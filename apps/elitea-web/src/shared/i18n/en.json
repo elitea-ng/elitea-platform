@@ -5632,6 +5632,7 @@
   "unattended.part.sensitive": "Sensitive tools",
   "unattended.sensitive.none": "This agent has no sensitive tools.",
   "workspace.chain.continued": "Continued automatically ({{n}})",
+  "workspace.chain.resumed": "Resumed after restart ({{n}})",
   "features.chatMessages.continuedAutomatically": "Continued automatically",
   "features.chatMessages.stepLimitReached": "The run stopped at its step limit. When the unattended grant allows it, the run continues automatically in a new turn.",
   "unattended.refused.categoryWithheld": "The tool {{tool}} is in a category that the platform keeps out of grants.",

@@ -47,6 +47,8 @@ export interface WorkspaceTurn {
    * the platform refused because grants are off).
    */
   start(request: TurnStartRequest, retry?: StartRetry): Promise<boolean>;
+  /** Continue a recorded turn that ran when the app stopped (ADR-0045 decision 7); resolves like `start`. */
+  resume(turnId: string): Promise<boolean>;
   /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
   prewarm(request: TurnPrewarmRequest): void;
   /** Send a turn's failed commit again; a refusal comes back as another `commit_failed` on the turn. */
@@ -115,6 +117,25 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
           if (again === undefined) throw error;
           return ipc.startTurn(again);
         });
+        dispatch({ type: 'begin', turnId: started.turn_id });
+        return true;
+      } catch (error) {
+        setRefusal(toRefusal(error));
+        return false;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [ipc],
+  );
+
+  const resume = useCallback(
+    async (stopped: string): Promise<boolean> => {
+      setRefusal(null);
+      setStarting(true);
+      try {
+        await ready.current;
+        const started = await ipc.resumeTurn(stopped);
         dispatch({ type: 'begin', turnId: started.turn_id });
         return true;
       } catch (error) {
@@ -218,5 +239,5 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc],
   );
 
-  return { view, turnId, earlier, busy, startError: refusal?.message ?? null, startErrorCode: refusal?.code ?? null, start, prewarm, retryCommit, cancel, answer, clear, adopt };
+  return { view, turnId, earlier, busy, startError: refusal?.message ?? null, startErrorCode: refusal?.code ?? null, start, resume, prewarm, retryCommit, cancel, answer, clear, adopt };
 }

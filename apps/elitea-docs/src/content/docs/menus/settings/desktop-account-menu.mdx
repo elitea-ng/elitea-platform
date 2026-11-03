@@ -96,6 +96,16 @@ When **Check the goal before finishing** is on, a small model reads your message
 - The brief and the check use the project's low-tier model. Their cost counts against the spend limit of the run.
 - Your administrator can turn the brief and the check off for all users. The run then ends as before.
 
+#### Long runs: sleep, closing and restarts
+
+- While a turn runs, the computer does not go to sleep when it is idle. The menu of the menu-bar icon (the tray icon on Windows and Linux) shows **Keeping the computer awake**. When the last turn ends, the computer can sleep again. The screen can still turn off, and you can still put the computer to sleep.
+- On Windows and Linux, when you close the window while a turn runs, the app hides the window and the turn continues. Select the tray icon to show the window again. When no turn runs, closing the window closes the app. On macOS, closing the window always hides it.
+- When you quit the app while a turn runs, the app asks first. Select **Quit** to stop the turn and quit, or **Keep running** to cancel.
+- When the app stops during a run with **To completion** (for example, the computer restarts), the app continues the run when you open it again. The next turn shows **Resumed after restart** at its top. It continues from the last saved turn, with the brief and the last goal check. The chain limits still apply: a run that is past its time limit does not continue.
+- After a restart, the goal check reads only your message and the turns after the restart.
+- A turn without **To completion** does not continue by itself. After a restart, the turn shows **This turn did not finish** and a **Continue** button. Select **Continue** to start the next turn.
+- When the platform refuses to continue the run (for example, at a chain limit), the run ends, and the last turn shows why.
+
 ### Send a thread to the cloud
 
 A thread that may move to the cloud shows **Send to cloud** in the row under the text. Select it to review what is sent and send the thread. The small **⌄** beside it opens **Handoff settings…**, where you choose what stays on your computer.

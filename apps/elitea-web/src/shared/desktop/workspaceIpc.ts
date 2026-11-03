@@ -244,14 +244,12 @@ export interface StoredTurn {
   state: 'done' | 'running' | 'interrupted';
   /** The host still keeps it: `turn_changes` / `checkpoint_restore` answer for it. */
   live: boolean;
+  /** An `interrupted` turn the host can continue (ADR-0045 decision 7): offer Continue (`resumeTurn`). Absent on an older host. */
+  resumable?: boolean;
 }
 
-/**
- * A rejected workspace / turn command. The host rejects with `{code, message}`
- * (`IpcError` in `src-tauri/src/local_commands.rs`): `code` is what the UI
- * branches on (`workspace_busy`, `agent_version_mismatch`, …), `message` is
- * written for a person. Anything else the seam throws gets code `unknown`.
- */
+/** A rejected workspace / turn command: the host's `{code, message}` (`IpcError` in `src-tauri/src/local_commands.rs`); `code`
+ * is what the UI branches on (`workspace_busy`, …), `message` is for a person. Anything else the seam throws: code `unknown`. */
 export class WorkspaceIpcError extends Error {
   readonly code: string;
 
@@ -282,6 +280,8 @@ export interface WorkspaceIpc extends ThreadForkCommands, SteeringCommands {
   /** The "/" menu's custom commands of the workspace and of the person's own folder, by name. */
   commands(workspaceId: string): Promise<CustomCommand[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
+  /** Continue a turn that ran when the app stopped (`StoredTurn.resumable`): the host starts the turn that continues it. */
+  resumeTurn(turnId: string): Promise<TurnStarted>;
   /** Attach the image file at `path` (absolute: a drop's, as `files_dropped` reports it) to the workspace's next turn; the host reads it confined and shrinks it. */
   attachFile(workspaceId: string, path: string): Promise<AttachedImage>;
   /** Attach a pasted image (`data`: base64, at most 10 MiB decoded). */
@@ -336,6 +336,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
       invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     commands: (workspaceId) => invoke<CustomCommand[]>('commands_list', { workspace_id: workspaceId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
+    resumeTurn: (turnId) => invoke<TurnStarted>('agent_turn_resume', { turn_id: turnId }),
     attachFile: (workspaceId, path) => invoke<AttachedImage>('attachment_add', { workspace_id: workspaceId, path }),
     attachBytes: (workspaceId, mime, data, name) =>
       invoke<AttachedImage>('attachment_add_bytes', { workspace_id: workspaceId, mime, data, ...(name === undefined ? {} : { name }) }),

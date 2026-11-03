@@ -167,6 +167,102 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// The desktop OS the app runs on, as the close and quit rules see it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostOs {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+impl HostOs {
+    /// This build's OS (anything else reads as Linux: it has no dock).
+    #[must_use]
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+}
+
+/// Whether closing the main window hides it instead (ADR-0045 decision 7):
+/// always on macOS (the dock icon or ⌘Q decide), and on Windows and Linux
+/// while a turn runs, so the turn goes on from the tray.
+#[must_use]
+pub const fn close_hides(os: HostOs, running_turns: usize) -> bool {
+    match os {
+        HostOs::MacOs => true,
+        HostOs::Windows | HostOs::Linux => running_turns > 0,
+    }
+}
+
+/// Whether a quit asks first: a turn runs, and the person did not confirm
+/// this quit yet.
+#[must_use]
+pub const fn quit_asks(running_turns: usize, confirmed: bool) -> bool {
+    running_turns > 0 && !confirmed
+}
+
+/// The turns that run now (`crate::keep_awake`).
+pub fn running_turns(app: &AppHandle) -> usize {
+    app.try_state::<crate::local_commands::LocalState>()
+        .map_or(0, |local| local.agents.keep_awake().running())
+}
+
+/// The quit's confirmation: asked once at a time, and once confirmed the
+/// quit goes through.
+#[derive(Default)]
+pub struct QuitGate {
+    asking: std::sync::atomic::AtomicBool,
+    confirmed: std::sync::atomic::AtomicBool,
+}
+
+impl QuitGate {
+    #[must_use]
+    pub fn confirmed(&self) -> bool {
+        self.confirmed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Ask the person, in a native dialog, whether to quit while a turn runs;
+/// on **Quit** the app exits.
+pub fn confirm_quit(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons, MessageDialogKind};
+    let Some(gate) = app.try_state::<QuitGate>() else {
+        return;
+    };
+    if gate.asking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    crate::app_events::show_main(app);
+    let text = crate::labels::text;
+    let handle = app.clone();
+    app.dialog()
+        .message(text("quit_running_message"))
+        .title(text("quit_running_title"))
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            text("quit_running_confirm"),
+            text("quit_running_cancel"),
+        ))
+        .show(move |quit| {
+            if let Some(gate) = handle.try_state::<QuitGate>() {
+                gate.asking.store(false, Ordering::SeqCst);
+                if quit {
+                    gate.confirmed.store(true, Ordering::SeqCst);
+                }
+            }
+            if quit {
+                handle.exit(0);
+            }
+        });
+}
+
 fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
     match event {
         // A folder dropped on the window opens as a workspace; files go to
@@ -175,10 +271,13 @@ fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
             crate::app_events::open_paths(app, paths);
         }
         // macOS keeps the app running with its window closed (⌘W, the red
-        // button); the dock icon or ⌘Q decide. Hidden, not destroyed, so
-        // a running turn keeps reporting and the window state is kept.
-        #[cfg(target_os = "macos")]
-        tauri::WindowEvent::CloseRequested { api, .. } => {
+        // button); the dock icon or ⌘Q decide. Windows and Linux do so
+        // while a turn runs: the tray shows it (ADR-0045 decision 7).
+        // Hidden, not destroyed, so a running turn keeps reporting and the
+        // window state is kept.
+        tauri::WindowEvent::CloseRequested { api, .. }
+            if close_hides(HostOs::current(), running_turns(app)) =>
+        {
             api.prevent_close();
             if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
                 let _ = window.hide();
@@ -265,6 +364,24 @@ mod tests {
         assert!(!is_blank(
             &Url::parse("https://elitea.example.com/").unwrap()
         ));
+    }
+
+    #[test]
+    fn closing_hides_on_macos_and_elsewhere_only_while_a_turn_runs() {
+        assert!(close_hides(HostOs::MacOs, 0));
+        assert!(close_hides(HostOs::MacOs, 1));
+        for os in [HostOs::Windows, HostOs::Linux] {
+            assert!(!close_hides(os, 0), "{os:?} quits with nothing running");
+            assert!(close_hides(os, 1), "{os:?} keeps a running turn");
+            assert!(close_hides(os, 3));
+        }
+    }
+
+    #[test]
+    fn a_quit_asks_only_while_a_turn_runs_and_once() {
+        assert!(!quit_asks(0, false));
+        assert!(quit_asks(1, false));
+        assert!(!quit_asks(1, true), "the person confirmed");
     }
 
     #[test]

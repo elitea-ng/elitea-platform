@@ -73,6 +73,7 @@ pub mod model;
 pub mod processes;
 pub mod recorder;
 pub mod remote_tools;
+pub mod resume;
 pub mod session;
 pub mod skills;
 pub mod slash_commands;

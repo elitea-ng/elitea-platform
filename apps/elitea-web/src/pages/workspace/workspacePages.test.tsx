@@ -417,6 +417,21 @@ describe('WorkspaceSessionPage', () => {
     };
   }
 
+  it('offers Continue on a turn that ran when the app stopped, only when the host can resume it', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const stopped = (id: string, resumable: boolean) => recorded(id, { state: 'interrupted', resumable, events: recorded(id).events.slice(0, 2) });
+    ipc.setHistory('w1', '77', [stopped('t1', false), stopped('t2', true)]);
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1?conversation=77');
+
+    expect(await screen.findAllByText(/did not finish/)).toHaveLength(2);
+    const buttons = screen.getAllByTestId('history-turn-continue');
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0] as HTMLElement);
+    await waitFor(() => expect(ipc.calls.resumed).toEqual(['t2']));
+  });
+
   it('reopens a thread with every turn recorded on this computer, and every turn\'s changes in the panel', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -955,6 +970,7 @@ describe('WorkspaceSessionPage', () => {
         startError: null,
         startErrorCode: null,
         start: () => Promise.resolve(started),
+        resume: () => Promise.resolve(started),
         prewarm: () => undefined,
         retryCommit: () => Promise.resolve(),
         cancel: () => Promise.resolve(),

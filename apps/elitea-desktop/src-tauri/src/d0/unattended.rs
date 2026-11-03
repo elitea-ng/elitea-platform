@@ -126,8 +126,9 @@ impl ChainLimits {
     }
 }
 
-/// `agent_turn_start.unattended`: what the grant answers.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+/// `agent_turn_start.unattended`: what the grant answers. Serialized as
+/// the resume record keeps it (ADR-0045 decision 7).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct UnattendedGrant {
     /// A UUID; the host makes one when the UI sends none.
@@ -249,6 +250,8 @@ pub enum ContinuationKind {
     ToolCallCap,
     /// The goal check found a condition not met (ADR-0045 decision 11).
     GoalNotMet,
+    /// The app started again while the chain ran (ADR-0045 decision 7).
+    Resume,
 }
 
 impl ContinuationKind {
@@ -258,6 +261,7 @@ impl ContinuationKind {
             Self::StepLimit => "step_limit",
             Self::ToolCallCap => "tool_call_cap",
             Self::GoalNotMet => "goal_not_met",
+            Self::Resume => "resume",
         }
     }
 }

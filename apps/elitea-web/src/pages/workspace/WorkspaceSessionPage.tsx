@@ -150,7 +150,12 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <ForkNotices fork={forking} ipc={ipc} />
               <McpProposals workspaceId={workspace.id} />
               <HooksProposals workspaceId={workspace.id} />
-              <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
+              <EarlierTurns
+                history={session.history}
+                shown={session.shown}
+                onFork={forking.onFork}
+                resume={{ onResume: (turnId) => void turn.resume(turnId), busy }}
+              />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />

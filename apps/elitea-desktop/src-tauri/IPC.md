@@ -319,6 +319,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
+| `agent_turn_resume` | `{turn_id}` | `{turn_id, execution_id}` — continues a turn that ran when the app stopped (`StoredTurn.resumable`, **Resume after restart** below): the host starts the turn that continues it, as `agent_turn_start` would, and the new turn's events come under the new `turn_id`. Rejects `resume_unknown` (no resume record of the signed-in account for that turn, or it is past its chain's deadline), `resume_invalid` (the record cannot make a turn), or what `agent_turn_start` rejects (the platform refused the continuation: the record goes). |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
@@ -628,8 +629,37 @@ person before the start:
   host started carries its `host_prompt` (the text the model got) and
   `continuation_kind`.
 - **Link kinds.** Each continuation's local turn start carries
-  `unattended.kind`: `step_limit`, `tool_call_cap` or `goal_not_met`; so
-  does its `turn_continued` (`kind`).
+  `unattended.kind`: `step_limit`, `tool_call_cap`, `goal_not_met` or
+  `resume` (below); so does its `turn_continued` (`kind`).
+- **Resume after restart** (ADR-0045 decision 7, #1438). The host keeps one
+  resume record per running turn in `threads.sqlite` (table
+  `resume_turns`, one row per workspace): the thread, the workspace, the
+  agent, the mode, the grant (with `goal_check`), the chain root, the
+  continuation index, the link kind, the run brief, the last goal check and
+  the last committed execution. It writes the record when the turn starts,
+  updates it at each commit that continues the chain, and deletes it when
+  the chain ends (or the turn is cancelled, or the next turn does not start
+  in time). A record survives only when the app stops while the turn runs.
+  About 5 seconds after the next start, for the signed-in account:
+  - A record past its chain's deadline (the platform's `chain.deadline_seconds`,
+    else the grant's, else 12 hours from the chain's start) is deleted.
+  - An unattended record (a grant the platform admitted) continues the chain
+    by itself: a turn with link kind `resume`, the next continuation index,
+    the same chain root and the text "Continue from where you stopped."
+    with the stored brief and last check (the `goal_not_met` text form).
+    A brief still pending is asked for again (at most 20 seconds). The old
+    turn sends `turn_continued` with `kind: "resume"` and
+    `resumed_after_restart: true`; the new turn's `status` `running` carries
+    `continuation_kind: "resume"`. When the platform refuses it (a chain
+    limit, a revoked grant), the record is deleted and the old turn sends
+    `chain_ended` (`limit_reached` or `failed`). When the start fails
+    without an answer from the platform (offline, the workspace busy), the
+    record stays and the turn is offered as below.
+  - Any other record (an attended turn) starts nothing: the old turn sends
+    `resume_offered`, and `thread_history` marks the turn `resumable`. The
+    UI shows **Continue** under it, which calls `agent_turn_resume`.
+  The goal check of a resumed chain reads the person's message and the
+  turns after the restart only (the transcript before it is not stored).
 - **Run brief and goal check** (ADR-0045 decision 11; #1564). With
   `goal_check` (absent = on) the chain's first turn asks the platform for
   the run brief in the background (`POST run_brief`, with the person's
@@ -1437,6 +1467,7 @@ type StoredTurn = {
   events_truncated: boolean;        // the turn outgrew the per-turn cap
   state: "done" | "running" | "interrupted"; // interrupted: never ended (the app quit)
   live: boolean;                    // turn_changes / checkpoint_restore still answer for it
+  resumable: boolean;               // interrupted, with a resume record: `agent_turn_resume` continues it
   origin: "local" | "cloud";        // cloud: imported when the thread came back (ADR-0034)
 };
 ```
@@ -2354,7 +2385,21 @@ them). The host folds the same `agent://event`, `index://event` and
 `⚠ n` while n approvals wait, else `◐ m:ss` (the longest-running turn), else
 only the icon; its menu lists the waiting approvals (tool and folder, never a
 command or a path) and the running turns, then Show / Quit, and choosing a
-turn shows the window and sends `focus_turn`. The Dock's progress bar follows a
+turn shows the window and sends `focus_turn`. While a turn runs its menu
+also says "Keeping the computer awake" (and so does its tooltip).
+
+**Keep awake, close and quit** (`src/keep_awake.rs`, `src/window.rs`,
+ADR-0045 decision 7). While one or more local turns run (a chain holds it
+between its turns too), the host holds one OS power assertion against idle
+sleep: `IOPMAssertion` `PreventUserIdleSystemSleep` on macOS,
+`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on Windows,
+logind `Inhibit("sleep:idle")` on Linux. The last turn's end (or panic,
+or cancel) releases it. The display may still sleep, and the person can
+still put the computer to sleep. Closing the window hides it on macOS
+always, and on Windows and Linux while a turn runs (the tray shows it
+again); else it closes. Quit (the menu, the tray, ⌘Q / Ctrl+Q) while a turn
+runs asks first, in a native dialog ("Quit Elitea?", **Quit** / **Keep
+running**). The Dock's progress bar follows a
 send to the cloud (`done`/`total`), else the index builds (files read of files
 to read; indeterminate until that is known), and is removed when they end.
 
@@ -2372,8 +2417,8 @@ fires the command, and a page keydown handler for the same keys could run
 the action twice.
 
 Standard actions are the OS's own and never reach the UI: Edit's
-undo/redo/cut/copy/paste/select all, Hide, Quit, Minimize, Zoom, Full
-Screen, Close Window (on macOS it hides the window; the dock icon shows
+undo/redo/cut/copy/paste/select all, Hide, Minimize, Zoom, Full
+Screen, Quit (the host's own item: it asks first while a turn runs), Close Window (on macOS it hides the window; the dock icon shows
 it again), the zoom items (Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, the
 host sets the webview zoom), Reload ⌘R (debug builds only) and Help ▸
 Elitea Help (opens `<deployment>/docs/` in the browser when connected).
@@ -2513,9 +2558,10 @@ order. Kinds and payloads:
 | `steer_injected` | `{steer_id, text}` — the agent loop took the message: it is a user message of the turn from this point |
 | `steer_dropped` | `{steer_id, text, reason: "removed" \| "turn_ended"}` — the message does not wait any more: the person removed it, or the turn ended before a safe point (the UI sends it as the next turn) |
 | `error` | `{code, message}` |
+| `resume_offered` | `{workspace_id, conversation_id}` — after an app start, on a turn that ran when the app stopped and that the host does not continue by itself: the UI may offer **Continue** (`agent_turn_resume`) (**Resume after restart**) |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn by itself (**Unattended turns**) |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
-| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met"}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
+| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met" \| "resume", resumed_after_restart?: true}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain; with `kind` `resume` (and `resumed_after_restart`), on the turn that ran when the app stopped, after the next start (**Resume after restart**) (**Unattended turns**); its events come under `next_turn_id` |
 | `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?, goal?: {outcome: "met" \| "not_met" \| "blocked" \| "not_checked", met: number, total: number, reason?}}` — after `done`: the unattended chain ends with this turn; `goal` is the last goal check's summary, when one was made |
 | `run_brief` | `{turn_id, chain_root_execution_id, state: "ready" \| "failed" \| "off" \| "none", brief?}` — on the chain's first turn (possibly after its `done`), when the platform answered the run brief (**Run brief and goal check**, under **Unattended turns**) |
 | `goal_checked` | `{turn_id, outcome: "met" \| "not_met" \| "blocked" \| "not_checked", conditions: {id, text, verdict, reason}[], met, total, reason?}` — after `done` of a turn that would end its chain, before `turn_continued` or `chain_ended` |

@@ -31,6 +31,7 @@
     "allow-agent-prewarm",
     "allow-turn-commit-retry",
     "allow-agent-turn-cancel",
+    "allow-agent-turn-resume",
     "allow-agent-turn-status",
     "allow-agent-turn-steer",
     "allow-agent-turn-steer-update",

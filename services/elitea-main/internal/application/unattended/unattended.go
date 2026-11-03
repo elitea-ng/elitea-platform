@@ -49,10 +49,11 @@ const (
 )
 
 // ValidDesktopContinuationKind reports whether kind is a link kind that a
-// desktop host may name on a continuation.
+// desktop host may name on a continuation. resume: the host continues a
+// chain after an app restart (ADR-0045 decision 7).
 func ValidDesktopContinuationKind(kind string) bool {
 	switch kind {
-	case LinkStepLimit, LinkToolCallCap, LinkGoalNotMet:
+	case LinkStepLimit, LinkToolCallCap, LinkGoalNotMet, LinkResume:
 		return true
 	}
 	return false

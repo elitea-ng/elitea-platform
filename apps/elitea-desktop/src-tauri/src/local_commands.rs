@@ -923,6 +923,16 @@ pub async fn rules_explain(
     })
 }
 
+/// **Continue** on a turn that was running when the app stopped (its
+/// resume record, ADR-0045 decision 7): the turn that continues it starts.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn agent_turn_resume(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<crate::d0::turn::TurnStarted, IpcError> {
+    Ok(state.agents.resume_turn(&turn_id).await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
     Ok(state.agents.cancel(&turn_id)?)

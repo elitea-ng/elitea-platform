@@ -26,6 +26,7 @@ import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayou
 
 import { turnSlots } from './chainSlots';
 import { CompactNotices } from './CompactNotices';
+import { InterruptedNote, type ResumeAction } from './InterruptedNote';
 import type { ForkMode, ForkPoint } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
 import type { SessionCommands } from './useSessionCommands';
@@ -236,7 +237,7 @@ export function ThreadIntro({
 const quietSx = (theme: Theme) => ({ color: theme.vars.palette.text.metrics });
 
 /** One recorded turn: its prompt, then its events replayed as the live transcript showed them. */
-function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }): React.JSX.Element {
+function RecordedTurn({ stored, onFork, resume }: { stored: StoredTurn; onFork: OnFork; resume: ResumeAction | undefined }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const view = useMemo(() => replayView(stored.events), [stored.events]);
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
@@ -245,9 +246,7 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }
       {view.continuation === undefined && <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />}
       <TurnTranscript view={view} busy={false} continuation={view.continuation} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
-        <Typography variant="bodySmall" sx={quietSx}>
-          {t('workspace.history.interrupted', 'This turn did not finish: the app closed while it ran.')}
-        </Typography>
+        <InterruptedNote turnId={stored.turn_id} resumable={stored.resumable === true} resume={resume} />
       )}
       {stored.events_truncated && (
         <Typography variant="bodySmall" sx={quietSx}>
@@ -278,11 +277,14 @@ export function EarlierTurns({
   history,
   shown,
   onFork,
+  resume,
 }: {
   history: ThreadHistory;
   shown: ReadonlySet<string>;
   /** "Fork from here" on each message; absent = not offered. */
   onFork?: OnFork;
+  /** Continue on a turn that ran when the app stopped; absent = not offered. */
+  resume?: ResumeAction;
 }): React.JSX.Element | null {
   switch (history.kind) {
     case 'loading':
@@ -297,7 +299,7 @@ export function EarlierTurns({
           {history.turns
             .filter((stored) => !shown.has(stored.turn_id))
             .map((stored) => (
-              <RecordedTurn key={stored.turn_id} stored={stored} onFork={onFork} />
+              <RecordedTurn key={stored.turn_id} stored={stored} onFork={onFork} resume={resume} />
             ))}
         </>
       );

@@ -39,8 +39,11 @@ type ChainOutcome = 'completed' | 'failed' | 'waiting' | 'limit_reached' | 'canc
 /** The chain limit that ended a `limit_reached` chain. */
 type ChainLimit = 'continuations' | 'spend' | 'deadline';
 
-/** Why the host continued the chain: the step limit, the 512 tool-call cap, or a goal check that found the goal not met. */
-export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met';
+/**
+ * Why the host continued the chain: the step limit, the 512 tool-call cap, a goal check that found the goal not met, or
+ * an app restart while the chain ran (`resume`, ADR-0045 decision 7).
+ */
+export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met' | 'resume';
 
 interface TurnContinuedPayload {
   next_turn_id: string;
@@ -48,6 +51,8 @@ interface TurnContinuedPayload {
   continuation_index: number;
   chain_root_execution_id: string;
   kind?: ContinuationKind;
+  /** The host continued the chain after an app restart (with `kind` `resume`), on the turn that ran when the app stopped. */
+  resumed_after_restart?: boolean;
 }
 
 /** The goal check's outcome (ADR-0045 decision 11). */
@@ -129,6 +134,8 @@ export interface UnattendedStatusFields {
   continued_automatically?: boolean;
   /** 1, 2, … for a turn the host started by itself. */
   continuation_index?: number;
+  /** Why the host started this turn; `resume`: after an app restart. */
+  continuation_kind?: ContinuationKind;
   /** On the first `running` of any unattended turn: the grant it runs under. */
   unattended?: Omit<UnattendedGrant, 'chain'> & { grant_id: string };
 }

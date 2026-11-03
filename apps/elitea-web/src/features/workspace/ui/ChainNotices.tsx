@@ -88,12 +88,14 @@ export function StopNotices({ view, onContinue }: { view: TurnView; onContinue: 
   );
 }
 
-/** In place of the person's prompt: the host started this turn by itself, the n-th time in its chain. */
-export function ContinuedMarker({ index }: { index: number }): React.JSX.Element {
+/** In place of the person's prompt: the host started this turn by itself, the n-th time in its chain (`resumed`: after an app restart). */
+export function ContinuedMarker({ index, resumed = false }: { index: number; resumed?: boolean }): React.JSX.Element {
   return (
     <Divider data-testid="turn-continued-marker" textAlign="center">
       <Typography variant="bodySmall" component="span" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
-        {t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(index) })}
+        {resumed
+          ? t('workspace.chain.resumed', 'Resumed after restart ({{n}})', { n: String(index) })
+          : t('workspace.chain.continued', 'Continued automatically ({{n}})', { n: String(index) })}
       </Typography>
     </Divider>
   );

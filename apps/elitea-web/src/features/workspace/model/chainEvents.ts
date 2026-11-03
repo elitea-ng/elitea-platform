@@ -18,6 +18,8 @@ export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | Ev
 export interface ChainView {
   /** The host started this turn by itself: the n-th continuation of the chain (from 1). */
   continuation?: number;
+  /** The host started this turn after an app restart (link kind `resume`). */
+  resumed?: true;
   /** The grant the turn runs under (the first `running` of an unattended turn). */
   unattended?: Omit<UnattendedGrant, 'chain'> & { grant_id: string };
   /** The host continued this turn in `nextTurnId` by itself: the person does not click Continue. */
@@ -69,6 +71,7 @@ export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true 
 export function withChainStatus<V extends ChainView>(view: V, payload: EventOf<'status'>['payload']): V {
   let next = view;
   if (payload.continued_automatically === true) next = { ...next, continuation: payload.continuation_index ?? 1 };
+  if (payload.continued_automatically === true && payload.continuation_kind === 'resume') next = { ...next, resumed: true };
   if (payload.unattended !== undefined) next = { ...next, unattended: payload.unattended };
   return next;
 }

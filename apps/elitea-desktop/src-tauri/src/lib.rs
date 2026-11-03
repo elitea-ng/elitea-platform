@@ -26,6 +26,7 @@ mod history;
 mod hooks;
 mod hooks_commands;
 mod index;
+mod keep_awake;
 mod labels;
 mod local_commands;
 mod logging;
@@ -133,6 +134,7 @@ pub fn run() {
         .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
+        .manage(window::QuitGate::default())
         // A (re)loading page is not listening to app://command yet: hold
         // commands until it calls `app_ready`.
         .on_page_load(|webview, payload| {
@@ -361,6 +363,32 @@ pub fn run() {
                 })
                 .map_err(|error| error.message)?,
             );
+            // The computer stays awake while a turn runs, and the tray says
+            // so (ADR-0045 decision 7).
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            agents
+                .keep_awake()
+                .set_backend(Arc::new(keep_awake::OsPower));
+            {
+                let handle = app.handle().clone();
+                agents.keep_awake().set_listener(Arc::new(move |awake| {
+                    if let Some(activity) = handle.try_state::<Arc<activity::Activity>>() {
+                        activity.awake(awake);
+                    }
+                }));
+            }
+            // The turns that ran when the app stopped: an unattended one
+            // continues, any other offers Continue (ADR-0045 decision 7).
+            {
+                let agents = agents.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(d0::resume::RESUME_AFTER).await;
+                    let resumed = agents.resume_after_restart().await;
+                    if resumed > 0 {
+                        log::info!("resumed {resumed} unattended run(s) after the restart");
+                    }
+                });
+            }
             // The app-wide compaction settings (threshold, idle compaction).
             agents.set_compaction_store(Arc::new(
                 compaction_settings::CompactionSettingsStore::open(data_dir.clone()),
@@ -479,6 +507,7 @@ pub fn run() {
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
+            local_commands::agent_turn_resume,
             local_commands::agent_turn_status,
             local_commands::agent_turn_steer,
             local_commands::agent_turn_steer_update,
@@ -572,6 +601,19 @@ const EXIT_COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10)
 
 #[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    // A quit (the menu, the tray, ⌘Q) with a running turn asks first
+    // (ADR-0045 decision 7); a confirmed one goes through.
+    if let tauri::RunEvent::ExitRequested { api, .. } = &event
+        && window::quit_asks(
+            window::running_turns(app),
+            app.try_state::<window::QuitGate>()
+                .is_some_and(|gate| gate.confirmed()),
+        )
+    {
+        api.prevent_exit();
+        window::confirm_quit(app);
+        return;
+    }
     // The history writer commits what it still holds before the process ends.
     if matches!(event, tauri::RunEvent::Exit)
         && let Some(local) = app.try_state::<LocalState>()

@@ -10727,3 +10727,268 @@ async fn goal_check_off_makes_no_calls() {
         "completed"
     );
 }
+
+// A long run survives a restart (ADR-0045 decision 7, #1438).
+
+/// The thread history the host writes, opened a second time: the resume
+/// records as a restart reads them.
+fn resume_records(h: &Harness) -> Vec<crate::history::ResumeRecord> {
+    crate::history::HistoryStore::open(h.app.path())
+        .unwrap()
+        .resume_records()
+        .unwrap()
+}
+
+/// Until `condition` holds over the resume records.
+async fn until_records(
+    h: &Harness,
+    what: &str,
+    condition: impl Fn(&[crate::history::ResumeRecord]) -> bool,
+) {
+    for _ in 0..SETTLE_POLLS {
+        if condition(&resume_records(h)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("never {what}: {:?}", resume_records(h));
+}
+
+/// A record of a turn that ran when the app stopped, as its start wrote it.
+async fn stopped_turn(h: &Harness, grant: Option<Value>) -> crate::history::ResumeRecord {
+    let now = chrono::Utc::now().timestamp_millis();
+    crate::history::ResumeRecord {
+        workspace_id: h.workspace_id.clone(),
+        turn_id: "turn-before-restart".into(),
+        owner: h.host.history_owner().await.unwrap(),
+        conversation_id: json!(42),
+        conversation_uuid: Some("99999999-2222-4333-8444-555555555555".into()),
+        project_id: 1,
+        application_id: 5,
+        version_id: 9,
+        mode: crate::history::ResumeMode::Build,
+        chain_root_execution_id: grant.as_ref().map(|_| "root-execution".to_owned()),
+        grant,
+        continuation_index: 2,
+        kind: Some("step_limit".into()),
+        execution_id: "dead-execution".into(),
+        last_committed_execution_id: Some("committed-execution".into()),
+        request: Some("Write notes and file a bug".into()),
+        brief: Some(ready_brief()["brief"].clone()),
+        last_check: Some(check(
+            "not_met",
+            1,
+            Some("The change is not committed."),
+            None,
+        )),
+        started_at: now,
+        updated_at: now,
+        deadline_at: now + 3_600_000,
+    }
+}
+
+fn keep(h: &Harness, record: crate::history::ResumeRecord) {
+    let store = crate::history::HistoryStore::open(h.app.path()).unwrap();
+    store.resume_put(record);
+    store.flush();
+}
+
+fn stored_grant() -> Value {
+    json!({"grant_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "continue_step_limit": true,
+           "continue_tool_call_cap": true, "hook_asks": false, "remote_confirmations": false,
+           "chain": null, "goal_check": true})
+}
+
+/// A turn's start writes its record, the chain's commit updates it (the
+/// last committed step), the chain's next turn replaces it, and the
+/// chain's end deletes it. The computer is kept awake meanwhile, and no
+/// longer after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_resume_record_is_kept_while_the_chain_runs() {
+    let model = |call: usize| {
+        if call < 8 {
+            tool_call(&format!("call-{call}"), "list_tree", &json!({}))
+        } else {
+            say("Done.")
+        }
+    };
+    let server = stalling_chain_platform(
+        model,
+        two_step_details(),
+        &[EXECUTION, EXECUTION_2],
+        Stall::Start(1),
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    let first = h
+        .host
+        .start(unattended_request(
+            &h,
+            json!({"continue_step_limit": true, "goal_check": false}),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        h.host.keep_awake().running() >= 1,
+        "the turn holds the computer awake"
+    );
+    until_records(&h, "the first turn's record", |records| {
+        records.len() == 1 && records[0].turn_id == first.turn_id
+    })
+    .await;
+    let record = &resume_records(&h)[0];
+    assert_eq!(record.execution_id, EXECUTION);
+    assert_eq!(record.chain_root_execution_id.as_deref(), Some(EXECUTION));
+    assert_eq!(record.grant.as_ref().unwrap()["continue_step_limit"], true);
+    assert_eq!(
+        record.request.as_deref(),
+        Some("Write notes and file a bug")
+    );
+    // The next start stalls: the commit's update is what a restart finds.
+    until_records(&h, "the committed step", |records| {
+        records.first().is_some_and(|r| {
+            r.turn_id == first.turn_id
+                && r.last_committed_execution_id.as_deref() == Some(EXECUTION)
+        })
+    })
+    .await;
+    let events = until_event(&h, "chain_ended").await;
+    let next = turn_events(&events, &first.turn_id, "turn_continued")[0]["next_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        turn_events(&events, &next, "chain_ended")[0]["outcome"],
+        "completed"
+    );
+    until_records(&h, "the record deleted", <[_]>::is_empty).await;
+    for _ in 0..SETTLE_POLLS {
+        if h.host.keep_awake().running() == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        h.host.keep_awake().running(),
+        0,
+        "released with the last commit"
+    );
+}
+
+/// After a restart an unattended record continues its chain: link kind
+/// `resume`, the stored grant and chain root, and the continue text with
+/// the stored brief and last check. The old turn says `turn_continued`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_resumes_an_unattended_turn_with_its_brief() {
+    let server = goal_platform(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION_2],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(200, check("met", 2, None, None))],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    keep(&h, stopped_turn(&h, Some(stored_grant())).await);
+    assert_eq!(h.host.resume_after_restart().await, 1);
+    let events = until_event(&h, "chain_ended").await;
+    let starts = start_bodies(&h.server);
+    assert_eq!(starts.len(), 1);
+    let wire = &starts[0]["unattended"];
+    assert_eq!(wire["kind"], "resume");
+    assert_eq!(wire["chain_root_execution_id"], "root-execution");
+    assert_eq!(wire["grant_id"], "6f9619ff-8b86-d011-b42d-00c04fc964ff");
+    let text = starts[0]["user_input"].as_str().unwrap();
+    let brief: super::goal::Brief = serde_json::from_value(ready_brief()["brief"].clone()).unwrap();
+    let last: super::goal::GoalCheck = serde_json::from_value(check(
+        "not_met",
+        1,
+        Some("The change is not committed."),
+        None,
+    ))
+    .unwrap();
+    assert_eq!(text, super::goal::continue_text(Some(&brief), Some(&last)));
+    assert!(text.contains("Goal: Make the login test pass."));
+    assert!(text.contains("Last check: The change is not committed."));
+    assert!(
+        !text.contains("- The login test passes."),
+        "met at the last check"
+    );
+    // No brief is asked for again: the record kept it.
+    assert!(bodies(&h.server, BRIEF_PATH).is_empty());
+    let continued = turn_events(&events, "turn-before-restart", "turn_continued");
+    assert_eq!(continued.len(), 1);
+    assert_eq!(continued[0]["kind"], "resume");
+    assert_eq!(continued[0]["continuation_index"], 3);
+    let next = continued[0]["next_turn_id"].as_str().unwrap().to_owned();
+    let running: Vec<&Value> = turn_events(&events, &next, "status")
+        .into_iter()
+        .filter(|s| s.get("continued_automatically").is_some())
+        .collect();
+    assert_eq!(running[0]["continuation_kind"], "resume");
+    assert_eq!(
+        turn_events(&events, &next, "chain_ended")[0]["outcome"],
+        "completed"
+    );
+    until_records(&h, "the record deleted", <[_]>::is_empty).await;
+}
+
+/// After a restart a record without a grant starts nothing: the turn says
+/// `resume_offered` and the record stays. The person's **Continue** starts
+/// the turn without a grant, from the continue prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_offers_continue_for_an_attended_turn() {
+    let server = chain_platform(|_| say("Done."), agent_details(), &[EXECUTION]).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    keep(&h, stopped_turn(&h, None).await);
+    assert_eq!(h.host.resume_after_restart().await, 0);
+    let all = h.emitter.all();
+    let offered = turn_events(&all, "turn-before-restart", "resume_offered");
+    assert_eq!(offered.len(), 1);
+    assert_eq!(offered[0]["workspace_id"], h.workspace_id);
+    assert!(
+        start_bodies(&h.server).is_empty(),
+        "nothing starts by itself"
+    );
+    assert_eq!(resume_records(&h).len(), 1, "the record stays");
+
+    let started = h.host.resume_turn("turn-before-restart").await.unwrap();
+    let events = until_event(&h, "done").await;
+    let starts = start_bodies(&h.server);
+    assert_eq!(starts.len(), 1);
+    assert!(starts[0].get("unattended").is_none_or(Value::is_null));
+    assert_eq!(starts[0]["user_input"], "Continue from where you stopped.");
+    assert_eq!(turn_events(&events, &started.turn_id, "done").len(), 1);
+    until_records(&h, "the record deleted", <[_]>::is_empty).await;
+    let again = h.host.resume_turn("turn-before-restart").await.unwrap_err();
+    assert_eq!(again.code, "resume_unknown");
+}
+
+/// A resume the platform refuses (a chain limit) ends the chain on the old
+/// turn and deletes the record; a record past its deadline is dropped
+/// without a start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_or_expired_resume_ends_the_chain_and_deletes_the_record() {
+    let server = chain_platform(|_| say("Done."), agent_details(), &[]).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    keep(&h, stopped_turn(&h, Some(stored_grant())).await);
+    assert_eq!(h.host.resume_after_restart().await, 0);
+    let events = h.emitter.all();
+    let ended = turn_events(&events, "turn-before-restart", "chain_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0]["outcome"], "limit_reached");
+    assert_eq!(ended[0]["limit"], "continuations");
+    assert_eq!(ended[0]["goal"]["outcome"], "not_met");
+    assert!(turn_events(&events, "turn-before-restart", "turn_continued").is_empty());
+    until_records(&h, "the record deleted", <[_]>::is_empty).await;
+
+    let mut expired = stopped_turn(&h, Some(stored_grant())).await;
+    expired.deadline_at = expired.started_at - 1;
+    keep(&h, expired);
+    let before = start_bodies(&h.server).len();
+    assert_eq!(h.host.resume_after_restart().await, 0);
+    assert_eq!(start_bodies(&h.server).len(), before, "nothing started");
+    until_records(&h, "the expired record dropped", <[_]>::is_empty).await;
+}
