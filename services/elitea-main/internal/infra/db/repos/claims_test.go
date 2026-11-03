@@ -212,6 +212,7 @@ func TestRetiredPreparedDeliveryReturnsTypedFenceFreeACK(t *testing.T) {
 				true,
 				false,
 				int64(1),
+				false,
 			}}}}}
 			generated := false
 			repository, err := newClaimsRepository(
