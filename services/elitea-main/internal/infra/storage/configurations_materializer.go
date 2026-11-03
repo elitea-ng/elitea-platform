@@ -14,6 +14,7 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -292,6 +293,9 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 	default:
 		return nil, ErrContentRejected
 	}
+	if err := m.materializeDelegatedCredentials(ctx, projectID, actorID, &request, maxBytes); err != nil {
+		return nil, err
+	}
 
 	result, err := proto.MarshalOptions{Deterministic: true}.Marshal(&request)
 	if err != nil || len(result) == 0 || int64(len(result)) > maxBytes {
@@ -299,6 +303,60 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 		return nil, ErrContentRejected
 	}
 	return result, nil
+}
+
+// maxDelegatedCredentialReferences is the open-card cap (contract §5): a wake
+// carries at most one reference per open card.
+const maxDelegatedCredentialReferences = 16
+
+// materializeDelegatedCredentials resolves a fan-out wake's
+// mcp_token_references (FU-250) through the one release path, for the live
+// claim's project and actor, and projects each token into mcp_tokens under
+// its resource. The references never leave Main. A grant that no longer
+// resolves (revoked, expired, another actor's) is dropped: the Worker then
+// ends that branch typed (graph.fanout.credential_unavailable) and never
+// resumes it "authorized". A malformed reference refuses the content.
+func (m *CurrentConfigurationsMaterializer) materializeDelegatedCredentials(
+	ctx context.Context, projectID, actorID int32, request *runtimev1.AgentExecutionInputV1, maxBytes int64,
+) error {
+	references := request.GetMcpTokenReferences()
+	if len(references) == 0 {
+		return nil
+	}
+	if m.toolkitTokens == nil || len(references) > maxDelegatedCredentialReferences {
+		return ErrContentRejected
+	}
+	tokens, err := decodeCurrentMaterializationObject(request.GetMcpTokens())
+	if err != nil {
+		return ErrContentRejected
+	}
+	for _, reference := range references {
+		toolkitID := reference.GetToolkitId()
+		if toolkitID == 0 || toolkitID > math.MaxInt32 || reference.GetRevision() == 0 ||
+			reference.GetRevision() > math.MaxInt64 || reference.GetReference() == "" {
+			return ErrContentRejected
+		}
+		resource := reference.GetResource()
+		if _, duplicate := tokens[resource]; duplicate {
+			return ErrContentRejected
+		}
+		binding := mcpoauth.TokenBinding{ProjectID: projectID, ActorID: actorID, ToolkitID: int64(toolkitID), Resource: resource}
+		projected, err := m.resolveMCPTokenReference(ctx, binding, reference.GetReference(), int64(reference.GetRevision()))
+		if errors.Is(err, mcpoauth.ErrTokenUnavailable) {
+			continue
+		}
+		if err != nil {
+			return currentMaterializationError(ctx, err)
+		}
+		tokens[resource] = projected
+	}
+	encoded, err := encodeCurrentMaterializationObject(tokens, maxBytes)
+	if err != nil {
+		return err
+	}
+	request.McpTokens = encoded
+	request.McpTokenReferences = nil
+	return nil
 }
 
 func (m *CurrentConfigurationsMaterializer) materializeCurrentAgentTools(

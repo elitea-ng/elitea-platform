@@ -920,6 +920,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		interruptSignals.Wakes = fanoutWakes
 		interruptSignals.Live = dependencies.InterruptLiveEvents
 		executionInterrupts.SetSignals(interruptSignals)
+		// FU-250: a fan-out authorize is checked against the delegated grant
+		// store; without its key material every authorize is refused typed.
+		if tokens := currentToolkitMCPTokenStore(dependencies.AdmissionPool); tokens != nil {
+			executionInterrupts.SetDelegatedTokens(tokens)
+		}
 		agentCancellation.SetInterruptSignals(interruptSignals)
 		agentJobs.SetInterruptSignals(interruptSignals)
 		var agentCancellationStore agentexecutionapp.CurrentAgentCancellationStore = agentCancellation

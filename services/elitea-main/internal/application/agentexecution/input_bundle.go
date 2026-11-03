@@ -2,9 +2,12 @@ package agentexecution
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
@@ -177,10 +180,36 @@ func validateAuthoritativeInput(input *runtimev1.AgentExecutionInputV1) error {
 		!validOptionalJSONObject(input.GetParallelReconcile()) ||
 		input.ExecutionGeneration == nil || input.GetExecutionGeneration() == "" ||
 		(input.StepsLimit != nil && input.GetStepsLimit() <= 0) ||
-		(input.GetHitlResume() && input.HitlAction == nil && !nonEmptyJSONArray(input.GetHitlDecisions())) {
+		(input.GetHitlResume() && input.HitlAction == nil && !nonEmptyJSONArray(input.GetHitlDecisions())) ||
+		!validDelegatedCredentialReferences(input.GetMcpTokenReferences()) {
 		return ErrInvalidAuthoritativeAgentInput
 	}
 	return nil
+}
+
+// validDelegatedCredentialReferences bounds a wake's mcp_token_references
+// (FU-250): at most the open-card cap, one per resource, each an opaque
+// 32-byte base64url store reference bound to a positive toolkit, revision 1
+// and an https resource. Shape only: the materializer resolves each one for
+// the claim's actor.
+func validDelegatedCredentialReferences(references []*runtimev1.McpTokenReferenceV1) bool {
+	if len(references) > 16 {
+		return false
+	}
+	seen := make(map[string]bool, len(references))
+	for _, reference := range references {
+		raw, err := base64.RawURLEncoding.DecodeString(reference.GetReference())
+		resource := reference.GetResource()
+		if reference == nil || err != nil || len(raw) != 32 || reference.GetRevision() != 1 ||
+			reference.GetToolkitId() == 0 || reference.GetToolkitId() > math.MaxInt32 ||
+			!strings.HasPrefix(resource, "https://") || len(resource) > 4096 ||
+			strings.ContainsAny(resource, "\x00\r\n") || seen[resource] ||
+			len(reference.ProtoReflect().GetUnknown()) != 0 {
+			return false
+		}
+		seen[resource] = true
+	}
+	return true
 }
 
 func nonEmptyJSONArray(value []byte) bool {

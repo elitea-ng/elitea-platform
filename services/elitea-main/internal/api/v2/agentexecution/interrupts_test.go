@@ -217,9 +217,9 @@ func TestExecutionInterruptDecisionUsesContractFixtures(t *testing.T) {
 		useCase := &interruptUseCaseStub{result: domain.DecideResult{InterruptKey: interruptTestKey, State: domain.StateDecided, Revision: 2, RequestID: strings.Repeat("ab", 32)}}
 		w := httptest.NewRecorder()
 		newInterruptTestRoute(t, useCase, domain.PermissionDecide).ServeHTTP(w, interruptRequest(http.MethodPost, decisionPath("7", interruptTestResponse, interruptTestKey), raw))
-		// A schema-valid authorize is refused until it carries its credential
-		// reference end to end (FU-250).
-		invalid := strings.Contains(filepath.Base(path), ".invalid.") || strings.Contains(filepath.Base(path), ".authorize.")
+		// A schema-valid authorize reaches the ledger, which checks its
+		// credential reference for the run's actor (FU-250).
+		invalid := strings.Contains(filepath.Base(path), ".invalid.")
 		if invalid && (w.Code != 400 || useCase.calls != 0) {
 			t.Errorf("%s: status=%d calls=%d", filepath.Base(path), w.Code, useCase.calls)
 		}

@@ -5641,7 +5641,7 @@ components:
     ExecutionInterruptCardDisplay:
       type: object
       additionalProperties: false
-      maxProperties: 14
+      maxProperties: 15
       description: >-
         Only fields today's card shows. Headers, tokens, resource metadata and
         checkpoint ids are never in a card. argument_digest is the worker's
@@ -5657,6 +5657,15 @@ components:
         node_name: {type: string, minLength: 1, maxLength: 128}
         tool_name: {type: string, minLength: 1, maxLength: 512}
         toolkit_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            The frozen toolkit of a delegated sign-in card (FU-250). Only a
+            card that names it can be authorized; a card raised before it
+            offers Skip only.
         toolkit_type: {type: string, minLength: 1, maxLength: 128}
         action_label: {type: string, minLength: 1, maxLength: 512}
         tool_call_id: {type: string, minLength: 1, maxLength: 512}
@@ -5676,6 +5685,7 @@ components:
           type: string
           enum:
             - agent_interrupt_already_resolved
+            - agent_interrupt_credential_refused
             - agent_interrupt_invalid_decision
             - agent_interrupt_not_found
         message:

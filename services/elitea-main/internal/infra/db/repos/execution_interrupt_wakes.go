@@ -2,18 +2,22 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
 
 // Wake admission (fanout-interrupt-decisions v1.1 §8.1). A QUEUED
@@ -161,6 +165,10 @@ WHERE job.execution_id = $1 AND job.generation = $2
 			refused = agentexecutionapp.FanoutWakeFailureActorNotAllowed
 			return nil
 		}
+		if err != nil {
+			return err
+		}
+		target.DelegatedCredentials, err = wakeDelegatedCredentials(ctx, tx, wake.responseID, wake.projectID)
 		return err
 	})
 	if err != nil {
@@ -467,4 +475,73 @@ FOR UPDATE OF response`, conversationID, newResponseID, projectID, newTurnSupers
 			return notices, nil
 		}
 	}
+}
+
+// wakeDelegatedCredentials reads the references of the response's DECIDED,
+// not yet consumed, `authorize` cards (FU-250, E1), sorted by resource: one
+// McpTokenReferenceV1 per card, bound to the card's frozen toolkit and the
+// canonical resource of its server. Grants are immutable (revision 1, see
+// mcpoauth.Tokens.Save); the materializer re-validates the full binding for
+// the claim's actor. A card whose stored bytes do not name both is skipped:
+// its authorize was refused at Decide, so it cannot be DECIDED here.
+func wakeDelegatedCredentials(ctx context.Context, tx sqlExecutor, responseID string, projectID int64) ([]*runtimev1.McpTokenReferenceV1, error) {
+	rows, err := tx.Query(ctx, `
+SELECT card_json, decision_json
+FROM elitea_runtime.execution_interrupts
+WHERE root_response_id = $1::uuid AND project_id = $2 AND state = 'DECIDED' AND decision_json IS NOT NULL
+ORDER BY interrupt_key`, responseID, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("load fanout wake credentials: %w", err)
+	}
+	defer rows.Close()
+	var references []*runtimev1.McpTokenReferenceV1
+	for rows.Next() {
+		var cardJSON, decisionJSON []byte
+		if err := rows.Scan(&cardJSON, &decisionJSON); err != nil {
+			return nil, fmt.Errorf("load fanout wake credentials: %w", err)
+		}
+		var decision struct {
+			Action        string  `json:"action"`
+			CredentialRef *string `json:"credential_ref"`
+		}
+		if json.Unmarshal(decisionJSON, &decision) != nil || decision.Action != string(domain.ActionAuthorize) ||
+			decision.CredentialRef == nil {
+			continue
+		}
+		toolkitID, resource, ok := delegatedCardBinding(cardJSON)
+		if !ok {
+			continue
+		}
+		references = append(references, &runtimev1.McpTokenReferenceV1{
+			Resource: resource, Reference: *decision.CredentialRef, Revision: 1, ToolkitId: uint64(toolkitID),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load fanout wake credentials: %w", err)
+	}
+	sort.Slice(references, func(i, j int) bool { return references[i].GetResource() < references[j].GetResource() })
+	return references, nil
+}
+
+// delegatedCardBinding reads a delegated_auth card's frozen toolkit id and
+// the canonical resource of its server (FU-250). ok is false for any other
+// card, or one raised before the card carried display.toolkit_id.
+func delegatedCardBinding(cardJSON []byte) (int64, string, bool) {
+	var card struct {
+		Kind    string `json:"kind"`
+		Display struct {
+			ToolkitID   int64  `json:"toolkit_id"`
+			ToolkitType string `json:"toolkit_type"`
+			ServerURL   string `json:"server_url"`
+		} `json:"display"`
+	}
+	if json.Unmarshal(cardJSON, &card) != nil || card.Kind != "delegated_auth" ||
+		card.Display.ToolkitID <= 0 || card.Display.ToolkitID > math.MaxInt32 || card.Display.ServerURL == "" {
+		return 0, "", false
+	}
+	resource, err := mcpoauth.CanonicalResource(card.Display.ToolkitType, card.Display.ServerURL)
+	if err != nil {
+		return 0, "", false
+	}
+	return card.Display.ToolkitID, resource, true
 }

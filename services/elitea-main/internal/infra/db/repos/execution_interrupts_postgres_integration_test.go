@@ -24,6 +24,7 @@ import (
 
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenant"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
 
 const interruptContractFixtures = "../../../../../../libs/jsonschema/runtime/v1/fixtures"
@@ -792,8 +793,9 @@ func TestFetchAndAckUnderTheLiveClaim(t *testing.T) {
 		t.Fatalf("fetch before any card = %+v, %v", empty, err)
 	}
 	approve := h.raise(response, "fanout-interrupt-card-v1.json")
-	auth := h.raise(response, "fanout-interrupt-card-v1.delegated-auth.json")
+	auth := h.raise(response, "fanout-interrupt-card-v1.delegated-auth-toolkit.json")
 	pending := h.raise(response, "fanout-interrupt-card-v1.map-ask-user.json")
+	h.repo.SetDelegatedTokens(acceptingTokens{})
 	if _, err := h.decide(interruptOwner, response, approve, "fetch-approve", "approve", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -1490,4 +1492,12 @@ func TestDecideByOutsiderNeverWaitsForTheResponseLock(t *testing.T) {
 	if !errors.Is(err, domain.ErrNotAllowed) {
 		t.Fatalf("outsider while the row is locked: %v, want an immediate ErrNotAllowed", err)
 	}
+}
+
+// acceptingTokens accepts every delegated grant reference (FU-250): the
+// credential check itself is proven by the authorize matrix tests.
+type acceptingTokens struct{}
+
+func (acceptingTokens) Validate(_ context.Context, reference string, _ mcpoauth.TokenBinding) (mcpoauth.TokenReference, error) {
+	return mcpoauth.TokenReference{Reference: reference, Revision: 1}, nil
 }

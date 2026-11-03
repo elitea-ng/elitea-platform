@@ -24,6 +24,16 @@ var (
 	ErrNotFound = errors.New("execution interrupt not found")
 	// ErrAlreadyResolved is every decision conflict other than an exact replay.
 	ErrAlreadyResolved = errors.New("execution interrupt already resolved")
+	// ErrAuthorizeUnavailable is `authorize` on a card that cannot take a
+	// credential: not a delegated sign-in card, or one raised before cards
+	// named their frozen toolkit (FU-250). Skip stays.
+	ErrAuthorizeUnavailable = errors.New("execution interrupt cannot be authorized from this card")
+	// ErrCredentialRefused is every refused `authorize` credential (FU-250):
+	// a decider who is not the run's actor, or a reference the run's actor
+	// does not hold for exactly this toolkit and resource (unknown, another
+	// user's or project's, revoked, expired). One value, so a refusal never
+	// tells which check failed.
+	ErrCredentialRefused = errors.New("execution interrupt credential refused")
 	// ErrRaiseConflict is a raise whose key, event id or interrupt id is taken
 	// by different bytes.
 	ErrRaiseConflict = errors.New("execution interrupt raise conflicts with a stored card")

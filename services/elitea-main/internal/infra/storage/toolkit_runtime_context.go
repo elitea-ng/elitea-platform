@@ -58,29 +58,46 @@ func (m *CurrentConfigurationsMaterializer) materializeToolkitRuntimeContext(ctx
 		return nil, ErrContentRejected
 	}
 	binding := mcpoauth.TokenBinding{ProjectID: projectID, ActorID: actorID, ToolkitID: reference.ToolkitID, Resource: reference.Resource}
-	resolved, err := m.toolkitTokens.Validate(ctx, reference.Reference, binding)
+	projected, err := m.resolveMCPTokenReference(ctx, binding, reference.Reference, reference.Revision)
 	if err != nil {
 		return nil, toolkitTokenMaterializationError(ctx, err)
 	}
-	if resolved.Reference != reference.Reference || resolved.Revision != reference.Revision {
-		return nil, ErrContentRejected
-	}
-	token, err := m.toolkitTokens.Load(ctx, reference.Reference, binding)
+	delete(object, "mcp_token_reference")
+	object["mcp_tokens"] = map[string]any{reference.Resource: projected}
+	return encodeCurrentMaterializationObject(object, maxBytes)
+}
+
+// resolveMCPTokenReference is the one release path of a delegated MCP grant
+// (FU-250): a toolkit call's frozen reference and a fan-out wake's
+// mcp_token_references both come here, only from the claim-checked content
+// listener. The binding's project and actor are the live claim's, so a
+// reference resolves only for the run's own actor; Validate re-checks the
+// full binding (project, actor, toolkit, resource) and the exact revision
+// before Load decrypts. Only the returned map holds token material.
+func (m *CurrentConfigurationsMaterializer) resolveMCPTokenReference(
+	ctx context.Context, binding mcpoauth.TokenBinding, reference string, revision int64,
+) (map[string]string, error) {
+	resolved, err := m.toolkitTokens.Validate(ctx, reference, binding)
 	if err != nil {
-		return nil, toolkitTokenMaterializationError(ctx, err)
+		return nil, err
+	}
+	if resolved.Reference != reference || resolved.Revision != revision {
+		return nil, mcpoauth.ErrTokenUnavailable
+	}
+	token, err := m.toolkitTokens.Load(ctx, reference, binding)
+	if err != nil {
+		return nil, err
 	}
 	// The credential inventory's last use (ADR-0044 decision 5).
-	credentialuse.Default().Touch(credentialuse.KindMCPOAuthToken, reference.Reference, int64(projectID))
-	delete(object, "mcp_token_reference")
+	credentialuse.Default().Touch(credentialuse.KindMCPOAuthToken, reference, int64(binding.ProjectID))
 	if !strings.EqualFold(token.TokenType, "Bearer") {
-		return nil, ErrContentRejected
+		return nil, mcpoauth.ErrTokenUnavailable
 	}
 	projected := map[string]string{"access_token": token.AccessToken}
 	if token.SessionID != "" {
 		projected["session_id"] = token.SessionID
 	}
-	object["mcp_tokens"] = map[string]any{reference.Resource: projected}
-	return encodeCurrentMaterializationObject(object, maxBytes)
+	return projected, nil
 }
 
 func toolkitTokenMaterializationError(ctx context.Context, err error) error {

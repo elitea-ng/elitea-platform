@@ -242,7 +242,7 @@ func TestPublishedBeforeDeadlineClaimedAfterDeadlineRetiresWithoutAuthority(t *t
 		rowResults: []scriptedRow{
 			{values: []any{
 				"command-1", "RUNNING", "DISPATCHED", "NOT_STARTED", "", "outbox-1", true,
-				digest[:], digest[:], false, "", true, false, int64(1),
+				digest[:], digest[:], false, "", true, false, int64(1), false,
 			}},
 			{values: []any{int64(1), "", ""}},
 		},
@@ -1243,6 +1243,7 @@ func claimExecutionRow(desiredState, jobState string, published bool, preparedDi
 		false,
 		authorityGranted,
 		int64(1),
+		false,
 	}}
 }
 

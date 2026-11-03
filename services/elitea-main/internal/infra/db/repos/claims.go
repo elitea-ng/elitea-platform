@@ -46,7 +46,7 @@ func (r *ClaimsRepository) ClaimValidation(ctx context.Context, request executio
 	var decision executionapp.ClaimDecision
 	err := r.store.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
 		var commandID, desiredState, jobState, invocationState, terminalErrorCode, outboxID, retirementCode string
-		var published, retired, deadlineExpired, authorityGranted bool
+		var published, retired, deadlineExpired, authorityGranted, wakeCredentials bool
 		var projectionProjectID int64
 		var preparedEnvelopeDigest, publishedEnvelopeDigest []byte
 		err := tx.QueryRow(ctx, `
@@ -57,7 +57,16 @@ SELECT j.command_id, j.desired_state, j.state, j.invocation_state,
        o.retired_at IS NOT NULL, COALESCE(o.retirement_code, ''),
        o.deadline <= clock_timestamp(),
        o.authority_granted_at IS NOT NULL,
-       j.projection_project_id
+       j.projection_project_id,
+       -- FU-250: a fanout_wake whose response holds an authorize decision
+       -- (over-approximated: any authorize recorded on the response).
+       EXISTS (
+         SELECT 1
+         FROM elitea_runtime.execution_interrupt_wakes wake
+         JOIN elitea_runtime.execution_interrupts card ON card.root_response_id = wake.root_response_id
+         WHERE wake.wake_execution_id = j.execution_id
+           AND card.decision_json IS NOT NULL
+           AND convert_from(card.decision_json, 'UTF8')::jsonb ->> 'action' = 'authorize')
 FROM elitea_runtime.execution_jobs AS j
 JOIN elitea_runtime.command_outbox AS o
   ON o.execution_id = j.execution_id AND o.generation = j.generation
@@ -79,6 +88,7 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 			&deadlineExpired,
 			&authorityGranted,
 			&projectionProjectID,
+			&wakeCredentials,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return executionapp.ErrInvalidClaim
@@ -186,6 +196,18 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 
 		if err := completeToolkitInboxProjection(ctx, tx, request); err != nil {
 			return err
+		}
+
+		// FU-250: a wake whose response holds an authorize decision may carry
+		// mcp_token_references; an older worker would drop the credential and
+		// resume the branch "authorized". Under every disposition (ordinary,
+		// reclaim, recovery) only a worker that opts in is granted it.
+		if wakeCredentials && !request.FanoutDelegatedCredentials {
+			decision = executionapp.ClaimDecision{
+				Disposition:  executionapp.ClaimRetryLaterNoACK,
+				DesiredState: desired,
+			}
+			return nil
 		}
 
 		existing, observedAt, live, err := loadActiveClaimForUpdate(ctx, tx, request.ExecutionID, request.Generation, commandID, desired)
