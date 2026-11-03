@@ -456,7 +456,7 @@ async fn answer_right_first(
     if action == "authorize" {
         fixture
             .ledger
-            .decide_with_credential(&right.0, "test-only-reference-0123456789abcdef");
+            .decide_with_credential(&right.0, TEST_CREDENTIAL_REF);
     } else {
         fixture.ledger.decide(&right.0, action, value);
     }
@@ -648,7 +648,37 @@ async fn a_delegated_auth_card_resumes_only_its_child_and_an_older_pause_is_refu
     assert_eq!(leaf.state["report"], json!({"authorized": true}));
     assert_older_pause_refused(&fixture, &older, "authorize", "").await;
     finish(&fixture, &left, "skip", None).await;
+    // FU-250 (brief item 2): the credential reference reaches no checkpoint
+    // of either child or their pipelines, and no fetched decision prints it.
+    for branch in ["left", "right"] {
+        for thread in [
+            Fixture::thread(branch),
+            format!("{}/workerB", Fixture::thread(branch)),
+        ] {
+            for saved in fixture.store.list(&thread).await.expect("list") {
+                let text = serde_json::to_string(&saved.state).expect("state")
+                    + &serde_json::to_string(&saved.metadata).expect("metadata");
+                assert!(
+                    !text.contains(TEST_CREDENTIAL_REF),
+                    "{thread} persisted the reference"
+                );
+            }
+        }
+    }
+    let decision = elitea_agent_runtime::graph::fanout::runner::FetchedDecision {
+        interrupt_key: "k".to_owned(),
+        request_id: "r".to_owned(),
+        revision: 2,
+        decision_sha256: "d".to_owned(),
+        action: "authorize".to_owned(),
+        value: None,
+        credential_ref: Some(TEST_CREDENTIAL_REF.to_owned()),
+    };
+    assert!(!format!("{decision:?}").contains(TEST_CREDENTIAL_REF));
 }
+
+/// A credential reference only a test uses.
+const TEST_CREDENTIAL_REF: &str = "test-only-reference-0123456789abcdef";
 
 /// FU-250: an `authorize` resumes only with its credential. Without a named
 /// reference, or without the run holding the card's server's token, the
@@ -673,7 +703,7 @@ async fn an_authorize_without_its_credential_ends_the_branch_typed() {
         if with_reference {
             fixture
                 .ledger
-                .decide_with_credential(&right.0, "test-only-reference-0123456789abcdef");
+                .decide_with_credential(&right.0, TEST_CREDENTIAL_REF);
         } else {
             fixture.ledger.decide(&right.0, "authorize", None);
         }
@@ -879,4 +909,59 @@ fn a_tool_guard_card_from_an_earlier_pause_keeps_its_bytes_and_a_recorded_rule_i
     assert_ne!(policy, plain, "a policy rule is part of the card");
     assert_ne!(platform, plain, "a recorded rule is part of the card");
     assert_ne!(policy, platform);
+}
+
+/// FU-250 (M2, the FU-268 rule): a delegated sign-in pause stored without a
+/// toolkit id (by an earlier Worker) re-raises its card with no
+/// `display.toolkit_id`, so its bytes are the earlier ones and Main keeps it
+/// skip-only; a pause that stored its toolkit id carries it in the card.
+#[tokio::test(flavor = "current_thread")]
+async fn a_delegated_auth_card_names_its_toolkit_only_when_its_pause_stored_it() {
+    let authorized = Arc::new(AtomicBool::new(false));
+    let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+        alias: "Customer Support".to_owned(),
+        tool: Arc::new(AuthorizationFixtureTool {
+            authorized: Arc::clone(&authorized),
+            toolkit_type: "mcp",
+        }),
+        sensitive: None,
+    });
+    let child = sensitive_pipeline_definition_yaml().replace("type: toolkit", "type: mcp");
+    let fixture = Fixture::new(&child, direct_tool_runtimes(resolver));
+    both_paused(&fixture, FanoutCardKind::DelegatedAuth).await;
+    let earlier = fixture.pause_of("right").await;
+    let earlier_parts = crate::agents::graph::parallel_cards::card_parts(&earlier)
+        .expect("an earlier pause renders");
+    let earlier_display = serde_json::to_value(&earlier_parts.display).expect("display json");
+    assert!(
+        earlier_display.get("toolkit_id").is_none(),
+        "{earlier_display}"
+    );
+
+    let Interrupt::Dynamic {
+        message,
+        data: Some(mut data),
+    } = earlier.interrupt.clone()
+    else {
+        panic!("a dynamic sign-in pause");
+    };
+    data["data"]["toolkit_id"] = json!(17);
+    let stored = ParallelBranchPause {
+        thread_id: earlier.thread_id.clone(),
+        checkpoint_id: earlier.checkpoint_id.clone(),
+        interrupt: Interrupt::Dynamic {
+            message,
+            data: Some(data),
+        },
+        checkpointer: earlier.checkpointer.clone(),
+    };
+    let parts = crate::agents::graph::parallel_cards::card_parts(&stored)
+        .expect("a pause with its toolkit renders");
+    let mut display = serde_json::to_value(&parts.display).expect("display json");
+    assert_eq!(display["toolkit_id"], json!(17), "{display}");
+    display
+        .as_object_mut()
+        .expect("display")
+        .remove("toolkit_id");
+    assert_eq!(display, earlier_display, "only the toolkit id is new");
 }

@@ -50,7 +50,47 @@ pub fn parse_agent_execution_input(
             "the agent execution input revision is not supported",
         ));
     }
+    // FU-250: references are Main's to resolve; a materialized input never
+    // carries one, so an input that still does is refused, not ignored.
+    if !message.mcp_token_references.is_empty() {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent input carries unresolved credential references",
+        ));
+    }
     Ok(message)
+}
+
+#[cfg(test)]
+mod credential_reference_tests {
+
+    use super::*;
+    use crate::protocol::elitea::runtime::v1::McpTokenReferenceV1;
+
+    /// FU-250: a materialized input never carries a credential reference; one
+    /// that still does is refused, so a Worker never runs with a reference it
+    /// cannot resolve.
+    #[test]
+    fn an_input_with_unresolved_credential_references_is_refused() {
+        let mut message = AgentExecutionInputV1 {
+            schema_revision: AGENT_INPUT_SCHEMA_REVISION.to_owned(),
+            ..AgentExecutionInputV1::default()
+        };
+        assert!(parse_agent_execution_input(&message.encode_to_vec()).is_ok());
+        message.mcp_token_references.push(McpTokenReferenceV1 {
+            resource: "https://mcp.example.invalid/".to_owned(),
+            reference: "a".repeat(43),
+            revision: 1,
+            toolkit_id: 7,
+        });
+        let error = parse_agent_execution_input(&message.encode_to_vec())
+            .expect_err("an unresolved reference is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("unresolved credential references"),
+            "{error}"
+        );
+    }
 }
 
 /// Validate every semantic field and bind it to the exact materialized input.
@@ -97,13 +137,6 @@ pub fn request_from(
         &message.internal_tools,
         "the agent internal tools must contain only strings",
     )?;
-    // FU-250: references are Main's to resolve; a materialized input never
-    // carries one, so an input that still does is refused, not ignored.
-    if !message.mcp_token_references.is_empty() {
-        return Err(AgentProtocolError::InvalidInput(
-            "the agent input carries unresolved credential references",
-        ));
-    }
     let mcp_tokens = json_object(
         &message.mcp_tokens,
         "the agent MCP tokens must be an object",
