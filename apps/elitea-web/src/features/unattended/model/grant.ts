@@ -9,8 +9,6 @@
  */
 import type { UnattendedChain, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
 
-export type { UnattendedChain, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
-
 /** A sensitive cloud tool, as a `toolkit/tool` pair. */
 export interface SensitiveToolRef {
   toolkit: string;

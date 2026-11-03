@@ -5,8 +5,9 @@
  * - leading, which shrinks: attach images (+), the mode ("Act ⌄",
  *   `ModePicker`), the agent·version picker, the model, then ⋯ for what is
  *   used less (the step limit);
- * - trailing, which keeps its room: where the thread runs ("Local ⌄") and the
- *   meters (the language servers and the context ring).
+ * - trailing, which keeps its room: where the thread runs ("Local ⌄"), the
+ *   meters (the language servers and the context ring) and "Run to
+ *   completion" (∞), just before Send.
  */
 import type { ReactNode } from 'react';
 
@@ -24,9 +25,10 @@ interface FooterControlsProps extends ModePickerProps {
   more: ((close: () => void) => ReactNode) | undefined;
   runLocation: ReactNode;
   contextMeter: ReactNode;
+  runToCompletion: ReactNode;
 }
 
-function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, ...mode }: FooterControlsProps): React.JSX.Element {
+function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, runToCompletion, ...mode }: FooterControlsProps): React.JSX.Element {
   return (
     <ComposerRow
       leading={
@@ -42,6 +44,7 @@ function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runL
         <>
           {runLocation}
           {contextMeter}
+          {runToCompletion}
         </>
       }
     />
@@ -54,14 +57,13 @@ export interface FooterSource {
   onPlanModeChange: (planMode: boolean) => void;
   bypass?: boolean;
   onBypassChange?: ((on: boolean) => void) | undefined;
-  unattended?: boolean;
-  onUnattendedChange?: ((on: boolean) => void) | undefined;
   showMode?: boolean;
   agentPicker?: ReactNode;
   modelPicker?: ReactNode;
   more?: ((close: () => void) => ReactNode) | undefined;
   runLocation?: ReactNode;
   contextMeter?: ReactNode;
+  runToCompletion?: ReactNode;
 }
 
 /** The footer row of the composer whose props are `source`, with `attach` (the + that picks images, or none). */
@@ -72,8 +74,6 @@ export function composerFooter(source: FooterSource, attach: ReactNode): React.J
       onPlanModeChange={source.onPlanModeChange}
       bypass={source.bypass === true}
       onBypassChange={source.onBypassChange}
-      unattended={source.unattended === true}
-      onUnattendedChange={source.onUnattendedChange}
       showMode={source.showMode !== false}
       attach={attach}
       agentPicker={source.agentPicker}
@@ -81,6 +81,7 @@ export function composerFooter(source: FooterSource, attach: ReactNode): React.J
       more={source.more}
       runLocation={source.runLocation}
       contextMeter={source.contextMeter}
+      runToCompletion={source.runToCompletion}
     />
   );
 }

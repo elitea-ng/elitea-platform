@@ -1,69 +1,36 @@
 /**
- * The parts of an unattended grant (ADR-0045 decision 1): what each one
- * answers, and what happens without the grant. The form and the summary both
- * read this list.
+ * The texts of the "Run to completion" control (ADR-0045 decision 1): the
+ * parts that also answer for the person (off by default), what each one
+ * answers and what happens without it, and the chain limits.
  */
 import { t } from '@/shared/i18n';
 
-import type { ChainField } from '../model/grant';
+import type { ChainDraft, ChainField } from '../model/grant';
 
-export type SwitchPart = 'continue_step_limit' | 'continue_tool_call_cap' | 'continue_output_limit' | 'hook_asks' | 'remote_confirmations';
+type OptInPart = 'hook_asks' | 'remote_confirmations';
 
-/** Where a part applies. */
-type Scope = 'any' | 'desktop' | 'cloud';
-
-interface PartInfo {
-  key: SwitchPart;
-  scope: Scope;
+interface OptInInfo {
+  key: OptInPart;
   label: () => string;
   help: () => string;
 }
 
-const PARTS: readonly PartInfo[] = [
-  {
-    key: 'continue_step_limit',
-    scope: 'any',
-    label: () => t('unattended.part.stepLimit', 'Continue at the step limit'),
-    help: () => t('unattended.part.stepLimitHelp', 'Answers “Continue?” at the step limit. Without the grant: the run asks; on timeout, it stops.'),
-  },
-  {
-    key: 'continue_tool_call_cap',
-    scope: 'desktop',
-    label: () => t('unattended.part.toolCallCap', 'Continue after 512 tool calls'),
-    help: () => t('unattended.part.toolCallCapHelp', 'Answers the local cap of 512 tool calls. Without the grant: the run stops and you click Continue.'),
-  },
-  {
-    key: 'continue_output_limit',
-    scope: 'cloud',
-    label: () => t('unattended.part.outputLimit', 'Continue at the output limit'),
-    help: () => t('unattended.part.outputLimitHelp', 'Answers the output limit. Without the grant: the run stops and you click Continue.'),
-  },
+/** The desktop parts that answer for the person. */
+export const DESKTOP_OPT_INS: readonly OptInInfo[] = [
   {
     key: 'hook_asks',
-    scope: 'desktop',
-    label: () => t('unattended.part.hookAsks', 'Allow hook questions'),
-    help: () => t('unattended.part.hookAsksHelp', 'Answers the question of a PreToolUse hook with Allow. Without the grant: the run asks; on timeout, it declines.'),
+    label: () => t('unattended.optIn.hookAsks', 'Hook asks'),
+    help: () => t('unattended.optIn.hookAsksHelp', 'Answers the question of a PreToolUse hook with Allow. When it is off, the run waits for you.'),
   },
   {
     key: 'remote_confirmations',
-    scope: 'desktop',
-    label: () => t('unattended.part.remote', 'Approve remote tool confirmations'),
-    help: () => t('unattended.part.remoteHelp', 'Answers a confirmation of a remote toolkit with Approve. Without the grant: the run asks; on timeout, it declines.'),
+    label: () => t('unattended.optIn.remote', 'Remote confirmations'),
+    help: () => t('unattended.optIn.remoteHelp', 'Answers a confirmation of a remote toolkit with Approve. When it is off, the run waits for you.'),
   },
 ];
 
-/** Which parts show: `desktop` shows the desktop-only parts, `cloud` the cloud-only ones. */
-export interface PartsShown {
-  desktop: boolean;
-  cloud: boolean;
-}
-
-export function visibleParts({ desktop, cloud }: PartsShown): readonly PartInfo[] {
-  return PARTS.filter((part) => part.scope === 'any' || (part.scope === 'desktop' ? desktop : cloud));
-}
-
 export const sensitiveLabel = (): string => t('unattended.part.sensitive', 'Sensitive tools');
-export const sensitiveHelp = (): string => t('unattended.part.sensitiveHelp', 'Runs the sensitive tools that you select without a pause. Without the grant: the run pauses for your approval.');
+export const sensitiveHelp = (): string => t('unattended.optIn.sensitiveHelp', 'Runs the sensitive tools that you select without a pause. The other sensitive tools pause for your approval.');
 
 interface ChainInfo {
   field: ChainField;
@@ -92,3 +59,15 @@ export const CHAIN_PARTS: readonly ChainInfo[] = [
     error: () => t('unattended.chain.deadlineError', 'Type a time of at least 1 second (0.0003 hours).'),
   },
 ];
+
+/** The chain limits in one line: the typed values, else the platform defaults. */
+export function chainLine(chain: ChainDraft): string {
+  const count = chain.max_continuations.trim();
+  const spend = chain.max_spend.trim();
+  const hours = chain.deadline_hours.trim();
+  return [
+    t('unattended.chain.lineContinuations', 'up to {{number}} continuations', { number: count === '' ? '20' : count }),
+    spend === '' ? t('unattended.chain.lineSpendDefault', 'the spend cap of one run × 10') : t('unattended.chain.lineSpend', '${{spend}}', { spend }),
+    t('unattended.chain.lineDeadline', '{{hours}} h', { hours: hours === '' ? '12' : hours }),
+  ].join(', ');
+}

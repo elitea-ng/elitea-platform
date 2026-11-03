@@ -11,6 +11,7 @@ import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
+import { defaultGrant, resetGrantsTurnedOff } from '@/features/unattended';
 import { readThreads, recordThread, WorkspaceIpcProvider, type WorkspaceTurn } from '@/features/workspace';
 import { IndexIpcProvider } from '@/features/workspace-index';
 import type { Application } from '@/shared/api/generated/model';
@@ -95,9 +96,9 @@ async function pickMode(user: ReturnType<typeof userEvent.setup>, name: string):
 /** The mode the picker shows. */
 const shownMode = (): HTMLElement => screen.getByTestId('mode-picker');
 
-/** Bypass and unattended mode are kept per folder in storage: each mode test starts, and leaves, without them. */
+/** Bypass mode and "Run to completion" are kept per folder in storage: each mode test starts, and leaves, without them. */
 function forgetBypass(): void {
-  window.localStorage.removeItem('el.desktop.workspace.w1.unattended');
+  window.localStorage.removeItem('el.desktop.workspace.w1.runToCompletion');
   window.localStorage.removeItem('el.desktop.workspace.w1.bypass');
   window.localStorage.removeItem('el.desktop.workspace.w1.bypassConfirmed');
 }
@@ -1293,33 +1294,78 @@ describe('WorkspaceSessionPage', () => {
       expect(shownMode()).toHaveTextContent('Bypass');
     }, 30_000);
 
-    it('turns unattended mode on from its grant dialog, shows the grant and sends it with a new grant id per message', async () => {
+    it('runs to completion by default: each send carries the default grant, without bypass, and no Unattended mode', async () => {
       forgetBypass();
       onTestFinished(forgetBypass);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      await pickMode(user, 'Plan mode (no changes)');
-      await pickMode(user, 'Unattended mode (continues by itself)');
-      const dialog = await screen.findByRole('dialog', { name: 'Run unattended?' });
-      await user.click(within(dialog).getByRole('switch', { name: 'Allow hook questions' }));
-      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5.5');
-      expect(within(dialog).getByTestId('workspace-unattended-start')).toBeDisabled();
-      await user.clear(within(dialog).getByTestId('unattended-chain-max-continuations'));
-      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5');
-      await user.click(within(dialog).getByTestId('workspace-unattended-start'));
-      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Run unattended?' })).toBeNull());
-      expect(shownMode()).toHaveTextContent('Unattended');
-      expect(screen.getByTestId('workspace-unattended-notice')).toHaveTextContent('Allow hook questions');
+      await user.click(await screen.findByTestId('mode-picker'));
+      expect(screen.queryByRole('menuitemradio', { name: /Unattended/u })).toBeNull();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByTestId('workspace-unattended-notice')).toBeNull();
+      expect(screen.getByTestId('workspace-run-to-completion-toggle')).toHaveAttribute('aria-pressed', 'true');
       const input = screen.getByTestId('chat-message-input');
       await user.type(input, 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       const started = ipc.calls.started[0];
       expect(started?.plan_mode).toBe(false);
       expect(started?.bypass_approvals).toBeUndefined();
-      expect(started?.unattended).toMatchObject({ continue_step_limit: true, continue_tool_call_cap: true, hook_asks: true, remote_confirmations: false, chain: { max_continuations: 5 } });
-      expect(started?.unattended?.grant_id).toMatch(/^[0-9a-f-]{36}$/u);
-      await user.click(within(screen.getByTestId('workspace-unattended-notice')).getByRole('button', { name: 'Turn off' }));
-      expect(shownMode()).toHaveTextContent('Act');
+      expect(started?.unattended).toEqual({ grant_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string, continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false });
+    }, 30_000);
+
+    it('keeps the opt-ins and the off choice for the folder, and sends no grant in Plan mode', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.click(screen.getByTestId('workspace-run-to-completion-open'));
+      const popover = await screen.findByRole('dialog', { name: 'Run to completion' });
+      await user.click(within(popover).getByRole('checkbox', { name: 'Hook asks' }));
+      await user.keyboard('{Escape}');
+      expect(screen.getByTestId('workspace-run-to-completion')).toHaveAttribute('data-tone', 'strong');
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.unattended).toMatchObject({ hook_asks: true, remote_confirmations: false });
+      expect(ipc.calls.started[0]?.bypass_approvals).toBeUndefined();
+      expect(JSON.parse(window.localStorage.getItem('el.desktop.workspace.w1.runToCompletion') ?? 'null')).toMatchObject({ on: true, grant: { hook_asks: true } });
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 0 } });
+      await pickMode(user, 'Plan mode (no changes)');
+      expect(screen.getByTestId('workspace-run-to-completion-toggle')).toBeDisabled();
+      await user.type(input, 'plan it{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
+      expect(ipc.calls.started[1]).toMatchObject({ plan_mode: true });
+      expect(ipc.calls.started[1]?.unattended).toBeUndefined();
+    }, 30_000);
+
+    it('sends the turn again without the grant once when an administrator turned grants off, and hides the control', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      onTestFinished(resetGrantsTurnedOff);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      ipc.failNext('startTurn', 'unattended_grant_refused', 'Unattended runs are turned off on this platform.');
+      await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
+      expect(ipc.calls.started[0]?.unattended).toBeDefined();
+      expect(ipc.calls.started[1]).not.toHaveProperty('unattended');
+      expect(ipc.calls.started[1]?.prompt).toBe('go');
+      await waitFor(() => expect(screen.queryByTestId('workspace-run-to-completion')).toBeNull());
+      expect(screen.queryByText('Unattended runs are turned off on this platform.')).toBeNull();
+    }, 30_000);
+
+    it('shows the refusal of a grant with hook asks when grants are off, and does not send it again', async () => {
+      forgetBypass();
+      onTestFinished(forgetBypass);
+      onTestFinished(resetGrantsTurnedOff);
+      window.localStorage.setItem('el.desktop.workspace.w1.runToCompletion', JSON.stringify({ on: true, grant: { ...defaultGrant(), hook_asks: true } }));
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      ipc.failNext('startTurn', 'unattended_grant_refused', 'Unattended runs are turned off on this platform.');
+      await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
+      expect(await screen.findByText('Unattended runs are turned off on this platform.')).toBeInTheDocument();
+      expect(ipc.calls.started).toHaveLength(1);
+      await waitFor(() => expect(screen.queryByTestId('workspace-run-to-completion')).toBeNull());
     }, 30_000);
 
     it('asks the host to read ahead for the selected agent when the composer gets focus', async () => {

@@ -1,6 +1,6 @@
 ---
 title: "Use chat"
-description: "Send messages, organize conversations into folders, attach agents and toolkits as participants, manage message output, and run long tasks unattended in Elitea chat."
+description: "Send messages, organize conversations into folders, attach agents and toolkits as participants, manage message output, and run long tasks to completion in Elitea chat."
 ---
 
 Chat is where you talk to models, agents, pipelines, toolkits, and MCP servers in one conversation. Every conversation keeps its own context — nothing is shared between conversations unless you attach the same participant to more than one.
@@ -63,22 +63,19 @@ Below an assistant message you get **Read out** (if voice is configured — see 
 
 Next to those, a thumbs-up and thumbs-down let you rate an assistant answer. Selecting one highlights it and, once you've rated a message, a comment icon appears so you can attach an optional note explaining why. Hover either thumb to see how many teammates rated the message the same way; changing your mind (clicking the other thumb, or clicking your own vote again) updates or clears your rating. A rated message keeps its feedback when the conversation is exported.
 
-## Run unattended
+## Run a task to completion
 
-Use unattended mode for a long task that must continue while you are away. You give a grant before you send. The grant tells the platform which questions it can answer for you in this task.
+**∞ To completion** is in the row under the message box, just before **Send**. It is on by default in each new conversation. With it on, each message that you send runs to the end to reach its goal: when the run stops at its step limit or at the output limit, the platform continues it for you. Select the chip to turn it off or on; the conversation keeps your choice while the page is open. Point at the chip to read what it does now.
 
-1. Above the message box, click **Run unattended…**.
-2. Read each part of the grant and set it:
-   - **Continue at the step limit**: when the run stops at its step limit, the platform starts a new turn with "Continue from where you stopped."
-   - **Continue at the output limit**: when the answer stops at the output limit, the platform continues the same answer.
-   - **Sensitive tools**: select the tools of the agent that can run without a pause. The list shows the tools that the agent's toolkits select. A tool that you do not select still pauses for your approval.
-   - **Chain limits**: the most automatic continuations (default 20), the most spend in USD (default: the spend cap of one run × 10) and the deadline in hours (default 12). An empty field takes the platform default.
-3. Click **Start**. A notice above the message box shows the grant. Click **Edit** to change it, or **Turn off** to stop unattended mode.
-4. Send your message. Each message that you send in unattended mode starts a new task with its own grant.
+Select the **⌄** beside the chip to open its settings:
 
-In the conversation, each turn that the platform started for you shows **Continued automatically** with its number in the task. An answer that stopped at its step limit shows a notice. The task ends when it is complete, when it waits for a question that the grant does not answer, or when it reaches a chain limit.
+- **Continue until the goal is met**: when the run stops at its step limit, the platform starts a new turn with "Continue from where you stopped." When the answer stops at the output limit, the platform continues the same answer. When it is off, the run stops at a limit and waits for you.
+- **Change limits**: the most automatic continuations (default 20), the most spend in USD (default: the spend cap of one run × 10) and the deadline in hours (default 12). An empty field takes the platform default.
+- **Also answer for me**, off by default: **Sensitive tools**. Select the tools of the agent that can run without a pause. The list shows the tools that the agent's toolkits select. A tool that you do not select still pauses for your approval. When you select a tool, the chip has an orange outline.
 
-The grant never lifts your organization's guardrails, budgets, run caps or kill switches. If the platform cannot accept the grant, the message is not sent, and the error names the tool and the reason. For example, a tool in a category that your administrator keeps out of grants (by default, payments) is refused. Clear that tool in the grant and send again. Administrators set the rules in [Unattended grants](/admin/enterprise-controls/runtime-safety#unattended-grants).
+Each message that you send starts a new task with its own grant. In the conversation, each turn that the platform started for you shows **Continued automatically** with its number in the task. An answer that stopped at its step limit shows a notice. The task ends when it is complete, when it waits for a question that the grant does not answer, or when it reaches a chain limit.
+
+The grant never lifts your organization's guardrails, budgets, run caps or kill switches. If the platform cannot accept the grant, the message is not sent, and the error names the tool and the reason. For example, a tool in a category that your administrator keeps out of grants (by default, payments) is refused. Clear that tool in the grant and send again. If your administrator turned unattended grants off, the platform does not continue a run for you. A grant that names sensitive tools is then refused with the message "An administrator turned off unattended grants", and the chip goes away until you load the page again. Administrators set the rules in [Unattended grants](/admin/enterprise-controls/runtime-safety#unattended-grants).
 
 ## Related
 

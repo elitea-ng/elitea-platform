@@ -15,7 +15,7 @@ export interface UnattendedChain {
   deadline_seconds?: number;
 }
 
-/** `agent_turn_start.unattended`: what the grant answers for the person. It implies bypass for local rule asks. */
+/** `agent_turn_start.unattended`: what the grant answers for the person. It does not bypass the local rules: only `bypass_approvals` does. */
 export interface UnattendedGrant {
   /** The chain's grant id; the host makes one when it is absent and keeps it for its own continuations. */
   grant_id?: string;

@@ -91,6 +91,15 @@ describe("classifyStartFailure", () => {
     ).toMatchObject({ message: expect.stringContaining("Most automatic continuations: the value is more than the platform maximum.") });
   });
 
+  it("marks a grant refused because grants are off, so the send can go again without it (ADR-0045)", () => {
+    expect(
+      classifyStartFailure(httpError(422, { error: "unattended_grant_refused", reason: "disabled" })),
+    ).toMatchObject({ started: false, reason: "rejected", grantsOff: true });
+    expect(
+      classifyStartFailure(httpError(422, { error: "unattended_grant_refused", reason: "over_maximum" })),
+    ).not.toHaveProperty("grantsOff");
+  });
+
   it("prefers safe_message, the field every Go producer actually writes", () => {
     expect(
       classifyStartFailure(

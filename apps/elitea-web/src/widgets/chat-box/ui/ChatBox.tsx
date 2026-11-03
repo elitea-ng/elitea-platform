@@ -52,7 +52,6 @@ import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
-import { ChatBoxUnattendedControls } from './ChatBoxUnattended';
 import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
@@ -112,7 +111,7 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipant, conversationParticipants, isAgentsPage,
   });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
-  // ADR-0045: the grant each send carries while unattended mode is on.
+  // ADR-0045: "Run to completion", on by default: the grant each send carries.
   const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest);
 
   // Local state (mentions, slash/skill phases, participant guards, etc.) —
@@ -352,10 +351,6 @@ const ChatBoxInner = memo(function ChatBox({
           })}
         />
         {contextIndicator}
-        <ChatBoxUnattendedControls
-          unattended={unattended}
-          disabled={isInputLoading}
-        />
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
@@ -380,7 +375,7 @@ const ChatBoxInner = memo(function ChatBox({
             model: { llmSettings, onSetLLMSettings, selectedModel: selectedLlmModel, onSelectModel: handleSelectModel, models: modelsList, shown: !participantForEditor },
             clearChat: { disabled: shouldDisableClearChat(isStreaming, messages.length), onClear: handleClear },
             refs: { attachmentButtonRef, voiceButtonRef, voiceInputRef: chatInputRef }, voice: readAloud.voicePlayerProps, voiceInput: { onRecordingChange: voiceFeedback.onRecordingChange, onError: voiceFeedback.onError },
-            isAgentsPage: !!isAgentsPage, participants: normalisedParticipants,
+            isAgentsPage: !!isAgentsPage, participants: normalisedParticipants, runToCompletion: { unattended, disabled: isInputLoading },
             entitySubmenus: { ...entitySubmenus, onSelectParticipant: entityParticipantActions.onSelectParticipant, getParticipantMenuState: entityParticipantActions.getParticipantMenuState }, ...buildCreateHandlerProps(editorCallbacks),
           })}
           refs={{ attachmentButtonRef, voiceButtonRef }}

@@ -3,7 +3,7 @@
  * when `native` is on, and the ⋯ menu that keeps every control the web row
  * shows as a button (model settings, read aloud, voice settings, clear).
  */
-import type { ReactElement } from 'react';
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -12,6 +12,7 @@ import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PlusChatButton, SendButton, VoiceButton } from '@/widgets/chat';
+import { defaultChoice, RunToCompletionControl } from '@/features/unattended';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { server } from '@/test/setup';
 
@@ -71,7 +72,7 @@ beforeEach(() => {
   );
 });
 
-function nativeSlots(isAgentsPage: boolean) {
+function nativeSlots(isAgentsPage: boolean, runToCompletion?: Parameters<typeof buildChatBoxInputSlots>[0]['runToCompletion']) {
   return buildChatBoxInputSlots({
     attachments: { attachments: [], onAttachFiles: vi.fn(), disabled: false },
     internalTools: { disabled: false, tools: [], onToolChange: vi.fn() },
@@ -84,8 +85,13 @@ function nativeSlots(isAgentsPage: boolean) {
     entitySubmenus: undefined,
     participants: undefined,
     native: true,
+    runToCompletion,
   });
 }
+
+/** The children of a fragment slot, in order. */
+const parts = (node: unknown): ReactElement<Record<string, unknown>>[] =>
+  Children.toArray(element(node).props['children'] as ReactNode).filter(isValidElement) as ReactElement<Record<string, unknown>>[];
 
 const element = (node: unknown): ReactElement<Record<string, unknown>> => node as ReactElement<Record<string, unknown>>;
 
@@ -97,11 +103,17 @@ describe('buildChatBoxInputSlots — the desktop row', () => {
     expect(element(slots.clearChat).type).toBe(ChatBoxComposerTools);
     expect((element(slots.clearChat).props['model'] as { shown: boolean }).shown).toBe(false);
     expect(slots.modelSelector).toBeUndefined();
-    expect(element(slots.voiceButton).type).toBe(VoiceButton);
-    expect(element(slots.voiceButton).props['native']).toBe(true);
+    expect(parts(slots.voiceButton).map((part) => part.type)).toEqual([VoiceButton]);
+    expect(parts(slots.voiceButton)[0]?.props['native']).toBe(true);
     const send = element(slots.sendControl({ question: '', disabledSend: false, onSend: vi.fn(), isSpeakingMode: false, isRecording: false } as never));
     expect(send.type).toBe(SendButton);
     expect(send.props['native']).toBe(true);
+  });
+
+  it('ends with "Run to completion" after the mic when it shows (ADR-0045)', () => {
+    const unattended = { shown: true, choice: defaultChoice(), setChoice: vi.fn(), sensitiveTools: undefined, wire: vi.fn() };
+    expect(parts(nativeSlots(false, { unattended, disabled: false }).voiceButton).map((part) => part.type)).toEqual([VoiceButton, RunToCompletionControl]);
+    expect(parts(nativeSlots(false, { unattended: { ...unattended, shown: false }, disabled: false }).voiceButton).map((part) => part.type)).toEqual([VoiceButton]);
   });
 
   it('keeps the web controls on the agents page', () => {
