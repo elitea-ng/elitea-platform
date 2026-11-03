@@ -47,7 +47,9 @@
 //! * [`context`] — the model's context limits, the step compaction's budget,
 //!   marker and meter (#1217);
 //! * [`idle`] — an idle thread compacted while its prompt cache is warm;
-//! * [`turn`] — the assembler and the host's turn table.
+//! * [`turn`] — the assembler and the host's turn table;
+//! * [`unattended`] — an unattended turn's grant, the questions' waits and
+//!   defaults, and the chain of automatic continuations (ADR-0045).
 
 pub mod api;
 pub mod approvals;
@@ -76,6 +78,7 @@ pub mod steering;
 pub mod subagents;
 pub mod tools;
 pub mod turn;
+pub mod unattended;
 
 #[cfg(test)]
 pub(crate) mod tests;

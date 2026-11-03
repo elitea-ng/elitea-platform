@@ -128,6 +128,17 @@ describe('buildStartBody', () => {
     expect(body?.['participant_id']).toBe(42);
   });
 
+  it('carries the unattended grant when unattended mode is on, on both contracts (ADR-0045)', () => {
+    const unattended = { grant_id: 'g-1', continue_step_limit: true, continue_output_limit: true, sensitive_tools: [{ toolkit_name: 'github', tool_name: 'delete_branch' }] };
+    expect(buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42, unattended })?.['unattended']).toEqual(unattended);
+    expect(buildStartBody({ ...commonBody, isApplicationTurn: false, participantId: 2, unattended })?.['unattended']).toEqual(unattended);
+  });
+
+  it('sends no unattended key while unattended mode is off', () => {
+    expect(Object.hasOwn(buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42 }) ?? {}, 'unattended')).toBe(false);
+    expect(Object.hasOwn(buildStartBody({ ...commonBody, isApplicationTurn: true, participantId: 42, unattended: undefined }) ?? {}, 'unattended')).toBe(false);
+  });
+
   it('sends the picked project skills as ids only, on an application turn', () => {
     const payload = { ...commonBody.payload, projectSkillIds: ['9', 8, '9', 'x', 0, -3] };
     const body = buildStartBody({ ...commonBody, payload, isApplicationTurn: true, participantId: 42 });

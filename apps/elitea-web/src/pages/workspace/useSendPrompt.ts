@@ -3,11 +3,13 @@
  */
 import { useRef, useState } from 'react';
 
+import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
-import type { AttachedImage, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
+import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
 import type { AgentSelection } from './useAgentSelection';
+import { modeFields } from './turnModeFields';
 import { useEnsureConversation } from './useEnsureConversation';
 
 /** The images a message carries: the tokens the host holds them by, and what the transcript shows of them. */
@@ -20,7 +22,7 @@ export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
   /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the skills it invokes with "/"; `compact`: `/compact` was asked for; `model`: the model chip's choice; `command`: the custom command it runs. */
-  send: (prompt: string, mode: TurnMode, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
+  send: (prompt: string, mode: TurnModeChoice, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
   /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
   prewarm: () => void;
 }
@@ -46,11 +48,6 @@ function notifyStarted(onStarted: ((conversationId: string, prompt: string, imag
 }
 
 /** `/compact` only when asked for: the start request is otherwise as before. */
-/** `plan_mode`, and `bypass_approvals` only when it is on. */
-function modeFields(mode: TurnMode): Pick<TurnStartRequest, 'plan_mode' | 'bypass_approvals'> {
-  return mode === 'bypass' ? { plan_mode: false, bypass_approvals: true } : { plan_mode: mode === 'plan' };
-}
-
 function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
@@ -63,6 +60,22 @@ function modelField(model: TurnModelChoice | undefined): { model?: TurnModelChoi
 /** The start request's `images`, only when the message carries some. */
 function imagesField(images: SentImages | undefined): { images?: TurnImagePick[] } {
   return images === undefined || images.picks.length === 0 ? {} : { images: images.picks };
+}
+
+/**
+ * ADR-0045: "Run to completion" is on by default, but an administrator can
+ * turn grants off. Then the control hides for this page load. A grant with
+ * only the continue parts goes once more without the grant (an older Main
+ * refuses it); a grant with hook asks or remote confirmations shows the
+ * refusal, because the person asked for those answers.
+ */
+function withoutRefusedGrant(request: TurnStartRequest, refusal: { code: string; message: string }): TurnStartRequest | undefined {
+  const grant = request.unattended;
+  if (grant === undefined || !isDesktopGrantsOff(refusal.code)) return undefined;
+  markGrantsTurnedOff();
+  if (grant.hook_asks || grant.remote_confirmations) return undefined;
+  const { unattended: _refused, ...rest } = request;
+  return rest;
 }
 
 function shownOf(images: SentImages | undefined): SentImages['shown'] {
@@ -93,7 +106,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, mode: TurnMode, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
+  const send = async (prompt: string, mode: TurnModeChoice, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -117,7 +130,7 @@ export function useSendPrompt(
         folderName: workspace.name,
       });
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
-      const started = await turn.start({
+      const request: TurnStartRequest = {
         workspace_id: workspace.id,
         project_id: projectId,
         conversation_id: conversationId,
@@ -131,7 +144,8 @@ export function useSendPrompt(
         ...modelField(model),
         ...commandField(command),
         ...imagesField(images),
-      });
+      };
+      const started = await turn.start(request, (refusal) => withoutRefusedGrant(request, refusal));
       // A refused start (its reason is the turn's startError) keeps the
       // prompt and the person's conversation choice as they were.
       if (!started) return false;

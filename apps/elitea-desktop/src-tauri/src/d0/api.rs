@@ -129,6 +129,9 @@ pub struct ApiError {
     /// (`network`, `invalid_response`, `not_signed_in`).
     pub code: String,
     pub message: String,
+    /// The refusal's `limit` (`continuations`, `spend`, `deadline`): which
+    /// chain limit a `409 chain_limit_reached` names (ADR-0045).
+    pub limit: Option<String>,
 }
 
 impl ApiError {
@@ -137,6 +140,7 @@ impl ApiError {
             status: None,
             code: code.to_owned(),
             message: message.into(),
+            limit: None,
         }
     }
 }
@@ -164,11 +168,25 @@ impl Answer {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
+        let mut code = text("error").unwrap_or_else(|| format!("http_{}", self.status));
+        // A refused unattended grant names the field and the reason: the
+        // person reads which limit the platform refused.
+        let message = if code == super::unattended::GRANT_REFUSED {
+            super::unattended::refusal_message(text("field").as_deref(), text("reason").as_deref())
+        } else {
+            text("message").unwrap_or_else(|| format!("the platform answered HTTP {}", self.status))
+        };
+        if code == super::unattended::GRANT_REFUSED && text("reason").as_deref() == Some("disabled")
+        {
+            code = super::unattended::GRANTS_OFF.to_owned();
+        }
         ApiError {
             status: Some(self.status),
-            code: text("error").unwrap_or_else(|| format!("http_{}", self.status)),
-            message: text("message")
-                .unwrap_or_else(|| format!("the platform answered HTTP {}", self.status)),
+            code,
+            message,
+            // Only a known limit name; anything else is dropped.
+            limit: text("limit")
+                .filter(|limit| matches!(limit.as_str(), "continuations" | "spend" | "deadline")),
         }
     }
 
@@ -214,6 +232,9 @@ pub struct LocalTurnStarted {
     pub question_id: String,
     pub response_message_id: String,
     pub memory_recall: MemoryRecall,
+    /// The chain of an unattended turn, as the platform admitted it.
+    #[serde(default)]
+    pub unattended: Option<super::unattended::StartedChain>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -966,6 +987,43 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Grants turned off: the refusal has its own code, so the UI does not
+    /// read the message to hide the control.
+    #[test]
+    fn a_grant_refused_because_grants_are_off_has_its_own_code() {
+        let answer = Answer {
+            status: 422,
+            body: json!({"error": "unattended_grant_refused", "reason": "disabled", "field": "unattended"}),
+            etag: None,
+        };
+        let error = answer.error();
+        assert_eq!(error.code, super::super::unattended::GRANTS_OFF);
+        assert_eq!(
+            error.message,
+            "Unattended runs are turned off on this platform."
+        );
+    }
+
+    /// The platform owns the chain maximums: its 422 reads well.
+    #[test]
+    fn a_refused_grant_names_the_limit() {
+        let answer = Answer {
+            status: 422,
+            body: json!({"error": "unattended_grant_refused", "reason": "over_maximum",
+                "field": "chain.deadline_seconds", "message": "The unattended grant was refused: over_maximum."}),
+            etag: None,
+        };
+        let error = answer.error();
+        assert_eq!(error.code, "unattended_grant_refused");
+        assert!(
+            error
+                .message
+                .starts_with("The unattended run's deadline is higher than the platform allows."),
+            "{}",
+            error.message
+        );
+    }
 
     #[test]
     fn the_signed_in_user_is_the_authors_id() {

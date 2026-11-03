@@ -17,4 +17,10 @@ describe('recordedPrompt', () => {
     expect(recordedPrompt(local('plain words') as never, COMMANDS, SKILLS)?.skills).toEqual([]);
     expect(recordedPrompt({ kind: 'none' } as never, COMMANDS, SKILLS)).toBeNull();
   });
+
+  it('skips the turns the host continued by itself: their prompt is not the person’s', () => {
+    const hostTurn: StoredTurn = { ...turn('Continue from where you stopped.'), events: [{ turn_id: 't', seq: 1, kind: 'status', payload: { phase: 'running', continued_automatically: true, continuation_index: 1 } }] };
+    const history = { kind: 'local' as const, turns: [turn('fix the build'), hostTurn] };
+    expect(recordedPrompt(history as never, COMMANDS, SKILLS)?.prompt).toBe('fix the build');
+  });
 });

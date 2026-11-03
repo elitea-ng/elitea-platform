@@ -16,6 +16,7 @@ use adk_rust::{ReadonlyContext, Toolset};
 use serde_json::{Map, Value};
 
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+use super::unattended::{GrantedApproval, UnattendedGrant};
 use crate::toolkits::{
     AdmittedToolSnapshot, FrozenToolKind, SensitiveToolPolicy, ToolAdmissionPolicy, ToolBindingPlan,
 };
@@ -114,6 +115,10 @@ pub(crate) struct SensitiveToolCatalog {
     /// The run's untrusted reads (ADR-0043 decision 4), when the catalog
     /// holds "read untrusted, then act" candidates.
     untrusted: Option<Arc<elitea_agent_runtime::untrusted::UntrustedReads>>,
+    /// The run's unattended grant, kept so that tools added after it was
+    /// applied (the cloud workspace's `git_push` and `open_pull_request`)
+    /// are granted too.
+    unattended_grant: Option<Arc<UnattendedGrant>>,
     /// Test-only: how often the unqualified names were rebuilt (budget test).
     #[cfg(test)]
     rebuilds: usize,
@@ -134,6 +139,9 @@ struct SensitiveToolEntry {
     /// approved call replays, because its effect is confined to the
     /// workspace the continuation hydrates from the published commit.
     conditional: bool,
+    /// The run's unattended grant names this tool (ADR-0045): a call does
+    /// not pause, it runs after one approval event.
+    granted: Option<GrantedApproval>,
 }
 
 impl SensitiveToolEntry {
@@ -179,12 +187,46 @@ impl SensitiveToolCatalog {
         self.scoped_entries.is_empty()
     }
 
-    /// The names confirmed on every call (conditional entries excluded).
+    /// The names confirmed on every call (conditional entries and the
+    /// entries of the run's unattended grant excluded).
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
         self.provider_entries
             .iter()
-            .filter(|(_, entry)| !entry.conditional)
+            .filter(|(_, entry)| !entry.conditional && entry.granted.is_none())
             .map(|(name, _)| name.as_ref())
+    }
+
+    /// Mark each sensitive tool that the run's unattended grant names
+    /// (ADR-0045 decision 2). A conditional entry ("read untrusted, then
+    /// act", the workspace command) stays as it is: the grant does not apply
+    /// to it. Call this before `bind_provider_names`, because the provider
+    /// names copy the scoped entries.
+    #[must_use]
+    pub(crate) fn with_unattended_grant(mut self, grant: Option<&UnattendedGrant>) -> Self {
+        let Some(grant) = grant.filter(|grant| grant.has_sensitive_tools()) else {
+            return self;
+        };
+        self.unattended_grant = Some(Arc::new(grant.clone()));
+        for (identity, entry) in &mut self.scoped_entries {
+            if !entry.conditional && grant.names_tool(&identity.toolkit_name, &identity.tool_name) {
+                entry.granted = Some(GrantedApproval::new(
+                    Arc::clone(grant.grant_id()),
+                    &identity.toolkit_name,
+                    &identity.tool_name,
+                ));
+            }
+        }
+        self.rebuild_unqualified_provider_entries();
+        self
+    }
+
+    /// The grant approval of one model-visible tool name, if the run's
+    /// unattended grant names that tool.
+    #[must_use]
+    pub(crate) fn granted_for(&self, tool_name: &str) -> Option<&GrantedApproval> {
+        self.provider_entries
+            .get(tool_name)
+            .and_then(|entry| entry.granted.as_ref())
     }
 
     /// Every name the catalog may confirm, conditional entries included: what
@@ -226,6 +268,7 @@ impl SensitiveToolCatalog {
             policy: SensitiveToolPolicy::workspace_command(),
             read_only: false,
             conditional: true,
+            granted: None,
         };
         let identity = SensitiveToolIdentity {
             toolkit_name: TOOLKIT.into(),
@@ -274,10 +317,19 @@ impl SensitiveToolCatalog {
             }
         }
         for (tool, policy) in tools {
+            // ADR-0045: a grant names these as `workspace/git_push` and
+            // `workspace/open_pull_request`, the toolkit name their pauses
+            // and the grant approval event carry.
+            let granted = self
+                .unattended_grant
+                .as_ref()
+                .filter(|grant| grant.names_tool(TOOLKIT, tool))
+                .map(|grant| GrantedApproval::new(Arc::clone(grant.grant_id()), TOOLKIT, tool));
             let entry = SensitiveToolEntry {
                 policy,
                 read_only: false,
                 conditional: false,
+                granted,
             };
             let identity = SensitiveToolIdentity {
                 toolkit_name: TOOLKIT.into(),
@@ -506,6 +558,7 @@ impl SensitiveToolCatalog {
                 policy,
                 read_only,
                 conditional: false,
+                granted: None,
             },
         )?;
         catalog.rebuild_unqualified_provider_entries();
@@ -583,6 +636,7 @@ pub(crate) async fn sensitive_tools_for_kind(
                     policy: sensitive,
                     read_only: tool.is_read_only(),
                     conditional,
+                    granted: None,
                 },
             )?;
         }
@@ -624,6 +678,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use super::super::unattended::{GrantedApproval, UnattendedGrant};
     use adk_rust::tool::{BasicToolset, FunctionTool};
     use adk_rust::{Tool, Toolset};
     use elitea_agent_runtime::approval_policy::ApprovalPolicy;
@@ -777,6 +832,7 @@ mod tests {
                         policy: sensitive,
                         read_only: true,
                         conditional: false,
+                        granted: None,
                     },
                 )
                 .expect("scoped sensitive tool");
@@ -827,6 +883,7 @@ mod tests {
                             .expect("sensitive fixture policy"),
                         read_only: false,
                         conditional: false,
+                        granted: None,
                     },
                 )
                 .expect("scoped sensitive tool");
@@ -928,6 +985,40 @@ mod tests {
         );
     }
 
+    /// ADR-0045: the workspace `git_push` and `open_pull_request` are added
+    /// after the grant is applied; a grant that names them as
+    /// `workspace/<tool>` still approves them, and one that does not leaves
+    /// them paused.
+    #[test]
+    fn a_grant_applied_before_the_workspace_tools_approves_them() {
+        let grant = UnattendedGrant::fixture(&[("workspace", "git_push")], false);
+        let catalog = SensitiveToolCatalog::default()
+            .with_unattended_grant(Some(&grant))
+            .with_workspace_pull_request()
+            .expect("pull request");
+        let granted = catalog.granted_for("git_push").expect("git_push granted");
+        assert_eq!(
+            granted,
+            &GrantedApproval::new(Arc::clone(grant.grant_id()), "workspace", "git_push")
+        );
+        assert!(catalog.granted_for("open_pull_request").is_none());
+        assert!(catalog.policy_for("open_pull_request").is_some());
+
+        let other = UnattendedGrant::fixture(&[("github", "open_pull_request")], false);
+        let catalog = SensitiveToolCatalog::default()
+            .with_unattended_grant(Some(&other))
+            .with_workspace_pull_request()
+            .expect("pull request");
+        assert!(catalog.granted_for("open_pull_request").is_none());
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_workspace_pull_request()
+                .expect("pull request")
+                .granted_for("git_push")
+                .is_none()
+        );
+    }
+
     /// #1321 code review round 3: a sensitive and a non-sensitive tool behind one
     /// identity (two kinds sharing a toolkit name) bind; the name stays confirmed
     /// and is never re-run after a dispatch.
@@ -945,6 +1036,7 @@ mod tests {
                         .expect("sensitive fixture policy"),
                     read_only: true,
                     conditional: false,
+                    granted: None,
                 },
             )
             .expect("sensitive tool");

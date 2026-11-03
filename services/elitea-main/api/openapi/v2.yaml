@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.29"
+  x-elitea-client-contract: "1.30"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3921,7 +3921,43 @@ components:
             sub-agents answers 409 `release_withdrawn_dependencies_removed`,
             because the unpublish removed the sub-agent copies its publish
             made (ApplicationReleaseRefusal).
+        unattended:
+          $ref: '#/components/schemas/ChatUnattendedRequest'
 
+    ChatUnattendedRequest:
+      type: object
+      description: >-
+        Client contract 1.30 (ADR-0045). The person's unattended grant for a
+        cloud run. Main admits each named sensitive tool against the run's
+        own toolkits, the withheld categories and the tier hitl rule; a
+        refused part refuses the whole send with 422
+        `unattended_grant_refused` (`reason`, `field`, `tool`). Schedule and
+        webhook runs cannot name sensitive tools. Main starts each
+        continuation itself. NOTE(W2):
+        internal/api/v2/agentexecution/unattended.go (`startUnattendedBody`).
+      properties:
+        grant_id:
+          type: string
+          format: uuid
+          description: Optional; Main derives a stable id from the question when absent.
+        sensitive_tools:
+          type: array
+          maxItems: 64
+          description: The sensitive tools the grant approves in-line.
+          items:
+            type: object
+            required: [toolkit_name, tool_name]
+            properties:
+              toolkit_name: { type: string, minLength: 1 }
+              tool_name: { type: string, minLength: 1 }
+        continue_step_limit:
+          type: boolean
+          description: Continue the run with a new turn when it stops at its step limit.
+        continue_output_limit:
+          type: boolean
+          description: Continue the answer when it stops at the output limit.
+        chain:
+          $ref: '#/components/schemas/UnattendedChainLimits'
     ChatRegenerateRequest:
       type: object
       description: >
@@ -4691,6 +4727,84 @@ components:
           description: >-
             The conversation's agent participant that answers. 0 or absent
             means the conversation's model participant.
+        unattended:
+          $ref: '#/components/schemas/LocalTurnUnattendedRequest'
+    LocalTurnUnattendedRequest:
+      type: object
+      description: >-
+        Client contract 1.30 (ADR-0045). The person's unattended grant. Send
+        it on the chain's first turn and on every continuation: the same
+        `grant_id`, and `chain_root_execution_id` set to the first turn's
+        `execution_id` on a continuation. Main checks the chain limits and
+        adds the continuation in one statement; a limit answers 409
+        `chain_limit_reached` with `limit`. A refused grant answers 422
+        `unattended_grant_refused` with `reason` and `field`. NOTE(W2):
+        internal/api/v2/localturns/unattended.go (`unattendedBody`).
+      required: [grant_id]
+      properties:
+        grant_id:
+          type: string
+          format: uuid
+          description: Client generated; the same for every turn of the chain.
+        chain_root_execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The chain's first turn. Absent on the first turn.
+        continue_step_limit:
+          type: boolean
+          description: Continue the run when it stops at its step limit.
+        continue_tool_call_cap:
+          type: boolean
+          description: Continue the run when it stops at its tool call cap.
+        hook_asks:
+          type: boolean
+          description: The grant answers the asks of local hooks.
+        remote_confirmations:
+          type: boolean
+          description: >-
+            The grant answers remote toolkit confirmations: the retry sends
+            `confirmation.source` `grant`.
+        chain:
+          $ref: '#/components/schemas/UnattendedChainLimits'
+    UnattendedChainLimits:
+      type: object
+      description: >-
+        Client contract 1.30. The chain limits. An absent value takes the
+        platform default; a value above the platform maximum answers 422
+        `unattended_grant_refused` (reason `over_maximum`). A continuation's
+        limits are the chain's stored ones.
+      properties:
+        max_continuations:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The most continuations of the chain.
+        max_spend:
+          type: number
+          format: double
+          minimum: 0
+          description: The most the chain spends, in USD. 0 means no limit when the platform has none.
+        deadline_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: How long the chain may run after its first turn.
+    LocalTurnUnattendedStarted:
+      type: object
+      description: >-
+        Client contract 1.30. The chain of an unattended turn. NOTE(W2):
+        internal/api/v2/localturns/unattended.go (`unattendedStarted`).
+      required: [grant_id, chain_root_execution_id, continuation_index, chain]
+      properties:
+        grant_id: { type: string, format: uuid }
+        chain_root_execution_id:
+          type: string
+          description: The chain's first turn (this turn's `execution_id` on the first turn).
+        continuation_index:
+          type: integer
+          description: 0 on the first turn, then 1, 2 and so on.
+        chain:
+          $ref: '#/components/schemas/UnattendedChainLimits'
     LocalTurnMemoryRecall:
       type: object
       description: >-
@@ -4737,6 +4851,8 @@ components:
           description: False when this call replayed an earlier start with the same `question_id`.
         memory_recall:
           $ref: '#/components/schemas/LocalTurnMemoryRecall'
+        unattended:
+          $ref: '#/components/schemas/LocalTurnUnattendedStarted'
     LocalTurnHITLExchange:
       type: object
       description: >-
@@ -4763,6 +4879,16 @@ components:
         value:
           type: string
           description: The user's answer or edit, at most 4 KiB.
+        source:
+          type: string
+          enum: [person, grant, bypass, timeout]
+          description: >-
+            Client contract 1.30 (ADR-0045 decision 3). Who answered. Absent
+            means `person`. Main writes an approval ledger row (path
+            `desktop`) for each source except `bypass`. A `grant` answer
+            needs the turn's grant: it is recorded as the owner's approval
+            with reason `unattended_grant`. A `timeout` answer is recorded as
+            `timed_out`.
     LocalTurnCommand:
       type: object
       required: [command]
@@ -4910,6 +5036,12 @@ components:
           maxItems: 64
           items:
             $ref: '#/components/schemas/LocalTurnHITLExchange'
+        chain_outcome:
+          type: string
+          enum: [completed, failed, waiting, limit_reached, cancelled]
+          description: >-
+            Client contract 1.30. On the last turn of an unattended chain:
+            how the chain ended. Main stores it once on the chain.
         local_work:
           $ref: '#/components/schemas/LocalTurnWorkReport'
         context_summary:
@@ -4962,12 +5094,31 @@ components:
         `local_turn_participant`, `local_turn_conflict`,
         `local_turn_already_committed`, `local_turn_expired`,
         `local_turn_unavailable`, `unsupported_media_type`,
-        `request_too_large`, `local_turn_failed`. NOTE(W2):
+        `request_too_large`, `local_turn_failed`, and from client contract
+        1.30 `unattended_grant_refused`, `chain_limit_reached` and
+        `chain_ended`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
       required: [error]
       properties:
         error: { type: string }
         message: { type: string }
+        reason:
+          type: string
+          description: >-
+            With `unattended_grant_refused`: `disabled`, `invalid`,
+            `over_maximum`, `not_owner`, `origin_not_allowed`,
+            `tool_not_resolved`, `category_withheld`, `tier_requires_hitl` or
+            `chain_not_found`.
+        field:
+          type: string
+          description: With `unattended_grant_refused`, the refused request field.
+        tool:
+          type: string
+          description: With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.
+        limit:
+          type: string
+          enum: [continuations, spend, deadline]
+          description: With `chain_limit_reached`, the limit the chain reached.
 
     ResolvedApplicationVersion:
       type: object
@@ -5141,6 +5292,15 @@ components:
           type: string
           pattern: '^hitl_[0-9a-f]{32}$'
           description: The `hitl_interrupt.interrupt_id` of the 409 this approves.
+        source:
+          type: string
+          enum: [grant]
+          description: >-
+            Client contract 1.30 (ADR-0045 decision 3). `grant` when the
+            turn's unattended grant approved the call, not a person. Main
+            accepts it only when the turn's stored grant has
+            `remote_confirmations` and the chain has not ended; otherwise 403
+            `confirmation_grant_refused`. Absent means a person approved.
     RemoteToolkitCallRequest:
       type: object
       additionalProperties: false
@@ -5480,6 +5640,15 @@ components:
         error: { type: string }
         message: { type: string }
         retryable: { type: boolean }
+        reason:
+          type: string
+          description: Client contract 1.30. With `unattended_grant_refused`, why (see LocalTurnError).
+        field:
+          type: string
+          description: Client contract 1.30. With `unattended_grant_refused`, the refused request field.
+        tool:
+          type: string
+          description: Client contract 1.30. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.
 
     # Wave 1 per-interrupt HITL API (libs/proto/contracts/fanout-interrupt-decisions-v1.md section 6;
     # JSON schemas libs/jsonschema/runtime/v1/fanout-interrupt-*.schema.json).
@@ -25571,7 +25740,8 @@ paths:
             (more than five skills in the turn), `project_skills_too_large`
             (more than 64 KiB of skill instructions) or
             `project_skill_name_conflict` (a picked skill shares its name with a
-            different skill of the agent).
+            different skill of the agent); or `unattended_grant_refused`
+            (client contract 1.30) with `reason`, `field` and `tool`.
           content:
             application/json:
               schema:
@@ -25673,7 +25843,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '409':
-          description: '`local_turn_conflict` or `local_turn_already_committed`.'
+          description: >-
+            `local_turn_conflict` or `local_turn_already_committed`; from
+            client contract 1.30, `chain_limit_reached` (with `limit`) or
+            `chain_ended` on an unattended continuation.
           content:
             application/json:
               schema:
@@ -25697,7 +25870,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '422':
-          description: '`participant_id` is not an agent or model participant of the conversation (`local_turn_participant`).'
+          description: >-
+            `participant_id` is not an agent or model participant of the
+            conversation (`local_turn_participant`), or the unattended grant
+            was refused (`unattended_grant_refused`, client contract 1.30).
           content:
             application/json:
               schema:

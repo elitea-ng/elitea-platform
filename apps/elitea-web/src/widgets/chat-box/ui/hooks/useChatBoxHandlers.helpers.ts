@@ -161,7 +161,7 @@ export type StreamStartOutcome =
   | { readonly started: false; readonly reason: 'no-transport' }
   | { readonly started: false; readonly reason: 'retry-later' }
   | { readonly started: false; readonly reason: 'already-resolved'; readonly code: 'agent_hitl_already_resolved' | 'agent_authorization_already_resolved' }
-  | { readonly started: false; readonly reason: 'rejected'; readonly message: string };
+  | { readonly started: false; readonly reason: 'rejected'; readonly message: string; readonly grantsOff?: true };
 /** No REST start happened; the socket emit is the fallback. */
 export const NO_STREAM_TRANSPORT: StreamStartOutcome = { started: false, reason: 'no-transport' };
 /**

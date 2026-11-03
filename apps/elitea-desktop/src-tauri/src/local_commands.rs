@@ -33,6 +33,7 @@ use crate::d0::turn::{
     AgentHost, PolicySource, PrewarmRequest, Prewarmed, RestorePreview, TurnError, TurnRequest,
     TurnStarted, TurnStatus,
 };
+use crate::d0::unattended::{UnattendedGrant, UnattendedTurn};
 use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
@@ -633,12 +634,35 @@ pub async fn agent_turn_start(
     command: Option<CommandPick>,
     images: Option<Vec<ImagePick>>,
     bypass_approvals: Option<bool>,
+    unattended: Option<Value>,
 ) -> Result<TurnStarted, IpcError> {
     let bypass = bypass_approvals.unwrap_or(false);
     if bypass && plan_mode {
         return Err(IpcError::new(
             "invalid_request",
             "A turn cannot run in plan mode and in bypass mode.",
+        ));
+    }
+    // An unattended turn (ADR-0045): the grant, checked here; the platform
+    // checks it again against its own limits.
+    let unattended = unattended
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<UnattendedGrant>(value)
+                .map_err(|_| {
+                    IpcError::new(
+                        "invalid_request",
+                        "The unattended grant does not have the expected shape.",
+                    )
+                })
+                .and_then(|grant| grant.admit().map_err(IpcError::from))
+                .map(UnattendedTurn::root)
+        })
+        .transpose()?;
+    if unattended.is_some() && plan_mode {
+        return Err(IpcError::new(
+            "invalid_request",
+            "A turn cannot run in plan mode and unattended.",
         ));
     }
     // A thread in the cloud runs no local turn (ADR-0034 decision 7; the
@@ -675,6 +699,7 @@ pub async fn agent_turn_start(
                 .transpose()?,
             command,
             images: images.unwrap_or_default(),
+            unattended,
         })
         .await?)
 }
@@ -1151,6 +1176,7 @@ mod tests {
             code: "workspace_busy".into(),
             message: "A turn is already running in this workspace.".into(),
             status: None,
+            limit: None,
         }
         .into();
         assert_eq!(

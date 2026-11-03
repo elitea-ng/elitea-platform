@@ -176,6 +176,9 @@ func runWithEnvironment(t *testing.T, root string, extra []string, arguments ...
 		// fixture must control it, so clear it and let each test set it.
 		"ELITEA_REQUIRE_DECLARED_SKIPS=",
 		"ELITEA_SKIP_LEDGER=",
+		// CI shards set this. The fixture must run its whole workspace unless
+		// a test names a selection.
+		"ELITEA_GO_PACKAGES_FILE=",
 	)
 	command.Env = append(command.Env, extra...)
 	output, err := command.CombinedOutput()
@@ -382,5 +385,80 @@ func TestUnknownModeIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(output, "usage:") {
 		t.Errorf("an unknown mode must print the usage text\n%s", output)
+	}
+}
+
+// packagesFile writes a shard selection file (ELITEA_GO_PACKAGES_FILE) and
+// returns the environment entry that names it.
+func packagesFile(t *testing.T, root string, content string) []string {
+	t.Helper()
+	path := filepath.Join(root, "shard-packages.tsv")
+	writeFile(t, path, content)
+	return []string{"ELITEA_GO_PACKAGES_FILE=" + path}
+}
+
+// TestPackagesFileRunsOnlyTheSelectedPackages holds the CI shard mode. The
+// FIRST module fails, but the shard file names only the second module, so this
+// shard passes. The summary must name the first module as another shard's,
+// not as a pass.
+func TestPackagesFileRunsOnlyTheSelectedPackages(t *testing.T) {
+	root := fixture(t, false)
+	output, status := runWithEnvironment(t, root,
+		packagesFile(t, root, "modbeta\texample.com/beta\n"), "test")
+
+	if status != 0 {
+		t.Fatalf("the selected module passes, so the shard must pass; got exit %d\n%s", status, output)
+	}
+	if !strings.Contains(output, "SHARD modalpha") {
+		t.Errorf("the summary must name the module that another shard runs\n%s", output)
+	}
+	if strings.Contains(output, "PASS  modalpha") {
+		t.Errorf("a module that did not run must not read as a pass\n%s", output)
+	}
+	if !strings.Contains(output, "PASS  modbeta") {
+		t.Errorf("the selected module must run and pass\n%s", output)
+	}
+}
+
+// TestPackagesFileStillFailsAFailedPackage keeps rule 2 true for a shard.
+func TestPackagesFileStillFailsAFailedPackage(t *testing.T) {
+	root := fixture(t, false)
+	output, status := runWithEnvironment(t, root,
+		packagesFile(t, root, "modalpha\texample.com/alpha\n"), "coverage")
+
+	if status == 0 {
+		t.Fatalf("a failed package in the shard must fail the shard; got exit 0\n%s", output)
+	}
+	if !strings.Contains(output, "FAIL  modalpha") {
+		t.Errorf("the summary must name the failed module\n%s", output)
+	}
+}
+
+// TestPackagesFileRejectsBadSelections holds the guards. An empty selection,
+// a module outside the workspace and a non-test mode each stop the run: each
+// one would otherwise be a shard that tests nothing and passes.
+func TestPackagesFileRejectsBadSelections(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		content string
+		mode    string
+		want    string
+	}{
+		{"empty", "", "test", "missing or empty"},
+		{"outside the workspace", "modoutside\texample.com/outside\n", "test", "not a workspace module"},
+		{"not a selection line", "modbeta example.com/beta\n", "test", "not <module dir><TAB><import path>"},
+		{"vet", "modbeta\texample.com/beta\n", "vet", "applies to test and coverage only"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			root := fixture(t, true)
+			output, status := runWithEnvironment(t, root,
+				packagesFile(t, root, testCase.content), testCase.mode)
+			if status == 0 {
+				t.Fatalf("a bad selection must not report success\n%s", output)
+			}
+			if !strings.Contains(output, testCase.want) {
+				t.Errorf("the failure must say %q\n%s", testCase.want, output)
+			}
+		})
 	}
 }

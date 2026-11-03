@@ -164,6 +164,14 @@ pub(crate) trait NativeAgentCompletionSelector: Send {
     fn wrap_up(&self) -> Option<std::sync::Arc<crate::workspace_run::wrap_up::WrapUp>> {
         None
     }
+
+    /// The step-limit stop of a run whose unattended grant continues at the
+    /// step limit (ADR-0045 decision 4). The lifecycle marks it when the run
+    /// reaches its step limit, and `select` then completes the run with its
+    /// text so far. `None` for every other run: the step limit fails it.
+    fn step_limit_stop(&self) -> Option<std::sync::Arc<super::unattended::StepLimitStop>> {
+        None
+    }
 }
 
 /// Post-authorization assembly input with one runtime-context redemption.
@@ -791,7 +799,8 @@ pub(super) fn admit_ordinary_plan(
         AdmittedNativeStart::DelegatedAuthorization(_) => {
             OrdinaryNoToolProfile::validate_delegated_authorization_resume(request)?
         }
-    };
+    }
+    .with_unattended_grant(command.unattended_grant().cloned());
     let plan = if matches!(&start, AdmittedNativeStart::OutputContinuation) {
         OrdinaryNativeAgentPlan::from_authorized_output_continuation(
             request,
@@ -1195,6 +1204,14 @@ impl NativeAgentRuntimeError {
 
     pub(crate) fn upstream_code(&self) -> Option<&'static str> {
         self.upstream.as_ref().map(|error| error.code)
+    }
+
+    /// Whether the run's agent stopped at its step limit (ADK max
+    /// iterations).
+    pub(crate) fn step_limit_reached(&self) -> bool {
+        self.upstream
+            .as_deref()
+            .is_some_and(elitea_agent_runtime::step_limit::reached)
     }
 
     /// Whether a fixed Parallel node refused an input or result past its

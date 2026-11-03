@@ -4,7 +4,8 @@
  * changes nothing, Bypass (a local thread only, `onBypassChange`) asks for no
  * approvals; the current one carries a check. Bypass keeps its first-time
  * warning (`useBypassMode`): picking it asks the page, which turns it on, and
- * leaves plan mode, only once the warning is confirmed.
+ * leaves plan mode, only once the person confirms. "Run to completion" is not
+ * a mode: it is its own control in the composer and works with each mode.
  */
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
 
@@ -49,7 +50,7 @@ function modeOptions(withBypass: boolean): ModeOption[] {
 export function ModePicker({ planMode, onPlanModeChange, bypass, onBypassChange }: ModePickerProps): React.JSX.Element {
   const options = modeOptions(onBypassChange !== undefined);
   const current = modeValue(planMode, bypass);
-  // Bypass turns plan mode off only once it is on (after its warning, the first time): a cancelled warning keeps the mode.
+  // Bypass turns plan mode off only once it is on (after the warning): a cancelled warning keeps the mode.
   const change = (next: ModeValue): void => {
     if (next === 'bypass') {
       onBypassChange?.(true);

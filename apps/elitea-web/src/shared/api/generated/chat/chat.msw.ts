@@ -1133,6 +1133,30 @@ export const getStartLocalTurnResponseMock = (
       (_, i) => i + 1,
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   },
+  unattended: faker.helpers.arrayElement([
+    {
+      grant_id: faker.string.uuid(),
+      chain_root_execution_id: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+      continuation_index: faker.number.int(),
+      chain: {
+        max_continuations: faker.helpers.arrayElement([
+          faker.number.int({ min: 0 }),
+          undefined,
+        ]),
+        max_spend: faker.helpers.arrayElement([
+          faker.number.float({ min: 0, fractionDigits: 2 }),
+          undefined,
+        ]),
+        deadline_seconds: faker.helpers.arrayElement([
+          faker.number.int({ min: 1 }),
+          undefined,
+        ]),
+      },
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 

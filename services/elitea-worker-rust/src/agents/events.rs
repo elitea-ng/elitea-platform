@@ -1035,6 +1035,19 @@ pub(crate) struct AgentEventProjector {
     /// message (ADR-0043 decision 5). Only the root projector of a run whose
     /// agent must cite has it.
     grounding: Option<crate::agents::grounding_model::GroundingSources>,
+    /// ADR-0045 decision 4: how the run's model loop ended. A run that
+    /// stopped at its step limit under an unattended grant is
+    /// `RunEnd::StepLimit` (`close_for_step_limit`).
+    run_end: RunEnd,
+}
+
+/// How the run's model loop ended, for the final `full_message`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunEnd {
+    /// The model loop ended as usual.
+    Ordinary,
+    /// The run stopped at its step limit under an unattended grant.
+    StepLimit,
 }
 
 /// A projector's step recorder. Only the root records the run's output step.
@@ -1188,6 +1201,7 @@ impl AgentEventProjector {
             node_recovery_paused: false,
             run_steps: None,
             grounding: None,
+            run_end: RunEnd::Ordinary,
         })
     }
 
@@ -3251,6 +3265,12 @@ impl AgentEventProjector {
                 fanout_member: event.provider_metadata.contains_key(FANOUT_MEMBER_CALL_KEY),
                 member_tier: fanout_member_tier(event)?,
             };
+            // ADR-0045 decision 2: the run's unattended grant names this
+            // sensitive tool, so the call does not pause. One approval event
+            // goes before the tool start, and Main records it in the ledger.
+            if let Some(granted) = self.sensitive_tools.granted_for(call.name) {
+                batch.push(self.unattended_approval_event(event, id, call, granted)?)?;
+            }
             let entry = tool_entry(id, &active, None, None, None, None);
             batch.push(self.event(
                 "agent_tool_start",
@@ -3264,6 +3284,42 @@ impl AgentEventProjector {
         }
         self.active_tools.extend(pending);
         Ok(())
+    }
+
+    /// The `agent_unattended_approval` event of one call that the run's
+    /// unattended grant approves (ADR-0045 decision 2). Its interrupt id is
+    /// the id that the sensitive pause of this call would have used.
+    fn unattended_approval_event(
+        &self,
+        event: &Event,
+        call_id: &str,
+        call: &adk_rust::ToolCallView<'_>,
+        granted: &super::unattended::GrantedApproval,
+    ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        let policy = self
+            .sensitive_tools
+            .policy_for(call.name)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let (interrupt_id, _) =
+            sensitive_call_identity(&event.invocation_id, call_id, call.name, call.args).map_err(
+                |error| match error.code() {
+                    super::direct_hitl::DirectHitlErrorCode::ResourceExhausted => {
+                        AgentEventProjectionError {
+                            code: AgentEventProjectionErrorCode::ResourceExhausted,
+                            protocol: None,
+                        }
+                    }
+                    _ => AgentEventProjectionError::invalid_state(),
+                },
+            )?;
+        let argument_digest = unmasked_argument_digest(call.args)?;
+        self.event(
+            super::unattended::UNATTENDED_APPROVAL_EVENT,
+            &Value::Null,
+            None,
+            &granted.event_metadata(&interrupt_id, policy.toolkit_type(), &argument_digest),
+            event.timestamp,
+        )
     }
 
     fn project_tool_results(
@@ -3769,6 +3825,18 @@ impl AgentEventProjector {
         Ok(batch)
     }
 
+    /// Close a run that stopped at its step limit under an unattended grant
+    /// (ADR-0045 decision 4), as `close_for_wrap_up` does. The final
+    /// `full_message` then carries `step_limit_reached: true`, and it may
+    /// have no text.
+    pub(crate) fn close_for_step_limit(
+        &mut self,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        self.run_end = RunEnd::StepLimit;
+        self.close_for_wrap_up(occurred_at)
+    }
+
     /// Emit the selected completed result only after ADK reaches EOS.
     #[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
     pub(crate) fn finish_after_eos(
@@ -3838,6 +3906,7 @@ impl AgentEventProjector {
         // continuation asks for the whole answer. Any other empty answer is
         // still malformed.
         if content.is_empty()
+            && self.run_end != RunEnd::StepLimit
             && !(output_limited
                 && matches!(
                     self.context.output_limit_behavior,
@@ -3891,33 +3960,44 @@ impl AgentEventProjector {
             }),
             occurred_at,
         )?)?;
+        let mut full_message_metadata = json!({
+            "project_id": self.context.project_id,
+            "chat_project_id": self.context.chat_project_id,
+            "application_details": self.context.application_details,
+            "thread_id": thread_id,
+            "llm_start_timestamp": Value::Null,
+            "additional_response_meta": {},
+            "files_modified": [],
+            "image_thumbnails": {},
+            "index_statuses": {},
+            "chat_history_tokens_input": 0,
+            "llm_response_tokens_output": 0,
+            "should_continue": self.context.should_continue,
+            "output_limit_reached": output_limited,
+            "hitl_resume": self.context.hitl_resume,
+            "parallel_reconcile": self.context.parallel_reconcile,
+            "context_info": context_info,
+            "invoked_skills": self.context.applied_skills,
+            "result_ref_v1": result_ref,
+            "pipeline_static_v1": self.static_pause_proof,
+            "pipeline_static_tools_v1": static_inventory,
+            "grounding": grounding,
+        });
+        // ADR-0045 decision 4: only a run stopped at its step limit has the
+        // key, so every other `full_message` stays byte-identical.
+        if self.run_end == RunEnd::StepLimit
+            && let Some(object) = full_message_metadata.as_object_mut()
+        {
+            object.insert(
+                super::unattended::STEP_LIMIT_REACHED_METADATA_KEY.to_owned(),
+                Value::Bool(true),
+            );
+        }
         batch.push(self.event(
             "full_message",
             &response,
             None,
-            &json!({
-                "project_id": self.context.project_id,
-                "chat_project_id": self.context.chat_project_id,
-                "application_details": self.context.application_details,
-                "thread_id": thread_id,
-                "llm_start_timestamp": Value::Null,
-                "additional_response_meta": {},
-                "files_modified": [],
-                "image_thumbnails": {},
-                "index_statuses": {},
-                "chat_history_tokens_input": 0,
-                "llm_response_tokens_output": 0,
-                "should_continue": self.context.should_continue,
-                "output_limit_reached": output_limited,
-                "hitl_resume": self.context.hitl_resume,
-                "parallel_reconcile": self.context.parallel_reconcile,
-                "context_info": context_info,
-                "invoked_skills": self.context.applied_skills,
-                "result_ref_v1": result_ref,
-                "pipeline_static_v1": self.static_pause_proof,
-                "pipeline_static_tools_v1": static_inventory,
-                "grounding": grounding,
-            }),
+            &full_message_metadata,
             occurred_at,
         )?)?;
         self.state = ProjectionState::Finished;

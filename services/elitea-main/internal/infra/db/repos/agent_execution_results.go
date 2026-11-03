@@ -56,6 +56,9 @@ type currentAgentFullMessage struct {
 	InvokedSkills              json.RawMessage
 	ResponseMetadata           json.RawMessage
 	OutputLimitReached         bool
+	// StepLimitReached marks a run that stopped at its step limit under an
+	// unattended grant (ADR-0045 decision 4).
+	StepLimitReached bool
 	// Grounding is the sanitized grounding indicator (ADR-0043 decision 5);
 	// nil when the answer has none.
 	Grounding json.RawMessage
@@ -377,6 +380,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		ThreadID            string          `json:"thread_id"`
 		InvokedSkills       json.RawMessage `json:"invoked_skills"`
 		OutputLimitReached  bool            `json:"output_limit_reached"`
+		StepLimitReached    bool            `json:"step_limit_reached"`
 		ApplicationDetails  struct {
 			AgentType      string `json:"agent_type"`
 			VersionDetails struct {
@@ -429,6 +433,7 @@ func decodeCurrentAgentFullMessage(contentJSON, references, responseMetadata jso
 		InvokedSkills:              invokedSkills,
 		ResponseMetadata:           append(json.RawMessage(nil), responseMetadata...),
 		OutputLimitReached:         metadata.OutputLimitReached,
+		StepLimitReached:           metadata.StepLimitReached,
 		PipelineStaticProof:        bytes.Clone(metadata.PipelineStaticProof),
 		PipelineStaticTools:        bytes.Clone(metadata.PipelineStaticTools),
 		Grounding:                  groundingFromMetadata(responseMetadata),
@@ -719,6 +724,9 @@ func persistCurrentAgentTerminal(ctx context.Context, tx sqlExecutor, expected o
 		)
 		if err != nil || rows != 1 {
 			return fmt.Errorf("finalize current agent response message group: %w", terminalWriteError(err))
+		}
+		if err := markStepLimitReached(ctx, tx, int64(messageGroupID), message.StepLimitReached); err != nil {
+			return err
 		}
 		if staticApproval == rootPauseFailed {
 			return finalizeStaticApprovalFailure(ctx, tx, int64(messageGroupID))

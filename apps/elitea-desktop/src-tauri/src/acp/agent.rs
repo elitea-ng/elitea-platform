@@ -1169,6 +1169,7 @@ impl Connection {
                 project_skills: Vec::new(),
                 command: input.command,
                 images: input.images,
+                unattended: None,
             })
             .await;
         let started = match started {

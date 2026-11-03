@@ -14,6 +14,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // composeLocalTurns builds startLocalTurn / commitLocalTurn (ADR-0029
@@ -47,6 +48,8 @@ func composeLocalTurns(
 	if err != nil {
 		return nil, err
 	}
+	// Unattended grants (ADR-0045): the approvals section, read live.
+	service.WithUnattended(platformconfig.UnattendedSettingsSource{Pool: pool})
 	route, err := localturnsapi.NewRoute(service, groupAuth, legacyrbac.NewPostgresResolver(pool))
 	if err != nil {
 		return nil, err

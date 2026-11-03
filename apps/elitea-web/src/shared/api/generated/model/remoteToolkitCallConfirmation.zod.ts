@@ -60,6 +60,12 @@ export const RemoteToolkitCallConfirmation = zod
       .string()
       .regex(remoteToolkitCallConfirmationInterruptIdRegExp)
       .describe("The `hitl_interrupt.interrupt_id` of the 409 this approves."),
+    source: zod
+      .enum(["grant"])
+      .optional()
+      .describe(
+        "Client contract 1.30 (ADR-0045 decision 3). `grant` when the turn's unattended grant approved the call, not a person. Main accepts it only when the turn's stored grant has `remote_confirmations` and the chain has not ended; otherwise 403 `confirmation_grant_refused`. Absent means a person approved.",
+      ),
   })
   .describe(
     "The user's approval of ONE sensitive tool call, after a 409 `confirmation_required`. It is bound to that call: `interrupt_id` must echo the `hitl_interrupt.interrupt_id` the 409 named, which the server derives from the turn, the toolkit, the agent version, the tool and the arguments and recomputes from the call it receives. It is used once: a repeat of the same request (the same Idempotency-Key) is the same call, any other request presenting it answers 409 `confirmation_required` again with the next interrupt id. It is recorded in the audit trail and passed to the worker as the call's only authority to run a sensitive tool.",

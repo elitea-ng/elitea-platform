@@ -42,6 +42,7 @@ import (
 	"github.com/google/uuid"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -145,6 +146,8 @@ type StartRequest struct {
 	ParticipantID int64
 	// AuditRoute is the matched route pattern for the audit event.
 	AuditRoute string
+	// Unattended is the turn's grant (ADR-0045); nil for an attended turn.
+	Unattended *unattended.Request
 }
 
 // MemoryRecall is the turn's recalled memory, the same value a cloud turn's
@@ -165,6 +168,8 @@ type StartOutcome struct {
 	ExpiresAt         time.Time
 	Created           bool
 	Recall            MemoryRecall
+	// Unattended is the turn's chain; nil for an attended turn.
+	Unattended *UnattendedStarted
 }
 
 // StartRecord is what the store writes for a start.
@@ -180,6 +185,8 @@ type StartRecord struct {
 	ParticipantID     int64
 	MemoriesUsed      int
 	TTL               time.Duration
+	// Grant is the admitted grant; nil for an attended turn.
+	Grant *StartGrant
 }
 
 // StartedTurn is the stored execution after a start (new or replayed).
@@ -189,6 +196,8 @@ type StartedTurn struct {
 	ParticipantID     int64
 	ExpiresAt         time.Time
 	Created           bool
+	// Chain is the turn's chain link; nil for an attended turn.
+	Chain *unattended.Chain
 }
 
 // HITLExchange is one approval or question the desktop resolved during the
@@ -200,6 +209,9 @@ type HITLExchange struct {
 	Prompt      string `json:"prompt"`
 	Decision    string `json:"decision"`
 	Value       string `json:"value,omitempty"`
+	// Source is who answered (ADR-0045 decision 3): person, grant, bypass
+	// or timeout. Absent is a person (a client from before the contract).
+	Source string `json:"source,omitempty"`
 }
 
 // CommandRecord is one command the client reports it ran.
@@ -258,6 +270,9 @@ type CommitRequest struct {
 	HITLExchanges []HITLExchange
 	Report        LocalWorkReport
 	AuditRoute    string
+	// ChainOutcome is the chain's end state, sent only on the commit of the
+	// chain's last turn (ADR-0045); "" otherwise.
+	ChainOutcome string
 }
 
 // CommitRecord is what the store writes for a commit.
@@ -275,6 +290,10 @@ type CommitRecord struct {
 	ToolCalls     json.RawMessage
 	ThinkingSteps []json.RawMessage
 	Digest        [32]byte
+	// Exchanges are the turn's HITL exchanges, for the approval ledger.
+	Exchanges []HITLExchange
+	// ChainOutcome ends the turn's chain; "" leaves it open.
+	ChainOutcome string
 }
 
 // CommittedTurn answers a commit.
@@ -297,6 +316,8 @@ type Service struct {
 	newID    IDGenerator
 	now      func() time.Time
 	logger   *slog.Logger
+	// unattended reads the grant settings (WithUnattended).
+	unattended UnattendedSettingsReader
 }
 
 // NewService builds the use case. Every dependency is required: a start
@@ -347,6 +368,12 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 	if !policy.LocalWork.Allowed {
 		return StartOutcome{}, ErrLocalWorkDisabled
 	}
+	var grant *StartGrant
+	if request.Unattended != nil {
+		if grant, err = s.admitGrant(ctx, *request.Unattended); err != nil {
+			return StartOutcome{}, err
+		}
+	}
 	// Recall FIRST and always fresh: the store writes nothing to the
 	// conversation at start, so the user's previous turn is still the one the
 	// reservation rule compares against (MemoriesRepo.ResolveCurrentMemoryRecall).
@@ -366,6 +393,7 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		ConversationUUID: request.ConversationUUID, QuestionID: request.QuestionID,
 		ResponseMessageID: ResponseMessageID(request.QuestionID),
 		ParticipantID:     request.ParticipantID, MemoriesUsed: recall.Count, TTL: DeadlineTTL,
+		Grant: grant,
 	})
 	if err != nil {
 		return StartOutcome{}, err
@@ -378,12 +406,19 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 	if ids == nil {
 		ids = []string{}
 	}
-	return StartOutcome{
+	outcome := StartOutcome{
 		ExecutionID: turn.ExecutionID, QuestionID: request.QuestionID,
 		ResponseMessageID: turn.ResponseMessageID, ConversationUUID: request.ConversationUUID,
 		ParticipantID: turn.ParticipantID, ExpiresAt: turn.ExpiresAt, Created: turn.Created,
 		Recall: MemoryRecall{Text: recall.Text, Count: recall.Count, IDs: ids},
-	}, nil
+	}
+	if chain := turn.Chain; chain != nil {
+		outcome.Unattended = &UnattendedStarted{
+			GrantID: chain.GrantID, ChainRootExecutionID: chain.RootExecutionID,
+			ContinuationIndex: chain.ContinuationIndex, Limits: chain.Limits,
+		}
+	}
+	return outcome, nil
 }
 
 // Commit appends the turn to the conversation, once.
@@ -449,6 +484,7 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 		SteeringMessages: request.SteeringMessages, AssistantMessage: request.AssistantMessage,
 		QuestionMeta: questionMeta, ResponseMeta: responseMeta,
 		ToolCalls: request.ToolCalls, ThinkingSteps: request.ThinkingSteps, Digest: digest,
+		Exchanges: exchanges, ChainOutcome: request.ChainOutcome,
 	})
 	if err != nil {
 		return CommittedTurn{}, err
@@ -523,6 +559,9 @@ func validCommit(request CommitRequest) bool {
 	if !request.AssistantIsError && request.AssistantError != "" {
 		return false
 	}
+	if request.ChainOutcome != "" && !unattended.ValidEndState(request.ChainOutcome) {
+		return false
+	}
 	if !validContextSummary(request.ContextSummary) {
 		return false
 	}
@@ -541,7 +580,8 @@ func validCommit(request CommitRequest) bool {
 		if !validToken(exchange.InterruptID) || !validToken(exchange.Kind) || !validToken(exchange.Decision) ||
 			(exchange.ToolRunID != "" && !validToken(exchange.ToolRunID)) ||
 			!validText(exchange.Prompt, MaxHITLFieldBytes, true) ||
-			!validText(exchange.Value, MaxHITLFieldBytes, true) {
+			!validText(exchange.Value, MaxHITLFieldBytes, true) ||
+			!validExchangeSource(exchange.Source) {
 			return false
 		}
 	}
@@ -787,10 +827,11 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 		ThinkingSteps    []json.RawMessage `json:"thinking_steps"`
 		HITLExchanges    []HITLExchange    `json:"hitl_exchanges"`
 		Report           LocalWorkReport   `json:"local_work"`
+		ChainOutcome     string            `json:"chain_outcome,omitempty"`
 	}{
 		request.ExecutionID, request.UserMessage, request.SteeringMessages, request.AssistantMessage,
 		request.AssistantIsError, request.AssistantError, request.ModelName,
-		contextSummary(request.ContextSummary), toolCalls, steps, exchanges, report,
+		contextSummary(request.ContextSummary), toolCalls, steps, exchanges, report, request.ChainOutcome,
 	})
 	if err != nil {
 		return [32]byte{}, err

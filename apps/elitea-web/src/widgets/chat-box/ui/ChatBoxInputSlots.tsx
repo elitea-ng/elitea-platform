@@ -20,10 +20,12 @@ import type { AttachmentButtonHandle, PlusChatButtonEntitySubmenus, VoiceButtonH
 import { FileList, HighlightedText } from '@/features/chat-messages';
 import { NewChatInput, VoiceControlButton } from '@/features/chat-input';
 import { LLMModelSelector } from '@/widgets/llm-model-selector';
+import { RunToCompletionControl } from '@/features/unattended';
 import { t } from '@/shared/i18n';
 
 import { optField } from './ChatBox.helpers';
 import { ChatBoxComposerTools } from './ChatBoxComposerTools';
+import type { ChatBoxUnattended } from './hooks/useChatBoxUnattended';
 
 /** The desktop build's composer row (a literal MODE test: the web keeps its look) — see `nativeSlots`. */
 const NATIVE = import.meta.env.MODE === 'desktop';
@@ -141,6 +143,8 @@ export interface ChatBoxInputSlotsProps {
   readonly onCreateToolkit?: ((isMcp?: boolean) => void) | undefined;
   /** The desktop composer row; defaults to the build (`NATIVE`), a test sets it. */
   readonly native?: boolean;
+  /** "Run to completion" (ADR-0045), on by default; it sits after the voice controls, before Send. None when it is not offered. */
+  readonly runToCompletion?: { readonly unattended: ChatBoxUnattended; readonly disabled: boolean } | undefined;
 }
 
 export interface ChatBoxInputSlotsResult {
@@ -202,6 +206,22 @@ function buildSendButtonProps(props: SendControlSlotProps) {
   };
 }
 
+/** "Run to completion" (ADR-0045) for the toolbar, or nothing when it does not show. */
+function runToCompletionNode(binding: ChatBoxInputSlotsProps['runToCompletion']): ReactNode {
+  if (binding === undefined || !binding.unattended.shown) return null;
+  const run = binding.unattended;
+  return (
+    <RunToCompletionControl
+      value={run.choice}
+      onChange={run.setChoice}
+      scope="cloud"
+      sensitiveTools={run.sensitiveTools}
+      disabled={binding.disabled}
+      testId="chat-run-to-completion"
+    />
+  );
+}
+
 /** Builds `NewChatInput`'s `slots` prop bundle — a function (not a component) so its return type slots directly into `NewChatInput`'s `slots` prop without an extra wrapper element. Prop objects are built as local consts (not inline `{...optField(...)}` spreads) so their `optField`-derived string keys aren't parsed as JSX-nested literals by the `i18next/no-literal-string` gate. */
 export function buildChatBoxInputSlots({
   attachments,
@@ -218,7 +238,9 @@ export function buildChatBoxInputSlots({
   voice,
   voiceInput,
   native = NATIVE,
+  runToCompletion,
 }: ChatBoxInputSlotsProps): ChatBoxInputSlotsResult {
+  const runControl = runToCompletionNode(runToCompletion);
   const attachmentButtonProps = {
     disableAttachments: attachments.disabled,
     ...optField('attachments', attachments.attachments),
@@ -310,6 +332,7 @@ export function buildChatBoxInputSlots({
         {/* `projectId` selects server dictation when the project has a transcription model; it was never passed, so the mic only ever used the browser engine. */}
         <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} projectId={voice.projectId} />
         <VoiceControlButton {...voice} />
+        {runControl}
       </>
     ),
     modelSelector: <LLMModelSelector {...modelSelectorProps} />,
@@ -324,7 +347,12 @@ export function buildChatBoxInputSlots({
     sendControl: (props: SendControlSlotProps) => <SendButton {...buildSendButtonProps(props)} native />,
     attachmentButton: <PlusChatButton {...plusButtonProps} native />,
     clearChat: <ChatBoxComposerTools model={{ ...model, shown: model.shown ?? true }} clearChat={clearChat} voice={voice} />,
-    voiceButton: <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} projectId={voice.projectId} native />,
+    voiceButton: (
+      <>
+        <VoiceButton ref={refs.voiceButtonRef} inputRef={refs.voiceInputRef} disabled={false} onRecordingChange={voiceInput.onRecordingChange} onError={voiceInput.onError} projectId={voice.projectId} native />
+        {runControl}
+      </>
+    ),
     modelSelector: undefined,
   };
 }

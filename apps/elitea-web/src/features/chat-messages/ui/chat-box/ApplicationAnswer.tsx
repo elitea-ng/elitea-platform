@@ -38,6 +38,8 @@ import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { GroundingIndicator } from './GroundingIndicator';
+import { ContinuedAutomaticallyLabel, StepLimitNotice } from './UnattendedMarkers';
+import { stoppedAtStepLimit } from '../../lib/unattendedMarks';
 import { groundingOf } from '../../lib/grounding';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
 import { replyActionsRevealSx } from './ReplyActionButton';
@@ -265,6 +267,7 @@ export function ApplicationAnswer({
       ) : showCaption && participantName ? (
         <AssistantCaption name={participantName} />
       ) : null}
+      {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
@@ -344,6 +347,7 @@ export function ApplicationAnswer({
       )}
 
       {!isProcessing && grounding && <GroundingIndicator grounding={grounding} answer={answer.content} />}
+      {!isProcessing && stoppedAtStepLimit(answer) && <StepLimitNotice />}
 
       {shouldRenderAnswerBlock && (
         // Below the text (`ApplicationAnswerActions`' module doc), the time and

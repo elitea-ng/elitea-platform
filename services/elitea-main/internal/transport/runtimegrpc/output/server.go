@@ -836,7 +836,11 @@ func agentExecutionResultDomainFor(result *runtimev1.AgentExecutionResultV1, cre
 	}
 	var terminalState outputapp.AgentExecutionTerminalState
 	switch result.GetTerminalState() {
-	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED:
+	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED,
+		// A run that stopped at its step limit under an unattended grant
+		// (ADR-0045) completed with its text so far; the full message's
+		// step_limit_reached flag lets the chain continue it.
+		runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED:
 		terminalState = outputapp.AgentExecutionTerminalCompleted
 	case runtimev1.AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL:
 		terminalState = outputapp.AgentExecutionTerminalPausedHITL

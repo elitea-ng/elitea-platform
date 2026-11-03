@@ -469,3 +469,50 @@ describe('background processes (#1223)', () => {
     expect(activeView(run([call(0, 'c1'), delta(2, 'b\n', 2), delta(1, 'a\n', 0)])).items[0]).toMatchObject({ process: { output: 'a\nb\n' } });
   });
 });
+
+describe('unattended chain events', () => {
+  const NEXT = 'turn-2';
+  const continued = (seq: number, next = NEXT): AgentEvent => ({
+    turn_id: T,
+    seq,
+    kind: 'turn_continued',
+    payload: { next_turn_id: next, execution_id: 'e2', continuation_index: 1, chain_root_execution_id: 'e1' },
+  });
+  const finished: AgentEvent = { turn_id: T, seq: 2, kind: 'done', payload: { committed: false, conversation_id: 'c', message_ids: [], changed_files: 0 } };
+
+  it('makes the next turn the active one, as a begin does, and keeps the finished one earlier', () => {
+    const state = run([status(1, 'running'), finished, continued(3)]);
+    expect(state.activeTurnId).toBe(NEXT);
+    expect(state.begun).toEqual([T, NEXT]);
+    expect(earlierViews(state).map((entry) => entry.turnId)).toEqual([T]);
+    expect(earlierViews(state)[0]?.view.continuedTo).toEqual({ nextTurnId: NEXT, index: 1 });
+  });
+
+  it('keeps the next turn’s events heard before the turn_continued', () => {
+    const early: AgentEvent = { turn_id: NEXT, seq: 1, kind: 'status', payload: { phase: 'running', continued_automatically: true, continuation_index: 1 } };
+    const state = run([finished, early, continued(3)]);
+    expect(activeView(state).continuation).toBe(1);
+    expect(state.unclaimed).not.toContain(NEXT);
+  });
+
+  it('ignores a turn_continued on a turn this hook did not begin, and a late duplicate', () => {
+    const other = turnReducer(initialTurnsState, { type: 'event', event: { ...continued(3), turn_id: 'someone-else' } });
+    expect(other.activeTurnId).toBeNull();
+    const state = run([finished, continued(3)]);
+    const third = turnReducer(state, { type: 'event', event: { ...continued(1, 'turn-3'), turn_id: NEXT } });
+    expect(third.activeTurnId).toBe('turn-3');
+    // The first turn's turn_continued delivered again changes nothing.
+    expect(turnReducer(third, { type: 'event', event: continued(3) })).toBe(third);
+  });
+
+  it('stores the chain end and the unattended fields of status running', () => {
+    const grant = { grant_id: 'g', continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false };
+    const running: AgentEvent = { turn_id: T, seq: 1, kind: 'status', payload: { phase: 'running', unattended: grant, continued_automatically: true, continuation_index: 4 } };
+    const ended: AgentEvent = { turn_id: T, seq: 3, kind: 'chain_ended', payload: { outcome: 'limit_reached', limit: 'spend' } };
+    const view = activeView(run([running, finished, ended]));
+    expect(view.unattended).toEqual(grant);
+    expect(view.continuation).toBe(4);
+    expect(view.chainEnded).toEqual({ outcome: 'limit_reached', limit: 'spend' });
+    expect(replayView([running, finished, ended]).chainEnded?.outcome).toBe('limit_reached');
+  });
+});

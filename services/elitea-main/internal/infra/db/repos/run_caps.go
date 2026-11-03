@@ -191,11 +191,7 @@ WITH capped AS (
       AND (j.run_caps->>'max_spend')::numeric > 0
 ), spent AS (
     SELECT c.execution_id, c.generation, c.resource_project_id, c.max_spend,
-           coalesce(sum(
-               CASE WHEN l.operation = 'tool' THEN coalesce(l.cost_usd, 0)
-                    ELSE l.prompt_tokens::numeric * coalesce(m.input_cost_per_1m_tokens, 0) / 1000000
-                       + l.completion_tokens::numeric * coalesce(m.output_cost_per_1m_tokens, 0) / 1000000
-               END), 0) AS spent
+           coalesce(sum(` + requestLogCostSQL + `), 0) AS spent
     FROM capped AS c
     JOIN gateway.llm_request_logs AS l
       ON l.project_id = c.resource_project_id

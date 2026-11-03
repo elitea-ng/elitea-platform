@@ -2,7 +2,8 @@
  * The live transcript of one turn: streamed text (Markdown, as in chat), each step's reasoning as a
  * folded "Thinking" block (`ThinkingBlock`), tool rows (local or remote, with a collapsible result),
  * each `spawn_agent` call's sub-agents under its row (`SubAgentLanes`), a background process's output under its
- * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`) and the status line, quiet
+ * `run_command` row (`ToolProcessOutput`), a message sent while the turn ran (`SteerMessage`), where the turn stopped
+ * (`StopNotices`: the tool-call stop, the end of an unattended chain) and the status line, quiet
  * text with a small spinner while the turn runs. Stop is the composer's (its round button, or Esc Esc).
  */
 import { useState, type MouseEvent } from 'react';
@@ -29,6 +30,7 @@ import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import { lanesOf } from '../model/subAgentEvents';
 import { isTerminalPhase, type TranscriptItem, type TurnView } from '../model/turnReducer';
+import { ContinuedMarker, StopNotices } from './ChainNotices';
 import { SteerMessage } from './SteerMessage';
 import { SubAgentLanes } from './SubAgentLanes';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -185,23 +187,10 @@ export interface TurnTranscriptProps {
   onTextContextMenu?: (text: string, event: MouseEvent) => void;
   /** The turn failed in a way another try may mend: "Retry" sends the message again (`/retry`); absent: not offered. */
   onRetryTurn?: () => void;
-  /** The turn stopped at the tool calls one turn can save: "Continue" starts a new turn; absent: not offered. */
+  /** The turn stopped at the tool calls one turn can save, or its unattended chain waits: "Continue" starts a new turn; absent: not offered. */
   onContinue?: () => void;
-}
-
-/** The turn stopped at the 512 tool calls one turn can save: "Continue" goes on in a new turn. */
-function ToolCallLimit({ onContinue }: { onContinue?: (() => void) | undefined }): React.JSX.Element {
-  const action =
-    onContinue === undefined ? undefined : (
-      <Button color="inherit" size="small" onClick={onContinue} data-testid="turn-continue">
-        {t('workspace.toolCallLimit.continue', 'Continue')}
-      </Button>
-    );
-  return (
-    <Alert severity="info" action={action} data-testid="turn-tool-call-limit">
-      {t('workspace.toolCallLimit.message', 'The agent made the most tool calls one turn can save. Continue goes on in a new turn.')}
-    </Alert>
-  );
+  /** The host started this turn by itself (an unattended chain), the n-th time: its marker shows first, in place of the person's prompt. */
+  continuation?: number | undefined;
 }
 
 /**
@@ -260,10 +249,11 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      {continuation !== undefined && <ContinuedMarker index={continuation} />}
       {view.items.map((item) =>
         item.type === 'text' ? (
           // The chat's own renderer; raw HTML from the model is dropped, not rendered.
@@ -285,7 +275,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
       )}
       {view.error !== undefined && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
-      {view.note === 'tool_call_limit_reached' && <ToolCallLimit onContinue={onContinue} />}
+      <StopNotices view={view} onContinue={onContinue} />
       {view.commitFailed !== undefined && <CommitFailed key={view.commitFailed.seq} failed={view.commitFailed} {...(onRetryCommit === undefined ? {} : { onRetry: onRetryCommit })} />}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
         {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (

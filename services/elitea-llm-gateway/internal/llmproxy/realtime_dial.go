@@ -155,7 +155,7 @@ func openRealtimeSocket(
 	// the URL it always sent: the provider's `?model=` URL, with the caller's
 	// allowlisted parameters (intent among them) merged on by
 	// realtimeProviderURL.
-	baseURL, bErr := rt.RealtimeWebSocketURL(key, model, "")
+	baseURL, bErr := rt.RealtimeWebSocketURL(ctx, key, model, "")
 	if bErr != nil {
 		// The error is NOT formatted with %v: a provider error can quote the
 		// URL, and the URL can carry userinfo.

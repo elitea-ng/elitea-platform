@@ -1,0 +1,43 @@
+{
+  "comment": "The Go test shards of the ci-go.yml Test job. scripts/ci/go-test-shards.mjs reads this file; its header gives the rules. The most specific pattern wins, and the shard with the pattern \"...\" gets every package that no other shard names.",
+  "shards": [
+    {
+      "name": "db-storage",
+      "storage": true,
+      "description": "The PostgreSQL repository suite (the longest package) and the storage suites that need the S3, Azure and GCS emulators.",
+      "packages": [
+        "services/elitea-main/internal/infra/db/...",
+        "services/elitea-main/internal/infra/storage/...",
+        "services/elitea-main/tests/contract"
+      ]
+    },
+    {
+      "name": "api-core",
+      "storage": false,
+      "description": "The four slowest API packages after repos: the router package and the eliteacore, configurations and mcp handlers.",
+      "packages": [
+        "services/elitea-main/internal/api",
+        "services/elitea-main/internal/api/v2/eliteacore",
+        "services/elitea-main/internal/api/v2/configurations",
+        "services/elitea-main/internal/api/v2/mcp"
+      ]
+    },
+    {
+      "name": "api-app",
+      "storage": false,
+      "description": "The other API packages and the application layer.",
+      "packages": [
+        "services/elitea-main/internal/api/...",
+        "services/elitea-main/internal/application/..."
+      ]
+    },
+    {
+      "name": "rest",
+      "storage": false,
+      "description": "Every package that no other shard names: the migration corpus, testpg, tests/system, the rest of elitea-main and every other workspace module.",
+      "packages": [
+        "..."
+      ]
+    }
+  ]
+}

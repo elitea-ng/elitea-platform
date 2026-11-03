@@ -164,7 +164,9 @@ type QuietKind =
   | 'process_exited'
   | 'steer_queued'
   | 'steer_injected'
-  | 'steer_dropped';
+  | 'steer_dropped'
+  | 'turn_continued'
+  | 'chain_ended';
 
 const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'text_delta',
@@ -183,14 +185,17 @@ const QUIET_KINDS: ReadonlySet<AgentEvent['kind']> = new Set<QuietKind>([
   'steer_queued',
   'steer_injected',
   'steer_dropped',
+  'turn_continued',
+  'chain_ended',
 ]);
 
 /**
  * Streamed text and reasoning, the composer's meter (`context`, and the
  * token counts of `usage` / `usage_total`: the composer shows them) and the
  * sub-agents' own events (the turn's `spawn_agent` / `wait_agent` calls are
- * its steps), and a background process's start, output and exit (its
- * `run_command` call is the step): nothing the feed shows.
+ * its steps), a background process's start, output and exit (its
+ * `run_command` call is the step), and an unattended chain's events (the
+ * next turn of the chain shows as its own turn): nothing the feed shows.
  */
 function changesNothing(event: AgentEvent): event is Extract<AgentEvent, { kind: QuietKind }> {
   return QUIET_KINDS.has(event.kind);

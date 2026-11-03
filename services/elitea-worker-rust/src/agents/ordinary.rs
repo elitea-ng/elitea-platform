@@ -803,7 +803,9 @@ impl OrdinaryNativeAgentAssembler {
         };
         let binding =
             bind_frozen_toolsets(&frozen, &reserved_toolsets).map_err(tool_binding_error)?;
-        let sensitive_tools = sensitive_tools.bind_provider_names(&binding)?;
+        let sensitive_tools = sensitive_tools
+            .with_unattended_grant(profile.unattended_grant())
+            .bind_provider_names(&binding)?;
         let delegated_authorization = delegated_authorization
             .bind_provider_names(&binding)
             .map_err(|()| invalid_tool_authorization_catalog())?;

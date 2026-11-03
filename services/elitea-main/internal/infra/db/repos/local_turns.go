@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 )
 
@@ -129,16 +130,58 @@ RETURNING execution_id, response_message_id::text, target_participant_id, expire
 		record.ConversationUUID, record.QuestionID, record.ResponseMessageID, target.targetID,
 		record.MemoriesUsed, record.TTL.Seconds(), applicationID, versionID,
 	).Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt)
+	created := err == nil
 	if errors.Is(err, pgx.ErrNoRows) {
 		turn, err = replayLocalTurnStart(ctx, tx, record, actor, target.targetID)
 	}
 	if err != nil {
 		return localturn.StartedTurn{}, err
 	}
+	// The unattended chain (ADR-0045 decision 4), in the start's
+	// transaction: a refused continuation starts no turn.
+	if created && record.Grant != nil {
+		if err := admitLocalTurnChain(ctx, tx, record, turn.ExecutionID); err != nil {
+			var limit *unattended.ChainLimitError
+			if errors.As(err, &limit) {
+				_ = tx.Rollback(ctx)
+				if _, endErr := endRunChain(context.WithoutCancel(ctx), r.pool,
+					record.Grant.ChainRootExecutionID, unattended.EndLimitReached, limit.Limit); endErr != nil {
+					return localturn.StartedTurn{}, errors.Join(err, endErr)
+				}
+			}
+			return localturn.StartedTurn{}, err
+		}
+	}
+	chain, found, err := readRunChainLink(ctx, tx, turn.ExecutionID)
+	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
+	if found {
+		turn.Chain = &chain
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return localturn.StartedTurn{}, fmt.Errorf("local turn: commit start: %w", err)
 	}
 	return turn, nil
+}
+
+// admitLocalTurnChain starts the chain of a first unattended turn, or adds a
+// continuation to the chain the turn continues.
+func admitLocalTurnChain(ctx context.Context, tx pgx.Tx, record localturn.StartRecord, executionID string) error {
+	grant := record.Grant
+	if grant.ChainRootExecutionID == "" {
+		return startRunChain(ctx, tx, unattended.ChainStart{
+			RootExecutionID: executionID, ProjectID: record.ProjectID, OwnerUserID: record.ActorUserID,
+			ConversationUUID: record.ConversationUUID, Origin: unattended.OriginDesktop,
+			Grant: grant.Grant, Limits: grant.Limits,
+		})
+	}
+	_, err := continueRunChain(ctx, tx, unattended.ChainContinue{
+		RootExecutionID: grant.ChainRootExecutionID, ExecutionID: executionID, Kind: "continue",
+		OwnerUserID: record.ActorUserID, GrantID: grant.Grant.GrantID, ProjectID: record.ProjectID,
+		ConversationUUID: record.ConversationUUID,
+	})
+	return err
 }
 
 func replayLocalTurnStart(
@@ -342,6 +385,14 @@ SET committed_at = clock_timestamp(), commit_digest = $2
 WHERE execution_id = $1
 RETURNING committed_at`, record.ExecutionID, record.Digest[:]).Scan(&turn.CommittedAt); err != nil {
 		return localturn.CommittedTurn{}, fmt.Errorf("local turn: mark committed: %w", err)
+	}
+	// The turn's answered questions in the approval ledger, and the chain's
+	// end (ADR-0045 decisions 3 and 4), with the commit.
+	if err := recordLocalTurnExchanges(ctx, tx, record, localTurnLedgerScope{
+		projectID: record.ProjectID, actorID: strconv.FormatInt(record.ActorUserID, 10),
+		conversationUUID: turn.ConversationUUID, responseMessageID: turn.ResponseMessageID,
+	}); err != nil {
+		return localturn.CommittedTurn{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return localturn.CommittedTurn{}, fmt.Errorf("local turn: commit: %w", err)
@@ -549,10 +600,23 @@ VALUES ($1, $2, $3, $4, $5)`,
 		claim.ExecutionID, claim.InterruptID, claim.CallDigest, consumed, claim.IdempotencyKey); err != nil {
 		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: consume confirmation: %w", err)
 	}
+	// A confirmation the turn's grant answered (ADR-0045): only when the
+	// grant answers remote confirmations.
+	grantID := ""
+	if claim.Source == localturn.SourceGrant {
+		chain, found, err := readRunChainLink(ctx, tx, claim.ExecutionID)
+		if err != nil {
+			return localturn.ConfirmationOutcome{}, err
+		}
+		if !found || !chain.Grant.RemoteConfirmations || chain.EndState != "" {
+			return localturn.ConfirmationOutcome{}, localturn.ErrConfirmationGrantRefused
+		}
+		grantID = chain.GrantID
+	}
 	// The approval ledger's decision row, with the consumption (ADR-0041
 	// decision 5). The desktop sends a confirmation only for an approval.
-	if err := recordLocalTurnApproval(ctx, tx, turn, claim.ExecutionID, claim.InterruptID, approvalPhaseDecision,
-		ApprovalOutcomeApproved, claim.Call); err != nil {
+	if err := recordLocalTurnDecision(ctx, tx, turn, claim.ExecutionID, claim.InterruptID, claim.Call,
+		grantID); err != nil {
 		return localturn.ConfirmationOutcome{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -620,6 +684,23 @@ func recordLocalTurnApproval(
 	ctx context.Context, tx pgx.Tx, turn localTurnLedgerScope, executionID, interruptID, phase, outcome string,
 	call localturn.ConfirmationLedgerCall,
 ) error {
+	return recordLocalTurnApprovalEntry(ctx, tx, turn, executionID, interruptID, phase, outcome, call, "")
+}
+
+// recordLocalTurnDecision writes a confirmation's decision row: a person's,
+// or the grant's when grantID is set.
+func recordLocalTurnDecision(
+	ctx context.Context, tx pgx.Tx, turn localTurnLedgerScope, executionID, interruptID string,
+	call localturn.ConfirmationLedgerCall, grantID string,
+) error {
+	return recordLocalTurnApprovalEntry(ctx, tx, turn, executionID, interruptID, approvalPhaseDecision,
+		ApprovalOutcomeApproved, call, grantID)
+}
+
+func recordLocalTurnApprovalEntry(
+	ctx context.Context, tx pgx.Tx, turn localTurnLedgerScope, executionID, interruptID, phase, outcome string,
+	call localturn.ConfirmationLedgerCall, grantID string,
+) error {
 	actor, _ := strconv.ParseInt(turn.actorID, 10, 64)
 	digest := ""
 	if call.ArgumentsSHA256 != "" {
@@ -631,6 +712,9 @@ func recordLocalTurnApproval(
 		Phase: phase, Outcome: outcome, TriggerOrigin: "manual",
 		Call: approvalCall{GuardrailType: "sensitive_tool", ToolName: call.ToolName, ToolkitName: call.ToolkitName,
 			ToolkitType: call.ToolkitType, ArgumentDigest: digest},
+	}
+	if grantID != "" {
+		entry.GrantID, entry.Reason = grantID, unattended.ReasonUnattendedGrant
 	}
 	if phase == approvalPhaseDecision {
 		entry.Action, entry.ActorUserID = "approve", actor

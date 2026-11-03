@@ -1006,7 +1006,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// rotation_staged_at, all set or all NULL; and the secret write ledger
 	// state 'retired' for a version the reference no longer uses. No data,
 	// no permission.
-	require.EqualValues(t, 220, Head(shared))
+	//
+	// 221: shared/0221_unattended_run_chains.sql, unattended grants and run
+	// chains (ADR-0045 decisions 1, 2 and 4, #1435, #1436):
+	// elitea_runtime.run_chains (one row per chain: root, owner, grant,
+	// count, spend, limits, deadline and end state),
+	// elitea_runtime.run_chain_links (one row per link) and the nullable
+	// approval_ledger.grant_id. No data, no permission.
+	require.EqualValues(t, 221, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -68,7 +68,7 @@ type stubRealtimeProvider struct {
 
 func (p *stubRealtimeProvider) SupportsRealtimeAPI() bool { return true }
 
-func (p *stubRealtimeProvider) RealtimeWebSocketURL(key schemas.Key, model, intent string) (string, *schemas.BifrostError) {
+func (p *stubRealtimeProvider) RealtimeWebSocketURL(_ *schemas.BifrostContext, key schemas.Key, model, intent string) (string, *schemas.BifrostError) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.urlKey, p.urlModel, p.urlIntent = key, model, intent

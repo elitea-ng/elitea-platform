@@ -428,7 +428,7 @@ Updating: as for `zavora-docx-opc` above.
 **Upstream.** The `zip` 9 move of `zavora-slide-opc` and `zavora-slide-xlsx`,
 on the current `zavora-ai/zavora-slide` default branch: https://github.com/zavora-ai/zavora-slide/pull/3.
 
-## `calamine/` — calamine 0.36.2 (upstream 0.36.1 + zip 9)
+## `calamine/` — calamine 0.36.2 (upstream 0.36.1 + zip 9 + quick-xml 0.42)
 
 The XLSX, XLSB, XLS and ODS reader. `xberg` 1.3.10 pulls it in as an optional
 dependency; `libs/rust/doc-extract` pins `xberg` at `=1.3.10`. Nothing in this
@@ -447,7 +447,7 @@ version every direct declaration in this repository already pins.
 | Source | `https://static.crates.io/crates/calamine/calamine-0.36.1.crate` |
 | Archive SHA-256 | `5fa68281b1a76b54a62156474adb06bb380a67e07dd60656e3217152b42183f3` (equals the crates.io index `cksum`) |
 | Upstream commit | `0a24c2a9f1e38c0932c1299e633270dc730db505` (`.cargo_vcs_info.json`), `https://github.com/tafia/calamine` |
-| Tree digest | `34b75557b910b21cbef99d5fbe6f6434bcc68e43e4ac6c3f5be0880ed127f049` (44 files; command below) |
+| Tree digest | `b26b72fa5795e8a44c812f7e83107ce190a6d797de37667ba35f9be2ed1bac25` (44 files; command below) |
 | Licence | `MIT`; the text is in the directory (`LICENSE-MIT.md`) |
 
 **The version is 0.36.2.** The patch must satisfy `xberg`'s `^0.36.1` range,
@@ -458,10 +458,10 @@ version no dependant accepts. Keep the version inside that range. Do not set
 **The migration source.** Upstream 0.37.0 carries the same `zip` 8 to 9 change
 (its changelog, PR #741). Each source change below copies the 0.37.0 code for
 that call site. The 0.37.0 release also holds XLS, CFB, formula and number
-format fixes, a new `workbook_properties()` API and `quick-xml` 0.42. None of
-those are here.
+format fixes and a new `workbook_properties()` API. None of those are here.
+The `quick-xml` 0.42 change of 0.37.0 is here (see the table).
 
-**Changes.** Six files, plus the removed lockfile. Every other file is the
+**Changes.** Nine files, plus the removed lockfile. Every other file is the
 archive's, byte for byte.
 
 | File | Change | Why |
@@ -472,6 +472,8 @@ archive's, byte for byte.
 | `src/xlsx/mod.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. A test, `a_workbook_with_a_non_utf8_entry_name_opens`, opens a minimal workbook that also holds the entry name bytes `xl/\xff\xfe-opaque.bin`, and reads its sheet. | `ZipFile::name` is now fallible. A name that does not decode cannot match a media path. Without the skip, one odd entry fails the read of the workbook. |
 | `src/xlsb/mod.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. | The same change. |
 | `src/ods.rs` | `read_pictures` skips an entry whose `zfile.name()` is an error. | The same change. |
+| `Cargo.toml`, `Cargo.toml.orig` | `quick-xml` moves from `0.41` to `0.42`. | The nightly Dependabot group of PR #1561 moved it. `xberg` 1.3.10 requires `quick-xml ^0.42.0`, so the copy now shares the `quick-xml` that `xberg` resolves. |
+| `src/attrs.rs`, `src/formats.rs`, `src/ods.rs`, `src/utils.rs`, `src/xlsb/mod.rs`, `src/xlsx/cells_reader.rs`, `src/xlsx/mod.rs` | The upstream `quick-xml` 0.42 port, https://github.com/tafia/calamine/pull/711 (merge commit `0af05f4f6030351e3b8a999ea0810c8618368776`, in 0.37.0), applied as is. One hunk (`workbookPr` in `src/xlsx/mod.rs`) is applied by hand: it keeps the 0.36.1 rule that an absent `date1904` clears the flag. | quick-xml 0.42 decodes names and attribute values to `str` (`local_name()`, `raw_attr()`, `xml10_content()`) and removes `Decoder` from attribute decoding. The 0.36.1 code does not compile on 0.42. |
 
 Each source change carries an "Elitea patch (zip 9)" comment. zip 9.1.3 reads
 a name that is not UTF-8 as CP437, which maps every byte, so on 9.1.3 the skip
@@ -489,7 +491,7 @@ The archive's `Cargo.lock` is removed (see "Why no `Cargo.lock`" above).
 curl -sL https://static.crates.io/crates/calamine/calamine-0.36.1.crate -o /tmp/c.crate
 shasum -a 256 /tmp/c.crate                       # the archive SHA-256 above
 tar xzf /tmp/c.crate -C /tmp && rm /tmp/calamine-0.36.1/Cargo.lock
-diff -r /tmp/calamine-0.36.1 vendor/calamine     # only the six files in the table
+diff -r /tmp/calamine-0.36.1 vendor/calamine     # only the nine files in the table
 (cd vendor/calamine && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
 (cd vendor/calamine && cargo check --all-features && cargo test --all-features --lib && rm -rf Cargo.lock target)
 ```
@@ -519,7 +521,7 @@ among them.
   `Read + Seek` value the caller gives it.
 
 Updating: replace the directory with the new archive's contents, remove its
-`Cargo.lock`, re-apply the six changes, update the table and the review, and
+`Cargo.lock`, re-apply the changes in the table, update the table and the review, and
 run the doc-extract spreadsheet tests.
 
 ## `zavora-xlsx/` — zavora-xlsx 0.1.2 (zip 9)

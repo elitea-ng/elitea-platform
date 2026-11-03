@@ -53,6 +53,10 @@ type SubmitRequest struct {
 	// every caller without an assertion. Not part of the request digest:
 	// it describes the caller, not the work.
 	AssertedScope *AssertedScope
+	// Unattended is the run's chain admission (ADR-0045): the first run of
+	// a chain, or a continuation. nil for a run without a grant. Not part
+	// of the request digest by itself: the grant is in Input.
+	Unattended *UnattendedAdmission
 }
 
 // AssertedScope is the toolkit scope of a verified delegation assertion.
@@ -125,6 +129,9 @@ type Admission struct {
 	// version row for a release run (release.go). Zero binds the run's
 	// version.
 	BindingVersionID int64
+	// Unattended is the chain admission (ADR-0045); the transaction writes
+	// the chain row or the continuation's link.
+	Unattended *UnattendedAdmission
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -293,6 +300,7 @@ func (s *AdmissionService) Submit(
 		GovernedCredentials:   governed,
 		ReleaseID:             releaseID(request.Release),
 		BindingVersionID:      bindingVersionID(request.Release, 0),
+		Unattended:            request.Unattended.Clone(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)

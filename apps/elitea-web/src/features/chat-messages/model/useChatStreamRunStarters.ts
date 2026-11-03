@@ -34,6 +34,7 @@ import {
   type ContinueAgentExecutionParams,
   type StartAgentExecutionParams,
 } from "@/entities/conversation/api/conversationApi";
+import { isGrantsOffRefusal, unattendedRefusalText } from "@/features/unattended";
 import { EliteaApiError } from "@/shared/api/generated/mutator";
 
 /**
@@ -57,6 +58,8 @@ export type AgentStreamStartAttempt =
       readonly started: false;
       readonly reason: "rejected";
       readonly message: string;
+      /** Main refused the unattended grant because an administrator turned grants off (ADR-0045): the send can go again without it. */
+      readonly grantsOff?: true;
     };
 
 /**
@@ -131,6 +134,9 @@ function isRegenerationPending(error: unknown): boolean {
 }
 
 function serverFailureMessage(body: unknown, status: number): string {
+  // A refused unattended grant (ADR-0045) names the tool and the reason.
+  const refusal = unattendedRefusalText(body);
+  if (refusal !== undefined) return refusal;
   if (typeof body === "object" && body !== null) {
     const value = body as Readonly<Record<string, unknown>>;
     for (const field of ["safe_message", "message", "error"] as const) {
@@ -151,6 +157,7 @@ export function classifyStartFailure(error: unknown): AgentStreamStartAttempt {
       started: false,
       reason: "rejected",
       message: serverFailureMessage(failure.body, failure.status),
+      ...(isGrantsOffRefusal(failure.body) ? { grantsOff: true as const } : {}),
     };
   }
   if (failure.kind === "auth") {

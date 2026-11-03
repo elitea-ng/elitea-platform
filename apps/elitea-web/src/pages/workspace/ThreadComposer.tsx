@@ -3,8 +3,8 @@
  * and the composer. Where a message goes depends on where the thread runs:
  *
  * - here: the local agent loop (`session.send`), with Act | Plan | Bypass
- *   (`useBypassMode`, kept per folder; Plan wins) and the
- *   agent·version picker;
+ *   (`useComposerModes`, kept per folder; Plan wins), "Run to completion"
+ *   (on by default, kept per folder) and the agent·version picker;
  * - `cloud`: the SERVER conversation (`useCloudChat`: the chat's own execution
  *   route and stream). The conversation's own agent answers, so the picker is
  *   shown disabled and there is no plan mode;
@@ -45,6 +45,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
+import { RunToCompletionControl } from '@/features/unattended';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import { IndexStatusIcon } from '@/features/workspace-index';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
@@ -53,6 +54,7 @@ import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
+import { isContinuedRecord } from './chainSlots';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
 import { IdleCompactedNotice } from './CompactNotices';
 import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
@@ -67,7 +69,7 @@ import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
 import type { SessionCommands } from './useSessionCommands';
-import { useComposerModes } from './useComposerModes';
+import { useComposerModes, type RunToCompletionBinding } from './useComposerModes';
 import { useIdleCompacted } from './useIdleCompacted';
 import { useIdleHold } from './useIdleHold';
 import { useSteering, type Steering } from './useSteering';
@@ -130,11 +132,12 @@ type Usage = WorkspaceTurn['view']['usage'];
 
 /**
  * The thread's last recorded message (thread history), for `/retry` before anything was sent here. The history keeps
- * the prompt as typed: its skill or custom command is read from it again, as a send does.
+ * the prompt as typed: its skill or custom command is read from it again, as a send does. A turn that the host
+ * continued by itself (an unattended chain) holds the host's prompt, not the person's: it is skipped.
  */
 export function recordedPrompt(history: ThreadSession['history'], commands: readonly CustomCommand[], skills: readonly ComposerSkill[]): SentMessage | null {
   if (history.kind !== 'local') return null;
-  const stored = history.turns[history.turns.length - 1];
+  const stored = history.turns.findLast((entry) => !isContinuedRecord(entry.events));
   if (stored === undefined) return null;
   const { command, skill } = composer.invokedPick(stored.prompt, commands, skills);
   return { prompt: stored.prompt, mentions: stored.mentions, skills: skillPicks(skill), command: command ?? undefined };
@@ -230,6 +233,11 @@ function useIdleNotice(workspaceId: string, conversationId: string): { shown: bo
   return { shown: at !== null && at !== dismissed, dismiss: () => setDismissed(at) };
 }
 
+/** "Run to completion" (ADR-0045) in the footer, or nothing when it does not show (a cloud thread, grants off). */
+function runControl(binding: RunToCompletionBinding | undefined, busy: boolean): React.JSX.Element | null {
+  return binding === undefined ? null : <RunToCompletionControl {...binding} scope="desktop" disabled={busy} testId="workspace-run-to-completion" />;
+}
+
 export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
@@ -249,7 +257,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     model.dismissNotice();
     idle.dismiss();
     remember(prompt);
-    const sent = await session.send(prompt, modes.mode, mentions, picked, commands.compactNext, model.choice, command, images);
+    const sent = await session.send(prompt, modes.choice, mentions, picked, commands.compactNext, model.choice, command, images);
     if (sent && commands.compactNext) commands.compactSent();
     return sent;
   };
@@ -301,6 +309,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
             <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
           </>
         }
+        runToCompletion={runControl(modes.runToCompletion, bound.busy)}
         contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
         more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}

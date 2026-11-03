@@ -75,6 +75,9 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// The version's `meta.citations` (ADR-0043 decision 5). Only a root
     /// agent's binding uses it.
     citations: elitea_agent_runtime::grounding::CitationMode,
+    /// The run's unattended grant (ADR-0045). Only the root agent of a run
+    /// has it; a nested agent pauses as before.
+    unattended: Option<Arc<super::unattended::UnattendedGrant>>,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -262,6 +265,7 @@ impl OrdinaryNoToolProfile {
             edit_format: application_edit_format(request),
             output_contract: None,
             citations: elitea_agent_runtime::grounding::CitationMode::Off,
+            unattended: None,
         })
     }
 
@@ -313,6 +317,7 @@ impl OrdinaryNoToolProfile {
             edit_format: application_edit_format(request),
             output_contract: application_output_contract(request)?,
             citations: application_citations(request),
+            unattended: None,
         })
     }
 
@@ -444,6 +449,7 @@ impl OrdinaryNoToolProfile {
             },
             // A nested agent's answer goes to its parent, not to the chat.
             citations: elitea_agent_runtime::grounding::CitationMode::Off,
+            unattended: None,
         })
     }
 
@@ -468,6 +474,22 @@ impl OrdinaryNoToolProfile {
             instructions,
             ..self.clone()
         }
+    }
+
+    /// Set the run's unattended grant (ADR-0045) on the root profile.
+    #[must_use]
+    pub(crate) fn with_unattended_grant(
+        mut self,
+        grant: Option<Arc<super::unattended::UnattendedGrant>>,
+    ) -> Self {
+        self.unattended = grant;
+        self
+    }
+
+    /// The run's unattended grant, if any.
+    #[must_use]
+    pub(crate) fn unattended_grant(&self) -> Option<&super::unattended::UnattendedGrant> {
+        self.unattended.as_deref()
     }
 
     /// The agent's citation setting (`meta.citations`).

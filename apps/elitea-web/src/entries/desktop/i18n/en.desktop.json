@@ -1048,5 +1048,15 @@
   "workspace.context.auto.switch": "Compact automatically",
   "workspace.context.auto.threshold": "Compact when context reaches",
   "workspace.context.auto.thresholdHint": "Lower saves on every request but forgets detail sooner.",
-  "workspace.context.auto.title": "Auto-compaction"
+  "workspace.context.auto.title": "Auto-compaction",
+  "workspace.chain.cancelled": "cancelled",
+  "workspace.chain.completed": "completed",
+  "workspace.chain.ended": "Unattended run ended: {{outcome}}",
+  "workspace.chain.failed": "failed",
+  "workspace.chain.limitContinuations": "The run used all its automatic continuations.",
+  "workspace.chain.limitDeadline": "The run reached its deadline.",
+  "workspace.chain.limitReached": "chain limit reached",
+  "workspace.chain.limitSpend": "The run reached its spend limit.",
+  "workspace.chain.waiting": "waiting for you. Click Continue to go on.",
+  "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode."
 }

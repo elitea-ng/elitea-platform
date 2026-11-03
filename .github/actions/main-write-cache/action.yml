@@ -33,9 +33,48 @@ description: >-
 # overwrites a key). That is the same behaviour actions/setup-go and
 # actions/setup-node had, and it is what keeps main's footprint at one entry
 # per key rather than one per push.
+#
+# ── Why the writer PATH is a literal, one writer step per slot ──────────────
+#
+# Measured 2026-11-03: main held NO go-v1-* and NO node-cache-* entry. Every
+# Go and npm job ran cold. The save never happened. The post step of the
+# writer logged `Input required and not supplied: path` and stopped.
+#
+# The cause is a runner limit. At job end the runner evaluates the `with:` of
+# a post step again, and for an action inside a composite action it does that
+# WITHOUT the composite's `inputs` and `steps` contexts. So `path:
+# ${{ inputs.path }}` became empty. (actions/cache reads the KEY from the
+# state it saved in its main step, so only the inputs it reads again in post,
+# `path` first, are lost.) .github/actions/build-stack-images saves its mounts
+# with the same actions/cache, and it works, because its path is the literal
+# `.buildkit-mounts`.
+#
+# So each writer step here has a LITERAL path, one step per slot:
+#
+#   slot  path                              the caller makes the tool use it
+#   go    ~/.cache/go-build, ~/go/pkg/mod   go-cache sets GOCACHE, GOMODCACHE
+#   npm   ~/.npm                            npm-cache sets NPM_CONFIG_CACHE
+#
+# The caller still passes `path` for the restore. The claim step below FAILS
+# when that path is not the literal path of the slot, so the directory that
+# is saved is always the directory that is restored. A new slot needs a new
+# writer step and a new line in the claim step.
+#
+# One slot can be used ONE time in a job. Two uses would register two saves of
+# the same directory under two keys. The claim step records each slot in
+# GITHUB_ENV and FAILS on a second use in the same job.
+# scripts/ci/check-workflow-cache-writes.mjs refuses a full actions/cache step
+# in a composite action whose path is an expression.
 inputs:
+  slot:
+    description: >-
+      The literal-path slot of this cache: `go` or `npm`. See the table in
+      the header of this file.
+    required: true
   path:
-    description: Newline-separated paths to cache (as actions/cache `path`).
+    description: >-
+      Newline-separated paths to cache (as actions/cache `path`). They must be
+      the paths of the slot, with `~` written as the home directory or as `~`.
     required: true
   key:
     description: The exact key.
@@ -47,19 +86,63 @@ inputs:
 outputs:
   cache-hit:
     description: "'true' on an exact-key hit."
-    value: ${{ steps.writer.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+    value: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader.outputs.cache-hit }}
   cache-matched-key:
     description: The key that was restored, empty on a miss.
-    value: ${{ steps.writer.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
+    value: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
 runs:
   using: composite
   steps:
-    - name: Restore, and save at job end (run on main)
-      id: writer
-      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    - name: Claim the cache slot (one use per job, literal path)
+      shell: bash
+      env:
+        SLOT: ${{ inputs.slot }}
+        PATHS: ${{ inputs.path }}
+        KEY: ${{ inputs.key }}
+      run: |
+        set -euo pipefail
+        # The literal paths of the writer steps below, in the same order.
+        case "$SLOT" in
+          go) expected="$HOME/.cache/go-build"$'\n'"$HOME/go/pkg/mod" ;;
+          npm) expected="$HOME/.npm" ;;
+          *) echo "::error::main-write-cache: unknown slot '$SLOT' (go or npm); a new slot needs its own literal writer step"; exit 1 ;;
+        esac
+        given=""
+        while IFS= read -r line; do
+          line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+          [ -n "$line" ] || continue
+          case "$line" in "~/"*) line="$HOME/${line#"~/"}" ;; esac
+          given="${given:+$given$'\n'}${line%/}"
+        done <<< "$PATHS"
+        if [ "$given" != "$expected" ]; then
+          echo "::error::main-write-cache: slot '$SLOT' saves its literal path, but the caller restores a different one."
+          printf 'restored:\n%s\nsaved:\n%s\n' "$given" "$expected"
+          exit 1
+        fi
+        marker="ELITEA_MAIN_WRITE_CACHE_SLOT_$(printf '%s' "$SLOT" | tr '[:lower:]' '[:upper:]')"
+        if [ -n "${!marker:-}" ]; then
+          echo "::error::main-write-cache: slot '$SLOT' is already used in this job (key ${!marker}). One slot saves one directory set; a second use would save it again under a second key."
+          exit 1
+        fi
+        echo "${marker}=${KEY}" >> "$GITHUB_ENV"
+    - name: Restore, and save at job end (run on main) — go slot
+      id: writer-go
+      if: inputs.slot == 'go' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       uses: actions/cache@v6
       with:
-        path: ${{ inputs.path }}
+        # LITERAL: the post step evaluates this again without `inputs`.
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ inputs.key }}
+        restore-keys: ${{ inputs.restore-keys }}
+    - name: Restore, and save at job end (run on main) — npm slot
+      id: writer-npm
+      if: inputs.slot == 'npm' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      uses: actions/cache@v6
+      with:
+        # LITERAL: the post step evaluates this again without `inputs`.
+        path: ~/.npm
         key: ${{ inputs.key }}
         restore-keys: ${{ inputs.restore-keys }}
     - name: Restore only (pull requests and every other run)
@@ -73,8 +156,8 @@ runs:
     - name: Report the cache result
       shell: bash
       env:
-        HIT: ${{ steps.writer.outputs.cache-hit || steps.reader.outputs.cache-hit }}
-        MATCHED: ${{ steps.writer.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
+        HIT: ${{ steps.writer-go.outputs.cache-hit || steps.writer-npm.outputs.cache-hit || steps.reader.outputs.cache-hit }}
+        MATCHED: ${{ steps.writer-go.outputs.cache-matched-key || steps.writer-npm.outputs.cache-matched-key || steps.reader.outputs.cache-matched-key }}
         KEY: ${{ inputs.key }}
         WRITES: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       run: |

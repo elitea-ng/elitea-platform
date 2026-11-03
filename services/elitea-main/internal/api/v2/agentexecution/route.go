@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
@@ -193,6 +194,9 @@ type currentApplicationStartBody struct {
 	// (ADR-0040 decision 2), published or withdrawn. Absent or zero runs
 	// the participant's version.
 	ReleaseID int64 `json:"release_id"`
+	// Unattended is the person's unattended grant (ADR-0045, client
+	// contract 1.30); absent for an attended run.
+	Unattended *startUnattendedBody `json:"unattended"`
 }
 
 type currentRegenerationBody struct {
@@ -344,6 +348,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				TriggerOrigin:    origin,
 				ProjectSkillIDs:  projectSkillIDs,
 				ReleaseID:        body.ReleaseID,
+				Unattended:       body.Unattended.request(),
 			},
 		)
 	case CurrentAdhocStartContract:
@@ -364,6 +369,7 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionedUserIDs: mentioned,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
+				Unattended:       body.Unattended.request(),
 			},
 		)
 	}
@@ -637,6 +643,9 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		// A release run (ADR-0040 decision 2): the toolkit id and the
 		// reason, never a setting.
 		writeJSON(writer, status, body)
+		return
+	}
+	if unattendedwire.WriteRefusal(writer, err) {
 		return
 	}
 	switch {
