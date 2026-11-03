@@ -177,17 +177,21 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
             == "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
         {
             let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
-            return Res::json(
-                200,
-                &json!({
-                    "execution_id": EXECUTION,
-                    "question_id": body["question_id"],
-                    "response_message_id": "11111111-2222-4333-8444-555555555555",
-                    "conversation_uuid": "99999999-2222-4333-8444-555555555555",
-                    "participant_id": 77, "expires_at": "2026-10-10T00:00:00Z", "created": true,
-                    "memory_recall": {"text": "Memory: the user likes tea.", "count": 1, "memory_ids": ["3"]}
-                }),
-            );
+            let mut started = json!({
+                "execution_id": EXECUTION,
+                "question_id": body["question_id"],
+                "response_message_id": "11111111-2222-4333-8444-555555555555",
+                "conversation_uuid": "99999999-2222-4333-8444-555555555555",
+                "participant_id": 77, "expires_at": "2026-10-10T00:00:00Z", "created": true,
+                "memory_recall": {"text": "Memory: the user likes tea.", "count": 1, "memory_ids": ["3"]}
+            });
+            // As the platform does with grants on: a start with a grant is
+            // the root of a chain.
+            if let Some(grant_id) = body["unattended"]["grant_id"].as_str() {
+                started["unattended"] = json!({"grant_id": grant_id,
+                    "chain_root_execution_id": EXECUTION, "continuation_index": 0});
+            }
+            return Res::json(200, &started);
         }
         if path == "/llm/v1/chat/completions" {
             return match model_calls.fetch_add(1, Ordering::SeqCst) {
