@@ -26,6 +26,9 @@
 //   actions/cache/save      the step's `if:` holds BOTH
 //                           `github.ref == 'refs/heads/main'` and
 //                           `github.event_name != 'pull_request'`
+//                           In a composite action, the full actions/cache
+//                           needs a LITERAL `path:` (its post step loses the
+//                           composite's contexts; .github/actions/main-write-cache)
 //   Swatinem/rust-cache     `save-if:` names `github.ref == 'refs/heads/main'`,
 //                           or is a literal false (restore only)
 //   golangci-lint-action    `skip-cache: true`, or `skip-save-cache:` gated on
@@ -211,6 +214,15 @@ export function checkDocument(name, doc, report) {
       report.cacheSteps += 1;
       if (!release && !gatedOnMainRun(cond)) {
         report.fail(where, `${action} saves the cache; its \`if:\` must require ${MAIN_REF} && ${WRITER_EVENT} (use actions/cache/restore to read)`);
+      }
+      // The post step of an action inside a composite action evaluates its
+      // `with:` again WITHOUT the composite's `inputs` and `steps` contexts.
+      // actions/cache reads `path` again there, so an expression becomes
+      // empty and the save never happens (measured 2026-11-03: main held no
+      // Go or npm cache at all). In a composite action the path must be a
+      // literal. See .github/actions/main-write-cache.
+      if (isAction && action === "actions/cache" && pyStr(get(with_, "path", "")).includes("${{")) {
+        report.fail(where, "actions/cache in a composite action needs a LITERAL `path:`; its post step evaluates `with:` again without the composite's inputs and steps, so an expression path is empty and nothing is saved");
       }
     } else if (action === "actions/cache/restore") {
       report.cacheSteps += 1;

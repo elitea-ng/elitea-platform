@@ -24,7 +24,7 @@ function workflow(steps, on = PR_AND_NIGHTLY) {
   return on + "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n" + indent(steps, "      ");
 }
 
-function tree(subject, { hcl = "", action = null, extra = {} } = {}) {
+function tree(subject, { hcl = "", action = null, actionName = "build-stack-images", extra = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cache-writes-"));
   const wf = path.join(root, ".github", "workflows");
   fs.mkdirSync(wf, { recursive: true });
@@ -36,8 +36,8 @@ function tree(subject, { hcl = "", action = null, extra = {} } = {}) {
     fs.writeFileSync(path.join(root, "deploy", "ci", "x.hcl"), hcl);
   }
   if (action !== null) {
-    fs.mkdirSync(path.join(root, ".github", "actions", "build-stack-images"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".github", "actions", "build-stack-images", "action.yml"), action);
+    fs.mkdirSync(path.join(root, ".github", "actions", actionName), { recursive: true });
+    fs.writeFileSync(path.join(root, ".github", "actions", actionName, "action.yml"), action);
   }
   return root;
 }
@@ -48,8 +48,8 @@ function runChecker(argv) {
   return [code, lines.join("\n")];
 }
 
-function check(steps, { on = PR_AND_NIGHTLY, hcl = "", action = null } = {}) {
-  const root = tree(workflow(steps, on), { hcl, action });
+function check(steps, { on = PR_AND_NIGHTLY, hcl = "", action = null, actionName } = {}) {
+  const root = tree(workflow(steps, on), { hcl, action, actionName });
   try {
     return runChecker(["--root", root]);
   } finally {
@@ -115,6 +115,18 @@ test("actions cache in a workflow no pull request can start passes", () => {
 
 test("actions cache in a push workflow is refused", () => {
   assertWrites("- uses: actions/cache@v6\n  with: {path: x, key: k}\n", "actions/cache saves", { on: "on:\n  push:\n" });
+});
+
+test("actions cache in a composite action with an expression path is refused", () => {
+  const action = `runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v6\n      if: ${MAIN_RUN}\n      with:\n        path: \${{ inputs.path }}\n        key: k\n`;
+  const [code, out] = check(FILLER, { action, actionName: "some-cache" });
+  assert.equal(code, 1, out);
+  assert.ok(out.includes("needs a LITERAL `path:`"), out);
+});
+
+test("actions cache in a composite action with a literal path passes", () => {
+  const action = `runs:\n  using: composite\n  steps:\n    - uses: actions/cache@v6\n      if: ${MAIN_RUN}\n      with:\n        path: |\n          ~/.cache/go-build\n          ~/go/pkg/mod\n        key: \${{ inputs.key }}\n    - uses: actions/cache/restore@v6\n      with:\n        path: \${{ inputs.path }}\n        key: k\n`;
+  assertClean(FILLER, { action, actionName: "some-cache" });
 });
 
 // ── BuildKit cache-to ─────────────────────────────────────────────────────
