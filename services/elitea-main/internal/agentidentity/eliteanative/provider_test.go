@@ -122,7 +122,7 @@ func TestAssertionVerifiesAgainstThePublishedJWKS(t *testing.T) {
 	}
 	// The raw payload carries no field outside the documented claim set.
 	payload := strings.Split(a.Token, ".")[1]
-	raw, err := jose.ParseSigned(a.Token, []jose.SignatureAlgorithm{jose.ES256})
+	raw, err := jose.ParseSignedCompact(a.Token, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil || payload == "" {
 		t.Fatal(err)
 	}
