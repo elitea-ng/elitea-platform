@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { defaultGrant } from './grant';
-import { answersForPerson, defaultChoice, grantToSend, readChoice } from './runChoice';
+import { answersForPerson, defaultChoice, grantToSend, readChoice, type RunChoice } from './runChoice';
 
 describe('defaultChoice', () => {
   it('is on, continues by itself, and answers nothing for the person', () => {
@@ -30,6 +30,18 @@ describe('answersForPerson', () => {
     expect(answersForPerson({ ...defaultGrant(), remote_confirmations: true }, 'desktop')).toBe(true);
     expect(answersForPerson({ ...defaultGrant(), remote_confirmations: true }, 'cloud')).toBe(false);
     expect(answersForPerson({ ...defaultGrant(), sensitive_tools: [{ toolkit: 'a', tool: 'b' }] }, 'cloud')).toBe(true);
+  });
+});
+
+describe('the goal check', () => {
+  it('is on by default, goes with the grant of both scopes, and is kept when turned off', () => {
+    expect(defaultChoice().grant.goal_check).toBe(true);
+    expect(grantToSend(defaultChoice(), 'desktop')?.goal_check).toBe(true);
+    expect(grantToSend(defaultChoice(), 'cloud')?.goal_check).toBe(true);
+    const off: RunChoice = { on: true, grant: { ...defaultGrant(), goal_check: false } };
+    expect(grantToSend(off, 'desktop')?.goal_check).toBe(false);
+    expect(grantToSend(off, 'cloud')?.goal_check).toBe(false);
+    expect(readChoice(JSON.parse(JSON.stringify(off)))?.grant.goal_check).toBe(false);
   });
 });
 

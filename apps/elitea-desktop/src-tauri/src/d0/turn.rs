@@ -91,7 +91,9 @@ use super::slash_commands::{self, CommandPick, ExpandedCommand, ListedCommand};
 use super::steering::{self, SteeringInjector, TurnSteering};
 use super::subagents::DesktopSubAgents;
 use super::tools::{AcceptedPlanNote, ObservedToolset, PlanGatedToolset, ToolObserver};
-use super::unattended::{self, ChainOutcome, ChainStep, TurnEnd, UnattendedTurn};
+use super::unattended::{
+    self, ChainOutcome, ChainStep, ContinuationKind, GoalDecision, TurnEnd, UnattendedTurn,
+};
 use crate::compaction_settings::{CompactionSettings, CompactionSettingsStore};
 use crate::history::{
     HistoryStore, NewTurn, Owner, StoredImage, StoredTurn, ThreadCopy, ThreadCopyTarget, TurnTap,
@@ -2584,6 +2586,27 @@ impl AgentHost {
         if started.unattended.is_none() {
             request.unattended = None;
         }
+        // The chain's root as Main admitted it (the first turn's execution).
+        let chain_root = started
+            .unattended
+            .as_ref()
+            .and_then(|chain| chain.chain_root_execution_id.clone())
+            .unwrap_or_else(|| started.execution_id.clone());
+        // A chain's first turn with `goal_check` asks for the run brief in
+        // the background (ADR-0045 decision 11): the turn does not wait.
+        if let Some(turn) = &request.unattended
+            && turn.chain_root_execution_id.is_none()
+            && let Some(goal) = turn.goal()
+        {
+            unattended::request_brief(
+                goal.clone(),
+                api.clone(),
+                request.project_id,
+                chain_root.clone(),
+                &request.prompt,
+                events.clone(),
+            );
+        }
         let recorder = entry.recorder.clone();
         workspace.prompt.bind(Some(TurnBinding {
             events: events.clone(),
@@ -2632,6 +2655,7 @@ impl AgentHost {
             events.unattended(&unattended::running_status(
                 turn,
                 started.unattended.as_ref(),
+                &request.prompt,
             ));
         }
 
@@ -2722,7 +2746,7 @@ impl AgentHost {
             );
             // A cancelled turn commits nothing: the chain ends here.
             if request.unattended.is_some() {
-                unattended::chain_ended(&events, ChainOutcome::Cancelled, None, None);
+                unattended::chain_ended(&events, ChainOutcome::Cancelled, None, None, None);
             }
             return;
         };
@@ -2743,28 +2767,49 @@ impl AgentHost {
         };
         // An unattended turn's chain: the next turn starts once the commit
         // landed, or the chain ends and the commit says how.
-        let chain_step = request.unattended.as_ref().map(|turn| {
-            unattended::next_step(
-                &turn.grant,
-                if failure.is_some() {
-                    TurnEnd::Failed
-                } else if stopped_at_calls {
-                    TurnEnd::ToolCallCap
-                } else if stopped_at_limit {
-                    TurnEnd::StepLimit { exhausted }
+        let turn_end = if failure.is_some() {
+            TurnEnd::Failed
+        } else if stopped_at_calls {
+            TurnEnd::ToolCallCap
+        } else if stopped_at_limit {
+            TurnEnd::StepLimit { exhausted }
+        } else {
+            TurnEnd::Answered
+        };
+        let chain_step = request
+            .unattended
+            .as_ref()
+            .map(|turn| unattended::next_step(&turn.grant, turn_end));
+        let continuation = match (&chain_step, &request.unattended) {
+            (Some(ChainStep::Continue), Some(turn)) => Some(unattended::continuation(
+                &request,
+                turn,
+                &started,
+                if turn_end == TurnEnd::ToolCallCap {
+                    ContinuationKind::ToolCallCap
                 } else {
-                    TurnEnd::Answered
+                    ContinuationKind::StepLimit
                 },
-            )
-        });
-        let chain_outcome = match chain_step {
-            Some(ChainStep::End(outcome)) => Some(outcome),
+            )),
             _ => None,
         };
-        let continuation = match (&chain_step, &request.unattended) {
-            (Some(ChainStep::Continue), Some(turn)) => {
-                Some(unattended::continuation(&request, turn, &started))
-            }
+        // A turn that would end the chain `completed` goes to the goal
+        // check first (ADR-0045 decision 11), unless the brief is known to
+        // have nothing to check.
+        let goal_step = match (&chain_step, &request.unattended) {
+            (Some(ChainStep::End(ChainOutcome::Completed)), Some(turn)) => turn
+                .goal()
+                .filter(|goal| goal.may_check())
+                .map(|goal| unattended::GoalStep {
+                    goal: goal.clone(),
+                    chain_root_execution_id: chain_root.clone(),
+                    next: unattended::continuation(
+                        &request,
+                        turn,
+                        &started,
+                        ContinuationKind::GoalNotMet,
+                    ),
+                }),
             _ => None,
         };
         // The person's `Stop` hooks (#1237), only for a turn whose message
@@ -2789,6 +2834,13 @@ impl AgentHost {
         } else {
             answer
         };
+        // The chain's transcript for its goal check: this turn's tool calls
+        // and answer.
+        if let Some(turn) = &request.unattended
+            && let Some(goal) = turn.goal()
+        {
+            goal.record_turn(turn.continuation_index, &recorder.tool_calls().0, &answer);
+        }
         let _ = sink
             .finish(match &failure {
                 None => RunOutcome::Completed {
@@ -2814,7 +2866,9 @@ impl AgentHost {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
-        let body = CommitBody {
+        // Encoded in the commit's job: a goal check may change the chain's
+        // outcome after `done`.
+        let commit_body = CommitBody {
             user_message: user_message(&request.prompt, &images),
             steering_messages: entry.steering.commit_messages(),
             assistant_message: assistant,
@@ -2823,9 +2877,8 @@ impl AgentHost {
             hitl_exchanges: recorder.hitl_exchanges(),
             local_work: recorder.work_report(sandbox_mode.as_str()),
             context_summary: turn_context.take_summary(),
-            chain_outcome,
-        }
-        .encode();
+            chain_outcome: None,
+        };
         // The workspace stays held by the commit (below) until it settles:
         // a handoff, restore or removal is refused until the last turn is
         // saved (or its commit failed), and the next turn waits for it.
@@ -2890,7 +2943,8 @@ impl AgentHost {
         // those to go out takes `gate`. When the commit lands, a watchdog
         // starts; it sends `chain_ended` when the next turn did not start in
         // time. A slow commit does not stop the chain.
-        let continuing = matches!(chain_step, Some(ChainStep::Continue));
+        // A goal check may continue the chain: the UI stays busy for it too.
+        let continuing = matches!(chain_step, Some(ChainStep::Continue)) || goal_step.is_some();
         let mut done = done;
         if continuing {
             done["continuing"] = json!(true);
@@ -2900,6 +2954,30 @@ impl AgentHost {
             // Nothing of the commit is reported before the turn's `done`.
             let _ = after_done.await;
             let work = std::panic::AssertUnwindSafe(async {
+                // The goal check of a turn that would end the chain
+                // `completed` (ADR-0045 decision 11), before the commit:
+                // the commit carries the chain's outcome.
+                let (mut chain_step, mut continuation, mut goal) = (chain_step, continuation, None);
+                if let Some(step) = goal_step {
+                    match step.decide(&api, project_id, &execution_id, &events).await {
+                        GoalDecision::End(outcome, summary) => {
+                            chain_step = Some(ChainStep::End(outcome));
+                            goal = summary;
+                        }
+                        GoalDecision::Continue(next) => {
+                            chain_step = Some(ChainStep::Continue);
+                            continuation = Some(*next);
+                        }
+                    }
+                }
+                let body = CommitBody {
+                    chain_outcome: match chain_step {
+                        Some(ChainStep::End(outcome)) => Some(outcome),
+                        _ => None,
+                    },
+                    ..commit_body
+                }
+                .encode();
                 let committing = std::time::Instant::now();
                 let outcome = match &body {
                     Ok(body) => commits::commit(&api, project_id, &execution_id, body, retry).await,
@@ -2950,7 +3028,7 @@ impl AgentHost {
                         ));
                     }
                     (Some(ChainStep::End(outcome)), _) if landed => {
-                        unattended::chain_ended(&events, outcome, None, None);
+                        unattended::chain_ended(&events, outcome, None, None, goal);
                     }
                     (Some(_), _) if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) => {
                         unattended::chain_ended(
@@ -2958,6 +3036,7 @@ impl AgentHost {
                             ChainOutcome::Failed,
                             None,
                             Some("The turn could not be saved, so the unattended run stops."),
+                            goal,
                         );
                     }
                     _ => {}
@@ -3014,6 +3093,7 @@ impl AgentHost {
                     ChainOutcome::Cancelled,
                     None,
                     Some("The next turn did not start in time, so the unattended run stops."),
+                    None,
                 );
             }
         });
@@ -3054,6 +3134,7 @@ impl AgentHost {
                         "execution_id": started.execution_id,
                         "continuation_index": turn.continuation_index,
                         "chain_root_execution_id": turn.chain_root_execution_id,
+                        "kind": turn.kind.map(ContinuationKind::as_str),
                     }),
                 ),
                 Err(_) if gate.swap(true, Ordering::SeqCst) => {}
@@ -3072,6 +3153,8 @@ impl AgentHost {
                         outcome,
                         error.limit.as_deref(),
                         Some(&error.message),
+                        // The chain's last goal check, when one was made.
+                        turn.goal().and_then(|goal| goal.last_summary()),
                     );
                 }
             }
@@ -3890,7 +3973,14 @@ impl AgentHost {
                     {
                         Some(next) => {
                             events.continued(budget.limit(), budget.continues());
-                            content = next;
+                            // An unattended chain with a ready brief
+                            // restates it (ADR-0045 decision 11).
+                            content = request
+                                .unattended
+                                .as_ref()
+                                .and_then(UnattendedTurn::goal)
+                                .and_then(|goal| goal.brief_prompt())
+                                .map_or(next, |text| Content::new("user").with_text(text));
                         }
                         None => {
                             return Ok(AgentAnswer {

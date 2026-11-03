@@ -668,6 +668,59 @@ impl PlatformApi {
         .into_ok()
     }
 
+    /// `runBrief` (ADR-0045 decision 11): the chain's brief, written by
+    /// Main's small model (up to ~20 s; a second call answers the stored
+    /// brief).
+    ///
+    /// # Errors
+    ///
+    /// Refused (404 for a chain that is not the caller's) or failed.
+    pub async fn run_brief(
+        &self,
+        project_id: i64,
+        chain_root_execution_id: &str,
+        request: &str,
+    ) -> Result<super::goal::BriefAnswer, ApiError> {
+        self.send(
+            Method::POST,
+            &format!("/api/v2/elitea_core/run_brief/prompt_lib/{project_id}"),
+            Some(&serde_json::json!({
+                "chain_root_execution_id": chain_root_execution_id,
+                "request": request,
+            })),
+            &[],
+        )
+        .await?
+        .into_ok()
+    }
+
+    /// `runCheck` (ADR-0045 decision 11): Main's goal check of the chain's
+    /// turn `execution_id` over the host's `transcript` excerpt.
+    ///
+    /// # Errors
+    ///
+    /// Refused (404 for a chain that is not the caller's) or failed.
+    pub async fn run_check(
+        &self,
+        project_id: i64,
+        chain_root_execution_id: &str,
+        execution_id: &str,
+        transcript: &str,
+    ) -> Result<super::goal::GoalCheck, ApiError> {
+        self.send(
+            Method::POST,
+            &format!("/api/v2/elitea_core/run_check/prompt_lib/{project_id}"),
+            Some(&serde_json::json!({
+                "chain_root_execution_id": chain_root_execution_id,
+                "execution_id": execution_id,
+                "transcript": transcript,
+            })),
+            &[],
+        )
+        .await?
+        .into_ok()
+    }
+
     /// `body` is the commit's JSON, encoded (its `tool_calls` keys are in
     /// the model's call order, which the server keeps).
     ///

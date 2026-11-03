@@ -173,15 +173,23 @@ func admitLocalTurnChain(ctx context.Context, tx pgx.Tx, record localturn.StartR
 		return startRunChain(ctx, tx, unattended.ChainStart{
 			RootExecutionID: executionID, ProjectID: record.ProjectID, OwnerUserID: record.ActorUserID,
 			ConversationUUID: record.ConversationUUID, Origin: unattended.OriginDesktop,
-			Grant: grant.Grant, Limits: grant.Limits,
+			Grant: grant.Grant, Limits: grant.Limits, BriefState: grant.BriefState,
 		})
 	}
 	_, err := continueRunChain(ctx, tx, unattended.ChainContinue{
-		RootExecutionID: grant.ChainRootExecutionID, ExecutionID: executionID, Kind: "continue",
+		RootExecutionID: grant.ChainRootExecutionID, ExecutionID: executionID, Kind: continueKind(grant.Kind),
 		OwnerUserID: record.ActorUserID, GrantID: grant.Grant.GrantID, ProjectID: record.ProjectID,
 		ConversationUUID: record.ConversationUUID,
 	})
 	return err
+}
+
+// continueKind is a desktop continuation's stored link kind.
+func continueKind(kind string) string {
+	if kind == "" {
+		return unattended.LinkContinue
+	}
+	return kind
 }
 
 func replayLocalTurnStart(

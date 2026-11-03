@@ -49,7 +49,8 @@
 //! * [`idle`] — an idle thread compacted while its prompt cache is warm;
 //! * [`turn`] — the assembler and the host's turn table;
 //! * [`unattended`] — an unattended turn's grant, the questions' waits and
-//!   defaults, and the chain of automatic continuations (ADR-0045).
+//!   defaults, and the chain of automatic continuations (ADR-0045);
+//! * [`goal`] — a chain's run brief and goal check (ADR-0045 decision 11).
 
 pub mod api;
 pub mod approvals;
@@ -63,6 +64,7 @@ pub mod definition;
 pub mod environment;
 pub mod events;
 pub mod framing;
+pub mod goal;
 pub mod idle;
 pub mod lsp;
 pub mod memory;

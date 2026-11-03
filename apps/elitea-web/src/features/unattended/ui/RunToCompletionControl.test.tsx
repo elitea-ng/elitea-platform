@@ -80,6 +80,27 @@ describe('RunToCompletionControl', () => {
     expect(screen.getByTestId('run')).toHaveAttribute('data-tone', 'strong');
   });
 
+  it.each(['desktop', 'cloud'] as const)('checks the goal before finishing by default (%s), and turns the check off', async (scope) => {
+    const { last, user } = setup({ scope });
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Run to completion' });
+    const check = within(dialog).getByTestId('run-to-completion-goal-check');
+    expect(check).toBeChecked();
+    expect(within(dialog).getByRole('switch', { name: 'Check the goal before finishing' })).toBe(check);
+    await user.click(check);
+    expect(last()?.grant.goal_check).toBe(false);
+    expect(check).not.toBeChecked();
+    // The check is part of the run: it does not change the chip's tone.
+    expect(screen.getByTestId('run')).toHaveAttribute('data-tone', 'on');
+  });
+
+  it('disables the goal check while the run is off', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Run to completion' }));
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    expect(screen.getByTestId('run-to-completion-goal-check')).toBeDisabled();
+  });
+
   it('does not apply while notApplied says why (Plan mode)', () => {
     setup({ notApplied: 'Plan mode stops at the plan.' });
     expect(screen.getByRole('button', { name: 'Run to completion' })).toBeDisabled();

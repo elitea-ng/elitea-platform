@@ -71,11 +71,28 @@ Select the **⌄** beside the chip to open its settings:
 
 - **Continue until the goal is met**: when the run stops at its step limit, the platform starts a new turn with "Continue from where you stopped." When the answer stops at the output limit, the platform continues the same answer. When it is off, the run stops at a limit and waits for you.
 - **Change limits**: the most automatic continuations (default 20), the most spend in USD (default: the spend cap of one run × 10) and the deadline in hours (default 12). An empty field takes the platform default.
+- **Check the goal before finishing**, on by default: a small model writes a brief of your goal and checks it before the run ends. When a check is not met, the platform starts a new turn. When it is off, the run ends when the agent stops. See [The brief and the goal check](#the-brief-and-the-goal-check).
 - **Also answer for me**, off by default: **Sensitive tools**. Select the tools of the agent that can run without a pause. The list shows the tools that the agent's toolkits select. A tool that you do not select still pauses for your approval. When you select a tool, the chip has an orange outline.
 
 Each message that you send starts a new task with its own grant. In the conversation, each turn that the platform started for you shows **Continued automatically** with its number in the task. An answer that stopped at its step limit shows a notice. The task ends when it is complete, when it waits for a question that the grant does not answer, or when it reaches a chain limit.
 
 The grant never lifts your organization's guardrails, budgets, run caps or kill switches. If the platform cannot accept the grant, the message is not sent, and the error names the tool and the reason. For example, a tool in a category that your administrator keeps out of grants (by default, payments) is refused. Clear that tool in the grant and send again. If your administrator turned unattended grants off, the platform does not continue a run for you. A grant that names sensitive tools is then refused with the message "An administrator turned off unattended grants", and the chip goes away until you load the page again. Administrators set the rules in [Unattended grants](/admin/enterprise-controls/runtime-safety#unattended-grants).
+
+### The brief and the goal check
+
+When **Check the goal before finishing** is on, a small model reads your message and writes a brief. The brief has the goal, up to five checks ("Done when"), the constraints and the assumptions. The first turn does not wait for the brief.
+
+- The first answer shows the brief as a card: **Goal · Done when: 3 checks**. Select the arrow on the card to see the goal, the checks, the constraints and the assumptions.
+- While the model writes the brief, the card shows **Writing the brief…**. If the model cannot write the brief, no card shows, and the run ends as before.
+- A model wrote the brief from your message. When they do not agree, your message wins. The brief never adds a tool, an approval or a grant.
+- A message with nothing to check, such as a greeting or a short question, gets a goal and no checks. The card then shows the goal only, and the run ends as before.
+- Before the run ends, the model compares the run's transcript with the checks. The answer that the model checked shows the result:
+  - **Done · 3 of 3 checks · model-reviewed**: all checks are met. The run ends as completed.
+  - **Not done yet: …**: a check is not met. The platform starts a new turn with the reason. This continuation counts against the chain limits.
+  - **Blocked on: …**: a check cannot be met, or the same check is not met three times in a row. The run ends as failed.
+  - **Not checked**: the check did not answer in time. The run ends as completed.
+- The brief and the check use the project's low-tier model. Their cost counts against the spend limit of the run.
+- Your administrator can turn the brief and the check off for all users. The run then ends as before.
 
 ## Related
 

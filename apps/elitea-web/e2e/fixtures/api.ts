@@ -2673,6 +2673,11 @@ export async function clearMockToolJournal(page: Page): Promise<void> {
  *
  * Omitting it keeps the previous behaviour exactly, for the readers that
  * assert about absence or do not know a project.
+ *
+ * The run brief and goal check calls of a run to completion (ADR-0045
+ * decision 11) are left out: Main makes them beside the agent's own turns,
+ * in parallel with the first one, and they quote the person's request, so
+ * they take the same scripted branch with no tools.
  */
 export async function readMockLlmJournal(
   page: Page,
@@ -2681,7 +2686,20 @@ export async function readMockLlmJournal(
   const entries = await readMockJournal<MockLlmJournalEntry>(page, `${MOCK_HOST}/__journal`);
   const failure = mockLlmJournalScopeFailure({ entries, projectId, host: MOCK_HOST });
   if (failure !== undefined) throw new Error(failure);
-  return entries;
+  return entries.filter((entry) => !isRunBriefRequest(entry));
+}
+
+/**
+ * The opening words of the two system prompts of Main's run brief and goal
+ * check (`services/elitea-main/internal/application/runbrief/prompts.go`).
+ */
+const RUN_BRIEF_PROMPT_STARTS = [
+  'You write a short brief for an AI agent',
+  'You check whether an AI agent finished a task',
+] as const;
+
+function isRunBriefRequest(entry: MockLlmJournalEntry): boolean {
+  return RUN_BRIEF_PROMPT_STARTS.some((start) => (entry.instructions ?? '').startsWith(start));
 }
 
 /** Empty the MODEL journal. */

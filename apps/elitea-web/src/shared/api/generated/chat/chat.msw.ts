@@ -62,6 +62,7 @@ import type {
   ExecutionInterruptDecisionResult,
   ExecutionInterruptList,
   GeneratedConversationName,
+  GoalCheckResult,
   LocalChildTurnStarted,
   LocalChildTurnState,
   LocalTurnCommitted,
@@ -73,6 +74,7 @@ import type {
   MessageTraceStepDetail,
   OkResponse,
   ParticipantCandidatesPage,
+  RunBriefState,
   StaticPipelineContinuationReceipt,
   SteeringMessage,
   SteeringMessageList,
@@ -1158,6 +1160,43 @@ export const getStartLocalTurnResponseMock = (
     undefined,
   ]),
   ...overrideResponse,
+});
+
+export const getGetRunBriefResponseMock = (): RunBriefState => ({
+  state: "ready",
+  brief: {
+    goal: "Make the login test pass.",
+    done_when: [
+      { id: "c1", text: "The login test passes." },
+      { id: "c2", text: "The change is committed." },
+    ],
+    constraints: ["Do not change the public API."],
+    assumptions: ["The test command is npm test."],
+    ambiguity: "low",
+  },
+});
+
+export const getCheckRunGoalResponseMock = (): GoalCheckResult => ({
+  outcome: "not_met",
+  conditions: [
+    {
+      id: "c1",
+      text: "The login test passes.",
+      verdict: "not_met",
+      reason: "The login test still fails.",
+    },
+    {
+      id: "c2",
+      text: "The change is committed.",
+      verdict: "met",
+      reason: "The transcript shows the commit.",
+    },
+  ],
+  met: 1,
+  total: 2,
+  reason: "The login test still fails.",
+  continue_text:
+    "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n- The login test passes.\nLast check: The login test still fails.\n</run_brief>",
 });
 
 export const getCommitLocalTurnResponseMock = (
@@ -3012,6 +3051,58 @@ export const getStartLocalTurnMockHandler = (
   );
 };
 
+export const getGetRunBriefMockHandler = (
+  overrideResponse?:
+    | RunBriefState
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<RunBriefState> | RunBriefState),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/run_brief/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetRunBriefResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCheckRunGoalMockHandler = (
+  overrideResponse?:
+    | GoalCheckResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<GoalCheckResult> | GoalCheckResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/run_check/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCheckRunGoalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getCommitLocalTurnMockHandler = (
   overrideResponse?:
     | LocalTurnCommitted
@@ -4194,6 +4285,8 @@ export const getChatMock = () => [
   getListConversationMessagesMockHandler(),
   getSendChatMessageMockHandler(),
   getStartLocalTurnMockHandler(),
+  getGetRunBriefMockHandler(),
+  getCheckRunGoalMockHandler(),
   getCommitLocalTurnMockHandler(),
   getGetWorkspaceHandoffPolicyMockHandler(),
   getBeginWorkspaceHandoffMockHandler(),

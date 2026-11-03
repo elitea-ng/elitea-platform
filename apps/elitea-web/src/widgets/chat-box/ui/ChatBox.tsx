@@ -53,6 +53,7 @@ import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
 import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
+import { useChatBoxChainFollow } from './hooks/useChatBoxChainFollow';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
@@ -294,8 +295,10 @@ const ChatBoxInner = memo(function ChatBox({
   // Contract 1.27: a send while the owned cloud turn runs STEERS it; a refusal or a leftover goes through the A17 queue.
   const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue, answerFailed: (id) => messages.some((m) => m.id === id && (Boolean(m.exception) || m.failureCode !== undefined)) });
   useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
+  // ADR-0045: what Main writes after an unattended answer settles (brief, goal check, continuations) shows without a reload.
+  const chainFollow = useChatBoxChainFollow({ enabled: !editorTest, projectId, conversationUuid, messages, isStreaming, setChatHistory: data.setChatHistory, granted: () => unattended.wire() !== undefined });
   // The composer's Stop, and Esc Esc anywhere on the page: the leftovers of the turn are offered, not sent.
-  const stopTurn = (): void => { steering.onStop(); stopGeneration(); };
+  const stopTurn = (): void => { chainFollow.cancel(); steering.onStop(); stopGeneration(); };
   useDoubleEscape(isStreaming && !hidden, stopTurn);
   // MUST target the host `ref`, never `chatInputRef` — see `ChatBox.types.ts`.
   useImperativeHandle(ref, () => ({

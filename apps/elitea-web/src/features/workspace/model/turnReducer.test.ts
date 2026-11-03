@@ -515,4 +515,38 @@ describe('unattended chain events', () => {
     expect(view.chainEnded).toEqual({ outcome: 'limit_reached', limit: 'spend' });
     expect(replayView([running, finished, ended]).chainEnded?.outcome).toBe('limit_reached');
   });
+
+  const brief = { goal: 'Fix the login test', done_when: [{ id: 'c1', text: 'The test passes' }], constraints: [], assumptions: [], ambiguity: 'low' as const };
+
+  it('stores the run brief, also when it comes after the turn is done', () => {
+    const pending: AgentEvent = { turn_id: T, seq: 1, kind: 'run_brief', payload: { turn_id: T, chain_root_execution_id: 'e1', state: 'pending' } };
+    const ready: AgentEvent = { turn_id: T, seq: 3, kind: 'run_brief', payload: { turn_id: T, chain_root_execution_id: 'e1', state: 'ready', brief } };
+    expect(activeView(run([pending])).runBrief).toEqual({ state: 'pending' });
+    expect(activeView(run([pending, finished, ready])).runBrief).toEqual({ state: 'ready', brief });
+    expect(replayView([finished, ready]).runBrief?.brief?.goal).toBe('Fix the login test');
+  });
+
+  it('stores the goal check, and labels the goal_not_met continuation like the others', () => {
+    const checked: AgentEvent = {
+      turn_id: T,
+      seq: 3,
+      kind: 'goal_checked',
+      payload: { turn_id: T, outcome: 'not_met', conditions: [{ id: 'c1', text: 'The test passes', verdict: 'not_met', reason: 'It still fails' }], met: 0, total: 1, reason: 'It still fails' },
+    };
+    const goalContinued: AgentEvent = { turn_id: T, seq: 4, kind: 'turn_continued', payload: { next_turn_id: NEXT, execution_id: 'e2', continuation_index: 2, chain_root_execution_id: 'e1', kind: 'goal_not_met' } };
+    const state = run([finished, checked, goalContinued]);
+    const [first] = earlierViews(state);
+    expect(first?.view.goalCheck).toMatchObject({ outcome: 'not_met', met: 0, total: 1, reason: 'It still fails' });
+    expect(first?.view.continuedTo).toEqual({ nextTurnId: NEXT, index: 2, kind: 'goal_not_met' });
+    expect(state.activeTurnId).toBe(NEXT);
+  });
+
+  it('keeps the full goal check over the short form of chain_ended, and takes the short form alone', () => {
+    const checked: AgentEvent = { turn_id: T, seq: 3, kind: 'goal_checked', payload: { turn_id: T, outcome: 'met', conditions: [{ id: 'c1', text: 'The test passes', verdict: 'met', reason: 'Shown' }], met: 1, total: 1 } };
+    const ended: AgentEvent = { turn_id: T, seq: 4, kind: 'chain_ended', payload: { outcome: 'completed', goal: { outcome: 'met', met: 1, total: 1 } } };
+    expect(activeView(run([finished, checked, ended])).goalCheck?.conditions).toHaveLength(1);
+    const blocked: AgentEvent = { turn_id: T, seq: 3, kind: 'chain_ended', payload: { outcome: 'failed', goal: { outcome: 'blocked', met: 0, total: 2, reason: 'No access' } } };
+    expect(activeView(run([finished, blocked])).goalCheck).toEqual({ outcome: 'blocked', conditions: [], met: 0, total: 2, reason: 'No access' });
+    expect(activeView(run([finished, { ...blocked, payload: { outcome: 'completed' } }])).goalCheck).toBeUndefined();
+  });
 });

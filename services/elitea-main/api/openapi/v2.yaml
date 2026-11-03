@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.30"
+  x-elitea-client-contract: "1.31"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3956,6 +3956,13 @@ components:
         continue_output_limit:
           type: boolean
           description: Continue the answer when it stops at the output limit.
+        goal_check:
+          type: boolean
+          description: >-
+            Client contract 1.31 (ADR-0045 decision 11). Main writes a run
+            brief with the small model and checks the goal before the chain
+            ends as completed. Absent is true; false turns the brief and the
+            check off for this chain.
         chain:
           $ref: '#/components/schemas/UnattendedChainLimits'
     ChatRegenerateRequest:
@@ -4764,6 +4771,21 @@ components:
           description: >-
             The grant answers remote toolkit confirmations: the retry sends
             `confirmation.source` `grant`.
+        goal_check:
+          type: boolean
+          description: >-
+            Client contract 1.31 (ADR-0045 decision 11). Main writes a run
+            brief with the small model and checks the goal before the chain
+            ends as completed. Absent is true; false turns the brief and the
+            check off for this chain.
+        kind:
+          type: string
+          description: >-
+            Client contract 1.31. Why a continuation starts: `step_limit`,
+            `tool_call_cap` or `goal_not_met`. Send it only with
+            `chain_root_execution_id`. Absent is `continue`. Another value,
+            or a kind on the first turn, answers 422
+            `unattended_grant_refused` (reason `invalid`, field `kind`).
         chain:
           $ref: '#/components/schemas/UnattendedChainLimits'
     UnattendedChainLimits:
@@ -4805,6 +4827,141 @@ components:
           description: 0 on the first turn, then 1, 2 and so on.
         chain:
           $ref: '#/components/schemas/UnattendedChainLimits'
+    RunBrief:
+      type: object
+      description: >-
+        Client contract 1.31 (ADR-0045 decision 11). The run brief that the
+        small model wrote from the person's request. Main validated it and
+        bounded each field; it never changes after it is stored. Render
+        every field as plain text. NOTE(W2):
+        internal/application/runbrief/brief.go (`Brief`).
+      required: [goal, done_when, constraints, assumptions, ambiguity]
+      properties:
+        goal:
+          type: string
+          maxLength: 300
+          description: The outcome, in one sentence.
+        done_when:
+          type: array
+          maxItems: 5
+          description: The conditions that show the work is done. Empty means the chain has no goal check.
+          items:
+            $ref: '#/components/schemas/RunBriefCondition'
+        constraints:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 200 }
+          description: Things that must not change.
+        assumptions:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 200 }
+          description: The defaults that the agent takes for gaps.
+        ambiguity:
+          type: string
+          description: '`low`, `medium` or `high`.'
+    RunBriefCondition:
+      type: object
+      description: Client contract 1.31. One condition of a run brief.
+      required: [id, text]
+      properties:
+        id:
+          type: string
+          pattern: '^c[1-5]$'
+        text:
+          type: string
+          maxLength: 300
+    RunBriefRequest:
+      type: object
+      description: >-
+        Client contract 1.31. NOTE(W2):
+        internal/api/v2/localturns/runbrief.go (`runBriefBody`).
+      required: [chain_root_execution_id, request]
+      properties:
+        chain_root_execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The chain's first turn.
+        request:
+          type: string
+          description: The person's first message. Main keeps its first 32 KiB.
+    RunBriefState:
+      type: object
+      description: >-
+        Client contract 1.31. A chain's run brief. `state` is `ready` (with
+        `brief`), `failed` (the model failed, timed out after 20 seconds or
+        answered no valid brief), `off` (the administrator switch
+        `approvals.run_brief` was off when the chain started), `none` (the
+        grant had `goal_check` false) or, while another call writes it,
+        `pending`. NOTE(W2): internal/api/v2/localturns/runbrief.go
+        (`runBriefAnswer`).
+      required: [state]
+      properties:
+        state: { type: string }
+        brief:
+          $ref: '#/components/schemas/RunBrief'
+    RunCheckRequest:
+      type: object
+      description: >-
+        Client contract 1.31. NOTE(W2):
+        internal/api/v2/localturns/runbrief.go (`runCheckBody`).
+      required: [chain_root_execution_id, execution_id, transcript]
+      properties:
+        chain_root_execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The chain's first turn.
+        execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The turn that would end the chain.
+        transcript:
+          type: string
+          description: The chain's local transcript excerpt. Main keeps its newest 32 KiB.
+    GoalCheckResult:
+      type: object
+      description: >-
+        Client contract 1.31 (ADR-0045 decision 11). One goal check.
+        `outcome` is `met` (end the chain as completed), `not_met` (start the
+        next turn with `kind` `goal_not_met` and the user text
+        `continue_text`), `blocked` (a condition is impossible, or the same
+        condition was not met on 3 consecutive checks: end the chain as
+        failed) or `not_checked` (the check failed or timed out, or the
+        chain has no check: end the chain as completed). A cloud answer
+        carries the same object, without `continue_text`, as
+        `meta.goal_check`. NOTE(W2): internal/application/runbrief/check.go
+        (`Result`).
+      required: [outcome, conditions, met, total]
+      properties:
+        outcome: { type: string }
+        conditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/GoalCheckCondition'
+        met:
+          type: integer
+          description: How many conditions are met.
+        total:
+          type: integer
+          description: How many conditions the brief has.
+        reason:
+          type: string
+          maxLength: 300
+          description: The first failing condition's reason (`not_met` and `blocked`).
+        continue_text:
+          type: string
+          description: Only with `not_met`. The full user text of the `goal_not_met` continuation.
+    GoalCheckCondition:
+      type: object
+      description: Client contract 1.31. One condition's verdict.
+      required: [id, text, verdict, reason]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        verdict:
+          type: string
+          description: '`met`, `not_met` or `impossible`.'
+        reason: { type: string, maxLength: 300 }
     LocalTurnMemoryRecall:
       type: object
       description: >-
@@ -5094,9 +5251,10 @@ components:
         `local_turn_participant`, `local_turn_conflict`,
         `local_turn_already_committed`, `local_turn_expired`,
         `local_turn_unavailable`, `unsupported_media_type`,
-        `request_too_large`, `local_turn_failed`, and from client contract
+        `request_too_large`, `local_turn_failed`, from client contract
         1.30 `unattended_grant_refused`, `chain_limit_reached` and
-        `chain_ended`. NOTE(W2):
+        `chain_ended`, and from client contract 1.31 `invalid_run_brief`,
+        `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
       required: [error]
       properties:
@@ -25881,6 +26039,232 @@ paths:
         '500': { $ref: '#/components/responses/500' }
         '503':
           description: The policy or the memory recall could not be read (`local_turn_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+
+  /elitea_core/run_brief/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: getRunBrief
+      summary: Write or read the run brief of a desktop unattended chain
+      description: |
+        Client contract 1.31 (ADR-0045 decision 11). The desktop host calls
+        it in the background when it starts a chain whose grant has
+        `goal_check` (absent is true). The first turn never waits for it.
+        Main asks the project's low-tier default model (else its default
+        model) for a brief, validates it, stores it once and answers it. The
+        call can take up to about 20 seconds. Its cost counts against the
+        chain's spend.
+
+        IDEMPOTENCY. The brief is frozen: a second call answers the stored
+        brief and makes no model call.
+
+        WHO. Only the chain's owner, with a native access token or a personal
+        access token. An unknown chain, another person's chain, a cloud chain
+        or a chain of another project answers 404 `chain_not_found`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunBriefRequest'
+            example:
+              chain_root_execution_id: 0123456789abcdef0123456789abcdef
+              request: Make the login test pass and commit the fix.
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The chain's brief state, with the brief when it is ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunBriefState'
+              example:
+                state: ready
+                brief:
+                  goal: Make the login test pass.
+                  done_when:
+                    - id: c1
+                      text: The login test passes.
+                    - id: c2
+                      text: The change is committed.
+                  constraints:
+                    - Do not change the public API.
+                  assumptions:
+                    - The test command is npm test.
+                  ambiguity: low
+        '400':
+          description: >-
+            A malformed body or field (`invalid_run_brief` or
+            `invalid_local_turn`), or an `X-Client-Version` that does not
+            parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission, or a session caller (`local_turn_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: >-
+            No such chain for this caller (`chain_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 256 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500':
+          description: The brief or the check could not be recorded (`run_brief_failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '503':
+          description: The run brief is not composed on this deployment (`run_brief_unavailable`).
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+
+  /elitea_core/run_check/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: checkRunGoal
+      summary: Check the goal of a desktop unattended chain
+      description: |
+        Client contract 1.31 (ADR-0045 decision 11). The desktop host calls
+        it when a turn would end the chain as completed and the chain has a
+        ready brief with conditions. Main asks the small model to judge each
+        condition against the transcript excerpt (the model has no tools),
+        records the check on the turn's chain link, updates the counts of
+        consecutive `not_met` checks and answers the result. The call can
+        take up to about 20 seconds. Its cost counts against the chain's
+        spend.
+
+        THEN. `met` or `not_checked`: commit the turn with `chain_outcome`
+        `completed`. `blocked`: commit it with `chain_outcome` `failed`.
+        `not_met`: start the next turn with `unattended.kind`
+        `goal_not_met` and the user text `continue_text`; a refused start
+        (409 `chain_limit_reached`) ends the chain as before.
+
+        IDEMPOTENCY. A second call for the same turn answers the stored check
+        and makes no model call.
+
+        WHO. Only the chain's owner, with a native access token or a personal
+        access token. An unknown chain, another person's chain, a cloud chain,
+        a chain of another project or a turn outside the chain answers 404
+        `chain_not_found`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunCheckRequest'
+            example:
+              chain_root_execution_id: 0123456789abcdef0123456789abcdef
+              execution_id: fedcba9876543210fedcba9876543210
+              transcript: "User: Make the login test pass and commit the fix.\nAgent: I fixed the selector and committed the change."
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The goal check of the turn.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoalCheckResult'
+              example:
+                outcome: not_met
+                conditions:
+                  - id: c1
+                    text: The login test passes.
+                    verdict: not_met
+                    reason: The login test still fails.
+                  - id: c2
+                    text: The change is committed.
+                    verdict: met
+                    reason: The transcript shows the commit.
+                met: 1
+                total: 2
+                reason: The login test still fails.
+                continue_text: "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n- The login test passes.\nLast check: The login test still fails.\n</run_brief>"
+        '400':
+          description: >-
+            A malformed body or field (`invalid_run_brief` or
+            `invalid_local_turn`), or an `X-Client-Version` that does not
+            parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission, or a session caller (`local_turn_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: >-
+            No such chain for this caller, or the turn is not a link of the chain (`chain_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 256 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500':
+          description: The brief or the check could not be recorded (`run_brief_failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '503':
+          description: The run brief is not composed on this deployment (`run_brief_unavailable`).
           headers:
             Retry-After:
               schema: { type: string }

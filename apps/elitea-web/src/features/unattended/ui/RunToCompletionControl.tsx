@@ -5,6 +5,7 @@
  *
  *   [x] Continue until the goal is met
  *       up to 20 continuations, …, 12 h   (Change limits)
+ *   [x] Check the goal before finishing   (on by default)
  *   Also answer for me (off by default)
  *   [ ] Hook asks / [ ] Remote confirmations   (desktop)
  *   [ ] the sensitive tools of the agent        (cloud)
@@ -129,6 +130,29 @@ function OptIns({ value, onChange, scope, sensitiveTools }: Pick<RunToCompletion
   );
 }
 
+/** The run brief and the goal check (ADR-0045 decision 11): on by default, sent as the grant's `goal_check`. */
+function GoalCheck({ value, onChange }: Pick<RunToCompletionControlProps, 'value' | 'onChange'>): React.JSX.Element {
+  return (
+    <Box>
+      <FormControlLabel
+        disabled={!value.on}
+        control={
+          <Switch
+            size="small"
+            checked={value.grant.goal_check}
+            onChange={(_event, on) => onChange({ ...value, grant: { ...value.grant, goal_check: on } })}
+            slotProps={{ input: { 'data-testid': 'run-to-completion-goal-check' } as React.InputHTMLAttributes<HTMLInputElement> }}
+          />
+        }
+        label={<Typography variant="bodyMedium">{t('unattended.control.goalCheck', 'Check the goal before finishing')}</Typography>}
+      />
+      <Typography variant="bodySmall" component="p" sx={(theme: Theme) => ({ ...muted(theme), marginLeft: 5.5, marginTop: -0.5 })}>
+        {t('unattended.control.goalCheckHelp', 'A small model writes the goal and its checks from your request. Before the run ends, it checks them against the answer.')}
+      </Typography>
+    </Box>
+  );
+}
+
 function Details(props: Omit<RunToCompletionControlProps, 'disabled' | 'notApplied' | 'testId'> & { titleId: string }): React.JSX.Element {
   const { value, onChange, titleId } = props;
   const [editing, setEditing] = useState(false);
@@ -151,6 +175,7 @@ function Details(props: Omit<RunToCompletionControlProps, 'disabled' | 'notAppli
         </Button>
       </Box>
       {(editing || invalid) && <ChainLimits value={value.grant} onChange={(grant) => onChange({ ...value, grant })} disabled={!value.on} />}
+      <GoalCheck value={value} onChange={onChange} />
       <Divider textAlign="left" sx={{ marginY: 0.5 }}>
         <Typography variant="labelSmall" sx={muted}>
           {t('unattended.control.alsoAnswer', 'Also answer for me (off by default)')}

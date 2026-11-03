@@ -38,6 +38,8 @@ export interface UnattendedGrantValue {
   remote_confirmations: boolean;
   /** Cloud only: the sensitive tools the grant names. */
   sensitive_tools: SensitiveToolRef[];
+  /** A run brief and a goal check before the chain ends (ADR-0045 decision 11); on by default. */
+  goal_check: boolean;
   chain: ChainDraft;
 }
 
@@ -52,6 +54,7 @@ export function defaultGrant(): UnattendedGrantValue {
     hook_asks: false,
     remote_confirmations: false,
     sensitive_tools: [],
+    goal_check: true,
     chain: { max_continuations: '', max_spend: '', deadline_hours: '' },
   };
 }
@@ -113,6 +116,7 @@ export function toWireGrant(value: UnattendedGrantValue, grantId?: string): Wire
     continue_tool_call_cap: value.continue_tool_call_cap,
     hook_asks: value.hook_asks,
     remote_confirmations: value.remote_confirmations,
+    goal_check: value.goal_check,
     ...(Object.keys(chain).length === 0 ? {} : { chain }),
   };
   return { ok: true, grant };
@@ -135,12 +139,12 @@ function readTools(raw: unknown): SensitiveToolRef[] {
     .map(({ toolkit, tool }) => ({ toolkit, tool }));
 }
 
-/** A kept grant read back (stored JSON), or null when it is not a valid grant. */
+/** A kept grant read back (stored JSON), or null when it is not a valid grant. A grant kept before the goal check has it on. */
 export function readGrant(raw: unknown): UnattendedGrantValue | null {
   if (!isRecord(raw) || !SWITCHES.every((key) => typeof raw[key] === 'boolean')) return null;
   const chain = readChain(raw.chain);
   if (chain === null || chainErrors(chain).length > 0) return null;
   const value = defaultGrant();
   for (const key of SWITCHES) value[key] = raw[key] === true;
-  return { ...value, sensitive_tools: readTools(raw.sensitive_tools), chain };
+  return { ...value, sensitive_tools: readTools(raw.sensitive_tools), goal_check: raw.goal_check !== false, chain };
 }

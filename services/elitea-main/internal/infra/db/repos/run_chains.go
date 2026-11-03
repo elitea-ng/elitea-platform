@@ -5,7 +5,9 @@ package repos
 // The chain's first run writes the chain row and link 0 in the SAME
 // transaction as its admission (a cloud agent admission or a desktop local
 // turn start). Each continuation runs ONE statement in its admission
-// transaction: it sums the chain's spend from the gateway request log, checks
+// transaction: it sums the chain's spend from the gateway request log (the
+// links' own calls, and the run brief and goal check calls that Main makes
+// for the chain, ADR-0045 decision 11), checks
 // the three limits, adds one to the count and writes the link. Under READ
 // COMMITTED a second continuation that waits on the row lock re-checks the
 // limits against the updated row, so two continuations that race cannot both
@@ -23,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 )
 
@@ -48,13 +51,13 @@ func startRunChain(ctx context.Context, tx pgx.Tx, start unattended.ChainStart) 
 	if _, err := tx.Exec(ctx, `
 INSERT INTO elitea_runtime.run_chains (
     root_execution_id, project_id, owner_user_id, conversation_uuid, origin, trigger_origin,
-    grant_id, grant_json, max_continuations, max_spend_usd, deadline, last_execution_id)
+    grant_id, grant_json, max_continuations, max_spend_usd, deadline, last_execution_id, brief_state)
 VALUES ($1, $2, $3, $4::uuid, $5, $6, $7::uuid, $8::jsonb, $9, $10,
-        clock_timestamp() + make_interval(secs => $11), $1)
+        clock_timestamp() + make_interval(secs => $11), $1, $12)
 ON CONFLICT (root_execution_id) DO NOTHING`,
 		start.RootExecutionID, start.ProjectID, start.OwnerUserID, start.ConversationUUID, start.Origin, origin,
 		start.Grant.GrantID, string(grant), start.Limits.MaxContinuations, start.Limits.MaxSpendUSD,
-		start.Limits.Deadline.Seconds()); err != nil {
+		start.Limits.Deadline.Seconds(), briefStateAtStart(start.BriefState)); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == runChainsGrantIDKey {
 			// The client sent a grant id that another chain already has (a
@@ -72,6 +75,15 @@ ON CONFLICT (execution_id) DO NOTHING`, start.RootExecutionID, start.ResponseMes
 	return nil
 }
 
+// briefStateAtStart is the stored brief state of a new chain.
+func briefStateAtStart(state string) string {
+	switch state {
+	case unattended.BriefOff, unattended.BriefPending:
+		return state
+	}
+	return unattended.BriefNone
+}
+
 // continueRunChainSQL is the chain check: the spend, the three limits, the
 // increment and the link, in one statement.
 const continueRunChainSQL = `
@@ -86,7 +98,9 @@ WITH chain AS MATERIALIZED (
     JOIN elitea_runtime.run_chain_links AS k ON k.root_execution_id = c.root_execution_id
     JOIN gateway.llm_request_logs AS l
       ON l.project_id = c.project_id
-     AND l.execution_id = k.execution_id
+     AND l.execution_id = ANY (ARRAY[k.execution_id,
+                                     '` + runbrief.AttributionBriefPrefix + `' || k.execution_id,
+                                     '` + runbrief.AttributionCheckPrefix + `' || k.execution_id])
      AND l.execution_id IS NOT NULL
     LEFT JOIN gateway.gateway_models AS m
       ON m.provider = l.provider AND m.model_name = l.model
