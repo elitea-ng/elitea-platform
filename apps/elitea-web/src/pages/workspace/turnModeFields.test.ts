@@ -28,6 +28,7 @@ describe('modeFields', () => {
         continue_tool_call_cap: true,
         hook_asks: false,
         remote_confirmations: false,
+        goal_check: true,
         chain: { max_continuations: 3 },
       },
     });

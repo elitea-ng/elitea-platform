@@ -552,7 +552,8 @@ person before the start:
   continue_tool_call_cap: boolean,// the 512 tool-call cap
   hook_asks: boolean,             // a PreToolUse hook's ask
   remote_confirmations: boolean,  // a remote toolkit confirmation
-  chain?: { max_continuations?: number, max_spend?: number /* US dollars */, deadline_seconds?: number }
+  chain?: { max_continuations?: number, max_spend?: number /* US dollars */, deadline_seconds?: number },
+  goal_check?: boolean            // the run brief and goal check; absent = true
 }
 ```
 
@@ -622,8 +623,42 @@ person before the start:
   the same outcome as `chain_outcome` (not for `limit_reached`, which the
   platform decides, nor for a cancelled turn, which commits nothing).
 - Each unattended turn's first `status` `running` carries `unattended`:
-  the grant's switches, `grant_id` and, when the platform answers them, the
-  chain's effective limits (`chain`).
+  the grant's switches (with `goal_check`), `grant_id` and, when the
+  platform answers them, the chain's effective limits (`chain`). A turn the
+  host started carries its `host_prompt` (the text the model got) and
+  `continuation_kind`.
+- **Link kinds.** Each continuation's local turn start carries
+  `unattended.kind`: `step_limit`, `tool_call_cap` or `goal_not_met`; so
+  does its `turn_continued` (`kind`).
+- **Run brief and goal check** (ADR-0045 decision 11; #1564). With
+  `goal_check` (absent = on) the chain's first turn asks the platform for
+  the run brief in the background (`POST run_brief`, with the person's
+  message): the turn never waits for it. When it answers, the first turn
+  sends `run_brief {turn_id, chain_root_execution_id, state: "ready" |
+  "failed" | "off" | "none", brief?}` (`brief`: `{goal, done_when: {id,
+  text}[], constraints: string[], assumptions: string[], ambiguity: "low" |
+  "medium" | "high"}`, only when `ready`). The host keeps the brief for the
+  chain. With a ready brief every continuation's text (the step limit's
+  continues within a turn, and the chain's `step_limit` and
+  `tool_call_cap` turns) is "Continue from where you stopped." followed by
+  a `<run_brief>` block: the goal, the conditions not met yet and the last
+  check's reason. When a turn would end the chain `completed` and the brief
+  has conditions (or is still being written, or failed), its `done`
+  carries `continuing: true` and the host, before the commit, waits for the
+  brief (at most 20 seconds) and sends the platform the chain's transcript
+  excerpt (`POST run_check`: the person's message, each turn's short tool
+  call lines and answer, at most 32 KiB, newest kept). It then sends
+  `goal_checked {turn_id, outcome: "met" | "not_met" | "blocked" |
+  "not_checked", conditions: {id, text, verdict: "met" | "not_met" |
+  "impossible", reason}[], met, total, reason?}`, before `turn_continued`
+  or `chain_ended`: `met` and `not_checked` (the brief failed or came too
+  late, or the check failed) end the chain `completed`, `blocked` ends it
+  `failed`, and `not_met` starts the next turn (kind `goal_not_met`) from
+  the platform's continuation text; a chain limit then ends it
+  `limit_reached` as for any continuation. `chain_ended` then carries
+  `goal: {outcome, met, total, reason?}`. A brief that is `off` or `none`,
+  or `ready` with no conditions, ends the chain as before (no
+  `goal_checked`, no `goal`).
 
 **Sub-agents** (#1226). Every workspace turn, plan mode included, is
 offered the runtime's sub-agent tools (`elitea-agent-runtime`
@@ -2480,8 +2515,10 @@ order. Kinds and payloads:
 | `error` | `{code, message}` |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn by itself (**Unattended turns**) |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
-| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
-| `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?}` — after `done`: the unattended chain ends with this turn |
+| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met"}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
+| `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?, goal?: {outcome: "met" \| "not_met" \| "blocked" \| "not_checked", met: number, total: number, reason?}}` — after `done`: the unattended chain ends with this turn; `goal` is the last goal check's summary, when one was made |
+| `run_brief` | `{turn_id, chain_root_execution_id, state: "ready" \| "failed" \| "off" \| "none", brief?}` — on the chain's first turn (possibly after its `done`), when the platform answered the run brief (**Run brief and goal check**, under **Unattended turns**) |
+| `goal_checked` | `{turn_id, outcome: "met" \| "not_met" \| "blocked" \| "not_checked", conditions: {id, text, verdict, reason}[], met, total, reason?}` — after `done` of a turn that would end its chain, before `turn_continued` or `chain_ended` |
 
 Order of a turn: `status` `resolving` → `status` `starting` → `status`
 `running` → (`thinking_delta`, `thinking_end`, `text_delta`, `model_retry`, `tool_call`, `approval_request`, `plan_proposed`, `plan_accepted`, `plan_updated`, `approval_closed`, `tool_result`, `usage`, `context`, `subagent_started`, `subagent_event`, `subagent_finished`, `process_started`, `tool_output_delta`, `process_exited`, `steer_queued`, `steer_injected`, `steer_dropped`)* →

@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.30
+ * client contract:    1.31
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -2605,6 +2605,8 @@ export interface components {
             continue_output_limit?: boolean;
             /** @description Continue the run with a new turn when it stops at its step limit. */
             continue_step_limit?: boolean;
+            /** @description Client contract 1.31 (ADR-0045 decision 11). Main writes a run brief with the small model and checks the goal before the chain ends as completed. Absent is true; false turns the brief and the check off for this chain. */
+            goal_check?: boolean;
             /**
              * Format: uuid
              * @description Optional; Main derives a stable id from the question when absent.

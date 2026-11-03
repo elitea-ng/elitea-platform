@@ -77,8 +77,49 @@ func (service *CurrentApplicationStartService) WithUnattendedGrants(policy *Unat
 type UnattendedContinuation struct {
 	// Chain is the link of the run that this one continues.
 	Chain unattended.Chain
-	// Kind is unattended.LinkStepLimit or unattended.LinkOutputLimit.
+	// Kind is unattended.LinkStepLimit, unattended.LinkOutputLimit or
+	// unattended.LinkGoalNotMet.
 	Kind string
+}
+
+// RunBriefStarter writes a new cloud chain's run brief in the background
+// (ADR-0045 decision 11). Begin never blocks the start.
+type RunBriefStarter interface {
+	Begin(ctx context.Context, start RunBriefStart)
+}
+
+// RunBriefStart is what the brief writer needs from a chain's first run.
+type RunBriefStart struct {
+	RootExecutionID string
+	ProjectID       int64
+	OwnerUserID     int64
+	// Request is the person's first message.
+	Request string
+}
+
+// WithRunBriefs lets the start service begin the run brief of each new
+// cloud chain whose grant asks for a goal check.
+func (service *CurrentApplicationStartService) WithRunBriefs(briefs RunBriefStarter) *CurrentApplicationStartService {
+	if service != nil && briefs != nil {
+		service.runBriefs = briefs
+	}
+	return service
+}
+
+// beginRunBrief starts the brief of a chain's first run after its admission.
+// A replayed start begins it again: the writer does nothing for a brief that
+// is not pending.
+func (service *CurrentApplicationStartService) beginRunBrief(
+	ctx context.Context, chain *UnattendedAdmission, executionID, request string,
+) {
+	if service.runBriefs == nil || chain == nil || chain.Start == nil ||
+		chain.Start.BriefState != unattended.BriefPending || executionID == "" {
+		return
+	}
+	service.runBriefs.Begin(ctx, RunBriefStart{
+		RootExecutionID: executionID, ProjectID: chain.Start.ProjectID,
+		OwnerUserID: chain.Start.OwnerUserID, Request: request,
+	})
 }
 
 // UnattendedAdmission is what the admission transaction writes for a run
@@ -223,6 +264,7 @@ func (service *CurrentApplicationStartService) admitUnattended(
 		ConversationUUID: target.conversationUUID, Origin: unattended.OriginCloud,
 		TriggerOrigin: string(target.triggerOrigin.Stored()), Grant: grant, Limits: limits,
 		ResponseMessageID: target.responseMessageID,
+		BriefState:        unattended.BriefStateAtStart(request.GoalCheck, settings.RunBrief),
 	}}
 	// The deadline is 0 on the first run: the chain row holds it, and a
 	// clock read here would make a retried start a different request.
@@ -269,7 +311,7 @@ func unattendedContinuationGrant(target unattendedTarget) (*runtimev1.Unattended
 		return nil, nil, unattended.ErrChainEnded
 	}
 	marks := []string{target.responseMessageID}
-	if target.continuation.Kind == unattended.LinkStepLimit && target.questionID != "" {
+	if target.continuation.Kind != unattended.LinkOutputLimit && target.questionID != "" {
 		marks = append([]string{target.questionID}, marks...)
 	}
 	admission := &UnattendedAdmission{
@@ -411,6 +453,12 @@ func grantToolCategory(toolkit frozenGrantToolkit, toolName string) toolcategory
 // same turn.
 func continuationQuestionID(previousExecutionID string) string {
 	return uuid.NewSHA1(unattendedGrantNamespace, []byte("step-limit\x00"+previousExecutionID)).String()
+}
+
+// GoalContinuationQuestionID is the question of a goal_not_met
+// continuation, derived from the run that the goal check read.
+func GoalContinuationQuestionID(previousExecutionID string) string {
+	return uuid.NewSHA1(unattendedGrantNamespace, []byte("goal-not-met\x00"+previousExecutionID)).String()
 }
 
 // ContinuationQuestionID exposes continuationQuestionID to the chain hook.

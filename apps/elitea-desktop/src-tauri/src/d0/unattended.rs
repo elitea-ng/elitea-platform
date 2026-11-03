@@ -14,7 +14,10 @@
 //! after the commit landed, with the same grant and the runtime's
 //! `CONTINUE_PROMPT`. The platform counts the chain and refuses a
 //! continuation past one of its limits (409 `chain_limit_reached`). The
-//! commit of the chain's last turn carries its [`ChainOutcome`].
+//! commit of the chain's last turn carries its [`ChainOutcome`]. With the
+//! grant's `goal_check` the chain has a run brief, its continuations
+//! restate it, and a turn that would end the chain `completed` is checked
+//! against it first ([`GoalStep`], [`super::goal`]; decision 11).
 //!
 //! Every question that a person answers has a wait (decision 3):
 //! [`RULE_ASK_WAIT`] for a rule's or a hook's ask, [`REMOTE_CONFIRMATION_WAIT`]
@@ -24,6 +27,7 @@
 //! without its own wait gets [`RULE_ASK_WAIT`], so the waits bound every
 //! turn of a chain; the platform's chain deadline refuses the next turn.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use elitea_agent_runtime::step_limit::ContinuePolicy;
@@ -31,8 +35,9 @@ use elitea_local_tools::approvals::Unattended;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::api::LocalTurnStarted;
+use super::api::{LocalTurnStarted, PlatformApi};
 use super::events::TurnEvents;
+use super::goal::{self, BriefAnswer, ChainGoal, GoalCheck, GoalOutcome};
 use super::turn::{TurnError, TurnRequest};
 
 /// How long the host waits, after a turn's commit lands, for the chain's
@@ -145,6 +150,10 @@ pub struct UnattendedGrant {
     pub remote_confirmations: bool,
     #[serde(default)]
     pub chain: Option<ChainLimits>,
+    /// The chain's run brief and goal check (ADR-0045 decision 11);
+    /// absent is on.
+    #[serde(default)]
+    pub goal_check: Option<bool>,
 }
 
 fn refused(message: &str) -> TurnError {
@@ -211,6 +220,12 @@ impl UnattendedGrant {
         }
     }
 
+    /// Whether the chain gets a run brief and a goal check (absent: on).
+    #[must_use]
+    pub fn goal_check(&self) -> bool {
+        self.goal_check.unwrap_or(true)
+    }
+
     /// The grant's switches, as the turn's first `status` `running` shows
     /// them.
     #[must_use]
@@ -221,7 +236,40 @@ impl UnattendedGrant {
             "continue_tool_call_cap": self.continue_tool_call_cap,
             "hook_asks": self.hook_asks,
             "remote_confirmations": self.remote_confirmations,
+            "goal_check": self.goal_check(),
         })
+    }
+}
+
+/// Why the host started a continuation: the link kind the local turn
+/// start carries (`unattended.kind`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContinuationKind {
+    StepLimit,
+    ToolCallCap,
+    /// The goal check found a condition not met (ADR-0045 decision 11).
+    GoalNotMet,
+}
+
+impl ContinuationKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StepLimit => "step_limit",
+            Self::ToolCallCap => "tool_call_cap",
+            Self::GoalNotMet => "goal_not_met",
+        }
+    }
+}
+
+/// A chain's brief and goal check ([`ChainGoal`]), shared by its turns:
+/// equal only to itself.
+#[derive(Clone, Debug, Default)]
+pub struct GoalHandle(pub std::sync::Arc<ChainGoal>);
+
+impl PartialEq for GoalHandle {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -233,16 +281,23 @@ pub struct UnattendedTurn {
     pub chain_root_execution_id: Option<String>,
     /// 0 for the chain's first turn, then 1, 2, …: as the host counts.
     pub continuation_index: u32,
+    /// Why the host started this continuation; `None` on the first turn.
+    pub kind: Option<ContinuationKind>,
+    /// The chain's brief and goal check; `None` with `goal_check` off.
+    pub goal: Option<GoalHandle>,
 }
 
 impl UnattendedTurn {
     /// The first turn of a chain.
     #[must_use]
-    pub const fn root(grant: UnattendedGrant) -> Self {
+    pub fn root(grant: UnattendedGrant) -> Self {
+        let goal = grant.goal_check().then(GoalHandle::default);
         Self {
             grant,
             chain_root_execution_id: None,
             continuation_index: 0,
+            kind: None,
+            goal,
         }
     }
 
@@ -257,7 +312,15 @@ impl UnattendedTurn {
                     .unwrap_or_else(|| execution_id.to_owned()),
             ),
             continuation_index: self.continuation_index.saturating_add(1),
+            kind: self.kind,
+            goal: self.goal.clone(),
         }
+    }
+
+    /// The chain's brief and goal check, when on.
+    #[must_use]
+    pub fn goal(&self) -> Option<&std::sync::Arc<ChainGoal>> {
+        self.goal.as_ref().map(|handle| &handle.0)
     }
 
     /// The local turn start's `unattended` object.
@@ -270,9 +333,13 @@ impl UnattendedTurn {
             "continue_tool_call_cap": grant.continue_tool_call_cap,
             "hook_asks": grant.hook_asks,
             "remote_confirmations": grant.remote_confirmations,
+            "goal_check": grant.goal_check(),
         });
         if let Some(root) = &self.chain_root_execution_id {
             wire["chain_root_execution_id"] = json!(root);
+            if let Some(kind) = self.kind {
+                wire["kind"] = json!(kind.as_str());
+            }
         }
         if let Some(chain) = &grant.chain {
             wire["chain"] = json!(chain);
@@ -359,16 +426,22 @@ pub const fn next_step(grant: &UnattendedGrant, end: TurnEnd) -> ChainStep {
     }
 }
 
-/// The next turn of `turn`'s chain, after `request` started as `started`:
-/// the same thread, agent, mode and grant, from the runtime's
-/// `CONTINUE_PROMPT`; nothing the person picked for the first turn (skills,
-/// a command, images, "@" files) is applied again.
+/// The next turn of `turn`'s chain, after `request` started as `started`,
+/// for `kind`: the same thread, agent, mode and grant, from the runtime's
+/// `CONTINUE_PROMPT`, restating the chain's brief when it is ready
+/// ([`super::goal::continue_text`]); nothing the person picked for the
+/// first turn (skills, a command, images, "@" files) is applied again.
 #[must_use]
 pub fn continuation(
     request: &TurnRequest,
     turn: &UnattendedTurn,
     started: &LocalTurnStarted,
+    kind: ContinuationKind,
 ) -> TurnRequest {
+    let prompt = turn.goal().map_or_else(
+        || elitea_agent_runtime::step_limit::CONTINUE_PROMPT.to_owned(),
+        |goal| goal.continue_text(),
+    );
     let root = started
         .unattended
         .as_ref()
@@ -380,7 +453,7 @@ pub fn continuation(
         conversation_id: request.conversation_id.clone(),
         application_id: request.application_id,
         version_id: request.version_id,
-        prompt: elitea_agent_runtime::step_limit::CONTINUE_PROMPT.to_owned(),
+        prompt,
         plan_mode: false,
         bypass: request.bypass,
         mentions: Vec::new(),
@@ -397,6 +470,7 @@ pub fn continuation(
                 .and_then(|chain| chain.continuation_index)
                 .unwrap_or(turn.continuation_index)
                 .saturating_add(1),
+            kind: Some(kind),
             ..turn.next(root)
         }),
     }
@@ -405,9 +479,13 @@ pub fn continuation(
 /// The `status` `running` payload of an unattended turn: the grant's
 /// switches and the chain's effective limits (`unattended`), and for a turn
 /// the host started by itself `continued_automatically`,
-/// `continuation_index` and `host_prompt`.
+/// `continuation_index` and `host_prompt` (the turn's `prompt`).
 #[must_use]
-pub fn running_status(turn: &UnattendedTurn, started: Option<&StartedChain>) -> Value {
+pub fn running_status(
+    turn: &UnattendedTurn,
+    started: Option<&StartedChain>,
+    prompt: &str,
+) -> Value {
     let mut shown = turn.grant.shown();
     if let Some(chain) = started.and_then(|chain| chain.chain.clone()) {
         shown["chain"] = chain;
@@ -419,18 +497,23 @@ pub fn running_status(turn: &UnattendedTurn, started: Option<&StartedChain>) -> 
     if turn.chain_root_execution_id.is_some() {
         payload["continued_automatically"] = json!(true);
         payload["continuation_index"] = json!(index);
-        payload["host_prompt"] = json!(elitea_agent_runtime::step_limit::CONTINUE_PROMPT);
+        payload["host_prompt"] = json!(prompt);
+        if let Some(kind) = turn.kind {
+            payload["continuation_kind"] = json!(kind.as_str());
+        }
     }
     payload
 }
 
 /// Send `chain_ended` on the chain's last turn (after its `done`), with
-/// the chain `limit` that refused the next turn, if any.
+/// the chain `limit` that refused the next turn, if any, and the last goal
+/// check's summary (`goal`, ADR-0045 decision 11).
 pub fn chain_ended(
     events: &TurnEvents,
     outcome: ChainOutcome,
     limit: Option<&str>,
     message: Option<&str>,
+    goal: Option<Value>,
 ) {
     let mut payload = json!({ "outcome": outcome.as_str() });
     if let Some(limit) = limit {
@@ -439,7 +522,118 @@ pub fn chain_ended(
     if let Some(message) = message {
         payload["message"] = json!(message);
     }
+    if let Some(goal) = goal {
+        payload["goal"] = goal;
+    }
     events.send("chain_ended", payload);
+}
+
+/// Ask Main for the brief of the chain rooted at `root`, in the background
+/// (the chain's first turn never waits for it): the chain keeps it, and
+/// the first turn's `events` say `run_brief`. Any error is a `failed`
+/// brief.
+pub fn request_brief(
+    goal: Arc<ChainGoal>,
+    api: Arc<PlatformApi>,
+    project_id: i64,
+    root: String,
+    request: &str,
+    events: Arc<TurnEvents>,
+) {
+    goal.set_request(request);
+    let request = goal::head(request, goal::EXCERPT_BYTES).to_owned();
+    tokio::spawn(async move {
+        let answer = match api.run_brief(project_id, &root, &request).await {
+            Ok(answer) => answer.checked(),
+            // An older Main has no route: no brief, no check, no notice.
+            Err(error) if error.status == Some(404) => BriefAnswer::off(),
+            Err(error) => {
+                log::warn!("a run brief was not made: {}", error.code);
+                BriefAnswer::failed()
+            }
+        };
+        let payload = answer.event(events.turn_id(), &root);
+        goal.settle(answer);
+        events.send("run_brief", payload);
+    });
+}
+
+/// The goal step of a turn that would end its chain `completed`
+/// (ADR-0045 decision 11): `next` is the continuation it starts when a
+/// condition is not met.
+pub struct GoalStep {
+    pub goal: Arc<ChainGoal>,
+    pub chain_root_execution_id: String,
+    pub next: TurnRequest,
+}
+
+/// What the goal step decided.
+pub enum GoalDecision {
+    /// The chain ends, with the check's summary (`chain_ended.goal`) when
+    /// one was made.
+    End(ChainOutcome, Option<Value>),
+    /// The chain continues with this turn (link kind `goal_not_met`).
+    Continue(Box<TurnRequest>),
+}
+
+impl GoalStep {
+    /// Wait for the brief (at most [`goal::BRIEF_WAIT`]), have Main check
+    /// the chain's transcript, and say `goal_checked` on `events`. A brief
+    /// with nothing to check ends the chain as before; a brief that failed
+    /// or came too late, or a check that failed, is `not_checked`.
+    pub async fn decide(
+        self,
+        api: &PlatformApi,
+        project_id: i64,
+        execution_id: &str,
+        events: &TurnEvents,
+    ) -> GoalDecision {
+        let brief = self.goal.settled_within(goal::BRIEF_WAIT).await;
+        let check = match &brief {
+            None => GoalCheck::not_checked("The run brief was not ready in time."),
+            Some(answer) if answer.state == "failed" => {
+                GoalCheck::not_checked("The run brief could not be written.")
+            }
+            Some(answer)
+                if answer
+                    .ready()
+                    .is_some_and(|brief| !brief.done_when.is_empty()) =>
+            {
+                match api
+                    .run_check(
+                        project_id,
+                        &self.chain_root_execution_id,
+                        execution_id,
+                        &self.goal.excerpt(),
+                    )
+                    .await
+                {
+                    Ok(check) => check,
+                    Err(error) => {
+                        log::warn!("a goal check was not made: {}", error.code);
+                        GoalCheck::not_checked("The goal check did not answer.")
+                    }
+                }
+            }
+            Some(_) => return GoalDecision::End(ChainOutcome::Completed, None),
+        };
+        events.send("goal_checked", check.event(events.turn_id()));
+        let summary = Some(check.summary());
+        let outcome = check.outcome();
+        let continue_text = check.continue_text.clone().filter(|t| !t.trim().is_empty());
+        self.goal.set_last_check(check);
+        match outcome {
+            GoalOutcome::Met | GoalOutcome::NotChecked => {
+                GoalDecision::End(ChainOutcome::Completed, summary)
+            }
+            GoalOutcome::Blocked => GoalDecision::End(ChainOutcome::Failed, summary),
+            GoalOutcome::NotMet => {
+                let mut next = self.next;
+                next.prompt = continue_text.unwrap_or_else(|| self.goal.continue_text());
+                GoalDecision::Continue(Box::new(next))
+            }
+        }
+    }
 }
 
 /// The HITL exchange of a "Continue?" that the grant answered at the step

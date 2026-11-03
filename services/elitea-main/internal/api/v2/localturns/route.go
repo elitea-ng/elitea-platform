@@ -48,6 +48,7 @@ var _ UseCase = (*localturn.Service)(nil)
 // way the chat execution routes are composed.
 type Route struct {
 	handler http.Handler
+	h       *handler
 }
 
 func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.PermissionResolver) (*Route, error) {
@@ -72,7 +73,18 @@ func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.Per
 	router := chi.NewRouter()
 	router.Method(http.MethodPost, StartPath, gate(h.start))
 	router.Method(http.MethodPost, CommitPath, gate(h.commit))
-	return &Route{handler: router}, nil
+	router.Method(http.MethodPost, RunBriefPath, gate(h.runBrief))
+	router.Method(http.MethodPost, RunCheckPath, gate(h.runCheck))
+	return &Route{handler: router, h: h}, nil
+}
+
+// WithRunBriefs serves runBrief and runCheck (ADR-0045 decision 11).
+// Without it, both answer 503 run_brief_unavailable.
+func (route *Route) WithRunBriefs(goals RunBriefs) *Route {
+	if route != nil && route.h != nil && goals != nil {
+		route.h.goals = goals
+	}
+	return route
 }
 
 func (route *Route) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -85,6 +97,7 @@ func (route *Route) ServeHTTP(writer http.ResponseWriter, request *http.Request)
 
 type handler struct {
 	useCase UseCase
+	goals   RunBriefs
 }
 
 type startBody struct {

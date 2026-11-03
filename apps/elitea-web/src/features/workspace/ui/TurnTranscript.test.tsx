@@ -127,6 +127,22 @@ describe('TurnTranscript', () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
+  it('shows the run brief above the first turn, and the goal check before the chain end', () => {
+    const view = {
+      phase: 'done' as const,
+      items: [],
+      approvals: [],
+      runBrief: { state: 'ready' as const, brief: { goal: 'Fix the login test', done_when: [{ id: 'c1', text: 'The test passes' }], constraints: [], assumptions: [], ambiguity: 'low' as const } },
+      goalCheck: { outcome: 'met' as const, conditions: [], met: 1, total: 1 },
+      chainEnded: { outcome: 'completed' as const },
+    };
+    renderWithTheme(<TurnTranscript view={view} busy={false} />);
+    expect(screen.getByTestId('run-brief-card')).toHaveTextContent('Goal: Fix the login test · Done when: 1 check');
+    const notice = screen.getByTestId('goal-check-notice');
+    expect(notice).toHaveTextContent('Done · 1 of 1 checks · model-reviewed');
+    expect(notice.compareDocumentPosition(screen.getByTestId('chain-ended')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('shows a recorded commit failure without Retry when nothing can resend it', () => {
     const view = { phase: 'done' as const, items: [], approvals: [], commitFailed: { executionId: 'e1', code: 'x', message: 'Not saved.', seq: 3 } };
     renderWithTheme(<TurnTranscript view={view} busy={false} />);

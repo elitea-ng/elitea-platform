@@ -13,6 +13,7 @@ describe('defaultGrant', () => {
       hook_asks: false,
       remote_confirmations: false,
       sensitive_tools: [],
+      goal_check: true,
       chain: { max_continuations: '', max_spend: '', deadline_hours: '' },
     });
   });
@@ -22,20 +23,20 @@ describe('toWireGrant', () => {
   it('sends the four desktop switches and no chain when every limit is empty', () => {
     expect(toWireGrant(defaultGrant())).toEqual({
       ok: true,
-      grant: { continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false },
+      grant: { continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false, goal_check: true },
     });
   });
 
   it('never sends the cloud-only parts on the desktop wire', () => {
     const value = { ...defaultGrant(), continue_output_limit: true, sensitive_tools: [{ toolkit: 'github', tool: 'delete_repo' }] };
     const wire = toWireGrant(value);
-    expect(wire.ok && Object.keys(wire.grant)).toEqual(['continue_step_limit', 'continue_tool_call_cap', 'hook_asks', 'remote_confirmations']);
+    expect(wire.ok && Object.keys(wire.grant)).toEqual(['continue_step_limit', 'continue_tool_call_cap', 'hook_asks', 'remote_confirmations', 'goal_check']);
   });
 
   it('adds the grant id when given, and only the typed chain limits', () => {
     expect(toWireGrant(withChain({ max_continuations: ' 5 ', deadline_hours: '1.5' }), 'g-1')).toEqual({
       ok: true,
-      grant: { grant_id: 'g-1', continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false, chain: { max_continuations: 5, deadline_seconds: 5400 } },
+      grant: { grant_id: 'g-1', continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false, goal_check: true, chain: { max_continuations: 5, deadline_seconds: 5400 } },
     });
     const spend = toWireGrant(withChain({ max_spend: '12.3456' }));
     expect(spend.ok && spend.grant.chain).toEqual({ max_spend: 12.3456 });
@@ -82,6 +83,19 @@ describe('readGrant', () => {
     expect(readGrant({ ...kept, chain: { max_continuations: 'many', max_spend: '', deadline_hours: '' } })).toBeNull();
     expect(readGrant(null)).toBeNull();
     expect(readGrant({ ...kept, sensitive_tools: [{ toolkit: 'a', tool: 'b' }, { toolkit: 1 }] })?.sensitive_tools).toEqual([{ toolkit: 'a', tool: 'b' }]);
+  });
+
+  it('keeps the goal check off when it was turned off, and on for a grant kept before the check', () => {
+    expect(readGrant(JSON.parse(JSON.stringify({ ...defaultGrant(), goal_check: false })))?.goal_check).toBe(false);
+    const { goal_check: _absent, ...older } = defaultGrant();
+    expect(readGrant(older)?.goal_check).toBe(true);
+  });
+});
+
+describe('toWireGrant goal_check', () => {
+  it('sends goal_check off when the person turned the check off', () => {
+    const wire = toWireGrant({ ...defaultGrant(), goal_check: false });
+    expect(wire.ok && wire.grant.goal_check).toBe(false);
   });
 });
 

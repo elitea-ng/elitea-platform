@@ -60,6 +60,7 @@ import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
+import { GoalCheckNotice, RunBriefCard } from '@/entities/run-brief';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';
@@ -268,6 +269,7 @@ export function ApplicationAnswer({
         <AssistantCaption name={participantName} />
       ) : null}
       {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
+      <RunBriefCard value={answer.runBrief} />
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}
 
@@ -348,6 +350,7 @@ export function ApplicationAnswer({
 
       {!isProcessing && grounding && <GroundingIndicator grounding={grounding} answer={answer.content} />}
       {!isProcessing && stoppedAtStepLimit(answer) && <StepLimitNotice />}
+      {!isProcessing && <GoalCheckNotice check={answer.goalCheck} />}
 
       {shouldRenderAnswerBlock && (
         // Below the text (`ApplicationAnswerActions`' module doc), the time and

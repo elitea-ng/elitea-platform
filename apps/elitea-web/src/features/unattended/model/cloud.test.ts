@@ -15,6 +15,7 @@ describe('toCloudGrant', () => {
         grant_id: 'g-1',
         continue_step_limit: true,
         continue_output_limit: false,
+        goal_check: true,
         sensitive_tools: [{ toolkit_name: 'github', tool_name: 'delete_branch' }],
         chain: { max_continuations: 5, max_spend: 2.5, deadline_seconds: 5400 },
       },
@@ -22,7 +23,12 @@ describe('toCloudGrant', () => {
   });
 
   it('leaves out the empty parts: Main takes the platform defaults', () => {
-    expect(toCloudGrant(defaultGrant())).toEqual({ ok: true, grant: { continue_step_limit: true, continue_output_limit: true } });
+    expect(toCloudGrant(defaultGrant())).toEqual({ ok: true, grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true } });
+  });
+
+  it('sends goal_check off when the person turned the check off', () => {
+    const result = toCloudGrant({ ...defaultGrant(), goal_check: false });
+    expect(result.ok && result.grant.goal_check).toBe(false);
   });
 
   it('names the chain fields that are not valid', () => {

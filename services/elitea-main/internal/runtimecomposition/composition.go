@@ -32,6 +32,7 @@ import (
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
 	toolkitcallapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
 	discovery "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
@@ -255,6 +256,10 @@ type Dependencies struct {
 	// live-update plane) publishes none; the list rows still carry the
 	// state.
 	ConversationActivity *conversationactivity.Notifier
+	// RunBriefs writes the run brief of a new unattended chain and runs its
+	// goal check (ADR-0045 decision 11). nil: every chain ends as before,
+	// with no brief and no check.
+	RunBriefs *runbrief.Service
 	// DelegationAssertions mints the delegation assertions of remote MCP
 	// calls (ADR-0044 decision 4, #1501). nil answers
 	// UNSUPPORTED_CAPABILITY to MintDelegationAssertion.
@@ -1078,6 +1083,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		// approval policy, the run caps and the agent's tier.
 		agentStart = agentStart.WithUnattendedGrants(
 			unattendedGrantPolicy(dependencies.AdmissionPool, approvalSettings, runCapsSettings, egressSources))
+		if dependencies.RunBriefs != nil {
+			agentStart = agentStart.WithRunBriefs(runBriefStarter{dependencies.RunBriefs})
+		}
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err
@@ -1452,7 +1460,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
 	settlementOptions = append(settlementOptions,
-		unattendedSettlementHooks(dependencies.AdmissionPool, agentStart, dependencies.Logger)...)
+		unattendedSettlementHooks(dependencies.AdmissionPool, agentStart, dependencies.RunBriefs, dependencies.Logger)...)
 	// A run that ended without parking leaves cards nothing can apply; the
 	// wake sweep closes them (contract §5, §8a). Kick it once the turn settles.
 	settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(

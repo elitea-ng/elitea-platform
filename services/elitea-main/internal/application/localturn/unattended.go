@@ -55,6 +55,12 @@ type StartGrant struct {
 	Limits unattended.Limits
 	// ChainRootExecutionID is empty on the chain's first turn.
 	ChainRootExecutionID string
+	// Kind is a continuation's link kind (unattended.LinkContinue when the
+	// host named none).
+	Kind string
+	// BriefState is the first turn's run brief state (ADR-0045 decision
+	// 11); empty on a continuation.
+	BriefState string
 }
 
 // UnattendedStarted is the start's answer about the chain.
@@ -95,9 +101,14 @@ func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*
 		// them; the limits a client sends again are ignored, so a maximum
 		// that an administrator lowers mid-chain does not refuse the chain's
 		// next turn.
+		kind := request.Kind
+		if kind == "" {
+			kind = unattended.LinkContinue
+		}
 		return &StartGrant{
 			Grant:                unattended.GrantOf(request, nil),
 			ChainRootExecutionID: request.ChainRootExecutionID,
+			Kind:                 kind,
 		}, nil
 	}
 	// A desktop turn has no per-run spend cap to multiply: the default chain
@@ -110,6 +121,7 @@ func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*
 		Grant:                unattended.GrantOf(request, nil),
 		Limits:               limits,
 		ChainRootExecutionID: request.ChainRootExecutionID,
+		BriefState:           unattended.BriefStateAtStart(request.GoalCheck, settings.RunBrief),
 	}, nil
 }
 

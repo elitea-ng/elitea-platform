@@ -73,6 +73,12 @@ export const ChatUnattendedRequest = zod
       .boolean()
       .optional()
       .describe("Continue the answer when it stops at the output limit."),
+    goal_check: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.31 (ADR-0045 decision 11). Main writes a run brief with the small model and checks the goal before the chain ends as completed. Absent is true; false turns the brief and the check off for this chain.",
+      ),
     chain: UnattendedChainLimits.optional(),
   })
   .describe(

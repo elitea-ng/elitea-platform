@@ -1310,7 +1310,7 @@ describe('WorkspaceSessionPage', () => {
       const started = ipc.calls.started[0];
       expect(started?.plan_mode).toBe(false);
       expect(started?.bypass_approvals).toBeUndefined();
-      expect(started?.unattended).toEqual({ grant_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string, continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false });
+      expect(started?.unattended).toEqual({ grant_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string, continue_step_limit: true, continue_tool_call_cap: true, hook_asks: false, remote_confirmations: false, goal_check: true });
     }, 30_000);
 
     it('keeps the opt-ins and the off choice for the folder, and sends no grant in Plan mode', async () => {

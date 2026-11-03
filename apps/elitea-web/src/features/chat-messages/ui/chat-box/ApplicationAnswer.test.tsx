@@ -170,6 +170,25 @@ describe('ApplicationAnswer', () => {
     expect(screen.queryByTestId('failure-reference')).not.toBeInTheDocument();
   });
 
+  it('shows the run brief at the top and the goal check under the answer (ADR-0045 decision 11)', () => {
+    const answer = {
+      id: 'checked',
+      role: 'assistant',
+      name: 'Agent',
+      createdAt: '2026-11-03T12:00:00Z',
+      content: 'Complete',
+      runBrief: { state: 'ready', brief: { goal: 'Write the report', done_when: [{ id: 'c1', text: 'It has a summary' }], constraints: [], assumptions: [], ambiguity: 'low' } },
+      goalCheck: { outcome: 'blocked', conditions: [], met: 0, total: 1, reason: 'No data source' },
+    } as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} />);
+    const card = screen.getByTestId('run-brief-card');
+    const notice = screen.getByTestId('goal-check-notice');
+    expect(card).toHaveTextContent('Goal: Write the report · Done when: 1 check');
+    expect(notice).toHaveTextContent('Blocked on: No data source');
+    expect(card.compareDocumentPosition(screen.getByText('Complete')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('Complete').compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('copies authoritative text items without duplicating collapsed group content', async () => {
     const user = userEvent.setup();
     const answer = { id: 'items', role: 'assistant', content: 'Stale group text',

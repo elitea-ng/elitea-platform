@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 )
 
 // admitAgentChain writes the chain of an agent admission that carries a
@@ -30,7 +31,22 @@ func admitAgentChain(
 	case chain.Start != nil:
 		start := *chain.Start
 		start.RootExecutionID = executionID
-		return startRunChain(ctx, tx, start)
+		if err := startRunChain(ctx, tx, start); err != nil {
+			return err
+		}
+		if start.BriefState != unattended.BriefPending || start.ResponseMessageID == "" {
+			return nil
+		}
+		// The transcript shows "Writing the brief…" until the brief is
+		// ready (ADR-0045 decision 11). A replayed admission finds the
+		// chain already there: its brief may be ready or failed by now, and
+		// the stored meta stays as SaveBrief wrote it.
+		pending, err := runBriefStillPending(ctx, tx, start.RootExecutionID)
+		if err != nil || !pending {
+			return err
+		}
+		return markRunBrief(ctx, tx, projectionProject, start.ResponseMessageID,
+			runBriefMeta{State: unattended.BriefPending})
 	case chain.Continue != nil:
 		next := *chain.Continue
 		next.ExecutionID = executionID

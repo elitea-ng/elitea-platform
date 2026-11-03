@@ -9810,10 +9810,20 @@ async fn stalling_chain_platform(
     executions: &'static [&'static str],
     stall: Stall,
 ) -> MockServer {
+    serve(chain_handler(model, details, executions, stall)).await
+}
+
+/// The handler of [`stalling_chain_platform`].
+fn chain_handler(
+    model: impl Fn(usize) -> Res + Send + Sync + 'static,
+    details: Value,
+    executions: &'static [&'static str],
+    stall: Stall,
+) -> impl Fn(&Req) -> Res + Send + Sync + 'static {
     let inner = platform(details, &[]);
     let starts = AtomicUsize::new(0);
     let calls = AtomicUsize::new(0);
-    serve(move |req: &Req| {
+    move |req: &Req| {
         if req.path == "/llm/v1/chat/completions" {
             return model(calls.fetch_add(1, Ordering::SeqCst));
         }
@@ -9866,8 +9876,7 @@ async fn stalling_chain_platform(
             );
         }
         inner(req)
-    })
-    .await
+    }
 }
 
 fn commits_of(server: &MockServer, execution: &str) -> Vec<Value> {
@@ -10332,4 +10341,389 @@ async fn an_unattended_turn_is_never_in_plan_mode() {
         .await
         .unwrap_err();
     assert_eq!(refused.code, "invalid_request");
+}
+
+// Run brief and goal check (ADR-0045 decision 11; #1564).
+
+const BRIEF_PATH: &str = "/api/v2/elitea_core/run_brief/prompt_lib/1";
+const CHECK_PATH: &str = "/api/v2/elitea_core/run_check/prompt_lib/1";
+
+/// The continuation text with [`ready_brief`] and no check yet.
+const BRIEF_TEXT: &str = "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n- The login test passes.\n- The change is committed.\n</run_brief>";
+
+fn ready_brief() -> Value {
+    json!({"state": "ready", "brief": {
+        "goal": "Make the login test pass.",
+        "done_when": [{"id": "c1", "text": "The login test passes."},
+                      {"id": "c2", "text": "The change is committed."}],
+        "constraints": [], "assumptions": [], "ambiguity": "low"}})
+}
+
+fn check(outcome: &str, met: u32, reason: Option<&str>, continue_text: Option<&str>) -> Value {
+    let first = if met >= 1 {
+        "met"
+    } else if outcome == "blocked" {
+        "impossible"
+    } else {
+        "not_met"
+    };
+    let mut check = json!({
+        "outcome": outcome,
+        "conditions": [
+            {"id": "c1", "text": "The login test passes.", "verdict": first,
+             "reason": reason.unwrap_or("")},
+            {"id": "c2", "text": "The change is committed.",
+             "verdict": if met >= 2 { "met" } else { "not_met" }, "reason": ""}
+        ],
+        "met": met, "total": 2
+    });
+    if let Some(reason) = reason {
+        check["reason"] = json!(reason);
+    }
+    if let Some(text) = continue_text {
+        check["continue_text"] = json!(text);
+    }
+    check
+}
+
+/// [`chain_platform`] with Main's brief and check: `run_brief` answers
+/// `brief` after `brief_delay`, and the n-th `run_check` answers
+/// `checks[n]` (past them, the last).
+async fn goal_platform(
+    model: impl Fn(usize) -> Res + Send + Sync + 'static,
+    details: Value,
+    executions: &'static [&'static str],
+    brief: Value,
+    brief_delay: Duration,
+    checks: Vec<(u16, Value)>,
+) -> MockServer {
+    let chain = chain_handler(model, details, executions, Stall::None);
+    let checked = AtomicUsize::new(0);
+    serve(move |req: &Req| {
+        if req.path == BRIEF_PATH {
+            if !brief_delay.is_zero() {
+                tokio::task::block_in_place(|| std::thread::sleep(brief_delay));
+            }
+            return Res::json(200, &brief);
+        }
+        if req.path == CHECK_PATH {
+            let n = checked.fetch_add(1, Ordering::SeqCst).min(checks.len() - 1);
+            return Res::json(checks[n].0, &checks[n].1);
+        }
+        chain(req)
+    })
+    .await
+}
+
+fn bodies(server: &MockServer, path: &str) -> Vec<Value> {
+    seen(server, path.trim_start_matches("/api/v2/elitea_core"))
+        .iter()
+        .map(|req| serde_json::from_str(&req.body).unwrap())
+        .collect()
+}
+
+fn position(events: &[AgentEvent], kind: &str) -> usize {
+    events.iter().position(|e| e.kind == kind).unwrap()
+}
+
+/// The first turn of a chain asks for the brief in the background: the
+/// turn runs while Main writes it, and the brief is asked for once per
+/// chain. `run_brief` carries the person's request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_run_brief_is_asked_for_once_in_the_background() {
+    let model = |call: usize| {
+        if call < 8 {
+            tool_call(&format!("call-{call}"), "list_tree", &json!({}))
+        } else {
+            say("Done.")
+        }
+    };
+    let server = goal_platform(
+        model,
+        two_step_details(),
+        &[EXECUTION, EXECUTION_2],
+        ready_brief(),
+        Duration::from_millis(800),
+        vec![(200, check("met", 2, None, None))],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let briefs = bodies(&h.server, BRIEF_PATH);
+    assert_eq!(briefs.len(), 1, "once per chain");
+    assert_eq!(
+        briefs[0],
+        json!({"chain_root_execution_id": EXECUTION, "request": "Write notes and file a bug"})
+    );
+    // The first turn called its tools before the brief arrived.
+    assert!(position(&events, "tool_call") < position(&events, "run_brief"));
+    let brief = turn_events(&events, &first.turn_id, "run_brief");
+    assert_eq!(brief.len(), 1);
+    assert_eq!(brief[0]["turn_id"], first.turn_id);
+    assert_eq!(brief[0]["chain_root_execution_id"], EXECUTION);
+    assert_eq!(brief[0]["state"], "ready");
+    assert_eq!(brief[0]["brief"]["done_when"][1]["id"], "c2");
+    assert_eq!(start_bodies(&h.server)[0]["unattended"]["goal_check"], true);
+}
+
+/// With a ready brief a step-limit continuation restates it, within the
+/// turn and on the chain's next turn (link kind `step_limit`). The chain's
+/// last turn is checked: all met ends it `completed` with the summary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_continuation_restates_a_ready_brief_and_a_met_goal_completes() {
+    let model = |call: usize| {
+        if call == 0 {
+            // The brief is ready before the first continue.
+            tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(300)));
+        }
+        if call < 8 {
+            tool_call(&format!("call-{call}"), "list_tree", &json!({}))
+        } else {
+            say("Done.")
+        }
+    };
+    let server = goal_platform(
+        model,
+        two_step_details(),
+        &[EXECUTION, EXECUTION_2],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(200, check("met", 2, None, None))],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    // Within the first turn: the granted continue carries the brief.
+    assert!(llm_bodies(&h.server)[2].to_string().contains("<run_brief>"));
+    let starts = start_bodies(&h.server);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[1]["user_input"], BRIEF_TEXT);
+    assert_eq!(starts[1]["unattended"]["kind"], "step_limit");
+    assert!(starts[0]["unattended"].get("kind").is_none());
+    let continued = turn_events(&events, &first.turn_id, "turn_continued");
+    assert_eq!(continued[0]["kind"], "step_limit");
+    // The last turn is checked over the chain's transcript.
+    let checks = bodies(&h.server, CHECK_PATH);
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0]["chain_root_execution_id"], EXECUTION);
+    assert_eq!(checks[0]["execution_id"], EXECUTION_2);
+    let transcript = checks[0]["transcript"].as_str().unwrap();
+    assert!(transcript.starts_with("# The person's request\nWrite notes and file a bug\n"));
+    assert!(transcript.contains("- list_tree {}"));
+    assert!(transcript.contains("Answer: Done."));
+    let checked = of_kind(&events, "goal_checked");
+    assert_eq!(checked.len(), 1);
+    assert_eq!(checked[0]["outcome"], "met");
+    assert_eq!(checked[0]["met"], 2);
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0]["outcome"], "completed");
+    assert_eq!(
+        ended[0]["goal"],
+        json!({"outcome": "met", "met": 2, "total": 2})
+    );
+    assert!(position(&events, "goal_checked") < position(&events, "chain_ended"));
+    assert_eq!(
+        commits_of(&h.server, EXECUTION_2)[0]["chain_outcome"],
+        "completed"
+    );
+}
+
+/// A goal not met continues the chain from Main's `continue_text`, with
+/// the link kind `goal_not_met`; the next check finds it met. A chain limit
+/// that refuses the continuation ends the chain `limit_reached`, with the
+/// check's state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_goal_not_met_continues_the_chain() {
+    let model = |call: usize| say(if call == 0 { "Done." } else { "Now done." });
+    let server = goal_platform(
+        model,
+        agent_details(),
+        &[EXECUTION, EXECUTION_2],
+        ready_brief(),
+        Duration::ZERO,
+        vec![
+            (
+                200,
+                check(
+                    "not_met",
+                    1,
+                    Some("The login test still fails."),
+                    Some("Main's continuation text."),
+                ),
+            ),
+            (200, check("met", 2, None, None)),
+        ],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let checked = turn_events(&events, &first.turn_id, "goal_checked");
+    assert_eq!(checked.len(), 1);
+    assert_eq!(checked[0]["outcome"], "not_met");
+    assert_eq!(checked[0]["reason"], "The login test still fails.");
+    assert!(checked[0].get("continue_text").is_none());
+    assert_eq!(
+        turn_events(&events, &first.turn_id, "done")[0]["continuing"],
+        true
+    );
+    assert!(
+        commits_of(&h.server, EXECUTION)[0]
+            .get("chain_outcome")
+            .is_none()
+    );
+    let starts = start_bodies(&h.server);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[1]["user_input"], "Main's continuation text.");
+    assert_eq!(starts[1]["unattended"]["kind"], "goal_not_met");
+    assert_eq!(
+        starts[1]["unattended"]["chain_root_execution_id"],
+        EXECUTION
+    );
+    let continued = turn_events(&events, &first.turn_id, "turn_continued");
+    assert_eq!(continued[0]["kind"], "goal_not_met");
+    assert!(position(&events, "goal_checked") < position(&events, "turn_continued"));
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "completed");
+    assert_eq!(ended[0]["goal"]["outcome"], "met");
+    assert_eq!(bodies(&h.server, BRIEF_PATH).len(), 1);
+
+    // The same check with no continuation left: limit_reached.
+    let server = goal_platform(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(
+            200,
+            check("not_met", 0, Some("Nothing ran."), Some("Go on.")),
+        )],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(&h, json!({})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "limit_reached");
+    assert_eq!(ended[0]["goal"]["outcome"], "not_met");
+    assert_eq!(ended[0]["goal"]["reason"], "Nothing ran.");
+}
+
+/// A blocked goal ends the chain `failed`; a check that does not answer
+/// ends it `completed`, not checked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_blocked_goal_fails_and_a_failed_check_is_not_checked() {
+    let server = goal_platform(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION, EXECUTION_2],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(
+            200,
+            check("blocked", 0, Some("No login test exists."), None),
+        )],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(&h, json!({})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert_eq!(of_kind(&events, "goal_checked")[0]["outcome"], "blocked");
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "failed");
+    assert_eq!(
+        ended[0]["goal"],
+        json!({"outcome": "blocked", "met": 0, "total": 2, "reason": "No login test exists."})
+    );
+    assert_eq!(
+        commits_of(&h.server, EXECUTION)[0]["chain_outcome"],
+        "failed"
+    );
+    assert_eq!(start_bodies(&h.server).len(), 1);
+
+    let server = goal_platform(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(500, json!({"error": "internal", "message": "boom"}))],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(&h, json!({})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert_eq!(
+        of_kind(&events, "goal_checked")[0]["outcome"],
+        "not_checked"
+    );
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "completed");
+    assert_eq!(ended[0]["goal"]["outcome"], "not_checked");
+    assert_eq!(
+        commits_of(&h.server, EXECUTION)[0]["chain_outcome"],
+        "completed"
+    );
+}
+
+/// `goal_check: false`: no brief, no check, the chain ends as before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn goal_check_off_makes_no_calls() {
+    let server = goal_platform(
+        |_| say("Done."),
+        agent_details(),
+        &[EXECUTION],
+        ready_brief(),
+        Duration::ZERO,
+        vec![(200, check("not_met", 0, Some("x"), Some("y")))],
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    h.host
+        .start(unattended_request(&h, json!({"goal_check": false})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    assert!(bodies(&h.server, BRIEF_PATH).is_empty());
+    assert!(bodies(&h.server, CHECK_PATH).is_empty());
+    assert!(of_kind(&events, "run_brief").is_empty());
+    assert!(of_kind(&events, "goal_checked").is_empty());
+    assert_eq!(
+        start_bodies(&h.server)[0]["unattended"]["goal_check"],
+        false
+    );
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended[0]["outcome"], "completed");
+    assert!(ended[0].get("goal").is_none());
+    assert_eq!(
+        commits_of(&h.server, EXECUTION)[0]["chain_outcome"],
+        "completed"
+    );
 }

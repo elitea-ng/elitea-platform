@@ -262,6 +262,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if outcome.Created {
 		service.notifyMentionedUsers(ctx, request.mentionRequest())
 	}
+	service.beginRunBrief(ctx, chain, outcome.ExecutionID, request.UserInput)
 	return CurrentApplicationStartOutcome{
 		ExecutionID: outcome.ExecutionID, CommandID: outcome.CommandID,
 		ResponseMessageID: responseMessageID, Created: outcome.Created,
