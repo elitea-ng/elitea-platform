@@ -596,6 +596,20 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Free runner disk for the worker test build
+        # The worker's lib-test build on top of the `test` job's restored
+        # target/ ran the runner out of disk (LLVM ENOSPC, PR #1561: a
+        # dependency refresh rebuilds most of the graph beside the cached
+        # copy). The same bounded, NON-FATAL step as the `quality` and
+        # `test` jobs.
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
+
       # The `test` job's entry (same `--all-features` test profile), restored
       # and never saved here: two jobs saving one key would race to reserve it.
       - name: Cache cargo registry and build artefacts
