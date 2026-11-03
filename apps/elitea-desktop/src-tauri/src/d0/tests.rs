@@ -9786,15 +9786,25 @@ async fn chain_platform(
     details: Value,
     executions: &'static [&'static str],
 ) -> MockServer {
-    stalling_chain_platform(model, details, executions, None).await
+    stalling_chain_platform(model, details, executions, Stall::None).await
 }
 
-/// [`chain_platform`], whose start number `stall` answers only after 1.5 s.
+/// Which answer of [`stalling_chain_platform`] comes only after 1.5 s.
+#[derive(Clone, Copy, PartialEq)]
+enum Stall {
+    None,
+    /// The start with this number.
+    Start(usize),
+    /// The first turn's commit.
+    FirstCommit,
+}
+
+/// [`chain_platform`], with one answer that comes only after 1.5 s.
 async fn stalling_chain_platform(
     model: impl Fn(usize) -> Res + Send + Sync + 'static,
     details: Value,
     executions: &'static [&'static str],
-    stall: Option<usize>,
+    stall: Stall,
 ) -> MockServer {
     let inner = platform(details, &[]);
     let starts = AtomicUsize::new(0);
@@ -9805,7 +9815,7 @@ async fn stalling_chain_platform(
         }
         if req.path == START_PATH {
             let n = starts.fetch_add(1, Ordering::SeqCst);
-            if stall == Some(n) {
+            if stall == Stall::Start(n) {
                 tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(1500)));
             }
             let Some(execution) = executions.get(n) else {
@@ -9840,6 +9850,9 @@ async fn stalling_chain_platform(
             .strip_prefix("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/")
             && executions.contains(&execution)
         {
+            if stall == Stall::FirstCommit && execution == executions[0] {
+                tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(1500)));
+            }
             return Res::json(
                 200,
                 &json!({"execution_id": execution, "created": true,
@@ -10029,8 +10042,8 @@ async fn a_granted_step_limit_continues_until_the_chain_limit() {
 }
 
 /// The UI stays busy while the host continues; a next turn that does not
-/// start in time ends the chain as `failed` (the host's watchdog), and the
-/// late turn is cancelled, never announced.
+/// start in time after the commit lands ends the chain as `cancelled` (the
+/// host's watchdog), and the late turn is cancelled, never announced.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_next_turn_that_does_not_start_in_time_ends_the_chain() {
     let model = |call: usize| tool_call(&format!("call-{call}"), "list_tree", &json!({}));
@@ -10038,7 +10051,7 @@ async fn a_next_turn_that_does_not_start_in_time_ends_the_chain() {
         model,
         two_step_details(),
         &[EXECUTION, EXECUTION_2],
-        Some(1),
+        Stall::Start(1),
     )
     .await;
     let h = harness(server, allowed(), UiDecision::Deny).await;
@@ -10052,7 +10065,7 @@ async fn a_next_turn_that_does_not_start_in_time_ends_the_chain() {
     let events = until_event(&h, "chain_ended").await;
     let ended = turn_events(&events, &first.turn_id, "chain_ended");
     assert_eq!(ended.len(), 1);
-    assert_eq!(ended[0]["outcome"], "failed");
+    assert_eq!(ended[0]["outcome"], "cancelled");
     assert!(ended[0].get("limit").is_none());
     assert_eq!(
         turn_events(&events, &first.turn_id, "done")[0]["continuing"],
@@ -10063,6 +10076,39 @@ async fn a_next_turn_that_does_not_start_in_time_ends_the_chain() {
     let events = h.emitter.all();
     assert!(turn_events(&events, &first.turn_id, "turn_continued").is_empty());
     assert_eq!(turn_events(&events, &first.turn_id, "chain_ended").len(), 1);
+}
+
+/// The watchdog starts when the commit lands: a commit slower than the
+/// wait does not end the chain, and the next turn starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_slow_commit_does_not_end_the_chain() {
+    let model = |call: usize| tool_call(&format!("call-{call}"), "list_tree", &json!({}));
+    let server = stalling_chain_platform(
+        model,
+        two_step_details(),
+        &[EXECUTION, EXECUTION_2],
+        Stall::FirstCommit,
+    )
+    .await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    two_steps(&h);
+    h.host.set_continue_wait(Duration::from_millis(300));
+    let first = h
+        .host
+        .start(unattended_request(&h, json!({"continue_step_limit": true})))
+        .await
+        .unwrap();
+    let events = until_event(&h, "chain_ended").await;
+    let continued = turn_events(&events, &first.turn_id, "turn_continued");
+    assert_eq!(
+        continued.len(),
+        1,
+        "the chain went on after the slow commit"
+    );
+    assert!(turn_events(&events, &first.turn_id, "chain_ended").is_empty());
+    let ended = of_kind(&events, "chain_ended");
+    assert_eq!(ended.len(), 1);
+    assert_eq!(ended[0]["outcome"], "limit_reached");
 }
 
 /// A grant with `remote_confirmations` confirms a sensitive remote call at

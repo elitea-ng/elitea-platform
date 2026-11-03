@@ -76,19 +76,19 @@ export const CHAIN_PARTS: readonly ChainInfo[] = [
   {
     field: 'max_continuations',
     label: () => t('unattended.chain.continuations', 'Most automatic continuations'),
-    help: () => t('unattended.chain.continuationsHelp', 'From 0 to 200. Default: 20.'),
-    error: () => t('unattended.chain.continuationsError', 'Type a whole number from 0 to 200.'),
+    help: () => t('unattended.chain.continuationsHelp', 'A whole number from 0. The platform sets the maximum. Default: 20.'),
+    error: () => t('unattended.chain.continuationsError', 'Type a whole number from 0.'),
   },
   {
     field: 'max_spend',
     label: () => t('unattended.chain.spend', 'Most spend (USD)'),
-    help: () => t('unattended.chain.spendHelp', 'More than 0, with at most 4 decimals. Default: the spend cap of one run × 10.'),
+    help: () => t('unattended.chain.spendHelp', 'More than 0, with at most 4 decimals. The platform sets the maximum. Default: the spend cap of one run × 10.'),
     error: () => t('unattended.chain.spendError', 'Type an amount more than 0, with at most 4 decimals.'),
   },
   {
     field: 'deadline_hours',
     label: () => t('unattended.chain.deadline', 'Deadline (hours)'),
-    help: () => t('unattended.chain.deadlineHelp', 'From 1 second to 7 days (168 hours). Default: 12 hours.'),
-    error: () => t('unattended.chain.deadlineError', 'Type a time from 1 second to 168 hours.'),
+    help: () => t('unattended.chain.deadlineHelp', 'At least 1 second. The platform sets the maximum. Default: 12 hours.'),
+    error: () => t('unattended.chain.deadlineError', 'Type a time of at least 1 second (0.0003 hours).'),
   },
 ];

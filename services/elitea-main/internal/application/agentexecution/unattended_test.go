@@ -175,6 +175,21 @@ func TestUnattendedContinuationGrant(t *testing.T) {
 	if _, _, err := grantTestService("low").admitUnattended(t.Context(), other); err == nil {
 		t.Fatal("another person's continuation was admitted")
 	}
+	// approvals.unattended_grants is read again on every continuation: off
+	// refuses it as disabled (the chain hook then ends the chain cancelled).
+	off := grantTestService("low")
+	disabled := platformconfig.DefaultUnattendedSettings()
+	disabled.Enabled = false
+	off.unattended.Settings = grantSettingsStub{disabled}
+	var refusal *unattended.RefusalError
+	if _, _, err := off.admitUnattended(t.Context(), target); !errors.As(err, &refusal) ||
+		refusal.Reason != unattended.RefusedDisabled {
+		t.Fatalf("continuation with grants off = %v", err)
+	}
+	if _, _, err := (&CurrentApplicationStartService{}).admitUnattended(t.Context(), target); !errors.As(err, &refusal) ||
+		refusal.Reason != unattended.RefusedDisabled {
+		t.Fatalf("continuation without a grant policy = %v", err)
+	}
 	ended := chain
 	ended.EndState = unattended.EndCompleted
 	target.continuation = &UnattendedContinuation{Chain: ended, Kind: unattended.LinkStepLimit}

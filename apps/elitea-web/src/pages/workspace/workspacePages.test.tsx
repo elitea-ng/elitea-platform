@@ -1302,7 +1302,7 @@ describe('WorkspaceSessionPage', () => {
       await pickMode(user, 'Unattended mode (continues by itself)');
       const dialog = await screen.findByRole('dialog', { name: 'Run unattended?' });
       await user.click(within(dialog).getByRole('switch', { name: 'Allow hook questions' }));
-      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '500');
+      await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5.5');
       expect(within(dialog).getByTestId('workspace-unattended-start')).toBeDisabled();
       await user.clear(within(dialog).getByTestId('unattended-chain-max-continuations'));
       await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5');

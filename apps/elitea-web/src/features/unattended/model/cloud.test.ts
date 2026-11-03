@@ -26,7 +26,7 @@ describe('toCloudGrant', () => {
   });
 
   it('names the chain fields that are not valid', () => {
-    expect(toCloudGrant({ ...defaultGrant(), chain: { max_continuations: '500', max_spend: '', deadline_hours: 'x' } })).toEqual({ ok: false, invalid: ['max_continuations', 'deadline_hours'] });
+    expect(toCloudGrant({ ...defaultGrant(), chain: { max_continuations: '-5', max_spend: '', deadline_hours: 'x' } })).toEqual({ ok: false, invalid: ['max_continuations', 'deadline_hours'] });
   });
 });
 
@@ -64,7 +64,10 @@ describe('unattendedRefusalText', () => {
   });
 
   it('names the field of a value that is not valid, also for an unknown reason', () => {
-    expect(unattendedRefusalText({ error: 'unattended_grant_refused', reason: 'invalid', field: 'chain.max_spend' })).toContain('The value of chain.max_spend is not valid.');
+    expect(unattendedRefusalText({ error: 'unattended_grant_refused', reason: 'invalid', field: 'chain.max_spend' })).toContain('The value of Most spend (USD) is not valid.');
+    expect(unattendedRefusalText({ error: 'unattended_grant_refused', reason: 'over_maximum', field: 'chain.max_continuations' })).toContain(
+      'Most automatic continuations: the value is more than the platform maximum. Type a lower value.',
+    );
     expect(unattendedRefusalText({ error: 'unattended_grant_refused', reason: 'something_new' })).toContain('The value of something_new is not valid.');
   });
 

@@ -7,6 +7,9 @@
 // at its step limit continues with a new question (ContinuePrompt) when the
 // grant asks for it. Each continuation passes the chain check in its
 // admission transaction; a refused one ends the chain as limit_reached.
+// Each continuation also checks approvals.unattended_grants again: when an
+// administrator turned grants off, Main does not start it and the chain
+// ends as cancelled.
 // Every other settle ends the chain: completed, failed, waiting (a pause
 // waits for a person) or cancelled.
 //
@@ -130,7 +133,8 @@ func (h *Hook) end(ctx context.Context, chain unattended.Chain, state string) er
 }
 
 // continued classifies a continuation's start error: a limit ends the chain
-// as limit_reached, an ended chain is done, and a refused start ends it as
+// as limit_reached, an ended chain is done, grants that an administrator
+// turned off end it as cancelled, and another refused start ends it as
 // failed. Any other error stays: a replay of the settle tries again.
 func (h *Hook) continued(ctx context.Context, chain unattended.Chain, err error) error {
 	var limit *unattended.ChainLimitError
@@ -140,6 +144,10 @@ func (h *Hook) continued(ctx context.Context, chain unattended.Chain, err error)
 		return nil
 	case errors.As(err, &limit):
 		return h.chains.EndRefusedChain(ctx, chain.RootExecutionID, limit)
+	case errors.As(err, &refusal) && refusal.Reason == unattended.RefusedDisabled:
+		h.logger.WarnContext(ctx, "unattended chain: grants are off, the chain is cancelled",
+			"chain_root_execution_id", chain.RootExecutionID)
+		return h.end(ctx, chain, unattended.EndCancelled)
 	case errors.As(err, &refusal):
 		h.logger.WarnContext(ctx, "unattended chain: continuation refused",
 			"chain_root_execution_id", chain.RootExecutionID, "reason", refusal.Reason)

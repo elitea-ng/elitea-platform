@@ -27,9 +27,10 @@ use super::api::LocalTurnStarted;
 use super::events::TurnEvents;
 use super::turn::{TurnError, TurnRequest};
 
-/// How long the host waits, after a turn's `done`, for the chain's next
-/// turn to start. Past it the chain ends as `failed`: the UI, which stays
-/// busy while the host continues, is never held for good.
+/// How long the host waits, after a turn's commit lands, for the chain's
+/// next turn to start. Past it the chain ends as `cancelled`: the UI, which
+/// stays busy while the host continues, is never held for good. A slow
+/// commit does not count against it.
 pub const CONTINUE_WAIT: Duration = Duration::from_secs(60);
 
 /// The platform's refusal of a continuation past a chain limit (409).
@@ -57,13 +58,33 @@ pub const SOURCE_BYPASS: &str = "bypass";
 /// answered within the wait, or an unattended turn had nobody to ask.
 pub const SOURCE_TIMEOUT: &str = "timeout";
 
-/// The most continuations a grant may ask for (the platform's maximum).
-pub const MAX_CONTINUATIONS: u32 = 200;
-/// The longest deadline a grant may ask for: 7 days (the platform's maximum).
-pub const MAX_DEADLINE_SECONDS: u64 = 7 * 24 * 60 * 60;
-/// The highest spend a grant may name, in US dollars (the shape of a run's
-/// `max_spend`).
-pub const MAX_SPEND: f64 = 1_000_000.0;
+/// The platform's refusal of a grant (422). The platform owns the chain
+/// maximums: the host checks only that a value makes sense, and shows the
+/// platform's refusal ([`refusal_message`]).
+pub const GRANT_REFUSED: &str = "unattended_grant_refused";
+
+/// A readable message for a refused grant: the refusal's `field` and
+/// `reason` (`over_maximum`, `invalid`, `disabled`, …).
+#[must_use]
+pub fn refusal_message(field: Option<&str>, reason: Option<&str>) -> String {
+    let limit = match field {
+        Some("chain.max_continuations") => Some("number of continuations"),
+        Some("chain.max_spend") => Some("spend limit"),
+        Some("chain.deadline_seconds") => Some("deadline"),
+        _ => None,
+    };
+    match (reason, limit) {
+        (Some("over_maximum"), Some(limit)) => format!(
+            "The unattended run's {limit} is higher than the platform allows. Choose a lower value, or ask your administrator for the maximum."
+        ),
+        (Some("invalid"), Some(limit)) => {
+            format!("The unattended run's {limit} is not valid.")
+        }
+        (Some("disabled"), _) => "Unattended runs are turned off on this platform.".to_owned(),
+        (Some(reason), _) => format!("The platform refused the unattended grant ({reason})."),
+        (None, _) => "The platform refused the unattended grant.".to_owned(),
+    }
+}
 
 /// The chain's limits, as the person sets them. An absent value is the
 /// platform's default.
@@ -120,8 +141,9 @@ impl UnattendedGrant {
     ///
     /// # Errors
     ///
-    /// `invalid_request` for a `grant_id` that is not a UUID, or a chain
-    /// limit outside the platform's maximums.
+    /// `invalid_request` for a `grant_id` that is not a UUID, a deadline of
+    /// 0 seconds or a spend limit that is not more than 0. The platform
+    /// checks its maximums itself (422 [`GRANT_REFUSED`]).
     pub fn admit(mut self) -> Result<Self, TurnError> {
         let id = match self.grant_id.take() {
             Some(id) => uuid::Uuid::parse_str(&id)
@@ -130,26 +152,17 @@ impl UnattendedGrant {
         };
         self.grant_id = Some(id.hyphenated().to_string());
         if let Some(chain) = &self.chain {
-            if chain
-                .max_continuations
-                .is_some_and(|n| n > MAX_CONTINUATIONS)
-            {
-                return Err(refused("An unattended run continues at most 200 times."));
-            }
-            if chain
-                .deadline_seconds
-                .is_some_and(|s| s == 0 || s > MAX_DEADLINE_SECONDS)
-            {
+            if chain.deadline_seconds == Some(0) {
                 return Err(refused(
-                    "An unattended run's deadline is 1 second to 7 days.",
+                    "An unattended run's deadline is at least 1 second.",
                 ));
             }
             if chain
                 .max_spend
-                .is_some_and(|spend| !spend.is_finite() || spend <= 0.0 || spend > MAX_SPEND)
+                .is_some_and(|spend| !spend.is_finite() || spend <= 0.0)
             {
                 return Err(refused(
-                    "An unattended run's spend limit is more than 0 and at most 1 000 000 US dollars.",
+                    "An unattended run's spend limit is more than 0 US dollars.",
                 ));
             }
         }
@@ -461,14 +474,35 @@ mod tests {
         assert_eq!(kept.id(), "6f9619ff-8b86-d011-b42d-00c04fc964ff");
         for bad in [
             json!({ "grant_id": "x" }),
-            json!({ "chain": { "max_continuations": 201 } }),
+            json!({ "chain": { "max_continuations": -1 } }),
+            json!({ "chain": { "max_continuations": 1.5 } }),
             json!({ "chain": { "deadline_seconds": 0 } }),
-            json!({ "chain": { "deadline_seconds": MAX_DEADLINE_SECONDS + 1 } }),
             json!({ "chain": { "max_spend": 0 } }),
+            json!({ "chain": { "max_spend": -1 } }),
             json!({ "other": true }),
         ] {
             assert_eq!(grant(bad).expect_err("refused").code, "invalid_request");
         }
+        // The platform owns the maximums: the host sends large values on.
+        let large = grant(json!({ "chain": {
+            "max_continuations": 100_000, "deadline_seconds": 30 * 24 * 3600, "max_spend": 5_000_000.0
+        } }))
+        .expect("grant");
+        assert_eq!(large.chain.and_then(|c| c.max_continuations), Some(100_000));
+    }
+
+    #[test]
+    fn a_refused_grant_reads_well() {
+        assert!(
+            refusal_message(Some("chain.max_continuations"), Some("over_maximum"))
+                .contains("number of continuations is higher than the platform allows")
+        );
+        assert!(refusal_message(Some("chain.max_spend"), Some("invalid")).contains("spend limit"));
+        assert_eq!(
+            refusal_message(Some("unattended"), Some("disabled")),
+            "Unattended runs are turned off on this platform."
+        );
+        assert!(refusal_message(None, Some("not_owner")).contains("not_owner"));
         let empty = grant(json!({ "chain": {} })).expect("grant");
         assert_eq!(empty.chain, None);
     }

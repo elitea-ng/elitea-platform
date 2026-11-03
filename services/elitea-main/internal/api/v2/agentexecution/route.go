@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
@@ -644,7 +645,7 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		writeJSON(writer, status, body)
 		return
 	}
-	if writeUnattendedStartError(writer, err) {
+	if unattendedwire.WriteRefusal(writer, err) {
 		return
 	}
 	switch {

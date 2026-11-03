@@ -19,7 +19,7 @@ import { useNavBlockerStore } from '@/widgets/app-shell';
 import type { AttachmentButtonHandle, VoiceButtonHandle } from '@/widgets/chat';
 import { ChatConversationStarters, NewChatInput, voiceHooks } from '@/features/chat-input';
 import { useSocketClient } from '@/shared/api/socket/client';
-import { ChatMessageList, useDeleteMessageAlert, currentNodeRecoveryBinding, applySteeringEvent, useChatSteering } from '@/features/chat-messages';
+import { ChatMessageList, currentNodeRecoveryBinding, applySteeringEvent, useChatSteering } from '@/features/chat-messages';
 import { getAllTokens } from '@/features/mcps';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
@@ -52,7 +52,8 @@ import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
-import { ChatBoxUnattendedControls } from './ChatBoxUnattended'; import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
+import { ChatBoxUnattendedControls } from './ChatBoxUnattended';
+import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
@@ -69,6 +70,7 @@ import { useAddEntityParticipant } from './hooks/useAddEntityParticipant';
 import { useActiveParticipantSelection } from './hooks/useActiveParticipantSelection';
 import { useSessionMcpAuthorizationRefs } from './hooks/useSessionMcpAuthorizationRefs';
 import { useChatBoxSend } from './hooks/useChatBoxSend';
+import { useChatBoxDeleteAlert } from './hooks/useChatBoxDeleteAlert';
 import { useReattachSeededTurn } from './hooks/useReattachSeededTurn';
 import { useChatBoxInterruptLedger } from './hooks/useChatBoxInterruptLedger';
 import { useStableRef } from './hooks/useStableRef';
@@ -110,7 +112,8 @@ const ChatBoxInner = memo(function ChatBox({
     activeParticipant, conversationParticipants, isAgentsPage,
   });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
-  const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest); // ADR-0045: the grant each send carries while unattended mode is on
+  // ADR-0045: the grant each send carries while unattended mode is on.
+  const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest);
 
   // Local state (mentions, slash/skill phases, participant guards, etc.) —
   // called after participant normalisation so its version-missing guard can
@@ -173,7 +176,8 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent, unattended: unattended.wire,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
+    unattended: unattended.wire,
   });
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
@@ -209,18 +213,8 @@ const ChatBoxInner = memo(function ChatBox({
     startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution,
   });
 
-  // Delete confirmation (single message / clear-all) — baseline:
-  // `useDeleteMessageAlert.hooks.js`'s confirm-then-delete gating.
-  const deleteAlert = useDeleteMessageAlert({
-    onDeleteChatMessage: async (messageId) => {
-      await handlers.deleteAnswer(messageId);
-      onDeleteAnswer?.(messageId);
-    },
-    onDeleteAllChatMessages: async () => {
-      await handlers.clearChat();
-      onDeleteAllMessages?.();
-    },
-  });
+  // Delete confirmation (single message / clear-all).
+  const deleteAlert = useChatBoxDeleteAlert(handlers, onDeleteAnswer, onDeleteAllMessages);
 
   // Version selection (real fetch + persist) + auto-recovery
   const { handleSelectVersion } = useChatBoxVersioning({
@@ -357,7 +351,11 @@ const ChatBoxInner = memo(function ChatBox({
             onAddParticipant: entityParticipantActions.onSelectParticipant,
           })}
         />
-        {contextIndicator}<ChatBoxUnattendedControls unattended={unattended} disabled={isInputLoading} />
+        {contextIndicator}
+        <ChatBoxUnattendedControls
+          unattended={unattended}
+          disabled={isInputLoading}
+        />
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}

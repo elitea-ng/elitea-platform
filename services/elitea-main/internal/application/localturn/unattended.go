@@ -68,7 +68,9 @@ type UnattendedStarted struct {
 // admitGrant checks a start's grant. A desktop grant names no sensitive cloud
 // tool, so the platform's category and tier rules have nothing to check.
 // The limits of a continuation are the chain's stored ones: the store reads
-// them.
+// them, and admitGrant does not resolve the limits a continuation sends.
+// The platform switch is read on every turn: with grants off, a
+// continuation is refused as disabled.
 func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*StartGrant, error) {
 	if err := unattended.ValidateShape(request); err != nil {
 		return nil, err
@@ -86,6 +88,16 @@ func (s *Service) admitGrant(ctx context.Context, request unattended.Request) (*
 	}
 	if !settings.Enabled {
 		return nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+	}
+	if request.IsContinuation() {
+		// A continuation keeps the chain's stored limits. The store reads
+		// them; the limits a client sends again are ignored, so a maximum
+		// that an administrator lowers mid-chain does not refuse the chain's
+		// next turn.
+		return &StartGrant{
+			Grant:                unattended.GrantOf(request, nil),
+			ChainRootExecutionID: request.ChainRootExecutionID,
+		}, nil
 	}
 	// A desktop turn has no per-run spend cap to multiply: the default chain
 	// spend is the platform maximum (none when it is 0).

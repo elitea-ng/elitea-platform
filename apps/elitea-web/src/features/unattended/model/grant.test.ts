@@ -41,8 +41,13 @@ describe('toWireGrant', () => {
     expect(spend.ok && spend.grant.chain).toEqual({ max_spend: 12.3456 });
   });
 
-  it('refuses limits out of range, and names the fields', () => {
-    expect(toWireGrant(withChain({ max_continuations: '201', max_spend: '0', deadline_hours: '169' }))).toEqual({ ok: false, invalid: ['max_continuations', 'max_spend', 'deadline_hours'] });
+  it('refuses limits that make no sense, and names the fields', () => {
+    expect(toWireGrant(withChain({ max_continuations: '-1', max_spend: '0', deadline_hours: '0' }))).toEqual({ ok: false, invalid: ['max_continuations', 'max_spend', 'deadline_hours'] });
+  });
+
+  it('sends large limits on: the platform owns the maximums', () => {
+    const large = toWireGrant(withChain({ max_continuations: '201', deadline_hours: '169' }));
+    expect(large.ok && large.grant.chain).toEqual({ max_continuations: 201, deadline_seconds: 169 * 3600 });
   });
 });
 
@@ -50,6 +55,7 @@ describe('chainErrors', () => {
   it.each([
     ['max_continuations', '0', true],
     ['max_continuations', '200', true],
+    ['max_continuations', '5000', true],
     ['max_continuations', '200.0', false],
     ['max_continuations', '-1', false],
     ['max_continuations', 'ten', false],
@@ -61,7 +67,8 @@ describe('chainErrors', () => {
     ['deadline_hours', '168', true],
     ['deadline_hours', '0.0003', true],
     ['deadline_hours', '0.0001', false],
-    ['deadline_hours', '168.01', false],
+    ['deadline_hours', '168.01', true],
+    ['deadline_hours', '0', false],
   ] as const)('%s = %j is valid: %s', (field, text, valid) => {
     expect(chainErrors(withChain({ [field]: text }).chain).includes(field)).toBe(!valid);
   });
@@ -72,7 +79,7 @@ describe('readGrant', () => {
     const kept = withChain({ max_continuations: '3' });
     expect(readGrant(JSON.parse(JSON.stringify(kept)))).toEqual(kept);
     expect(readGrant({ ...kept, hook_asks: 'yes' })).toBeNull();
-    expect(readGrant({ ...kept, chain: { max_continuations: '999', max_spend: '', deadline_hours: '' } })).toBeNull();
+    expect(readGrant({ ...kept, chain: { max_continuations: 'many', max_spend: '', deadline_hours: '' } })).toBeNull();
     expect(readGrant(null)).toBeNull();
     expect(readGrant({ ...kept, sensitive_tools: [{ toolkit: 'a', tool: 'b' }, { toolkit: 1 }] })?.sensitive_tools).toEqual([{ toolkit: 'a', tool: 'b' }]);
   });

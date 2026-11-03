@@ -26,7 +26,7 @@ interface FooterControlsProps extends ModePickerProps {
   contextMeter: ReactNode;
 }
 
-export function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, ...mode }: FooterControlsProps): React.JSX.Element {
+function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, ...mode }: FooterControlsProps): React.JSX.Element {
   return (
     <ComposerRow
       leading={
@@ -44,6 +44,43 @@ export function FooterControls({ showMode, attach, agentPicker, modelPicker, mor
           {contextMeter}
         </>
       }
+    />
+  );
+}
+
+/** The composer props the footer reads (`WorkspaceComposerProps`). */
+export interface FooterSource {
+  planMode: boolean;
+  onPlanModeChange: (planMode: boolean) => void;
+  bypass?: boolean;
+  onBypassChange?: ((on: boolean) => void) | undefined;
+  unattended?: boolean;
+  onUnattendedChange?: ((on: boolean) => void) | undefined;
+  showMode?: boolean;
+  agentPicker?: ReactNode;
+  modelPicker?: ReactNode;
+  more?: ((close: () => void) => ReactNode) | undefined;
+  runLocation?: ReactNode;
+  contextMeter?: ReactNode;
+}
+
+/** The footer row of the composer whose props are `source`, with `attach` (the + that picks images, or none). */
+export function composerFooter(source: FooterSource, attach: ReactNode): React.JSX.Element {
+  return (
+    <FooterControls
+      planMode={source.planMode}
+      onPlanModeChange={source.onPlanModeChange}
+      bypass={source.bypass === true}
+      onBypassChange={source.onBypassChange}
+      unattended={source.unattended === true}
+      onUnattendedChange={source.onUnattendedChange}
+      showMode={source.showMode !== false}
+      attach={attach}
+      agentPicker={source.agentPicker}
+      modelPicker={source.modelPicker}
+      more={source.more}
+      runLocation={source.runLocation}
+      contextMeter={source.contextMeter}
     />
   );
 }

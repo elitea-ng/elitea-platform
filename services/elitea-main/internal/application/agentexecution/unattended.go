@@ -154,6 +154,9 @@ func (service *CurrentApplicationStartService) admitUnattended(
 	case target.request != nil && target.continuation != nil:
 		return nil, nil, ErrInvalidCurrentAgentStart
 	case target.continuation != nil:
+		if err := service.unattendedGrantsEnabled(ctx); err != nil {
+			return nil, nil, err
+		}
 		return unattendedContinuationGrant(target)
 	}
 	request := *target.request
@@ -172,15 +175,9 @@ func (service *CurrentApplicationStartService) admitUnattended(
 		// remote confirmation.
 		return nil, nil, unattended.Refused("unattended", "", unattended.RefusedInvalid)
 	}
-	if !service.unattended.complete() {
-		return nil, nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
-	}
-	settings, err := service.unattended.Settings.Get(ctx)
+	settings, err := service.unattendedSettings(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read the unattended grant settings: %w", err)
-	}
-	if !settings.Enabled {
-		return nil, nil, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+		return nil, nil, err
 	}
 	if len(request.SensitiveTools) > 0 &&
 		(target.triggerOrigin == executiondomain.TriggerOriginSchedule ||
@@ -225,6 +222,34 @@ func (service *CurrentApplicationStartService) admitUnattended(
 	// The deadline is 0 on the first run: the chain row holds it, and a
 	// clock read here would make a retried start a different request.
 	return grantProto(grant, target.actorUserID, "", 0, limits, 0), admission, nil
+}
+
+// unattendedSettings reads the grant settings. It refuses as disabled when
+// the start service has no grant policy or approvals.unattended_grants is
+// off.
+func (service *CurrentApplicationStartService) unattendedSettings(
+	ctx context.Context,
+) (platformconfig.UnattendedSettings, error) {
+	if !service.unattended.complete() {
+		return platformconfig.UnattendedSettings{}, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+	}
+	settings, err := service.unattended.Settings.Get(ctx)
+	if err != nil {
+		return platformconfig.UnattendedSettings{}, fmt.Errorf("read the unattended grant settings: %w", err)
+	}
+	if !settings.Enabled {
+		return platformconfig.UnattendedSettings{}, unattended.Refused("unattended", "", unattended.RefusedDisabled)
+	}
+	return settings, nil
+}
+
+// unattendedGrantsEnabled checks the platform switch again before Main
+// starts a continuation. An administrator who turns grants off stops every
+// running chain at its next continuation: the chain hook ends it as
+// cancelled.
+func (service *CurrentApplicationStartService) unattendedGrantsEnabled(ctx context.Context) error {
+	_, err := service.unattendedSettings(ctx)
+	return err
 }
 
 // unattendedContinuationGrant is the grant of a continuation that Main

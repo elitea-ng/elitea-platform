@@ -72,15 +72,15 @@ describe('UnattendedGrantForm', () => {
   it('says which chain limit is not valid', async () => {
     const { last, user } = setup();
     const count = screen.getByTestId('unattended-chain-max-continuations');
-    expect(screen.getByText('From 0 to 200. Default: 20.')).toBeInTheDocument();
-    await user.type(count, '500');
-    expect(last()?.chain.max_continuations).toBe('500');
-    expect(screen.getByText('Type a whole number from 0 to 200.')).toBeInTheDocument();
+    expect(screen.getByText('A whole number from 0. The platform sets the maximum. Default: 20.')).toBeInTheDocument();
+    await user.type(count, '5.5');
+    expect(last()?.chain.max_continuations).toBe('5.5');
+    expect(screen.getByText('Type a whole number from 0.')).toBeInTheDocument();
     expect(count).toHaveAttribute('aria-invalid', 'true');
     await user.type(screen.getByTestId('unattended-chain-max-spend'), '1.23456');
     expect(screen.getByText('Type an amount more than 0, with at most 4 decimals.')).toBeInTheDocument();
     await user.clear(count);
-    expect(screen.queryByText('Type a whole number from 0 to 200.')).toBeNull();
+    expect(screen.queryByText('Type a whole number from 0.')).toBeNull();
   });
 });
 

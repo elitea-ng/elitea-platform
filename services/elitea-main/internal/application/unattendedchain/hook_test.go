@@ -171,3 +171,22 @@ func TestSettleIgnoresAnOlderRunAndDesktopChains(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0045: an administrator who turns grants off stops a running chain at
+// its next continuation. Main does not start it; the chain ends cancelled.
+func TestSettleGrantsDisabledCancelsTheChain(t *testing.T) {
+	for _, mutate := range []func(*SettleView){
+		func(v *SettleView) { v.StepLimitReached = true },
+		func(v *SettleView) { v.OutputLimitReached, v.OutputLimitSequence = true, 1 },
+	} {
+		chains := &chainsStub{view: cloudView()}
+		mutate(&chains.view)
+		starter := &starterStub{err: unattended.Refused("unattended", "", unattended.RefusedDisabled)}
+		if err := New(chains, starter, nil).Settle(t.Context(), "x", executionapp.SettlementSucceeded); err != nil {
+			t.Fatal(err)
+		}
+		if len(chains.ended) != 1 || chains.ended[0] != unattended.EndCancelled || len(chains.refused) != 0 {
+			t.Fatalf("ended = %v, refused = %v", chains.ended, chains.refused)
+		}
+	}
+}

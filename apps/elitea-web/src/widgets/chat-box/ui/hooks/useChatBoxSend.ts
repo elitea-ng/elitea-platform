@@ -6,12 +6,6 @@ import { useCallback, useMemo } from "react";
 import { useChatStreamTransport, type ChatMessage, type ReattachableTurn } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
 import { getExecutionTokens } from "@/features/mcps";
-import type { useUploadAttachments } from "@/entities/conversation";
-
-// Derive these types through the public entity API; avoid a cross-slice deep import.
-type UploadAttachments = ReturnType<typeof useUploadAttachments>["uploadAttachments"];
-type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
-type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
 import { getConfig } from "@/shared/config";
 import { settleCanvasSaves } from "@/shared/lib/canvasSaveGate";
 import type { ExecutionEventData } from "@/shared/api/sse";
@@ -34,22 +28,9 @@ import {
   resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
+  type SendDeps,
+  type UploadAttachmentsOutcome,
 } from "./useChatBoxSend.helpers";
-
-/** The conversation-lifecycle and attachment-upload slices this hook adapts. */
-interface SendDeps {
-  readonly createConversation: (input: {
-    name: string;
-    isPrivate: boolean;
-    participants?: readonly unknown[];
-    meta?: Readonly<Record<string, unknown>>;
-  }) => Promise<
-    { readonly id?: string | number; readonly uuid?: string } | undefined
-  >;
-  readonly uploadAttachments: (
-    input: UploadAttachmentsParams,
-  ) => Promise<UploadAttachmentsOutcome>;
-}
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
@@ -94,7 +75,8 @@ export interface UseChatBoxSendParams {
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
-  /** The `unattended` field of the next start (ADR-0045), read at each send; undefined while the mode is off. */ readonly unattended?: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
+  /** The `unattended` field of the next start (ADR-0045), read at each send; undefined while the mode is off. */
+  readonly unattended?: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
   /** Steering frames of the owned run (contract 1.27), passed to the transport. */
   readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
@@ -242,7 +224,9 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       modelRequest,
-      getInternalToolsForSend, target, unattended,
+      getInternalToolsForSend,
+      target,
+      unattended,
     ],
   );
 

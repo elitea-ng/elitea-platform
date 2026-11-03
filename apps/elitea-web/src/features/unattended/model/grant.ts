@@ -1,8 +1,10 @@
 /**
  * The unattended grant (ADR-0045 decision 1) as the person edits it, and its
  * wire shape. The form keeps the chain limits as typed text; `toWireGrant`
- * checks them and drops the empty ones (an absent limit takes the platform
- * default). The desktop wire never carries `continue_output_limit` (cloud
+ * checks that they make sense and drops the empty ones (an absent limit
+ * takes the platform default). The platform owns the maximums: Main refuses a
+ * value over one (422 `unattended_grant_refused`, reason `over_maximum`), and
+ * the client shows that refusal. The desktop wire never carries `continue_output_limit` (cloud
  * only) or `sensitive_tools` (named cloud tools).
  */
 import type { UnattendedChain, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
@@ -41,8 +43,6 @@ export interface UnattendedGrantValue {
   chain: ChainDraft;
 }
 
-const MAX_CONTINUATIONS = 200;
-const MAX_DEADLINE_SECONDS = 7 * 24 * 3600;
 const SECONDS_PER_HOUR = 3600;
 
 /** A new grant: the run continues by itself; the project's own guards (hooks, remote confirmations) still ask. */
@@ -69,7 +69,7 @@ const NUMBER = /^(?:\d+(?:\.\d+)?|\.\d+)$/u;
 
 function continuations(text: string): number | null {
   const value = INTEGER.test(text) ? Number(text) : Number.NaN;
-  return Number.isInteger(value) && value <= MAX_CONTINUATIONS ? value : null;
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 function spend(text: string): number | null {
@@ -79,7 +79,7 @@ function spend(text: string): number | null {
 
 function deadlineSeconds(text: string): number | null {
   const seconds = NUMBER.test(text) ? Math.round(Number(text) * SECONDS_PER_HOUR) : Number.NaN;
-  return seconds >= 1 && seconds <= MAX_DEADLINE_SECONDS ? seconds : null;
+  return Number.isSafeInteger(seconds) && seconds >= 1 ? seconds : null;
 }
 
 /** The chain fields typed but not valid. */
@@ -132,7 +132,9 @@ function readChain(raw: unknown): ChainDraft | null {
 
 function readTools(raw: unknown): SensitiveToolRef[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter((item): item is SensitiveToolRef => isRecord(item) && typeof item.toolkit === 'string' && typeof item.tool === 'string').map(({ toolkit, tool }) => ({ toolkit, tool }));
+  return raw
+    .filter((item): item is SensitiveToolRef => isRecord(item) && typeof item.toolkit === 'string' && typeof item.tool === 'string')
+    .map(({ toolkit, tool }) => ({ toolkit, tool }));
 }
 
 /** A kept grant read back (stored JSON), or null when it is not a valid grant. */

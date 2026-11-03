@@ -36,8 +36,10 @@ function Line({ title, items, testId }: { title: string; items: string[]; testId
 
 /** The typed chain limits, else "platform defaults". */
 function chainText(value: UnattendedGrantValue): string {
-  const typed = CHAIN_PARTS.filter((part) => value.chain[part.field].trim() !== '').map((part) => `${part.label()}: ${value.chain[part.field].trim()}`);
-  return typed.length === 0 ? t('unattended.summary.defaults', 'platform defaults (20 continuations, the spend cap of one run × 10, 12 hours)') : typed.join(', ');
+  const typed = CHAIN_PARTS.filter((part) => value.chain[part.field].trim() !== '')
+    .map((part) => `${part.label()}: ${value.chain[part.field].trim()}`);
+  if (typed.length > 0) return typed.join(', ');
+  return t('unattended.summary.defaults', 'platform defaults (20 continuations, the spend cap of one run × 10, 12 hours)');
 }
 
 export function UnattendedGrantSummary({ value, desktop = true, cloud = false }: UnattendedGrantSummaryProps): React.JSX.Element {

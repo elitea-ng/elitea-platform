@@ -88,7 +88,7 @@ describe("classifyStartFailure", () => {
       classifyStartFailure(
         httpError(422, { error: "unattended_grant_refused", reason: "over_maximum", field: "chain.max_continuations" }),
       ),
-    ).toMatchObject({ message: expect.stringContaining("The value of chain.max_continuations is more than the platform maximum.") });
+    ).toMatchObject({ message: expect.stringContaining("Most automatic continuations: the value is more than the platform maximum.") });
   });
 
   it("prefers safe_message, the field every Go producer actually writes", () => {

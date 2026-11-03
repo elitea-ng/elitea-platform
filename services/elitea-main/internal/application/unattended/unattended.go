@@ -216,6 +216,15 @@ func (e *RefusalError) Error() string {
 	return text
 }
 
+// AsRefusal finds a RefusalError in err's chain.
+func AsRefusal(err error) (*RefusalError, bool) {
+	var refusal *RefusalError
+	if errors.As(err, &refusal) {
+		return refusal, true
+	}
+	return nil, false
+}
+
 // Refused builds a RefusalError.
 func Refused(field, tool, reason string) error {
 	return &RefusalError{Field: field, Tool: tool, Reason: reason}
@@ -277,7 +286,8 @@ func validName(value string) bool {
 }
 
 // ResolveLimits fills the platform defaults into a chain request and
-// refuses a value over the platform maximum. perRunSpendUSD is the per-run
+// refuses a value over the platform maximum. A max_spend that is 0, negative
+// or rounds to 0 is invalid; an absent one takes the default. perRunSpendUSD is the per-run
 // spend cap of the run's tier (0 for none).
 func ResolveLimits(settings platformconfig.UnattendedSettings, chain ChainRequest, perRunSpendUSD float64) (Limits, error) {
 	limits := Limits{
@@ -303,16 +313,19 @@ func ResolveLimits(settings platformconfig.UnattendedSettings, chain ChainReques
 	if chain.MaxSpendUSD != nil {
 		value := *chain.MaxSpendUSD
 		switch {
-		case math.IsNaN(value) || math.IsInf(value, 0) || value < 0:
+		case math.IsNaN(value) || math.IsInf(value, 0) || roundSpend(value) <= 0:
+			// 0 would read as "no spend limit" in the chain row: a client
+			// cannot lift the limit that way. A value that rounds to 0 is the
+			// same.
 			return Limits{}, Refused("chain.max_spend", "", RefusedInvalid)
-		case settings.MaxSpendUSD > 0 && (value == 0 || value > settings.MaxSpendUSD):
+		case settings.MaxSpendUSD > 0 && value > settings.MaxSpendUSD:
 			return Limits{}, Refused("chain.max_spend", "", RefusedOverMaximum)
 		case value > platformconfig.MaxChainSpendUSDBound:
 			return Limits{}, Refused("chain.max_spend", "", RefusedOverMaximum)
 		}
 		limits.MaxSpendUSD = value
 	}
-	limits.MaxSpendUSD = math.Round(limits.MaxSpendUSD*10000) / 10000
+	limits.MaxSpendUSD = roundSpend(limits.MaxSpendUSD)
 	if chain.DeadlineSeconds != nil {
 		value := *chain.DeadlineSeconds
 		switch {
@@ -325,6 +338,9 @@ func ResolveLimits(settings platformconfig.UnattendedSettings, chain ChainReques
 	}
 	return limits, nil
 }
+
+// roundSpend rounds a spend to the 4 decimals of run_chains.max_spend_usd.
+func roundSpend(value float64) float64 { return math.Round(value*10000) / 10000 }
 
 // GrantOf is the stored form of an admitted request.
 func GrantOf(request Request, start *CloudStart) Grant {

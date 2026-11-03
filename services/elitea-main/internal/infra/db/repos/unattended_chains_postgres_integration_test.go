@@ -101,8 +101,9 @@ func TestPostgresUnattendedLocalChainLimitAndLedger(t *testing.T) {
 			ProjectID: 1, ActorUserID: user, TokenID: "91", ConversationUUID: conversation,
 			QuestionID: question, UserInput: "work",
 			Unattended: &unattended.Request{
-				GrantID: grantID, ChainRootExecutionID: root, ContinueStepLimit: true,
-				Chain: unattended.ChainRequest{MaxContinuations: int64Pointer(1)},
+				GrantID: grantID, ChainRootExecutionID: root, ContinueStepLimit: true, HookAsks: true,
+				RemoteConfirmations: true,
+				Chain:               unattended.ChainRequest{MaxContinuations: int64Pointer(1)},
 			},
 		})
 	}
@@ -125,6 +126,20 @@ func TestPostgresUnattendedLocalChainLimitAndLedger(t *testing.T) {
 	if second.Unattended == nil || second.Unattended.ContinuationIndex != 1 {
 		t.Fatalf("continuation chain = %+v", second.Unattended)
 	}
+	// A remote confirmation that the grant answered: Main writes its
+	// decision row when it consumes the approval.
+	repo := NewLocalTurnsRepo(pool)
+	confirmed := localturn.ConfirmationCall{ExecutionID: second.ExecutionID, ToolkitID: 61, ApplicationID: 11,
+		VersionID: 12, ToolName: "delete_file", ArgumentsSHA256: strings.Repeat("a", 64)}.Digest()
+	confirmedInterrupt := localturn.ConfirmationInterruptID(confirmed, 0)
+	if outcome, err := repo.ConsumeConfirmation(ctx, localturn.ConfirmationClaim{
+		ExecutionID: second.ExecutionID, CallDigest: confirmed, InterruptID: confirmedInterrupt,
+		IdempotencyKey: "k1", Fresh: true, Source: localturn.SourceGrant,
+		Call: localturn.ConfirmationLedgerCall{ToolName: "delete_file", ToolkitName: "files", ToolkitType: "filesystem"},
+	}); err != nil || !outcome.Accepted {
+		t.Fatalf("grant confirmation = %+v, %v", outcome, err)
+	}
+
 	_, err = start("21111111-2222-4333-8444-555555555553", first.ExecutionID)
 	var limit *unattended.ChainLimitError
 	if !errors.As(err, &limit) || limit.Limit != unattended.LimitContinuations {
@@ -143,7 +158,14 @@ func TestPostgresUnattendedLocalChainLimitAndLedger(t *testing.T) {
 		ProjectID: 1, ActorUserID: user, Credential: localturn.Credential{TokenID: "91"},
 		ExecutionID: second.ExecutionID, UserMessage: "work", AssistantMessage: "done",
 		HITLExchanges: []localturn.HITLExchange{
+			// The confirmed call: the commit writes no second decision row.
+			{InterruptID: "i-confirmed", Kind: "tool_confirmation", Prompt: "delete", Decision: "approve",
+				Source: localturn.SourceGrant},
 			{InterruptID: "i-grant", Kind: "command_approval", Prompt: "rm", Decision: "approve", Source: localturn.SourceGrant},
+			// A grant answer of a kind the grant does not cover: no row, the
+			// commit succeeds.
+			{InterruptID: "i-uncovered", Kind: "question", Prompt: "which", Decision: "approve",
+				Source: localturn.SourceGrant},
 			{InterruptID: "i-timeout", Kind: "question", Prompt: "which", Decision: "answer", Source: localturn.SourceTimeout},
 			{InterruptID: "i-bypass", Kind: "command_approval", Prompt: "ls", Decision: "approve", Source: localturn.SourceBypass},
 			{InterruptID: "i-person", Kind: "command_approval", Prompt: "git", Decision: "reject"},
@@ -153,10 +175,21 @@ func TestPostgresUnattendedLocalChainLimitAndLedger(t *testing.T) {
 	if err != nil || !committed.Created {
 		t.Fatalf("commit = %+v, %v", committed, err)
 	}
-	rows := readApprovalLedger(t, pool, second.ExecutionID)
-	if got := ledgerOutcomes(rows); strings.Join(got, ",") != "decision:approved,decision:timed_out,decision:rejected" {
+	all := readApprovalLedger(t, pool, second.ExecutionID)
+	if got := ledgerOutcomes(all); strings.Join(got, ",") !=
+		"decision:approved,decision:approved,decision:timed_out,decision:rejected" {
 		t.Fatalf("ledger = %v", got)
 	}
+	if all[0].InterruptID != confirmedInterrupt || all[0].Reason != unattended.ReasonUnattendedGrant ||
+		all[0].ToolName != "delete_file" {
+		t.Fatalf("confirmation row = %+v", all[0])
+	}
+	for _, row := range all {
+		if row.InterruptID == "i-confirmed" || row.InterruptID == "i-uncovered" {
+			t.Fatalf("the commit wrote a row for %s: %+v", row.InterruptID, row)
+		}
+	}
+	rows := all[1:]
 	grant := rows[0]
 	if grant.ActorKind != "user" || grant.ActorUserID == nil || *grant.ActorUserID != user ||
 		grant.Reason != unattended.ReasonUnattendedGrant || grant.Path != approvalPathDesktop {
@@ -171,7 +204,7 @@ SELECT grant_id::text FROM elitea_runtime.approval_ledger WHERE execution_id = $
 	if rows[1].ActorKind != "system" || rows[1].Reason != desktopTimeoutReason {
 		t.Fatalf("timeout row = %+v", rows[1])
 	}
-	assertApprovalAudit(t, pool, 1, rows)
+	assertApprovalAudit(t, pool, 1, all)
 	// The chain already ended at its limit: the outcome does not overwrite it.
 	if _, state, _ := chainState(t, pool, first.ExecutionID); state != unattended.EndLimitReached {
 		t.Fatalf("end state = %q", state)

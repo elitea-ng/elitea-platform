@@ -559,9 +559,12 @@ person before the start:
 - The grant implies bypass mode for the rules' asks
   (`bypass_approvals` is not needed). `plan_mode` with `unattended` is
   refused with `invalid_request`, and so is a grant id that is not a UUID,
-  more than 200 continuations, a deadline outside 1 second to 7 days, or a
-  spend that is not more than 0. The platform checks the grant again
-  (`unattended_grant_refused`, the field named in the message).
+  a deadline of 0 seconds, or a spend that is not more than 0. The host
+  does not check the platform's maximums: the platform checks the grant
+  (`422 unattended_grant_refused` with `field` and `reason`), and the error
+  message names the limit, for example "The unattended run's deadline is
+  higher than the platform allows." A continuation keeps the chain's stored
+  limits; the platform ignores the limits it carries again.
 - The grant answers at once what it names. `hook_asks` allows a hook's
   ask (`source: "grant"`). `remote_confirmations` approves a remote
   confirmation; the retry carries `confirmation.source: "grant"`, and the
@@ -588,15 +591,19 @@ person before the start:
   The platform counts the chain and refuses a continuation past a limit
   (`409 chain_limit_reached`). The `done` of a turn the host continues
   carries `continuing: true`: the UI stays busy until `turn_continued` or
-  `chain_ended`. When the next turn has not started 60 seconds after that
-  `done`, the host sends `chain_ended` `failed` itself, and a turn that
-  starts later is cancelled at once.
+  `chain_ended`. The host waits for the commit of the finished turn (a slow
+  commit does not end the chain), then gives the next turn 60 seconds to
+  start. When it has not started by then, the host sends `chain_ended`
+  `cancelled` itself, and a turn that starts later is cancelled at once (the
+  platform's sweep records the chain as `cancelled` too). A start that
+  succeeded first continues the chain.
 - **The end.** The chain's last turn sends `chain_ended {outcome, limit?, message?}`
   after its `done`: `completed` (the agent answered), `failed` (the turn
-  failed, its commit did not land, or the next turn did not start),
+  failed, its commit did not land, or the platform refused the next turn),
   `waiting` (it stopped at a cap the grant does not cover: the person can
   click **Continue**), `limit_reached` (a chain limit refused the next turn;
-  `limit` names it: `continuations`, `spend` or `deadline`) or `cancelled`. The commit of a turn the host does not continue carries
+  `limit` names it: `continuations`, `spend` or `deadline`) or `cancelled`
+  (the turn was cancelled, or the next turn did not start in time). The commit of a turn the host does not continue carries
   the same outcome as `chain_outcome` (not for `limit_reached`, which the
   platform decides, nor for a cancelled turn, which commits nothing).
 - Each unattended turn's first `status` `running` carries `unattended`:

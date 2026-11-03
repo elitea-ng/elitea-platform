@@ -168,11 +168,18 @@ impl Answer {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
+        let code = text("error").unwrap_or_else(|| format!("http_{}", self.status));
+        // A refused unattended grant names the field and the reason: the
+        // person reads which limit the platform refused.
+        let message = if code == super::unattended::GRANT_REFUSED {
+            super::unattended::refusal_message(text("field").as_deref(), text("reason").as_deref())
+        } else {
+            text("message").unwrap_or_else(|| format!("the platform answered HTTP {}", self.status))
+        };
         ApiError {
             status: Some(self.status),
-            code: text("error").unwrap_or_else(|| format!("http_{}", self.status)),
-            message: text("message")
-                .unwrap_or_else(|| format!("the platform answered HTTP {}", self.status)),
+            code,
+            message,
             // Only a known limit name; anything else is dropped.
             limit: text("limit")
                 .filter(|limit| matches!(limit.as_str(), "continuations" | "spend" | "deadline")),
@@ -976,6 +983,26 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The platform owns the chain maximums: its 422 reads well.
+    #[test]
+    fn a_refused_grant_names_the_limit() {
+        let answer = Answer {
+            status: 422,
+            body: json!({"error": "unattended_grant_refused", "reason": "over_maximum",
+                "field": "chain.deadline_seconds", "message": "The unattended grant was refused: over_maximum."}),
+            etag: None,
+        };
+        let error = answer.error();
+        assert_eq!(error.code, "unattended_grant_refused");
+        assert!(
+            error
+                .message
+                .starts_with("The unattended run's deadline is higher than the platform allows."),
+            "{}",
+            error.message
+        );
+    }
 
     #[test]
     fn the_signed_in_user_is_the_authors_id() {

@@ -1,6 +1,23 @@
 /** Pure execution-contract adapters used by `useChatBoxSend`. */
 import { conversationApi } from '@/entities/conversation';
+import type { useUploadAttachments } from '@/entities/conversation';
 import type { ChatStreamContext } from '@/features/chat-messages';
+
+// Derive these types through the public entity API; avoid a cross-slice deep import.
+type UploadAttachments = ReturnType<typeof useUploadAttachments>['uploadAttachments'];
+type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
+export type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
+
+/** The conversation-lifecycle and attachment-upload slices `useChatBoxSend` adapts. */
+export interface SendDeps {
+  readonly createConversation: (input: {
+    name: string;
+    isPrivate: boolean;
+    participants?: readonly unknown[];
+    meta?: Readonly<Record<string, unknown>>;
+  }) => Promise<{ readonly id?: string | number; readonly uuid?: string } | undefined>;
+  readonly uploadAttachments: (input: UploadAttachmentsParams) => Promise<UploadAttachmentsOutcome>;
+}
 
 /**
  * The slice of `useChatBoxSend`'s params this pure module reads. Declared

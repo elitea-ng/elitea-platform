@@ -33,7 +33,15 @@ function GrantDialog({ unattended }: { readonly unattended: Mode }): React.JSX.E
             'In unattended mode the agent runs the sensitive tools that you select without a pause, and it continues the run by itself as this grant allows. A question that the grant does not answer takes its default at once. Your organization’s guardrails, budgets and kill switches still apply.',
           )}
         </DialogContentText>
-        {draft !== null && <UnattendedGrantForm value={draft} onChange={unattended.setDraft} desktop={false} cloud {...(sensitiveTools === undefined ? {} : { sensitiveTools })} />}
+        {draft !== null && (
+          <UnattendedGrantForm
+            value={draft}
+            onChange={unattended.setDraft}
+            desktop={false}
+            cloud
+            {...(sensitiveTools === undefined ? {} : { sensitiveTools })}
+          />
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={unattended.cancel}>{t('workspace.unattended.cancel', 'Cancel')}</Button>

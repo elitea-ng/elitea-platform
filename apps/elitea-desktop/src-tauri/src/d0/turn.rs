@@ -921,8 +921,8 @@ pub struct AgentHost {
     /// The threads' idle compactions (`super::idle`).
     idle: Arc<IdleCompactor>,
     /// How long an unattended chain's next turn may take to start after
-    /// the previous turn's `done` ([`unattended::CONTINUE_WAIT`]; tests
-    /// shorten it), in milliseconds.
+    /// the previous turn's commit lands ([`unattended::CONTINUE_WAIT`];
+    /// tests shorten it), in milliseconds.
     continue_wait_ms: std::sync::atomic::AtomicU64,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
@@ -2879,15 +2879,15 @@ impl AgentHost {
         });
         // The host will start the chain's next turn: `done` says so, and the
         // UI stays busy until `turn_continued` or `chain_ended`. The first of
-        // those to go out takes `gate`; the watchdog below sends
-        // `chain_ended` when neither went out in time.
+        // those to go out takes `gate`. When the commit lands, a watchdog
+        // starts; it sends `chain_ended` when the next turn did not start in
+        // time. A slow commit does not stop the chain.
         let continuing = matches!(chain_step, Some(ChainStep::Continue));
         let mut done = done;
         if continuing {
             done["continuing"] = json!(true);
         }
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watchdog = continuing.then(|| (gate.clone(), events.clone()));
         let job = async move {
             // Nothing of the commit is reported before the turn's `done`.
             let _ = after_done.await;
@@ -2934,6 +2934,7 @@ impl AgentHost {
                 // The chain goes on only from a saved turn.
                 match (chain_step, continuation) {
                     (Some(ChainStep::Continue), Some(next)) if landed => {
+                        host.watch_next_start(gate.clone(), events.clone());
                         tokio::spawn(host.clone().continue_chain(
                             next,
                             events.clone(),
@@ -2984,24 +2985,30 @@ impl AgentHost {
         // reports one that did not land.
         done_entry.finish(&done_events, done);
         let _ = done_sent.send(());
-        if let Some((gate, events)) = watchdog {
-            let wait = Duration::from_millis(
-                self.continue_wait_ms
-                    .load(std::sync::atomic::Ordering::SeqCst),
-            );
-            tokio::spawn(async move {
-                tokio::time::sleep(wait).await;
-                if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    log::warn!("an unattended run's next turn did not start in time");
-                    unattended::chain_ended(
-                        &events,
-                        ChainOutcome::Failed,
-                        None,
-                        Some("The next turn did not start in time, so the unattended run stops."),
-                    );
-                }
-            });
-        }
+    }
+
+    /// The watchdog of a chain's next-turn start. It starts when the
+    /// previous turn's commit lands and covers only the start: when the
+    /// start did not take `gate` in time, the chain ends `cancelled` (the
+    /// late turn is cancelled, and the server's sweep records the chain as
+    /// cancelled too). A start that took `gate` first continues the chain.
+    fn watch_next_start(&self, gate: Arc<std::sync::atomic::AtomicBool>, events: Arc<TurnEvents>) {
+        let wait = Duration::from_millis(
+            self.continue_wait_ms
+                .load(std::sync::atomic::Ordering::SeqCst),
+        );
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                log::warn!("an unattended run's next turn did not start in time");
+                unattended::chain_ended(
+                    &events,
+                    ChainOutcome::Cancelled,
+                    None,
+                    Some("The next turn did not start in time, so the unattended run stops."),
+                );
+            }
+        });
     }
 
     /// Start `next`, the next turn of an unattended chain (ADR-0045

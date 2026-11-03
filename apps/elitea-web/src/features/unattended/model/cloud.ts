@@ -42,7 +42,10 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 
 /** The tool names a version tool entry selects: top-level `selected_tools`, else in its settings or config. */
 function selectedTools(entry: Record<string, unknown>): string[] {
-  const candidates = [entry['selected_tools'], isRecord(entry['settings']) ? entry['settings']['selected_tools'] : undefined, isRecord(entry['config']) && isRecord(entry['config']['settings']) ? entry['config']['settings']['selected_tools'] : undefined];
+  const settings = isRecord(entry['settings']) ? entry['settings'] : {};
+  const config = isRecord(entry['config']) ? entry['config'] : {};
+  const configSettings = isRecord(config['settings']) ? config['settings'] : {};
+  const candidates = [entry['selected_tools'], settings['selected_tools'], configSettings['selected_tools']];
   const list = candidates.find((candidate) => Array.isArray(candidate) && candidate.length > 0);
   return Array.isArray(list) ? list.filter((name): name is string => typeof name === 'string' && name !== '') : [];
 }
@@ -78,12 +81,26 @@ export function grantableTools(versionDetails: unknown): SensitiveToolRef[] {
   return out;
 }
 
+/** The form's name of a refused chain field; any other field as sent. */
+function fieldText(field: string): string {
+  switch (field) {
+    case 'chain.max_continuations':
+      return t('unattended.chain.continuations', 'Most automatic continuations');
+    case 'chain.max_spend':
+      return t('unattended.chain.spend', 'Most spend (USD)');
+    case 'chain.deadline_seconds':
+      return t('unattended.chain.deadline', 'Deadline (hours)');
+    default:
+      return field;
+  }
+}
+
 function reasonText(reason: string, field: string, tool: string): string {
   switch (reason) {
     case 'disabled':
       return t('unattended.refused.disabled', 'An administrator turned off unattended grants.');
     case 'over_maximum':
-      return t('unattended.refused.overMaximum', 'The value of {{field}} is more than the platform maximum.', { field });
+      return t('unattended.refused.overMaximum', '{{field}}: the value is more than the platform maximum. Type a lower value.', { field: fieldText(field) });
     case 'not_owner':
       return t('unattended.refused.notOwner', 'Only the person who starts the run can give the grant.');
     case 'origin_not_allowed':
@@ -97,7 +114,7 @@ function reasonText(reason: string, field: string, tool: string): string {
     case 'chain_not_found':
       return t('unattended.refused.chainNotFound', 'The run chain of this grant does not exist.');
     default:
-      return t('unattended.refused.invalid', 'The value of {{field}} is not valid.', { field: field === '' ? reason : field });
+      return t('unattended.refused.invalid', 'The value of {{field}} is not valid.', { field: field === '' ? reason : fieldText(field) });
   }
 }
 

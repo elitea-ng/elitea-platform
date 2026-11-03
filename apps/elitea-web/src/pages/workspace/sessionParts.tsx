@@ -332,7 +332,10 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
   const slots = turnSlots(turns);
   const exchanges = turns.map((entry, index) => {
     const slot = slots[index] ?? { prompt: index };
-    const prompt = 'prompt' in slot ? { prompt: prompts[slot.prompt], images: promptImages[slot.prompt], continuation: undefined } : { prompt: undefined, images: undefined, continuation: slot.continuation };
+    const prompt =
+      'prompt' in slot
+        ? { prompt: prompts[slot.prompt], images: promptImages[slot.prompt], continuation: undefined }
+        : { prompt: undefined, images: undefined, continuation: slot.continuation };
     return { key: entry.turnId, view: entry.view, live: entry.turnId === turn.turnId, ...prompt };
   });
   return (

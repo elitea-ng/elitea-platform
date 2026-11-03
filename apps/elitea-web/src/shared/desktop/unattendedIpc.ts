@@ -7,11 +7,11 @@
 
 /** The chain limits of a grant. An absent field takes the platform default (20 continuations, the per-run cap x10, 12 h). */
 export interface UnattendedChain {
-  /** A whole number from 0 to 200. */
+  /** A whole number from 0; the platform sets the maximum. */
   max_continuations?: number;
   /** US dollars, above 0, at most 4 decimals. */
   max_spend?: number;
-  /** From 1 second to 7 days. */
+  /** At least 1 second; the platform sets the maximum. */
   deadline_seconds?: number;
 }
 

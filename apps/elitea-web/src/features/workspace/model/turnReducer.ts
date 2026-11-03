@@ -20,7 +20,15 @@ import type { PlanProposalPayload, PlanView } from '@/shared/desktop/planIpc';
 import type { TurnModel } from '@/shared/desktop/turnModel';
 import type { AgentEvent, ApprovalRequestPayload, ContextMeter, TurnPhase } from '@/shared/desktop/workspaceIpc';
 
-import { applyChainEvent, continuedTurn, isChainEvent, withChainStatus, type ChainEvent, type ChainView } from './chainEvents';
+import {
+  applyChainEvent,
+  continuedTurn,
+  isChainEvent,
+  withChainStatus,
+  type ChainEvent,
+  type ChainView,
+} from './chainEvents';
+import { appended, compact, type StoredEvent } from './storedEvents';
 import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { SteerView } from './steeringEvents';
@@ -36,7 +44,8 @@ interface TurnDone {
   conversationId: string;
   messageIds: string[];
   changedFiles: number;
-  /** The host starts the chain's next turn by itself. */ continuing?: true;
+  /** The host starts the chain's next turn by itself. */
+  continuing?: true;
 }
 
 export interface TurnView extends SteerView, ChainView {
@@ -70,9 +79,6 @@ export interface TurnView extends SteerView, ChainView {
   /** A model call is made again (`model_retry`): shown until the model streams again or the turn ends. */
   retrying?: RetryingView;
 }
-
-/** A stored event; a merged text run covers the seqs `seq..last`, each seen. */
-type StoredEvent = AgentEvent & { last: number };
 
 interface TurnRecord {
   events: StoredEvent[];
@@ -195,8 +201,20 @@ function onApprovalRequest(view: TurnView, event: EventOf<'approval_request'>, r
 }
 
 function onDone(view: TurnView, event: EventOf<'done'>): TurnView {
-  const { committed, conversation_id: conversationId, message_ids: messageIds, changed_files: changedFiles, continuing } = event.payload;
-  const done: TurnDone = { committed, conversationId, messageIds, changedFiles, ...(continuing === true ? { continuing } : {}) };
+  const {
+    committed,
+    conversation_id: conversationId,
+    message_ids: messageIds,
+    changed_files: changedFiles,
+    continuing,
+  } = event.payload;
+  const done: TurnDone = {
+    committed,
+    conversationId,
+    messageIds,
+    changedFiles,
+    ...(continuing === true ? { continuing } : {}),
+  };
   return withoutProposal({ ...view, done, approvals: [] });
 }
 
@@ -256,31 +274,6 @@ function fold(events: readonly AgentEvent[], resolved: readonly string[]): TurnV
   return events.reduce((view, event) => applyEvent(view, event, resolved), EMPTY_VIEW);
 }
 
-function lastSeq(event: AgentEvent | StoredEvent): number {
-  return 'last' in event ? event.last : event.seq;
-}
-
-type DeltaEvent = EventOf<'text_delta'> | EventOf<'thinking_delta'>;
-
-const isDelta = (event: AgentEvent | undefined): event is DeltaEvent => event?.kind === 'text_delta' || event?.kind === 'thinking_delta';
-
-/** `event` merged onto `run` when it is a delta (or run) of the run's kind directly following it; otherwise null. */
-function extendRun(run: StoredEvent | undefined, event: AgentEvent | StoredEvent): StoredEvent | null {
-  if (run === undefined || !isDelta(run) || !isDelta(event) || run.kind !== event.kind || event.seq !== run.last + 1) return null;
-  return { ...run, payload: { text: run.payload.text + event.payload.text }, last: lastSeq(event) };
-}
-
-/** Sorted events (unique seqs) as stored: contiguous text deltas merged into runs. */
-function compact(events: readonly (AgentEvent | StoredEvent)[]): StoredEvent[] {
-  const out: StoredEvent[] = [];
-  for (const event of events) {
-    const merged = extendRun(out[out.length - 1], event);
-    if (merged === null) out.push({ ...event, last: lastSeq(event) });
-    else out[out.length - 1] = merged;
-  }
-  return out;
-}
-
 /** `view` without a commit failure a retry has since saved. */
 function withoutSaved(view: TurnView, savedThrough: number | undefined): TurnView {
   if (view.commitFailed === undefined || savedThrough === undefined || view.commitFailed.seq > savedThrough) return view;
@@ -306,11 +299,6 @@ function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
  */
 export function replayView(events: readonly AgentEvent[]): TurnView {
   return withoutProposal({ ...fold(sortedUnique(events), []), approvals: [] });
-}
-
-function appended(events: readonly StoredEvent[], event: AgentEvent): StoredEvent[] {
-  const merged = extendRun(events[events.length - 1], event);
-  return merged === null ? [...events, { ...event, last: event.seq }] : [...events.slice(0, -1), merged];
 }
 
 /** Keep `turnId` as the most recently heard unclaimed turn; forget the oldest past the bound. */

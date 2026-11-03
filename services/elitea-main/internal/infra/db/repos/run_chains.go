@@ -71,11 +71,7 @@ WITH chain AS MATERIALIZED (
     WHERE root_execution_id = $1 AND owner_user_id = $2 AND grant_id = $3::uuid AND project_id = $4
       AND conversation_uuid = $8::uuid
 ), spent AS MATERIALIZED (
-    SELECT coalesce(sum(
-               CASE WHEN l.operation = 'tool' THEN coalesce(l.cost_usd, 0)
-                    ELSE l.prompt_tokens::numeric * coalesce(m.input_cost_per_1m_tokens, 0) / 1000000
-                       + l.completion_tokens::numeric * coalesce(m.output_cost_per_1m_tokens, 0) / 1000000
-               END), 0) AS usd
+    SELECT coalesce(sum(` + requestLogCostSQL + `), 0) AS usd
     FROM chain AS c
     JOIN elitea_runtime.run_chain_links AS k ON k.root_execution_id = c.root_execution_id
     JOIN gateway.llm_request_logs AS l

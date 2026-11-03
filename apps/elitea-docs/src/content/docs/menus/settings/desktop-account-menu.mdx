@@ -65,11 +65,11 @@ Use **Unattended** to start a long task and walk away. When you pick the mode, t
 | **Continue after 512 tool calls** | The turn's tool-call cap. The app starts the next turn by itself. | The turn stops; select **Continue**. |
 | **Hook asks** | A `PreToolUse` hook that asks for your approval: the call runs. | The call is declined. |
 | **Remote toolkit confirmations** | A toolkit that asks you to confirm a call: the call runs. | The call is declined. |
-| **Chain limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). | Platform defaults. |
+| **Chain limits** | At most this many automatic continuations, this spend in US dollars and this many hours. Empty fields use the platform's defaults (20 continuations, 10 × the project's per-run spend cap, 12 hours). Your administrator sets the maximums. If a value is too high, the platform refuses the grant and the app tells you which limit to lower. | Platform defaults. |
 
 - An unattended turn also runs in bypass mode: what your approval rules would ask runs without the question. The policy, every deny rule, the sandbox and the budgets still apply.
 - A question the grant does not answer takes its default at once. An MCP sign-in fails, so sign in to the MCP servers before you start.
-- Each turn the app starts by itself shows **Continued automatically** at its top. The message box stays busy between the turns. The last turn shows how the run ended: completed, failed, waiting for you, stopped at a chain limit (and which one), or cancelled. If the next turn does not start within a minute, the run ends as failed.
+- Each turn the app starts by itself shows **Continued automatically** at its top. The message box stays busy between the turns. The last turn shows how the run ended: completed, failed, waiting for you, stopped at a chain limit (and which one), or cancelled. After a turn is saved, the next turn must start within a minute; if it does not, the run ends as cancelled. A slow save does not end the run. If your administrator turns unattended runs off, the run stops at its next continuation.
 - Every answer is saved with the thread, with who gave it: you, the grant, bypass mode, or nobody (the wait ran out).
 
 Questions also have a time limit when you are there: an approval waits 30 minutes, a toolkit confirmation 15 minutes and "Continue?" 10 minutes. After that the call is declined, or the turn stops.

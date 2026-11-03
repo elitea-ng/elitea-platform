@@ -84,5 +84,13 @@ export function useChatBoxParticipant({
   const versionDetails = participantForEditor === undefined ? undefined : rawParticipantDetails['version_details'];
   const tools = useMemo(() => (versionDetails === undefined ? undefined : grantableTools(versionDetails)), [versionDetails]);
 
-  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools: tools };
+  return {
+    participantForEditor,
+    normalisedParticipants,
+    agentEditorParticipantDetails,
+    isFetchingParticipantDetails,
+    assistantName,
+    areAttachmentsGated,
+    grantableTools: tools,
+  };
 }

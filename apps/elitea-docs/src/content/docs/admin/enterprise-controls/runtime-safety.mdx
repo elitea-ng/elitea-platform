@@ -529,8 +529,8 @@ A long task can stop many times: at a sensitive tool, at the step limit, or at t
 | `reason` | Cause |
 | --- | --- |
 | `disabled` | **Unattended Grants** is off. |
-| `invalid` | The grant has a wrong shape, or a cloud grant sets a desktop-only part. |
-| `over_maximum` | A chain limit is above the platform maximum. |
+| `invalid` | The grant has a wrong shape, or a cloud grant sets a desktop-only part. A `max_spend` of 0, a negative `max_spend` or a `max_spend` that rounds to 0 at 4 decimals is `invalid`: 0 would mean "no spend limit". |
+| `over_maximum` | A chain limit is above the platform maximum. The platform owns the maximums: the desktop app and the web UI check only that a value makes sense, and show this refusal. |
 | `tool_not_resolved` | The tool is not a tool of the turn's own toolkits. |
 | `category_withheld` | The tool's category is in **Categories a Grant Cannot Name** (default: `payment`). |
 | `tier_requires_hitl` | The approval policy requires approval for the agent's risk tier and the tool's category. |
@@ -541,7 +541,7 @@ The platform never narrows a grant. One refused pair refuses the start.
 
 **The cloud workspace's push and pull request tools.** In a thread handed off to the cloud executor, the agent can push its branch and open a pull request (GitHub) or merge request (GitLab). These two tools are not in the agent's toolkits, so a grant names them with the toolkit name `workspace`: `workspace`/`git_push` and `workspace`/`open_pull_request`. They ask for approval only when the cloud executor setting asks before each push and pull request. A grant can name them only on a turn in a thread handed off to the cloud executor. On any other turn the platform refuses them as `tool_not_resolved`. The ledger row of a granted push or pull request names the toolkit `workspace`.
 
-**Each grant approval is a ledger row.** When the worker reaches a granted tool, it approves the call in-line and reports it. Main checks the report against the stored grant and writes a `decision` row: outcome `approved`, `actor_kind` `user`, the actor is the person who gave the grant, the reason is `unattended_grant`, and `grant_id` names the grant. A report for a tool that the grant does not name is refused. On the desktop, the commit of each turn records each answered question with its source: `grant` (the same row as above), `timeout` (`timed_out`, reason `desktop_timeout`) or `person`. A `bypass` answer asks no question and has no row.
+**Each grant approval is a ledger row.** When the worker reaches a granted tool, it approves the call in-line and reports it. Main checks the report against the stored grant and writes a `decision` row: outcome `approved`, `actor_kind` `user`, the actor is the person who gave the grant, the reason is `unattended_grant`, and `grant_id` names the grant. A report for a tool that the grant does not name is refused. On the desktop, the commit of each turn records each answered question with its source: `grant` (the same row as above), `timeout` (`timed_out`, reason `desktop_timeout`) or `person`. A `bypass` answer asks no question and has no row. An approved remote toolkit confirmation has its row when Main consumes the approval, so the commit writes no second row for it. A `grant` answer must be one that the stored grant gives: a hook's ask needs `hook_asks`, and "Continue?" needs `continue_step_limit`. For any other `grant` answer, Main writes no row and logs a warning; the commit still saves the turn.
 
 **A chain has limits.** Each continuation passes one database statement that checks the limits and adds the continuation. Two continuations cannot both take the last place. A continuation that a limit refuses ends the chain with the state `limit_reached` and the limit (`continuations`, `spend` or `deadline`). The desktop gets HTTP 409 `chain_limit_reached` with `limit`.
 
@@ -556,6 +556,10 @@ The platform never narrows a grant. One refused pair refuses the start.
 - at the output limit, and the grant has `continue_output_limit`: Main continues the same answer;
 - at the step limit, and the grant has `continue_step_limit`: Main adds the question "Continue from where you stopped." and starts the next turn;
 - in any other way: Main ends the chain as `completed`, `failed`, `waiting` (a pause waits for a person) or `cancelled`.
+
+Before each continuation, Main reads **Unattended Grants** again. When an administrator turned it off, Main does not start the continuation, and the chain ends as `cancelled`. A desktop continuation is refused with HTTP 422 `unattended_grant_refused`, reason `disabled`.
+
+A continuation always keeps the chain's stored limits. The limits that a desktop continuation sends again are ignored, so a maximum that an administrator lowers while a chain runs does not stop that chain.
 
 Each continued question and answer has `meta.continued_automatically` true and `meta.unattended` (`grant_id`, `chain_root_execution_id`, `continuation_index`).
 
@@ -576,7 +580,9 @@ Open **Configuration › Approvals** (permission `configuration.governance`):
 | **Chain: Default Deadline (hours)** | `approvals.chain_default_deadline_hours` | 12 | 1 to 720 |
 | **Chain: Maximum Deadline (hours)** | `approvals.chain_max_deadline_hours` | 168 | 1 to 720 |
 
-A default above its maximum is refused with HTTP 400. Turn **Unattended Grants** off to refuse every new grant. Chains that already started keep their stored limits.
+A default above its maximum is refused with HTTP 400. Turn **Unattended Grants** off to refuse every new grant and to stop every running chain at its next continuation (the chain ends as `cancelled`). Chains that already started keep their stored limits.
+
+The chain's spend uses the same price formula as the per-run spend cap and the agent circuit breaker: a metered tool call costs what the gateway billed, and a model call costs its tokens at the price catalogue rate.
 
 ### Evidence
 
