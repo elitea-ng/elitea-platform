@@ -58,15 +58,7 @@ SELECT j.command_id, j.desired_state, j.state, j.invocation_state,
        o.deadline <= clock_timestamp(),
        o.authority_granted_at IS NOT NULL,
        j.projection_project_id,
-       -- FU-250: a fanout_wake whose response holds an authorize decision
-       -- (over-approximated: any authorize recorded on the response).
-       EXISTS (
-         SELECT 1
-         FROM elitea_runtime.execution_interrupt_wakes wake
-         JOIN elitea_runtime.execution_interrupts card ON card.root_response_id = wake.root_response_id
-         WHERE wake.wake_execution_id = j.execution_id
-           AND card.decision_json IS NOT NULL
-           AND convert_from(card.decision_json, 'UTF8')::jsonb ->> 'action' = 'authorize')
+       `+wakeCredentialsSQL+`
 FROM elitea_runtime.execution_jobs AS j
 JOIN elitea_runtime.command_outbox AS o
   ON o.execution_id = j.execution_id AND o.generation = j.generation
@@ -1261,3 +1253,15 @@ func randomFenceToken() (runtimedomain.FenceToken, error) {
 }
 
 var _ executionapp.ClaimRepository = (*ClaimsRepository)(nil)
+
+// wakeCredentialsSQL is true for a fanout_wake job (alias j) whose response
+// holds an `authorize` decision (FU-250): its input may carry
+// mcp_token_references, so only a worker that opts in may claim it. It
+// over-approximates (any authorize recorded on the response), never under.
+const wakeCredentialsSQL = `EXISTS (
+         SELECT 1
+         FROM elitea_runtime.execution_interrupt_wakes wake
+         JOIN elitea_runtime.execution_interrupts card ON card.root_response_id = wake.root_response_id
+         WHERE wake.wake_execution_id = j.execution_id
+           AND card.decision_json IS NOT NULL
+           AND convert_from(card.decision_json, 'UTF8')::jsonb ->> 'action' = 'authorize')`

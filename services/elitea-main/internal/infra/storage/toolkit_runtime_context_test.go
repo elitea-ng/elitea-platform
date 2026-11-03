@@ -3,10 +3,14 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"strings"
 	"testing"
+
+	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 type toolkitTokenLoader struct {
@@ -91,5 +95,81 @@ func TestToolkitContextRedeemsOnlyExactClaimAuthorization(t *testing.T) {
 				t.Fatal("invalid authorization reached token loader")
 			}
 		})
+	}
+}
+
+// FU-250 (E1, revocation window): a fan-out wake's mcp_token_references
+// resolve through the one release path for the live claim's project and
+// actor only, project into mcp_tokens under their resource, and never leave
+// Main; a grant that no longer resolves is dropped (the Worker ends that
+// branch typed); a malformed or duplicate entry refuses the content.
+func TestAgentWakeReferencesResolveForTheClaimActorOnly(t *testing.T) {
+	resource := "https://mcp.example.test/"
+	reference := strings.Repeat("a", 43)
+	wake := func(references ...*runtimev1.McpTokenReferenceV1) []byte {
+		request := currentAgentMaterializationRequest(`[]`)
+		request.McpTokenReferences = references
+		source, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	entry := func(resource string, toolkit, revision uint64) *runtimev1.McpTokenReferenceV1 {
+		return &runtimev1.McpTokenReferenceV1{Resource: resource, Reference: reference, Revision: revision, ToolkitId: toolkit}
+	}
+	authorization := ContentAuthorization{ResourceProjectID: "7", ActorID: "42",
+		CapabilityID: executiondomain.AgentAdhocCapability, SemanticRole: executiondomain.AgentExecutionRequestRole}
+	materialize := func(loader *toolkitTokenLoader, source []byte) (*runtimev1.AgentExecutionInputV1, []byte, error) {
+		materializer := newCurrentConfigurationsMaterializerForTest(t, &currentMaterializationUnsecreterStub{})
+		materializer.toolkitTokens = loader
+		result, err := materializer.MaterializeContent(context.Background(), authorization, source, 256*1024)
+		if err != nil {
+			return nil, nil, err
+		}
+		var input runtimev1.AgentExecutionInputV1
+		if err := proto.Unmarshal(result, &input); err != nil {
+			t.Fatal(err)
+		}
+		return &input, result, nil
+	}
+
+	// The claim's own project and actor, the entry's toolkit and resource.
+	loader := &toolkitTokenLoader{want: mcpoauth.TokenBinding{ProjectID: 7, ActorID: 42, ToolkitID: 19, Resource: resource}, revision: 1}
+	input, raw, err := materialize(loader, wake(entry(resource, 19, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tokens map[string]map[string]string
+	if json.Unmarshal(input.GetMcpTokens(), &tokens) != nil || tokens[resource]["access_token"] != "transient-token" ||
+		len(input.GetMcpTokenReferences()) != 0 || strings.Contains(string(raw), reference) {
+		t.Fatalf("resolved wake input: tokens=%s references=%v", input.GetMcpTokens(), input.GetMcpTokenReferences())
+	}
+
+	// Another actor's grant (the binding does not match) and a revoked one
+	// are dropped, never projected.
+	for _, loader := range []*toolkitTokenLoader{
+		{want: mcpoauth.TokenBinding{ProjectID: 7, ActorID: 43, ToolkitID: 19, Resource: resource}, revision: 1},
+		{want: mcpoauth.TokenBinding{ProjectID: 7, ActorID: 42, ToolkitID: 19, Resource: resource}, revision: 1, revoked: true},
+	} {
+		input, raw, err := materialize(loader, wake(entry(resource, 19, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(input.GetMcpTokens()) != `{}` || len(input.GetMcpTokenReferences()) != 0 ||
+			strings.Contains(string(raw), "transient-token") || loader.loads != 0 {
+			t.Fatalf("an unresolvable grant reached the input: %s loads=%d", input.GetMcpTokens(), loader.loads)
+		}
+	}
+
+	// Malformed or duplicate entries refuse the content.
+	for name, source := range map[string][]byte{
+		"zero toolkit":       wake(entry(resource, 0, 1)),
+		"zero revision":      wake(entry(resource, 19, 0)),
+		"duplicate resource": wake(entry(resource, 19, 1), entry(resource, 19, 1)),
+	} {
+		if _, _, err := materialize(loader, source); !errors.Is(err, ErrContentRejected) {
+			t.Fatalf("%s: %v", name, err)
+		}
 	}
 }
