@@ -115,6 +115,10 @@ pub(crate) struct SensitiveToolCatalog {
     /// The run's untrusted reads (ADR-0043 decision 4), when the catalog
     /// holds "read untrusted, then act" candidates.
     untrusted: Option<Arc<elitea_agent_runtime::untrusted::UntrustedReads>>,
+    /// The run's unattended grant, kept so that tools added after it was
+    /// applied (the cloud workspace's `git_push` and `open_pull_request`)
+    /// are granted too.
+    unattended_grant: Option<Arc<UnattendedGrant>>,
     /// Test-only: how often the unqualified names were rebuilt (budget test).
     #[cfg(test)]
     rebuilds: usize,
@@ -202,6 +206,7 @@ impl SensitiveToolCatalog {
         let Some(grant) = grant.filter(|grant| grant.has_sensitive_tools()) else {
             return self;
         };
+        self.unattended_grant = Some(Arc::new(grant.clone()));
         for (identity, entry) in &mut self.scoped_entries {
             if !entry.conditional && grant.names_tool(&identity.toolkit_name, &identity.tool_name) {
                 entry.granted = Some(GrantedApproval::new(
@@ -312,11 +317,19 @@ impl SensitiveToolCatalog {
             }
         }
         for (tool, policy) in tools {
+            // ADR-0045: a grant names these as `workspace/git_push` and
+            // `workspace/open_pull_request`, the toolkit name their pauses
+            // and the grant approval event carry.
+            let granted = self
+                .unattended_grant
+                .as_ref()
+                .filter(|grant| grant.names_tool(TOOLKIT, tool))
+                .map(|grant| GrantedApproval::new(Arc::clone(grant.grant_id()), TOOLKIT, tool));
             let entry = SensitiveToolEntry {
                 policy,
                 read_only: false,
                 conditional: false,
-                granted: None,
+                granted,
             };
             let identity = SensitiveToolIdentity {
                 toolkit_name: TOOLKIT.into(),
@@ -665,6 +678,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
+    use super::super::unattended::{GrantedApproval, UnattendedGrant};
     use adk_rust::tool::{BasicToolset, FunctionTool};
     use adk_rust::{Tool, Toolset};
     use elitea_agent_runtime::approval_policy::ApprovalPolicy;
@@ -968,6 +982,40 @@ mod tests {
                 .with_other_tool("kit", "open_pull_request", false)
                 .with_workspace_pull_request()
                 .is_err()
+        );
+    }
+
+    /// ADR-0045: the workspace `git_push` and `open_pull_request` are added
+    /// after the grant is applied; a grant that names them as
+    /// `workspace/<tool>` still approves them, and one that does not leaves
+    /// them paused.
+    #[test]
+    fn a_grant_applied_before_the_workspace_tools_approves_them() {
+        let grant = UnattendedGrant::fixture(&[("workspace", "git_push")], false);
+        let catalog = SensitiveToolCatalog::default()
+            .with_unattended_grant(Some(&grant))
+            .with_workspace_pull_request()
+            .expect("pull request");
+        let granted = catalog.granted_for("git_push").expect("git_push granted");
+        assert_eq!(
+            granted,
+            &GrantedApproval::new(Arc::clone(grant.grant_id()), "workspace", "git_push")
+        );
+        assert!(catalog.granted_for("open_pull_request").is_none());
+        assert!(catalog.policy_for("open_pull_request").is_some());
+
+        let other = UnattendedGrant::fixture(&[("github", "open_pull_request")], false);
+        let catalog = SensitiveToolCatalog::default()
+            .with_unattended_grant(Some(&other))
+            .with_workspace_pull_request()
+            .expect("pull request");
+        assert!(catalog.granted_for("open_pull_request").is_none());
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_workspace_pull_request()
+                .expect("pull request")
+                .granted_for("git_push")
+                .is_none()
         );
     }
 

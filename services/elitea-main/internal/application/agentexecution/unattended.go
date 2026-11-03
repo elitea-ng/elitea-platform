@@ -128,7 +128,10 @@ type unattendedTarget struct {
 	responseMessageID string
 	questionID        string
 	triggerOrigin     executiondomain.TriggerOrigin
-	start             *unattended.CloudStart
+	// cloudWorkspace: the conversation is a thread handed off to the cloud
+	// executor, so the turn has the workspace tools.
+	cloudWorkspace bool
+	start          *unattended.CloudStart
 }
 
 var unattendedGrantNamespace = uuid.MustParse("4f8f6a52-1c55-4d77-9a0e-7b7f0c3c2b61")
@@ -306,6 +309,9 @@ func admitSensitiveTools(
 	for _, tool := range tools {
 		name := tool.ToolkitName + "/" + tool.ToolName
 		toolkit, ok := resolvedGrantToolkit(toolkits, tool)
+		if !ok && target.cloudWorkspace && workspaceGrantTool(tool) {
+			toolkit, ok = frozenGrantToolkit{Type: workspaceGrantToolkit, ToolkitName: workspaceGrantToolkit}, true
+		}
 		if !ok {
 			return unattended.Refused("sensitive_tools", name, unattended.RefusedToolNotResolved)
 		}
@@ -318,6 +324,21 @@ func admitSensitiveTools(
 		}
 	}
 	return nil
+}
+
+// workspaceGrantToolkit is the toolkit name of the cloud workspace's
+// pull-request tools: their pauses, the worker's grant approval event and a
+// grant all name them workspace/git_push and workspace/open_pull_request.
+const workspaceGrantToolkit = "workspace"
+
+// workspaceGrantTool reports one of the cloud workspace's pull-request
+// tools. They are not in the frozen toolkit set: the worker adds them to a
+// turn of a thread handed off to the cloud executor (ADR-0034 decision 10),
+// and they pause only when the project's policy asks before each push and
+// pull request. A grant names them only for such a thread.
+func workspaceGrantTool(tool unattended.Tool) bool {
+	return tool.ToolkitName == workspaceGrantToolkit &&
+		(tool.ToolName == "git_push" || tool.ToolName == "open_pull_request")
 }
 
 // resolvedGrantToolkit finds the toolkit a named tool belongs to: the

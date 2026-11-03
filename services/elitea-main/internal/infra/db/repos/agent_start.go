@@ -334,9 +334,13 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 	if err != nil {
 		return agentexecutionapp.CurrentApplicationTarget{}, agentexecutionapp.ErrInvalidCurrentAgentStart
 	}
-	var target agentexecutionapp.CurrentApplicationTarget
+	var (
+		target         agentexecutionapp.CurrentApplicationTarget
+		cloudWorkspace bool
+	)
 	resolve := func() error {
 		target = agentexecutionapp.CurrentApplicationTarget{}
+		cloudWorkspace = false
 		// The catalogue version is read in its OWN short transaction after this
 		// one closes, never nested inside it: two pool connections held at once
 		// per turn start is a deadlock waiting for a busy pool, and the second
@@ -347,9 +351,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
+				handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor)
+				if err != nil {
 					return err
 				}
+				cloudWorkspace = handedOff
 				queries, ok := tx.(currentApplicationStartQuerier)
 				if !ok {
 					return errors.New("current agent start query is unavailable")
@@ -533,6 +539,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 	); err != nil {
 		return agentexecutionapp.CurrentApplicationTarget{}, err
 	}
+	target.CloudWorkspace = cloudWorkspace
 	return target, nil
 }
 
@@ -791,17 +798,23 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 	if err != nil {
 		return agentexecutionapp.CurrentAdhocTarget{}, agentexecutionapp.ErrInvalidCurrentAgentStart
 	}
-	var target agentexecutionapp.CurrentAdhocTarget
+	var (
+		target         agentexecutionapp.CurrentAdhocTarget
+		cloudWorkspace bool
+	)
 	resolve := func() error {
 		target = agentexecutionapp.CurrentAdhocTarget{}
+		cloudWorkspace = false
 		return repository.projects.WithinProjectTx(
 			ctx,
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				if _, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor); err != nil {
+				handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor)
+				if err != nil {
 					return err
 				}
+				cloudWorkspace = handedOff
 				queries, ok := tx.(currentAdhocStartQuerier)
 				if !ok {
 					return errors.New("current agent start query is unavailable")
@@ -861,6 +874,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 	); err != nil {
 		return agentexecutionapp.CurrentAdhocTarget{}, err
 	}
+	target.CloudWorkspace = cloudWorkspace
 	return target, nil
 }
 

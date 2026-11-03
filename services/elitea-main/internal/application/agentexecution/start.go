@@ -118,6 +118,11 @@ type CurrentApplicationTarget struct {
 	// of the catalogue. When set, VersionDetails and SourceVersionDetails
 	// are the release's definition.
 	Release *ReleaseRun
+	// CloudWorkspace: the conversation is a desktop Local work thread
+	// handed off to the cloud executor (CLOUD_IDLE). Its turn has the
+	// workspace tools, so an unattended grant may name workspace/git_push
+	// and workspace/open_pull_request (ADR-0045).
+	CloudWorkspace bool
 }
 
 type CurrentApplicationResolver interface {
@@ -395,7 +400,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		projectID: request.ProjectID, actorUserID: request.ActorUserID, applicationID: target.ApplicationID,
 		conversationUUID: request.ConversationUUID, grantKey: request.QuestionID,
 		responseMessageID: responseMessageID, questionID: request.QuestionID,
-		triggerOrigin: request.TriggerOrigin,
+		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
 		start: &unattended.CloudStart{
 			Contract: CloudStartContractApplication, ParticipantID: request.TargetParticipantID,
 		},
