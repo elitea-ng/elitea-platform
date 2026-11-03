@@ -6,7 +6,8 @@
 //! it. The brief is kept for the chain, in memory with the chain's turns,
 //! and in the turn's resume record
 //! (`crate::history::ResumeRecord`): a chain the host continues after a
-//! restart keeps its brief and its last check ([`ChainGoal::restored`]).
+//! restart keeps its brief, its last check and its turns' transcript
+//! ([`ChainGoal::restored`]).
 //! Main's `run_brief` answers the stored brief again when asked twice.
 //!
 //! With a ready brief every continuation's text restates it
@@ -383,10 +384,15 @@ fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl ChainGoal {
     /// A chain's goal as its resume record kept it (ADR-0045 decision 7):
-    /// the brief settled when it was ready, the last check and the
-    /// request. The turns' transcript before the restart is not kept.
+    /// the brief settled when it was ready, the last check, the request
+    /// and the turns' transcript ([`Self::transcript`]) before the restart.
     #[must_use]
-    pub fn restored(brief: Option<Brief>, last_check: Option<GoalCheck>, request: &str) -> Self {
+    pub fn restored(
+        brief: Option<Brief>,
+        last_check: Option<GoalCheck>,
+        request: &str,
+        transcript: &str,
+    ) -> Self {
         let goal = Self::default();
         if let Some(brief) = brief {
             goal.settle(BriefAnswer {
@@ -398,7 +404,15 @@ impl ChainGoal {
             goal.set_last_check(check);
         }
         goal.set_request(request);
+        tail(transcript, EXCERPT_BYTES).clone_into(&mut locked(&goal.log));
         goal
+    }
+
+    /// The turns' transcript so far (newest kept, at most
+    /// [`EXCERPT_BYTES`]), as a resume record keeps it.
+    #[must_use]
+    pub fn transcript(&self) -> String {
+        locked(&self.log).clone()
     }
 
     /// The last goal check, when one was made.

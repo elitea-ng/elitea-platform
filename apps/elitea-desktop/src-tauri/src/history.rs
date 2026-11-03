@@ -66,7 +66,8 @@
 //!         continuation_index INTEGER, kind TEXT NULL, execution_id TEXT,
 //!         last_committed_execution_id TEXT NULL, request TEXT NULL,
 //!         brief TEXT NULL, last_check TEXT NULL /* JSON */,
-//!         started_at, updated_at, deadline_at INTEGER /* Unix ms */)
+//!         started_at, updated_at, deadline_at INTEGER /* Unix ms */,
+//!         transcript TEXT NULL /* the goal check's turns, ≤ 32 KiB */)
 //! ```
 //!
 //! `resume_turns` (schema 4, ADR-0045 decision 7) holds one record per
@@ -180,7 +181,8 @@ CREATE TABLE IF NOT EXISTS resume_turns (
     last_check TEXT,
     started_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    deadline_at INTEGER NOT NULL
+    deadline_at INTEGER NOT NULL,
+    transcript TEXT
 );
 ";
 
@@ -254,6 +256,18 @@ pub struct ResumeRecord {
     pub updated_at: i64,
     /// Unix ms: past it the record is dropped, not resumed.
     pub deadline_at: i64,
+    /// The chain's goal-check transcript of its turns so far (newest kept,
+    /// at most 32 KiB), so a check after the restart sees them too.
+    pub transcript: Option<String>,
+}
+
+/// What a commit that continues the chain updates in its resume record:
+/// the chain's goal state (JSON for the brief and the check).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResumeProgress {
+    pub brief: Option<Value>,
+    pub last_check: Option<Value>,
+    pub transcript: Option<String>,
 }
 
 /// A write to the resume records, in the writer's order.
@@ -266,6 +280,7 @@ enum ResumeWrite {
         execution_id: String,
         brief: Option<String>,
         last_check: Option<String>,
+        transcript: Option<String>,
     },
     /// The turn ended (only its own record goes).
     Delete {
@@ -1367,21 +1382,21 @@ impl HistoryStore {
     }
 
     /// The record's turn committed and its chain goes on: the last
-    /// committed step, the brief and the last goal check.
+    /// committed step, the brief, the last goal check and the transcript.
     pub fn resume_committed(
         &self,
         workspace_id: &str,
         turn_id: &str,
         execution_id: &str,
-        brief: Option<&Value>,
-        last_check: Option<&Value>,
+        progress: ResumeProgress,
     ) {
         self.send(Op::Resume(ResumeWrite::Committed {
             workspace_id: workspace_id.to_owned(),
             turn_id: turn_id.to_owned(),
             execution_id: execution_id.to_owned(),
-            brief: brief.map(Value::to_string),
-            last_check: last_check.map(Value::to_string),
+            brief: progress.brief.as_ref().map(Value::to_string),
+            last_check: progress.last_check.as_ref().map(Value::to_string),
+            transcript: progress.transcript,
         }));
     }
 
@@ -1406,7 +1421,7 @@ impl HistoryStore {
                         conversation_uuid, project_id, application_id, version_id, mode,
                         grant_json, chain_root_execution_id, continuation_index, kind,
                         execution_id, last_committed_execution_id, request, brief,
-                        last_check, started_at, updated_at, deadline_at
+                        last_check, started_at, updated_at, deadline_at, transcript
                  FROM resume_turns ORDER BY started_at",
             )?;
             let json = |text: Option<String>| text.and_then(|t| serde_json::from_str(&t).ok());
@@ -1441,6 +1456,7 @@ impl HistoryStore {
                         started_at: row.get(19)?,
                         updated_at: row.get(20)?,
                         deadline_at: row.get(21)?,
+                        transcript: row.get(22)?,
                     })
                 })?
                 .collect()
@@ -1819,9 +1835,9 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                          version_id, mode, grant_json, chain_root_execution_id,
                          continuation_index, kind, execution_id,
                          last_committed_execution_id, request, brief, last_check,
-                         started_at, updated_at, deadline_at)
+                         started_at, updated_at, deadline_at, transcript)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                         ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                         ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
                      ON CONFLICT (workspace_id) DO UPDATE SET
                          turn_id = excluded.turn_id, origin = excluded.origin,
                          user_id = excluded.user_id,
@@ -1840,6 +1856,7 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                              THEN resume_turns.last_committed_execution_id END),
                          request = excluded.request, brief = excluded.brief,
                          last_check = excluded.last_check,
+                         transcript = excluded.transcript,
                          started_at = CASE WHEN {SAME_CHAIN}
                              THEN resume_turns.started_at ELSE excluded.started_at END,
                          updated_at = excluded.updated_at,
@@ -1869,6 +1886,7 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                     record.started_at,
                     record.updated_at,
                     record.deadline_at,
+                    record.transcript,
                 ],
             )
             .map(|_| ())
@@ -1879,11 +1897,12 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
             execution_id,
             brief,
             last_check,
+            transcript,
         } => conn
             .execute(
                 "UPDATE resume_turns SET last_committed_execution_id = ?3,
                      brief = COALESCE(?4, brief), last_check = COALESCE(?5, last_check),
-                     updated_at = ?6
+                     transcript = COALESCE(?7, transcript), updated_at = ?6
                  WHERE workspace_id = ?1 AND turn_id = ?2",
                 params![
                     workspace_id,
@@ -1891,7 +1910,8 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                     execution_id,
                     brief,
                     last_check,
-                    now_ms()
+                    now_ms(),
+                    transcript
                 ],
             )
             .map(|_| ()),
@@ -3264,6 +3284,7 @@ mod tests {
             started_at,
             updated_at: started_at,
             deadline_at: started_at + 1000,
+            transcript: None,
         }
     }
 
@@ -3279,8 +3300,19 @@ mod tests {
 
         let brief = json!({"goal": "Fix the build."});
         let check = json!({"outcome": "not_met"});
-        store.resume_committed("w1", "t1", "exec-t1", Some(&brief), Some(&check));
+        let transcript = "\n## Turn 1\nAnswer: The build fails in auth.\n";
+        store.resume_committed(
+            "w1",
+            "t1",
+            "exec-t1",
+            ResumeProgress {
+                brief: Some(brief.clone()),
+                last_check: Some(check.clone()),
+                transcript: Some(transcript.into()),
+            },
+        );
         let committed = &store.resume_records().unwrap()[0];
+        assert_eq!(committed.transcript.as_deref(), Some(transcript));
         assert_eq!(
             committed.last_committed_execution_id.as_deref(),
             Some("exec-t1")

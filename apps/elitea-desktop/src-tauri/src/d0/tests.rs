@@ -10784,6 +10784,10 @@ async fn stopped_turn(h: &Harness, grant: Option<Value>) -> crate::history::Resu
         started_at: now,
         updated_at: now,
         deadline_at: now + 3_600_000,
+        transcript: Some(
+            "\n## Turn 3\n- read_file: notes.md\nAnswer: Notes written; the bug is not filed yet.\n"
+                .into(),
+        ),
     }
 }
 
@@ -10932,6 +10936,19 @@ async fn a_restart_resumes_an_unattended_turn_with_its_brief() {
         turn_events(&events, &next, "chain_ended")[0]["outcome"],
         "completed"
     );
+    // The goal check after the restart sees the turns from before it too.
+    let checks = bodies(&h.server, CHECK_PATH);
+    assert_eq!(checks.len(), 1);
+    let transcript = checks[0]["transcript"].as_str().unwrap();
+    assert!(
+        transcript.contains("Write notes and file a bug"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Answer: Notes written; the bug is not filed yet."),
+        "{transcript}"
+    );
+    assert!(transcript.contains("Answer: Done."), "{transcript}");
     until_records(&h, "the record deleted", <[_]>::is_empty).await;
 }
 

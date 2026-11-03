@@ -635,8 +635,9 @@ person before the start:
   resume record per running turn in `threads.sqlite` (table
   `resume_turns`, one row per workspace): the thread, the workspace, the
   agent, the mode, the grant (with `goal_check`), the chain root, the
-  continuation index, the link kind, the run brief, the last goal check and
-  the last committed execution. It writes the record when the turn starts,
+  continuation index, the link kind, the run brief, the last goal check,
+  the goal check's transcript excerpt of the chain's turns so far (at most
+  32 KiB, newest kept) and the last committed execution. It writes the record when the turn starts,
   updates it at each commit that continues the chain, and deletes it when
   the chain ends (or the turn is cancelled, or the next turn does not start
   in time). A record survives only when the app stops while the turn runs.
@@ -647,6 +648,8 @@ person before the start:
     by itself: a turn with link kind `resume`, the next continuation index,
     the same chain root and the text "Continue from where you stopped."
     with the stored brief and last check (the `goal_not_met` text form).
+    The chain's goal state gets the stored transcript back, so the goal
+    check after the restart reads the turns from before it too.
     A brief still pending is asked for again (at most 20 seconds). The old
     turn sends `turn_continued` with `kind: "resume"` and
     `resumed_after_restart: true`; the new turn's `status` `running` carries
@@ -658,8 +661,6 @@ person before the start:
   - Any other record (an attended turn) starts nothing: the old turn sends
     `resume_offered`, and `thread_history` marks the turn `resumable`. The
     UI shows **Continue** under it, which calls `agent_turn_resume`.
-  The goal check of a resumed chain reads the person's message and the
-  turns after the restart only (the transcript before it is not stored).
 - **Run brief and goal check** (ADR-0045 decision 11; #1564). With
   `goal_check` (absent = on) the chain's first turn asks the platform for
   the run brief in the background (`POST run_brief`, with the person's

@@ -111,6 +111,9 @@ pub fn record(
         started_at: now_ms,
         updated_at: now_ms,
         deadline_at: now_ms.saturating_add(i64::try_from(deadline.as_millis()).unwrap_or(i64::MAX)),
+        transcript: goal
+            .map(|goal| goal.transcript())
+            .filter(|text| !text.is_empty()),
     }
 }
 
@@ -168,6 +171,7 @@ pub fn continuation(record: &ResumeRecord) -> Result<TurnRequest, TurnError> {
                         .clone()
                         .and_then(|check| serde_json::from_value::<GoalCheck>(check).ok()),
                     record.request.as_deref().unwrap_or_default(),
+                    record.transcript.as_deref().unwrap_or_default(),
                 )))
             });
             Some(UnattendedTurn {
@@ -241,6 +245,7 @@ mod tests {
             started_at: 1,
             updated_at: 1,
             deadline_at: 100,
+            transcript: Some("\n## Turn 3\nAnswer: The login form renders.\n".into()),
         }
     }
 
@@ -266,6 +271,10 @@ mod tests {
                 .starts_with("Continue from where you stopped.")
         );
         assert!(request.prompt.contains("Goal: Make the login test pass."));
+        // The goal check after the restart reads the turns from before it.
+        let excerpt = turn.goal().expect("goal").excerpt();
+        assert!(excerpt.contains("Make the login test pass"));
+        assert!(excerpt.contains("Answer: The login form renders."));
         assert!(request.bypass && !request.plan_mode);
         assert_eq!(request.conversation_id, json!(42));
     }

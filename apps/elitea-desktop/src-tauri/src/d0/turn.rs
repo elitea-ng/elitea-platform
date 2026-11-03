@@ -3062,20 +3062,23 @@ impl AgentHost {
                     );
                 if goes_on {
                     if let Some(history) = &host.deps.history {
-                        let brief = resume_goal
-                            .as_ref()
-                            .and_then(|goal| goal.ready_brief())
-                            .and_then(|brief| serde_json::to_value(brief).ok());
-                        let check = resume_goal
-                            .as_ref()
-                            .and_then(|goal| goal.last_check())
-                            .and_then(|check| serde_json::to_value(check).ok());
+                        let goal = resume_goal.as_ref();
+                        let progress = crate::history::ResumeProgress {
+                            brief: goal
+                                .and_then(|goal| goal.ready_brief())
+                                .and_then(|brief| serde_json::to_value(brief).ok()),
+                            last_check: goal
+                                .and_then(|goal| goal.last_check())
+                                .and_then(|check| serde_json::to_value(check).ok()),
+                            transcript: goal
+                                .map(|goal| goal.transcript())
+                                .filter(|text| !text.is_empty()),
+                        };
                         history.resume_committed(
                             &resume_workspace,
                             events.turn_id(),
                             &execution_id,
-                            brief.as_ref(),
-                            check.as_ref(),
+                            progress,
                         );
                     }
                 } else {
