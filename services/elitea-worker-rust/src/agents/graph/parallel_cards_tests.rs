@@ -622,6 +622,19 @@ async fn a_tool_guard_card_resumes_only_its_child_and_an_older_pause_is_refused(
 
 #[tokio::test]
 async fn a_delegated_auth_card_resumes_only_its_child_and_an_older_pause_is_refused() {
+    if std::env::var_os(TRACE_CHILD_ENV).is_some() {
+        // Run by the log-capture test in its own process: every event and
+        // span of the authorize wake, at TRACE, to stdout.
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                .with_ansi(false)
+                .finish(),
+        )
+        .expect("the child process's subscriber");
+        tracing::trace!(target: "elitea_worker::fu250", "trace capture installed");
+    }
     let authorized = Arc::new(AtomicBool::new(false));
     let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
         alias: "Customer Support".to_owned(),
@@ -679,6 +692,36 @@ async fn a_delegated_auth_card_resumes_only_its_child_and_an_older_pause_is_refu
 
 /// A credential reference only a test uses.
 const TEST_CREDENTIAL_REF: &str = "test-only-reference-0123456789abcdef";
+
+/// Set when the log-capture test runs the authorize wake in a child process.
+const TRACE_CHILD_ENV: &str = "ELITEA_TEST_FU250_TRACE_CHILD";
+
+/// FU-250 (E2): the authorize wake, run in its own process under a global
+/// TRACE subscriber with span events, logs no credential reference. The
+/// child process keeps other tests' events out of the capture.
+#[test]
+fn an_authorize_wake_logs_no_credential_reference_at_trace() {
+    let module = module_path!().split_once("::").expect("crate path").1;
+    let test = format!(
+        "{module}::a_delegated_auth_card_resumes_only_its_child_and_an_older_pause_is_refused"
+    );
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", test.as_str(), "--nocapture", "--test-threads=1"])
+        .env(TRACE_CHILD_ENV, "1")
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout} {stderr}");
+    assert!(
+        stdout.contains("1 passed") && stdout.contains("trace capture installed"),
+        "the child ran the wake under the capture: {stdout}"
+    );
+    assert!(
+        !stdout.contains(TEST_CREDENTIAL_REF) && !stderr.contains(TEST_CREDENTIAL_REF),
+        "a log line carries the credential reference"
+    );
+}
 
 /// FU-250: an `authorize` resumes only with its credential. Without a named
 /// reference, or without the run holding the card's server's token, the

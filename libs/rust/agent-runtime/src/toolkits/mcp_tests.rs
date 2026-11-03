@@ -2202,6 +2202,19 @@ fn an_internal_category_carries_no_assertion() {
 /// requests carried which bearer.
 #[tokio::test]
 async fn a_projected_token_reaches_only_the_toolset_of_its_resource() {
+    if std::env::var_os(TRACE_CHILD_ENV).is_some() {
+        // Run by the log-capture test in its own process: every event and
+        // span, at TRACE, to stdout.
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                .with_ansi(false)
+                .finish(),
+        )
+        .expect("the child process's subscriber");
+        tracing::trace!(target: "elitea_agent_runtime::fu250", "trace capture installed");
+    }
     let resource = "https://mcp.example.invalid/v1/mcp";
     let other = "https://other.example.invalid/v1/mcp";
     let tokens = Map::from_iter([(
@@ -2250,5 +2263,33 @@ async fn a_projected_token_reaches_only_the_toolset_of_its_resource() {
             .iter()
             .any(|(path, bearer)| path == "/s" && bearer.is_some()),
         "another server received a bearer: {seen:?}"
+    );
+}
+
+/// Set when the log-capture test runs the token test in a child process.
+const TRACE_CHILD_ENV: &str = "ELITEA_TEST_FU250_TRACE_CHILD";
+
+/// FU-250 (E2): presenting a projected token, run in its own process under a
+/// global TRACE subscriber with span events, logs no token bytes. The child
+/// process keeps other tests' events out of the capture.
+#[test]
+fn a_projected_token_is_never_logged_at_trace() {
+    let module = module_path!().split_once("::").expect("crate path").1;
+    let test = format!("{module}::a_projected_token_reaches_only_the_toolset_of_its_resource");
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", test.as_str(), "--nocapture", "--test-threads=1"])
+        .env(TRACE_CHILD_ENV, "1")
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout} {stderr}");
+    assert!(
+        stdout.contains("1 passed") && stdout.contains("trace capture installed"),
+        "the child presented the token under the capture: {stdout}"
+    );
+    assert!(
+        !stdout.contains("test-only-fu250-marker") && !stderr.contains("test-only-fu250-marker"),
+        "a log line carries the token"
     );
 }

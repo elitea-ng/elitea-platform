@@ -108,7 +108,10 @@ impl std::fmt::Debug for FetchedDecision {
             .field("decision_sha256", &self.decision_sha256)
             .field("action", &self.action)
             .field("value", &self.value.as_ref().map(|_| "<redacted>"))
-            .field("credential_ref", &self.credential_ref.as_ref().map(|_| "<redacted>"))
+            .field(
+                "credential_ref",
+                &self.credential_ref.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
