@@ -14,6 +14,20 @@ import (
 // CallTimeout bounds each brief and each check call.
 const CallTimeout = 20 * time.Second
 
+// ClaimLapse is how long one replica's claim on a pending brief holds: only
+// the claimant asks the model, and a claim older than this lapses so another
+// call can retry after a crash.
+const ClaimLapse = 30 * time.Second
+
+// MaxBriefAttempts bounds the model calls for one chain's brief in one
+// process: a transport error leaves the brief pending for a later
+// EnsureBrief, and the last attempt's error freezes it failed.
+const MaxBriefAttempts = 3
+
+// ErrNoModelPlane is a call before the model plane is composed (or on a
+// deployment without one). It never freezes a brief and is not an attempt.
+var ErrNoModelPlane = errors.New("run brief: no LLM gateway is composed")
+
 // Output bounds of the two calls, in tokens.
 const (
 	briefMaxTokens = 1200
@@ -78,6 +92,11 @@ type ChainBrief struct {
 // Store reads and writes the brief and the checks (repos.RunChainsRepository).
 type Store interface {
 	ChainBrief(ctx context.Context, root string) (ChainBrief, bool, error)
+	// ClaimBrief claims a pending brief for this replica: true when no other
+	// replica holds a claim younger than ClaimLapse.
+	ClaimBrief(ctx context.Context, root string) (bool, error)
+	// ReleaseBrief drops the claim on a brief that stays pending.
+	ReleaseBrief(ctx context.Context, root string) error
 	// SaveBrief moves a pending brief to state (ready with brief, failed or
 	// off) and answers the stored state. It changes nothing when the brief
 	// is not pending.
@@ -110,8 +129,14 @@ type Service struct {
 	transcripts Transcripts
 	logger      *slog.Logger
 
+	// pollEvery is how often a call that lost the claim reads the brief.
+	pollEvery time.Duration
+
 	mu       sync.Mutex
 	inflight map[string]chan struct{}
+	// attempts is root -> the brief calls that failed with a transport
+	// error in this process.
+	attempts map[string]int
 }
 
 // New builds the service. It answers nil when a part is missing.
@@ -127,7 +152,8 @@ func New(
 	}
 	return &Service{
 		completer: completer, models: models, settings: settings, store: store, transcripts: transcripts,
-		logger: logger, inflight: map[string]chan struct{}{},
+		logger: logger, pollEvery: 250 * time.Millisecond,
+		inflight: map[string]chan struct{}{}, attempts: map[string]int{},
 	}
 }
 
@@ -153,7 +179,10 @@ func (s *Service) Chain(ctx context.Context, root string) (ChainBrief, bool, err
 // EnsureBrief answers the chain's brief, and writes it first when it is
 // pending. request is the person's first message; empty reads it from a
 // cloud chain's transcript. A brief that another call in this process is
-// writing is waited for.
+// writing is waited for; a brief that another replica claimed is polled for
+// up to CallTimeout. A brief that stays pending (a transport error, another
+// replica still writing it) is answered pending: the caller has no check
+// this time.
 func (s *Service) EnsureBrief(ctx context.Context, root, request string) (ChainBrief, bool, error) {
 	chain, found, err := s.store.ChainBrief(ctx, root)
 	if err != nil || !found || chain.State != unattended.BriefPending {
@@ -210,12 +239,82 @@ func (s *Service) writeBrief(ctx context.Context, chain ChainBrief, request stri
 		// Nothing to brief from: the desktop host sends the request.
 		return chain, nil
 	}
-	brief, err := s.generate(ctx, chain, request)
+	claimed, err := s.store.ClaimBrief(ctx, chain.RootExecutionID)
 	if err != nil {
+		return chain, err
+	}
+	if !claimed {
+		// Another replica asks the model.
+		return s.awaitBrief(ctx, chain)
+	}
+	brief, err := s.generate(ctx, chain, request)
+	if err == nil {
+		s.forget(chain.RootExecutionID)
+		return s.store.SaveBrief(ctx, chain.RootExecutionID, unattended.BriefReady, &brief)
+	}
+	if s.final(chain.RootExecutionID, err) {
 		s.logger.WarnContext(ctx, "run brief: no brief", "chain_root_execution_id", chain.RootExecutionID, "err", err)
+		s.forget(chain.RootExecutionID)
 		return s.store.SaveBrief(ctx, chain.RootExecutionID, unattended.BriefFailed, nil)
 	}
-	return s.store.SaveBrief(ctx, chain.RootExecutionID, unattended.BriefReady, &brief)
+	s.logger.WarnContext(ctx, "run brief: not written yet; a later call retries",
+		"chain_root_execution_id", chain.RootExecutionID, "err", err)
+	if err := s.store.ReleaseBrief(context.WithoutCancel(ctx), chain.RootExecutionID); err != nil {
+		s.logger.WarnContext(ctx, "run brief: release the claim", "chain_root_execution_id", chain.RootExecutionID,
+			"err", err)
+	}
+	return chain, nil
+}
+
+// final reports whether a brief error freezes the brief failed: an invalid
+// answer, the call timeout, or the last of MaxBriefAttempts transport
+// errors. ErrNoModelPlane never does.
+func (s *Service) final(root string, err error) bool {
+	switch {
+	case errors.Is(err, ErrNoModelPlane):
+		return false
+	case errors.Is(err, ErrInvalidBrief), errors.Is(err, context.DeadlineExceeded):
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attempts[root]++
+	return s.attempts[root] >= MaxBriefAttempts
+}
+
+func (s *Service) forget(root string) {
+	s.mu.Lock()
+	delete(s.attempts, root)
+	s.mu.Unlock()
+}
+
+// awaitBrief polls a brief that another replica claimed until it is no
+// longer pending, for up to CallTimeout, and answers the last read.
+func (s *Service) awaitBrief(ctx context.Context, chain ChainBrief) (ChainBrief, error) {
+	deadline := time.NewTimer(CallTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(s.pollEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return chain, ctx.Err()
+		case <-deadline.C:
+			return chain, nil
+		case <-tick.C:
+		}
+		next, found, err := s.store.ChainBrief(ctx, chain.RootExecutionID)
+		if err != nil {
+			return chain, err
+		}
+		if !found {
+			return chain, nil
+		}
+		chain = next
+		if chain.State != unattended.BriefPending {
+			return chain, nil
+		}
+	}
 }
 
 func (s *Service) generate(ctx context.Context, chain ChainBrief, request string) (Brief, error) {
@@ -281,19 +380,49 @@ func (s *Service) Check(
 		return *stored, true, nil
 	}
 	chain, found, err := s.EnsureBrief(ctx, root, "")
-	if err != nil || !found {
-		return Result{}, false, err
+	if err != nil {
+		return s.notChecked(ctx, root, executionID, err)
 	}
-	if chain.State != unattended.BriefReady || !chain.Brief.HasConditions() {
+	if !found || chain.State != unattended.BriefReady || !chain.Brief.HasConditions() {
 		return Result{}, false, nil
 	}
-	if enabled, err := s.settings.RunBriefEnabled(ctx); err != nil || !enabled {
-		return Result{}, false, err
+	enabled, err := s.settings.RunBriefEnabled(ctx)
+	if err != nil {
+		return s.notChecked(ctx, root, executionID, fmt.Errorf("read approvals.run_brief: %w", err))
+	}
+	if !enabled {
+		return Result{}, false, nil
+	}
+	// A concurrent replay may have checked this run while the brief was
+	// written: its check stands and the model is not asked again.
+	if stored, _, err := s.store.LinkCheck(ctx, root, executionID); err == nil && stored != nil {
+		return *stored, true, nil
 	}
 	result, failures := s.judge(ctx, chain, executionID, transcript)
 	recorded, err := s.store.RecordCheck(ctx, root, executionID, result, failures)
 	if err != nil {
-		return Result{}, false, err
+		return s.notChecked(ctx, root, executionID, fmt.Errorf("record the check: %w", err))
+	}
+	return recorded, true, nil
+}
+
+// notChecked is a check that an infrastructure error stopped: the run is
+// "not checked" with the counts unchanged, recorded when the store answers.
+// Without a ready brief that has conditions there is nothing to record, and
+// the error stays for the caller (the settle hook ends the chain completed).
+func (s *Service) notChecked(ctx context.Context, root, executionID string, cause error) (Result, bool, error) {
+	s.logger.WarnContext(ctx, "goal check: not checked", "chain_root_execution_id", root,
+		"execution_id", executionID, "err", cause)
+	chain, found, err := s.store.ChainBrief(ctx, root)
+	if err != nil || !found || chain.State != unattended.BriefReady || !chain.Brief.HasConditions() {
+		return Result{}, false, cause
+	}
+	result := NotChecked(chain.Brief)
+	recorded, err := s.store.RecordCheck(ctx, root, executionID, result, chain.Failures)
+	if err != nil {
+		s.logger.WarnContext(ctx, "goal check: record not checked", "chain_root_execution_id", root,
+			"execution_id", executionID, "err", err)
+		return result, true, nil
 	}
 	return recorded, true, nil
 }

@@ -5,13 +5,18 @@ package repos
 // without it.
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
 const briefGrantID = "4c1d2e3f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
@@ -159,5 +164,67 @@ func TestPostgresRunBriefStateFollowsTheGrant(t *testing.T) {
 	chain, _, err := NewRunChainsRepository(pool).ChainBrief(t.Context(), outcome.ExecutionID)
 	if err != nil || chain.State != unattended.BriefNone {
 		t.Fatalf("goal_check false = %+v, %v", chain, err)
+	}
+}
+
+// TestPostgresRunBriefReplayedAdmissionKeepsTheSettledMeta: a replayed
+// first-run admission of a cloud chain whose brief is ready does not write
+// meta.run_brief back to pending.
+func TestPostgresRunBriefReplayedAdmissionKeepsTheSettledMeta(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	const user int64 = 4704
+	conversation := seedLocalTurnConversation(t, pool, user)
+	var response string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
+SELECT gen_random_uuid(), m.participant_id, c.id, '{}'::jsonb, now() AT TIME ZONE 'UTC'
+FROM p_1.chat_conversations AS c
+JOIN p_1.chat_participant_mapping AS m ON m.conversation_id = c.id
+WHERE c.uuid = $1::uuid LIMIT 1
+RETURNING uuid::text`, conversation).Scan(&response); err != nil {
+		t.Fatal(err)
+	}
+	root := strings.Repeat("e", 32)
+	admission := agentexecutionapp.Admission{
+		Record: executiondomain.Admission{Job: executiondomain.Job{ID: root}},
+		Unattended: &agentexecutionapp.UnattendedAdmission{Start: &unattended.ChainStart{
+			ProjectID: 1, OwnerUserID: user, ConversationUUID: conversation, Origin: unattended.OriginCloud,
+			Grant:             unattended.Grant{GrantID: "7c1d2e3f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", GoalCheck: true},
+			Limits:            unattended.Limits{MaxContinuations: 3, Deadline: time.Hour},
+			BriefState:        unattended.BriefPending,
+			ResponseMessageID: response,
+		}},
+	}
+	admit := func() {
+		t.Helper()
+		if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			return admitAgentChain(ctx, tx, admission, 1)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state := func() string {
+		t.Helper()
+		var value string
+		if err := pool.QueryRow(ctx, `
+SELECT COALESCE(meta->'run_brief'->>'state', '') FROM p_1.chat_message_group WHERE uuid = $1::uuid`,
+			response).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	admit()
+	if got := state(); got != unattended.BriefPending {
+		t.Fatalf("meta at start = %q", got)
+	}
+	brief := runbrief.Brief{Goal: "Say hello.", DoneWhen: []runbrief.Condition{}, Constraints: []string{},
+		Assumptions: []string{}, Ambiguity: runbrief.AmbiguityLow}
+	if _, err := NewRunChainsRepository(pool).SaveBrief(ctx, root, unattended.BriefReady, &brief); err != nil {
+		t.Fatal(err)
+	}
+	admit()
+	if got := state(); got != unattended.BriefReady {
+		t.Fatalf("meta after a replay = %q, want ready", got)
 	}
 }

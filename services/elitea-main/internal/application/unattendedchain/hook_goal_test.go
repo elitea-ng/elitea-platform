@@ -92,14 +92,35 @@ func TestSettleGoalNotMetAtTheLimitEndsLimitReached(t *testing.T) {
 	}
 }
 
-func TestSettleGoalCheckErrorLeavesTheChainForAReplay(t *testing.T) {
+func TestSettleGoalCheckErrorEndsTheChainNotChecked(t *testing.T) {
 	chains := &chainsStub{view: cloudView()}
 	hook := New(chains, &starterStub{}, nil).WithGoals(&goalsStub{err: errors.New("database down")})
-	if err := hook.Settle(t.Context(), "x", executionapp.SettlementSucceeded); err == nil {
-		t.Fatal("want the error")
+	if err := hook.Settle(t.Context(), "x", executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
 	}
-	if len(chains.ended) != 0 {
+	if len(chains.ended) != 1 || chains.ended[0] != unattended.EndCompleted {
 		t.Fatalf("ended = %v", chains.ended)
+	}
+}
+
+func TestSettleLimitWithoutTheGrantWaitsUnchecked(t *testing.T) {
+	for name, mutate := range map[string]func(*SettleView){
+		"step limit": func(v *SettleView) { v.StepLimitReached, v.Chain.Grant.ContinueStepLimit = true, false },
+		"output limit": func(v *SettleView) {
+			v.OutputLimitReached, v.OutputLimitSequence, v.Chain.Grant.ContinueOutputLimit = true, 1, false
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			chains := &chainsStub{view: cloudView()}
+			mutate(&chains.view)
+			starter := &starterStub{}
+			goals := &goalsStub{checked: true, result: runbrief.Result{Outcome: runbrief.OutcomeNotMet, ContinueText: "x"}}
+			settleWithGoals(t, chains, starter, goals)
+			if len(goals.checks) != 0 || len(starter.applications) != 0 ||
+				len(chains.ended) != 1 || chains.ended[0] != unattended.EndWaiting {
+				t.Fatalf("checks = %v, starts = %d, ended = %v", goals.checks, len(starter.applications), chains.ended)
+			}
+		})
 	}
 }
 

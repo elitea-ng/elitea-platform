@@ -124,6 +124,19 @@ describe('useChatBoxChainFollow (ADR-0045)', () => {
     expect(read).toHaveBeenCalledTimes(calls);
   });
 
+  it('stops 15 s after a ready brief without conditions settles (a greeting expects no check)', async () => {
+    const greeting: NonNullable<ChatMessage['runBrief']> = { state: 'ready', brief: { goal: 'Say hello', done_when: [], constraints: [], assumptions: [], ambiguity: 'low' } };
+    let brief = pending;
+    const read = vi.fn<ChainSnapshotReader>(() => Promise.resolve([question, { ...answer, runBrief: brief }]));
+    const hook = setup([question, { ...answer, runBrief: pending }], read);
+    brief = greeting;
+    await advance(CHAIN_POLL_MS);
+    expect(hook.result.current.messages[1]?.runBrief).toEqual(greeting);
+    await advance(60_000);
+    // The change at 3 s, then reads until 15 s passed without one: 3 s + 15 s = 18 s, 6 reads.
+    expect(read).toHaveBeenCalledTimes(6);
+  });
+
   it('stops 15 s after a settle when no brief or check is expected, and not at all when the person stopped the turn', async () => {
     const read = vi.fn<ChainSnapshotReader>(() => Promise.resolve([question, answer]));
     const hook = setup([question, { ...answer, isStreaming: true }], read, { isStreaming: true });

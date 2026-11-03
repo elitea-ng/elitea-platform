@@ -39,6 +39,20 @@ func markRunBrief(ctx context.Context, tx pgx.Tx, projectID int64, messageID str
 	return markMessageMeta(ctx, tx, projectID, messageID, map[string]any{"run_brief": value})
 }
 
+// runBriefStillPending reports whether the chain's brief is still pending.
+func runBriefStillPending(ctx context.Context, tx pgx.Tx, root string) (bool, error) {
+	var state string
+	err := tx.QueryRow(ctx, `
+SELECT brief_state FROM elitea_runtime.run_chains WHERE root_execution_id = $1`, root).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("run brief: read the state: %w", err)
+	}
+	return state == unattended.BriefPending, nil
+}
+
 // markMessageMeta merges fields into one answer's meta.
 func markMessageMeta(ctx context.Context, tx pgx.Tx, projectID int64, messageID string, fields map[string]any) error {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
@@ -155,6 +169,33 @@ RETURNING c.origin, c.project_id,
 		err = errors.New("run brief: the chain is missing")
 	}
 	return chain, err
+}
+
+// ClaimBrief claims a pending brief for this replica: true when no other
+// replica holds a claim younger than runbrief.ClaimLapse. Only the claimant
+// asks the model.
+func (r *RunChainsRepository) ClaimBrief(ctx context.Context, root string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+UPDATE elitea_runtime.run_chains
+SET brief_claimed_at = clock_timestamp()
+WHERE root_execution_id = $1 AND brief_state = 'pending'
+  AND (brief_claimed_at IS NULL OR brief_claimed_at < clock_timestamp() - make_interval(secs => $2))`,
+		root, runbrief.ClaimLapse.Seconds())
+	if err != nil {
+		return false, fmt.Errorf("run brief: claim: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ReleaseBrief drops this replica's claim on a brief that stays pending, so
+// a later call can retry at once.
+func (r *RunChainsRepository) ReleaseBrief(ctx context.Context, root string) error {
+	if _, err := r.pool.Exec(ctx, `
+UPDATE elitea_runtime.run_chains SET brief_claimed_at = NULL
+WHERE root_execution_id = $1 AND brief_state = 'pending'`, root); err != nil {
+		return fmt.Errorf("run brief: release the claim: %w", err)
+	}
+	return nil
 }
 
 // LinkCheck answers whether executionID is a link of root, and its stored

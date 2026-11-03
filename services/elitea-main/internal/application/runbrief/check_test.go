@@ -111,3 +111,17 @@ func TestPublicDropsTheContinueText(t *testing.T) {
 	require.Empty(t, public.ContinueText)
 	require.Equal(t, []ConditionResult{}, public.Conditions)
 }
+
+func TestParseVerdictsIgnoresTextAfterTheObject(t *testing.T) {
+	object := `{"conditions":[{"id":"c1","verdict":"met"},{"id":"c2","verdict":"met"},{"id":"c3","verdict":"met"}]}`
+	for name, answer := range map[string]string{
+		"trailing prose":           object + "\nAll three are met {see above}.",
+		"fenced with prose inside": "```json\n" + object + "\nnote: checked the diff\n```",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParseVerdicts(answer, threeConditions())
+			require.NoError(t, err)
+			require.Len(t, got, 3)
+		})
+	}
+}

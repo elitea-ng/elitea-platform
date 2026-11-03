@@ -56,15 +56,41 @@ type fakeModels struct{ model string }
 
 func (f fakeModels) LowTierModel(context.Context, int64) (string, error) { return f.model, nil }
 
-type fakeSettings struct{ off bool }
+type fakeSettings struct {
+	off bool
+	err error
+}
 
-func (f fakeSettings) RunBriefEnabled(context.Context) (bool, error) { return !f.off, nil }
+func (f fakeSettings) RunBriefEnabled(context.Context) (bool, error) { return !f.off, f.err }
 
 type fakeStore struct {
 	mu     sync.Mutex
 	chain  ChainBrief
 	links  map[string]*Result
 	stored int
+	// claimed is a claim on the pending brief (this or another replica).
+	claimed   bool
+	claims    int
+	recordErr error
+	onSave    func(*fakeStore)
+}
+
+func (f *fakeStore) ClaimBrief(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.chain.State != unattended.BriefPending || f.claimed {
+		return false, nil
+	}
+	f.claimed = true
+	f.claims++
+	return true, nil
+}
+
+func (f *fakeStore) ReleaseBrief(context.Context, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.claimed = false
+	return nil
 }
 
 func (f *fakeStore) ChainBrief(_ context.Context, root string) (ChainBrief, bool, error) {
@@ -81,6 +107,10 @@ func (f *fakeStore) SaveBrief(ctx context.Context, root, state string, brief *Br
 	if f.chain.State == unattended.BriefPending {
 		f.chain.State, f.chain.Brief = state, brief
 		f.stored++
+		f.claimed = false
+		if f.onSave != nil {
+			f.onSave(f)
+		}
 	}
 	f.mu.Unlock()
 	chain, _, err := f.ChainBrief(ctx, root)
@@ -99,6 +129,9 @@ func (f *fakeStore) RecordCheck(
 ) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.recordErr != nil {
+		return Result{}, f.recordErr
+	}
 	if stored := f.links[executionID]; stored != nil {
 		return *stored, nil
 	}
@@ -165,9 +198,9 @@ func TestEnsureBriefWritesTheBriefOnceOnTheLowTierModel(t *testing.T) {
 	require.Len(t, completer.calls(), 1)
 }
 
-func TestEnsureBriefFailsOnAModelErrorOrAnInvalidAnswer(t *testing.T) {
+func TestEnsureBriefFailsOnATimeoutOrAnInvalidAnswer(t *testing.T) {
 	for name, completer := range map[string]*fakeCompleter{
-		"error":   {err: errors.New("gateway down")},
+		"timeout": {err: context.DeadlineExceeded},
 		"invalid": {answers: []string{"Sure! Here is a brief."}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -178,6 +211,59 @@ func TestEnsureBriefFailsOnAModelErrorOrAnInvalidAnswer(t *testing.T) {
 			require.Nil(t, chain.Brief)
 		})
 	}
+}
+
+func TestEnsureBriefRetriesATransportErrorUpToThreeAttempts(t *testing.T) {
+	completer := &fakeCompleter{err: errors.New("gateway down")}
+	store := pendingStore(unattended.OriginDesktop)
+	service := newTestService(completer, store, fakeSettings{})
+	for attempt := 1; attempt < MaxBriefAttempts; attempt++ {
+		chain, _, err := service.EnsureBrief(t.Context(), testRoot, "r")
+		require.NoError(t, err)
+		require.Equal(t, unattended.BriefPending, chain.State, "attempt %d leaves the brief for a retry", attempt)
+	}
+	chain, _, err := service.EnsureBrief(t.Context(), testRoot, "r")
+	require.NoError(t, err)
+	require.Equal(t, unattended.BriefFailed, chain.State)
+	require.Len(t, completer.calls(), MaxBriefAttempts)
+}
+
+func TestEnsureBriefWithoutAModelPlaneStaysPending(t *testing.T) {
+	completer := &fakeCompleter{err: ErrNoModelPlane}
+	store := pendingStore(unattended.OriginDesktop)
+	service := newTestService(completer, store, fakeSettings{})
+	for range MaxBriefAttempts + 2 {
+		chain, _, err := service.EnsureBrief(t.Context(), testRoot, "r")
+		require.NoError(t, err)
+		require.Equal(t, unattended.BriefPending, chain.State)
+	}
+	completer.mu.Lock()
+	completer.err, completer.answers = nil, []string{readyAnswer}
+	completer.mu.Unlock()
+	chain, _, err := service.EnsureBrief(t.Context(), testRoot, "r")
+	require.NoError(t, err)
+	require.Equal(t, unattended.BriefReady, chain.State)
+}
+
+func TestEnsureBriefClaimedByAnotherReplicaWaitsWithoutACall(t *testing.T) {
+	completer := &fakeCompleter{answers: []string{readyAnswer}}
+	store := pendingStore(unattended.OriginDesktop)
+	store.claimed = true // another replica asks the model
+	service := newTestService(completer, store, fakeSettings{})
+	service.pollEvery = time.Millisecond
+	brief, err := ParseBrief(readyAnswer)
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		store.mu.Lock()
+		store.chain.State, store.chain.Brief = unattended.BriefReady, &brief
+		store.mu.Unlock()
+	}()
+	chain, _, err := service.EnsureBrief(t.Context(), testRoot, "r")
+	require.NoError(t, err)
+	require.Equal(t, unattended.BriefReady, chain.State)
+	require.Empty(t, completer.calls(), "only the claimant asks the model")
+	require.Zero(t, store.claims)
 }
 
 func TestEnsureBriefWithTheSwitchOffMakesNoCall(t *testing.T) {
@@ -269,6 +355,43 @@ func TestCheckModelFailureIsNotChecked(t *testing.T) {
 	require.Equal(t, 2, result.Total)
 	require.Empty(t, result.ContinueText)
 	require.Equal(t, map[string]int{"c2": 2}, store.chain.Failures, "a failed check keeps the counts")
+}
+
+func TestCheckReplayedWhileTheBriefIsWrittenKeepsTheFirstCheck(t *testing.T) {
+	completer := &fakeCompleter{answers: []string{readyAnswer, `{"conditions":[]}`}}
+	store := pendingStore(unattended.OriginCloud)
+	first := &Result{Outcome: OutcomeMet, Met: 2, Total: 2}
+	store.onSave = func(f *fakeStore) { f.links[testRun] = first }
+	result, checked, err := newTestService(completer, store, fakeSettings{}).CheckCloud(t.Context(), testRoot, testRun)
+	require.NoError(t, err)
+	require.True(t, checked)
+	require.Equal(t, *first, result)
+	require.Len(t, completer.calls(), 1, "only the brief call: the check stands")
+}
+
+func TestCheckInfrastructureErrorsAreNotChecked(t *testing.T) {
+	t.Run("settings", func(t *testing.T) {
+		store := readyStore()
+		result, checked, err := newTestService(&fakeCompleter{}, store, fakeSettings{err: errors.New("db down")}).
+			CheckCloud(t.Context(), testRoot, testRun)
+		require.NoError(t, err)
+		require.True(t, checked)
+		require.Equal(t, OutcomeNotChecked, result.Outcome)
+		require.NotNil(t, store.links[testRun], "the not_checked check is recorded")
+		require.Equal(t, OutcomeNotChecked, store.links[testRun].Outcome)
+	})
+	t.Run("record", func(t *testing.T) {
+		store := readyStore()
+		store.recordErr = errors.New("db down")
+		completer := &fakeCompleter{answers: []string{
+			`{"conditions":[{"id":"c1","verdict":"met"},{"id":"c2","verdict":"not_met","reason":"x"}]}`,
+		}}
+		result, checked, err := newTestService(completer, store, fakeSettings{}).
+			CheckCloud(t.Context(), testRoot, testRun)
+		require.NoError(t, err)
+		require.True(t, checked)
+		require.Equal(t, OutcomeNotChecked, result.Outcome, "an unrecorded not_met starts no continuation")
+	})
 }
 
 func TestCheckWithoutConditionsOrWithTheSwitchOffChecksNothing(t *testing.T) {

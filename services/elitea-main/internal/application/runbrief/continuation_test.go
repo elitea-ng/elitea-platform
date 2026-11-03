@@ -62,6 +62,15 @@ func TestContinuationTextSharedGolden(t *testing.T) {
 	require.Equal(t, "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from "+
 		"the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\n</run_brief>",
 		ContinuationText(&brief, &allMet))
+
+	// A not_checked last check: no "Last check:" line, every condition
+	// open. The desktop host pins the same case.
+	notChecked := Result{Outcome: OutcomeNotChecked, Reason: "The check model did not answer.",
+		Conditions: []ConditionResult{}}
+	require.Equal(t, "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from "+
+		"the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n"+
+		"- The login test passes.\n- The change is committed.\n</run_brief>",
+		ContinuationText(&brief, &notChecked))
 }
 
 func TestContinuationTextWithoutABriefIsTheContinuePrompt(t *testing.T) {

@@ -7,7 +7,7 @@ newest entry is first.
 ## Run brief and goal check (#1564, ADR-0045 decision 11)
 
 New shared migration `0222_run_brief_goal_check`. It adds the columns
-`brief`, `brief_state`, `brief_sha256` and `goal_check_failures` to
+`brief`, `brief_state`, `brief_sha256`, `brief_claimed_at` and `goal_check_failures` to
 `elitea_runtime.run_chains`, and the column `done_check` to
 `elitea_runtime.run_chain_links`. It also adds the link kind
 `goal_not_met`. The migration only adds objects. An existing chain gets

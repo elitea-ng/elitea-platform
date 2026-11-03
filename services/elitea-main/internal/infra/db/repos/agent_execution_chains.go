@@ -38,7 +38,13 @@ func admitAgentChain(
 			return nil
 		}
 		// The transcript shows "Writing the brief…" until the brief is
-		// ready (ADR-0045 decision 11).
+		// ready (ADR-0045 decision 11). A replayed admission finds the
+		// chain already there: its brief may be ready or failed by now, and
+		// the stored meta stays as SaveBrief wrote it.
+		pending, err := runBriefStillPending(ctx, tx, start.RootExecutionID)
+		if err != nil || !pending {
+			return err
+		}
 		return markRunBrief(ctx, tx, projectionProject, start.ResponseMessageID,
 			runBriefMeta{State: unattended.BriefPending})
 	case chain.Continue != nil:

@@ -18,6 +18,12 @@
 --       The brief is frozen: Main writes it once (pending -> ready or
 --       failed) and never changes it after that.
 --
+--   elitea_runtime.run_chains.brief_claimed_at
+--       When a Main replica claimed the pending brief to ask the model. Only
+--       the claimant asks; a claim older than 30 seconds lapses, so another
+--       replica can retry after a crash or a transient error. NULL when no
+--       replica holds the brief.
+--
 --   elitea_runtime.run_chains.brief_sha256
 --       The SHA-256 of the stored brief JSON (hex). NULL without a brief.
 --
@@ -40,6 +46,7 @@ ALTER TABLE elitea_runtime.run_chains
     ADD COLUMN IF NOT EXISTS brief jsonb,
     ADD COLUMN IF NOT EXISTS brief_state text NOT NULL DEFAULT 'none',
     ADD COLUMN IF NOT EXISTS brief_sha256 text,
+    ADD COLUMN IF NOT EXISTS brief_claimed_at timestamptz,
     ADD COLUMN IF NOT EXISTS goal_check_failures jsonb;
 
 ALTER TABLE elitea_runtime.run_chain_links
@@ -88,6 +95,8 @@ COMMENT ON COLUMN elitea_runtime.run_chains.brief IS
     'The run brief (ADR-0045 decision 11): the goal, the done_when conditions, the constraints, the assumptions and the ambiguity. Written once by Main from the small model''s answer, after validation. Frozen.';
 COMMENT ON COLUMN elitea_runtime.run_chains.brief_state IS
     'none, off, pending, ready or failed (ADR-0045 decision 11). Moves once from pending to ready or failed.';
+COMMENT ON COLUMN elitea_runtime.run_chains.brief_claimed_at IS
+    'When a Main replica claimed the pending brief to ask the model (ADR-0045 decision 11). A claim lapses after 30 seconds. NULL when unclaimed.';
 COMMENT ON COLUMN elitea_runtime.run_chains.goal_check_failures IS
     'Condition id -> the count of consecutive goal checks that found it not met. 3 ends the chain as failed.';
 COMMENT ON COLUMN elitea_runtime.run_chain_links.done_check IS

@@ -13,7 +13,7 @@ import { t } from '@/shared/i18n';
 import { chainErrors, type ChainField, type SensitiveToolRef, type UnattendedGrantValue } from './grant';
 
 /** The cloud grant; `goal_check` (contract #1564, absent = true) is sent always. */
-export type CloudGrant = ChatUnattendedRequest & { goal_check?: boolean };
+export type CloudGrant = ChatUnattendedRequest;
 
 export type CloudGrantResult = { ok: true; grant: CloudGrant } | { ok: false; invalid: ChainField[] };
 

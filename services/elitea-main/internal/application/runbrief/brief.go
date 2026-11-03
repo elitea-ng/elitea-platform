@@ -181,22 +181,19 @@ func Clean(text string, limit int) string {
 	return text
 }
 
-// decodeObject reads one JSON object from a model's answer: the whole
-// answer, or a fenced code block, or the text from the first "{" to the
-// last "}".
+// decodeObject reads one JSON object from a model's answer: the first JSON
+// value from the first "{" of a fenced code block, else of the whole answer.
+// Text after the object (prose, another block) is ignored.
 func decodeObject(answer string, out any) error {
 	text := strings.TrimSpace(answer)
-	if fenced := fencedBlock(text); fenced != "" {
+	if fenced := fencedBlock(text); fenced != "" && strings.Contains(fenced, "{") {
 		text = fenced
 	}
-	if !strings.HasPrefix(text, "{") {
-		start, end := strings.Index(text, "{"), strings.LastIndex(text, "}")
-		if start < 0 || end <= start {
-			return errors.New("no JSON object")
-		}
-		text = text[start : end+1]
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return errors.New("no JSON object")
 	}
-	return json.Unmarshal([]byte(text), out)
+	return json.NewDecoder(strings.NewReader(text[start:])).Decode(out)
 }
 
 func fencedBlock(text string) string {

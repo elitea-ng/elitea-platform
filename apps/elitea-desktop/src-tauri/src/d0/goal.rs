@@ -238,7 +238,8 @@ impl GoalCheck {
 /// The text of a continuation that carries user text (contract section 4,
 /// identical to Main's): [`CONTINUE_PROMPT`] alone without a ready brief;
 /// with one, the brief's goal, the conditions not met at the `last` check
-/// (all of them before any check) and the last check's reason.
+/// (all of them before any check) and the last check's reason (left out
+/// when that check is `not_checked`).
 #[must_use]
 pub fn continue_text(brief: Option<&Brief>, last: Option<&GoalCheck>) -> String {
     let Some(brief) = brief else {
@@ -266,6 +267,7 @@ pub fn continue_text(brief: Option<&Brief>, last: Option<&GoalCheck>) -> String 
         }
     }
     if let Some(reason) = last
+        .filter(|check| check.outcome() != GoalOutcome::NotChecked)
         .and_then(|check| check.reason.as_deref())
         .filter(|reason| !reason.is_empty())
     {
@@ -546,6 +548,13 @@ mod tests {
         assert_eq!(
             continue_text(Some(&brief()), Some(&check)),
             "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n- The login test passes.\nLast check: The login test still fails.\n</run_brief>"
+        );
+        // A not_checked last check: no "Last check:" line, every condition
+        // open (Main pins the same case).
+        let not_checked = GoalCheck::not_checked("The check model did not answer.");
+        assert_eq!(
+            continue_text(Some(&brief()), Some(&not_checked)),
+            "Continue from where you stopped.\n\n<run_brief>\nThis brief was written by a model from the person's request. The request wins when they disagree.\nGoal: Make the login test pass.\nNot met yet:\n- The login test passes.\n- The change is committed.\n</run_brief>"
         );
         let empty = Brief {
             goal: "Say hello.".into(),

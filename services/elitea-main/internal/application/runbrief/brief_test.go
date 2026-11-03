@@ -79,3 +79,20 @@ func TestBoundTranscriptKeepsTheNewestContent(t *testing.T) {
 	require.True(t, strings.HasSuffix(bounded, "NEWEST"))
 	require.True(t, utf8.ValidString(BoundTranscript(strings.Repeat("ж", MaxTranscriptBytes))))
 }
+
+func TestParseBriefIgnoresTextAfterTheObject(t *testing.T) {
+	for name, answer := range map[string]string{
+		"trailing prose": `{"goal":"Say hello","done_when":[{"text":"A greeting is sent"}],"ambiguity":"low"}` +
+			"\nHope this helps! Ask me about {anything}.",
+		"fenced with prose inside": "Here:\n```json\n" +
+			`{"goal":"Say hello","done_when":[{"text":"A greeting is sent"}],"ambiguity":"low"}` +
+			"\n(the conditions are checkable)\n```\nDone {ok}.",
+	} {
+		t.Run(name, func(t *testing.T) {
+			brief, err := ParseBrief(answer)
+			require.NoError(t, err)
+			require.Equal(t, "Say hello", brief.Goal)
+			require.Equal(t, []Condition{{ID: "c1", Text: "A greeting is sent"}}, brief.DoneWhen)
+		})
+	}
+}

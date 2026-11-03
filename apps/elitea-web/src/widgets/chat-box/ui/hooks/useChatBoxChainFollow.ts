@@ -20,7 +20,8 @@
  * message then, and `useReattachSeededTurn` attaches to its stream.
  *
  * It stops when the chain is over (a goal check other than `not_met`, or no
- * brief or check is expected and nothing new came within 15 s), when the
+ * brief or check is expected — a settled brief without conditions included —
+ * and nothing new came within 15 s), when the
  * person sends, stops or leaves the conversation, or after 3 minutes without
  * a change.
  */
@@ -84,7 +85,12 @@ function chainBrief(message: ChatMessage, history: readonly ChatMessage[]): Chat
   return history.slice(0, index === -1 ? history.length : index).findLast((item) => item.runBrief !== undefined)?.runBrief;
 }
 
-/** More is due from Main for this tail: its answer, a continuation, a brief or a goal check. */
+/**
+ * More is due from Main for this tail: its answer, a continuation, a brief or
+ * a goal check. A goal check is due only for a ready brief with at least one
+ * condition: Main checks nothing else, so a settled brief without conditions
+ * (a greeting) expects nothing more.
+ */
 export function chainExpectsMore(history: readonly ChatMessage[]): boolean {
   const tail = history[history.length - 1];
   if (tail === undefined) return false;
@@ -92,7 +98,8 @@ export function chainExpectsMore(history: readonly ChatMessage[]): boolean {
   if (inFlight(tail) || atStepLimit(tail)) return true;
   if (tail.goalCheck !== undefined) return false;
   const brief = chainBrief(tail, history);
-  return brief?.state === 'pending' || brief?.state === 'ready';
+  if (brief?.state === 'pending') return true;
+  return brief?.state === 'ready' && (brief.brief?.done_when.length ?? 0) > 0;
 }
 
 /** The chain is over at this tail: a goal check that starts no continuation. */

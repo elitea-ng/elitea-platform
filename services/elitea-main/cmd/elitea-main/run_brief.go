@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strconv"
 	"sync/atomic"
@@ -20,12 +19,13 @@ import (
 // service is composed before the runtime (its settle hook and the start
 // service take it), but the predict completer is composed after the runtime,
 // with the gateway client. deferredRunBriefCompleter bridges the two: until
-// the completer is set, every call fails, which reads as a failed brief and
-// "not checked".
+// the completer is set, every call fails with errRunBriefNoModelPlane, which
+// leaves a brief pending (a later call retries) and a check "not checked".
 
 // errRunBriefNoModelPlane is a call before the gateway completer is set, or
 // on a deployment without LLM_GATEWAY_URL.
-var errRunBriefNoModelPlane = errors.New("run brief: no LLM gateway is composed")
+// runbrief.ErrNoModelPlane leaves a brief pending, so a later call retries.
+var errRunBriefNoModelPlane = runbrief.ErrNoModelPlane
 
 // deferredRunBriefCompleter is runbrief.Completer over a predict completer
 // that is set later.

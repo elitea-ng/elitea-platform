@@ -17,7 +17,8 @@
 // (ADR-0045 decision 11, runbrief) when the chain has a brief with
 // conditions: met ends it completed, not_met starts a goal_not_met
 // continuation with the check's text, blocked ends it failed, and a check
-// that could not run ends it completed. With a ready brief, a step-limit
+// that could not run ends it completed. A run that stopped at a limit
+// without the grant to continue it ends the chain waiting, unchecked. With a ready brief, a step-limit
 // continuation's text restates the brief (runbrief.ContinuationText).
 //
 // A settle hook fires on replays too. The hook is idempotent: it acts only
@@ -149,7 +150,12 @@ func (h *Hook) Settle(ctx context.Context, executionID string, outcome execution
 			return h.end(ctx, chain, unattended.EndWaiting)
 		}
 		return h.continued(ctx, chain, h.continueOutputLimit(ctx, chain))
-	case view.StepLimitReached && chain.Grant.ContinueStepLimit:
+	case view.StepLimitReached:
+		if !chain.Grant.ContinueStepLimit {
+			// The person continues it: the chain waits, with no goal check
+			// (the run did not finish its work).
+			return h.end(ctx, chain, unattended.EndWaiting)
+		}
 		return h.continued(ctx, chain, h.startNext(ctx, chain, unattended.LinkStepLimit,
 			agentexecution.ContinuationQuestionID(chain.ExecutionID), h.continueText(ctx, chain)))
 	}
@@ -157,14 +163,18 @@ func (h *Hook) Settle(ctx context.Context, executionID string, outcome execution
 }
 
 // finish ends a chain whose run would end it as completed, after the goal
-// check when the chain has one.
+// check when the chain has one. A check that an infrastructure error stopped
+// ends the chain completed ("not checked"); only a continuation's start
+// error stays for a replay.
 func (h *Hook) finish(ctx context.Context, chain unattended.Chain) error {
 	if h.goals == nil {
 		return h.end(ctx, chain, unattended.EndCompleted)
 	}
 	result, checked, err := h.goals.CheckCloud(ctx, chain.RootExecutionID, chain.ExecutionID)
 	if err != nil {
-		return err
+		h.logger.WarnContext(ctx, "unattended chain: goal check failed; the chain ends not checked",
+			"chain_root_execution_id", chain.RootExecutionID, "execution_id", chain.ExecutionID, "err", err)
+		return h.end(ctx, chain, unattended.EndCompleted)
 	}
 	if !checked {
 		return h.end(ctx, chain, unattended.EndCompleted)
