@@ -639,3 +639,71 @@ async fn a_refused_model_budget_stops_the_wiki_descriptions() {
         "{text}"
     );
 }
+
+#[tokio::test]
+async fn failed_wiki_picture_reads_count_against_the_per_call_limit() {
+    let platform = FakePlatform::new();
+    let mut page = String::new();
+    for n in 0..200 {
+        let n = n.to_string();
+        page.push_str("![m.png](/.attachments/missing-");
+        page.push_str(&n);
+        page.push_str(".png)\n");
+    }
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/pages") {
+            return ok(json!({"id":12,"path":"/Home","content":page.clone()}));
+        }
+        wiki_provider(request, index)
+    });
+    let served = wiki_picture_tools(Arc::clone(&transport), Some(&platform), &json!({})).await;
+    let text = tool(&served, "get_wiki_page_by_path")
+        .execute(context(), json!({"page_name":"/Home"}))
+        .await
+        .expect("the call still answers");
+    let text = text.as_str().expect("text");
+    let limit = super::families::attachment_host::MAX_PICTURES;
+    assert_eq!(repository_reads(&transport).len(), limit);
+    assert!(platform.model_calls().is_empty());
+    assert_eq!(
+        text.matches("[image skipped: per-call image limit of 20 reached]")
+            .count(),
+        200 - limit,
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_wiki_page_too_large_with_descriptions_comes_back_without_them() {
+    let filler = "x".repeat(super::families::ado::client::MAX_OUTPUT_BYTES - 2_000);
+    let content = format!("{filler}\n![s.png](/.attachments/screenshot.png)\n");
+    let dropped = super::families::ado::inline_images::DESCRIPTIONS_DROPPED;
+    let page = content.clone();
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/pages") {
+            return ok(json!({"id":12,"path":"/Home","content":page.clone()}));
+        }
+        wiki_provider(request, index)
+    });
+    let platform = FakePlatform::new();
+    platform.reply(&"d".repeat(4_000));
+    platform.reply(&"d".repeat(4_000));
+    let served = wiki_picture_tools(Arc::clone(&transport), Some(&platform), &json!({})).await;
+    // A page read by path: the text without descriptions, and a note.
+    let text = tool(&served, "get_wiki_page_by_path")
+        .execute(context(), json!({"page_name":"/Home"}))
+        .await
+        .expect("the page fits without its descriptions");
+    assert_eq!(text, json!(format!("{content}\n\n{dropped}")));
+    // get_wiki_page: the page without descriptions, and the note beside it.
+    let page = tool(&served, "get_wiki_page")
+        .execute(
+            context(),
+            json!({"page_path":"/Home","include_content":true}),
+        )
+        .await
+        .expect("the page fits without its descriptions");
+    assert_eq!(page["page"]["content"], content.as_str());
+    assert_eq!(page["image_descriptions"], dropped);
+    assert_eq!(platform.model_calls().len(), 2);
+}

@@ -74,10 +74,11 @@ With `process_images` on, the agent worker describes the images in the result wi
 
 - **Get comments** adds an `image-description` attribute to each `<img>` tag. Below each markdown image, it adds a line `[image-description: ...]`.
 - **Get work item** describes the images in the fields only when `parse_attachments` is also on.
-- The worker reads each image through the toolkit connection, with the same limits as **Get image by url**. One call describes a maximum of 20 images and downloads a maximum of 12 MB. A larger image (more than 5 MB) is not described.
+- The worker reads each image through the toolkit connection, with the same limits as **Get image by url**. One call reads a maximum of 20 images and describes a maximum of 12 MB. A failed download also counts as one of the 20. A link that is not an Azure DevOps attachment gets a note and does not count. A larger image (more than 5 MB) is not described.
 - The worker reads each image one time, also when the result refers to it more than one time.
 - When the worker cannot read or describe an image, it adds a short note, for example `[image unavailable: ...]` or `[image skipped: ...]`. The tool call does not fail.
 - When the agent has no chat model, the result comes back with the images not described.
+- When the descriptions make the result larger than the tool result limit (512 KB), the result comes back without descriptions. A note `[image descriptions dropped: ...]` tells the agent why: in the `image_descriptions` key of a work item, or as the last item of the comment list.
 </Note>
 
 <Note>

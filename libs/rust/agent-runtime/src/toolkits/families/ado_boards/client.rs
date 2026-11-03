@@ -15,6 +15,7 @@ use crate::toolkits::families::ado::client::{
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
 use crate::toolkits::families::ado::format::{as_dict, python_json_string};
 use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
+use crate::toolkits::families::ado::inline_images::bounded_described;
 use crate::toolkits::families::ado::work_items::{
     DEFAULT_SEARCH_FIELDS, FieldDefinition, WORK_ITEMS_API, create_work_item,
     format_work_item_type_fields, get_work_item, id_text, transform_work_item, update_work_item,
@@ -415,11 +416,13 @@ impl AdoBoardsClient {
                         comments.truncate(comments.len().saturating_sub(drop));
                     }
                     if request.process_images {
+                        let plain = Value::Array(comments.clone());
                         self.describe_comment_images(
                             &mut comments,
                             request.image_description_prompt,
                         )
                         .await;
+                        return bounded_described(plain, Value::Array(comments));
                     }
                     return bounded_output(Value::Array(comments));
                 }

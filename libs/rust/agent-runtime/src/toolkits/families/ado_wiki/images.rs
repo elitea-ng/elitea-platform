@@ -15,9 +15,9 @@ use serde_json::Value;
 
 use crate::toolkits::families::ado::client::{AdoClientError, AdoRequest};
 use crate::toolkits::families::ado::inline_images::{
-    Picture, annotate_wiki, describe_references, wiki_image_links,
+    Target, annotate_wiki, describe_references, wiki_image_links,
 };
-use crate::toolkits::families::ado_boards::attach::checked_picture;
+use crate::toolkits::families::ado::pictures::checked_picture;
 
 use super::client::AdoWikiClient;
 
@@ -92,32 +92,37 @@ impl AdoWikiClient {
         };
         // Read once per call, and only when a picture is to be read.
         let repository = tokio::sync::OnceCell::new();
-        let annotations =
-            describe_references(links.into_iter().map(|(_, url)| url), host, prompt, |url| {
+        let annotations = describe_references(
+            links.into_iter().map(|(_, url)| url),
+            host,
+            prompt,
+            |url| {
+                let target = link_target(url);
+                if !has_image_extension(target) {
+                    Target::Skip
+                } else if target.starts_with(ATTACHMENTS_PREFIX) {
+                    Target::Fetch(target.to_owned())
+                } else {
+                    Target::Unavailable(
+                        "only wiki attachments are read; external images are not fetched"
+                            .to_owned(),
+                    )
+                }
+            },
+            |target| {
                 let repository = &repository;
                 async move {
-                    let target = link_target(&url);
-                    if !has_image_extension(target) {
-                        return Picture::Skip;
-                    }
-                    if !target.starts_with(ATTACHMENTS_PREFIX) {
-                        return Picture::Unavailable(
-                            "only wiki attachments are read; external images are not fetched"
-                                .to_owned(),
-                        );
-                    }
                     let Ok(repository) = repository
                         .get_or_try_init(|| self.wiki_repository(wiki))
                         .await
                     else {
-                        return Picture::Unavailable(
-                            "the wiki's repository could not be read".to_owned(),
-                        );
+                        return Err("the wiki's repository could not be read".to_owned());
                     };
-                    self.read_attachment(repository, target).await
+                    self.read_attachment(repository, &target).await
                 }
-            })
-            .await;
+            },
+        )
+        .await;
         annotate_wiki(content, &annotations)
     }
 
@@ -151,12 +156,16 @@ impl AdoWikiClient {
         })
     }
 
-    async fn read_attachment(&self, repository: &WikiRepository, target: &str) -> Picture {
+    async fn read_attachment(
+        &self,
+        repository: &WikiRepository,
+        target: &str,
+    ) -> Result<(Vec<u8>, &'static str), String> {
         let relative = percent_encoding::percent_decode_str(target.trim_start_matches('/'))
             .decode_utf8_lossy()
             .into_owned();
         if relative.split('/').any(|segment| segment == "..") {
-            return Picture::Unavailable("the attachment path is not valid".to_owned());
+            return Err("the attachment path is not valid".to_owned());
         }
         let path = if repository.prefix.is_empty() {
             format!("/{relative}")
@@ -173,22 +182,20 @@ impl AdoWikiClient {
         let bytes = match self.ado.bytes(request, false).await {
             Ok(bytes) => bytes,
             Err(error) => {
-                return match error.code() {
+                return Err(match error.code() {
                     crate::toolkits::families::ado::client::AdoClientErrorCode::ResourceExhausted => {
-                        Picture::Unavailable("image exceeds the 5 MB processing limit".to_owned())
+                        "image exceeds the 5 MB processing limit".to_owned()
                     }
                     crate::toolkits::families::ado::client::AdoClientErrorCode::NotFound => {
-                        Picture::Unavailable("the attachment was not found in the wiki".to_owned())
+                        "the attachment was not found in the wiki".to_owned()
                     }
-                    _ => Picture::Unavailable("could not download the attachment".to_owned()),
-                };
+                    _ => "could not download the attachment".to_owned(),
+                });
             }
         };
         let name = relative.rsplit('/').next().unwrap_or(relative.as_str());
-        match checked_picture(&bytes, name) {
-            Ok(media_type) => Picture::Read(bytes, media_type),
-            Err(reason) => Picture::Unavailable(reason),
-        }
+        let media_type = checked_picture(&bytes, name)?;
+        Ok((bytes, media_type))
     }
 }
 

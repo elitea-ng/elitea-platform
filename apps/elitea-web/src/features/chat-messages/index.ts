@@ -118,6 +118,7 @@ export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';
 export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer.types';
 export type { AnswerCanvasSelection } from './ui/chat-box/AnswerContent';
 export { canvasByteRange, canvasKindForSelection } from './lib/canvasSelection';
+export { isCanvasMessageItem } from './lib/canvasMessageItem';
 export { isEscapeConsumedInside } from './lib/canvasEditorKeys';
 export { ChatContinue } from './ui/chat-continue/ChatContinue';
 export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';

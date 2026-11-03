@@ -4,7 +4,8 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk, bounded_output};
+use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk};
+use crate::toolkits::families::ado::inline_images::bounded_described;
 use crate::toolkits::families::ado::toolset::{
     AdoToolExecutor, AdoToolKind, AdoToolsetError, MAX_IDENTIFIER_BYTES, MAX_TEXT_BYTES,
     build_toolset, invalid_arguments, optional_bool, optional_i64, optional_str,
@@ -576,8 +577,9 @@ async fn dispatch(
                 .await;
             match item {
                 Ok(Value::Object(mut item)) if parse_attachments && process_images => {
+                    let plain = Value::Object(item.clone());
                     client.describe_work_item_images(&mut item, prompt).await;
-                    bounded_output(Value::Object(item))
+                    bounded_described(plain, Value::Object(item))
                 }
                 other => other,
             }

@@ -11,7 +11,7 @@
 use serde_json::{Map, Value};
 
 use crate::toolkits::families::ado::inline_images::{
-    Picture, annotate, describe_references, html_image_sources, markdown_image_urls,
+    Target, annotate, describe_references, html_image_sources, markdown_image_urls,
 };
 
 use super::client::AdoBoardsClient;
@@ -108,12 +108,16 @@ impl AdoBoardsClient {
             return None;
         };
         Some(
-            describe_references(references, host, prompt, |url| async move {
-                match self.fetch_attachment_picture(&url, None).await {
-                    Ok((bytes, media_type)) => Picture::Read(bytes, media_type),
-                    Err(reason) => Picture::Unavailable(reason),
-                }
-            })
+            describe_references(
+                references,
+                host,
+                prompt,
+                |url| match self.attachment_target(url, None) {
+                    Ok(target) => Target::Fetch(target),
+                    Err(reason) => Target::Unavailable(reason),
+                },
+                |target| async move { self.download_attachment_picture(&target).await },
+            )
             .await,
         )
     }

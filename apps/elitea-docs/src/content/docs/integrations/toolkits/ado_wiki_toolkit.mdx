@@ -71,9 +71,10 @@ With `process_images` on, the agent worker describes the images in the page cont
 - **Get wiki page** describes images only when `include_content` is on.
 - The worker reads only wiki attachments (`/.attachments/...`), from the wiki repository, through the toolkit connection. It does not get images from other sites. These images keep their link and get a note.
 - A link to a file that is not an image, for example a PDF, does not change.
-- One call describes a maximum of 20 images and downloads a maximum of 12 MB. A larger image (more than 5 MB) is not described.
+- One call reads a maximum of 20 images and describes a maximum of 12 MB. A failed download also counts as one of the 20. A link to another site or to a file that is not an image does not count. A larger image (more than 5 MB) is not described.
 - When the worker cannot read or describe an image, it adds a short note below the link, for example `[image unavailable: ...]`. The tool call does not fail.
 - When the agent has no chat model, the page comes back with the images not described.
+- When the descriptions make the result larger than the tool result limit (512 KB), the page comes back without descriptions. A note `[image descriptions dropped: ...]` tells the agent why: below the page text, or in the `image_descriptions` key of a **Get wiki page** result.
 </Note>
 
 <Note>

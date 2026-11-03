@@ -4,7 +4,8 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
-use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk, bounded_output};
+use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk};
+use crate::toolkits::families::ado::inline_images::bounded_described;
 use crate::toolkits::families::ado::toolset::{
     AdoToolExecutor, AdoToolKind, AdoToolsetError, MAX_IDENTIFIER_BYTES, MAX_TEXT_BYTES,
     build_toolset, invalid_arguments, optional_bool, optional_id, optional_str,
@@ -284,7 +285,9 @@ fn path_argument<'a>(arguments: &'a Map<String, Value>, key: &str) -> adk_core::
 }
 
 /// A page read's result with its pictures described when `process_images`
-/// is on (images.rs), bounded again because descriptions add text.
+/// is on (images.rs), bounded again because descriptions add text. A
+/// page that fits without its descriptions is returned without them, with
+/// a note, when they make it too large.
 async fn described(
     client: &AdoWikiClient,
     wiki: Option<&str>,
@@ -294,7 +297,8 @@ async fn described(
 ) -> Result<Value, AdoClientError> {
     match page {
         Ok(value) if process_images => {
-            bounded_output(describe_result(client, wiki, value, prompt).await)
+            let plain = value.clone();
+            bounded_described(plain, describe_result(client, wiki, value, prompt).await)
         }
         other => other,
     }

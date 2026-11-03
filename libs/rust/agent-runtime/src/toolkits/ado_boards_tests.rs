@@ -1609,3 +1609,132 @@ async fn work_item_field_pictures_are_described_with_parse_attachments() {
     assert!(!off.to_string().contains("image-description"));
     assert_eq!(platform.model_calls().len(), 1);
 }
+
+#[tokio::test]
+async fn failed_picture_reads_count_against_the_per_call_limit() {
+    // 200 pictures that each fail to download: the call reads at most
+    // MAX_PICTURES of them, not 200.
+    let platform = FakePlatform::new();
+    let mut html = String::new();
+    for n in 0..200 {
+        html.push_str(r#"<img src="https://dev.azure.com/contoso/_apis/wit/attachments/gone-"#);
+        html.push_str(&n.to_string());
+        html.push_str(r#"?fileName=p.png">"#);
+    }
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/workItems/5/comments") {
+            return ok(json!({"comments":[{"id":1,"text":"x","renderedText":html.clone()}]}));
+        }
+        if request
+            .path
+            .starts_with("/contoso/_apis/wit/attachments/gone-")
+        {
+            return status(StatusCode::NOT_FOUND, None);
+        }
+        picture_provider(request, index)
+    });
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let text = comments_text(&served, json!({"work_item_id":5,"process_images":true})).await;
+    let limit = super::families::attachment_host::MAX_PICTURES;
+    assert_eq!(attachment_reads(&transport), limit);
+    assert!(platform.model_calls().is_empty());
+    assert_eq!(
+        text.matches("[image unavailable: could not download the attachment")
+            .count(),
+        limit,
+        "{text}"
+    );
+    assert_eq!(
+        text.matches("[image skipped: per-call image limit of 20 reached]")
+            .count(),
+        200 - limit,
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn a_reference_that_is_not_read_does_not_count_against_the_limit() {
+    // 30 links that are not attachment URLs are refused without a request
+    // and leave the call's pictures for the real one after them.
+    let platform = FakePlatform::new();
+    platform.reply("The real picture.");
+    let mut html = String::new();
+    for n in 0..30 {
+        html.push_str(r#"<img src="https://example.com/"#);
+        html.push_str(&n.to_string());
+        html.push_str(r#".png">"#);
+    }
+    html.push_str(r#"<img src=""#);
+    html.push_str(PICTURE);
+    html.push_str(r#"">"#);
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/workItems/5/comments") {
+            return ok(json!({"comments":[{"id":1,"text":"x","renderedText":html.clone()}]}));
+        }
+        picture_provider(request, index)
+    });
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let text = comments_text(&served, json!({"work_item_id":5,"process_images":true})).await;
+    assert!(text.contains("The real picture."), "{text}");
+    assert_eq!(attachment_reads(&transport), 1);
+    assert!(!text.contains("per-call image limit"), "{text}");
+}
+
+/// Markup that fits one tool result only without its picture description.
+fn near_limit_markup() -> String {
+    let filler = "x".repeat(super::families::ado::client::MAX_OUTPUT_BYTES - 2_000);
+    format!("<p>{filler}</p><img src=\"{PICTURE}\">")
+}
+
+#[tokio::test]
+async fn comments_too_large_with_descriptions_come_back_without_them() {
+    let platform = FakePlatform::new();
+    platform.reply(&"d".repeat(4_000));
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/workItems/5/comments") {
+            return ok(
+                json!({"comments":[{"id":1,"text":"x","renderedText":near_limit_markup()}]}),
+            );
+        }
+        picture_provider(request, index)
+    });
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let comments = tool(&served, "get_comments")
+        .execute(context(), json!({"work_item_id":5,"process_images":true}))
+        .await
+        .expect("the comments fit without their descriptions");
+    let comments = comments.as_array().expect("a list");
+    assert_eq!(comments.len(), 2, "the comment and the note");
+    assert_eq!(comments[0]["rendered_text"], near_limit_markup());
+    assert_eq!(
+        comments[1],
+        super::families::ado::inline_images::DESCRIPTIONS_DROPPED
+    );
+    assert_eq!(platform.model_calls().len(), 1);
+}
+
+#[tokio::test]
+async fn a_work_item_too_large_with_descriptions_comes_back_without_them() {
+    let platform = FakePlatform::new();
+    platform.reply(&"d".repeat(4_000));
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/wit/workitems/42") {
+            return ok(work_item(
+                42,
+                &json!({"System.Title":"T","System.Description":near_limit_markup()}),
+            ));
+        }
+        picture_provider(request, index)
+    });
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let item = tool(&served, "get_work_item")
+        .execute(context(), json!({"id":42,"parse_attachments":true}))
+        .await
+        .expect("the work item fits without its descriptions");
+    assert_eq!(item["System.Description"], near_limit_markup());
+    assert_eq!(
+        item["image_descriptions"],
+        super::families::ado::inline_images::DESCRIPTIONS_DROPPED
+    );
+    assert_eq!(platform.model_calls().len(), 1);
+}
