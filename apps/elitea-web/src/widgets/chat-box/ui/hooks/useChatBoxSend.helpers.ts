@@ -182,6 +182,8 @@ export function buildStartBody(params: {
   readonly modelName: string | undefined;
   readonly isApplicationTurn: boolean;
   readonly participantId: number | undefined;
+  /** The person's unattended grant (ADR-0045, `ChatUnattendedRequest`); absent while unattended mode is off. */
+  readonly unattended?: Readonly<Record<string, unknown>> | undefined;
 }): Record<string, unknown> | undefined {
   const { payload } = params;
   const question = typeof payload['question'] === 'string' ? payload['question'] : '';
@@ -213,6 +215,7 @@ export function buildStartBody(params: {
     interaction_uuid: crypto.randomUUID(),
     mcp_tokens: params.mcpTokens ?? {},
     ...mentions,
+    ...(params.unattended === undefined ? {} : { unattended: params.unattended }),
     payload: {
       user_input: question,
       ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}),

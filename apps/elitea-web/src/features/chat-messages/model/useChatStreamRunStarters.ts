@@ -34,6 +34,7 @@ import {
   type ContinueAgentExecutionParams,
   type StartAgentExecutionParams,
 } from "@/entities/conversation/api/conversationApi";
+import { unattendedRefusalText } from "@/features/unattended";
 import { EliteaApiError } from "@/shared/api/generated/mutator";
 
 /**
@@ -131,6 +132,9 @@ function isRegenerationPending(error: unknown): boolean {
 }
 
 function serverFailureMessage(body: unknown, status: number): string {
+  // A refused unattended grant (ADR-0045) names the tool and the reason.
+  const refusal = unattendedRefusalText(body);
+  if (refusal !== undefined) return refusal;
   if (typeof body === "object" && body !== null) {
     const value = body as Readonly<Record<string, unknown>>;
     for (const field of ["safe_message", "message", "error"] as const) {

@@ -84,4 +84,10 @@ export interface ChatMessage {
    * `question_id`, persisted as the question row's uuid.
    */
   readonly interjected?: boolean | undefined;
+  /** Persisted `meta.continued_automatically` (ADR-0045): Main started this turn by itself in an unattended run chain. On an answer, set only when its question has no mark. */
+  readonly continuedAutomatically?: boolean | undefined;
+  /** The continuation's place in its chain (`meta.unattended.continuation_index`, 1 for the first), when known. */
+  readonly continuationIndex?: number | undefined;
+  /** Persisted `meta.step_limit_reached`: the answer stopped at its step limit in an unattended run. Live answers carry it in `responseMetadata`. */
+  readonly stepLimitReached?: boolean | undefined;
 }

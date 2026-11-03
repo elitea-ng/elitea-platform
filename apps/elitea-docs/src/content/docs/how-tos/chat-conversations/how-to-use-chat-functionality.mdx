@@ -1,6 +1,6 @@
 ---
 title: "Use chat"
-description: "Send messages, organize conversations into folders, attach agents and toolkits as participants, and manage message output in Elitea chat."
+description: "Send messages, organize conversations into folders, attach agents and toolkits as participants, manage message output, and run long tasks unattended in Elitea chat."
 ---
 
 Chat is where you talk to models, agents, pipelines, toolkits, and MCP servers in one conversation. Every conversation keeps its own context — nothing is shared between conversations unless you attach the same participant to more than one.
@@ -62,6 +62,23 @@ Click the model selector to pick an LLM. Click the settings icon next to it to a
 Below an assistant message you get **Read out** (if voice is configured — see [Voice](/menus/chat#voice)), **Copy**, **Regenerate**, and **Delete**. To change your own last message, use its **Edit** action: the message becomes editable, any attachments stay attached unless you remove them, and **Save and apply** re-sends it and regenerates the answer. **Regenerate** replaces the answer text in place. If the answer holds a [canvas](/how-tos/chat-conversations/how-to-canvas#regenerating-a-reply-that-holds-a-canvas), the canvas and its saved versions stay in the message.
 
 Next to those, a thumbs-up and thumbs-down let you rate an assistant answer. Selecting one highlights it and, once you've rated a message, a comment icon appears so you can attach an optional note explaining why. Hover either thumb to see how many teammates rated the message the same way; changing your mind (clicking the other thumb, or clicking your own vote again) updates or clears your rating. A rated message keeps its feedback when the conversation is exported.
+
+## Run unattended
+
+Use unattended mode for a long task that must continue while you are away. You give a grant before you send. The grant tells the platform which questions it can answer for you in this task.
+
+1. Above the message box, click **Run unattended…**.
+2. Read each part of the grant and set it:
+   - **Continue at the step limit**: when the run stops at its step limit, the platform starts a new turn with "Continue from where you stopped."
+   - **Continue at the output limit**: when the answer stops at the output limit, the platform continues the same answer.
+   - **Sensitive tools**: select the tools of the agent that can run without a pause. The list shows the tools that the agent's toolkits select. A tool that you do not select still pauses for your approval.
+   - **Chain limits**: the most automatic continuations (default 20), the most spend in USD (default: the spend cap of one run × 10) and the deadline in hours (default 12). An empty field takes the platform default.
+3. Click **Start**. A notice above the message box shows the grant. Click **Edit** to change it, or **Turn off** to stop unattended mode.
+4. Send your message. Each message that you send in unattended mode starts a new task with its own grant.
+
+In the conversation, each turn that the platform started for you shows **Continued automatically** with its number in the task. An answer that stopped at its step limit shows a notice. The task ends when it is complete, when it waits for a question that the grant does not answer, or when it reaches a chain limit.
+
+The grant never lifts your organization's guardrails, budgets, run caps or kill switches. If the platform cannot accept the grant, the message is not sent, and the error names the tool and the reason. For example, a tool in a category that your administrator keeps out of grants (by default, payments) is refused. Clear that tool in the grant and send again. Administrators set the rules in [Unattended grants](/admin/enterprise-controls/runtime-safety#unattended-grants).
 
 ## Related
 

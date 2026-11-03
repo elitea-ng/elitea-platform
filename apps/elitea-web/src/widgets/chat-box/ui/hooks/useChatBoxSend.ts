@@ -94,6 +94,7 @@ export interface UseChatBoxSendParams {
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
+  /** The `unattended` field of the next start (ADR-0045), read at each send; undefined while the mode is off. */ readonly unattended?: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
   /** Steering frames of the owned run (contract 1.27), passed to the transport. */
   readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
@@ -156,7 +157,7 @@ export interface UseChatBoxSendResult {
 export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
-  const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend, unattended } = params;
   const modelRequest = useMemo(
     () => ({
       modelName: resolveSendModelName(params.llmSettings, params.model?.name),
@@ -222,6 +223,7 @@ export function useChatBoxSend(
           (isApplicationTurn
             ? positiveParticipantId(payload["participant_id"])
             : undefined) ?? targetParticipantId,
+        unattended: unattended?.(),
       });
       // No body can satisfy this contract (an agent turn with no addressable
       // participant). The socket fallback takes it rather than a POST that is
@@ -240,8 +242,7 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       modelRequest,
-      getInternalToolsForSend,
-      target,
+      getInternalToolsForSend, target, unattended,
     ],
   );
 

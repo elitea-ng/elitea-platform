@@ -194,6 +194,12 @@ export interface MessageGroupMetaWire {
    * "absent" and "0" mean the same thing to a reader).
    */
   readonly memories_used?: number;
+  /** ADR-0045: Main started this turn by itself in an unattended run chain (`internal/infra/db/repos/agent_execution_chains.go`). */
+  readonly continued_automatically?: boolean;
+  /** ADR-0045: the chain position of a continued message. */
+  readonly unattended?: { readonly grant_id?: string; readonly chain_root_execution_id?: string; readonly continuation_index?: number };
+  /** ADR-0045: the response stopped at its step limit under an unattended grant. */
+  readonly step_limit_reached?: boolean;
 }
 
 /**

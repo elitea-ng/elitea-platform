@@ -52,6 +52,7 @@ import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
 import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
+import { ChatBoxUnattendedControls } from './ChatBoxUnattended'; import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
 import { ChatEmptyGreeting } from './ChatEmptyGreeting';
 import { chatColumnSx, chatShellSx } from './ChatBox.layout';
@@ -105,10 +106,11 @@ const ChatBoxInner = memo(function ChatBox({
   const messages = data.messageList.messages;
 
   // Participant normalisation + details fetch
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated } = useChatBoxParticipant({
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools } = useChatBoxParticipant({
     activeParticipant, conversationParticipants, isAgentsPage,
   });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
+  const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest); // ADR-0045: the grant each send carries while unattended mode is on
 
   // Local state (mentions, slash/skill phases, participant guards, etc.) —
   // called after participant normalisation so its version-missing guard can
@@ -171,7 +173,7 @@ const ChatBoxInner = memo(function ChatBox({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
     activeParticipant, participants: conversationParticipants, userName, userAvatar,
-    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
+    llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent, unattended: unattended.wire,
   });
   useChatBoxInterruptLedger({ projectId, conversationUuid, messages, setChatHistory: data.setChatHistory, reattach: reattachStreamedExecution }); // per-interrupt cards across tabs; a fan-out wake attaches
   // After `useChatBoxSend`: a "+" pick on a chat with no conversation has to create one first, and it reuses the adapter the first send would have used, so an eagerly created conversation is seeded exactly like a send-created one.
@@ -219,7 +221,6 @@ const ChatBoxInner = memo(function ChatBox({
       onDeleteAllMessages?.();
     },
   });
-
 
   // Version selection (real fetch + persist) + auto-recovery
   const { handleSelectVersion } = useChatBoxVersioning({
@@ -310,7 +311,6 @@ const ChatBoxInner = memo(function ChatBox({
     stopAll: stopGeneration,
   }), [handleClearRef, stopGeneration]);
 
-
   // Early return
   if (hidden) return null;
 
@@ -357,7 +357,7 @@ const ChatBoxInner = memo(function ChatBox({
             onAddParticipant: entityParticipantActions.onSelectParticipant,
           })}
         />
-        {contextIndicator}
+        {contextIndicator}<ChatBoxUnattendedControls unattended={unattended} disabled={isInputLoading} />
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}

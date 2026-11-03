@@ -67,6 +67,30 @@ describe("classifyStartFailure", () => {
     ).toEqual({ started: false, reason: "rejected", message });
   });
 
+  it("names the tool and the reason of a refused unattended grant (ADR-0045)", () => {
+    expect(
+      classifyStartFailure(
+        httpError(422, {
+          error: "unattended_grant_refused",
+          message: "The unattended grant was refused: category_withheld.",
+          reason: "category_withheld",
+          field: "sensitive_tools",
+          tool: "stripe/create_charge",
+        }),
+      ),
+    ).toEqual({
+      started: false,
+      reason: "rejected",
+      message:
+        "The unattended grant was refused. The tool stripe/create_charge is in a category that the platform keeps out of grants. Change the grant and send again.",
+    });
+    expect(
+      classifyStartFailure(
+        httpError(422, { error: "unattended_grant_refused", reason: "over_maximum", field: "chain.max_continuations" }),
+      ),
+    ).toMatchObject({ message: expect.stringContaining("The value of chain.max_continuations is more than the platform maximum.") });
+  });
+
   it("prefers safe_message, the field every Go producer actually writes", () => {
     expect(
       classifyStartFailure(

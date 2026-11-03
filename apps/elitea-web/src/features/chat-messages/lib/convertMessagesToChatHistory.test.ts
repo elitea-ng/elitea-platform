@@ -355,3 +355,27 @@ describe('persisted assistant authors', () => {
     expect(convertMessagesToChatHistory([message], participants)[0]?.authorName).toBeUndefined();
   });
 });
+
+describe('unattended run marks (ADR-0045)', () => {
+  const at = '2026-01-01T12:00:00Z';
+  it('marks a continued question with its chain position and keeps the mark off its answer', () => {
+    const rows = [
+      { id: 10, uuid: 'q-1', role: 'user', content: 'Continue.', created_at: at, meta: { continued_automatically: true, unattended: { continuation_index: 2 } } },
+      { id: 11, uuid: 'a-1', role: 'assistant', reply_to_id: 10, content: 'Done.', created_at: at, meta: { continued_automatically: true, unattended: { continuation_index: 2 } } },
+    ] as unknown as readonly MessageGroupWire[];
+    const [question, answer] = convertMessagesToChatHistory(rows, []);
+    expect(question).toMatchObject({ continuedAutomatically: true, continuationIndex: 2 });
+    expect(answer?.continuedAutomatically).toBeUndefined();
+  });
+
+  it('marks an answer that Main continued without a new question, and a step-limit stop', () => {
+    const rows = [
+      { id: 20, uuid: 'q-2', role: 'user', content: 'Write the report.', created_at: at },
+      { id: 21, uuid: 'a-2', role: 'assistant', reply_to_id: 20, content: 'Part one', created_at: at, meta: { continued_automatically: true, step_limit_reached: true } },
+    ] as unknown as readonly MessageGroupWire[];
+    const [question, answer] = convertMessagesToChatHistory(rows, []);
+    expect(question?.continuedAutomatically).toBeUndefined();
+    expect(answer).toMatchObject({ continuedAutomatically: true, stepLimitReached: true });
+    expect(answer?.continuationIndex).toBeUndefined();
+  });
+});
