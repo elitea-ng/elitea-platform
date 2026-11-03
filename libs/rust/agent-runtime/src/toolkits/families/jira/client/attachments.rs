@@ -30,16 +30,17 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::toolkits::families::attachment_host::{
-    AttachmentError, MAX_ATTACH_BYTES, MAX_PICTURE_BYTES, PictureTally, Step, describe_for_text,
-    detect_media_type, is_inline_media, multipart_upload, picture_prompt, upload_name_is_valid,
+    AttachmentError, MAX_ATTACH_BYTES, MAX_PICTURE_BYTES, NO_READABLE_TEXT, PictureTally,
+    SDK_IMAGE_PROMPT, Step, describe_for_text, detect_media_type, is_inline_media,
+    multipart_upload, picture_prompt, upload_name_is_valid,
 };
 use crate::toolkits::families::office_host::OfficeFailure;
 use crate::toolkits::families::python_repr::repr_str_list;
 
 /// `JiraApiWrapper._get_default_image_analysis_prompt`, verbatim (indentation included).
 const DEFAULT_IMAGE_PROMPT: &str = "\n        ## Image Analysis Task:\n        Analyze this image and describe it in detail, focusing on structural elements and UI components rather than specific content details.\n        Consider image type and context:\n        ## Image Type: Diagrams (e.g., Sequence Diagram, Context Diagram, Component Diagram)\n        **Prompt**:\n        \"Analyze the given diagram to identify and describe the connections and relationships between components. Provide a detailed flow of interactions, highlighting key elements and their roles within the system architecture. Provide result in functional specification format ready to be used by BA's, Developers and QA's.\"\n        ## Image Type: Application Screenshots\n        **Prompt**:\n        \"Examine the application screenshot to construct a functional specification. Detail the user experience by identifying and describing all UX components, their functions, and the overall flow of the screen.\"\n        ## Image Type: Free Form Screenshots (e.g., Text Documents, Excel Sheets)\n        **Prompt**:\n        \"Extract and interpret the text from the screenshot. Establish and describe the relationships between the text and any visible components, providing a comprehensive understanding of the content and context.\"\n        ## Image Type: Mockup Screenshots\n        **Prompt**:\n        \"Delve into the UX specifics of the mockup screenshot. Offer a detailed description of each component, focusing on design elements, user interactions, and the overall user experience.\"\n\n        Focus on:\n        1. UI components and their arrangement (buttons, forms, navigation elements, etc.)\n        2. Visual structure and layout patterns\n        3. Functional elements if it's a screenshot or diagram\n        4. General purpose and type of the interface or diagram shown\n        5. Overall context and functionality represented\n\n        ### Instructions and Important guidelines:\n        - Prioritize describing the PURPOSE and FUNCTION of interface elements over their specific content\n        - For media content (like movie/video thumbnails), mention the presence of media elements but DON'T focus on specific titles\n        - For text fields, describe their purpose (e.g., \"username field\", \"search box\") rather than the exact text entered\n        - For diagrams, focus on the type of relationship shown rather than specific entity names\n        - Provide a comprehensive description that focuses on HOW the interface works rather than the specific content displayed\n        - Ensure clarity and precision in the analysis for each image type.\n        - Avoid introducing information does not present in the image.\n        - Maintain a structured and logical flow in the output to enhance understanding and usability.\n        - Avoid presenting the entire prompt for user.\n        ";
-/// `image_processing_prompt` of the SDK's content parser, verbatim: what the image loader sends for an attachment.
-const ATTACHMENT_IMAGE_PROMPT: &str = "\nYou are an AI model designed for analyzing images. Your task is to accurately describe the content of the given image. Depending on the type of image, follow these specific instructions:\n\nIf the image is a diagram (e.g., chart, table, pie chart, bar graph, etc.):\n\nIdentify the type of diagram.\nExtract all numerical values, labels, axis titles, headings, legends, and any other textual elements.\nDescribe the relationships or trends between the data, if visible.\nIf the image is a screenshot:\n\nDescribe what is shown in the screenshot.\nIf it is a software interface, identify the program or website name (if visible).\nList the key interface elements (e.g., buttons, menus, text fields, images, headers).\nIf there is text, extract it.\nIf the screenshot shows a conversation, describe the participants, the content of the messages, and timestamps (if visible).\nIf the image is a photograph:\n\nDescribe the main objects, people, animals, or elements visible in the photo.\nSpecify the setting (e.g., indoors, outdoors, nature, urban area).\nIf possible, identify the actions being performed by people or objects in the photo.\nIf the image is an illustration or drawing:\n\nDescribe the style of the illustration (e.g., realistic, cartoonish, abstract).\nIdentify the main elements, their colors, and the composition of the image.\nIf there is text, extract it.\nIf the image contains text:\n\nExtract all text from the image.\nSpecify the format of the text (e.g., heading, paragraph, list).\nIf the image is a mixed type (e.g., a diagram within a screenshot):\n\nIdentify all types of content present in the image.\nPerform an analysis for each type of content separately, following the relevant instructions above.\nIf the image does not fit into any of the above categories:\n\nProvide a detailed description of what is shown in the image.\nHighlight any visible details that could help in understanding the image.\nBe as precise and thorough as possible in your responses. If something is unclear or illegible, state that explicitly.\n";
+/// What the image loader sends for an attachment.
+const ATTACHMENT_IMAGE_PROMPT: &str = SDK_IMAGE_PROMPT;
 
 /// The most attachments of one issue `get_attachments_content` reads.
 const MAX_LISTED_ATTACHMENTS: usize = 100;
@@ -1206,19 +1207,17 @@ impl JiraClient {
         filename: &str,
     ) -> String {
         let Some(host) = self.attachments.as_ref() else {
-            return "[No readable text detected by LLM]".to_owned();
+            return NO_READABLE_TEXT.to_owned();
         };
         match describe_for_text(host, bytes, filename, ATTACHMENT_IMAGE_PROMPT.to_owned()).await {
-            Ok(description) if description.trim().is_empty() => {
-                "[No readable text detected by LLM]".to_owned()
-            }
+            Ok(description) if description.trim().is_empty() => NO_READABLE_TEXT.to_owned(),
             Ok(description) => description,
             Err(error) => {
                 let note = if matches!(
                     error,
                     AttachmentError::Host(Step::Model, OfficeFailure::NoModel)
                 ) {
-                    "[No readable text detected by LLM]".to_owned()
+                    NO_READABLE_TEXT.to_owned()
                 } else {
                     format!("[Image: {filename} - not described: {}]", error.sentence())
                 };

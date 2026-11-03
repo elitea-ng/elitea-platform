@@ -142,7 +142,8 @@ export function ApplicationAnswer({
   const hasTextContent = !!answer.content || items.length > 0;
   // #1098: a regeneration keeps the canvas and clears the words, so the
   // loader waits for WORDS, not for any item.
-  const hasWords = !!answer.content || items.some((item) => item.kind === 'text');
+  const textItems = items.filter((item) => item.kind === 'text');
+  const hasWords = !!answer.content || textItems.length > 0;
 
   /*
    * "Open as document" (issue #879) — the WHOLE answer carved into a
@@ -236,7 +237,6 @@ export function ApplicationAnswer({
     />
   ) : null;
   const continuationFailed = !!exception && answer.failureCode === 'OUTPUT_CONTINUATION_EXHAUSTED';
-  const textItems = items.filter((item) => item.kind === 'text');
   const partialOutput = textItems.length > 0
     ? textItems.map((item) => item.content).join('\n\n')
     : answer.content;

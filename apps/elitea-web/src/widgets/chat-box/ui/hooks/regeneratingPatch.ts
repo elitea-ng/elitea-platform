@@ -12,13 +12,8 @@
  * hide the new streamed `content` (AnswerContent shows `content` only when no
  * text item states it).
  */
+import { isCanvasMessageItem } from '@/features/chat-messages';
 import type { ChatMessage } from '@/features/chat-messages';
-
-const CANVAS_MESSAGE_ITEM_TYPE = 'canvas_message';
-
-function isCanvasItem(item: unknown): boolean {
-  return typeof item === 'object' && item !== null && (item as Record<string, unknown>)['item_type'] === CANVAS_MESSAGE_ITEM_TYPE;
-}
 
 export const regeneratingPatch = (item: ChatMessage): ChatMessage => ({
   ...item,
@@ -29,5 +24,5 @@ export const regeneratingPatch = (item: ChatMessage): ChatMessage => ({
   isLoading: true,
   isStreaming: true,
   createdAt: new Date().toISOString(),
-  ...(item.messageItems !== undefined ? { messageItems: item.messageItems.filter(isCanvasItem) } : {}),
+  ...(item.messageItems !== undefined ? { messageItems: item.messageItems.filter(isCanvasMessageItem) } : {}),
 });

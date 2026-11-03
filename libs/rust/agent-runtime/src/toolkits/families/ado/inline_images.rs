@@ -15,10 +15,12 @@ use std::sync::LazyLock;
 
 use regex::{Captures, Regex};
 
-use crate::toolkits::families::ado_boards::attach::describe_picture;
+use serde_json::Value;
+
+use crate::toolkits::families::ado::client::{AdoClientError, MAX_OUTPUT_BYTES, bounded_output};
+use crate::toolkits::families::ado::pictures::describe_picture;
 use crate::toolkits::families::attachment_host::{
-    AttachmentError, AttachmentHost, MAX_PICTURES, MAX_TOTAL_PICTURE_BYTES,
-    stops_every_later_picture,
+    AttachmentHost, MAX_PICTURES, PictureTally, stops_every_later_picture,
 };
 
 /// The SDK's `_MARKDOWN_IMAGE_PATTERN` (work item comments).
@@ -172,46 +174,57 @@ fn with_attribute(tag: &str, value: &str) -> String {
     format!("{body} image-description=\"{escaped}\"{close}")
 }
 
-/// What reading one picture gives: its bytes and media type, `Skip` for a
-/// reference that is not a picture this family reads (it stays as it is),
-/// or the reason it could not be read.
-pub(crate) enum Picture {
-    Read(Vec<u8>, &'static str),
+/// What one reference is, decided before any request: a picture to read
+/// (`Fetch`), a reference that is not a picture this family reads (`Skip`:
+/// it stays as it is), or a picture that is not read, with the reason.
+pub(crate) enum Target<T> {
+    Fetch(T),
     Skip,
     Unavailable(String),
 }
 
 /// Describe each distinct reference of `references` once, in order, within
-/// the per-call bounds: at most [`MAX_PICTURES`] pictures and
-/// [`MAX_TOTAL_PICTURE_BYTES`] bytes. A `data:` URI and a skipped reference
-/// get no annotation. `read` reads one picture through the family's own
-/// authenticated client.
-pub(crate) async fn describe_references<F, Fut>(
+/// the per-call bounds of [`PictureTally`]: at most [`MAX_PICTURES`]
+/// pictures are read, failed reads included, and at most
+/// [`MAX_TOTAL_PICTURE_BYTES`](crate::toolkits::families::attachment_host::MAX_TOTAL_PICTURE_BYTES)
+/// bytes are described. A `data:` URI and a
+/// skipped reference get no annotation. `target` decides what a reference
+/// is without a request; `read` reads one picture through the family's own
+/// authenticated client (`Err` is the reason, as a sentence).
+pub(crate) async fn describe_references<T, P, F, Fut>(
     references: impl IntoIterator<Item = String>,
     host: &AttachmentHost,
     prompt: Option<&str>,
+    target: P,
     read: F,
 ) -> BTreeMap<String, Annotation>
 where
-    F: Fn(String) -> Fut,
-    Fut: Future<Output = Picture>,
+    P: Fn(&str) -> Target<T>,
+    F: Fn(T) -> Fut,
+    Fut: Future<Output = Result<(Vec<u8>, &'static str), String>>,
 {
     let mut annotations = BTreeMap::new();
     let mut seen = std::collections::BTreeSet::new();
-    let mut described = 0usize;
-    let mut bytes_used = 0u64;
-    let mut stopped: Option<AttachmentError> = None;
+    let mut tally = PictureTally::default();
     for reference in references {
         if !seen.insert(reference.clone()) || reference.to_ascii_lowercase().starts_with("data:") {
             continue;
         }
+        let picture = match target(&reference) {
+            Target::Fetch(picture) => picture,
+            Target::Skip => continue,
+            Target::Unavailable(reason) => {
+                annotations.insert(reference, unavailable(&reason));
+                continue;
+            }
+        };
         // A failure every later picture would meet (no budget, no model):
         // ask no more, and say why beside each later picture.
-        if let Some(error) = &stopped {
+        if let Some(error) = tally.stopped_by() {
             annotations.insert(reference, unavailable(&error.sentence()));
             continue;
         }
-        if described >= MAX_PICTURES {
+        if tally.refusal(None).is_some() {
             annotations.insert(
                 reference,
                 Annotation::Note(format!(
@@ -220,31 +233,26 @@ where
             );
             continue;
         }
-        if bytes_used >= MAX_TOTAL_PICTURE_BYTES {
-            annotations.insert(reference, budget_note());
-            continue;
-        }
-        let (bytes, media_type) = match read(reference.clone()).await {
-            Picture::Read(bytes, media_type) => (bytes, media_type),
-            Picture::Skip => continue,
-            Picture::Unavailable(reason) => {
+        // Count the read before it is sent: a read that fails also uses one
+        // of the call's pictures.
+        tally.attempt();
+        let (bytes, media_type) = match read(picture).await {
+            Ok(picture) => picture,
+            Err(reason) => {
                 annotations.insert(reference, unavailable(&reason));
                 continue;
             }
         };
-        let size = bytes.len() as u64;
-        if bytes_used.saturating_add(size) > MAX_TOTAL_PICTURE_BYTES {
+        if !tally.take(bytes.len() as u64) {
             annotations.insert(reference, budget_note());
             continue;
         }
-        bytes_used += size;
-        described += 1;
         let annotation = match describe_picture(host, bytes, media_type, prompt).await {
             Ok(description) => Annotation::Description(description),
             Err(error) => {
                 let note = unavailable(&error.sentence());
                 if stops_every_later_picture(&error) {
-                    stopped = Some(error);
+                    tally.stop(error);
                 }
                 note
             }
@@ -256,6 +264,57 @@ where
 
 fn budget_note() -> Annotation {
     Annotation::Note("[image skipped: per-call download budget reached]".to_owned())
+}
+
+/// The note a result carries when its descriptions are dropped for size.
+pub(crate) const DESCRIPTIONS_DROPPED: &str =
+    "[image descriptions dropped: the result with them exceeds the tool's output limit]";
+
+/// The described result when it fits one tool result. When it does not,
+/// the result without descriptions (`plain`), with a short note that says
+/// so: the descriptions must not make a result fail that fits without them.
+pub(crate) fn bounded_described(plain: Value, described: Value) -> Result<Value, AdoClientError> {
+    if fits(&described) {
+        return Ok(described);
+    }
+    tracing::debug!(
+        event = "ado_image_descriptions_dropped",
+        limit = MAX_OUTPUT_BYTES,
+        "the described result exceeds the output limit; it is returned without descriptions"
+    );
+    let noted = with_dropped_note(plain.clone());
+    if fits(&noted) {
+        return Ok(noted);
+    }
+    bounded_output(plain)
+}
+
+fn fits(value: &Value) -> bool {
+    serde_json::to_vec(value).is_ok_and(|encoded| encoded.len() <= MAX_OUTPUT_BYTES)
+}
+
+/// `value` with [`DESCRIPTIONS_DROPPED`]: a line under a text, a key of an
+/// object, a last item of a list.
+fn with_dropped_note(value: Value) -> Value {
+    match value {
+        Value::String(mut text) => {
+            text.push_str("\n\n");
+            text.push_str(DESCRIPTIONS_DROPPED);
+            Value::String(text)
+        }
+        Value::Object(mut object) => {
+            object.insert(
+                "image_descriptions".to_owned(),
+                Value::String(DESCRIPTIONS_DROPPED.to_owned()),
+            );
+            Value::Object(object)
+        }
+        Value::Array(mut items) => {
+            items.push(Value::String(DESCRIPTIONS_DROPPED.to_owned()));
+            Value::Array(items)
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]

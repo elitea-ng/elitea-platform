@@ -50,10 +50,10 @@ import type { CanvasEditPayload, CodeBlockInfo } from '../canvas/Canvas';
 import { SelectableAnswerText } from './SelectableAnswerText';
 import type { CanvasSelectionPayload } from './SelectableAnswerText';
 
+import { isCanvasMessageItem } from '../../lib/canvasMessageItem';
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
 
 const TEXT_MESSAGE_ITEM_TYPE = 'text_message';
-const CANVAS_MESSAGE_ITEM_TYPE = 'canvas_message';
 
 /** The four canvas kinds `Canvas` renders; anything else the server invents falls back to `code`. */
 const CANVAS_TYPES = ['code', 'diagram', 'table', 'document'] as const;
@@ -132,7 +132,7 @@ export function readAnswerItems(messageItems: ChatMessage['messageItems']): read
       });
       return;
     }
-    if (item['item_type'] === CANVAS_MESSAGE_ITEM_TYPE) items.push(readCanvasItem(item, index));
+    if (isCanvasMessageItem(item)) items.push(readCanvasItem(item, index));
   });
   return items;
 }
