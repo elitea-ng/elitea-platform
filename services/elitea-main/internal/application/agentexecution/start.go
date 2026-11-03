@@ -271,6 +271,9 @@ type CurrentApplicationStartService struct {
 	pipelineChildren PipelineChildVersionSource
 	// unattended admits unattended grants (WithUnattendedGrants, ADR-0045).
 	unattended *UnattendedGrantPolicy
+	// runBriefs writes the run brief of a new chain (WithRunBriefs,
+	// ADR-0045 decision 11).
+	runBriefs RunBriefStarter
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -447,6 +450,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// Best-effort, AFTER admission — see recordCurrentMemoryUsage's own
 	// comment for why this never affects the turn's outcome.
 	service.recordCurrentMemoryUsage(ctx, request.ProjectID, responseMessageID, memoryRecall)
+	service.beginRunBrief(ctx, chain, outcome.ExecutionID, request.UserInput)
 	// #977, and best-effort for the same reason: a notification that could not
 	// be written must cost the mention, never the turn. The message is already
 	// sent and stored by the time this runs, so a failure here leaves a

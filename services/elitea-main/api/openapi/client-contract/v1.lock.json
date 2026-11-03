@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.30",
+  "client_contract": "1.31",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -16817,12 +16817,18 @@
                   "continue_tool_call_cap": {
                     "type": "boolean"
                   },
+                  "goal_check": {
+                    "type": "boolean"
+                  },
                   "grant_id": {
                     "type": "string",
                     "format": "uuid"
                   },
                   "hook_asks": {
                     "type": "boolean"
+                  },
+                  "kind": {
+                    "type": "string"
                   },
                   "remote_confirmations": {
                     "type": "boolean"
@@ -18488,6 +18494,9 @@
                     "type": "boolean"
                   },
                   "continue_step_limit": {
+                    "type": "boolean"
+                  },
+                  "goal_check": {
                     "type": "boolean"
                   },
                   "grant_id": {
@@ -20711,6 +20720,840 @@
                   "type": "boolean"
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/run_brief/prompt_lib/{project_id}": {
+      "operation_id": "getRunBrief",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "chain_root_execution_id",
+              "request"
+            ],
+            "properties": {
+              "chain_root_execution_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "request": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "brief": {
+                  "type": "object",
+                  "required": [
+                    "ambiguity",
+                    "assumptions",
+                    "constraints",
+                    "done_when",
+                    "goal"
+                  ],
+                  "properties": {
+                    "ambiguity": {
+                      "type": "string"
+                    },
+                    "assumptions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "max_length": 200
+                      },
+                      "max_items": 5
+                    },
+                    "constraints": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "max_length": 200
+                      },
+                      "max_items": 5
+                    },
+                    "done_when": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "text"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^c[1-5]$"
+                          },
+                          "text": {
+                            "type": "string",
+                            "max_length": 300
+                          }
+                        }
+                      },
+                      "max_items": 5
+                    },
+                    "goal": {
+                      "type": "string",
+                      "max_length": 300
+                    }
+                  }
+                },
+                "state": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/run_check/prompt_lib/{project_id}": {
+      "operation_id": "checkRunGoal",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "chain_root_execution_id",
+              "execution_id",
+              "transcript"
+            ],
+            "properties": {
+              "chain_root_execution_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "execution_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "transcript": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "conditions",
+                "met",
+                "outcome",
+                "total"
+              ],
+              "properties": {
+                "conditions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "reason",
+                      "text",
+                      "verdict"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "max_length": 300
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "verdict": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "continue_text": {
+                  "type": "string"
+                },
+                "met": {
+                  "type": "integer"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "max_length": 300
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
             }
           }
         }

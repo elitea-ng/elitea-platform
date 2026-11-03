@@ -91,6 +91,7 @@ import type {
   GetMessageTraceParams,
   GetWorkspaceFetchPlanParams,
   GetWorkspaceHandoffDiffParams,
+  GoalCheckResult,
   HandOffChatExecutionSteeringBody,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
@@ -125,6 +126,9 @@ import type {
   OkResponse,
   ParticipantCandidatesPage,
   RegenerateChatMessageParams,
+  RunBriefRequest,
+  RunBriefState,
+  RunCheckRequest,
   SendChatMessageParams,
   StaticPipelineContinuationBody,
   StaticPipelineContinuationReceipt,
@@ -7740,6 +7744,616 @@ export function useStartLocalTurn<
     projectId,
     conversationId,
     localTurnStartRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getRunBriefResponse200 = {
+  data: RunBriefState;
+  status: 200;
+};
+
+export type getRunBriefResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type getRunBriefResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getRunBriefResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type getRunBriefResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type getRunBriefResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type getRunBriefResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type getRunBriefResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getRunBriefResponse500 = {
+  data: LocalTurnError;
+  status: 500;
+};
+
+export type getRunBriefResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type getRunBriefResponseSuccess = getRunBriefResponse200 & {
+  headers: Headers;
+};
+export type getRunBriefResponseError = (
+  | getRunBriefResponse400
+  | getRunBriefResponse401
+  | getRunBriefResponse403
+  | getRunBriefResponse404
+  | getRunBriefResponse413
+  | getRunBriefResponse415
+  | getRunBriefResponse426
+  | getRunBriefResponse500
+  | getRunBriefResponse503
+) & {
+  headers: Headers;
+};
+
+export type getRunBriefResponse =
+  getRunBriefResponseSuccess | getRunBriefResponseError;
+
+export const getGetRunBriefUrl = (projectId: string) => {
+  return `/elitea_core/run_brief/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.31 (ADR-0045 decision 11). The desktop host calls
+ * it in the background when it starts a chain whose grant has
+ * `goal_check` (absent is true). The first turn never waits for it.
+ * Main asks the project's low-tier default model (else its default
+ * model) for a brief, validates it, stores it once and answers it. The
+ * call can take up to about 20 seconds. Its cost counts against the
+ * chain's spend.
+ *
+ * IDEMPOTENCY. The brief is frozen: a second call answers the stored
+ * brief and makes no model call.
+ *
+ * WHO. Only the chain's owner, with a native access token or a personal
+ * access token. An unknown chain, another person's chain, a cloud chain
+ * or a chain of another project answers 404 `chain_not_found`.
+ * @summary Write or read the run brief of a desktop unattended chain
+ */
+export const getRunBrief = async (
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getRunBriefResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<getRunBriefResponse>(getGetRunBriefUrl(projectId), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(runBriefRequest),
+  });
+};
+
+export const getGetRunBriefQueryKey = (
+  projectId: string,
+  runBriefRequest?: RunBriefRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/run_brief/prompt_lib/${projectId}`,
+    runBriefRequest,
+  ] as const;
+};
+
+export const getGetRunBriefQueryOptions = <
+  TData = Awaited<ReturnType<typeof getRunBrief>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRunBrief>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetRunBriefQueryKey(projectId, runBriefRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getRunBrief>>> = ({
+    signal,
+  }) => getRunBrief(projectId, runBriefRequest, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getRunBrief>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetRunBriefQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getRunBrief>>
+>;
+export type GetRunBriefQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse;
+
+export function useGetRunBrief<
+  TData = Awaited<ReturnType<typeof getRunBrief>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRunBrief>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunBrief>>,
+          TError,
+          Awaited<ReturnType<typeof getRunBrief>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRunBrief<
+  TData = Awaited<ReturnType<typeof getRunBrief>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRunBrief>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getRunBrief>>,
+          TError,
+          Awaited<ReturnType<typeof getRunBrief>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetRunBrief<
+  TData = Awaited<ReturnType<typeof getRunBrief>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRunBrief>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Write or read the run brief of a desktop unattended chain
+ */
+
+export function useGetRunBrief<
+  TData = Awaited<ReturnType<typeof getRunBrief>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runBriefRequest: RunBriefRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getRunBrief>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetRunBriefQueryOptions(
+    projectId,
+    runBriefRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type checkRunGoalResponse200 = {
+  data: GoalCheckResult;
+  status: 200;
+};
+
+export type checkRunGoalResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type checkRunGoalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type checkRunGoalResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type checkRunGoalResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type checkRunGoalResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type checkRunGoalResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type checkRunGoalResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type checkRunGoalResponse500 = {
+  data: LocalTurnError;
+  status: 500;
+};
+
+export type checkRunGoalResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type checkRunGoalResponseSuccess = checkRunGoalResponse200 & {
+  headers: Headers;
+};
+export type checkRunGoalResponseError = (
+  | checkRunGoalResponse400
+  | checkRunGoalResponse401
+  | checkRunGoalResponse403
+  | checkRunGoalResponse404
+  | checkRunGoalResponse413
+  | checkRunGoalResponse415
+  | checkRunGoalResponse426
+  | checkRunGoalResponse500
+  | checkRunGoalResponse503
+) & {
+  headers: Headers;
+};
+
+export type checkRunGoalResponse =
+  checkRunGoalResponseSuccess | checkRunGoalResponseError;
+
+export const getCheckRunGoalUrl = (projectId: string) => {
+  return `/elitea_core/run_check/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.31 (ADR-0045 decision 11). The desktop host calls
+ * it when a turn would end the chain as completed and the chain has a
+ * ready brief with conditions. Main asks the small model to judge each
+ * condition against the transcript excerpt (the model has no tools),
+ * records the check on the turn's chain link, updates the counts of
+ * consecutive `not_met` checks and answers the result. The call can
+ * take up to about 20 seconds. Its cost counts against the chain's
+ * spend.
+ *
+ * THEN. `met` or `not_checked`: commit the turn with `chain_outcome`
+ * `completed`. `blocked`: commit it with `chain_outcome` `failed`.
+ * `not_met`: start the next turn with `unattended.kind`
+ * `goal_not_met` and the user text `continue_text`; a refused start
+ * (409 `chain_limit_reached`) ends the chain as before.
+ *
+ * IDEMPOTENCY. A second call for the same turn answers the stored check
+ * and makes no model call.
+ *
+ * WHO. Only the chain's owner, with a native access token or a personal
+ * access token. An unknown chain, another person's chain, a cloud chain,
+ * a chain of another project or a turn outside the chain answers 404
+ * `chain_not_found`.
+ * @summary Check the goal of a desktop unattended chain
+ */
+export const checkRunGoal = async (
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<checkRunGoalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<checkRunGoalResponse>(getCheckRunGoalUrl(projectId), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(runCheckRequest),
+  });
+};
+
+export const getCheckRunGoalQueryKey = (
+  projectId: string,
+  runCheckRequest?: RunCheckRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/run_check/prompt_lib/${projectId}`,
+    runCheckRequest,
+  ] as const;
+};
+
+export const getCheckRunGoalQueryOptions = <
+  TData = Awaited<ReturnType<typeof checkRunGoal>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof checkRunGoal>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCheckRunGoalQueryKey(projectId, runCheckRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof checkRunGoal>>> = ({
+    signal,
+  }) => checkRunGoal(projectId, runCheckRequest, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof checkRunGoal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CheckRunGoalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof checkRunGoal>>
+>;
+export type CheckRunGoalQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse;
+
+export function useCheckRunGoal<
+  TData = Awaited<ReturnType<typeof checkRunGoal>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof checkRunGoal>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof checkRunGoal>>,
+          TError,
+          Awaited<ReturnType<typeof checkRunGoal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCheckRunGoal<
+  TData = Awaited<ReturnType<typeof checkRunGoal>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof checkRunGoal>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof checkRunGoal>>,
+          TError,
+          Awaited<ReturnType<typeof checkRunGoal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCheckRunGoal<
+  TData = Awaited<ReturnType<typeof checkRunGoal>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof checkRunGoal>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Check the goal of a desktop unattended chain
+ */
+
+export function useCheckRunGoal<
+  TData = Awaited<ReturnType<typeof checkRunGoal>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  runCheckRequest: RunCheckRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof checkRunGoal>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCheckRunGoalQueryOptions(
+    projectId,
+    runCheckRequest,
     options,
   );
 

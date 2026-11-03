@@ -21,6 +21,9 @@ import (
 const (
 	// KeyApprovalsUnattendedGrants turns grants on or off. Default on.
 	KeyApprovalsUnattendedGrants = "unattended_grants"
+	// KeyApprovalsRunBrief turns the run brief and the goal check on or off
+	// for the platform (ADR-0045 decision 11). Default on.
+	KeyApprovalsRunBrief = "run_brief"
 	// KeyApprovalsWithheldCategories lists the tool categories a grant can
 	// never name. Default [payment].
 	KeyApprovalsWithheldCategories = "unattended_withheld_categories"
@@ -59,6 +62,9 @@ const (
 type UnattendedSettings struct {
 	// Enabled is approvals.unattended_grants.
 	Enabled bool
+	// RunBrief is approvals.run_brief: a chain whose grant asks for a goal
+	// check gets a run brief and a goal check.
+	RunBrief bool
 	// Withheld are the categories no grant can name.
 	Withheld []toolcategory.Category
 	// DefaultContinuations and MaxContinuations bound max_continuations.
@@ -77,6 +83,7 @@ type UnattendedSettings struct {
 func DefaultUnattendedSettings() UnattendedSettings {
 	return UnattendedSettings{
 		Enabled:              true,
+		RunBrief:             true,
 		Withheld:             []toolcategory.Category{toolcategory.Payment},
 		DefaultContinuations: DefaultChainContinuations,
 		MaxContinuations:     DefaultChainMaxContinuations,
@@ -102,6 +109,7 @@ func (s UnattendedSettings) Withholds(category toolcategory.Category) bool {
 func UnattendedSettingsFromValues(values Values) UnattendedSettings {
 	settings := DefaultUnattendedSettings()
 	settings.Enabled = values.Bool(KeyApprovalsUnattendedGrants, true)
+	settings.RunBrief = values.Bool(KeyApprovalsRunBrief, true)
 	if _, isList := values[KeyApprovalsWithheldCategories].([]any); isList {
 		withheld := []toolcategory.Category{}
 		for _, raw := range values.Strings(KeyApprovalsWithheldCategories) {

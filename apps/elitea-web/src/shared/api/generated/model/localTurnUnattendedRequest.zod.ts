@@ -75,6 +75,18 @@ export const LocalTurnUnattendedRequest = zod
       .describe(
         "The grant answers remote toolkit confirmations: the retry sends `confirmation.source` `grant`.",
       ),
+    goal_check: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.31 (ADR-0045 decision 11). Main writes a run brief with the small model and checks the goal before the chain ends as completed. Absent is true; false turns the brief and the check off for this chain.",
+      ),
+    kind: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.31. Why a continuation starts: `step_limit`, `tool_call_cap` or `goal_not_met`. Send it only with `chain_root_execution_id`. Absent is `continue`. Another value, or a kind on the first turn, answers 422 `unattended_grant_refused` (reason `invalid`, field `kind`).",
+      ),
     chain: UnattendedChainLimits.optional(),
   })
   .describe(

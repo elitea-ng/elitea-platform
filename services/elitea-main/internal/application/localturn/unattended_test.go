@@ -105,3 +105,61 @@ func TestDefaultGrantStartsWithNoGrantWhenGrantsAreOff(t *testing.T) {
 		t.Fatalf("hook asks with grants off = %v", err)
 	}
 }
+
+// ADR-0045 decision 11: a desktop continuation names its link kind
+// (step_limit, tool_call_cap or goal_not_met); absent is continue, and any
+// other kind, or a kind on a first turn, is refused as invalid.
+func TestContinuationKind(t *testing.T) {
+	service, store := grantService(t, platformconfig.DefaultUnattendedSettings())
+	root := strings.Repeat("a", 32)
+	for kind, want := range map[string]string{
+		"": unattended.LinkContinue, unattended.LinkStepLimit: unattended.LinkStepLimit,
+		unattended.LinkToolCallCap: unattended.LinkToolCallCap, unattended.LinkGoalNotMet: unattended.LinkGoalNotMet,
+	} {
+		request := grantStartRequest(root, 1)
+		request.Unattended.Kind = kind
+		if _, err := service.Start(t.Context(), request); err != nil {
+			t.Fatalf("kind %q = %v", kind, err)
+		}
+		if got := store.started[len(store.started)-1].Grant.Kind; got != want {
+			t.Fatalf("kind %q stored as %q", kind, got)
+		}
+	}
+	refused := []StartRequest{grantStartRequest(root, 1), grantStartRequest(root, 1), grantStartRequest("", 1)}
+	refused[0].Unattended.Kind = unattended.LinkRoot
+	refused[1].Unattended.Kind = unattended.LinkOutputLimit
+	refused[2].Unattended.Kind = unattended.LinkGoalNotMet
+	for _, request := range refused {
+		var refusal *unattended.RefusalError
+		if _, err := service.Start(t.Context(), request); !errors.As(err, &refusal) ||
+			refusal.Field != "kind" || refusal.Reason != unattended.RefusedInvalid {
+			t.Fatalf("kind %q = %v", request.Unattended.Kind, err)
+		}
+	}
+}
+
+// ADR-0045 decision 11: the first turn's brief state follows goal_check and
+// approvals.run_brief.
+func TestFirstTurnBriefState(t *testing.T) {
+	for _, tc := range []struct {
+		goalCheck, runBrief bool
+		want                string
+	}{
+		{true, true, unattended.BriefPending},
+		{true, false, unattended.BriefOff},
+		{false, true, unattended.BriefNone},
+	} {
+		settings := platformconfig.DefaultUnattendedSettings()
+		settings.RunBrief = tc.runBrief
+		service, store := grantService(t, settings)
+		request := grantStartRequest("", 1)
+		request.Unattended.GoalCheck = tc.goalCheck
+		if _, err := service.Start(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+		grant := store.started[0].Grant
+		if grant.BriefState != tc.want || grant.Grant.GoalCheck != tc.goalCheck {
+			t.Fatalf("goal_check %v, run_brief %v = %+v", tc.goalCheck, tc.runBrief, grant)
+		}
+	}
+}

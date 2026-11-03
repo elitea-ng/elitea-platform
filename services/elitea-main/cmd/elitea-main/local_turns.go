@@ -11,6 +11,7 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	localturnsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/localturns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
@@ -30,6 +31,7 @@ func composeLocalTurns(
 	policy localturn.PolicyReader,
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
+	runBriefs *runbrief.Service,
 	logger *slog.Logger,
 ) (http.Handler, error) {
 	// No database, or no credential plane at all (the zero group AuthConfig):
@@ -53,6 +55,10 @@ func composeLocalTurns(
 	route, err := localturnsapi.NewRoute(service, groupAuth, legacyrbac.NewPostgresResolver(pool))
 	if err != nil {
 		return nil, err
+	}
+	if runBriefs != nil {
+		// The desktop run brief and goal check (ADR-0045 decision 11).
+		route.WithRunBriefs(runBriefs)
 	}
 	return route, nil
 }

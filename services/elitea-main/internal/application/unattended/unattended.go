@@ -41,7 +41,22 @@ const (
 	LinkOutputLimit = "output_limit"
 	LinkToolCallCap = "tool_call_cap"
 	LinkResume      = "resume"
+	// LinkContinue is a desktop continuation whose host named no kind.
+	LinkContinue = "continue"
+	// LinkGoalNotMet is a continuation that a goal check started
+	// (ADR-0045 decision 11).
+	LinkGoalNotMet = "goal_not_met"
 )
+
+// ValidDesktopContinuationKind reports whether kind is a link kind that a
+// desktop host may name on a continuation.
+func ValidDesktopContinuationKind(kind string) bool {
+	switch kind {
+	case LinkStepLimit, LinkToolCallCap, LinkGoalNotMet:
+		return true
+	}
+	return false
+}
 
 // Chain end states (run_chains.end_state) and the limits of limit_reached.
 const (
@@ -88,6 +103,28 @@ const (
 	RefusedChainNotFound    = "chain_not_found"
 )
 
+// Run brief states (run_chains.brief_state, ADR-0045 decision 11).
+const (
+	// BriefNone: the grant has goal_check false (or no grant).
+	BriefNone = "none"
+	// BriefOff: approvals.run_brief was off when the chain started.
+	BriefOff     = "off"
+	BriefPending = "pending"
+	BriefReady   = "ready"
+	BriefFailed  = "failed"
+)
+
+// BriefStateAtStart is the brief state a new chain starts with.
+func BriefStateAtStart(goalCheck, runBriefEnabled bool) string {
+	switch {
+	case !goalCheck:
+		return BriefNone
+	case !runBriefEnabled:
+		return BriefOff
+	}
+	return BriefPending
+}
+
 // Bounds of a grant.
 const (
 	MaxSensitiveTools  = 64
@@ -126,6 +163,13 @@ type Request struct {
 	RemoteConfirmations bool
 	SensitiveTools      []Tool
 	Chain               ChainRequest
+	// GoalCheck asks for the run brief and the goal check (ADR-0045
+	// decision 11). The wire's absent value is true.
+	GoalCheck bool
+	// Kind is a desktop continuation's link kind: step_limit,
+	// tool_call_cap or goal_not_met. Empty is LinkContinue. Only a
+	// continuation names one.
+	Kind string
 }
 
 // IsContinuation reports whether the request continues a chain.
@@ -158,6 +202,9 @@ type Grant struct {
 	HookAsks            bool   `json:"hook_asks"`
 	RemoteConfirmations bool   `json:"remote_confirmations"`
 	SensitiveTools      []Tool `json:"sensitive_tools"`
+	// GoalCheck: the chain has a run brief and a goal check (ADR-0045
+	// decision 11). A grant stored before it has none.
+	GoalCheck bool `json:"goal_check"`
 	// Start is how Main starts a cloud continuation; nil for a desktop
 	// chain.
 	Start *CloudStart `json:"start,omitempty"`
@@ -272,6 +319,9 @@ func ValidateShape(request Request) error {
 	if request.ChainRootExecutionID != "" && !ValidExecutionID(request.ChainRootExecutionID) {
 		return Refused("chain_root_execution_id", "", RefusedInvalid)
 	}
+	if request.Kind != "" && (!request.IsContinuation() || !ValidDesktopContinuationKind(request.Kind)) {
+		return Refused("kind", "", RefusedInvalid)
+	}
 	if len(request.SensitiveTools) > MaxSensitiveTools {
 		return Refused("sensitive_tools", "", RefusedOverMaximum)
 	}
@@ -368,6 +418,7 @@ func GrantOf(request Request, start *CloudStart) Grant {
 		HookAsks:            request.HookAsks,
 		RemoteConfirmations: request.RemoteConfirmations,
 		SensitiveTools:      tools,
+		GoalCheck:           request.GoalCheck,
 		Start:               start,
 	}
 }
@@ -383,6 +434,9 @@ type ChainStart struct {
 	Grant             Grant
 	Limits            Limits
 	ResponseMessageID string
+	// BriefState is the chain's run brief state at its start
+	// (BriefStateAtStart). Empty is BriefNone.
+	BriefState string
 }
 
 // ChainContinue is one continuation, as the admission stores it.

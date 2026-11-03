@@ -35,6 +35,18 @@ func unattendedGrantFields(section string) []map[string]any {
 			"default": defaults.Enabled,
 		},
 		{
+			"key":   platformconfig.KeyApprovalsRunBrief,
+			"type":  "boolean",
+			"title": "Run Brief and Goal Check",
+			"description": "When a run to completion starts, a small model writes a brief from the request: " +
+				"the goal and the conditions that show the work is done. Before the chain ends as completed, " +
+				"the small model checks the conditions against the transcript. A condition that is not met " +
+				"starts one more continuation. Each call costs a small amount and counts against the chain's " +
+				"spend. Turn this off to end chains as before, with no brief and no check.",
+			"section": section,
+			"default": defaults.RunBrief,
+		},
+		{
 			"key":   platformconfig.KeyApprovalsWithheldCategories,
 			"type":  "array",
 			"items": map[string]any{"type": "string", "enum": toolcategory.Strings()},
@@ -79,9 +91,11 @@ func unattendedGrantFields(section string) []map[string]any {
 
 // validateUnattendedGrantValues checks the grant fields of a save.
 func validateUnattendedGrantValues(values map[string]any) string {
-	if raw, present := values[platformconfig.KeyApprovalsUnattendedGrants]; present {
-		if _, ok := raw.(bool); !ok {
-			return fmt.Sprintf("%q must be true or false", platformconfig.KeyApprovalsUnattendedGrants)
+	for _, key := range []string{platformconfig.KeyApprovalsUnattendedGrants, platformconfig.KeyApprovalsRunBrief} {
+		if raw, present := values[key]; present {
+			if _, ok := raw.(bool); !ok {
+				return fmt.Sprintf("%q must be true or false", key)
+			}
 		}
 	}
 	if raw, present := values[platformconfig.KeyApprovalsWithheldCategories]; present {
