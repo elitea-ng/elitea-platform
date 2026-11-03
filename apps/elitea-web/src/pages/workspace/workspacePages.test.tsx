@@ -1344,7 +1344,7 @@ describe('WorkspaceSessionPage', () => {
       onTestFinished(resetGrantsTurnedOff);
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      ipc.failNext('startTurn', 'unattended_grant_refused', 'Unattended runs are turned off on this platform.');
+      ipc.failNext('startTurn', 'unattended_grants_off', 'Unattended runs are turned off on this platform.');
       await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(ipc.calls.started[0]?.unattended).toBeDefined();
@@ -1361,7 +1361,7 @@ describe('WorkspaceSessionPage', () => {
       window.localStorage.setItem('el.desktop.workspace.w1.runToCompletion', JSON.stringify({ on: true, grant: { ...defaultGrant(), hook_asks: true } }));
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
-      ipc.failNext('startTurn', 'unattended_grant_refused', 'Unattended runs are turned off on this platform.');
+      ipc.failNext('startTurn', 'unattended_grants_off', 'Unattended runs are turned off on this platform.');
       await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
       expect(await screen.findByText('Unattended runs are turned off on this platform.')).toBeInTheDocument();
       expect(ipc.calls.started).toHaveLength(1);

@@ -168,7 +168,7 @@ impl Answer {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
         };
-        let code = text("error").unwrap_or_else(|| format!("http_{}", self.status));
+        let mut code = text("error").unwrap_or_else(|| format!("http_{}", self.status));
         // A refused unattended grant names the field and the reason: the
         // person reads which limit the platform refused.
         let message = if code == super::unattended::GRANT_REFUSED {
@@ -176,6 +176,10 @@ impl Answer {
         } else {
             text("message").unwrap_or_else(|| format!("the platform answered HTTP {}", self.status))
         };
+        if code == super::unattended::GRANT_REFUSED && text("reason").as_deref() == Some("disabled")
+        {
+            code = super::unattended::GRANTS_OFF.to_owned();
+        }
         ApiError {
             status: Some(self.status),
             code,
@@ -983,6 +987,23 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Grants turned off: the refusal has its own code, so the UI does not
+    /// read the message to hide the control.
+    #[test]
+    fn a_grant_refused_because_grants_are_off_has_its_own_code() {
+        let answer = Answer {
+            status: 422,
+            body: json!({"error": "unattended_grant_refused", "reason": "disabled", "field": "unattended"}),
+            etag: None,
+        };
+        let error = answer.error();
+        assert_eq!(error.code, super::super::unattended::GRANTS_OFF);
+        assert_eq!(
+            error.message,
+            "Unattended runs are turned off on this platform."
+        );
+    }
 
     /// The platform owns the chain maximums: its 422 reads well.
     #[test]

@@ -47,10 +47,9 @@ export function isGrantsOffRefusal(body: unknown): boolean {
 
 /**
  * True for the desktop host's refusal of a grant because unattended grants are
- * off. The host error carries the code and a message, not the reason: the
- * message for reason `disabled` is fixed (`refusal_message` in
+ * off: the host gives that refusal its own code (`GRANTS_OFF` in
  * apps/elitea-desktop/src-tauri/src/d0/unattended.rs).
  */
-export function isDesktopGrantsOff(code: string, message: string): boolean {
-  return code === 'unattended_grant_refused' && message.startsWith('Unattended runs are turned off');
+export function isDesktopGrantsOff(code: string): boolean {
+  return code === 'unattended_grants_off';
 }

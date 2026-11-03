@@ -568,7 +568,12 @@ person before the start:
   (`422 unattended_grant_refused` with `field` and `reason`), and the error
   message names the limit, for example "The unattended run's deadline is
   higher than the platform allows." A continuation keeps the chain's stored
-  limits; the platform ignores the limits it carries again.
+  limits; the platform ignores the limits it carries again. A refusal with
+  the reason `disabled` (an administrator turned grants off) has its own
+  code, `unattended_grants_off`, and the UI hides the "Run to completion"
+  control on it. With grants off, the platform starts a turn whose grant
+  only continues at the caps with no grant (no `unattended` in
+  `LocalTurnStarted`): the host then runs it as a turn with no grant.
 - The grant answers at once what it names. `hook_asks` allows a hook's
   ask of a call that the rules allow (`source: "grant"`); a rule's own ask
   stays the person's. `remote_confirmations` approves a remote

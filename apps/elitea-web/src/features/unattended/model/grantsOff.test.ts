@@ -14,9 +14,9 @@ describe('grants turned off', () => {
   });
 
   it('knows the desktop host’s refusal with reason disabled', () => {
-    expect(isDesktopGrantsOff('unattended_grant_refused', 'Unattended runs are turned off on this platform.')).toBe(true);
-    expect(isDesktopGrantsOff('unattended_grant_refused', "The unattended run's deadline is higher than the platform allows.")).toBe(false);
-    expect(isDesktopGrantsOff('invalid_request', 'Unattended runs are turned off on this platform.')).toBe(false);
+    expect(isDesktopGrantsOff('unattended_grants_off')).toBe(true);
+    expect(isDesktopGrantsOff('unattended_grant_refused')).toBe(false);
+    expect(isDesktopGrantsOff('invalid_request')).toBe(false);
   });
 
   it('tells every subscriber once the flag is set', () => {

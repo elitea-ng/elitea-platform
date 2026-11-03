@@ -71,7 +71,7 @@ function imagesField(images: SentImages | undefined): { images?: TurnImagePick[]
  */
 function withoutRefusedGrant(request: TurnStartRequest, refusal: { code: string; message: string }): TurnStartRequest | undefined {
   const grant = request.unattended;
-  if (grant === undefined || !isDesktopGrantsOff(refusal.code, refusal.message)) return undefined;
+  if (grant === undefined || !isDesktopGrantsOff(refusal.code)) return undefined;
   markGrantsTurnedOff();
   if (grant.hook_asks || grant.remote_confirmations) return undefined;
   const { unattended: _refused, ...rest } = request;

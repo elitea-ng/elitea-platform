@@ -71,6 +71,11 @@ pub const SOURCE_TIMEOUT: &str = "timeout";
 /// platform's refusal ([`refusal_message`]).
 pub const GRANT_REFUSED: &str = "unattended_grant_refused";
 
+/// The host's code for a grant that the platform refused because an
+/// administrator turned grants off (reason `disabled`). The UI hides the
+/// "Run to completion" control on it.
+pub const GRANTS_OFF: &str = "unattended_grants_off";
+
 /// A readable message for a refused grant: the refusal's `field` and
 /// `reason` (`over_maximum`, `invalid`, `disabled`, …).
 #[must_use]
