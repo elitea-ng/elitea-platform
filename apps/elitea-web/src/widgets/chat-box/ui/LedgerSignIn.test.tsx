@@ -90,6 +90,24 @@ describe('LedgerSignIn', () => {
     expect(socket.getEmitted('test_mcp_connection')).toEqual([]);
   });
 
+  it('a retry after a refusal clears the message and opens the dialog', async () => {
+    let calls = 0;
+    server.use(
+      http.post(CHALLENGE_PATH, () => {
+        calls += 1;
+        return calls === 1 ? HttpResponse.json({ error: 'authorization_discovery_failed' }, { status: 502 }) : HttpResponse.json(challenge);
+      }),
+    );
+    render(<LedgerSignIn projectId="1" slot={slot()} />, createTestSocketClient());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Authorize' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Authorize' }));
+
+    await screen.findByRole('dialog');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it.each([
     ['authorization_discovery_failed', 502, "The MCP server's sign-in details could not be read. Try again, or Skip."],
     ['authorization_discovery_timeout', 504, 'The MCP server did not answer in time. Try again, or Skip.'],
