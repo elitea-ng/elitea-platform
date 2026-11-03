@@ -13,6 +13,13 @@
 // Every other settle ends the chain: completed, failed, waiting (a pause
 // waits for a person) or cancelled.
 //
+// A run that would end the chain as completed first passes the goal check
+// (ADR-0045 decision 11, runbrief) when the chain has a brief with
+// conditions: met ends it completed, not_met starts a goal_not_met
+// continuation with the check's text, blocked ends it failed, and a check
+// that could not run ends it completed. With a ready brief, a step-limit
+// continuation's text restates the brief (runbrief.ContinuationText).
+//
 // A settle hook fires on replays too. The hook is idempotent: it acts only
 // on the chain's latest run of a chain that has not ended, each
 // continuation's request is derived from the run it continues (the same
@@ -27,6 +34,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 )
@@ -62,11 +70,31 @@ type Starter interface {
 	) (agentexecution.CurrentApplicationStartOutcome, error)
 }
 
+// Goals is the run brief and the goal check (runbrief.Service).
+type Goals interface {
+	// ContinueText is the user text of a continuation of the chain.
+	ContinueText(ctx context.Context, root string) string
+	// CheckCloud checks the goal after a run that would end the chain as
+	// completed; false when the chain has no check.
+	CheckCloud(ctx context.Context, root, executionID string) (runbrief.Result, bool, error)
+}
+
 // Hook is the after-settle hook.
 type Hook struct {
 	chains  Chains
 	starter Starter
+	goals   Goals
 	logger  *slog.Logger
+}
+
+// WithGoals adds the run brief and the goal check. Without it, every
+// continuation says unattended.ContinuePrompt and a chain ends completed
+// with no check.
+func (h *Hook) WithGoals(goals Goals) *Hook {
+	if h != nil {
+		h.goals = goals
+	}
+	return h
 }
 
 // New builds the hook. It answers nil when a part is missing.
@@ -122,9 +150,40 @@ func (h *Hook) Settle(ctx context.Context, executionID string, outcome execution
 		}
 		return h.continued(ctx, chain, h.continueOutputLimit(ctx, chain))
 	case view.StepLimitReached && chain.Grant.ContinueStepLimit:
-		return h.continued(ctx, chain, h.continueStepLimit(ctx, chain))
+		return h.continued(ctx, chain, h.startNext(ctx, chain, unattended.LinkStepLimit,
+			agentexecution.ContinuationQuestionID(chain.ExecutionID), h.continueText(ctx, chain)))
+	}
+	return h.finish(ctx, chain)
+}
+
+// finish ends a chain whose run would end it as completed, after the goal
+// check when the chain has one.
+func (h *Hook) finish(ctx context.Context, chain unattended.Chain) error {
+	if h.goals == nil {
+		return h.end(ctx, chain, unattended.EndCompleted)
+	}
+	result, checked, err := h.goals.CheckCloud(ctx, chain.RootExecutionID, chain.ExecutionID)
+	if err != nil {
+		return err
+	}
+	if !checked {
+		return h.end(ctx, chain, unattended.EndCompleted)
+	}
+	switch result.Outcome {
+	case runbrief.OutcomeBlocked:
+		return h.end(ctx, chain, unattended.EndFailed)
+	case runbrief.OutcomeNotMet:
+		return h.continued(ctx, chain, h.startNext(ctx, chain, unattended.LinkGoalNotMet,
+			agentexecution.GoalContinuationQuestionID(chain.ExecutionID), result.ContinueText))
 	}
 	return h.end(ctx, chain, unattended.EndCompleted)
+}
+
+func (h *Hook) continueText(ctx context.Context, chain unattended.Chain) string {
+	if h.goals == nil {
+		return unattended.ContinuePrompt
+	}
+	return h.goals.ContinueText(ctx, chain.RootExecutionID)
 }
 
 func (h *Hook) end(ctx context.Context, chain unattended.Chain, state string) error {
@@ -172,27 +231,28 @@ func (h *Hook) continueOutputLimit(ctx context.Context, chain unattended.Chain) 
 	return err
 }
 
-func (h *Hook) continueStepLimit(ctx context.Context, chain unattended.Chain) error {
+// startNext starts a continuation that asks a new question: a step-limit
+// or a goal_not_met continuation, with text as the question.
+func (h *Hook) startNext(ctx context.Context, chain unattended.Chain, kind, questionID, text string) error {
 	start := chain.Grant.Start
-	if start == nil {
+	if start == nil || text == "" {
 		return unattended.Refused("unattended", "", unattended.RefusedInvalid)
 	}
-	continuation := &agentexecution.UnattendedContinuation{Chain: chain, Kind: unattended.LinkStepLimit}
-	questionID := agentexecution.ContinuationQuestionID(chain.ExecutionID)
+	continuation := &agentexecution.UnattendedContinuation{Chain: chain, Kind: kind}
 	var err error
 	switch start.Contract {
 	case agentexecution.CloudStartContractApplication:
 		_, err = h.starter.StartCurrentApplication(ctx, agentexecution.CurrentApplicationStartRequest{
 			ProjectID: chain.ProjectID, ActorUserID: chain.OwnerUserID, ConversationUUID: chain.ConversationUUID,
 			TargetParticipantID: start.ParticipantID, QuestionID: questionID,
-			UserInput: unattended.ContinuePrompt, TriggerOrigin: triggerOrigin(chain),
+			UserInput: text, TriggerOrigin: triggerOrigin(chain),
 			UnattendedContinuation: continuation,
 		})
 	case agentexecution.CloudStartContractAdhoc:
 		_, err = h.starter.StartCurrentAdhoc(ctx, agentexecution.CurrentAdhocStartRequest{
 			ProjectID: chain.ProjectID, ActorUserID: chain.OwnerUserID, ConversationUUID: chain.ConversationUUID,
 			TargetParticipantID: start.ParticipantID, QuestionID: questionID,
-			UserInput: unattended.ContinuePrompt, LLMSettings: start.LLMSettings,
+			UserInput: text, LLMSettings: start.LLMSettings,
 			TriggerOrigin: triggerOrigin(chain), UnattendedContinuation: continuation,
 		})
 	default:

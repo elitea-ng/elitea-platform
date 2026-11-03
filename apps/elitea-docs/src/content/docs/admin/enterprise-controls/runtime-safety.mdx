@@ -576,6 +576,35 @@ A continuation always keeps the chain's stored limits. The limits that a desktop
 
 Each continued question and answer has `meta.continued_automatically` true and `meta.unattended` (`grant_id`, `chain_root_execution_id`, `continuation_index`).
 
+**A run brief and a goal check (ADR-0045 decision 11).** The working model does not decide when the task is done. When a chain starts, a small model writes a brief from the person's request. The first turn does not wait for the brief. The brief has these fields:
+
+| Field | Content | Bound |
+| --- | --- | --- |
+| `goal` | The outcome, in one sentence | 300 characters |
+| `done_when` | 0 to 5 conditions that a reader can check from the transcript | 300 characters each |
+| `constraints` | Things that must not change | 5 items, 200 characters each |
+| `assumptions` | The defaults that the agent takes for gaps | 5 items, 200 characters each |
+| `ambiguity` | `low`, `medium` or `high` | — |
+
+Main validates the brief and cuts each field to its bound. Main removes control characters. Main stores the brief once, and nobody changes it after that. A request with nothing to check (a greeting or a short question) gets no conditions. Such a chain has no goal check.
+
+Main uses the project's low-tier default model. When the project has none, Main uses the project's default model. Each call has a timeout of 20 seconds. The gateway meters each call under the chain owner's project. The call counts against the chain's spend limit. A brief that fails or times out leaves the chain with no check. The chain then ends as before.
+
+When a turn would end the chain as `completed`, and the brief has conditions, the small model checks each condition against the end of the transcript (32 KiB, newest content kept). The model has no tools. It answers `met`, `not_met` or `impossible` for each condition, with a reason. Main decides the outcome:
+
+| Outcome | When | The chain |
+| --- | --- | --- |
+| `met` | All conditions are met. | Ends `completed`. The transcript shows "Done · 3 of 3 checks · model-reviewed". |
+| `not_met` | A condition is not met. | Continues with a turn of kind `goal_not_met`. The turn counts against the chain limits. A limit ends the chain `limit_reached`. |
+| `blocked` | A condition is `impossible`, or the same condition is `not_met` on 3 consecutive checks. | Ends `failed`. The transcript shows "Blocked on: …". |
+| `not_checked` | The check failed or timed out. | Ends `completed`. The transcript shows "Not checked". |
+
+With a brief, each continuation's question restates the brief: "Continue from where you stopped.", then the goal, the conditions that are not met, and the last check's reason. The block says that a model wrote the brief, and that the person's request wins when they disagree. A brief never adds a tool, a grant answer or an approval.
+
+On the desktop, the app asks Main for the brief (`getRunBrief`) and for the check (`checkRunGoal`). Main makes both model calls, so the cloud and the desktop use the same prompts. Only the chain's owner can call them.
+
+The person turns the check off for a request in the "To completion" popover ("Check the goal before finishing"). The grant then has `goal_check` false. To turn the brief and the check off for all users, set **Run Brief and Goal Check** (`approvals.run_brief`) to off. A chain that starts while the switch is off has no brief and no check.
+
 **Main ends a chain that nothing else ends.** Once a minute, Main ends a chain whose deadline passed (`limit_reached`, limit `deadline`), or whose latest turn ended more than 10 minutes ago with no continuation started. A desktop turn that expired without a commit ends the chain as `cancelled`; any other turn ends it as `failed`.
 
 ### Configure
@@ -585,6 +614,7 @@ Open **Configuration › Approvals** (permission `configuration.governance`):
 | Field | Key | Default | Range |
 | --- | --- | --- | --- |
 | **Unattended Grants** | `approvals.unattended_grants` | on | on or off |
+| **Run Brief and Goal Check** | `approvals.run_brief` | on | on or off |
 | **Categories a Grant Cannot Name** | `approvals.unattended_withheld_categories` | `payment` | tool categories |
 | **Chain: Default Continuations** | `approvals.chain_default_continuations` | 20 | 0 to 10000 |
 | **Chain: Maximum Continuations** | `approvals.chain_max_continuations` | 200 | 0 to 10000 |
@@ -608,7 +638,8 @@ WHERE reason = 'unattended_grant'
 ORDER BY id;
 
 SELECT c.root_execution_id, c.owner_user_id, c.continuations, c.max_continuations,
-       c.deadline, c.end_state, c.end_limit, k.continuation_index, k.kind, k.execution_id
+       c.deadline, c.end_state, c.end_limit, c.brief_state, c.brief,
+       k.continuation_index, k.kind, k.execution_id, k.done_check
 FROM elitea_runtime.run_chains AS c
 JOIN elitea_runtime.run_chain_links AS k USING (root_execution_id)
 WHERE c.grant_id = '<grant id>'
@@ -616,6 +647,8 @@ ORDER BY k.continuation_index;
 ```
 
 The audit event of a grant row has the reasons `unattended_grant` and `grant:<grant id>`.
+
+The brief and goal check calls are in the gateway request log. Their `execution_id` is `run_brief:<root execution id>` or `goal_check:<checked execution id>`.
 
 ### Customer responsibility
 

@@ -13,6 +13,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattendedchain"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -36,7 +37,8 @@ func unattendedGrantPolicy(
 // unattendedSettlementHooks continues or ends a cloud chain when its run
 // settles. Without a start service there is no chain to continue.
 func unattendedSettlementHooks(
-	pool *pgxpool.Pool, start *agentexecutionapp.CurrentApplicationStartService, logger *slog.Logger,
+	pool *pgxpool.Pool, start *agentexecutionapp.CurrentApplicationStartService, briefs *runbrief.Service,
+	logger *slog.Logger,
 ) []executionapp.SettlementOption {
 	if pool == nil || start == nil {
 		return nil
@@ -45,7 +47,17 @@ func unattendedSettlementHooks(
 	if hook == nil {
 		return nil
 	}
+	if briefs != nil {
+		hook.WithGoals(briefs)
+	}
 	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(hook.AfterSettle)}
+}
+
+// runBriefStarter adapts runbrief.Service to agentexecution.RunBriefStarter.
+type runBriefStarter struct{ *runbrief.Service }
+
+func (s runBriefStarter) Begin(ctx context.Context, start agentexecutionapp.RunBriefStart) {
+	s.Service.Begin(ctx, start.RootExecutionID, start.Request)
 }
 
 // chainSettleViews adapts the repository to unattendedchain.Chains.

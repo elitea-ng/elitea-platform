@@ -40,6 +40,9 @@ type Grant struct {
 	HookAsks            bool   `json:"hook_asks"`
 	RemoteConfirmations bool   `json:"remote_confirmations"`
 	Chain               *Chain `json:"chain"`
+	// GoalCheck asks for the run brief and the goal check (ADR-0045
+	// decision 11). Absent is true.
+	GoalCheck *bool `json:"goal_check"`
 }
 
 // Request is the application form of the shared parts.
@@ -47,6 +50,7 @@ func (g Grant) Request() unattended.Request {
 	return unattended.Request{
 		GrantID: g.GrantID, ContinueStepLimit: g.ContinueStepLimit, ContinueToolCallCap: g.ContinueToolCallCap,
 		HookAsks: g.HookAsks, RemoteConfirmations: g.RemoteConfirmations, Chain: g.Chain.Request(),
+		GoalCheck: g.GoalCheck == nil || *g.GoalCheck,
 	}
 }
 

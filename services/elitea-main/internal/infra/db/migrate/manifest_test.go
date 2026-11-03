@@ -1013,7 +1013,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// count, spend, limits, deadline and end state),
 	// elitea_runtime.run_chain_links (one row per link) and the nullable
 	// approval_ledger.grant_id. No data, no permission.
-	require.EqualValues(t, 221, Head(shared))
+	//
+	// 222: shared/0222_run_brief_goal_check.sql, the run brief and the goal
+	// check (ADR-0045 decision 11, #1564): run_chains.brief, brief_state,
+	// brief_sha256 and goal_check_failures, run_chain_links.done_check, and
+	// the link kind goal_not_met. No data, no permission.
+	require.EqualValues(t, 222, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -15,6 +15,9 @@ import (
 type unattendedBody struct {
 	unattendedwire.Grant
 	ChainRootExecutionID string `json:"chain_root_execution_id"`
+	// Kind is a continuation's link kind: step_limit, tool_call_cap or
+	// goal_not_met (ADR-0045 decision 11). Absent is continue.
+	Kind string `json:"kind"`
 }
 
 func (b *unattendedBody) request() *unattended.Request {
@@ -23,6 +26,7 @@ func (b *unattendedBody) request() *unattended.Request {
 	}
 	request := b.Request()
 	request.ChainRootExecutionID = b.ChainRootExecutionID
+	request.Kind = b.Kind
 	return &request
 }
 

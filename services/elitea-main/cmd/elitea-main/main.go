@@ -1665,6 +1665,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var runtimeRoot *runtimecomposition.Runtime
 	var productionRuntime *api.ProductionRuntimeRoutes
 
+	// The run brief and the goal check of unattended chains (ADR-0045
+	// decision 11). The cloud start and settle hook and the desktop routes
+	// share it; its model client is set once the gateway is composed.
+	var runBriefCatalog predictapi.ModelCatalog
+	if currentConfigurationsRoot != nil {
+		if catalog := currentConfigurationsRoot.ModelCatalog(); catalog != nil {
+			runBriefCatalog = catalog
+		}
+	}
+	runBriefs, runBriefCompleter := composeRunBriefs(
+		pool, runBriefCatalog, currentConfigurationsConfig.PublicProjectID, logger)
+
 	// The DeepWiki facade (ADR-0022 P2). Composed OUTSIDE the runtime-plane
 	// block: it proxies to an independently deployed service and needs nothing
 	// the runtime provides, so tying it to ELITEA_RUNTIME_ENABLED would make a
@@ -2207,6 +2219,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// Main replica merges the same rows and one writes the event.
 			EgressAuditStore:     dbrepos.NewEgressRunSummaries(pool),
 			ConversationActivity: conversationActivity,
+			RunBriefs:            runBriefs,
 		})
 		if err != nil {
 			return fmt.Errorf("compose optional runtime: %w", err)
@@ -2627,6 +2640,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				return fmt.Errorf("compose predict default model resolver: %w", err)
 			}
 		}
+		if runBriefCompleter != nil {
+			runBriefCompleter.Set(predictCompleter)
+		}
 		slog.Info("predict_llm completion client enabled", "target", os.Getenv("LLM_GATEWAY_URL"))
 	} else {
 		slog.Warn("predict_llm completion client disabled: LLM_GATEWAY_URL is empty; " +
@@ -2853,7 +2869,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// One native policy reader for the router (discovery, token responses,
 	// the 426 gate, the admin save's invalidation) AND the local turn start,
 	// so a save that turns local work off is seen by both at once.
-	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, runBriefs, logger)
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}

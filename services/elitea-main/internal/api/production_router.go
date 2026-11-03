@@ -232,6 +232,8 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentLocalTurns != nil {
 		r.Method(http.MethodPost, localturnsapi.StartPath, cfg.CurrentLocalTurns)
 		r.Method(http.MethodPost, localturnsapi.CommitPath, cfg.CurrentLocalTurns)
+		r.Method(http.MethodPost, localturnsapi.RunBriefPath, cfg.CurrentLocalTurns)
+		r.Method(http.MethodPost, localturnsapi.RunCheckPath, cfg.CurrentLocalTurns)
 	}
 	if cfg.CurrentWorkspaceHandoff != nil {
 		for _, route := range workspacehandoffapi.Methods {
