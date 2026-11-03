@@ -25,12 +25,14 @@ func approvalsSection() map[string]any {
 			"refuses the step, and the model reads that it was skipped. notify_and_wait pauses the run, " +
 			"notifies its owner and ends the run with approval_timed_out when nobody answers in time. A " +
 			"schedule or trigger can set its own action. Every pause, decision and timeout is recorded in " +
-			"the audit trail as agent.approval.*.",
+			"the audit trail as agent.approval.*. A run that a person starts can carry an unattended " +
+			"grant: the person answers the step limit, the output limit and named sensitive tools in " +
+			"advance, inside a chain limit. A schedule or trigger run never carries one.",
 		"order":               7,
 		"icon":                "approval",
 		"always_visible":      true,
 		"required_permission": "configuration.governance",
-		"fields": []map[string]any{
+		"fields": append([]map[string]any{
 			{
 				"key":   platformconfig.KeyApprovalsUnattendedDefault,
 				"type":  "string",
@@ -58,7 +60,7 @@ func approvalsSection() map[string]any {
 				"minimum": platformconfig.MinApprovalsUnattendedWaitHours,
 				"maximum": platformconfig.MaxApprovalsUnattendedWaitHours,
 			},
-		},
+		}, unattendedGrantFields(section)...),
 	}
 }
 
@@ -80,5 +82,5 @@ func validateApprovalsValues(section string, values map[string]any) string {
 		return fmt.Sprintf("%q must be a whole number from %d to %d", platformconfig.KeyApprovalsUnattendedWaitHours,
 			platformconfig.MinApprovalsUnattendedWaitHours, platformconfig.MaxApprovalsUnattendedWaitHours)
 	}
-	return ""
+	return validateUnattendedGrantValues(values)
 }

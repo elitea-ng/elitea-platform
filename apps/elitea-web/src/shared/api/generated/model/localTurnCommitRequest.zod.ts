@@ -115,6 +115,12 @@ export const LocalTurnCommitRequest = zod
       .array(LocalTurnHITLExchange)
       .max(localTurnCommitRequestHitlExchangesMax)
       .optional(),
+    chain_outcome: zod
+      .enum(["completed", "failed", "waiting", "limit_reached", "cancelled"])
+      .optional()
+      .describe(
+        "Client contract 1.30. On the last turn of an unattended chain: how the chain ended. Main stores it once on the chain.",
+      ),
     local_work: LocalTurnWorkReport.optional(),
     context_summary: zod
       .object({

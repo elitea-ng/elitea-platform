@@ -755,6 +755,12 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, nil, resumeErr
 		}
 	}
+	// The unattended chain (ADR-0045 decision 4): the chain's first run, or
+	// the continuation's chain check, in this transaction. A refused
+	// continuation admits nothing.
+	if err := admitAgentChain(ctx, tx, admission, projectionProject); err != nil {
+		return executionapp.AdmissionOutcome{}, nil, err
+	}
 	if err := txQueries.InsertRuntimeCommandOutbox(
 		ctx,
 		sqlcgen.InsertRuntimeCommandOutboxParams{

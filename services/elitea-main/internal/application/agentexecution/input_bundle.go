@@ -149,7 +149,8 @@ func (f *InputBundleFactory) Build(
 func validateAuthoritativeInput(input *runtimev1.AgentExecutionInputV1) error {
 	if input == nil || input.GetSchemaRevision() != agentInputSchemaRevision ||
 		len(input.ProtoReflect().GetUnknown()) != 0 || !validCurrentProjectContextSnapshot(input.GetProjectContext()) ||
-		(input.GetPlatformPreamble() != nil && !ValidPlatformPreambleSnapshot(input.GetPlatformPreamble())) {
+		(input.GetPlatformPreamble() != nil && !ValidPlatformPreambleSnapshot(input.GetPlatformPreamble())) ||
+		(input.GetUnattendedGrant() != nil && !ValidUnattendedGrant(input.GetUnattendedGrant())) {
 		return ErrInvalidAuthoritativeAgentInput
 	}
 	objectFields := [][]byte{

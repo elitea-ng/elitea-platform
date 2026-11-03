@@ -92,12 +92,15 @@ where
                 .map_err(|_| "node_recovery.input_invalid")?;
             let message = crate::agents::parse_agent_execution_input(bytes.as_bytes())
                 .map_err(|_| "node_recovery.input_invalid")?;
-            let request = crate::agents::request_from(message, kind, binding)
-                .map_err(|_| "node_recovery.input_invalid")?;
+            let (request, grant) =
+                crate::agents::protocol::request_and_grant_from(message, kind, binding)
+                    .map_err(|_| "node_recovery.input_invalid")?;
+            // The recovered run keeps the unattended grant of its input.
             let command = crate::agents::session::AuthorizedNativeCommandBinding::from_verified(
                 &verified, &request,
             )
-            .map_err(|_| "node_recovery.command_invalid")?;
+            .map_err(|_| "node_recovery.command_invalid")?
+            .with_unattended_grant(grant);
             let visit = self
                 .authorized
                 .inspect_node_recovery(

@@ -33,6 +33,12 @@ const (
 	// claims challenge; ADR-0039, #1117). Resumes on the authorization
 	// continuation. Never emitted while the governance flag is off.
 	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION AgentExecutionTerminalStateV1 = 5
+	// The run used its model steps (ADR-0045 decision 4). The terminal event
+	// is a full_message with the text so far, as for COMPLETED, and its
+	// response_metadata has step_limit_reached true. The worker emits it only
+	// when the input's unattended_grant has continue_step_limit; Main then
+	// starts the next link of the chain.
+	AgentExecutionTerminalStateV1_AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED AgentExecutionTerminalStateV1 = 6
 )
 
 // Enum value maps for AgentExecutionTerminalStateV1.
@@ -44,6 +50,7 @@ var (
 		3: "AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH",
 		4: "AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN",
 		5: "AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION",
+		6: "AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED",
 	}
 	AgentExecutionTerminalStateV1_value = map[string]int32{
 		"AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED":                     0,
@@ -52,6 +59,7 @@ var (
 		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH":                 3,
 		"AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN":                 4,
 		"AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION": 5,
+		"AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED":              6,
 	}
 )
 
@@ -263,8 +271,15 @@ type AgentExecutionInputV1 struct {
 	// after an administrator saved a preamble, so inputs are unchanged while
 	// workers from an earlier release run.
 	PlatformPreamble *PlatformPreambleSnapshotV1 `protobuf:"bytes,67,opt,name=platform_preamble,json=platformPreamble,proto3" json:"platform_preamble,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The run's unattended grant (ADR-0045 decisions 1, 2 and 4, #1435,
+	// #1436), frozen at admission. Main sets it only when the person who
+	// starts the run gives a grant, or when Main starts a chain continuation
+	// of such a run. ABSENT for every other run, so inputs stay unchanged
+	// while workers from an earlier release run (they reject unknown tags).
+	// The legacy boolean auto_approve_sensitive_actions stays refused.
+	UnattendedGrant *UnattendedGrantV1 `protobuf:"bytes,68,opt,name=unattended_grant,json=unattendedGrant,proto3" json:"unattended_grant,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *AgentExecutionInputV1) Reset() {
@@ -598,6 +613,250 @@ func (x *AgentExecutionInputV1) GetPlatformPreamble() *PlatformPreambleSnapshotV
 	return nil
 }
 
+func (x *AgentExecutionInputV1) GetUnattendedGrant() *UnattendedGrantV1 {
+	if x != nil {
+		return x.UnattendedGrant
+	}
+	return nil
+}
+
+// One unattended grant (ADR-0045 decision 1). Main admitted every part of it
+// before the run started: the platform switch, the owner, each named tool
+// against the agent's resolved tools, the withheld categories and the tier
+// hitl rule. Nothing in it lifts a deny, a guardrail, a run cap or a budget.
+type UnattendedGrantV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The grant's id: a lowercase canonical UUID. The same on every link of
+	// the chain. The ledger rows of the grant's approvals name it.
+	GrantId string `protobuf:"bytes,1,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	// The execution id of the chain's first run. Empty on the first run.
+	ChainRootExecutionId string `protobuf:"bytes,2,opt,name=chain_root_execution_id,json=chainRootExecutionId,proto3" json:"chain_root_execution_id,omitempty"`
+	// The person who gave the grant: the owner of the chain's first run.
+	OwnerUserId int64 `protobuf:"varint,3,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	// The sensitive tools the owner named. At a sensitive pause for one of
+	// these pairs the worker approves the call itself, does not end the run,
+	// and emits one agent_unattended_approval node event. Any other pause ends
+	// the run with PAUSED_HITL as before.
+	SensitiveTools []*UnattendedGrantToolV1 `protobuf:"bytes,4,rep,name=sensitive_tools,json=sensitiveTools,proto3" json:"sensitive_tools,omitempty"`
+	// At the step limit, the worker ends the run with STEP_LIMIT_REACHED, and
+	// Main starts the next link of the chain.
+	ContinueStepLimit bool `protobuf:"varint,5,opt,name=continue_step_limit,json=continueStepLimit,proto3" json:"continue_step_limit,omitempty"`
+	// At the output limit, Main starts the output_limit continuation.
+	ContinueOutputLimit bool `protobuf:"varint,6,opt,name=continue_output_limit,json=continueOutputLimit,proto3" json:"continue_output_limit,omitempty"`
+	// The chain's effective limits. Main checks them before each link; the
+	// worker does not enforce them.
+	Chain *UnattendedChainLimitsV1 `protobuf:"bytes,7,opt,name=chain,proto3" json:"chain,omitempty"`
+	// 0 on the chain's first run, then 1, 2 and so on.
+	ContinuationIndex uint32 `protobuf:"varint,8,opt,name=continuation_index,json=continuationIndex,proto3" json:"continuation_index,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *UnattendedGrantV1) Reset() {
+	*x = UnattendedGrantV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnattendedGrantV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnattendedGrantV1) ProtoMessage() {}
+
+func (x *UnattendedGrantV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnattendedGrantV1.ProtoReflect.Descriptor instead.
+func (*UnattendedGrantV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *UnattendedGrantV1) GetGrantId() string {
+	if x != nil {
+		return x.GrantId
+	}
+	return ""
+}
+
+func (x *UnattendedGrantV1) GetChainRootExecutionId() string {
+	if x != nil {
+		return x.ChainRootExecutionId
+	}
+	return ""
+}
+
+func (x *UnattendedGrantV1) GetOwnerUserId() int64 {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return 0
+}
+
+func (x *UnattendedGrantV1) GetSensitiveTools() []*UnattendedGrantToolV1 {
+	if x != nil {
+		return x.SensitiveTools
+	}
+	return nil
+}
+
+func (x *UnattendedGrantV1) GetContinueStepLimit() bool {
+	if x != nil {
+		return x.ContinueStepLimit
+	}
+	return false
+}
+
+func (x *UnattendedGrantV1) GetContinueOutputLimit() bool {
+	if x != nil {
+		return x.ContinueOutputLimit
+	}
+	return false
+}
+
+func (x *UnattendedGrantV1) GetChain() *UnattendedChainLimitsV1 {
+	if x != nil {
+		return x.Chain
+	}
+	return nil
+}
+
+func (x *UnattendedGrantV1) GetContinuationIndex() uint32 {
+	if x != nil {
+		return x.ContinuationIndex
+	}
+	return 0
+}
+
+// One named sensitive tool: the toolkit name as the agent configures it,
+// and the tool name.
+type UnattendedGrantToolV1 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolkitName   string                 `protobuf:"bytes,1,opt,name=toolkit_name,json=toolkitName,proto3" json:"toolkit_name,omitempty"`
+	ToolName      string                 `protobuf:"bytes,2,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnattendedGrantToolV1) Reset() {
+	*x = UnattendedGrantToolV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnattendedGrantToolV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnattendedGrantToolV1) ProtoMessage() {}
+
+func (x *UnattendedGrantToolV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnattendedGrantToolV1.ProtoReflect.Descriptor instead.
+func (*UnattendedGrantToolV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *UnattendedGrantToolV1) GetToolkitName() string {
+	if x != nil {
+		return x.ToolkitName
+	}
+	return ""
+}
+
+func (x *UnattendedGrantToolV1) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+// The chain limits of a grant (ADR-0045 decision 4).
+type UnattendedChainLimitsV1 struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	MaxContinuations uint32                 `protobuf:"varint,1,opt,name=max_continuations,json=maxContinuations,proto3" json:"max_continuations,omitempty"`
+	// US dollars, at most four decimals; 0 means no spend limit.
+	MaxSpendUsd float64 `protobuf:"fixed64,2,opt,name=max_spend_usd,json=maxSpendUsd,proto3" json:"max_spend_usd,omitempty"`
+	// The chain's deadline, in Unix seconds. It is 0 on the chain's first run:
+	// the chain row holds the deadline, and a clock read there would make a
+	// retried start a different request.
+	DeadlineUnixSeconds int64 `protobuf:"varint,3,opt,name=deadline_unix_seconds,json=deadlineUnixSeconds,proto3" json:"deadline_unix_seconds,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *UnattendedChainLimitsV1) Reset() {
+	*x = UnattendedChainLimitsV1{}
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnattendedChainLimitsV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnattendedChainLimitsV1) ProtoMessage() {}
+
+func (x *UnattendedChainLimitsV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnattendedChainLimitsV1.ProtoReflect.Descriptor instead.
+func (*UnattendedChainLimitsV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *UnattendedChainLimitsV1) GetMaxContinuations() uint32 {
+	if x != nil {
+		return x.MaxContinuations
+	}
+	return 0
+}
+
+func (x *UnattendedChainLimitsV1) GetMaxSpendUsd() float64 {
+	if x != nil {
+		return x.MaxSpendUsd
+	}
+	return 0
+}
+
+func (x *UnattendedChainLimitsV1) GetDeadlineUnixSeconds() int64 {
+	if x != nil {
+		return x.DeadlineUnixSeconds
+	}
+	return 0
+}
+
 // One revision of the platform preamble (shared 0216). The command's
 // content_controls (field 71) names the same revision and digest.
 type PlatformPreambleSnapshotV1 struct {
@@ -613,7 +872,7 @@ type PlatformPreambleSnapshotV1 struct {
 
 func (x *PlatformPreambleSnapshotV1) Reset() {
 	*x = PlatformPreambleSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +884,7 @@ func (x *PlatformPreambleSnapshotV1) String() string {
 func (*PlatformPreambleSnapshotV1) ProtoMessage() {}
 
 func (x *PlatformPreambleSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[2]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +897,7 @@ func (x *PlatformPreambleSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlatformPreambleSnapshotV1.ProtoReflect.Descriptor instead.
 func (*PlatformPreambleSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PlatformPreambleSnapshotV1) GetRevision() uint32 {
@@ -676,7 +935,7 @@ type SummaryModelSnapshotV1 struct {
 
 func (x *SummaryModelSnapshotV1) Reset() {
 	*x = SummaryModelSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -688,7 +947,7 @@ func (x *SummaryModelSnapshotV1) String() string {
 func (*SummaryModelSnapshotV1) ProtoMessage() {}
 
 func (x *SummaryModelSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[3]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -701,7 +960,7 @@ func (x *SummaryModelSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SummaryModelSnapshotV1.ProtoReflect.Descriptor instead.
 func (*SummaryModelSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SummaryModelSnapshotV1) GetLlmSettings() []byte {
@@ -734,7 +993,7 @@ type ModelContextLimitsV1 struct {
 
 func (x *ModelContextLimitsV1) Reset() {
 	*x = ModelContextLimitsV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -746,7 +1005,7 @@ func (x *ModelContextLimitsV1) String() string {
 func (*ModelContextLimitsV1) ProtoMessage() {}
 
 func (x *ModelContextLimitsV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[4]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -759,7 +1018,7 @@ func (x *ModelContextLimitsV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelContextLimitsV1.ProtoReflect.Descriptor instead.
 func (*ModelContextLimitsV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ModelContextLimitsV1) GetContextWindowTokens() uint32 {
@@ -813,7 +1072,7 @@ type ProjectContextSnapshotV1 struct {
 
 func (x *ProjectContextSnapshotV1) Reset() {
 	*x = ProjectContextSnapshotV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +1084,7 @@ func (x *ProjectContextSnapshotV1) String() string {
 func (*ProjectContextSnapshotV1) ProtoMessage() {}
 
 func (x *ProjectContextSnapshotV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[5]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +1097,7 @@ func (x *ProjectContextSnapshotV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectContextSnapshotV1.ProtoReflect.Descriptor instead.
 func (*ProjectContextSnapshotV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ProjectContextSnapshotV1) GetId() string {
@@ -890,7 +1149,7 @@ type AgentExecutionArtifactReferenceV1 struct {
 
 func (x *AgentExecutionArtifactReferenceV1) Reset() {
 	*x = AgentExecutionArtifactReferenceV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +1161,7 @@ func (x *AgentExecutionArtifactReferenceV1) String() string {
 func (*AgentExecutionArtifactReferenceV1) ProtoMessage() {}
 
 func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[6]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +1174,7 @@ func (x *AgentExecutionArtifactReferenceV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionArtifactReferenceV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionArtifactReferenceV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AgentExecutionArtifactReferenceV1) GetArtifactId() string {
@@ -1001,7 +1260,7 @@ type AgentExecutionAttachmentContentV1 struct {
 
 func (x *AgentExecutionAttachmentContentV1) Reset() {
 	*x = AgentExecutionAttachmentContentV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1013,7 +1272,7 @@ func (x *AgentExecutionAttachmentContentV1) String() string {
 func (*AgentExecutionAttachmentContentV1) ProtoMessage() {}
 
 func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[7]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1026,7 +1285,7 @@ func (x *AgentExecutionAttachmentContentV1) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AgentExecutionAttachmentContentV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionAttachmentContentV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AgentExecutionAttachmentContentV1) GetItemId() string {
@@ -1092,7 +1351,7 @@ type AgentExecutionResultV1 struct {
 
 func (x *AgentExecutionResultV1) Reset() {
 	*x = AgentExecutionResultV1{}
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1104,7 +1363,7 @@ func (x *AgentExecutionResultV1) String() string {
 func (*AgentExecutionResultV1) ProtoMessage() {}
 
 func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
-	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[8]
+	mi := &file_elitea_runtime_v1_agent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1117,7 +1376,7 @@ func (x *AgentExecutionResultV1) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentExecutionResultV1.ProtoReflect.Descriptor instead.
 func (*AgentExecutionResultV1) Descriptor() ([]byte, []int) {
-	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{8}
+	return file_elitea_runtime_v1_agent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *AgentExecutionResultV1) GetInputBundleId() string {
@@ -1185,7 +1444,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryId\x12(\n" +
 	"\x10client_stream_id\x18\x02 \x01(\tR\x0eclientStreamId\x12*\n" +
 	"\x11client_message_id\x18\x03 \x01(\tR\x0fclientMessageId\x12\x1b\n" +
-	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xd3\x10\n" +
+	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xa4\x11\n" +
 	"\x15AgentExecutionInputV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x10\n" +
 	"\x03llm\x18\x02 \x01(\fR\x03llm\x12!\n" +
@@ -1237,7 +1496,8 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x0fproject_context\x18@ \x01(\v2+.elitea.runtime.v1.ProjectContextSnapshotV1R\x0eprojectContext\x12Y\n" +
 	"\x14model_context_limits\x18A \x01(\v2'.elitea.runtime.v1.ModelContextLimitsV1R\x12modelContextLimits\x12N\n" +
 	"\rsummary_model\x18B \x01(\v2).elitea.runtime.v1.SummaryModelSnapshotV1R\fsummaryModel\x12Z\n" +
-	"\x11platform_preamble\x18C \x01(\v2-.elitea.runtime.v1.PlatformPreambleSnapshotV1R\x10platformPreambleB\f\n" +
+	"\x11platform_preamble\x18C \x01(\v2-.elitea.runtime.v1.PlatformPreambleSnapshotV1R\x10platformPreamble\x12O\n" +
+	"\x10unattended_grant\x18D \x01(\v2$.elitea.runtime.v1.UnattendedGrantV1R\x0funattendedGrantB\f\n" +
 	"\n" +
 	"_thread_idB\x10\n" +
 	"\x0e_checkpoint_idB\x0e\n" +
@@ -1247,7 +1507,23 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15_execution_generationB\x12\n" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
-	"\v_debug_modeJ\x04\b(\x10@\"j\n" +
+	"\v_debug_modeJ\x04\b(\x10@\"\xb7\x03\n" +
+	"\x11UnattendedGrantV1\x12\x19\n" +
+	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x125\n" +
+	"\x17chain_root_execution_id\x18\x02 \x01(\tR\x14chainRootExecutionId\x12\"\n" +
+	"\rowner_user_id\x18\x03 \x01(\x03R\vownerUserId\x12Q\n" +
+	"\x0fsensitive_tools\x18\x04 \x03(\v2(.elitea.runtime.v1.UnattendedGrantToolV1R\x0esensitiveTools\x12.\n" +
+	"\x13continue_step_limit\x18\x05 \x01(\bR\x11continueStepLimit\x122\n" +
+	"\x15continue_output_limit\x18\x06 \x01(\bR\x13continueOutputLimit\x12@\n" +
+	"\x05chain\x18\a \x01(\v2*.elitea.runtime.v1.UnattendedChainLimitsV1R\x05chain\x12-\n" +
+	"\x12continuation_index\x18\b \x01(\rR\x11continuationIndexJ\x04\b\t\x10\x10\"]\n" +
+	"\x15UnattendedGrantToolV1\x12!\n" +
+	"\ftoolkit_name\x18\x01 \x01(\tR\vtoolkitName\x12\x1b\n" +
+	"\ttool_name\x18\x02 \x01(\tR\btoolNameJ\x04\b\x03\x10\b\"\xa4\x01\n" +
+	"\x17UnattendedChainLimitsV1\x12+\n" +
+	"\x11max_continuations\x18\x01 \x01(\rR\x10maxContinuations\x12\"\n" +
+	"\rmax_spend_usd\x18\x02 \x01(\x01R\vmaxSpendUsd\x122\n" +
+	"\x15deadline_unix_seconds\x18\x03 \x01(\x03R\x13deadlineUnixSecondsJ\x04\b\x04\x10\b\"j\n" +
 	"\x1aPlatformPreambleSnapshotV1\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\rR\brevision\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12\x12\n" +
@@ -1289,14 +1565,15 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x16request_content_digest\x18\x05 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x14requestContentDigest\x12W\n" +
 	"\x0eterminal_state\x18\x06 \x01(\x0e20.elitea.runtime.v1.AgentExecutionTerminalStateV1R\rterminalState\x12]\n" +
 	"\x0fresult_artifact\x18\a \x01(\v24.elitea.runtime.v1.AgentExecutionArtifactReferenceV1R\x0eresultArtifact\x12e\n" +
-	"\x13attachment_contents\x18\x10 \x03(\v24.elitea.runtime.v1.AgentExecutionAttachmentContentV1R\x12attachmentContentsJ\x04\b\b\x10\x10J\x04\b\x11\x10 *\xeb\x02\n" +
+	"\x13attachment_contents\x18\x10 \x03(\v24.elitea.runtime.v1.AgentExecutionAttachmentContentV1R\x12attachmentContentsJ\x04\b\b\x10\x10J\x04\b\x11\x10 *\xa5\x03\n" +
 	"\x1dAgentExecutionTerminalStateV1\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_UNSPECIFIED\x10\x00\x12/\n" +
 	"+AGENT_EXECUTION_TERMINAL_STATE_V1_COMPLETED\x10\x01\x121\n" +
 	"-AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_HITL\x10\x02\x125\n" +
 	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_MCP_AUTH\x10\x03\x125\n" +
 	"1AGENT_EXECUTION_TERMINAL_STATE_V1_PARKED_CHILDREN\x10\x04\x12E\n" +
-	"AAGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION\x10\x05BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"AAGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION\x10\x05\x128\n" +
+	"4AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED\x10\x06BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_agent_proto_rawDescOnce sync.Once
@@ -1311,37 +1588,43 @@ func file_elitea_runtime_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_elitea_runtime_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_elitea_runtime_v1_agent_proto_goTypes = []any{
 	(AgentExecutionTerminalStateV1)(0),        // 0: elitea.runtime.v1.AgentExecutionTerminalStateV1
 	(*AgentExecutionCommandV1)(nil),           // 1: elitea.runtime.v1.AgentExecutionCommandV1
 	(*AgentExecutionInputV1)(nil),             // 2: elitea.runtime.v1.AgentExecutionInputV1
-	(*PlatformPreambleSnapshotV1)(nil),        // 3: elitea.runtime.v1.PlatformPreambleSnapshotV1
-	(*SummaryModelSnapshotV1)(nil),            // 4: elitea.runtime.v1.SummaryModelSnapshotV1
-	(*ModelContextLimitsV1)(nil),              // 5: elitea.runtime.v1.ModelContextLimitsV1
-	(*ProjectContextSnapshotV1)(nil),          // 6: elitea.runtime.v1.ProjectContextSnapshotV1
-	(*AgentExecutionArtifactReferenceV1)(nil), // 7: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	(*AgentExecutionAttachmentContentV1)(nil), // 8: elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	(*AgentExecutionResultV1)(nil),            // 9: elitea.runtime.v1.AgentExecutionResultV1
-	(*DigestV1)(nil),                          // 10: elitea.runtime.v1.DigestV1
+	(*UnattendedGrantV1)(nil),                 // 3: elitea.runtime.v1.UnattendedGrantV1
+	(*UnattendedGrantToolV1)(nil),             // 4: elitea.runtime.v1.UnattendedGrantToolV1
+	(*UnattendedChainLimitsV1)(nil),           // 5: elitea.runtime.v1.UnattendedChainLimitsV1
+	(*PlatformPreambleSnapshotV1)(nil),        // 6: elitea.runtime.v1.PlatformPreambleSnapshotV1
+	(*SummaryModelSnapshotV1)(nil),            // 7: elitea.runtime.v1.SummaryModelSnapshotV1
+	(*ModelContextLimitsV1)(nil),              // 8: elitea.runtime.v1.ModelContextLimitsV1
+	(*ProjectContextSnapshotV1)(nil),          // 9: elitea.runtime.v1.ProjectContextSnapshotV1
+	(*AgentExecutionArtifactReferenceV1)(nil), // 10: elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	(*AgentExecutionAttachmentContentV1)(nil), // 11: elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	(*AgentExecutionResultV1)(nil),            // 12: elitea.runtime.v1.AgentExecutionResultV1
+	(*DigestV1)(nil),                          // 13: elitea.runtime.v1.DigestV1
 }
 var file_elitea_runtime_v1_agent_proto_depIdxs = []int32{
-	6,  // 0: elitea.runtime.v1.AgentExecutionInputV1.project_context:type_name -> elitea.runtime.v1.ProjectContextSnapshotV1
-	5,  // 1: elitea.runtime.v1.AgentExecutionInputV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
-	4,  // 2: elitea.runtime.v1.AgentExecutionInputV1.summary_model:type_name -> elitea.runtime.v1.SummaryModelSnapshotV1
-	3,  // 3: elitea.runtime.v1.AgentExecutionInputV1.platform_preamble:type_name -> elitea.runtime.v1.PlatformPreambleSnapshotV1
-	5,  // 4: elitea.runtime.v1.SummaryModelSnapshotV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
-	10, // 5: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
-	10, // 6: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
-	10, // 7: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
-	0,  // 8: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
-	7,  // 9: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
-	8,  // 10: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	9,  // 0: elitea.runtime.v1.AgentExecutionInputV1.project_context:type_name -> elitea.runtime.v1.ProjectContextSnapshotV1
+	8,  // 1: elitea.runtime.v1.AgentExecutionInputV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	7,  // 2: elitea.runtime.v1.AgentExecutionInputV1.summary_model:type_name -> elitea.runtime.v1.SummaryModelSnapshotV1
+	6,  // 3: elitea.runtime.v1.AgentExecutionInputV1.platform_preamble:type_name -> elitea.runtime.v1.PlatformPreambleSnapshotV1
+	3,  // 4: elitea.runtime.v1.AgentExecutionInputV1.unattended_grant:type_name -> elitea.runtime.v1.UnattendedGrantV1
+	4,  // 5: elitea.runtime.v1.UnattendedGrantV1.sensitive_tools:type_name -> elitea.runtime.v1.UnattendedGrantToolV1
+	5,  // 6: elitea.runtime.v1.UnattendedGrantV1.chain:type_name -> elitea.runtime.v1.UnattendedChainLimitsV1
+	8,  // 7: elitea.runtime.v1.SummaryModelSnapshotV1.model_context_limits:type_name -> elitea.runtime.v1.ModelContextLimitsV1
+	13, // 8: elitea.runtime.v1.AgentExecutionArtifactReferenceV1.digest:type_name -> elitea.runtime.v1.DigestV1
+	13, // 9: elitea.runtime.v1.AgentExecutionResultV1.input_bundle_digest:type_name -> elitea.runtime.v1.DigestV1
+	13, // 10: elitea.runtime.v1.AgentExecutionResultV1.request_content_digest:type_name -> elitea.runtime.v1.DigestV1
+	0,  // 11: elitea.runtime.v1.AgentExecutionResultV1.terminal_state:type_name -> elitea.runtime.v1.AgentExecutionTerminalStateV1
+	10, // 12: elitea.runtime.v1.AgentExecutionResultV1.result_artifact:type_name -> elitea.runtime.v1.AgentExecutionArtifactReferenceV1
+	11, // 13: elitea.runtime.v1.AgentExecutionResultV1.attachment_contents:type_name -> elitea.runtime.v1.AgentExecutionAttachmentContentV1
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_agent_proto_init() }
@@ -1351,14 +1634,14 @@ func file_elitea_runtime_v1_agent_proto_init() {
 	}
 	file_elitea_runtime_v1_common_proto_init()
 	file_elitea_runtime_v1_agent_proto_msgTypes[1].OneofWrappers = []any{}
-	file_elitea_runtime_v1_agent_proto_msgTypes[4].OneofWrappers = []any{}
+	file_elitea_runtime_v1_agent_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_agent_proto_rawDesc), len(file_elitea_runtime_v1_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

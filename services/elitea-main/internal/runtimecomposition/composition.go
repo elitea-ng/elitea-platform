@@ -1074,6 +1074,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			}
 			agentStart = agentStart.WithAttachmentImages(attachmentImages)
 		}
+		// Unattended grants (ADR-0045 decision 2): the platform switch, the
+		// approval policy, the run caps and the agent's tier.
+		agentStart = agentStart.WithUnattendedGrants(
+			unattendedGrantPolicy(dependencies.AdmissionPool, approvalSettings, runCapsSettings, egressSources))
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
 			return nil, err
@@ -1239,6 +1243,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			publisherRoot, err = newPublisherSet(publisherRoot, unattendedApprovals)
 			if err != nil {
 				return nil, fmt.Errorf("compose unattended approval worker: %w", err)
+			}
+		}
+		// ADR-0045 decision 4: end the unattended chains nothing else ends.
+		if dependencies.AdmissionPool != nil {
+			chainSweeper, sweepErr := unattendedChainSweeper(dependencies.AdmissionPool, dependencies.Logger)
+			if sweepErr != nil {
+				return nil, fmt.Errorf("construct unattended chain sweeper: %w", sweepErr)
+			}
+			publisherRoot, err = newPublisherSet(publisherRoot, chainSweeper)
+			if err != nil {
+				return nil, fmt.Errorf("compose unattended chain sweeper: %w", err)
 			}
 		}
 	}
@@ -1436,6 +1451,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
+	settlementOptions = append(settlementOptions,
+		unattendedSettlementHooks(dependencies.AdmissionPool, agentStart, dependencies.Logger)...)
 	// A run that ended without parking leaves cards nothing can apply; the
 	// wake sweep closes them (contract §5, §8a). Kick it once the turn settles.
 	settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(

@@ -505,6 +505,7 @@ where
     let mut probe = run.lease_state_probe();
     let mut pauses = AgentPauseAccumulator::default();
     let wrap_up = completion_selector.wrap_up();
+    let step_limit = completion_selector.step_limit_stop();
     tracing::info!(event = "agent_event_stream_started");
     let stream = Box::pin(drive_native_stream(
         &mut run,
@@ -512,7 +513,10 @@ where
         &mut projector,
         &mut pauses,
         &mut probe,
-        wrap_up,
+        NativeStreamStops {
+            wrap_up,
+            step_limit: step_limit.clone(),
+        },
         clock.as_ref(),
         &steps,
     ))
@@ -527,7 +531,13 @@ where
     if !matches!(stream, NativeStreamOutcome::FatalLease(_)) {
         probe.flush_steering_acknowledgements().await;
     }
-    let mut successful_terminal = FreshAgentTerminalSelection::Completed;
+    // ADR-0045 decision 4: a run stopped at its step limit under an
+    // unattended grant completes as STEP_LIMIT_REACHED.
+    let mut successful_terminal = if step_limit.as_ref().is_some_and(|stop| stop.reached()) {
+        FreshAgentTerminalSelection::StepLimitReached
+    } else {
+        FreshAgentTerminalSelection::Completed
+    };
     let mut failure = match stream {
         NativeStreamOutcome::Eos => None,
         NativeStreamOutcome::NodeRecoverySuspended => {
@@ -628,7 +638,12 @@ where
     };
     failure = cap_reached_terminal(failure, &run_caps);
 
-    if failure.is_none() && matches!(successful_terminal, FreshAgentTerminalSelection::Completed) {
+    if failure.is_none()
+        && matches!(
+            successful_terminal,
+            FreshAgentTerminalSelection::Completed | FreshAgentTerminalSelection::StepLimitReached
+        )
+    {
         tracing::info!(event = "agent_completion_selection_started");
         let (next_run, completion_result) = Box::pin(
             run.select_native_completion(completion_selector, projector.has_static_tool_pause()),
@@ -795,7 +810,7 @@ async fn drive_native_stream<C, K, R>(
     projector: &mut AgentEventProjector,
     pauses: &mut AgentPauseAccumulator,
     probe: &mut ClaimLeaseStateProbe,
-    wrap_up: Option<std::sync::Arc<crate::workspace_run::wrap_up::WrapUp>>,
+    stream_stops: NativeStreamStops,
     clock: &K,
     steps: &RunSteps<R>,
 ) -> NativeStreamOutcome
@@ -804,6 +819,10 @@ where
     K: UnixMillisClock,
     R: ControlRpc + 'static,
 {
+    let NativeStreamStops {
+        wrap_up,
+        step_limit,
+    } = stream_stops;
     let mut failure = None;
     // ADR-0034 take back: the lease poll's `workspace_wrap_up` asks the turn
     // to wrap up; once no workspace tool call is in flight the run is
@@ -878,6 +897,26 @@ where
                             NativeStreamOutcome::Paused
                         } else {
                             close_wrapped_up_turn(run, projector, pauses, clock).await
+                        };
+                    }
+                    Err(error)
+                        if failure.is_none()
+                            && error.step_limit_reached()
+                            && let Some(stop) = &step_limit =>
+                    {
+                        // ADR-0045 decision 4: the unattended grant continues
+                        // at the step limit. The run ends with the text it
+                        // has, as a completed turn at its step limit.
+                        stop.mark();
+                        tracing::info!(
+                            event = "agent_step_limit_reached",
+                            execution_id = %run.trace_execution_id(),
+                            "the unattended run reached its step limit"
+                        );
+                        return if projector.is_paused() {
+                            NativeStreamOutcome::Paused
+                        } else {
+                            close_step_limited_turn(run, projector, pauses, clock).await
                         };
                     }
                     Err(error) => {
@@ -999,6 +1038,47 @@ where
             NativeStreamOutcome::RecoveryRequired { code, retryable }
         }
     }
+}
+
+/// A run stopped at its step limit under an unattended grant (ADR-0045
+/// decision 4): publish what the model had produced as an incomplete step
+/// and stand the projector where a completed turn would, so the turn ends
+/// as `STEP_LIMIT_REACHED` instead of failing.
+async fn close_step_limited_turn<C, K>(
+    run: &mut CursorBoundAuthorizedAgentRun<C>,
+    projector: &mut AgentEventProjector,
+    pauses: &mut AgentPauseAccumulator,
+    clock: &K,
+) -> NativeStreamOutcome
+where
+    C: AgentProgressConnector,
+    K: UnixMillisClock,
+{
+    let Some(occurred_at) = chrono::DateTime::from_timestamp_millis(clock.now_unix_millis()) else {
+        return NativeStreamOutcome::RecoveryRequired {
+            code: "agent_lifecycle.invalid_clock",
+            retryable: false,
+        };
+    };
+    let batch = match projector.close_for_step_limit(occurred_at) {
+        Ok(batch) => batch,
+        Err(error) => return NativeStreamOutcome::Failure(projection_failure(&error)),
+    };
+    match Box::pin(publish_batch(run, batch, pauses, clock)).await {
+        BatchPublication::Acknowledged => NativeStreamOutcome::Eos,
+        BatchPublication::Rejected => NativeStreamOutcome::Failure(RuntimeFailureKind::Cancelled),
+        BatchPublication::RecoveryRequired { code, retryable } => {
+            NativeStreamOutcome::RecoveryRequired { code, retryable }
+        }
+    }
+}
+
+/// The cooperative stops of one run's event stream.
+struct NativeStreamStops {
+    /// The cloud turn's take-back wrap-up (ADR-0034).
+    wrap_up: Option<Arc<crate::workspace_run::wrap_up::WrapUp>>,
+    /// The step-limit stop of an unattended run (ADR-0045).
+    step_limit: Option<Arc<crate::agents::unattended::StepLimitStop>>,
 }
 
 enum BatchPublication {

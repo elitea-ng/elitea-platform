@@ -46,9 +46,29 @@ export const LocalTurnError = zod
   .object({
     error: zod.string(),
     message: zod.string().optional(),
+    reason: zod
+      .string()
+      .optional()
+      .describe(
+        "With `unattended_grant_refused`: `disabled`, `invalid`, `over_maximum`, `not_owner`, `origin_not_allowed`, `tool_not_resolved`, `category_withheld`, `tier_requires_hitl` or `chain_not_found`.",
+      ),
+    field: zod
+      .string()
+      .optional()
+      .describe("With `unattended_grant_refused`, the refused request field."),
+    tool: zod
+      .string()
+      .optional()
+      .describe(
+        "With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.",
+      ),
+    limit: zod
+      .enum(["continuations", "spend", "deadline"])
+      .optional()
+      .describe("With `chain_limit_reached`, the limit the chain reached."),
   })
   .describe(
-    "A refused local turn call. `error` is a machine code: `invalid_local_turn`, `local_turn_requires_token`, `local_work_disabled`, `local_turn_not_found`, `local_turn_participant`, `local_turn_conflict`, `local_turn_already_committed`, `local_turn_expired`, `local_turn_unavailable`, `unsupported_media_type`, `request_too_large`, `local_turn_failed`. NOTE(W2): internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).",
+    "A refused local turn call. `error` is a machine code: `invalid_local_turn`, `local_turn_requires_token`, `local_work_disabled`, `local_turn_not_found`, `local_turn_participant`, `local_turn_conflict`, `local_turn_already_committed`, `local_turn_expired`, `local_turn_unavailable`, `unsupported_media_type`, `request_too_large`, `local_turn_failed`, and from client contract 1.30 `unattended_grant_refused`, `chain_limit_reached` and `chain_ended`. NOTE(W2): internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).",
   );
 
 export type LocalTurnError = zod.input<typeof LocalTurnError>;

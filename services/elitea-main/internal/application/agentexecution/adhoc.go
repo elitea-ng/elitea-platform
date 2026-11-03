@@ -13,6 +13,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
@@ -99,6 +100,10 @@ type CurrentAdhocStartRequest struct {
 	// on, so a colleague tagged in a model chat was never told.
 	MentionedUserIDs []int64
 	MentionsEveryone bool
+	// Unattended and UnattendedContinuation are as on
+	// CurrentApplicationStartRequest (ADR-0045).
+	Unattended             *unattended.Request
+	UnattendedContinuation *UnattendedContinuation
 }
 
 // mentionRequest is the part of an ad-hoc start the mention notifier reads,
@@ -200,9 +205,29 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
 	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
+	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
+		request: request.Unattended, continuation: request.UnattendedContinuation,
+		capabilityID: executiondomain.AgentAdhocCapability, input: input,
+		projectID: request.ProjectID, actorUserID: request.ActorUserID,
+		conversationUUID: request.ConversationUUID, grantKey: request.QuestionID,
+		responseMessageID: responseMessageID, questionID: request.QuestionID,
+		triggerOrigin: request.TriggerOrigin,
+		start: &unattended.CloudStart{
+			Contract: CloudStartContractAdhoc, ParticipantID: request.TargetParticipantID,
+			LLMSettings: bytes.Clone(request.LLMSettings),
+		},
+	})
+	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
+	input.UnattendedGrant = grant
+	if request.UnattendedContinuation != nil {
+		questionMeta = markContinuedAutomatically(questionMeta)
+	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
+		Unattended: chain,
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: projectID, ResourceProjectID: projectID,
 			ProjectionProjectID: projectID, ActorID: actorID,

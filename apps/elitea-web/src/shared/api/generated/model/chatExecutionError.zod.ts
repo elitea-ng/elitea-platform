@@ -47,6 +47,24 @@ export const ChatExecutionError = zod
     error: zod.string(),
     message: zod.string().optional(),
     retryable: zod.boolean().optional(),
+    reason: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.30. With `unattended_grant_refused`, why (see LocalTurnError).",
+      ),
+    field: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.30. With `unattended_grant_refused`, the refused request field.",
+      ),
+    tool: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.30. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.",
+      ),
   })
   .describe(
     'A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn".\n',

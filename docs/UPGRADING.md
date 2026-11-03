@@ -4,6 +4,25 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Unattended grants and chains (#1435, #1436, ADR-0045)
+
+New shared migration `0221_unattended_run_chains`: the tables
+`elitea_runtime.run_chains` and `elitea_runtime.run_chain_links`, and the
+column `approval_ledger.grant_id`. The migration only adds objects. New
+approvals settings: `unattended_grants` (default on),
+`unattended_withheld_categories` (default `payment`) and the `chain_*`
+limits. Client contract 1.30: `unattended` on the local turn start and on
+the chat send, `source` on a HITL exchange, `chain_outcome` on the commit,
+and `source: grant` on a remote toolkit confirmation. New proto field
+`AgentExecutionInputV1.unattended_grant` (68) and terminal state
+`STEP_LIMIT_REACHED`.
+
+**Upgrade Main before the workers.** Main sends field 68 only on a turn
+that carries a grant. A worker of an earlier release refuses such a turn.
+A turn without a grant is unchanged byte for byte. To refuse every grant
+until all workers are upgraded, set **Configuration › Approvals ›
+Unattended Grants** to off.
+
 ## Grounding indicators (#1500, ADR-0043 decision 5)
 
 A new agent version meta key, `meta.citations` (`"off"`, `"required"` or

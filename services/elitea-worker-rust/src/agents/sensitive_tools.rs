@@ -16,6 +16,7 @@ use adk_rust::{ReadonlyContext, Toolset};
 use serde_json::{Map, Value};
 
 use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+use super::unattended::{GrantedApproval, UnattendedGrant};
 use crate::toolkits::{
     AdmittedToolSnapshot, FrozenToolKind, SensitiveToolPolicy, ToolAdmissionPolicy, ToolBindingPlan,
 };
@@ -134,6 +135,9 @@ struct SensitiveToolEntry {
     /// approved call replays, because its effect is confined to the
     /// workspace the continuation hydrates from the published commit.
     conditional: bool,
+    /// The run's unattended grant names this tool (ADR-0045): a call does
+    /// not pause, it runs after one approval event.
+    granted: Option<GrantedApproval>,
 }
 
 impl SensitiveToolEntry {
@@ -179,12 +183,45 @@ impl SensitiveToolCatalog {
         self.scoped_entries.is_empty()
     }
 
-    /// The names confirmed on every call (conditional entries excluded).
+    /// The names confirmed on every call (conditional entries and the
+    /// entries of the run's unattended grant excluded).
     pub(crate) fn tool_names(&self) -> impl Iterator<Item = &str> {
         self.provider_entries
             .iter()
-            .filter(|(_, entry)| !entry.conditional)
+            .filter(|(_, entry)| !entry.conditional && entry.granted.is_none())
             .map(|(name, _)| name.as_ref())
+    }
+
+    /// Mark each sensitive tool that the run's unattended grant names
+    /// (ADR-0045 decision 2). A conditional entry ("read untrusted, then
+    /// act", the workspace command) stays as it is: the grant does not apply
+    /// to it. Call this before `bind_provider_names`, because the provider
+    /// names copy the scoped entries.
+    #[must_use]
+    pub(crate) fn with_unattended_grant(mut self, grant: Option<&UnattendedGrant>) -> Self {
+        let Some(grant) = grant.filter(|grant| grant.has_sensitive_tools()) else {
+            return self;
+        };
+        for (identity, entry) in &mut self.scoped_entries {
+            if !entry.conditional && grant.names_tool(&identity.toolkit_name, &identity.tool_name) {
+                entry.granted = Some(GrantedApproval::new(
+                    Arc::clone(grant.grant_id()),
+                    &identity.toolkit_name,
+                    &identity.tool_name,
+                ));
+            }
+        }
+        self.rebuild_unqualified_provider_entries();
+        self
+    }
+
+    /// The grant approval of one model-visible tool name, if the run's
+    /// unattended grant names that tool.
+    #[must_use]
+    pub(crate) fn granted_for(&self, tool_name: &str) -> Option<&GrantedApproval> {
+        self.provider_entries
+            .get(tool_name)
+            .and_then(|entry| entry.granted.as_ref())
     }
 
     /// Every name the catalog may confirm, conditional entries included: what
@@ -226,6 +263,7 @@ impl SensitiveToolCatalog {
             policy: SensitiveToolPolicy::workspace_command(),
             read_only: false,
             conditional: true,
+            granted: None,
         };
         let identity = SensitiveToolIdentity {
             toolkit_name: TOOLKIT.into(),
@@ -278,6 +316,7 @@ impl SensitiveToolCatalog {
                 policy,
                 read_only: false,
                 conditional: false,
+                granted: None,
             };
             let identity = SensitiveToolIdentity {
                 toolkit_name: TOOLKIT.into(),
@@ -506,6 +545,7 @@ impl SensitiveToolCatalog {
                 policy,
                 read_only,
                 conditional: false,
+                granted: None,
             },
         )?;
         catalog.rebuild_unqualified_provider_entries();
@@ -583,6 +623,7 @@ pub(crate) async fn sensitive_tools_for_kind(
                     policy: sensitive,
                     read_only: tool.is_read_only(),
                     conditional,
+                    granted: None,
                 },
             )?;
         }
@@ -777,6 +818,7 @@ mod tests {
                         policy: sensitive,
                         read_only: true,
                         conditional: false,
+                        granted: None,
                     },
                 )
                 .expect("scoped sensitive tool");
@@ -827,6 +869,7 @@ mod tests {
                             .expect("sensitive fixture policy"),
                         read_only: false,
                         conditional: false,
+                        granted: None,
                     },
                 )
                 .expect("scoped sensitive tool");
@@ -945,6 +988,7 @@ mod tests {
                         .expect("sensitive fixture policy"),
                     read_only: true,
                     conditional: false,
+                    granted: None,
                 },
             )
             .expect("sensitive tool");

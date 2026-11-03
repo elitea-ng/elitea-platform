@@ -766,3 +766,31 @@ fn input_limit_sections_preserve_reasons_without_exposing_values() {
     let error = AgentProtocolError::InvalidInput("malformed JSON");
     assert_eq!(error.in_input_field(InputLimitField::UserMessage), error);
 }
+
+#[test]
+fn an_unattended_grant_survives_canonical_wire_and_a_malformed_one_is_refused() {
+    use elitea_worker_rust::protocol::elitea::runtime::v1::{
+        UnattendedGrantToolV1, UnattendedGrantV1,
+    };
+    use prost::Message;
+    let mut message = application_message();
+    assert!(message.unattended_grant.is_none());
+    message.unattended_grant = Some(UnattendedGrantV1 {
+        grant_id: "0b9e3f4c-1d2a-4b5c-8d6e-7f8091a2b3c4".to_owned(),
+        owner_user_id: 7,
+        sensitive_tools: vec![UnattendedGrantToolV1 {
+            toolkit_name: "github".to_owned(),
+            tool_name: "create_issue".to_owned(),
+        }],
+        continue_step_limit: true,
+        ..UnattendedGrantV1::default()
+    });
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    assert!(request_from(decoded, AgentExecutionKind::Application, binding()).is_ok());
+    message.unattended_grant.as_mut().unwrap().owner_user_id = 0;
+    let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
+    assert!(matches!(
+        request_from(decoded, AgentExecutionKind::Application, binding()),
+        Err(AgentProtocolError::InvalidInput(_))
+    ));
+}

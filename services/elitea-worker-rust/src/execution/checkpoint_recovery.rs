@@ -67,7 +67,7 @@ where
         recovery: CheckpointAgentDelivery,
         output: PreparedAgentOutput,
     ) -> AgentAuthorizationJobCompletion {
-        let (delivery, verified, inspection) = recovery.into_parts();
+        let (delivery, mut verified, inspection) = recovery.into_parts();
         let kind = verified.kind();
         let mut lease = ClaimLeaseMonitor::start_checkpoint_inspection(
             self.control.clone(),
@@ -90,7 +90,11 @@ where
         )
         .await
         {
-            Ok(request) => request,
+            Ok((request, grant)) => {
+                // The recovered run keeps the unattended grant of its input.
+                verified.attach_unattended_grant(grant);
+                request
+            }
             Err(CheckpointInputError::Lease(error))
                 if !matches!(error, ClaimLeaseError::Cancelled(_)) =>
             {
