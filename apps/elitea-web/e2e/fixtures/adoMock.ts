@@ -38,18 +38,18 @@ export const START_RE = /\/elitea_core\/messages\/prompt_lib\/(\d+)\/[0-9a-f-]+/
  * was retired. They were written against the SDK's ADO wrappers and their
  * image pipeline (`parse_file_content` → `EliteAImageLoader`, the vision call
  * with the picture). The native `ado_boards`/`ado_wiki` families
- * (`libs/rust/agent-runtime/src/toolkits/families/`) exist, but:
- *   * they admit an HTTPS `organization_url` only, and `ado-mock` serves plain
- *     `http://ado-mock:8097` — so the toolkit is refused at materialization;
- *   * they do not describe images: `process_images` returns the content with
- *     its image references unchanged ("Image description is not available in
- *     this runtime"; only `get_image_by_url` calls the vision model).
- * The cases are KEPT so that closing either gap on the native runtime turns
+ * (`libs/rust/agent-runtime/src/toolkits/families/`) exist and describe
+ * images inline with `process_images` (#985), but they admit an HTTPS
+ * `organization_url` only, and `ado-mock` serves plain `http://ado-mock:8097`
+ * — so the toolkit is refused at materialization.
+ * The cases are KEPT so that closing that gap on the native runtime turns
  * them on, rather than deleting the only end-to-end statement of the contract.
+ * When it closes, check the read counts: the native wiki family reads a
+ * picture once per call, also when a page links it more than once.
  */
 export const ADO_NATIVE_GAP =
-  'native ado_boards/ado_wiki: https-only organization_url (ado-mock is http) and no image description ' +
-  'in process_images — see ADO_NATIVE_GAP in e2e/fixtures/adoMock.ts';
+  'native ado_boards/ado_wiki: https-only organization_url (ado-mock is http) ' +
+  '— see ADO_NATIVE_GAP in e2e/fixtures/adoMock.ts';
 
 export interface AdoAttachment {
   readonly id: string;

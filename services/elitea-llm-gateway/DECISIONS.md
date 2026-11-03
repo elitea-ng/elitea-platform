@@ -151,6 +151,37 @@ decision]** are risk/policy calls an autonomous agent must NOT change without si
   drains are bounded (`LLM_STREAM_DRAIN_MAX_INFLIGHT`) and shutdown cuts them
   loose so the pod's termination grace is never held hostage to the stream grace
   (see the two-phase drain entry below). The loss event is operator-only.
+- **[human decision] 2026-11-02 — A CALLER disconnect cancels the provider at
+  once and bills an estimate (issue #1201).** AMENDS the 2026-08-05 entry above
+  for the caller-disconnect exits only (`write_error`, `client_disconnected`).
+  *Finding:* the grace kept the upstream generating after the caller left. On a
+  self-hosted model (vLLM) that held a model slot for a generation nobody read
+  (~14 s measured). *Decision (owner approved 2026-11-02):* free the slot
+  AND keep the bill. `settleDisconnect` (`stream_disconnect.go`) cancels the
+  provider stream at once, waits at most `disconnectCloseWait` (1 s) for the
+  channel to close, and bills: the terminal trailer if it already arrived;
+  else an ESTIMATE. Input = the provider's prompt count (any usage block on a
+  chunk, or the accumulated handle after close), else the request TEXT at
+  4 bytes per token (inline media excluded). The text includes tool results,
+  the tool calls of earlier turns (name and arguments: chat `tool_calls`,
+  Responses `function_call`, Anthropic `tool_use`) and the tool definitions,
+  because providers bill them as input (review of PR #1558). Output = max(relayed chunks,
+  relayed text bytes / 4, accumulated count above the placeholder). The
+  relayed text bytes are `chatDeltaBytes` / `responsesDeltaBytes`, so a change to
+  those counters changes the bill. The background reader of a provider that
+  is slow to close takes a drain-pool slot (global and per project); when the
+  pool is full the gateway abandons the cancelled channel and starts no
+  reader (drain outcome `cancelled_on_disconnect/slow_close_abandoned`). Relayed
+  means the SSE write SUCCEEDED, so a frame the caller never received adds
+  nothing; this answers the "over-bills inline base64" objection. The
+  disconnect signal is explicit (write error or request context done), so it
+  cannot fire on a clean close. The estimate is MARKED: request-log
+  `error_code = client_disconnected_usage_estimated` (status stays 200, so the
+  `status >= 400` failure views ignore it) and `budget.unbilled_stream` with
+  reason `estimated_on_disconnect` and the estimated counts. The grace drain
+  stays for provider error, guardrail block and failed stream setup. *Accepted
+  cost:* an estimate reaches the money path on this one exit; it is a floor
+  on the true usage in the common case, not an upper bound.
 - **[human decision] 2026-08-05 — Drain-pool saturation fails to a SHORT grace,
   never to "bill nothing"; slots are bounded per project.** *Finding:* the first
   cut of the above dropped a saturated drain straight to grace=0, destroying a

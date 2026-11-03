@@ -485,6 +485,48 @@ describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
 });
 
 /**
+ * #1098: an answer that holds a canvas can be regenerated. The server keeps
+ * the canvas (and its versions) and replaces only the words, so the client
+ * must neither disable the action nor hide the loader behind the kept canvas.
+ */
+describe('ApplicationAnswer regenerate with a canvas (#1098)', () => {
+  const canvasItem = {
+    id: 9102,
+    item_type: 'canvas_message',
+    order_index: 0,
+    item_details: {
+      id: 9102,
+      uuid: '60000000-0000-4000-8000-000000001098',
+      item_type: 'canvas_message',
+      name: 'Edited canvas',
+      canvas_type: 'document',
+      canvas_content: 'What the user wrote.',
+      code_language: 'document',
+      editors: [],
+      latest_version: { id: 5, canvas_content: 'What the user wrote.', code_language: 'document', created_at: '2026-11-01T10:00:00Z' },
+    },
+  };
+
+  it('offers an enabled Regenerate on an answer that holds a canvas', async () => {
+    const user = userEvent.setup();
+    const onRegenerate = vi.fn();
+    const answer = { id: 'answer-canvas-1', role: 'assistant', content: '', messageItems: [canvasItem] } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} isLastMessage actions={{ onRegenerate }} />);
+
+    const regenerate = screen.getByRole('button', { name: 'Regenerate' });
+    expect(regenerate).toBeEnabled();
+    await user.click(regenerate);
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the loader while a canvas answer regenerates, although the canvas is kept', () => {
+    const answer = { id: 'answer-canvas-2', role: 'assistant', content: '', messageItems: [canvasItem] } as unknown as ChatMessage;
+    renderWithTheme(<ApplicationAnswer answer={answer} messageId={answer.id} isLastMessage status={{ isLoading: true }} />);
+    expect(screen.getByText('Loading...')).toBeInTheDocument();
+  });
+});
+
+/**
  * issue 975: a REGENERATED answer must be captioned with the time it was
  * regenerated. The row is rewritten in place and keeps its `createdAt`, so a
  * caption reading that field alone put fresh text under the time the text it

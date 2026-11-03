@@ -34,6 +34,14 @@ because each was a real bug found across 3 review rounds.
   Precedence is terminal trailer > partial > nothing, and it only moves up.
   Read the handle ONLY after the provider closed the channel: the provider
   mutates it in place, and the close is the sole happens-before edge.
+- **A CALLER disconnect on a stream cancels the provider AT ONCE and bills an
+  estimate** (issue #1201, human decision 2026-11-02, `stream_disconnect.go`).
+  It is the ONE exit where an estimate reaches the money path. Keep its rules:
+  the trailer still wins when it arrived; output is never below what was
+  RELAYED (count after a successful write, never before); the prompt estimate
+  counts text only, never inline media; the row is marked
+  `client_disconnected_usage_estimated` and the event `estimated_on_disconnect`.
+  Every other early exit keeps the grace drain and the no-estimate rule.
 
 ## Enforcement policy (do not weaken without a human)
 - **Fail CLOSED** on a budget-store / Postgres read error while NATS is up — never

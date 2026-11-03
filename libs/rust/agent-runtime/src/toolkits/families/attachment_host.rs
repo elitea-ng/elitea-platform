@@ -25,6 +25,15 @@ use super::office_host::{
     SharedOfficeToolHost, TOOLKIT_BUDGET_SENTENCE,
 };
 
+/// `image_processing_prompt` of the SDK's content parser, verbatim: the
+/// default prompt of the SDK's image loader. Jira sends it for an attachment
+/// picture; the ADO families send it when no prompt is configured.
+pub(crate) const SDK_IMAGE_PROMPT: &str = include_str!("image_processing_prompt.txt");
+
+/// The SDK's placeholder for an empty description
+/// (`EliteAImageLoader.get_content`).
+pub(crate) const NO_READABLE_TEXT: &str = "[No readable text detected by LLM]";
+
 /// The most bytes of one artifact a tool reads to attach it: the host's own
 /// cap, restated so a tool can refuse before it buffers.
 pub(crate) const MAX_ATTACH_BYTES: u64 = MAX_OFFICE_OBJECT_BYTES;
@@ -614,10 +623,19 @@ pub(crate) async fn describe_for_text(
     }
     match host.describe_picture(bytes, media_type, prompt).await {
         Ok(description) => Ok(description),
-        Err(
-            error @ (AttachmentError::Host(
-                Step::Model,
-                OfficeFailure::BudgetRefused
+        Err(error) if stops_every_later_picture(&error) => Err(error),
+        Err(error) => Ok(format!("[Image processing error: {}]", error.sentence())),
+    }
+}
+
+/// Whether every later picture of the same call would meet `error` too, so
+/// the call asks the model no more.
+pub(crate) fn stops_every_later_picture(error: &AttachmentError) -> bool {
+    matches!(
+        error,
+        AttachmentError::Host(
+            Step::Model,
+            OfficeFailure::BudgetRefused
                 | OfficeFailure::NoModel
                 | OfficeFailure::ModelUnusable
                 // The run's context is unusable for every later picture too:
@@ -626,11 +644,8 @@ pub(crate) async fn describe_for_text(
                 | OfficeFailure::RateLimited
                 | OfficeFailure::AccessRefused
                 | OfficeFailure::Unreachable,
-            )
-            | AttachmentError::ToolkitBudget),
-        ) => Err(error),
-        Err(error) => Ok(format!("[Image processing error: {}]", error.sentence())),
-    }
+        ) | AttachmentError::ToolkitBudget
+    )
 }
 
 /// The bounds one tool call keeps on the pictures it sends to the model:
@@ -688,6 +703,11 @@ impl PictureTally {
         }
         self.bytes += length;
         true
+    }
+
+    /// The failure that stopped the model calls of this call, if one did.
+    pub(crate) fn stopped_by(&self) -> Option<&AttachmentError> {
+        self.stopped.as_ref()
     }
 
     pub(crate) fn stop(&mut self, error: AttachmentError) {

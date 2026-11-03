@@ -26,6 +26,10 @@ Under the credential field, choose an existing **ado** credential, or select **C
 If you plan to index this source, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit without indexing.
 </Step>
 
+<Step title="Set the image defaults (optional)">
+**Process Images** and **Image Description Prompt** set the default of the `process_images` and `image_description_prompt` arguments for **Get work item** and **Get comments**. A call that sets an argument overrides the toolkit value. Leave a field empty to keep each tool's own default: on for Get work item, off for Get comments. Two toolkits of this type in one agent can have different defaults.
+</Step>
+
 <Step title="Save">
 Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
 </Step>
@@ -64,6 +68,18 @@ The category of a tool decides when a run needs human approval to call it. See [
 </Accordion>
 
 ## Common issues
+
+<Note>
+With `process_images` on, the agent worker describes the images in the result with the agent's chat model, and uses `image_description_prompt` when it is set:
+
+- **Get comments** adds an `image-description` attribute to each `<img>` tag. Below each markdown image, it adds a line `[image-description: ...]`.
+- **Get work item** describes the images in the fields only when `parse_attachments` is also on.
+- The worker reads each image through the toolkit connection, with the same limits as **Get image by url**. One call reads a maximum of 20 images and describes a maximum of 12 MB. A failed download also counts as one of the 20. A link that is not an Azure DevOps attachment gets a note and does not count. A larger image (more than 5 MB) is not described.
+- The worker reads each image one time, also when the result refers to it more than one time.
+- When the worker cannot read or describe an image, it adds a short note, for example `[image unavailable: ...]` or `[image skipped: ...]`. The tool call does not fail.
+- When the agent has no chat model, the result comes back with the images not described.
+- When the descriptions make the result larger than the tool result limit (512 KB), the result comes back without descriptions. A note `[image descriptions dropped: ...]` tells the agent why: in the `image_descriptions` key of a work item, or as the last item of the comment list.
+</Note>
 
 <Note>
 The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.

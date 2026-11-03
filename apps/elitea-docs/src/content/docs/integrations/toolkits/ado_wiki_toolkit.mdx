@@ -26,6 +26,10 @@ Under the credential field, choose an existing **ado** credential, or select **C
 If you plan to index this source, set an **embedding model**. Indexes are kept in the platform's vector store, so there is no vector-storage setting to pick. Leave it empty to use the toolkit without indexing.
 </Step>
 
+<Step title="Set the image defaults (optional)">
+**Process Images** and **Image Description Prompt** set the default of the `process_images` and `image_description_prompt` arguments for **Get wiki page**, **Get wiki page by path** and **Get wiki page by id**. A call that sets an argument overrides the toolkit value. Leave a field empty to keep each tool's own default: on. Two toolkits of this type in one agent can have different defaults.
+</Step>
+
 <Step title="Save">
 Name the toolkit and select **Create**. It's now available to attach to agents, pipelines and conversations in this project.
 </Step>
@@ -59,6 +63,19 @@ The category of a tool decides when a run needs human approval to call it. See [
 </Accordion>
 
 ## Common issues
+
+<Note>
+With `process_images` on, the agent worker describes the images in the page content with the agent's chat model, and uses `image_description_prompt` when it is set:
+
+- The description replaces the link of each image: `![name](/.attachments/a.png)` becomes `![name](description)`.
+- **Get wiki page** describes images only when `include_content` is on.
+- The worker reads only wiki attachments (`/.attachments/...`), from the wiki repository, through the toolkit connection. It does not get images from other sites. These images keep their link and get a note.
+- A link to a file that is not an image, for example a PDF, does not change.
+- One call reads a maximum of 20 images and describes a maximum of 12 MB. A failed download also counts as one of the 20. A link to another site or to a file that is not an image does not count. A larger image (more than 5 MB) is not described.
+- When the worker cannot read or describe an image, it adds a short note below the link, for example `[image unavailable: ...]`. The tool call does not fail.
+- When the agent has no chat model, the page comes back with the images not described.
+- When the descriptions make the result larger than the tool result limit (512 KB), the page comes back without descriptions. A note `[image descriptions dropped: ...]` tells the agent why: below the page text, or in the `image_descriptions` key of a **Get wiki page** result.
+</Note>
 
 <Note>
 The Indexes tab only appears when the configured worker can run this type's `index_data` tool; if the worker can't, the tab is hidden and shows the worker's refusal message. `index_data` itself can't be run from the Test tools pane — use the Indexes tab.

@@ -2,8 +2,10 @@ package llmproxy
 
 // stream_disconnect_test.go — the rest of the issue #9 contract: what happens
 // when the grace period does NOT recover the usage trailer, and the guardrails
-// around the mechanism (bounded concurrency, bounded shutdown, no estimate ever
-// reaching the money path, no context leak on the blocked path).
+// around the mechanism (bounded concurrency, bounded shutdown, no context leak
+// on the blocked path). Since issue #1201 a CALLER disconnect does not use the
+// grace: it cancels the provider at once and bills an estimate. The grace tests
+// here drive the exits that still use it (a stream that cannot start).
 //
 // The end-to-end reproduction lives in stream_disconnect_gate_test.go.
 
@@ -161,11 +163,11 @@ func allowGate() *fakeBudgetChecker {
 	}
 }
 
-// TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss is the anti-estimate
-// guard. When the grace period expires with no provider usage, the ONLY correct
-// outcomes are: bill nothing, and make the loss loudly visible. Billing an
-// observed-output estimate here was the second rejected attempt (issue #9) — it
-// puts a bytes/4 heuristic on the money path, which DECISIONS.md forbids.
+// TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss guards the grace
+// drain, which still settles every early exit that is NOT a caller disconnect
+// (here: a stream that cannot start). When the grace expires with no provider
+// usage, the only correct outcomes are: bill nothing, and make the loss
+// visible. Only a caller disconnect bills an estimate (issue #1201).
 func TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
@@ -176,7 +178,7 @@ func TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond))
 
-	w := &failAfterWriter{okWrites: 1} // client disconnects on the second frame
+	w := &nonFlusherWriter{} // the stream cannot start: the grace drain settles it
 	h.Chat(w, chatReqWithProject(t, "30", true))
 
 	events.waitForEvent(t)
@@ -190,8 +192,8 @@ func TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss(t *testing.T) {
 	if p.ProjectID != "30" {
 		t.Errorf("event project_id = %q, want 30", p.ProjectID)
 	}
-	if p.Reason != lossReasonWriteError {
-		t.Errorf("event reason = %q, want %q", p.Reason, lossReasonWriteError)
+	if p.Reason != lossReasonBeginStreamFail {
+		t.Errorf("event reason = %q, want %q", p.Reason, lossReasonBeginStreamFail)
 	}
 	if p.DrainOutcome != drainOutcomeGraceExpired {
 		t.Errorf("event drain_outcome = %q, want %q — this provider never sends a trailer, so the "+
@@ -212,20 +214,21 @@ func TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss(t *testing.T) {
 	}
 }
 
-// TestStreamDisconnect_SilentProvider_LoopExitsOnClientGone covers the hazard
-// the decoupling introduces: once the provider stream no longer dies with the
-// request, a client that leaves while the provider is silent produces NO write
-// error, so a loop that only watches the channel would park until the
-// provider's own idle timeout (bifrost: 120 s). The SSE loop must notice the
-// request context instead, settle, and return promptly.
+// TestStreamDisconnect_SilentProvider_LoopExitsOnClientGone covers a caller
+// that leaves while the provider is silent. That produces NO write error, so a
+// loop that only watches the channel would park until the provider's own idle
+// timeout (bifrost: 120 s). The SSE loop must notice the request context,
+// cancel the provider AT ONCE (issue #1201) and bill an estimate.
 func TestStreamDisconnect_SilentProvider_LoopExitsOnClientGone(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
 	router := newSilentRouter(chatDelta("c1", "hello"))
+	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
 	h := NewHandler(router, nil, nil,
-		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
+		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
-		WithStreamGrace(50*time.Millisecond))
+		// A long grace: the cancel must NOT wait for it.
+		WithStreamGrace(MaxStreamGrace))
 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	req := chatReqWithProject(t, "30", true).WithContext(reqCtx)
@@ -238,60 +241,82 @@ func TestStreamDisconnect_SilentProvider_LoopExitsOnClientGone(t *testing.T) {
 
 	// Let the first chunk through, then hang up. The provider stays silent.
 	time.Sleep(50 * time.Millisecond)
+	hungUp := time.Now()
 	cancelReq()
 
 	select {
+	case <-router.closed:
+	case <-time.After(time.Second):
+		t.Fatal("the provider stream was not cancelled within 1s of the disconnect — the model " +
+			"slot stays busy for a generation nobody reads (issue #1201)")
+	}
+	if d := time.Since(hungUp); d > 500*time.Millisecond {
+		t.Errorf("provider cancelled %v after the disconnect, want well under the grace", d)
+	}
+	select {
 	case <-returned:
 	case <-time.After(3 * time.Second):
-		t.Fatal("SSE loop did not return after the client disconnected — it is parked waiting " +
-			"for a chunk from a provider that has nothing to say")
+		t.Fatal("SSE loop did not return after the client disconnected")
 	}
 
+	gate.waitForUpdate(t)
 	events.waitForEvent(t)
 	h.DrainBilling()
 
-	if got := gate.updateCalls.Load(); got != 0 {
-		t.Fatalf("UpdateUsage calls = %d, want 0 (no provider usage was ever reported)", got)
+	if got := gate.updateCalls.Load(); got != 1 {
+		t.Fatalf("UpdateUsage calls = %d, want 1 (the estimate is billed once)", got)
 	}
-	if p := events.decodeUnbilled(t); p.Reason != lossReasonClientGone {
-		t.Errorf("event reason = %q, want %q — a silent provider cannot produce a write error, so "+
-			"anything else means the loss was mislabelled", p.Reason, lossReasonClientGone)
+	// Prompt "hi" is 1 token by estimate. The relayed chunk "hello" is 5
+	// bytes: ceil(5/4) = 2 tokens, more than its 1 chunk.
+	if in, out := calc.getLastTokens(); in != 1 || out != 2 {
+		t.Errorf("billed tokens = (%d, %d), want (1, 2)", in, out)
+	}
+	p := events.decodeUnbilled(t)
+	if p.Reason != lossReasonEstimatedOnDisconnect {
+		t.Errorf("event reason = %q, want %q", p.Reason, lossReasonEstimatedOnDisconnect)
+	}
+	if p.ExitReason != lossReasonClientGone {
+		t.Errorf("event exit_reason = %q, want %q — a silent provider cannot produce a write "+
+			"error, so anything else means the exit was mislabelled", p.ExitReason, lossReasonClientGone)
+	}
+	if p.DrainOutcome != drainOutcomeCancelled {
+		t.Errorf("event drain_outcome = %q, want %q", p.DrainOutcome, drainOutcomeCancelled)
+	}
+	if p.EstimatedInputTokens != 1 || p.EstimatedOutputTokens != 2 {
+		t.Errorf("event estimated tokens = (%d, %d), want (1, 2)", p.EstimatedInputTokens, p.EstimatedOutputTokens)
 	}
 }
 
-// TestStreamDisconnect_MultimodalPayload_BillsZeroNotAnEstimate is the direct
-// regression guard for the rejected estimate: a stream carrying a large
-// base64-ish payload and no usage trailer must bill exactly zero. The earlier
-// attempt billed len(bytes)/4 "tokens" here, over-charging inline-image
-// requests by 2–3 orders of magnitude.
-func TestStreamDisconnect_MultimodalPayload_BillsZeroNotAnEstimate(t *testing.T) {
+// TestStreamDisconnect_UnsentPayload_IsNotBilledAsOutput: the output estimate
+// counts what REACHED the caller. A large base64-like chunk whose write failed
+// was never relayed, so it adds no output tokens. The earlier rejected attempt
+// billed len(bytes)/4 here, over-charging inline-image requests by 2–3 orders
+// of magnitude. The prompt is still billed: the provider processed it.
+func TestStreamDisconnect_UnsentPayload_IsNotBilledAsOutput(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
-	// ~256 KB of "inline base64" output — 65k phantom tokens under a bytes/4
-	// heuristic, and at these rates ~650_000_000 nano-USD of phantom spend.
 	huge := strings.Repeat("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=", 8192)
 	router := newSilentRouter(chatDelta("c1", huge))
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
 	h := NewHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
-		WithStreamGrace(50*time.Millisecond))
+		WithStreamGrace(MaxStreamGrace))
 
 	w := &failAfterWriter{okWrites: 0} // disconnected before the first frame lands
 	h.Chat(w, chatReqWithProject(t, "30", true))
 
-	events.waitForEvent(t)
+	gate.waitForUpdate(t)
 	h.DrainBilling()
 
-	if got := gate.updateCalls.Load(); got != 0 {
-		t.Fatalf("UpdateUsage calls = %d, want 0", got)
+	if in, out := calc.getLastTokens(); in != 1 || out != 0 {
+		t.Fatalf("billed tokens = (%d, %d), want (1, 0) — a frame the caller never received "+
+			"must add no output tokens", in, out)
 	}
-	if got := gate.getLastUpdateCostNano(); got != 0 {
-		t.Fatalf("billed %d nano-USD for a stream with no provider usage, want 0", got)
-	}
-	if in, out := calc.getLastTokens(); in != 0 || out != 0 {
-		t.Fatalf("cost calculator was called with (%d, %d) tokens — no estimated token count "+
-			"may ever reach the cost path", in, out)
+	select {
+	case <-router.closed:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream was not cancelled on the disconnect")
 	}
 	// The magnitude is still reported, as an observability dimension only.
 	if p := events.decodeUnbilled(t); p.ObservedOutputBytes < int64(len(huge)) {
@@ -327,7 +352,7 @@ func TestStreamDisconnect_DrainSaturated_StillRecoversTheTrailer(t *testing.T) {
 	}
 
 	start := time.Now()
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 	gate.waitForUpdate(t)
 	h.DrainBilling()
 
@@ -361,7 +386,7 @@ func TestStreamDisconnect_DrainSaturated_MetersLossWhenGraceTooShort(t *testing.
 		t.Fatal("could not take the single drain slot")
 	}
 
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 	events.waitForEvent(t)
 	h.DrainBilling()
 
@@ -391,7 +416,7 @@ func TestStreamDisconnect_DrainReleasesItsSlot(t *testing.T) {
 		WithStreamGrace(50*time.Millisecond),
 		WithStreamDrainLimit(1))
 
-	w := &failAfterWriter{okWrites: 1}
+	w := &nonFlusherWriter{}
 	h.Chat(w, chatReqWithProject(t, "30", true))
 	events.waitForEvent(t)
 	h.DrainBilling()
@@ -411,7 +436,7 @@ func TestStreamDisconnect_DrainBillingDoesNotWaitFullGrace(t *testing.T) {
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithStreamGrace(MaxStreamGrace)) // 15 s
 
-	w := &failAfterWriter{okWrites: 1}
+	w := &nonFlusherWriter{}
 	h.Chat(w, chatReqWithProject(t, "30", true))
 
 	done := make(chan struct{})
@@ -589,7 +614,7 @@ func TestShutdown_RecoveredTrailerIsBilled(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(MaxStreamGrace))
 
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 
 	// Let the trailer reach the drain, which then stays parked on the still-open
 	// channel — exactly the state a SIGTERM finds it in.
@@ -733,9 +758,9 @@ func TestUnbilledStream_ReasonAndOutcomeDimensions(t *testing.T) {
 		{
 			name:        "grace disabled",
 			router:      newSilentRouter(chatDelta("c1", "hi"), chatDelta("c2", "there")),
-			writer:      &failAfterWriter{okWrites: 1},
+			writer:      &nonFlusherWriter{},
 			grace:       0,
-			wantReason:  lossReasonWriteError,
+			wantReason:  lossReasonBeginStreamFail,
 			wantOutcome: drainOutcomeDisabled,
 		},
 	}
@@ -782,7 +807,7 @@ func TestUnbilledStream_ResponsesDialectCountsObservedBytes(t *testing.T) {
 		strings.NewReader(`{"model":"openai/gpt-4o","input":"hi","stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(headerProjectID, "30")
-	h.Responses(&failAfterWriter{okWrites: 1}, req)
+	h.Responses(&nonFlusherWriter{}, req)
 
 	events.waitForEvent(t)
 	h.DrainBilling()
@@ -921,7 +946,7 @@ func TestAnthropicDialect_PartialUsageIsNotAuthoritative(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond))
 
-	h.Messages(&failAfterWriter{okWrites: 1}, messagesStreamReqWithProject(t, "30"))
+	h.Messages(&nonFlusherWriter{}, messagesStreamReqWithProject(t, "30"))
 	events.waitForEvent(t)
 	h.DrainBilling()
 
@@ -929,9 +954,9 @@ func TestAnthropicDialect_PartialUsageIsNotAuthoritative(t *testing.T) {
 		t.Fatalf("UpdateUsage calls = %d, want 0 — mid-stream usage is NOT the authoritative trailer; "+
 			"billing it understates output and hides that we did", got)
 	}
-	if p := events.decodeUnbilled(t); p.Reason != lossReasonWriteError {
+	if p := events.decodeUnbilled(t); p.Reason != lossReasonBeginStreamFail {
 		t.Errorf("reason = %q, want %q — the loss must stay visible, not be masked by partial usage",
-			p.Reason, lossReasonWriteError)
+			p.Reason, lossReasonBeginStreamFail)
 	}
 }
 
@@ -948,7 +973,7 @@ func TestAnthropicDialect_TerminalUsageStillBills(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(2*time.Second))
 
-	h.Messages(&failAfterWriter{okWrites: 1}, messagesStreamReqWithProject(t, "30"))
+	h.Messages(&nonFlusherWriter{}, messagesStreamReqWithProject(t, "30"))
 	gate.waitForUpdate(t)
 	h.DrainBilling()
 
@@ -1036,7 +1061,7 @@ func TestShutdown_DisconnectDuringHTTPDrainIsBilled(t *testing.T) {
 	// srv.ShutdownHTTP is running: the HTTP surface is draining, but the grace
 	// is still ARMED. A client that hangs up here must be billed exactly as on
 	// a normal day — this is the ~150 s window of every rolling deploy.
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 
 	if router.tornDown.Load() {
 		t.Fatal("the provider stream was cut during the HTTP drain window — disconnect billing is " +

@@ -5,15 +5,18 @@ use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
 use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk};
+use crate::toolkits::families::ado::inline_images::bounded_described;
 use crate::toolkits::families::ado::toolset::{
     AdoToolExecutor, AdoToolKind, AdoToolsetError, MAX_IDENTIFIER_BYTES, MAX_TEXT_BYTES,
     build_toolset, invalid_arguments, optional_bool, optional_id, optional_str,
     reject_unknown_keys, required_id, required_str, schema,
 };
+use crate::toolkits::families::attachment_host::AttachmentHost;
 use crate::toolkits::policy::ToolAdmissionPolicy;
 
 use super::client::{AdoWikiClient, GetWikiPage, ModifyWikiPage, PageAddress, RenameWikiPage};
 use super::config::AdoWikiToolkitConfig;
+use super::images::describe_result;
 
 pub(crate) const TOOLKIT_TYPE: &str = "ado_wiki";
 
@@ -86,10 +89,10 @@ impl AdoToolKind for AdoWikiToolKind {
         match self {
             Self::GetWiki => "Extract ADO wiki information.",
             Self::GetWikiPage => {
-                "Get wiki page metadata and optionally content. Retrieves eTag, id, path, git_item_path, remote_url, url, sub_pages, order, is_parent_page and is_non_conformant, by page_id (takes precedence) or page_path. recursion_level controls sub-page depth: none, oneLevel (default), oneLevelPlusNestedEmptyFolders or full. Image description is not available in this runtime; image references in content are returned unchanged."
+                "Get wiki page metadata and optionally content. Retrieves eTag, id, path, git_item_path, remote_url, url, sub_pages, order, is_parent_page and is_non_conformant, by page_id (takes precedence) or page_path. recursion_level controls sub-page depth: none, oneLevel (default), oneLevelPlusNestedEmptyFolders or full. With include_content and process_images, each wiki attachment image in the content is described by the run's vision model and the description replaces the image URL (at most 20 images and 12 MB per call)."
             }
             Self::GetWikiPageByPath | Self::GetWikiPageById => {
-                "Extract ADO wiki page content. Image description is not available in this runtime; image references are returned unchanged."
+                "Extract ADO wiki page content. With process_images (default on), each wiki attachment image is described by the run's vision model and the description replaces the image URL (at most 20 images and 12 MB per call); a non-image attachment link is left as it is."
             }
             Self::DeletePageByPath => "Delete ADO wiki page by path.",
             Self::DeletePageById => "Delete ADO wiki page by ID.",
@@ -226,9 +229,15 @@ pub(crate) fn build_ado_wiki_toolset(
     toolkit_name: &str,
     config: AdoWikiToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
+    attachments: Option<AttachmentHost>,
 ) -> Result<BasicToolset, AdoToolsetError> {
     let selected = config.selected_tools().to_vec();
-    let client = Arc::new(AdoWikiClient::new(config.into_inner())?);
+    let (config, images) = config.into_parts();
+    let client = Arc::new(
+        AdoWikiClient::new(config)?
+            .with_image_defaults(images)
+            .with_attachments(attachments),
+    );
     build_with_client(toolkit_name, &selected, policy, client)
 }
 
@@ -275,6 +284,26 @@ fn path_argument<'a>(arguments: &'a Map<String, Value>, key: &str) -> adk_core::
     Ok(path)
 }
 
+/// A page read's result with its pictures described when `process_images`
+/// is on (images.rs), bounded again because descriptions add text. A
+/// page that fits without its descriptions is returned without them, with
+/// a note, when they make it too large.
+async fn described(
+    client: &AdoWikiClient,
+    wiki: Option<&str>,
+    page: Result<Value, AdoClientError>,
+    process_images: bool,
+    prompt: Option<&str>,
+) -> Result<Value, AdoClientError> {
+    match page {
+        Ok(value) if process_images => {
+            let plain = value.clone();
+            bounded_described(plain, describe_result(client, wiki, value, prompt).await)
+        }
+        other => other,
+    }
+}
+
 #[allow(clippy::too_many_lines)] // One source-ordered argument ledger per tool.
 async fn dispatch(
     client: &AdoWikiClient,
@@ -300,8 +329,8 @@ async fn dispatch(
                     "recursion_level",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
+            let prompt = client.images.image_description_prompt(arguments)?;
+            let process_images = client.images.process_images(arguments, true)?;
             let recursion_level = optional_str(arguments, "recursion_level", MAX_IDENTIFIER_BYTES)?
                 .unwrap_or("oneLevel");
             if !RECURSION_LEVELS.contains(&recursion_level) {
@@ -317,14 +346,23 @@ async fn dispatch(
             let address = page_id
                 .map(PageAddress::Id)
                 .or_else(|| page_path.map(PageAddress::Path));
-            client
+            let include_content = optional_bool(arguments, "include_content", false)?;
+            let page = client
                 .get_wiki_page(GetWikiPage {
                     wiki_identified: wiki,
                     address,
-                    include_content: optional_bool(arguments, "include_content", false)?,
+                    include_content,
                     recursion_level,
                 })
-                .await
+                .await;
+            described(
+                client,
+                wiki,
+                page,
+                include_content && process_images,
+                prompt,
+            )
+            .await
         }
         AdoWikiToolKind::GetWikiPageByPath => {
             reject_unknown_keys(
@@ -336,14 +374,15 @@ async fn dispatch(
                     "process_images",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
-            client
+            let prompt = client.images.image_description_prompt(arguments)?;
+            let process_images = client.images.process_images(arguments, true)?;
+            let page = client
                 .page_content(
                     wiki,
                     PageAddress::Path(path_argument(arguments, "page_name")?),
                 )
-                .await
+                .await;
+            described(client, wiki, page, process_images, prompt).await
         }
         AdoWikiToolKind::GetWikiPageById => {
             reject_unknown_keys(
@@ -355,11 +394,12 @@ async fn dispatch(
                     "process_images",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
-            optional_bool(arguments, "process_images", true)?;
-            client
+            let prompt = client.images.image_description_prompt(arguments)?;
+            let process_images = client.images.process_images(arguments, true)?;
+            let page = client
                 .page_content(wiki, PageAddress::Id(required_id(arguments, "page_id")?))
-                .await
+                .await;
+            described(client, wiki, page, process_images, prompt).await
         }
         AdoWikiToolKind::DeletePageByPath => {
             reject_unknown_keys(arguments, &["wiki_identified", "page_name"])?;

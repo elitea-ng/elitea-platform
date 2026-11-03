@@ -11,7 +11,9 @@
 # certificate itself lives one hour (natsBootstrap.tls.certificate.duration). cert-manager
 # leaves the Secret behind unless it runs with --enable-certificate-owner-ref;
 # what is left holds a certificate that expires an hour after the install and
-# is never renewed, and the next install re-issues it before the Job dials.
+# is never renewed. The next install deletes it first (cleanup.yaml, #1370):
+# a new Certificate that reads an expired Secret reports Ready=False/Expired,
+# and Argo CD reads that as Degraded and fails the sync.
 #
 # Not a pre-install hook: Helm treats a hook that is not a Job or Pod as done
 # the moment it is created, and would delete a pre-install Certificate at the

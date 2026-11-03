@@ -715,6 +715,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	preDispatch := time.Since(t0)
 
 	if streaming {
+		// The prompt estimate is billed only when a streaming caller
+		// disconnects (issue #1201). It is measured lazily, at that moment.
+		setPromptEstimate(ctx, func() int64 { return chatPromptEstimate(bifReq) })
 		ch, bErr := h.router.ChatCompletionStreamRequest(ctx, bifReq)
 		// Stamp before streamOpenAI: beginStream writes the response head, and
 		// a header set after that never reaches the client.
@@ -864,6 +867,8 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streaming {
+		// Billed only when a streaming caller disconnects (issue #1201).
+		setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 		ch, bErr := h.router.ResponsesStreamRequest(ctx, bifReq)
 		// FIX #5: pass billing context so streamResponses can call updateUsage
 		// after the channel drains with the final usage chunk.
@@ -966,6 +971,8 @@ func (h *Handler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streaming {
+		// Billed only when a streaming caller disconnects (issue #1201).
+		setPromptEstimate(ctx, func() int64 { return responsesPromptEstimate(bifReq) })
 		ch, bErr := h.router.ResponsesStreamRequest(ctx, bifReq)
 		// FIX #5: pass billing context so streamAnthropic can call updateUsage
 		// after the channel drains with the final usage-carrying chunk.
@@ -1216,7 +1223,7 @@ func (h *Handler) streamOpenAI(
 			// the loop would park here until the provider's own idle timeout,
 			// because the provider stream no longer dies with the request
 			// (issue #9).
-			s.settleEarly(lossReasonClientGone)
+			s.settleDisconnect(lossReasonClientGone)
 			return
 		}
 		if exit == streamExitChanDone {
@@ -1248,9 +1255,10 @@ func (h *Handler) streamOpenAI(
 			continue
 		}
 		if writeErr := sw.Data(string(data)); writeErr != nil {
-			s.settleEarly(lossReasonWriteError) // client disconnected
+			s.settleDisconnect(lossReasonWriteError) // client disconnected
 			return
 		}
+		s.relayed(chatDeltaBytes(chunk))
 	}
 	// Release the text the guardrails still hold.
 	extra, blocked := gs.finishChat(ctx)
@@ -1322,7 +1330,7 @@ func (h *Handler) streamResponses(
 	for {
 		chunk, exit := nextChunk(ch, clientGone)
 		if exit == streamExitClient {
-			s.settleEarly(lossReasonClientGone)
+			s.settleDisconnect(lossReasonClientGone)
 			return
 		}
 		if exit == streamExitChanDone {
@@ -1351,9 +1359,10 @@ func (h *Handler) streamResponses(
 			return
 		}
 		if writeErr := writeResponsesEvents(sw, before); writeErr != nil {
-			s.settleEarly(lossReasonWriteError)
+			s.settleDisconnect(lossReasonWriteError)
 			return
 		}
+		s.relayedResponses(before...)
 		if drop {
 			// The guardrails hold this tool-call argument delta.
 			continue
@@ -1365,9 +1374,10 @@ func (h *Handler) streamResponses(
 			continue
 		}
 		if writeErr := sw.Event(event, string(data)); writeErr != nil {
-			s.settleEarly(lossReasonWriteError)
+			s.settleDisconnect(lossReasonWriteError)
 			return
 		}
+		s.relayedResponses(sr)
 	}
 	leftover, blocked := gs.finishResponses(ctx)
 	if blocked != nil {
@@ -1436,7 +1446,7 @@ func (h *Handler) streamAnthropic(
 	for {
 		chunk, exit := nextChunk(ch, clientGone)
 		if exit == streamExitClient {
-			s.settleEarly(lossReasonClientGone)
+			s.settleDisconnect(lossReasonClientGone)
 			return
 		}
 		if exit == streamExitChanDone {
@@ -1470,9 +1480,10 @@ func (h *Handler) streamAnthropic(
 		}
 		for _, item := range before {
 			if writeErr := h.writeAnthropicEvents(sw, ctx, item); writeErr != nil {
-				s.settleEarly(lossReasonWriteError)
+				s.settleDisconnect(lossReasonWriteError)
 				return
 			}
+			s.relayedResponses(item)
 		}
 	}
 	leftover, blocked := gs.finishResponses(ctx)

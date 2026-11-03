@@ -162,6 +162,8 @@ func TestStreamCut_AccumulatedUsageIsBilledDeterministically(t *testing.T) {
 			WithOpsEventPublisher(newRecordingEvents()),
 			WithStreamGrace(20*time.Millisecond))
 
+		// A caller disconnect (issue #1201) cancels the provider at once and
+		// reads the same handle for its estimate, so this run covers both.
 		h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
 		h.DrainBilling()
 
@@ -207,7 +209,7 @@ func TestStreamCut_PlaceholderAccumulatedCount_IsNotBilled(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(20*time.Millisecond))
 
-	h.Chat(&failAfterWriter{okWrites: 1}, messagesStreamReqWithProject(t, "30"))
+	h.Chat(&nonFlusherWriter{}, messagesStreamReqWithProject(t, "30"))
 	events.waitForEvent(t)
 	h.DrainBilling()
 
@@ -220,9 +222,9 @@ func TestStreamCut_PlaceholderAccumulatedCount_IsNotBilled(t *testing.T) {
 		t.Fatalf("cost calculator saw (%d, %d) tokens — a placeholder count must never be priced", in, out)
 	}
 	p := events.decodeUnbilled(t)
-	if p.Reason != lossReasonWriteError {
+	if p.Reason != lossReasonBeginStreamFail {
 		t.Errorf("event reason = %q, want %q — a rejected placeholder is a plain unbilled stream, "+
-			"not a partial bill", p.Reason, lossReasonWriteError)
+			"not a partial bill", p.Reason, lossReasonBeginStreamFail)
 	}
 	if p.PartialInputTokens != 0 || p.PartialOutputTokens != 0 {
 		t.Errorf("event carries partial tokens (%d, %d) but nothing was billed",
@@ -248,7 +250,7 @@ func TestStreamCut_PartialBill_StillReportsTheGap(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(20*time.Millisecond))
 
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 	gate.waitForUpdate(t)
 	events.waitForEvent(t)
 	h.DrainBilling()
@@ -262,9 +264,9 @@ func TestStreamCut_PartialBill_StillReportsTheGap(t *testing.T) {
 			"publish, or the gap between the floor and the true total is invisible",
 			p.Reason, lossReasonPartialProviderUsage)
 	}
-	if p.ExitReason != lossReasonWriteError {
+	if p.ExitReason != lossReasonBeginStreamFail {
 		t.Errorf("event exit_reason = %q, want %q — the trigger that ended the stream must survive",
-			p.ExitReason, lossReasonWriteError)
+			p.ExitReason, lossReasonBeginStreamFail)
 	}
 	if p.PartialInputTokens != 11 || p.PartialOutputTokens != 22 {
 		t.Errorf("event partial tokens = (%d, %d), want (11, 22) — the floor that was billed must "+
@@ -298,7 +300,7 @@ func TestStreamCut_TerminalTrailerOutranksAccumulatedCount(t *testing.T) {
 		WithOpsEventPublisher(events),
 		WithStreamGrace(2*time.Second))
 
-	h.Chat(&failAfterWriter{okWrites: 1}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 	gate.waitForUpdate(t)
 	h.DrainBilling()
 
@@ -339,7 +341,7 @@ func TestStreamCut_AccumulatedUsageSurvivesDrainSaturation(t *testing.T) {
 		t.Fatal("could not take the single drain slot")
 	}
 
-	h.Chat(&failAfterWriter{okWrites: 0}, chatReqWithProject(t, "30", true))
+	h.Chat(&nonFlusherWriter{}, chatReqWithProject(t, "30", true))
 	gate.waitForUpdate(t)
 	h.DrainBilling()
 

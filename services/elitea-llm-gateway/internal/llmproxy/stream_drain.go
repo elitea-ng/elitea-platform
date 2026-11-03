@@ -29,6 +29,11 @@ package llmproxy
 //     (streamSettler.settleEarly) which waits up to the grace period for the
 //     authoritative usage chunk, then cancels.
 //
+// Since issue #1201 a CALLER disconnect does not come here: settleDisconnect
+// (stream_disconnect.go) cancels the provider at once and bills an estimate.
+// The grace drain below settles the other early exits (provider error,
+// guardrail block, failed stream setup).
+//
 // What is deliberately NOT here: any estimate. An observed-output-bytes
 // estimate on the money path was the second rejected attempt: it contradicts
 // the standing "no estimate ever reaches a billed amount" rule, over-bills
@@ -289,12 +294,20 @@ func responsesUsageFromChunk(c *schemas.BifrostStreamChunk) (int64, int64, bool)
 	return in, out, true
 }
 
-// chatDeltaBytes counts streamed output payload bytes on a chat chunk.
+// chatDeltaBytes counts the streamed output payload bytes on a chat chunk:
+// content, refusal, reasoning and tool-call argument deltas.
 //
-// OBSERVABILITY ONLY. This number exists so the loss event carries the
-// magnitude of what went unbilled; it is NOT a token count and MUST NOT be fed
-// to cost.Calculator or any billing path (DECISIONS.md: estimates never reach
-// the money path).
+// The count has TWO uses, and the second is on the money path:
+//
+//  1. observedOutBytes, the magnitude hint on budget.unbilled_stream. It is
+//     not a token count and is never billed.
+//  2. The disconnect estimate (issue #1201, DECISIONS.md 2026-11-02). After a
+//     write to the caller SUCCEEDS, the SSE loop passes this count to
+//     streamSettler.relayed, and relayedOutputTokens bills relayed bytes / 4
+//     as the floor of the output estimate when the caller disconnects.
+//
+// So a change to what this function counts CHANGES THE BILL on a caller
+// disconnect. TestDeltaBytes_CountingIsPinned pins the counting.
 func chatDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
 	if c == nil || c.BifrostChatResponse == nil {
 		return 0
@@ -322,14 +335,25 @@ func chatDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
 	return n
 }
 
-// responsesDeltaBytes counts streamed output payload bytes on a Responses-API
-// chunk. Only the incremental Delta is counted: the *.done events re-carry text
-// already streamed as deltas. OBSERVABILITY ONLY — see chatDeltaBytes.
+// responsesDeltaBytes counts the streamed output payload bytes on a
+// Responses-API chunk. Only the incremental Delta is counted: the *.done
+// events re-carry text already streamed as deltas. It has the same two uses
+// as chatDeltaBytes, so a change here also CHANGES THE BILL on a caller
+// disconnect.
 func responsesDeltaBytes(c *schemas.BifrostStreamChunk) int64 {
-	if c == nil || c.BifrostResponsesStreamResponse == nil || c.BifrostResponsesStreamResponse.Delta == nil {
+	if c == nil {
 		return 0
 	}
-	return int64(len(*c.BifrostResponsesStreamResponse.Delta))
+	return responsesEventDeltaBytes(c.BifrostResponsesStreamResponse)
+}
+
+// responsesEventDeltaBytes is responsesDeltaBytes for one Responses event.
+// The relay loops use it on the events they wrote (relayedResponses).
+func responsesEventDeltaBytes(ev *schemas.BifrostResponsesStreamResponse) int64 {
+	if ev == nil || ev.Delta == nil {
+		return 0
+	}
+	return int64(len(*ev.Delta))
 }
 
 // streamSettler accumulates billable evidence while an SSE loop — and, after an
@@ -367,6 +391,14 @@ type streamSettler struct {
 	gotCache              bool
 	observedOutBytes      int64
 	settled               bool
+	// promptEstimate, seenPrompt, relayedChunks and relayedBytes feed the
+	// estimate billed when the CALLER disconnects (stream_disconnect.go,
+	// issue #1201). They reach the money path only there.
+	promptEstimate              func() int64
+	seenPrompt                  int64
+	relayedChunks, relayedBytes int64
+	// estimated is true when in/out are an estimate (settleDisconnect).
+	estimated bool
 	// logUsage is the request log's enrichment handle, captured while the
 	// request context still carries it.
 	//
@@ -407,8 +439,9 @@ func (h *Handler) newChatSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
-		logUsage:  requestlog.FromContext(ctx),
-		usageFrom: chatUsageFromChunk, deltaFrom: chatDeltaBytes,
+		logUsage:       requestlog.FromContext(ctx),
+		promptEstimate: promptEstimateFrom(ctx),
+		usageFrom:      chatUsageFromChunk, deltaFrom: chatDeltaBytes,
 	}
 }
 
@@ -427,8 +460,9 @@ func (h *Handler) newResponsesSettler(
 		userID:      identityUserFromCtx(ctx),
 		executionID: identityExecutionFromCtx(ctx),
 		ctx:         ctx, sc: sc, ch: ch,
-		logUsage:  requestlog.FromContext(ctx),
-		usageFrom: responsesUsageFromChunk, deltaFrom: responsesDeltaBytes,
+		logUsage:       requestlog.FromContext(ctx),
+		promptEstimate: promptEstimateFrom(ctx),
+		usageFrom:      responsesUsageFromChunk, deltaFrom: responsesDeltaBytes,
 	}
 }
 
@@ -445,6 +479,9 @@ func (s *streamSettler) observe(c *schemas.BifrostStreamChunk) {
 		// same chunk the extractor accepted — for the Responses dialect that is
 		// the terminal event, never message_start.
 		s.cacheRead, s.cacheWrite, s.gotCache = cacheTokensFromChunk(c)
+	}
+	if p := chunkPromptTokens(c); p > s.seenPrompt {
+		s.seenPrompt = p
 	}
 	if s.deltaFrom != nil {
 		s.observedOutBytes += s.deltaFrom(c)
@@ -498,8 +535,9 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 // here: the trailer if one arrived, and otherwise the provider's accumulated
 // count, which is readable as soon as the channel closed.
 //
-// A stream that the client cut still records 0. That is honest — the gateway
-// answered before it knew the count — and the money is not lost with it: the
+// A stream that the client cut records the estimate settleDisconnect billed
+// (issue #1201), so the per-agent spend cap, which reads this row, sees it. A
+// stream cut on another early exit records 0 when no count was known yet: the
 // drain still bills, and a refused increment still publishes
 // `budget.unbilled_stream`.
 func (s *streamSettler) recordLogTokens() {
@@ -580,14 +618,22 @@ func (s *streamSettler) settleClean() {
 	}
 	// The loss path publishes to NATS synchronously (up to the 150ms flush
 	// bound). The client already has its terminal frame, so do not hang the
-	// tail of the request on it — hand it to a tracked goroutine.
+	// tail of the request on it.
+	s.reportOffRequest(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+}
+
+// reportOffRequest runs report on a goroutine tracked on drainWg, so a NATS
+// publish in the settle does not hold the tail of the request. When the drain
+// group is already closed (late shutdown), it reports inline: an untracked
+// goroutine could outlive the billing drain and lose the settle.
+func (s *streamSettler) reportOffRequest(reason, outcome string) {
 	if !s.h.trackDrain() {
-		s.report(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+		s.report(reason, outcome)
 		return
 	}
 	go func() {
 		defer s.h.drainWg.Done()
-		s.report(lossReasonCleanCloseNoTrai, drainOutcomeInline)
+		s.report(reason, outcome)
 	}()
 }
 
@@ -756,7 +802,9 @@ func (s *streamSettler) drain(grace time.Duration) string {
 }
 
 // report settles the stream: bill the provider's numbers, or meter the loss.
-// There is no third option — an estimate never reaches this path.
+// The one exception is a caller disconnect: settleDisconnect sets an estimate
+// (estimated=true) before it calls report, and report bills it and publishes
+// estimated_on_disconnect (issue #1201).
 //
 // Precedence of billable evidence is strict, and it only ever moves UP:
 //
@@ -788,6 +836,11 @@ func (s *streamSettler) report(reason, outcome string) {
 		// (gateway-review blocker 1, reproduced on the deploy path).
 		switch s.h.updateUsage(s.billingContext(), s.provider, s.model, s.in, s.out, s.projectID, s.userID) {
 		case billBilled:
+			if s.estimated {
+				// Billed from an estimate (caller disconnect, issue #1201).
+				s.reportEstimatedBill(reason, outcome)
+				return
+			}
 			if partial {
 				// Billed, and STILL reported. A partial count is a floor on
 				// the real usage, so the remainder is an underbill of unknown
@@ -809,15 +862,17 @@ func (s *streamSettler) report(reason, outcome string) {
 			"reason", reason, "drain_outcome", outcome, "partial", partial,
 			"input_tokens", s.in, "output_tokens", s.out)
 		s.h.publishStreamLossEvent(unbilledStreamPayload{
-			ProjectID:           s.projectID,
-			Provider:            s.provider,
-			Model:               s.model,
-			Reason:              lossReasonBillingRefused,
-			DrainOutcome:        outcome,
-			ObservedOutputBytes: s.observedOutBytes,
-			ExitReason:          reason,
-			PartialInputTokens:  partialOnly(partial, s.in),
-			PartialOutputTokens: partialOnly(partial, s.out),
+			ProjectID:             s.projectID,
+			Provider:              s.provider,
+			Model:                 s.model,
+			Reason:                lossReasonBillingRefused,
+			DrainOutcome:          outcome,
+			ObservedOutputBytes:   s.observedOutBytes,
+			ExitReason:            reason,
+			PartialInputTokens:    onlyIf(partial, s.in),
+			PartialOutputTokens:   onlyIf(partial, s.out),
+			EstimatedInputTokens:  onlyIf(s.estimated, s.in),
+			EstimatedOutputTokens: onlyIf(s.estimated, s.out),
 		})
 		return
 	}
@@ -846,10 +901,10 @@ func (s *streamSettler) reportPartialBill(reason, outcome string) {
 	})
 }
 
-// partialOnly returns n when the settlement came from a partial count, else 0.
-// It keeps the partial token fields empty on every event that is not one.
-func partialOnly(partial bool, n int64) int64 {
-	if !partial {
+// onlyIf returns n when cond holds, else 0. It keeps the partial and the
+// estimated token fields empty on every event that is not of that kind.
+func onlyIf(cond bool, n int64) int64 {
+	if !cond {
 		return 0
 	}
 	return n
@@ -972,6 +1027,11 @@ type unbilledStreamPayload struct {
 	// necessary even on a stream that WAS billed. Zero on every other event.
 	PartialInputTokens  int64 `json:"partial_input_tokens,omitempty"`
 	PartialOutputTokens int64 `json:"partial_output_tokens,omitempty"`
+	// EstimatedInputTokens and EstimatedOutputTokens are the estimate a
+	// stream was billed from after a caller disconnect (issue #1201). Zero on
+	// every other event.
+	EstimatedInputTokens  int64 `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens int64 `json:"estimated_output_tokens,omitempty"`
 }
 
 // publishUnbilledStreamEvent emits budget.unbilled_stream onto gateway.events.*

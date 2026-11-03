@@ -293,6 +293,20 @@ if "$HELM" template "${EL[@]}" --set nats.enabled=false --set natsBootstrap.enab
 else
   echo "REFUSED-THE-ESCAPE-HATCH	elitea: acknowledged plaintext	$(tail -1 "$TMP/plain.err")" >> "$TMP/refusals"
 fi
+# The stale-Secret cleanup (#1370) deletes only Secrets the chart's own
+# Certificates write. With certificate.create=false the Secrets are yours, and
+# nothing renders that could delete them.
+if "$HELM" template "${EL[@]}" --set natsBootstrap.tls.certificate.create=false \
+    --set natsBootstrap.tls.secretNames.main=m --set natsBootstrap.tls.secretNames.gateway=g \
+    --set natsBootstrap.tls.secretNames.runtime=r --set natsBootstrap.tls.secretNames.worker=w > "$TMP/own-certs.yaml" 2> "$TMP/own-certs.err"; then
+  if grep -q "nats-bootstrap-cleanup" "$TMP/own-certs.yaml"; then
+    echo "DELETES-YOUR-SECRETS	bootstrap: certificate.create=false renders the stale-Secret cleanup" >> "$TMP/refusals"
+  else
+    echo "ok	bootstrap: certificate.create=false renders no stale-Secret cleanup" >> "$TMP/refusals"
+  fi
+else
+  echo "REFUSED-A-VALID-TOPOLOGY	bootstrap: your own certificate Secrets	$(tail -1 "$TMP/own-certs.err")" >> "$TMP/refusals"
+fi
 
 python3 - "$TMP" "$NS" "$DIR/argocd/applications" <<'PY'
 import json, pathlib, re, sys, yaml
@@ -589,7 +603,54 @@ for a in ("main", "gateway", "runtime"):
     check(f"the bootstrap mounts {a}'s certificate Secret at NATS_TLS_DIR/{a}",
           c and bvols.get(f"nats-client-tls-{a}") == c["spec"]["secretName"] and bmnts.get(f"nats-client-tls-{a}") == f"{env.get('NATS_TLS_DIR')}/{a}")
 
-# ── the platform ──────────────────────────────────────────────────────────
+# ── the stale-Secret cleanup (#1370) ──────────────────────────────────────
+# cert-manager leaves each bootstrap Secret behind, and it expires an hour
+# later. A new Certificate that reads it reports Ready=False/Expired, which
+# Argo CD's health check reads as Degraded. The cleanup deletes the Secrets
+# before the Certificates exist, on Helm and on Argo CD.
+cl = [d for d in docs("bootstrap.yaml") if (d["metadata"].get("labels") or {}).get("app.kubernetes.io/name") == "nats-bootstrap-cleanup"]
+check("cleanup: a ServiceAccount, a Role, a RoleBinding and a Job", sorted(d["kind"] for d in cl) == ["Job", "Role", "RoleBinding", "ServiceAccount"], sorted(d["kind"] for d in cl))
+bsecrets = sorted(c["spec"]["secretName"] for c in bcerts.values())
+crole = kinds(cl, "Role")
+check("cleanup: the Role may get and delete only the bootstrap Secrets, by name",
+      crole and [dict(r, resourceNames=sorted(r.get("resourceNames", []))) for r in crole[0]["rules"]]
+      == [{"apiGroups": [""], "resources": ["secrets"], "resourceNames": bsecrets, "verbs": ["get", "delete"]}],
+      crole and crole[0]["rules"])
+cjob = kinds(cl, "Job")
+cjobmeta = cjob[0]["metadata"]["annotations"] if cjob else {}
+cpod = cjob[0]["spec"]["template"]["spec"] if cjob else {}
+cenv = {e["name"]: e.get("value") for e in cpod["containers"][0]["env"]} if cpod else {}
+check("cleanup: the Job deletes exactly the Secrets the Certificates write", sorted((cenv.get("SECRETS") or "").split()) == bsecrets, cenv.get("SECRETS"))
+check("cleanup: the Job uses the bootstrap image (no new image)", cpod and cpod["containers"][0]["image"] == job["containers"][0]["image"])
+check("cleanup: the pod is not admitted to NATS (not labelled nats-bootstrap)",
+      cjob and cjob[0]["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") != "nats-bootstrap")
+csc = cpod["containers"][0].get("securityContext", {}) if cpod else {}
+check("cleanup: the pod runs as non-root, read-only, with no capabilities",
+      cpod.get("securityContext", {}).get("runAsNonRoot") is True and csc.get("readOnlyRootFilesystem") is True
+      and csc.get("allowPrivilegeEscalation") is False and csc.get("capabilities", {}).get("drop") == ["ALL"], csc)
+crb = kinds(cl, "RoleBinding")
+check("cleanup: the RoleBinding binds the cleanup ServiceAccount to the cleanup Role",
+      crb and crole and cjob and crb[0]["roleRef"]["name"] == crole[0]["metadata"]["name"]
+      and crb[0]["subjects"] == [{"kind": "ServiceAccount", "name": cpod.get("serviceAccountName"), "namespace": ns}], crb and crb[0])
+# Helm: the same post-install/post-upgrade phase, before the Certificates.
+# Helm waits for a Job hook to complete before the next weight.
+cweight = int(cjobmeta.get("helm.sh/hook-weight", "0"))
+for name, c in bcerts.items():
+    ann = c["metadata"].get("annotations", {})
+    check(f"cleanup: Helm runs it in {name}'s phase, before it", cjobmeta.get("helm.sh/hook") == ann.get("helm.sh/hook") and cweight < int(ann.get("helm.sh/hook-weight", "0")), (cjobmeta.get("helm.sh/hook"), cweight))
+    # Argo CD: a Sync hook in an EARLIER wave. Argo CD starts the next wave
+    # only after this one's hooks succeed.
+    check(f"cleanup: Argo CD runs it in a wave before {name}'s",
+          cjobmeta.get("argocd.argoproj.io/hook") == "Sync" and int(cjobmeta.get("argocd.argoproj.io/sync-wave", "0")) < int(ann.get("argocd.argoproj.io/sync-wave", "0")), cjobmeta)
+for d in cl:
+    a = d["metadata"].get("annotations", {})
+    check(f"cleanup: {d['kind']} exists only while the hook phase runs",
+          "hook-succeeded" in a.get("helm.sh/hook-delete-policy", "") and "HookSucceeded" in a.get("argocd.argoproj.io/hook-delete-policy", ""), a)
+    if d["kind"] != "Job":
+        check(f"cleanup: {d['kind']} exists before the Job (Helm weight, same Argo CD wave)",
+              int(a.get("helm.sh/hook-weight", "0")) < cweight and a.get("argocd.argoproj.io/sync-wave") == cjobmeta.get("argocd.argoproj.io/sync-wave"), a)
+
+# ── the platform──────────────────────────────────────────────────────────
 el = docs("elitea.yaml")
 certs = {c["spec"]["commonName"]: c for c in kinds(el, "Certificate") if c["spec"].get("uris") and not c["spec"]["commonName"].startswith("elitea-nats-bootstrap-")}
 want = {"elitea-main", "elitea-llm-gateway", "elitea-scheduler"}
@@ -795,7 +856,9 @@ check("argocd: the sample keeps the bundled NATS", eparams.get("nats.enabled", "
 # creates; and the bootstrap is a Sync hook, because a PostSync one waits for
 # workloads that wait for it.
 wave = lambda x: int((x["metadata"].get("annotations") or {}).get("argocd.argoproj.io/sync-wave", "0"))
-natsobjs = [x for x in el if x["metadata"]["name"].startswith("elitea-nats") and not x["metadata"]["name"].endswith("-nats-client")]
+# The stale-Secret cleanup runs one wave earlier, on purpose (#1370, asserted above).
+natsobjs = [x for x in el if x["metadata"]["name"].startswith("elitea-nats") and not x["metadata"]["name"].endswith("-nats-client")
+            and (x["metadata"].get("labels") or {}).get("app.kubernetes.io/name") != "nats-bootstrap-cleanup"]
 check("argocd: every NATS server and bootstrap object is in wave -10", natsobjs and all(wave(x) == -10 for x in natsobjs if x["kind"] != "ConfigMap" or x["metadata"]["name"] != "elitea-nats-bootstrap"),
       sorted((x["kind"], x["metadata"]["name"], wave(x)) for x in natsobjs if wave(x) != -10))
 check("argocd: the bootstrap Job is a Sync hook", jobmeta.get("argocd.argoproj.io/hook") == "Sync", jobmeta)

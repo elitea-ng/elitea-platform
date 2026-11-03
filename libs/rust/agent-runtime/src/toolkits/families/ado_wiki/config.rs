@@ -1,20 +1,25 @@
 use serde_json::{Map, Value};
 
 use crate::toolkits::families::ado::config::{AdoConfigError, AdoToolkitConfig};
+use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
 
 /// `ado_wiki` settings (`tools/ado/__init__.py::get_tools`):
 /// `ado_configuration`, `project`, `limit`, `selected_tools` and the optional
 /// `default_wiki_identifier`.
 /// The embedding setting only feeds the index tools, which this runtime does
 /// not serve (the SDK's `pgvector_configuration` is retired and never sent).
+/// `process_images` and `image_description_prompt` are the instance's image
+/// defaults (#985, [`AdoImageDefaults`]).
 pub(crate) struct AdoWikiToolkitConfig {
     inner: AdoToolkitConfig,
+    images: AdoImageDefaults,
 }
 
 impl AdoWikiToolkitConfig {
     pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, AdoConfigError> {
         Ok(Self {
             inner: AdoToolkitConfig::parse(settings)?,
+            images: AdoImageDefaults::parse(settings)?,
         })
     }
 
@@ -25,5 +30,10 @@ impl AdoWikiToolkitConfig {
 
     pub(crate) fn into_inner(self) -> AdoToolkitConfig {
         self.inner
+    }
+
+    /// The connection settings and the instance's image defaults.
+    pub(crate) fn into_parts(self) -> (AdoToolkitConfig, AdoImageDefaults) {
+        (self.inner, self.images)
     }
 }
