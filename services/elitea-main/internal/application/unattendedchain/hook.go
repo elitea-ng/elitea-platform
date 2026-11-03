@@ -201,6 +201,11 @@ func (h *Hook) continued(ctx context.Context, chain unattended.Chain, err error)
 	switch {
 	case err == nil, errors.Is(err, unattended.ErrChainEnded):
 		return nil
+	case errors.Is(err, executionapp.ErrIdempotencyConflict):
+		// The question id comes from the settled run, so a replay that
+		// finds it taken started this continuation already. The text can
+		// differ when the brief became ready between the two settles.
+		return nil
 	case errors.As(err, &limit):
 		return h.chains.EndRefusedChain(ctx, chain.RootExecutionID, limit)
 	case errors.As(err, &refusal) && refusal.Reason == unattended.RefusedDisabled:

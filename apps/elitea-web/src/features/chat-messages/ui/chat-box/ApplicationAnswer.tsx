@@ -60,7 +60,7 @@ import { PersistedMessageTrace } from './PersistedMessageTrace';
 import { AnswerContent } from './AnswerContent';
 import { readAnswerItems } from './AnswerMessageItems';
 
-import { GoalCheckNotice, RunBriefCard } from '@/features/unattended';
+import { GoalCheckNotice, RunBriefCard } from '@/features/run-brief';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import { Markdown } from '@/shared/ui/Markdown';
 import { TOOL_ACTION_TYPES, ToolActionStatus } from '@/shared/lib/chat';

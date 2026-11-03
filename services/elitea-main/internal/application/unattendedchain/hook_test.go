@@ -2,6 +2,7 @@ package unattendedchain
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -188,5 +189,20 @@ func TestSettleGrantsDisabledCancelsTheChain(t *testing.T) {
 		if len(chains.ended) != 1 || chains.ended[0] != unattended.EndCancelled || len(chains.refused) != 0 {
 			t.Fatalf("ended = %v, refused = %v", chains.ended, chains.refused)
 		}
+	}
+}
+
+// A settle replay whose continuation question exists already (the text
+// differs when the brief became ready in between) neither fails nor ends
+// the chain.
+func TestSettleReplayOfAStartedContinuationIsDone(t *testing.T) {
+	chains := &chainsStub{view: cloudView()}
+	chains.view.StepLimitReached = true
+	starter := &starterStub{err: fmt.Errorf("start: %w", executionapp.ErrIdempotencyConflict)}
+	if err := New(chains, starter, nil).Settle(t.Context(), "x", executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	if len(chains.ended) != 0 || len(chains.refused) != 0 {
+		t.Fatalf("ended = %v, refused = %v", chains.ended, chains.refused)
 	}
 }

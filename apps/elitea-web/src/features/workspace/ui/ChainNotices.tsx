@@ -9,7 +9,7 @@ import Divider from '@mui/material/Divider';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import { GoalCheckNotice } from '@/features/unattended';
+import { GoalCheckNotice } from '@/features/run-brief';
 import type { ChainEndedPayload } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 

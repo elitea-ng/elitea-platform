@@ -25,7 +25,7 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { RunBriefCard } from '@/features/unattended';
+import { RunBriefCard } from '@/features/run-brief';
 import { t } from '@/shared/i18n';
 import { Markdown } from '@/shared/ui/Markdown';
 import { conversationBubbleSx } from '@/shared/ui/conversation-column';
