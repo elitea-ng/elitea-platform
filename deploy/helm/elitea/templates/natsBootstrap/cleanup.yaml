@@ -1,0 +1,173 @@
+{{- if and .Values.natsBootstrap.enabled .Values.natsBootstrap.tls.certificate.create }}
+{{- /*
+The stale-Secret cleanup (#1370). cert-manager does not delete a
+Certificate's Secret when the Certificate is deleted, unless the controller
+runs with --enable-certificate-owner-ref. That flag is cluster-wide, and
+cert-manager 1.19 has no per-Certificate equivalent. So each sync leaves the
+bootstrap Secrets behind, and their certificates expire an hour later
+(natsBootstrap.tls.certificate.duration).
+
+On the next sync, the new hook Certificate first reads the expired Secret
+and reports Ready=False, reason Expired, before it re-issues. Argo CD's
+Certificate health check reads that state as Degraded and fails the hook.
+
+This Job deletes those Secrets before the Certificates exist. Each sync then
+starts from the state of a first install: no Secret, so cert-manager issues
+at once and the Job pod waits in ContainerCreating until it has.
+
+Order:
+  Helm     post-install/post-upgrade hooks, weight -20 (RBAC at -30). Helm
+           waits for this Job to complete before it creates the
+           Certificates (weight -10).
+  Argo CD  Sync hooks in wave -11. Argo CD waits for this Job to succeed
+           before it starts wave -10 (NATS, its CA, the Certificates and the
+           bootstrap Job).
+
+Least privilege: the Role may get and delete only the bootstrap Secrets, by
+name. The pod is not labelled nats-bootstrap, so the NATS NetworkPolicy does
+not admit it. It uses the bootstrap image (nats-box: sh, curl), so it adds no
+image. All of it is deleted when the hook phase ends.
+*/ -}}
+{{- $name := printf "%s-cleanup" (include "nats-bootstrap.fullname" .) }}
+{{- $secrets := list }}
+{{- range $acct := .Values.natsBootstrap.accounts }}
+{{- $secrets = append $secrets (include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $)) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.cleanupLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.cleanupLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+rules:
+  # Only the bootstrap certificate Secrets, by name. No list, no watch, and no
+  # other Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      {{- range $s := $secrets }}
+      - {{ $s | quote }}
+      {{- end }}
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.cleanupLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded,HookFailed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "nats-bootstrap.cleanupLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "-11"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "nats-bootstrap.cleanupLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      automountServiceAccountToken: true
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        # The nats user of the nats-box image.
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: "{{ .Values.natsBootstrap.image.repository }}:{{ .Values.natsBootstrap.image.tag }}"
+          imagePullPolicy: {{ .Values.natsBootstrap.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              sa=/var/run/secrets/kubernetes.io/serviceaccount
+              ns=$(cat "$sa/namespace")
+              api="https://kubernetes.default.svc/api/v1/namespaces/$ns/secrets"
+              # The token goes to curl on stdin, not in argv.
+              auth="Authorization: Bearer $(cat "$sa/token")"
+              call() {
+                curl -sS --cacert "$sa/ca.crt" -H @- -o /dev/null -w '%{http_code}' -X "$1" "$api/$2" <<EOF
+              $auth
+              EOF
+              }
+              for s in $SECRETS; do
+                code=$(call DELETE "$s")
+                case "$code" in
+                  200|202) echo "deleted the stale Secret $s" ;;
+                  404) echo "no Secret $s" ;;
+                  *) echo "DELETE $s returned HTTP $code" >&2; exit 1 ;;
+                esac
+                # A Secret with a finalizer stays until it is released. Wait
+                # until it is gone: a Certificate must not read it.
+                i=0
+                while [ "$(call GET "$s")" != 404 ]; do
+                  i=$((i + 1))
+                  if [ "$i" -ge 60 ]; then echo "the Secret $s is still present" >&2; exit 1; fi
+                  sleep 1
+                done
+              done
+          env:
+            - name: SECRETS
+              value: {{ join " " $secrets | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.natsBootstrap.resources | nindent 12 }}
+{{- end }}

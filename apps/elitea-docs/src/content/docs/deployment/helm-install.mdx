@@ -91,7 +91,7 @@ helm install elitea deploy/helm/elitea \
 
 The published chart is the recommended source: `oci://ghcr.io/elitea-ng/charts/elitea --version <version>` in place of the path. Its package carries the same values files (`helm pull --untar` to read them) and both dependencies, so it needs no `helm dependency build`. In an air-gapped network, mirror that OCI chart; do not build from a clone.
 
-The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler, the worker) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value. The stream and KV bootstrap is a `post-install,post-upgrade` hook Job; until it has run, the workloads restart, then settle.
+The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler, the worker) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value. The stream and KV bootstrap is a `post-install,post-upgrade` hook Job; until it has run, the workloads restart, then settle. Its client certificates are hooks too, and live one hour. Before they are issued, a short cleanup hook Job (`elitea-nats-bootstrap-cleanup`) deletes the expired certificate Secrets that the previous install or upgrade left behind. Its Role can delete only those Secrets, by name.
 
 <Warning title="No --wait on a first install">
 `helm install --wait` waits for workloads that wait for the streams the bootstrap hook creates, and that hook runs only after the wait. Leave `--wait` off the first install; later upgrades may use it.

@@ -4,7 +4,7 @@ use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk};
+use crate::toolkits::families::ado::client::{AdoClientError, IntoAdk, bounded_output};
 use crate::toolkits::families::ado::toolset::{
     AdoToolExecutor, AdoToolKind, AdoToolsetError, MAX_IDENTIFIER_BYTES, MAX_TEXT_BYTES,
     build_toolset, invalid_arguments, optional_bool, optional_i64, optional_str,
@@ -106,7 +106,7 @@ impl AdoToolKind for AdoBoardsToolKind {
                 "Delete a work item from Azure DevOps by ID. The item moves to the recycle bin."
             }
             Self::GetWorkItem => {
-                "Get a single work item by ID with all fields, or only the listed fields. expand Relations or All also returns the work item's relations. Image and attachment description is not available in this runtime; parse_attachments returns the work item without attachment content."
+                "Get a single work item by ID with all fields, or only the listed fields. expand Relations or All also returns the work item's relations. With parse_attachments and process_images, each attachment image in a text field is described by the run's vision model and the description is set as an image-description attribute on its <img> (at most 20 images and 12 MB per call). Attached documents are not parsed in this runtime."
             }
             Self::LinkWorkItems => {
                 "Add the relation to the source work item with an appropriate attributes if any. User may pass attributes like name, etc. link_type must be a relation reference name from get_relation_types."
@@ -115,7 +115,7 @@ impl AdoToolKind for AdoBoardsToolKind {
                 "Returns dict of possible relation types per syntax: 'relation name': 'relation reference name'. NOTE: reference name is used for adding links to the work item"
             }
             Self::GetComments => {
-                "Get comments for work item by ID, up to limit_total (default: the toolkit limit). Image description is not available in this runtime; process_images returns the comments with their image references unchanged."
+                "Get comments for work item by ID, up to limit_total (default: the toolkit limit). With process_images, each attachment image in the comments is described by the run's vision model: an <img> gets an image-description attribute, a markdown image gets an [image-description: ...] line (at most 20 images and 12 MB per call; an image that cannot be described gets an [image unavailable: ...] note)."
             }
             Self::LinkWorkItemsToWikiPage => {
                 "Links one or more work items to a specific wiki page using an ArtifactLink."
@@ -348,7 +348,7 @@ impl AdoToolKind for AdoBoardsToolKind {
                     (
                         "process_images",
                         schema::optional_bool(
-                            "Whether to fetch and analyze images embedded in comment text. Image description is not available in this runtime.",
+                            "Whether to fetch and analyze images embedded in comment text. When True, each embedded ADO attachment image is described by the configured LLM and the description is inserted next to the image reference in the returned comment content.",
                             false,
                         ),
                     ),
@@ -428,7 +428,12 @@ pub(crate) fn build_ado_boards_toolset(
             "Azure DevOps tools that need the artifact store or chat model are left out"
         );
     }
-    let client = Arc::new(AdoBoardsClient::new(config.into_inner())?.with_attachments(attachments));
+    let (config, images) = config.into_parts();
+    let client = Arc::new(
+        AdoBoardsClient::new(config)?
+            .with_image_defaults(images)
+            .with_attachments(attachments),
+    );
     build_with_client(toolkit_name, &selected, policy, client)
 }
 
@@ -554,19 +559,28 @@ async fn dispatch(
                     "process_images",
                 ],
             )?;
-            // Accepted for the SDK call shape; see the tool description.
-            optional_bool(arguments, "parse_attachments", false)?;
-            optional_bool(arguments, "process_images", true)?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
+            // The SDK describes the field pictures only with parse_attachments
+            // and process_images both on (the call, else the toolkit, else
+            // true). Attached documents are not parsed here.
+            let parse_attachments = optional_bool(arguments, "parse_attachments", false)?;
+            let process_images = client.images.process_images(arguments, true)?;
+            let prompt = client.images.image_description_prompt(arguments)?;
             let fields = optional_string_list(arguments, "fields")?;
-            client
+            let item = client
                 .get_work_item(
                     required_id(arguments, "id")?,
                     fields.as_deref(),
                     optional_str(arguments, "as_of", MAX_IDENTIFIER_BYTES)?,
                     optional_str(arguments, "expand", MAX_IDENTIFIER_BYTES)?,
                 )
-                .await
+                .await;
+            match item {
+                Ok(Value::Object(mut item)) if parse_attachments && process_images => {
+                    client.describe_work_item_images(&mut item, prompt).await;
+                    bounded_output(Value::Object(item))
+                }
+                other => other,
+            }
         }
         AdoBoardsToolKind::LinkWorkItems => {
             reject_unknown_keys(
@@ -611,7 +625,7 @@ async fn dispatch(
                     "image_description_prompt",
                 ],
             )?;
-            optional_str(arguments, "image_description_prompt", MAX_TEXT_BYTES)?;
+            let image_description_prompt = client.images.image_description_prompt(arguments)?;
             client
                 .get_comments(GetComments {
                     work_item_id: required_id(arguments, "work_item_id")?,
@@ -621,7 +635,9 @@ async fn dispatch(
                         optional_str(arguments, "expand", MAX_IDENTIFIER_BYTES)?.unwrap_or("none"),
                     ),
                     order: optional_str(arguments, "order", MAX_IDENTIFIER_BYTES)?,
-                    process_images: optional_bool(arguments, "process_images", false)?,
+                    // The call's argument, else the instance setting (#985).
+                    process_images: client.images.process_images(arguments, false)?,
+                    image_description_prompt,
                 })
                 .await
         }

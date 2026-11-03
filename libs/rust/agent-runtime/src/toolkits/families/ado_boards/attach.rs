@@ -380,7 +380,6 @@ impl AdoBoardsClient {
         ))
     }
 
-    #[allow(clippy::too_many_lines)] // The SDK's validation ladder, one message per rung.
     async fn describe_image(
         &self,
         host: &AttachmentHost,
@@ -388,6 +387,23 @@ impl AdoBoardsClient {
         file_name: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<String, String> {
+        let (bytes, media_type) = self
+            .fetch_attachment_picture(attachment_url, file_name)
+            .await?;
+        describe_picture(host, bytes, media_type, prompt)
+            .await
+            .map_err(|error| error.sentence())
+    }
+
+    /// One work item attachment picture, read through the configured
+    /// connection and checked as `get_image_by_url` checks it (the SDK's
+    /// `_fetch_validated_image`). `Err` is the reason, as a sentence.
+    #[allow(clippy::too_many_lines)] // The SDK's validation ladder, one message per rung.
+    pub(crate) async fn fetch_attachment_picture(
+        &self,
+        attachment_url: &str,
+        file_name: Option<&str>,
+    ) -> Result<(Vec<u8>, &'static str), String> {
         if attachment_url.to_ascii_lowercase().starts_with("data:") {
             return Err(
                 "data: URIs are not supported; provide an Azure DevOps attachment URL.".to_owned(),
@@ -468,36 +484,8 @@ impl AdoBoardsClient {
                     format!("Could not download the attachment: {}", cause(&error))
                 }
             })?;
-        if bytes.len() as u64 > MAX_PICTURE_BYTES {
-            return Err("Image exceeds the 5 MB processing limit".to_owned());
-        }
-        let media_type = detect_media_type(&bytes, &name);
-        let Some((width, height)) =
-            image_dimensions(&bytes).filter(|_| is_describable_image(media_type))
-        else {
-            return Err("Could not read image dimensions".to_owned());
-        };
-        if width == 0 || height == 0 {
-            return Err("Could not read image dimensions".to_owned());
-        }
-        if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
-            return Err(format!(
-                "Image dimensions {width}x{height} exceed the processing limit"
-            ));
-        }
-        let prompt = prompt
-            .filter(|prompt| !prompt.is_empty())
-            .map_or_else(|| DEFAULT_IMAGE_PROMPT.to_owned(), ToOwned::to_owned);
-        let description = host
-            .describe_picture(bytes, media_type, prompt)
-            .await
-            .map_err(|error: AttachmentError| error.sentence())?;
-        // `EliteAImageLoader.get_content`.
-        if description.trim().is_empty() {
-            Ok("[No readable text detected by LLM]".to_owned())
-        } else {
-            Ok(description)
-        }
+        let media_type = checked_picture(&bytes, &name)?;
+        Ok((bytes, media_type))
     }
 
     /// `urlparse(attachment_url)`: whether the URL is inside the configured
@@ -570,6 +558,51 @@ fn same_organization_other_form(configured: &str, url: &Url) -> bool {
         ("dev.azure.com", _, _, Some(org)) => first_segment(&configured) == Some(org),
         (_, "dev.azure.com", Some(org), _) => first_segment(url) == Some(org),
         _ => false,
+    }
+}
+
+/// The checks every picture passes before the model sees it (the SDK's
+/// `_fetch_validated_image` after the download): at most 5 MB, a PNG, JPEG,
+/// GIF or WebP with a readable size, and at most [`MAX_IMAGE_PIXELS`]
+/// pixels. `Ok` is the media type; `Err` is the reason, as a sentence.
+pub(crate) fn checked_picture(bytes: &[u8], name: &str) -> Result<&'static str, String> {
+    if bytes.len() as u64 > MAX_PICTURE_BYTES {
+        return Err("Image exceeds the 5 MB processing limit".to_owned());
+    }
+    let media_type = detect_media_type(bytes, name);
+    let Some((width, height)) =
+        image_dimensions(bytes).filter(|_| is_describable_image(media_type))
+    else {
+        return Err("Could not read image dimensions".to_owned());
+    };
+    if width == 0 || height == 0 {
+        return Err("Could not read image dimensions".to_owned());
+    }
+    if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
+        return Err(format!(
+            "Image dimensions {width}x{height} exceed the processing limit"
+        ));
+    }
+    Ok(media_type)
+}
+
+/// Describe one checked picture with the run's chat model: `prompt` when it
+/// is not empty, else the SDK's default image prompt. An empty reply is the
+/// SDK's placeholder (`EliteAImageLoader.get_content`).
+pub(crate) async fn describe_picture(
+    host: &AttachmentHost,
+    bytes: Vec<u8>,
+    media_type: &'static str,
+    prompt: Option<&str>,
+) -> Result<String, AttachmentError> {
+    let prompt = prompt
+        .filter(|prompt| !prompt.is_empty())
+        .map_or_else(|| DEFAULT_IMAGE_PROMPT.to_owned(), ToOwned::to_owned);
+    let description = host.describe_picture(bytes, media_type, prompt).await?;
+    if description.trim().is_empty() {
+        Ok("[No readable text detected by LLM]".to_owned())
+    } else {
+        Ok(description)
     }
 }
 

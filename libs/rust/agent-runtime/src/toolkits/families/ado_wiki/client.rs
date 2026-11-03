@@ -10,6 +10,8 @@ use crate::toolkits::families::ado::client::{
 };
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
 use crate::toolkits::families::ado::format::as_dict;
+use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
+use crate::toolkits::families::attachment_host::AttachmentHost;
 
 const WIKI_API: &str = "7.0";
 const PROJECTS_API: &str = "7.0";
@@ -49,8 +51,13 @@ pub(crate) struct RenameWikiPage<'a> {
 }
 
 pub(crate) struct AdoWikiClient {
-    ado: AdoClient,
+    pub(super) ado: AdoClient,
     default_wiki: Option<Box<str>>,
+    /// The run's chat model, when the run lends it (image descriptions).
+    pub(super) attachments: Option<AttachmentHost>,
+    /// The instance's `process_images` and `image_description_prompt`
+    /// defaults (#985).
+    pub(super) images: AdoImageDefaults,
 }
 
 impl AdoWikiClient {
@@ -63,7 +70,26 @@ impl AdoWikiClient {
     }
 
     pub(crate) fn with_client(ado: AdoClient, default_wiki: Option<Box<str>>) -> Self {
-        Self { ado, default_wiki }
+        Self {
+            ado,
+            default_wiki,
+            attachments: None,
+            images: AdoImageDefaults::default(),
+        }
+    }
+
+    /// The same client, lent the run's chat model.
+    #[must_use]
+    pub(crate) fn with_attachments(mut self, attachments: Option<AttachmentHost>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
+    /// The same client, with the instance's image defaults.
+    #[must_use]
+    pub(crate) fn with_image_defaults(mut self, images: AdoImageDefaults) -> Self {
+        self.images = images;
+        self
     }
 
     pub(crate) fn default_wiki(&self) -> Option<&str> {
@@ -71,7 +97,7 @@ impl AdoWikiClient {
     }
 
     /// `_resolve_wiki_identifier`: the argument, else the configured default.
-    fn resolve<'a>(&'a self, wiki_identified: Option<&'a str>) -> Option<&'a str> {
+    pub(super) fn resolve<'a>(&'a self, wiki_identified: Option<&'a str>) -> Option<&'a str> {
         wiki_identified
             .filter(|wiki| !wiki.is_empty())
             .or(self.default_wiki.as_deref())
@@ -96,9 +122,8 @@ impl AdoWikiClient {
 
     /// `get_wiki_page_by_path` / `get_wiki_page_by_id`: the page content.
     ///
-    /// The SDK then describes images with the toolkit LLM when
-    /// `process_images` is set; that LLM is not lent to toolkits here, so the
-    /// content is returned with its image references unchanged.
+    /// With `process_images`, the tool then describes the page's pictures
+    /// (images.rs).
     pub(crate) async fn page_content(
         &self,
         wiki_identified: Option<&str>,

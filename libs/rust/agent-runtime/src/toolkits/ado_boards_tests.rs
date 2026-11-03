@@ -372,6 +372,7 @@ async fn comments_page_by_continuation_three_at_a_time_up_to_the_total() {
             expand: Some("none"),
             order: None,
             process_images: false,
+            image_description_prompt: None,
         })
         .await
         .expect("comments");
@@ -1279,4 +1280,332 @@ async fn a_work_item_that_keeps_changing_is_reported_as_uploaded_but_not_linked(
             .count(),
         3
     );
+}
+
+/// The toolset over `boards` with the image defaults that `extra` settings
+/// parse to, as `build_ado_boards_toolset` composes them (#985).
+async fn image_default_tools(
+    transport: Arc<FixtureTransport>,
+    extra: &Value,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    let (_, images) = AdoBoardsToolkitConfig::parse(&settings(extra))
+        .expect("valid image settings")
+        .into_parts();
+    let client = Arc::new(boards(transport).with_image_defaults(images));
+    let toolset = build_with_client("boards", &[], &policy(&[]), client).expect("toolset");
+    tools(&toolset).await
+}
+
+#[tokio::test]
+async fn the_instance_process_images_is_the_default_of_a_get_comments_call() {
+    // `process_images` asks for the rendered comment HTML. The instance turns
+    // it on; a call that omits the argument (or sends null) inherits it, and a
+    // call that names it overrides it.
+    let transport = FixtureTransport::new(|_, _| ok(json!({"comments":[]})));
+    let served = image_default_tools(
+        transport.clone(),
+        &json!({"process_images":true,"image_description_prompt":"short caption"}),
+    )
+    .await;
+    for arguments in [
+        json!({"work_item_id":5}),
+        json!({"work_item_id":5,"process_images":null}),
+        json!({"work_item_id":5,"process_images":false}),
+        json!({"work_item_id":5,"process_images":true,"image_description_prompt":"other"}),
+    ] {
+        tool(&served, "get_comments")
+            .execute(context(), arguments)
+            .await
+            .expect("comments");
+    }
+    let expands = transport
+        .requests()
+        .iter()
+        .map(|request| request.query_value("$expand").map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        expands,
+        [
+            Some("renderedText".to_owned()),
+            Some("renderedText".to_owned()),
+            Some("none".to_owned()),
+            Some("renderedText".to_owned()),
+        ]
+    );
+
+    // Without the setting, get_comments keeps the SDK default (off).
+    let transport = FixtureTransport::new(|_, _| ok(json!({"comments":[]})));
+    let served = image_default_tools(transport.clone(), &json!({})).await;
+    tool(&served, "get_comments")
+        .execute(context(), json!({"work_item_id":5}))
+        .await
+        .expect("comments");
+    assert_eq!(transport.requests()[0].query_value("$expand"), Some("none"));
+}
+
+#[tokio::test]
+async fn image_settings_and_arguments_of_the_wrong_type_are_refused() {
+    for invalid in [
+        json!({"process_images":"yes"}),
+        json!({"image_description_prompt":["a"]}),
+    ] {
+        let Err(error) = AdoBoardsToolkitConfig::parse(&settings(&invalid)) else {
+            panic!("{invalid} must be refused");
+        };
+        assert_eq!(error.code(), AdoConfigErrorCode::InvalidConfiguration);
+    }
+    let transport = FixtureTransport::new(|_, _| panic!("no request for invalid arguments"));
+    let served = image_default_tools(transport, &json!({"process_images":true})).await;
+    for (name, arguments) in [
+        (
+            "get_comments",
+            json!({"work_item_id":5,"process_images":"no"}),
+        ),
+        ("get_work_item", json!({"id":5,"process_images":1})),
+        (
+            "get_work_item",
+            json!({"id":5,"image_description_prompt":false}),
+        ),
+    ] {
+        assert!(
+            tool(&served, name)
+                .execute(context(), arguments.clone())
+                .await
+                .is_err(),
+            "{name} {arguments}"
+        );
+    }
+}
+
+// ── inline image description (#985) ──────────────────────────────────────
+
+const PICTURE: &str = "https://dev.azure.com/contoso/_apis/wit/attachments/guid-1?fileName=a.png";
+const GONE: &str = "https://dev.azure.com/contoso/_apis/wit/attachments/missing?fileName=b.png";
+
+/// Comments with the same picture twice (HTML and markdown), a missing one
+/// and a `data:` URI; attachment reads as `image_provider` answers them, and
+/// any `guid-<n>` attachment is the PNG.
+fn picture_provider(
+    request: &CapturedRequest,
+    index: usize,
+) -> Result<super::families::ado::client::AdoHttpResponse, AdoClientError> {
+    match request.path.as_str() {
+        "/contoso/Fabrikam Fiber/_apis/wit/workItems/5/comments" => ok(json!({"comments":[
+            {"id":1,"text":"x","renderedText":format!(
+                "<p>first sighting</p><img src=\"{}\"><img src=\"{}\"><img src=\"data:image/png;base64,AAAA\">",
+                PICTURE.replace('&', "&amp;"), GONE
+            )},
+            {"id":2,"text":format!("see ![shot]({PICTURE})"),"renderedText":"<p>no picture</p>"}
+        ]})),
+        "/contoso/Fabrikam Fiber/_apis/wit/workitems/42" => ok(work_item(
+            42,
+            &json!({"System.Title":"T","System.Description":format!("<div><img src=\"{PICTURE}\"></div>")}),
+        )),
+        path if path.starts_with("/contoso/_apis/wit/attachments/guid-") => file(PNG),
+        _ => image_provider(request, index),
+    }
+}
+
+async fn picture_tools(
+    transport: &Arc<FixtureTransport>,
+    platform: Option<&Arc<FakePlatform>>,
+    extra: &Value,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    let (_, images) = AdoBoardsToolkitConfig::parse(&settings(extra))
+        .expect("valid settings")
+        .into_parts();
+    let client = boards(Arc::clone(transport))
+        .with_image_defaults(images)
+        .with_attachments(platform.map(FakePlatform::host));
+    let toolset =
+        build_with_client("boards", &[], &policy(&[]), Arc::new(client)).expect("toolset");
+    tools(&toolset).await
+}
+
+async fn comments_text(tools: &[Arc<dyn adk_core::Tool>], arguments: Value) -> String {
+    tool(tools, "get_comments")
+        .execute(context(), arguments)
+        .await
+        .expect("comments")
+        .to_string()
+}
+
+fn attachment_reads(transport: &FixtureTransport) -> usize {
+    transport
+        .requests()
+        .iter()
+        .filter(|request| request.path.contains("/wit/attachments/"))
+        .count()
+}
+
+#[tokio::test]
+async fn comment_pictures_are_described_once_each_and_a_failure_is_a_note() {
+    let platform = FakePlatform::new();
+    platform.reply("A login form.");
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let text = comments_text(
+        &served,
+        json!({"work_item_id":5,"process_images":true,"image_description_prompt":"short caption"}),
+    )
+    .await;
+    // One model call for the picture referenced twice, with the call's prompt
+    // and the attachment's own bytes.
+    let calls = platform.model_calls();
+    assert_eq!(calls.len(), 1, "{text}");
+    assert_eq!(calls[0].prompt, "short caption");
+    assert_eq!(calls[0].images_png[0], PNG);
+    assert_eq!(&*calls[0].image_media_types, ["image/png"]);
+    // The <img> gets the attribute and keeps its src; the markdown image gets
+    // a line under it; the comment text is kept.
+    assert!(
+        text.contains(r#"image-description=\"A login form.\""#),
+        "{text}"
+    );
+    assert!(text.contains("first sighting"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "![shot]({PICTURE})\\n[image-description: A login form.]"
+        )),
+        "{text}"
+    );
+    // The missing picture is a note, not a failed call; the data: URI is left
+    // alone.
+    assert!(
+        text.contains(
+            "image-description=\\\"[image unavailable: could not download the attachment"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("data:image/png;base64,AAAA\\\">"), "{text}");
+    // The attachment is read through the connection, with the PAT.
+    let read = transport
+        .requests()
+        .into_iter()
+        .find(|request| request.path == "/contoso/_apis/wit/attachments/guid-1")
+        .expect("the picture was read");
+    assert_eq!(
+        read.authorization.as_deref(),
+        Some(expected_authorization().as_str())
+    );
+    assert_eq!(read.accept.as_deref(), Some("application/octet-stream"));
+}
+
+#[tokio::test]
+async fn comment_pictures_follow_the_call_then_the_toolkit_then_the_tool_default() {
+    // Off by the tool default: no read, no model call, the markup unchanged.
+    let platform = FakePlatform::new();
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let text = comments_text(&served, json!({"work_item_id":5})).await;
+    assert!(!text.contains("image-description"), "{text}");
+    assert_eq!(attachment_reads(&transport), 0);
+    assert!(platform.model_calls().is_empty());
+
+    // On by the toolkit setting, for a call that names no argument, with the
+    // toolkit's prompt.
+    let platform = FakePlatform::new();
+    platform.reply("From the toolkit default.");
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(
+        &transport,
+        Some(&platform),
+        &json!({"process_images":true,"image_description_prompt":"toolkit prompt"}),
+    )
+    .await;
+    let text = comments_text(&served, json!({"work_item_id":5})).await;
+    assert!(text.contains("From the toolkit default."), "{text}");
+    assert_eq!(platform.model_calls()[0].prompt, "toolkit prompt");
+
+    // The call overrides the toolkit: off.
+    let before = platform.model_calls().len();
+    let reads = attachment_reads(&transport);
+    let text = comments_text(&served, json!({"work_item_id":5,"process_images":false})).await;
+    assert!(!text.contains("image-description"), "{text}");
+    assert_eq!(platform.model_calls().len(), before);
+    assert_eq!(attachment_reads(&transport), reads);
+
+    // And on, against a toolkit that turns it off.
+    let platform = FakePlatform::new();
+    platform.reply("From the call.");
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(
+        &transport,
+        Some(&platform),
+        &json!({"process_images":false}),
+    )
+    .await;
+    let text = comments_text(&served, json!({"work_item_id":5,"process_images":true})).await;
+    assert!(text.contains("From the call."), "{text}");
+}
+
+#[tokio::test]
+async fn without_a_chat_model_the_comments_come_back_as_they_are() {
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(&transport, None, &json!({"process_images":true})).await;
+    let text = comments_text(&served, json!({"work_item_id":5})).await;
+    assert!(!text.contains("image-description"), "{text}");
+    assert_eq!(attachment_reads(&transport), 0);
+    assert_eq!(
+        transport.requests()[0].query_value("$expand"),
+        Some("renderedText")
+    );
+}
+
+#[tokio::test]
+async fn one_call_describes_at_most_twenty_pictures() {
+    let platform = FakePlatform::new();
+    for n in 0..20 {
+        platform.reply(&format!("picture {n}"));
+    }
+    let mut html = String::new();
+    for n in 0..22 {
+        html.push_str(r#"<img src="https://dev.azure.com/contoso/_apis/wit/attachments/guid-"#);
+        html.push_str(&n.to_string());
+        html.push_str(r#"?fileName=p.png">"#);
+    }
+    let transport = FixtureTransport::new(move |request, index| {
+        if request.path.ends_with("/workItems/5/comments") {
+            return ok(json!({"comments":[{"id":1,"text":"x","renderedText":html.clone()}]}));
+        }
+        picture_provider(request, index)
+    });
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let text = comments_text(&served, json!({"work_item_id":5,"process_images":true})).await;
+    assert_eq!(platform.model_calls().len(), 20);
+    assert_eq!(attachment_reads(&transport), 20);
+    assert_eq!(
+        text.matches("[image skipped: per-call image limit of 20 reached]")
+            .count(),
+        2,
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn work_item_field_pictures_are_described_with_parse_attachments() {
+    let platform = FakePlatform::new();
+    platform.reply("A field picture.");
+    let transport = FixtureTransport::new(picture_provider);
+    let served = picture_tools(&transport, Some(&platform), &json!({})).await;
+    let get = |arguments: Value| {
+        let tool = tool(&served, "get_work_item");
+        async move { tool.execute(context(), arguments).await.expect("work item") }
+    };
+    // process_images defaults on, but without parse_attachments the SDK
+    // describes nothing.
+    let plain = get(json!({"id":42})).await;
+    assert!(!plain.to_string().contains("image-description"));
+    assert!(platform.model_calls().is_empty());
+    let described = get(json!({"id":42,"parse_attachments":true})).await;
+    assert_eq!(
+        described["System.Description"],
+        format!("<div><img src=\"{PICTURE}\" image-description=\"A field picture.\"></div>")
+    );
+    assert_eq!(described["System.Title"], "T");
+    assert_eq!(platform.model_calls().len(), 1);
+    // The call turns it off.
+    let off = get(json!({"id":42,"parse_attachments":true,"process_images":false})).await;
+    assert!(!off.to_string().contains("image-description"));
+    assert_eq!(platform.model_calls().len(), 1);
 }

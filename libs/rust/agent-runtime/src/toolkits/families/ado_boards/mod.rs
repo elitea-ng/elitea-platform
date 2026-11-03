@@ -10,7 +10,8 @@
 
 #![allow(dead_code)] // Production toolkit assembly remains capability-gated.
 
-mod attach;
+pub(in crate::toolkits) mod attach;
 pub(in crate::toolkits) mod client;
 pub(in crate::toolkits) mod config;
+mod inline;
 pub(in crate::toolkits) mod tools;

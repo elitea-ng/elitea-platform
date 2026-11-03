@@ -14,6 +14,7 @@ use crate::toolkits::families::ado::client::{
 };
 use crate::toolkits::families::ado::config::AdoToolkitConfig;
 use crate::toolkits::families::ado::format::{as_dict, python_json_string};
+use crate::toolkits::families::ado::image_defaults::AdoImageDefaults;
 use crate::toolkits::families::ado::work_items::{
     DEFAULT_SEARCH_FIELDS, FieldDefinition, WORK_ITEMS_API, create_work_item,
     format_work_item_type_fields, get_work_item, id_text, transform_work_item, update_work_item,
@@ -46,6 +47,8 @@ pub(crate) struct GetComments<'a> {
     pub(crate) expand: Option<&'a str>,
     pub(crate) order: Option<&'a str>,
     pub(crate) process_images: bool,
+    /// The prompt for the image descriptions (`image_description_prompt`).
+    pub(crate) image_description_prompt: Option<&'a str>,
 }
 
 /// One claim-scoped boards client with the SDK's per-instance caches.
@@ -55,6 +58,9 @@ pub(crate) struct AdoBoardsClient {
     /// The artifact store and chat model the run lends, when it lends them
     /// (`attach_file_to_work_item`, `get_image_by_url`).
     pub(super) attachments: Option<AttachmentHost>,
+    /// The instance's `process_images` and `image_description_prompt`
+    /// defaults (#985).
+    pub(super) images: AdoImageDefaults,
     relation_types: Mutex<Option<BTreeMap<String, String>>>,
     type_fields: Mutex<BTreeMap<String, Vec<FieldDefinition>>>,
 }
@@ -73,9 +79,17 @@ impl AdoBoardsClient {
             ado,
             limit,
             attachments: None,
+            images: AdoImageDefaults::default(),
             relation_types: Mutex::new(None),
             type_fields: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// The same client, with the instance's image defaults.
+    #[must_use]
+    pub(crate) fn with_image_defaults(mut self, images: AdoImageDefaults) -> Self {
+        self.images = images;
+        self
     }
 
     /// The same client, lent the run's artifact store and chat model.
@@ -355,9 +369,7 @@ impl AdoBoardsClient {
         };
         // Markdown comments carry images in `text` and HTML ones in
         // `renderedText`; the SDK asks for the rendered form when images are
-        // to be processed. Image descriptions need the toolkit LLM, which this
-        // runtime does not lend to toolkits, so the comments come back as the
-        // SDK returns them when no LLM is configured.
+        // to be processed, then describes each picture (inline.rs).
         let expand = if request.process_images && matches!(request.expand, None | Some("none")) {
             Some("renderedText")
         } else {
@@ -401,6 +413,13 @@ impl AdoBoardsClient {
                         // `comments_all[:negative]` drops that many from the end.
                         let drop = usize::try_from(limit_all.unsigned_abs()).unwrap_or(usize::MAX);
                         comments.truncate(comments.len().saturating_sub(drop));
+                    }
+                    if request.process_images {
+                        self.describe_comment_images(
+                            &mut comments,
+                            request.image_description_prompt,
+                        )
+                        .await;
                     }
                     return bounded_output(Value::Array(comments));
                 }
