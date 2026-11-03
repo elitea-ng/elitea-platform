@@ -551,6 +551,34 @@ async fn prebuilt_authorization_preserves_dynamic_toolkit_type() {
     assert_eq!(requirement.toolkit_name(), "release intelligence");
 }
 
+/// FU-250: an MCP toolkit with no configured OAuth client (dynamic client
+/// registration) still names its frozen toolkit on the requirement, so the
+/// fan-out card can offer a sign-in.
+#[tokio::test]
+async fn an_authorization_requirement_without_an_oauth_client_names_its_toolkit() {
+    let version = frozen("mcp", &settings(&["lookup_release"]));
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let guarded = materialize_mcp_toolsets(&snapshot, &AuthorizationConnector, &policy(&[]))
+        .await
+        .expect("authorization placeholder");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tool = guarded[0]
+        .tools(readonly)
+        .await
+        .expect("guarded tools")
+        .pop()
+        .expect("selected placeholder");
+    let error = tool
+        .execute(context(), json!({}))
+        .await
+        .expect_err("authorization required");
+    let requirement =
+        delegated_authorization_requirement(&error).expect("typed authorization metadata");
+    assert_eq!(requirement.toolkit_id(), Some(41));
+}
+
 #[tokio::test]
 async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_rebuild() {
     let mut configured = settings(&["lookup_release"]);

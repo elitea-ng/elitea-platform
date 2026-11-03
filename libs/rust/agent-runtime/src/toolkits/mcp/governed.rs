@@ -177,7 +177,7 @@ pub async fn materialize_governed_mcp_toolsets(
                 out.toolsets.push(admit(reference, policy, tools)?);
             }
             Listing::Authorization(requirement) => {
-                authorization_placeholders(reference, &server, policy, requirement, &mut out)?;
+                authorization_placeholders(reference, &server, policy, *requirement, &mut out)?;
             }
             Listing::Refused(reason_code) => {
                 tracing::warn!(
@@ -301,7 +301,7 @@ impl GovernedServer {
 /// What one redeemed listing produced.
 enum Listing {
     Tools(Vec<ToolDeclaration>),
-    Authorization(DelegatedAuthorizationRequirement),
+    Authorization(Box<DelegatedAuthorizationRequirement>),
     /// Left out for this reason code; the rest of the run goes on.
     Refused(&'static str),
 }
@@ -328,7 +328,9 @@ async fn list(
         .await
     {
         Ok(Redeemed::Envelope(envelope)) => envelope,
-        Ok(Redeemed::Authorization(requirement)) => return Ok(Listing::Authorization(requirement)),
+        Ok(Redeemed::Authorization(requirement)) => {
+            return Ok(Listing::Authorization(Box::new(requirement)));
+        }
         Err(GovernedError::RedeemUnavailable {
             retryable: true, ..
         }) => return Err(dependency_unavailable()),
