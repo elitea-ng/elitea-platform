@@ -10,6 +10,13 @@
 //! [`CONTINUE_PROMPT`] ([`StepBudget::continue_content`]), at most
 //! [`MAX_CONTINUES`] times per turn. A channel that cannot answer inline
 //! (the cloud's, which defers) means "stop".
+//!
+//! An unattended grant (ADR-0045 decision 1, `continue.step_limit`) is a
+//! [`ContinuePolicy`] of the budget: with [`ContinuePolicy::Granted`] the
+//! run continues without a question, up to the same [`MAX_CONTINUES`].
+//! [`answer_step_limit`] says who answered ([`StepLimitAnswer`]). When the
+//! continues are used up, the answer is [`StepLimitAnswer::Exhausted`]: a
+//! host with a grant then starts the next turn of the chain.
 
 use std::time::Duration;
 
@@ -56,11 +63,46 @@ pub fn reached(error: &AdkError) -> bool {
         && error.message.ends_with(") exceeded")
 }
 
-/// One turn's steps: the limit per run and the continues used.
+/// Who answers "Continue?" at the step limit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ContinuePolicy {
+    /// The host asks the person through its [`ApprovalChannel`], also in
+    /// an unattended turn whose grant does not cover the step limit. The
+    /// question waits [`CONTINUE_TIMEOUT`] at most.
+    #[default]
+    Ask,
+    /// An unattended grant answers "continue" without a question.
+    Granted,
+}
+
+/// How the step limit of one run was answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StepLimitAnswer {
+    /// The person approved: continue.
+    Approved,
+    /// The grant answered: continue.
+    Granted,
+    /// The person said stop, or the question got no answer: stop.
+    Stopped,
+    /// The turn used its [`MAX_CONTINUES`]: stop. No question was asked.
+    Exhausted,
+}
+
+impl StepLimitAnswer {
+    /// Whether the run continues.
+    #[must_use]
+    pub const fn continues(self) -> bool {
+        matches!(self, Self::Approved | Self::Granted)
+    }
+}
+
+/// One turn's steps: the limit per run, the continues used, and who
+/// answers "Continue?".
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StepBudget {
     limit: u32,
     continues: u32,
+    policy: ContinuePolicy,
 }
 
 impl StepBudget {
@@ -69,7 +111,21 @@ impl StepBudget {
         Self {
             limit,
             continues: 0,
+            policy: ContinuePolicy::Ask,
         }
+    }
+
+    /// The budget with `policy` as the answer to "Continue?".
+    #[must_use]
+    pub const fn with_policy(mut self, policy: ContinuePolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Who answers "Continue?".
+    #[must_use]
+    pub const fn policy(&self) -> ContinuePolicy {
+        self.policy
     }
 
     /// The steps of each run.
@@ -115,6 +171,32 @@ pub fn continue_request(subject: &str, steps: u32, last_text: &str) -> ApprovalR
         message: format!("The agent used its {steps} steps"),
         available_actions: vec!["approve".to_owned(), "reject".to_owned()],
         payload: json!({ CONTINUE_PAYLOAD_KEY: { "steps": steps, "detail": detail } }),
+    }
+}
+
+/// Answer the step limit of one run under `budget`: [`StepLimitAnswer::Exhausted`]
+/// once the continues are used up, [`StepLimitAnswer::Granted`] at once
+/// with [`ContinuePolicy::Granted`], else the person's answer through
+/// `channel` ([`ask_to_continue`]). Nothing is counted: the caller takes
+/// [`StepBudget::continue_content`] when the answer continues.
+pub async fn answer_step_limit(
+    budget: &StepBudget,
+    channel: &dyn ApprovalChannel,
+    subject: &str,
+    last_text: &str,
+) -> StepLimitAnswer {
+    if !budget.may_continue() {
+        return StepLimitAnswer::Exhausted;
+    }
+    match budget.policy() {
+        ContinuePolicy::Granted => StepLimitAnswer::Granted,
+        ContinuePolicy::Ask => {
+            if ask_to_continue(channel, subject, budget.limit(), last_text).await {
+                StepLimitAnswer::Approved
+            } else {
+                StepLimitAnswer::Stopped
+            }
+        }
     }
 }
 
@@ -313,6 +395,68 @@ mod tests {
         ] {
             assert!(!ask_to_continue(&channel, "t", 100, "").await);
         }
+    }
+
+    /// A channel that must not be asked.
+    struct Silent;
+
+    #[async_trait]
+    impl ApprovalChannel for Silent {
+        async fn request(&self, _request: ApprovalRequest) -> Result<ApprovalOutcome, HostError> {
+            panic!("a granted step limit asks nobody");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_grant_continues_without_a_question_up_to_the_turns_continues() {
+        let mut budget = StepBudget::new(5).with_policy(ContinuePolicy::Granted);
+        assert_eq!(budget.policy(), ContinuePolicy::Granted);
+        let mut answers = Vec::new();
+        loop {
+            let answer = answer_step_limit(&budget, &Silent, "t", "").await;
+            answers.push(answer);
+            if !answer.continues() {
+                break;
+            }
+            assert!(budget.continue_content().is_some());
+        }
+        assert_eq!(
+            answers,
+            [
+                StepLimitAnswer::Granted,
+                StepLimitAnswer::Granted,
+                StepLimitAnswer::Granted,
+                StepLimitAnswer::Exhausted
+            ]
+        );
+        assert_eq!(budget.continues(), MAX_CONTINUES);
+    }
+
+    #[tokio::test]
+    async fn without_a_grant_the_person_answers_and_the_continues_still_end() {
+        let approve = Answer(Ok(ApprovalOutcome::Decided {
+            action: "approve".to_owned(),
+            value: json!({}),
+        }));
+        let mut budget = StepBudget::new(5);
+        assert_eq!(budget.policy(), ContinuePolicy::Ask);
+        assert_eq!(
+            answer_step_limit(&budget, &approve, "t", "").await,
+            StepLimitAnswer::Approved
+        );
+        assert_eq!(
+            answer_step_limit(&budget, &Answer(Ok(ApprovalOutcome::Deferred)), "t", "").await,
+            StepLimitAnswer::Stopped
+        );
+        for _ in 0..MAX_CONTINUES {
+            budget.continue_content();
+        }
+        assert_eq!(
+            answer_step_limit(&budget, &Silent, "t", "").await,
+            StepLimitAnswer::Exhausted
+        );
+        assert!(!StepLimitAnswer::Exhausted.continues());
+        assert!(!StepLimitAnswer::Stopped.continues());
     }
 
     #[test]

@@ -1935,7 +1935,10 @@ impl ActiveAgentPreparation {
             Err(error) => return preparation_error(AgentPreparationError::Lease(error)),
         };
         let request = match self.request_from(materialized.as_bytes()) {
-            Ok(request) => request,
+            Ok((request, grant)) => {
+                self.verified.attach_unattended_grant(grant);
+                request
+            }
             Err(error) => {
                 return self
                     .terminal_after_final_lease(PreInvocationTerminalCause::InputProtocol(error))
@@ -2018,10 +2021,19 @@ impl ActiveAgentPreparation {
         ))
     }
 
-    fn request_from(&self, raw: &[u8]) -> Result<AgentExecutionRequest, ProtocolError> {
+    fn request_from(
+        &self,
+        raw: &[u8],
+    ) -> Result<
+        (
+            AgentExecutionRequest,
+            Option<crate::agents::unattended::UnattendedGrant>,
+        ),
+        ProtocolError,
+    > {
         let message = parse_agent_execution_input(raw)?;
         let binding = agent_input_binding(&self.execution)?;
-        crate::agents::request_from(message, self.kind, binding)
+        crate::agents::protocol::request_and_grant_from(message, self.kind, binding)
     }
 
     async fn terminal_after_final_lease(
@@ -2178,7 +2190,13 @@ pub(crate) async fn prepare_checkpoint_input<I: AgentInputMaterializer, K: UnixM
     verified: &VerifiedAgentCommand,
     lease: &mut ClaimLeaseMonitor,
     clock: &K,
-) -> Result<AgentExecutionRequest, CheckpointInputError> {
+) -> Result<
+    (
+        AgentExecutionRequest,
+        Option<crate::agents::unattended::UnattendedGrant>,
+    ),
+    CheckpointInputError,
+> {
     if !inspection.matches_command(verified) {
         return Err(CheckpointInputError::Protocol(
             ProtocolError::AuthorizationFailed("the recovery input belongs to another command"),
@@ -2200,7 +2218,7 @@ pub(crate) async fn prepare_checkpoint_input<I: AgentInputMaterializer, K: UnixM
         .map_err(CheckpointInputError::Protocol)?;
     let message = parse_agent_execution_input(materialized.as_bytes())
         .map_err(CheckpointInputError::Protocol)?;
-    crate::agents::request_from(message, verified.kind(), binding)
+    crate::agents::protocol::request_and_grant_from(message, verified.kind(), binding)
         .map_err(CheckpointInputError::Protocol)
 }
 

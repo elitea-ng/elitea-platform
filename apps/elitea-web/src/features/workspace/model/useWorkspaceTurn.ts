@@ -23,6 +23,7 @@ import {
   type WorkspaceIpc,
 } from '@/shared/desktop/workspaceIpc';
 
+import { waitsForNextTurn } from './chainEvents';
 import { describeWorkspaceError } from './describeWorkspaceError';
 import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
 
@@ -40,8 +41,12 @@ export interface WorkspaceTurn {
   startError: string | null;
   /** The host's `code` for `startError` (e.g. `model_unavailable`); `null` with it. */
   startErrorCode: string | null;
-  /** Resolves `true` once the host started the turn; `false` when it refused (see `startError`). */
-  start(request: TurnStartRequest): Promise<boolean>;
+  /**
+   * Resolves `true` once the host started the turn; `false` when it refused (see `startError`). `retry` reads a
+   * refusal and can give one other request to send at once instead (for example, the same turn without a grant that
+   * the platform refused because grants are off).
+   */
+  start(request: TurnStartRequest, retry?: StartRetry): Promise<boolean>;
   /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
   prewarm(request: TurnPrewarmRequest): void;
   /** Send a turn's failed commit again; a refusal comes back as another `commit_failed` on the turn. */
@@ -54,6 +59,9 @@ export interface WorkspaceTurn {
   /** Take over a turn still running from an earlier visit (its recorded events), so its live events, Stop and `done` land here. */
   adopt(turnId: string, events: readonly AgentEvent[]): void;
 }
+
+/** Reads a refused start (`code`, `message`); a request to send once instead, or undefined to keep the refusal. */
+type StartRetry = (refusal: { code: string; message: string }) => TurnStartRequest | undefined;
 
 const RESYNC_MS = 15_000;
 /** Past any seq the host sends: a `done` learnt from the status folds in last. */
@@ -97,12 +105,16 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   const earlier = useMemo(() => earlierViews(state), [state]);
 
   const start = useCallback(
-    async (request: TurnStartRequest): Promise<boolean> => {
+    async (request: TurnStartRequest, retry?: StartRetry): Promise<boolean> => {
       setRefusal(null);
       setStarting(true);
       try {
         await ready.current;
-        const started = await ipc.startTurn(request);
+        const started = await ipc.startTurn(request).catch((error: unknown) => {
+          const again = retry?.(toWorkspaceIpcError(error));
+          if (again === undefined) throw error;
+          return ipc.startTurn(again);
+        });
         dispatch({ type: 'begin', turnId: started.turn_id });
         return true;
       } catch (error) {
@@ -115,7 +127,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc],
   );
 
-  const unfinished = turnId !== null && view.done === undefined;
+  const unfinished = turnId !== null && (view.done === undefined || waitsForNextTurn(view));
 
   const resync = useCallback(async () => {
     if (turnId === null) return;

@@ -13,6 +13,7 @@ import (
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
@@ -117,6 +118,11 @@ type CurrentApplicationTarget struct {
 	// of the catalogue. When set, VersionDetails and SourceVersionDetails
 	// are the release's definition.
 	Release *ReleaseRun
+	// CloudWorkspace: the conversation is a desktop Local work thread
+	// handed off to the cloud executor (CLOUD_IDLE). Its turn has the
+	// workspace tools, so an unattended grant may name workspace/git_push
+	// and workspace/open_pull_request (ADR-0045).
+	CloudWorkspace bool
 }
 
 type CurrentApplicationResolver interface {
@@ -187,6 +193,12 @@ type CurrentApplicationStartRequest struct {
 	// assertion (ADR-0044 decision 4); nil without one. See
 	// SubmitRequest.AssertedScope.
 	AssertedScope *AssertedScope
+	// Unattended is the grant the person gives at the start (ADR-0045);
+	// nil for an attended run.
+	Unattended *unattended.Request
+	// UnattendedContinuation is set only when Main starts a step-limit
+	// continuation of a chain (unattendedchain); never from a request body.
+	UnattendedContinuation *UnattendedContinuation
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -257,6 +269,8 @@ type CurrentApplicationStartService struct {
 	pipelineApproval PipelineApprovalAdmission
 	// pipelineChildren reads the saved child versions the check covers.
 	pipelineChildren PipelineChildVersionSource
+	// unattended admits unattended grants (WithUnattendedGrants, ADR-0045).
+	unattended *UnattendedGrantPolicy
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -380,9 +394,28 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		return CurrentApplicationStartOutcome{}, err
 	}
 	input.ContextSettings = contextSettings
+	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
+		request: request.Unattended, continuation: request.UnattendedContinuation,
+		capabilityID: executiondomain.AgentApplicationCapability, input: input,
+		projectID: request.ProjectID, actorUserID: request.ActorUserID, applicationID: target.ApplicationID,
+		conversationUUID: request.ConversationUUID, grantKey: request.QuestionID,
+		responseMessageID: responseMessageID, questionID: request.QuestionID,
+		triggerOrigin: request.TriggerOrigin, cloudWorkspace: target.CloudWorkspace,
+		start: &unattended.CloudStart{
+			Contract: CloudStartContractApplication, ParticipantID: request.TargetParticipantID,
+		},
+	})
+	if err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
+	input.UnattendedGrant = grant
+	if request.UnattendedContinuation != nil {
+		questionMeta = markContinuedAutomatically(questionMeta)
+	}
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
+		Unattended: chain,
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: projectID, ResourceProjectID: projectID,
 			ProjectionProjectID: projectID, ActorID: actorID,

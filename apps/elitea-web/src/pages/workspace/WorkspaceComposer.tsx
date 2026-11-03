@@ -53,7 +53,7 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import { AttachImagesButton } from './AttachImagesButton';
-import { FooterControls } from './FooterControls';
+import { composerFooter } from './FooterControls';
 import { RetryUnsent, useRestoredDraft } from './SteeringControls';
 import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
@@ -104,6 +104,8 @@ export interface WorkspaceComposerProps {
   runLocation?: ReactNode;
   /** The meters (the language servers and the context ring), after the run location. */
   contextMeter?: ReactNode;
+  /** "Run to completion" (ADR-0045), after the meters and before Send; none when it is not offered. */
+  runToCompletion?: ReactNode;
   /** The ⋯ menu's rows (the step limit); no ⋯ without them. */
   more?: ((close: () => void) => ReactNode) | undefined;
   /** The model chip (`ModelChip`), after the agent picker. */
@@ -193,12 +195,9 @@ const takesImages = (accept: boolean | undefined, locked: boolean): boolean => a
 
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
-/** The footer row (`FooterControls`) from the composer's props; the + that picks images (`onPick`) when they are taken. */
+/** The footer row (`composerFooter`) from the composer's props; the + that picks images (`onPick`) when they are taken. */
 function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void): React.JSX.Element {
-  const { planMode, onPlanModeChange, onBypassChange, agentPicker, modelPicker, more, runLocation, contextMeter } = props;
-  const attach = images ? <AttachImagesButton onPick={onPick} /> : null;
-  const rest = { agentPicker, modelPicker, more, runLocation, contextMeter };
-  return <FooterControls planMode={planMode} onPlanModeChange={onPlanModeChange} bypass={props.bypass === true} onBypassChange={onBypassChange} showMode={props.showMode !== false} attach={attach} {...rest} />;
+  return composerFooter(props, images ? <AttachImagesButton onPick={onPick} /> : null);
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {

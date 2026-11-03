@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { ChatProjectSkillPick } from "./chatProjectSkillPick.zod";
 import { ChatStartAttachment } from "./chatStartAttachment.zod";
+import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
 
 export const chatSendRequestPayloadSkillsMax = 5;
 
@@ -103,6 +104,7 @@ export const ChatSendRequest = zod
       .describe(
         "Runs one release of the participant's agent, published or withdrawn (listApplicationReleases). Absent or 0 runs the participant's version, which is the agent's published release when that version is published. Only for `agent.execute.application.v1`. A release that is not a release of the agent answers 404 `release_not_found`; a release whose pinned toolkits or configurations changed answers 409 `release_toolkit_drifted`; a withdrawn release of an agent with sub-agents answers 409 `release_withdrawn_dependencies_removed`, because the unpublish removed the sub-agent copies its publish made (ApplicationReleaseRefusal).\n",
       ),
+    unattended: ChatUnattendedRequest.optional(),
   })
   .describe(
     "The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB.\n",

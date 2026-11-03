@@ -344,6 +344,7 @@ mod tests {
             status,
             code: code.into(),
             message: String::new(),
+            limit: None,
         };
         assert!(retryable(&error(None, "network")));
         assert!(retryable(&error(None, "timeout")));

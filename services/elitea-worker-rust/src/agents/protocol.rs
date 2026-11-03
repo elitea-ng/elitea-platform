@@ -7,6 +7,7 @@ use super::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     MAX_AGENT_INSTRUCTION_BYTES, MAX_AGENT_USER_INPUT_BYTES, NextInputSuggestionPolicy, UserInput,
 };
+use super::unattended::{UnattendedGrant, grant_from_input};
 use crate::protocol::{
     InputLimitField, ProtocolError as AgentProtocolError,
     elitea::runtime::v1::AgentExecutionInputV1,
@@ -53,6 +54,22 @@ pub fn parse_agent_execution_input(
     Ok(message)
 }
 
+/// Validate the input as [`request_from`] does, and also return its
+/// admitted unattended grant (ADR-0045). An absent grant answers `None`.
+///
+/// # Errors
+///
+/// Returns the same errors as [`request_from`].
+pub(crate) fn request_and_grant_from(
+    message: AgentExecutionInputV1,
+    kind: AgentExecutionKind,
+    binding: AgentInputBinding,
+) -> Result<(AgentExecutionRequest, Option<UnattendedGrant>), AgentProtocolError> {
+    let grant = grant_from_input(&message)?;
+    let request = request_from(message, kind, binding)?;
+    Ok((request, grant))
+}
+
 /// Validate every semantic field and bind it to the exact materialized input.
 ///
 /// # Errors
@@ -67,6 +84,9 @@ pub fn request_from(
     binding: AgentInputBinding,
 ) -> Result<AgentExecutionRequest, AgentProtocolError> {
     validate_binding(&binding)?;
+    // A malformed unattended grant refuses the input on every path, also on a
+    // path that does not use the grant.
+    grant_from_input(&message)?;
 
     let llm = json_object(&message.llm, "the agent llm must be an object")?;
     // History is data-plane content. Let the model context policy compact it

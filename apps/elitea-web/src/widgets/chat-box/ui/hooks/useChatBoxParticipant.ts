@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import type { Participant } from '@/entities/participant';
 import { normaliseVersionSummaries } from '@/entities/version';
 import { useActiveParticipantDetails } from '@/features/chat-participants';
+import { grantableTools, type SensitiveToolRef } from '@/features/unattended';
 import { useParticipantName } from '@/features/chat-messages';
 
 import { toParticipant, toParticipants } from '../ChatBox.helpers';
@@ -49,6 +50,8 @@ export interface UseChatBoxParticipantResult {
    * paperclip, and the drop/paste bridge.
    */
   readonly areAttachmentsGated: boolean;
+  /** The tools of the active agent's version that an unattended grant can name (ADR-0045); undefined without an agent. */
+  readonly grantableTools: readonly SensitiveToolRef[] | undefined;
 }
 
 export function useChatBoxParticipant({
@@ -78,6 +81,16 @@ export function useChatBoxParticipant({
   }, [rawParticipantDetails]);
 
   const areAttachmentsGated = useChatBoxAttachmentsGate({ activeParticipant, participants: conversationParticipants, isAgentsPage });
+  const versionDetails = participantForEditor === undefined ? undefined : rawParticipantDetails['version_details'];
+  const tools = useMemo(() => (versionDetails === undefined ? undefined : grantableTools(versionDetails)), [versionDetails]);
 
-  return { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated };
+  return {
+    participantForEditor,
+    normalisedParticipants,
+    agentEditorParticipantDetails,
+    isFetchingParticipantDetails,
+    assistantName,
+    areAttachmentsGated,
+    grantableTools: tools,
+  };
 }

@@ -408,7 +408,7 @@ The row is written in the same database transaction as the decision. If the row 
 
 **The chat window shows the ledger.** The pending steps in the message metadata (`hitl_interrupts`) are a view for the UI. The ledger is the record. Each pending step in the chat window has a `pause` row, and each decided step has a `decision` row.
 
-**Unattended runs never approve.** When a run that a schedule or a webhook trigger started gets to a step that needs approval, the platform does one of three things, set by `on_approval_required`:
+**Unattended runs never approve on their own.** Only a person's [unattended grant](#unattended-grants) approves a step without a person present. When a run that a schedule or a webhook trigger started gets to a step that needs approval, the platform does one of three things, set by `on_approval_required`:
 
 | Value | What happens | Ledger outcome |
 | --- | --- | --- |
@@ -513,6 +513,115 @@ An event of the platform has the `principal_ref` `system:elitea-main`. The secur
 - Use `notify_and_wait` only when the owner of the schedule or trigger can answer before the wait expires.
 - Monitor `elitea_runtime.unattended_approval_actions` for rows with the failure code `expiry_failed`, and stop or answer those runs.
 - Send the `agent.approval` events to your SIEM, and alert on `unattended_failed` and `timed_out`.
+
+## Unattended grants
+
+### The risk
+
+A long task can stop many times: at a sensitive tool, at the step limit, or at the output limit. If a person must be present for each stop, the task does not finish while the person is away. If the platform lets a run approve its own steps, the approval control has no meaning. A person who starts a task must be able to approve, in advance, a small and named set of steps for that one task, with limits on how long and how far the task can go.
+
+### What is enforced
+
+**"Run to completion" is on by default.** Each request that a person starts in the chat carries a grant by default. The default grant answers only the run's own caps: at the step limit and at the 512 tool-call cap, the run continues by itself, inside the chain limits below. The default grant approves no tool step. Each approval question still goes to the person. A question that nobody answers in its wait takes its safe default: the step is declined, and the ledger records `timed_out`.
+
+These parts stay an explicit opt-in for each request. The default never sets them:
+
+| Opt-in | What it answers |
+| --- | --- |
+| Hook asks (`hook_asks`, desktop) | A `PreToolUse` hook's ask of a call that the local rules allow. A local rule's own ask still goes to the person. |
+| Remote confirmations (`remote_confirmations`, desktop) | The confirmation of a sensitive remote toolkit tool. |
+| Named sensitive tools (cloud) | Each sensitive cloud tool that the grant names (see below). |
+| Bypass mode (`bypass_approvals`) | A separate mode, not a part of the grant. The local rules' asks run without a question. A grant never sets bypass mode. |
+
+To turn "Run to completion" off for all users, set **Unattended Grants** (`approvals.unattended_grants`) to off (see [Configure](#configure)). With the switch off, a request that carries only the default grant runs as a request with no grant: it stops at the caps and is not refused. A request with an opt-in (hook asks, remote confirmations or named sensitive tools) is refused with `422 unattended_grant_refused` and the reason `disabled`, and a running chain stops at its next continuation.
+
+**A grant belongs to one task.** A person gives a grant when they start a chat turn (ADR-0045). The grant applies to that turn and to the turns that continue it (the chain). A grant is never stored on an agent, and another person cannot use it.
+
+**A grant names each sensitive tool.** On a cloud turn, the grant lists the sensitive tools it approves as `toolkit_name`/`tool_name` pairs. The platform checks each pair before the turn starts. It refuses the whole start with HTTP 422 `unattended_grant_refused` (with `reason`, `field` and `tool`) when:
+
+| `reason` | Cause |
+| --- | --- |
+| `disabled` | **Unattended Grants** is off. |
+| `invalid` | The grant has a wrong shape, or a cloud grant sets a desktop-only part. A `max_spend` of 0, a negative `max_spend` or a `max_spend` that rounds to 0 at 4 decimals is `invalid`: 0 would mean "no spend limit". |
+| `over_maximum` | A chain limit is above the platform maximum. The platform owns the maximums: the desktop app and the web UI check only that a value makes sense, and show this refusal. |
+| `tool_not_resolved` | The tool is not a tool of the turn's own toolkits. |
+| `category_withheld` | The tool's category is in **Categories a Grant Cannot Name** (default: `payment`). |
+| `tier_requires_hitl` | The approval policy requires approval for the agent's risk tier and the tool's category. |
+| `origin_not_allowed` | A schedule or a webhook run names a sensitive tool. These runs keep `on_approval_required`. |
+| `not_owner`, `chain_not_found` | The chain belongs to another person, project or conversation. |
+
+The platform never narrows a grant. One refused pair refuses the start.
+
+**The cloud workspace's push and pull request tools.** In a thread handed off to the cloud executor, the agent can push its branch and open a pull request (GitHub) or merge request (GitLab). These two tools are not in the agent's toolkits, so a grant names them with the toolkit name `workspace`: `workspace`/`git_push` and `workspace`/`open_pull_request`. They ask for approval only when the cloud executor setting asks before each push and pull request. A grant can name them only on a turn in a thread handed off to the cloud executor. On any other turn the platform refuses them as `tool_not_resolved`. The ledger row of a granted push or pull request names the toolkit `workspace`.
+
+**Each grant approval is a ledger row.** When the worker reaches a granted tool, it approves the call in-line and reports it. Main checks the report against the stored grant and writes a `decision` row: outcome `approved`, `actor_kind` `user`, the actor is the person who gave the grant, the reason is `unattended_grant`, and `grant_id` names the grant. A report for a tool that the grant does not name is refused. On the desktop, the commit of each turn records each answered question with its source: `grant` (the same row as above), `timeout` (`timed_out`, reason `desktop_timeout`) or `person`. A `bypass` answer asks no question and has no row. An approved remote toolkit confirmation has its row when Main consumes the approval, so the commit writes no second row for it. A `grant` answer must be one that the stored grant gives: a hook's ask needs `hook_asks`, and "Continue?" needs `continue_step_limit`. For any other `grant` answer, Main writes no row and logs a warning; the commit still saves the turn.
+
+**A chain has limits.** Each continuation passes one database statement that checks the limits and adds the continuation. Two continuations cannot both take the last place. A continuation that a limit refuses ends the chain with the state `limit_reached` and the limit (`continuations`, `spend` or `deadline`). The desktop gets HTTP 409 `chain_limit_reached` with `limit`.
+
+| Limit | Default | Maximum |
+| --- | --- | --- |
+| Continuations | 20 | 200 |
+| Spend (USD) | the per-run spend cap of the agent's tier × 10 (desktop: the platform maximum) | **Chain: Maximum Spend (USD)**; 0 means none |
+| Deadline | 12 hours | 7 days |
+
+**Main continues a cloud chain.** When a cloud turn of a chain ends:
+
+- at the output limit, and the grant has `continue_output_limit`: Main continues the same answer;
+- at the step limit, and the grant has `continue_step_limit`: Main adds the question "Continue from where you stopped." and starts the next turn;
+- in any other way: Main ends the chain as `completed`, `failed`, `waiting` (a pause waits for a person) or `cancelled`.
+
+Before each continuation, Main reads **Unattended Grants** again. When an administrator turned it off, Main does not start the continuation, and the chain ends as `cancelled`. A desktop continuation is refused with HTTP 422 `unattended_grant_refused`, reason `disabled`.
+
+A continuation always keeps the chain's stored limits. The limits that a desktop continuation sends again are ignored, so a maximum that an administrator lowers while a chain runs does not stop that chain.
+
+Each continued question and answer has `meta.continued_automatically` true and `meta.unattended` (`grant_id`, `chain_root_execution_id`, `continuation_index`).
+
+**Main ends a chain that nothing else ends.** Once a minute, Main ends a chain whose deadline passed (`limit_reached`, limit `deadline`), or whose latest turn ended more than 10 minutes ago with no continuation started. A desktop turn that expired without a commit ends the chain as `cancelled`; any other turn ends it as `failed`.
+
+### Configure
+
+Open **Configuration › Approvals** (permission `configuration.governance`):
+
+| Field | Key | Default | Range |
+| --- | --- | --- | --- |
+| **Unattended Grants** | `approvals.unattended_grants` | on | on or off |
+| **Categories a Grant Cannot Name** | `approvals.unattended_withheld_categories` | `payment` | tool categories |
+| **Chain: Default Continuations** | `approvals.chain_default_continuations` | 20 | 0 to 10000 |
+| **Chain: Maximum Continuations** | `approvals.chain_max_continuations` | 200 | 0 to 10000 |
+| **Chain: Default Spend Multiplier** | `approvals.chain_spend_multiplier` | 10 | 1 to 1000 |
+| **Chain: Maximum Spend (USD)** | `approvals.chain_max_spend_usd` | 0 (none) | 0 to 1000000 |
+| **Chain: Default Deadline (hours)** | `approvals.chain_default_deadline_hours` | 12 | 1 to 720 |
+| **Chain: Maximum Deadline (hours)** | `approvals.chain_max_deadline_hours` | 168 | 1 to 720 |
+
+A default above its maximum is refused with HTTP 400. Turn **Unattended Grants** off to refuse every new grant and to stop every running chain at its next continuation (the chain ends as `cancelled`). Chains that already started keep their stored limits.
+
+The chain's spend uses the same price formula as the per-run spend cap and the agent circuit breaker: a metered tool call costs what the gateway billed, and a model call costs its tokens at the price catalogue rate.
+
+### Evidence
+
+Read the grant approvals and the chain of a task:
+
+```sql
+SELECT created_at, execution_id, interrupt_id, tool_name, toolkit_name, actor_user_id, grant_id
+FROM elitea_runtime.approval_ledger
+WHERE reason = 'unattended_grant'
+ORDER BY id;
+
+SELECT c.root_execution_id, c.owner_user_id, c.continuations, c.max_continuations,
+       c.deadline, c.end_state, c.end_limit, k.continuation_index, k.kind, k.execution_id
+FROM elitea_runtime.run_chains AS c
+JOIN elitea_runtime.run_chain_links AS k USING (root_execution_id)
+WHERE c.grant_id = '<grant id>'
+ORDER BY k.continuation_index;
+```
+
+The audit event of a grant row has the reasons `unattended_grant` and `grant:<grant id>`.
+
+### Customer responsibility
+
+- Keep `payment` and other high-impact categories in **Categories a Grant Cannot Name**.
+- Set **Chain: Maximum Spend (USD)** to a value that your budget can absorb.
+- Review the grant approvals in the ledger with the other approvals.
 
 ## Tool categories and approval policy
 

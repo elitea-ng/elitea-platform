@@ -24,6 +24,7 @@ import { t } from '@/shared/i18n';
 import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 
 import type { ChatMessage } from '../../lib/convertMessagesToChatHistory';
+import { ContinuedAutomaticallyLabel } from './UnattendedMarkers';
 
 /**
  * The row shell: a column whose children hug the reader's side (right) or
@@ -324,6 +325,7 @@ export function UserMessage({
               ? t('features.chatMessages.typing', 'Typing...')
               : resolvedContent}
           </Typography>
+          {message.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={message.continuationIndex} />}
           {message.interjected === true && (
             <Typography
               variant="labelSmall"

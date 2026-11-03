@@ -16,12 +16,14 @@ import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayloa
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import { steeringCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, type ThreadForkCommands } from './threadForkIpc';
+import type { UnattendedEvent, UnattendedStatusFields } from './unattendedIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
 import type { Workspace } from './workspace';
 
 export type { ContextMeter } from './contextMeter';
-export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnMode, TurnStartRequest } from './turnStart';
+export type { AttachedImage, CustomCommand, TurnCommand, TurnImagePick, TurnMode, TurnModeChoice, TurnStartRequest } from './turnStart';
 export type { ThreadForkRequest } from './threadForkIpc';
+export type { ChainEndedPayload } from './unattendedIpc';
 
 export { openedFolders, type Workspace } from './workspace';
 
@@ -142,6 +144,8 @@ export interface TurnDonePayload {
   conversation_id: string;
   message_ids: string[];
   changed_files: number;
+  /** An unattended turn the host continues by itself: the UI stays busy until `turn_continued` or `chain_ended`. */
+  continuing?: boolean;
 }
 
 /** `agent_turn_status`: where a turn is; `done` is the `done` event's payload once it was sent. */
@@ -164,7 +168,7 @@ export interface ModelRetryPayload {
 export type AgentEvent =
   | (EventBase & {
       kind: 'status';
-      payload: {
+      payload: UnattendedStatusFields & {
         phase: TurnPhase;
         message?: string;
         project_instructions?: string[];
@@ -203,8 +207,8 @@ export type AgentEvent =
   | (EventBase & { kind: 'subagent_event'; payload: { agent_id: string; inner: SubAgentInnerEvent } })
   /** A sub-agent settled: once per run of it (a `send_input` that continues it settles again). */
   | (EventBase & { kind: 'subagent_finished'; payload: SubAgentFinishedPayload })
-  /** A background process of a `run_command` call, while this turn runs (#1223); the steering queue (`steeringIpc.ts`). */
-  | (EventBase & (ProcessTurnEvent | SteeringEvent))
+  /** A `run_command` call's background process (#1223); the steering queue (`steeringIpc.ts`); an unattended chain (`unattendedIpc.ts`). */
+  | (EventBase & (ProcessTurnEvent | SteeringEvent | UnattendedEvent))
   /**
    * A model call failed in a way another call may mend (a cut or stalled stream, the gateway unreachable, a 408,
    * 409, 429 or 5xx) and is made again after `delay_ms`. `text_units` and `thinking_units` are what the failed call

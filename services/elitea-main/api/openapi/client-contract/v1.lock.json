@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.29",
+  "client_contract": "1.30",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -14933,11 +14933,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -14984,11 +14993,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -15005,11 +15023,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -15026,11 +15053,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -15047,11 +15083,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -15110,11 +15155,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -16727,6 +16781,54 @@
                 "type": "string",
                 "format": "uuid"
               },
+              "unattended": {
+                "type": "object",
+                "required": [
+                  "grant_id"
+                ],
+                "properties": {
+                  "chain": {
+                    "type": "object",
+                    "properties": {
+                      "deadline_seconds": {
+                        "type": "integer",
+                        "format": "int64",
+                        "minimum": 1
+                      },
+                      "max_continuations": {
+                        "type": "integer",
+                        "format": "int64",
+                        "minimum": 0
+                      },
+                      "max_spend": {
+                        "type": "number",
+                        "format": "double",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "chain_root_execution_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$"
+                  },
+                  "continue_step_limit": {
+                    "type": "boolean"
+                  },
+                  "continue_tool_call_cap": {
+                    "type": "boolean"
+                  },
+                  "grant_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "hook_asks": {
+                    "type": "boolean"
+                  },
+                  "remote_confirmations": {
+                    "type": "boolean"
+                  }
+                }
+              },
               "user_input": {
                 "type": "string",
                 "min_length": 1
@@ -16798,6 +16900,47 @@
                 "response_message_id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "unattended": {
+                  "type": "object",
+                  "required": [
+                    "chain",
+                    "chain_root_execution_id",
+                    "continuation_index",
+                    "grant_id"
+                  ],
+                  "properties": {
+                    "chain": {
+                      "type": "object",
+                      "properties": {
+                        "deadline_seconds": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 1
+                        },
+                        "max_continuations": {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                        },
+                        "max_spend": {
+                          "type": "number",
+                          "format": "double",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "chain_root_execution_id": {
+                      "type": "string"
+                    },
+                    "continuation_index": {
+                      "type": "integer"
+                    },
+                    "grant_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
                 }
               }
             }
@@ -16831,7 +16974,24 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -16866,7 +17026,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16884,7 +17061,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16902,7 +17096,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16920,7 +17131,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16938,7 +17166,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16956,7 +17201,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -16974,7 +17236,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17034,7 +17313,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17101,6 +17397,16 @@
                   }
                 }
               },
+              "chain_outcome": {
+                "type": "string",
+                "enum": [
+                  "cancelled",
+                  "completed",
+                  "failed",
+                  "limit_reached",
+                  "waiting"
+                ]
+              },
               "context_summary": {
                 "type": "object",
                 "required": [
@@ -17135,6 +17441,15 @@
                     },
                     "prompt": {
                       "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "bypass",
+                        "grant",
+                        "person",
+                        "timeout"
+                      ]
                     },
                     "tool_run_id": {
                       "type": "string"
@@ -17316,7 +17631,24 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -17351,7 +17683,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17369,7 +17718,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17387,7 +17753,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17405,7 +17788,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17423,7 +17823,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17441,7 +17858,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -17459,7 +17893,24 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -18010,6 +18461,62 @@
                 "format": "int64",
                 "minimum": 0
               },
+              "unattended": {
+                "type": "object",
+                "properties": {
+                  "chain": {
+                    "type": "object",
+                    "properties": {
+                      "deadline_seconds": {
+                        "type": "integer",
+                        "format": "int64",
+                        "minimum": 1
+                      },
+                      "max_continuations": {
+                        "type": "integer",
+                        "format": "int64",
+                        "minimum": 0
+                      },
+                      "max_spend": {
+                        "type": "number",
+                        "format": "double",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "continue_output_limit": {
+                    "type": "boolean"
+                  },
+                  "continue_step_limit": {
+                    "type": "boolean"
+                  },
+                  "grant_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "sensitive_tools": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "tool_name",
+                        "toolkit_name"
+                      ],
+                      "properties": {
+                        "tool_name": {
+                          "type": "string",
+                          "min_length": 1
+                        },
+                        "toolkit_name": {
+                          "type": "string",
+                          "min_length": 1
+                        }
+                      }
+                    },
+                    "max_items": 64
+                  }
+                }
+              },
               "user_ids": {
                 "type": "array",
                 "items": {
@@ -18068,11 +18575,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18104,11 +18620,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18125,11 +18650,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18146,11 +18680,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18167,11 +18710,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18188,11 +18740,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18209,11 +18770,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18272,11 +18842,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18740,11 +19319,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18791,11 +19379,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18817,11 +19414,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18838,11 +19444,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18859,11 +19474,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -18922,11 +19546,20 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
                   "type": "string"
                 },
                 "retryable": {
                   "type": "boolean"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }
@@ -19010,6 +19643,12 @@
                   "interrupt_id": {
                     "type": "string",
                     "pattern": "^hitl_[0-9a-f]{32}$"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "grant"
+                    ]
                   }
                 }
               },

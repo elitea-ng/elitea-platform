@@ -24,6 +24,7 @@ import { Markdown } from '@/shared/ui/Markdown';
 import { conversationBubbleSx } from '@/shared/ui/conversation-column';
 import { copyText, modKey, selectInspectorShown, useContextMenu, useDesktopLayout } from '@/widgets/desktop-shell';
 
+import { turnSlots } from './chainSlots';
 import { CompactNotices } from './CompactNotices';
 import type { ForkMode, ForkPoint } from './useForkThread';
 import type { ComposerSkill } from './useAgentSkills';
@@ -241,8 +242,8 @@ function RecordedTurn({ stored, onFork }: { stored: StoredTurn; onFork: OnFork }
   const fork = forkAction(onFork, stored.state === 'running' ? null : turnForkPoint(stored.turn_id, view.done));
   return (
     <Box data-testid="history-turn" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />
-      <TurnTranscript view={view} busy={false} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
+      {view.continuation === undefined && <YourPrompt text={stored.prompt} fork={fork} images={stored.images} />}
+      <TurnTranscript view={view} busy={false} continuation={view.continuation} onTextContextMenu={(text, event) => copyMenu(text, event, fork)} />
       {stored.state === 'interrupted' && view.done === undefined && (
         <Typography variant="bodySmall" sx={quietSx}>
           {t('workspace.history.interrupted', 'This turn did not finish: the app closed while it ran.')}
@@ -326,10 +327,17 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
   live?: { onRetryTurn: () => void; onContinue: () => void };
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
-  const exchanges = [
-    ...turn.earlier.map((entry, index) => ({ key: entry.turnId, prompt: prompts[index], images: promptImages[index], view: entry.view, live: false })),
-    ...(turn.turnId === null ? [] : [{ key: turn.turnId, prompt: prompts[turn.earlier.length], images: promptImages[turn.earlier.length], view: turn.view, live: true }]),
-  ];
+  const turns = [...turn.earlier, ...(turn.turnId === null ? [] : [{ turnId: turn.turnId, view: turn.view }])];
+  // A turn the host continued by itself (an unattended chain) has no prompt of the person: its marker stands there.
+  const slots = turnSlots(turns);
+  const exchanges = turns.map((entry, index) => {
+    const slot = slots[index] ?? { prompt: index };
+    const prompt =
+      'prompt' in slot
+        ? { prompt: prompts[slot.prompt], images: promptImages[slot.prompt], continuation: undefined }
+        : { prompt: undefined, images: undefined, continuation: slot.continuation };
+    return { key: entry.turnId, view: entry.view, live: entry.turnId === turn.turnId, ...prompt };
+  });
   return (
     <>
       {exchanges.map((exchange) => {
@@ -341,6 +349,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
           <TurnTranscript
             view={exchange.view}
             busy={exchange.live && turn.busy}
+            continuation={exchange.continuation}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
             {...(exchange.live ? live : {})}

@@ -112,6 +112,9 @@ type approvalEntry struct {
 	TriggerOrigin string
 	Call          approvalCall
 	Reason        string
+	// GrantID is the unattended grant (ADR-0045) that answered the
+	// approval: set only on a user decision with reason unattended_grant.
+	GrantID string
 }
 
 var (
@@ -206,17 +209,18 @@ func recordApproval(ctx context.Context, executor sqlExecutor, entry approvalEnt
 INSERT INTO elitea_runtime.approval_ledger (
     project_id, execution_id, response_message_id, conversation_uuid, interrupt_id, interrupt_key,
     path, phase, outcome, action, actor_kind, actor_user_id, trigger_origin, guardrail_type,
-    tool_name, toolkit_name, toolkit_type, argument_digest, reason, audit_event_id)
+    tool_name, toolkit_name, toolkit_type, argument_digest, reason, audit_event_id, grant_id)
 VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, '')::uuid, $5, NULLIF($6, ''),
         $7, $8, $9, NULLIF($10, ''), $11, $12, $13, NULLIF($14, ''),
-        NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20::uuid)
+        NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20::uuid,
+        NULLIF($21, '')::uuid)
 ON CONFLICT (execution_id, interrupt_id, phase) DO NOTHING
 RETURNING id`,
 		entry.ProjectID, entry.ExecutionID, entry.ResponseMessageID, entry.ConversationUUID,
 		entry.InterruptID, entry.InterruptKey, entry.Path, entry.Phase, entry.Outcome, action,
 		actorKind, actor, origin, boundedText(entry.Call.GuardrailType, 64),
 		boundedText(entry.Call.ToolName, 512), boundedText(entry.Call.ToolkitName, 512),
-		boundedText(entry.Call.ToolkitType, 128), digest, entry.Reason, eventID.String()).Scan(&id)
+		boundedText(entry.Call.ToolkitType, 128), digest, entry.Reason, eventID.String(), entry.GrantID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -238,6 +242,9 @@ RETURNING id`,
 	}
 	if entry.Reason != "" {
 		reasons = append(reasons, entry.Reason)
+	}
+	if entry.GrantID != "" {
+		reasons = append(reasons, "grant:"+entry.GrantID)
 	}
 	responseRef := entry.ResponseMessageID
 	resourceType := "chat_message"

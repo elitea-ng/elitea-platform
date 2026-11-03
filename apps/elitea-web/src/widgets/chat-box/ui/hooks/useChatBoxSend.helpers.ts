@@ -1,6 +1,26 @@
 /** Pure execution-contract adapters used by `useChatBoxSend`. */
 import { conversationApi } from '@/entities/conversation';
+import type { useUploadAttachments } from '@/entities/conversation';
 import type { ChatStreamContext } from '@/features/chat-messages';
+import { markGrantsTurnedOff } from '@/features/unattended';
+
+import type { StreamStartOutcome } from './useChatBoxHandlers.helpers';
+
+// Derive these types through the public entity API; avoid a cross-slice deep import.
+type UploadAttachments = ReturnType<typeof useUploadAttachments>['uploadAttachments'];
+type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
+export type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
+
+/** The conversation-lifecycle and attachment-upload slices `useChatBoxSend` adapts. */
+export interface SendDeps {
+  readonly createConversation: (input: {
+    name: string;
+    isPrivate: boolean;
+    participants?: readonly unknown[];
+    meta?: Readonly<Record<string, unknown>>;
+  }) => Promise<{ readonly id?: string | number; readonly uuid?: string } | undefined>;
+  readonly uploadAttachments: (input: UploadAttachmentsParams) => Promise<UploadAttachmentsOutcome>;
+}
 
 /**
  * The slice of `useChatBoxSend`'s params this pure module reads. Declared
@@ -182,6 +202,8 @@ export function buildStartBody(params: {
   readonly modelName: string | undefined;
   readonly isApplicationTurn: boolean;
   readonly participantId: number | undefined;
+  /** The "Run to completion" grant (ADR-0045, `ChatUnattendedRequest`); absent while the control is off. */
+  readonly unattended?: Readonly<Record<string, unknown>> | undefined;
 }): Record<string, unknown> | undefined {
   const { payload } = params;
   const question = typeof payload['question'] === 'string' ? payload['question'] : '';
@@ -213,6 +235,7 @@ export function buildStartBody(params: {
     interaction_uuid: crypto.randomUUID(),
     mcp_tokens: params.mcpTokens ?? {},
     ...mentions,
+    ...(params.unattended === undefined ? {} : { unattended: params.unattended }),
     payload: {
       user_input: question,
       ...(payload['attachments'] ? { attachments: payload['attachments'] } : {}),
@@ -329,4 +352,18 @@ export function creationMeta(settings: Readonly<Record<string, unknown>> | undef
 export async function internalToolsSaveFailure(getTools: (() => Promise<readonly string[]>) | undefined): Promise<{ readonly started: false; readonly reason: 'rejected'; readonly message: string } | undefined> {
   try { await getTools?.(); return undefined; }
   catch { return { started: false, reason: 'rejected', message: 'Internal tools configuration could not be saved. Select the tools again and retry.' }; }
+}
+
+/**
+ * ADR-0045: Main refused the sent grant because an administrator turned
+ * grants off. The control hides for this page load. True when the same
+ * message goes again without the grant: a grant with only the continue parts
+ * (an older Main refuses it). A grant that names sensitive tools keeps the
+ * refusal, because the person asked for those answers.
+ */
+export function sendAgainWithoutGrant(outcome: StreamStartOutcome, grant: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (grant === undefined || outcome.started || outcome.reason !== 'rejected' || outcome.grantsOff !== true) return false;
+  markGrantsTurnedOff();
+  const tools = grant['sensitive_tools'];
+  return !(Array.isArray(tools) && tools.length > 0);
 }

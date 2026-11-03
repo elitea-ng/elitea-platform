@@ -5,8 +5,9 @@
  * - leading, which shrinks: attach images (+), the mode ("Act ⌄",
  *   `ModePicker`), the agent·version picker, the model, then ⋯ for what is
  *   used less (the step limit);
- * - trailing, which keeps its room: where the thread runs ("Local ⌄") and the
- *   meters (the language servers and the context ring).
+ * - trailing, which keeps its room: where the thread runs ("Local ⌄"), the
+ *   meters (the language servers and the context ring) and "Run to
+ *   completion" (∞), just before Send.
  */
 import type { ReactNode } from 'react';
 
@@ -24,9 +25,10 @@ interface FooterControlsProps extends ModePickerProps {
   more: ((close: () => void) => ReactNode) | undefined;
   runLocation: ReactNode;
   contextMeter: ReactNode;
+  runToCompletion: ReactNode;
 }
 
-export function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, ...mode }: FooterControlsProps): React.JSX.Element {
+function FooterControls({ showMode, attach, agentPicker, modelPicker, more, runLocation, contextMeter, runToCompletion, ...mode }: FooterControlsProps): React.JSX.Element {
   return (
     <ComposerRow
       leading={
@@ -42,8 +44,44 @@ export function FooterControls({ showMode, attach, agentPicker, modelPicker, mor
         <>
           {runLocation}
           {contextMeter}
+          {runToCompletion}
         </>
       }
+    />
+  );
+}
+
+/** The composer props the footer reads (`WorkspaceComposerProps`). */
+export interface FooterSource {
+  planMode: boolean;
+  onPlanModeChange: (planMode: boolean) => void;
+  bypass?: boolean;
+  onBypassChange?: ((on: boolean) => void) | undefined;
+  showMode?: boolean;
+  agentPicker?: ReactNode;
+  modelPicker?: ReactNode;
+  more?: ((close: () => void) => ReactNode) | undefined;
+  runLocation?: ReactNode;
+  contextMeter?: ReactNode;
+  runToCompletion?: ReactNode;
+}
+
+/** The footer row of the composer whose props are `source`, with `attach` (the + that picks images, or none). */
+export function composerFooter(source: FooterSource, attach: ReactNode): React.JSX.Element {
+  return (
+    <FooterControls
+      planMode={source.planMode}
+      onPlanModeChange={source.onPlanModeChange}
+      bypass={source.bypass === true}
+      onBypassChange={source.onBypassChange}
+      showMode={source.showMode !== false}
+      attach={attach}
+      agentPicker={source.agentPicker}
+      modelPicker={source.modelPicker}
+      more={source.more}
+      runLocation={source.runLocation}
+      contextMeter={source.contextMeter}
+      runToCompletion={source.runToCompletion}
     />
   );
 }

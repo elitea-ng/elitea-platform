@@ -91,6 +91,20 @@ where
             Self::Pipeline(completion) => completion.paused().await,
         }
     }
+
+    fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        match self {
+            Self::Direct(completion) => completion.wrap_up(),
+            Self::Pipeline(completion) => completion.wrap_up(),
+        }
+    }
+
+    fn step_limit_stop(&self) -> Option<Arc<super::unattended::StepLimitStop>> {
+        match self {
+            Self::Direct(completion) => completion.step_limit_stop(),
+            Self::Pipeline(completion) => completion.step_limit_stop(),
+        }
+    }
 }
 
 /// Strict router over the concrete direct-agent and pipeline assemblers.

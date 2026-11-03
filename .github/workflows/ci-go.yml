@@ -48,6 +48,10 @@ on:
       # workflow. A gate that does not trigger on the file it guards is the
       # same false green in another costume (#409).
       - "scripts/go/**"
+      # The Test plan job splits the Go tests into shards with this script
+      # (scripts/go/test-shards.json is under scripts/go/** above).
+      - "scripts/ci/go-test-shards.mjs"
+      - "scripts/ci/go-test-shards.test.mjs"
       - "scripts/contract/check_compiled_snapshots_postgres.sh"
       - "scripts/contract/generate_proto.sh"
       - "scripts/coverage/**"
@@ -266,9 +270,122 @@ jobs:
       - name: golangci-lint (workspace)
         run: bash scripts/go/workspace-run.sh lint
 
-  test:
-    name: Test
+  # ── The Go tests: a plan, one job per shard, and the "Test" result ─────────
+  #
+  # The tests ran in ONE job, named Test. On main that job took 20 to 40
+  # minutes (2026-11-02: 06:02:41 to 06:35:39; the test step alone 27.7 min).
+  # The services/elitea-main module took 22.8 min of that. Its package
+  # internal/infra/db/repos ran for 6 to 10 minutes, and it started LAST, so
+  # for the last 4 minutes one package ran on a 4-core runner. Go vet ran 3.5
+  # minutes before the first test, in series.
+  #
+  # Now the work is in parallel jobs:
+  #
+  #   test-plan    reads scripts/go/test-shards.json and the go tool's package
+  #                list, and FAILS if a package is in no shard or in two
+  #                (scripts/ci/go-test-shards.mjs). Its output is the matrix.
+  #   test-checks  the checks that run one time: Go vet, the generated OpenAPI
+  #                server, the static API contract.
+  #   test-shard   one job per shard, each with its own PostgreSQL and NATS,
+  #                and the storage emulators only where the shard sets
+  #                `storage`. Each shard runs the skip ledger with
+  #                ELITEA_REQUIRE_DECLARED_SKIPS=1, so an undeclared skip
+  #                fails that shard.
+  #   test         named "Test", as before. It needs all of the above and
+  #                fails unless each one succeeded. It also joins the shard
+  #                coverage profiles into the one `coverage` artifact.
+  test-plan:
+    name: Test plan (Go shards)
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # `go list -find` reads directories only. It needs no module cache.
+          cache: false
+          go-version-file: go.work
+      # The scenario count is compared with the pass count, so a scenario
+      # that does not run cannot read as a pass.
+      - name: Shard script scenarios
+        run: |
+          set -uo pipefail
+          expected="$(grep -c '^test(' scripts/ci/go-test-shards.test.mjs)"
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/go-test-shards.test.mjs 2>&1)" || status=$?
+          echo "$output"
+          ran="$(printf '%s\n' "$output" | sed -n 's/^# pass \([0-9]*\)$/\1/p' | tail -1)"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::node --test go-test-shards.test.mjs exited ${status}"
+            exit 1
+          fi
+          if [ "${ran:-}" != "$expected" ]; then
+            echo "::error::the suite holds ${expected} scenario(s) and node --test passed ${ran:-none}"
+            exit 1
+          fi
+      - name: Assign every package to exactly one shard
+        id: plan
+        run: |
+          set -euo pipefail
+          matrix="$(node scripts/ci/go-test-shards.mjs matrix)"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  test-checks:
+    name: Test checks (vet, generated code)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # The cache is .github/actions/go-cache below: setup-go's own
+          # saves from every ref, and pull-request copies evicted main's.
+          cache: false
+          go-version-file: go.work
+      - name: Restore the Go cache (pull requests read, main writes)
+        uses: ./.github/actions/go-cache
+        with:
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            services/elitea-scheduler/go.sum
+            services/elitea-subapp-host/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+            conformance/nativeclient/go.sum
+
+      - name: Verify generated OpenAPI server is current
+        run: |
+          cd services/elitea-main
+          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.2 \
+            --config api/openapi/oapi-codegen.yaml api/openapi/v2.yaml
+          git diff --exit-code -- internal/api/generated/api.gen.go
+
+      # The response SHAPE each listed handler writes, against what the SPA
+      # reads. It parses Go source and starts no server, so it costs a second.
+      #
+      # It ran in no workflow until #428. That mattered twice over: the script
+      # also turned every unreadable assertion into a warning and exited 0, so
+      # even a manual run reported success after measuring nothing. It now fails
+      # on a skipped assertion and prints how many of the 17 ran. #424 tracks the
+      # other gates that still have no caller.
+      - name: Static API contract (handler response shapes)
+        run: bash services/elitea-main/scripts/validate_contract_static.sh
+
+      # One aggregation for CI and for `task vet`. The inline loop that used to
+      # live here reported the status of its LAST module only (#409). It ran
+      # in series before the tests (3.5 minutes); here it runs beside them.
+      - name: Go vet (workspace)
+        run: bash scripts/go/workspace-run.sh vet
+
+  test-shard:
+    name: Test (${{ matrix.name }})
+    needs: test-plan
+    runs-on: ubuntu-latest
+    strategy:
+      # Each shard reports. One red shard does not cancel the others, so a
+      # run names every failure, as workspace-run.sh does for modules.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test-plan.outputs.matrix) }}
     # Backs ELITEA_TEST_DATABASE_URL below. Without this, every Postgres
     # integration test across the workspace (internal/infra/db/repos,
     # internal/runtimecomposition, internal/application/artifactbootstrap,
@@ -331,6 +448,13 @@ jobs:
             libs/proto/gen/go/go.sum
             conformance/nativeclient/go.sum
 
+      # The same function as the plan job, on the same commit, so the shard
+      # and the plan cannot disagree. It fails again on a bad split.
+      - name: Select the packages of this shard
+        env:
+          SHARD: ${{ matrix.name }}
+        run: node scripts/ci/go-test-shards.mjs select "$SHARD" "${RUNNER_TEMP}/go-shard-packages.tsv"
+
       # Three suites need a database with NOTHING in it: they create the
       # legacy `centry` schema and the `auth_core__*` tables themselves, then
       # roll back. They cannot share one database, because two of them would
@@ -349,44 +473,27 @@ jobs:
               -c "CREATE DATABASE ${database}"
           done
 
-      - name: Verify generated OpenAPI server is current
-        run: |
-          cd services/elitea-main
-          go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.2 \
-            --config api/openapi/oapi-codegen.yaml api/openapi/v2.yaml
-          git diff --exit-code -- internal/api/generated/api.gen.go
-
-      # The response SHAPE each listed handler writes, against what the SPA
-      # reads. It parses Go source and starts no server, so it costs a second.
-      #
-      # It ran in no workflow until #428. That mattered twice over: the script
-      # also turned every unreadable assertion into a warning and exited 0, so
-      # even a manual run reported success after measuring nothing. It now fails
-      # on a skipped assertion and prints how many of the 17 ran. #424 tracks the
-      # other gates that still have no caller.
-      - name: Static API contract (handler response shapes)
-        run: bash services/elitea-main/scripts/validate_contract_static.sh
-
-      # One aggregation for CI and for `task vet`. The inline loop that used to
-      # live here reported the status of its LAST module only (#409).
-      - name: Go vet (workspace)
-        run: bash scripts/go/workspace-run.sh vet
-
       # internal/api/clientcontract compares this change's client-contract
       # locks with the BASE branch's: the other gates read the lock from the
       # same tree as the spec, so breaking the spec and hand-editing the lock
       # to match passed all of them. The checkout above is shallow, so fetch
       # the base tip; ELITEA_REQUIRE_CLIENT_CONTRACT_BASE (below) makes a
-      # missing base a failure rather than a skip.
+      # missing base a failure rather than a skip. Every shard fetches it (one
+      # second), so a move of that package to another shard cannot lose it.
       - name: Fetch the base branch for the client-contract lock comparison
         env:
           BASE_REF: ${{ github.base_ref || 'main' }}
         run: git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
-      # Emulator stack for internal/infra/storage/conformance (S4). --wait
-      # blocks until every service's healthcheck passes (see the compose
-      # file for why each healthcheck is more involved than a bare wget).
+      # Emulator stack for internal/infra/storage/conformance (S4) and the
+      # other packages that read S3_ENDPOINT_URL. Only a shard with
+      # `storage: true` in scripts/go/test-shards.json starts it. A storage
+      # test in another shard cannot pass in silence: the S3/Azure/GCS
+      # variables below stay set, so it fails to connect. --wait blocks until
+      # every service's healthcheck passes (see the compose file for why each
+      # healthcheck is more involved than a bare wget).
       - name: Start storage emulators
+        if: matrix.storage
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
       # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
@@ -396,7 +503,8 @@ jobs:
       # renders that config (helm + the upstream subchart), fetches the pinned
       # nats CLI the bootstrap runs, and sets ELITEA_REQUIRE_NATS_SECURE_TEST,
       # so a missing piece fails those tests instead of skipping them. The
-      # nats service container still backs the plaintext suites.
+      # nats service container still backs the plaintext suites. Packages in
+      # every shard use natstest, so every shard provisions it.
       - name: Set up Helm
         uses: azure/setup-helm@v5
         with:
@@ -419,8 +527,13 @@ jobs:
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
         run: bash scripts/nats/ci-secure-test-env.sh
 
-      - name: Run tests (workspace)
+      - name: Run tests (shard)
         env:
+          # The packages of this shard (the select step above). With it,
+          # workspace-run.sh runs only these packages and names each module
+          # it leaves to another shard.
+          ELITEA_GO_PACKAGES_FILE: "${{ runner.temp }}/go-shard-packages.tsv"
+
           S3_ENDPOINT_URL: "http://127.0.0.1:19000"
           S3_ACCESS_KEY: "testaccesskey"
           S3_SECRET_KEY: "testsecretkey"
@@ -487,9 +600,10 @@ jobs:
           CLIENT_CONTRACT_BASE_REF: origin/${{ github.base_ref || 'main' }}
           ELITEA_REQUIRE_CLIENT_CONTRACT_BASE: "1"
 
-          # A skip that nothing declares FAILS this job. Locally the ledger
+          # A skip that nothing declares FAILS this shard. Locally the ledger
           # only reports, so a developer with no PostgreSQL or NATS can still
-          # run `task test`.
+          # run `task test`. A declaration for a package of another shard
+          # reads as STALE here; skip-gate.py does not fail on STALE.
           ELITEA_REQUIRE_DECLARED_SKIPS: "1"
         # One aggregation for CI and for `task test`. The inline loop that used
         # to live here reported the status of its LAST module, and it ended
@@ -502,21 +616,22 @@ jobs:
         run: bash scripts/go/workspace-run.sh coverage --race
 
       - name: Stop storage emulators
-        if: always()
+        if: always() && matrix.storage
         run: docker compose -f deploy/docker-compose.storage-test.yml down -v
 
-      # `path: coverage.out` collected nothing. The profiles are written INSIDE
-      # each module directory, and no module is the repository root, so the
-      # root holds no coverage.out. The default `if-no-files-found: warn` kept
-      # the step green while it uploaded an empty artifact (#409).
-      #
-      # `error` is deliberate: an upload that finds no file must fail, because
-      # an empty artifact reads exactly like a passing one.
+      # The profiles are written INSIDE each module directory. The collect
+      # step copies them to <dir>/<module>/coverage.out, so the artifact keeps
+      # the module path and the "Test" job can join the shards. It FAILS when
+      # it finds no profile: an empty artifact reads exactly like a passing
+      # one (#409).
+      - name: Collect coverage
+        run: node scripts/ci/go-test-shards.mjs collect-coverage "${RUNNER_TEMP}/go-coverage"
+
       - name: Upload coverage
         uses: actions/upload-artifact@v7
         with:
-          name: coverage
-          path: "**/coverage.out"
+          name: coverage-go-${{ matrix.name }}
+          path: ${{ runner.temp }}/go-coverage
           if-no-files-found: error
 
       # The former `build` job is gone: `go vet ./...` in the lint job
@@ -524,6 +639,50 @@ jobs:
       # compiling already fails there, and a link-stage failure for a
       # pure-Go CGO_ENABLED=0 binary is not a case this repository has seen.
       # Production images are built from the Containerfiles, not here.
+
+  # The one result named "Test", as before the split. No branch rule names a
+  # required check today (2026-11-03: main has no branch protection, and its
+  # ruleset requires no status check), but people and tools read this name.
+  # `if: always()` makes this job run when a shard fails, so it can report
+  # the failure. A skipped or cancelled job is a failure here too.
+  test:
+    name: Test
+    if: always()
+    needs: [test-plan, test-checks, test-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every shard and check passed
+        env:
+          PLAN: ${{ needs.test-plan.result }}
+          CHECKS: ${{ needs.test-checks.result }}
+          SHARDS: ${{ needs.test-shard.result }}
+        run: |
+          set -euo pipefail
+          echo "test-plan: ${PLAN}; test-checks: ${CHECKS}; test-shard (all shards): ${SHARDS}"
+          for result in "$PLAN" "$CHECKS" "$SHARDS"; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a Go test job did not succeed (plan ${PLAN}, checks ${CHECKS}, shards ${SHARDS})"
+              exit 1
+            fi
+          done
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts/ci
+      - name: Download shard coverage
+        uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-go-*
+          path: ${{ runner.temp }}/go-coverage-shards
+      # One `coverage` artifact with <module>/coverage.out, as the single job
+      # uploaded. The shards hold different packages, so the join is exact.
+      - name: Merge coverage
+        run: node scripts/ci/go-test-shards.mjs merge-coverage "${RUNNER_TEMP}/go-coverage-shards" "${RUNNER_TEMP}/go-coverage"
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: ${{ runner.temp }}/go-coverage
+          if-no-files-found: error
 
   editor-lifecycle:
     name: Editor Test lifecycle (PostgreSQL 18)

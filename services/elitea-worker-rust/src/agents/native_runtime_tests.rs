@@ -249,3 +249,75 @@ async fn unified_completion_preserves_the_selected_terminal_owner() {
         NativeAgentAssemblyErrorCode::ResourceExhausted
     );
 }
+
+/// A completion that owns a take-back wrap-up and a step-limit stop, as a
+/// cloud turn with an unattended grant does.
+struct HooksCompletion {
+    wrap_up: Arc<crate::workspace_run::wrap_up::WrapUp>,
+    step_limit: Arc<super::unattended::StepLimitStop>,
+}
+
+#[async_trait]
+impl NativeAgentCompletionSelector for HooksCompletion {
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
+
+    async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        Err(NativeAgentAssemblyError::new(
+            NativeAgentAssemblyErrorCode::InvalidResult,
+            "test completion is unavailable",
+        ))
+    }
+
+    fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
+        Some(Arc::clone(&self.wrap_up))
+    }
+
+    fn step_limit_stop(&self) -> Option<Arc<super::unattended::StepLimitStop>> {
+        Some(Arc::clone(&self.step_limit))
+    }
+}
+
+/// The production wrapper forwards the cloud take-back wrap-up and the
+/// step-limit stop of the selected runtime. Without the forwarding the
+/// trait's `None` default hides them and the lifecycle never requests the
+/// wrap-up.
+#[test]
+fn unified_completion_forwards_wrap_up_and_step_limit_stop() {
+    fn hooks() -> HooksCompletion {
+        HooksCompletion {
+            wrap_up: Arc::default(),
+            step_limit: Arc::default(),
+        }
+    }
+    let direct_hooks = hooks();
+    let direct_wrap_up = Arc::clone(&direct_hooks.wrap_up);
+    let direct_step_limit = Arc::clone(&direct_hooks.step_limit);
+    let direct = NativeRuntimeCompletion::<HooksCompletion, NeverCompletion>::Direct(direct_hooks);
+    assert!(Arc::ptr_eq(
+        &direct.wrap_up().expect("direct wrap-up forwarded"),
+        &direct_wrap_up
+    ));
+    assert!(Arc::ptr_eq(
+        &direct
+            .step_limit_stop()
+            .expect("direct step-limit stop forwarded"),
+        &direct_step_limit
+    ));
+
+    let pipeline_hooks = hooks();
+    let pipeline_wrap_up = Arc::clone(&pipeline_hooks.wrap_up);
+    let pipeline =
+        NativeRuntimeCompletion::<NeverCompletion, HooksCompletion>::Pipeline(pipeline_hooks);
+    assert!(Arc::ptr_eq(
+        &pipeline.wrap_up().expect("pipeline wrap-up forwarded"),
+        &pipeline_wrap_up
+    ));
+
+    let other =
+        NativeRuntimeCompletion::<NeverCompletion, HooksCompletion>::Direct(NeverCompletion);
+    assert!(other.wrap_up().is_none());
+}

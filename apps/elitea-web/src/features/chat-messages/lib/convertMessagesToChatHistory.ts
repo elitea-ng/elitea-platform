@@ -55,6 +55,7 @@ import type { ToolAction } from './chatStreamToolAction';
 // ---------------------------------------------------------------------------
 
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
+import { unattendedMarksOf } from './unattendedMarks';
 export type { ChatMessage } from './convertMessagesToChatHistory.types';
 
 // ---------------------------------------------------------------------------
@@ -288,6 +289,9 @@ export function convertMessagesToChatHistory(
     }
   }
 
+  // An answer shows the continuation mark only when its question does not (an output-limit continuation has no new question).
+  const continuedRows = new Set(parentMessages.filter((mg) => mg.meta?.continued_automatically === true).flatMap((mg) => [String(mg.id), mg.uuid]));
+
   // Convert parent messages and attach swarm-child toolActions.
   return parentMessages.map((messageGroup) => {
     const { author_participant_id, sent_to_id, reply_to_id, sent_to, uuid } = messageGroup;
@@ -305,7 +309,7 @@ export function convertMessagesToChatHistory(
         return convertToPlayerQuestion(messageGroup, playerInfo, participants);
       }
       // normaliseUserMessage returns a UserMessage; cast to ChatMessage.
-      return normaliseUserMessage(messageGroup, users, participants) as ChatMessage;
+      return { ...(normaliseUserMessage(messageGroup, users, participants) as ChatMessage), ...unattendedMarksOf(messageGroup.meta) };
     }
 
     // Convert AI answer using entities-level normaliser.
@@ -328,6 +332,7 @@ export function convertMessagesToChatHistory(
       staticPause: staticPauseBinding(uuid, meta?.execution_generation, meta?.thread_id, meta?.pipeline_static_v1, meta?.pipeline_static_tools_v1),
       ...(meta?.skipped_capabilities === undefined ? {} : { skippedCapabilities: meta.skipped_capabilities }),
       ...(meta?.grounding === undefined ? {} : { grounding: meta.grounding }),
+      ...answerMarks(meta, reply_to_id === undefined ? false : continuedRows.has(String(reply_to_id))),
     };
     if (messageGroup.persisted_trace) Object.assign(aiMessage, { persistedTrace: messageGroup.persisted_trace });
 
@@ -343,6 +348,13 @@ export function convertMessagesToChatHistory(
 
     return aiMessage;
   });
+}
+
+/** An answer's unattended marks: without the continuation mark when its question carries it. */
+function answerMarks(meta: unknown, questionContinued: boolean): ReturnType<typeof unattendedMarksOf> {
+  const { continuedAutomatically, continuationIndex, ...rest } = unattendedMarksOf(meta);
+  if (questionContinued || continuedAutomatically === undefined) return rest;
+  return { ...rest, continuedAutomatically, ...(continuationIndex === undefined ? {} : { continuationIndex }) };
 }
 
 // ---------------------------------------------------------------------------

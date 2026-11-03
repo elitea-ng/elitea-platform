@@ -128,6 +128,10 @@ pub(crate) trait VerifiedExecutionCommand {
 pub struct VerifiedAgentCommand {
     common: VerifiedWorkerCommand,
     kind: AgentExecutionKind,
+    /// The unattended grant of the run's input (ADR-0045). Preparation
+    /// attaches it after it admits the input. A command without a grant
+    /// keeps `None`.
+    unattended_grant: Option<crate::agents::unattended::UnattendedGrant>,
 }
 
 impl VerifiedAgentCommand {
@@ -152,6 +156,22 @@ impl VerifiedAgentCommand {
     #[must_use]
     pub const fn kind(&self) -> AgentExecutionKind {
         self.kind
+    }
+
+    /// The unattended grant that preparation attached, if any.
+    #[must_use]
+    pub(crate) const fn unattended_grant(
+        &self,
+    ) -> Option<&crate::agents::unattended::UnattendedGrant> {
+        self.unattended_grant.as_ref()
+    }
+
+    /// Attach the admitted unattended grant of the run's input.
+    pub(crate) fn attach_unattended_grant(
+        &mut self,
+        grant: Option<crate::agents::unattended::UnattendedGrant>,
+    ) {
+        self.unattended_grant = grant;
     }
 }
 
@@ -342,7 +362,11 @@ pub fn parse_and_verify_agent_command(
     let common = parse_and_verify_worker_command(raw, authenticator)?;
     scan_agent_worker_command(&common.signed.worker_command_bytes)?;
     let kind = validate_agent_command(&common.command)?;
-    Ok(VerifiedAgentCommand { common, kind })
+    Ok(VerifiedAgentCommand {
+        common,
+        kind,
+        unattended_grant: None,
+    })
 }
 
 /// Verify exact signed bytes before decoding a supported toolkit command.
@@ -380,6 +404,7 @@ pub(crate) fn parse_and_verify_execution_command(
             Ok(VerifiedExecutionCommandKind::Agent(VerifiedAgentCommand {
                 common,
                 kind,
+                unattended_grant: None,
             }))
         }
         Some(

@@ -707,6 +707,8 @@ pub(crate) struct AuthorizedNativeCommandBinding {
     /// 71): the disclosure marker, the preamble and the run's untrusted
     /// reads, shared by every path of this execution.
     content: std::sync::Arc<elitea_agent_runtime::preamble::ContentControls>,
+    /// The run's unattended grant (ADR-0045), when the input has one.
+    unattended: Option<std::sync::Arc<super::unattended::UnattendedGrant>>,
 }
 
 impl AuthorizedNativeCommandBinding {
@@ -736,7 +738,8 @@ impl AuthorizedNativeCommandBinding {
             request.payload.platform_preamble.as_ref(),
         )
         .map_err(|_| invalid_input())?;
-        Ok(Self::new(command, agent, approval, content))
+        Ok(Self::new(command, agent, approval, content)
+            .with_unattended_grant(verified.unattended_grant().cloned()))
     }
 
     fn new(
@@ -760,7 +763,36 @@ impl AuthorizedNativeCommandBinding {
             content,
             approval,
             run_caps: crate::protocol::run_caps::meter_from_command(command),
+            unattended: None,
         }
+    }
+
+    /// Set the run's unattended grant (ADR-0045).
+    #[must_use]
+    pub(crate) fn with_unattended_grant(
+        self,
+        grant: Option<super::unattended::UnattendedGrant>,
+    ) -> Self {
+        Self {
+            unattended: grant.map(std::sync::Arc::new),
+            ..self
+        }
+    }
+
+    /// The run's unattended grant (ADR-0045), if any.
+    pub(crate) const fn unattended_grant(
+        &self,
+    ) -> Option<&std::sync::Arc<super::unattended::UnattendedGrant>> {
+        self.unattended.as_ref()
+    }
+
+    /// A new step-limit stop when the run's unattended grant continues at
+    /// the step limit (ADR-0045 decision 4), else `None`.
+    fn step_limit_stop(&self) -> Option<Arc<super::unattended::StepLimitStop>> {
+        self.unattended
+            .as_ref()
+            .filter(|grant| grant.continue_step_limit())
+            .map(|_| Arc::new(super::unattended::StepLimitStop::default()))
     }
 
     /// The claimed execution.
@@ -813,6 +845,7 @@ impl AuthorizedNativeCommandBinding {
                 elitea_agent_runtime::run_caps::RunCapLimits::worker_default(),
             ),
             content: elitea_agent_runtime::preamble::ContentControls::worker_default(),
+            unattended: None,
         }
     }
 
@@ -861,6 +894,10 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     /// FU-265: the paused execution a pipeline continuation re-enters, as
     /// Main named it inside the admission that authorized the decision.
     paused_writer: Option<super::graph::continuation_writer::PausedWriter>,
+    /// ADR-0045 decision 4: the stop that completes the run at its step
+    /// limit. Only a run whose unattended grant sets `continue_step_limit`
+    /// has it.
+    step_limit_stop: Option<Arc<super::unattended::StepLimitStop>>,
 }
 
 impl OrdinaryNativeAgentPlan {
@@ -1061,6 +1098,7 @@ impl OrdinaryNativeAgentPlan {
             deadline_unix_millis: binding.deadline_unix_millis,
             dispatch_abort: super::dispatch_journal::DispatchAbort::default(),
             paused_writer: None,
+            step_limit_stop: binding.step_limit_stop(),
         })
     }
 
@@ -2437,6 +2475,9 @@ pub(crate) struct OrdinaryAgentCompletion<M> {
     /// ADR-0034: the cloud executor's workspace, published once the run
     /// completes or pauses, and never when it fails.
     workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+    /// ADR-0045 decision 4: set when the run's unattended grant continues
+    /// at the step limit.
+    step_limit: Option<Arc<super::unattended::StepLimitStop>>,
 }
 
 impl<M> OrdinaryAgentCompletion<M> {
@@ -2464,9 +2505,12 @@ where
             .workspace
             .as_ref()
             .is_some_and(|workspace| workspace.wrap_up().stopped());
+        // A run stopped at its step limit under an unattended grant may also
+        // have no final text. It completes with the text it has.
+        let step_limited = self.step_limit.as_ref().is_some_and(|stop| stop.reached());
         let mut content = match self.model.take_completed_text() {
             Ok(content) => content,
-            Err(_) if wrapped_up => String::new(),
+            Err(_) if wrapped_up || step_limited => String::new(),
             Err(error) => {
                 if let Some(workspace) = &self.workspace {
                     let _ = workspace
@@ -2525,6 +2569,10 @@ where
 
     fn wrap_up(&self) -> Option<Arc<crate::workspace_run::wrap_up::WrapUp>> {
         self.workspace.as_ref().map(|workspace| workspace.wrap_up())
+    }
+
+    fn step_limit_stop(&self) -> Option<Arc<super::unattended::StepLimitStop>> {
+        self.step_limit.clone()
     }
 }
 
@@ -2813,6 +2861,7 @@ pub(super) async fn assemble_pipeline_native(
         deadline_unix_millis: _,
         dispatch_abort,
         paused_writer: _,
+        step_limit_stop: _,
     } = plan;
     // Node models consume the admitted policy. The Runner never summarizes
     // deterministic graph state or introduces a pipeline-wide summary model.
@@ -3380,6 +3429,7 @@ where
         deadline_unix_millis: _,
         dispatch_abort: _,
         paused_writer: _,
+        step_limit_stop,
     } = plan;
     // `session_compaction` (#1368): the desktop's step compaction prepares
     // every root request when the model's limits are frozen; without them the
@@ -3563,6 +3613,7 @@ where
                 model,
                 thread_id,
                 workspace: None,
+                step_limit: step_limit_stop,
             },
         ),
         evidence,
@@ -3990,6 +4041,7 @@ where
         deadline_unix_millis: _,
         dispatch_abort: _,
         paused_writer: _,
+        step_limit_stop,
     } = plan;
     let context_compaction =
         context_management.prepare_runner_composition(model.summarization_model())?;
@@ -4043,6 +4095,7 @@ where
             model,
             thread_id,
             workspace: None,
+            step_limit: step_limit_stop,
         },
     ))
 }

@@ -6,12 +6,6 @@ import { useCallback, useMemo } from "react";
 import { useChatStreamTransport, type ChatMessage, type ReattachableTurn } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
 import { getExecutionTokens } from "@/features/mcps";
-import type { useUploadAttachments } from "@/entities/conversation";
-
-// Derive these types through the public entity API; avoid a cross-slice deep import.
-type UploadAttachments = ReturnType<typeof useUploadAttachments>["uploadAttachments"];
-type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
-type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
 import { getConfig } from "@/shared/config";
 import { settleCanvasSaves } from "@/shared/lib/canvasSaveGate";
 import type { ExecutionEventData } from "@/shared/api/sse";
@@ -34,22 +28,10 @@ import {
   resolveSendModelName,
   resolveStartContract,
   resolveTargetParticipant,
+  sendAgainWithoutGrant,
+  type SendDeps,
+  type UploadAttachmentsOutcome,
 } from "./useChatBoxSend.helpers";
-
-/** The conversation-lifecycle and attachment-upload slices this hook adapts. */
-interface SendDeps {
-  readonly createConversation: (input: {
-    name: string;
-    isPrivate: boolean;
-    participants?: readonly unknown[];
-    meta?: Readonly<Record<string, unknown>>;
-  }) => Promise<
-    { readonly id?: string | number; readonly uuid?: string } | undefined
-  >;
-  readonly uploadAttachments: (
-    input: UploadAttachmentsParams,
-  ) => Promise<UploadAttachmentsOutcome>;
-}
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
@@ -94,6 +76,8 @@ export interface UseChatBoxSendParams {
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
   readonly onAgentEvent?: ((frame: ExecutionEventData) => void) | undefined;
+  /** The `unattended` field of the next start (ADR-0045), read at each send; undefined while "Run to completion" is off. */
+  readonly unattended?: (() => Readonly<Record<string, unknown>> | undefined) | undefined;
   /** Steering frames of the owned run (contract 1.27), passed to the transport. */
   readonly onSteerEvent?: ((event: string, frame: ExecutionEventData) => void) | undefined;
 }
@@ -156,7 +140,7 @@ export interface UseChatBoxSendResult {
 export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
-  const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
+  const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend, unattended } = params;
   const modelRequest = useMemo(
     () => ({
       modelName: resolveSendModelName(params.llmSettings, params.model?.name),
@@ -211,7 +195,8 @@ export function useChatBoxSend(
       const targetParticipantId = positiveParticipantId(
         (target as { readonly id?: unknown } | null | undefined)?.id,
       );
-      const body = buildStartBody({
+      const grant = unattended?.();
+      const bodyParams = {
         mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid,
         projectId: projectIdString,
@@ -222,17 +207,23 @@ export function useChatBoxSend(
           (isApplicationTurn
             ? positiveParticipantId(payload["participant_id"])
             : undefined) ?? targetParticipantId,
-      });
+      };
+      const body = buildStartBody({ ...bodyParams, unattended: grant });
       // No body can satisfy this contract (an agent turn with no addressable
       // participant). The socket fallback takes it rather than a POST that is
       // certain to be refused.
       if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
-      return requireTestTransport(await startDetailed({
-        projectId,
-        conversationUuid,
-        contract: resolveStartContract(target),
-        body,
-      }));
+      const start = (startBody: Record<string, unknown>) =>
+        startDetailed({ projectId, conversationUuid, contract: resolveStartContract(target), body: startBody });
+      const outcome = await start(body);
+      // ADR-0045: "Run to completion" is on by default, but an administrator
+      // can turn grants off. Then the control hides for this page load. A
+      // grant with only the continue parts goes once more without the grant
+      // (an older Main refuses it); a grant that names sensitive tools shows
+      // the refusal, because the person asked for those answers.
+      if (!sendAgainWithoutGrant(outcome, grant)) return requireTestTransport(outcome);
+      const retry = buildStartBody({ ...bodyParams, unattended: undefined });
+      return requireTestTransport(retry === undefined ? outcome : await start(retry));
     },
     [
       requireTestTransport,
@@ -242,6 +233,7 @@ export function useChatBoxSend(
       modelRequest,
       getInternalToolsForSend,
       target,
+      unattended,
     ],
   );
 

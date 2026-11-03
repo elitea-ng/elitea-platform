@@ -91,6 +91,8 @@ type startBody struct {
 	QuestionID    string `json:"question_id"`
 	UserInput     string `json:"user_input"`
 	ParticipantID int64  `json:"participant_id"`
+	// Unattended is the turn's grant (ADR-0045, client contract 1.30).
+	Unattended *unattendedBody `json:"unattended"`
 }
 
 type commitBody struct {
@@ -114,6 +116,9 @@ type commitBody struct {
 	LocalWork     *localturn.LocalWorkReport `json:"local_work"`
 	// ContextSummary is the turn's latest v1 context summary (#1368).
 	ContextSummary json.RawMessage `json:"context_summary"`
+	// ChainOutcome ends the turn's unattended chain (ADR-0045); only on
+	// the commit of the chain's last turn.
+	ChainOutcome string `json:"chain_outcome"`
 }
 
 // caller is the token principal both operations require. A local turn is a
@@ -181,13 +186,13 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 		ProjectID: projectID, ActorUserID: actor, TokenID: user.TokenID,
 		NativeClientID: user.NativeClientID, ConversationUUID: chi.URLParam(request, "conversationID"),
 		QuestionID: body.QuestionID, UserInput: body.UserInput, ParticipantID: body.ParticipantID,
-		AuditRoute: StartPath,
+		AuditRoute: StartPath, Unattended: body.Unattended.request(),
 	})
 	if err != nil {
 		writeUseCaseError(request.Context(), writer, "start", err)
 		return
 	}
-	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
+	started := map[string]any{
 		"execution_id":        outcome.ExecutionID,
 		"question_id":         outcome.QuestionID,
 		"response_message_id": outcome.ResponseMessageID,
@@ -200,7 +205,11 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 			"count":      outcome.Recall.Count,
 			"memory_ids": outcome.Recall.IDs,
 		},
-	})
+	}
+	if outcome.Unattended != nil {
+		started["unattended"] = unattendedStarted(*outcome.Unattended)
+	}
+	desktopwire.WriteJSON(writer, http.StatusOK, started)
 }
 
 func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
@@ -237,6 +246,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		ContextSummary:   body.ContextSummary,
 		ToolCalls:        body.ToolCalls, ThinkingSteps: body.ThinkingSteps,
 		HITLExchanges: body.HITLExchanges, Report: report, AuditRoute: CommitPath,
+		ChainOutcome: body.ChainOutcome,
 	})
 	if err != nil {
 		writeUseCaseError(request.Context(), writer, "commit", err)
@@ -254,6 +264,9 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 }
 
 func writeUseCaseError(ctx context.Context, writer http.ResponseWriter, operation string, err error) {
+	if writeUnattendedError(writer, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, localturn.ErrInvalid):
 		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")

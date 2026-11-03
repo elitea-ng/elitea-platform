@@ -60,6 +60,8 @@ task build   # builds elitea-main's binaries (elitea-main, elitea-migrate, cutov
 
 `task test`, `task vet`, and `task lint` all run through `scripts/go/workspace-run.sh`, which iterates every module, prints a per-module result, and exits non-zero if any module failed — a bare shell loop over modules used to report only its last iteration's status, so a failing module could hide behind a later pass. Read the run's summary rather than its exit code alone: a `NOT COVERED` line names a module on disk the command did not open (this is how `elitea-llm-gateway` shows up, since it sits outside `go.work`), and a `workspace-run skip ledger` line lists every test that skipped itself and why — a suite where every test called `t.Skip` prints `ok`, identical to a suite that ran and passed.
 
+In CI, the `ci-go.yml` Test job runs the same script as a matrix of parallel shards, because one job took 20 to 40 minutes. `scripts/go/test-shards.json` names the shards. Each shard has a list of package patterns, and the most specific pattern gets the package. `scripts/ci/go-test-shards.mjs` reads the package list from the go tool and fails the run if a package is in no shard or in two. Each shard gives its packages to `workspace-run.sh` through `ELITEA_GO_PACKAGES_FILE`, keeps the skip gate (`ELITEA_REQUIRE_DECLARED_SKIPS=1`), and uploads its coverage. The job named `Test` passes only when the plan, the one-time checks (vet, the generated OpenAPI server, the static API contract) and every shard pass, and it joins the shard coverage into one `coverage` artifact. To move a slow package to a different shard, edit `test-shards.json` and run `node scripts/ci/go-test-shards.mjs check`.
+
 For `apps/elitea-web`, run `npm run typecheck`, `npm run lint`, and `npm run test:unit` from inside the directory — see [elitea-web development](/development/frontend) for the fuller gate list.
 
 ## Guardrails
@@ -96,4 +98,5 @@ Continue to [Run the standalone stack](/development/standalone-stack) to bring t
 {/* source: apps/elitea-web/scripts/lib/compose-detect.sh (referenced by e2e-stack.sh:20-21 and standalone-stack.sh:115-117) */}
 {/* source: Taskfile.yml (test/vet/lint/build tasks) */}
 {/* source: scripts/go/workspace-run.sh (referenced by AGENTS.md "Verification" section) */}
+{/* source: .github/workflows/ci-go.yml (test-plan, test-checks, test-shard, test jobs); scripts/go/test-shards.json; scripts/ci/go-test-shards.mjs */}
 {/* source: AGENTS.md ("Architecture boundaries", "Working agreements") */}

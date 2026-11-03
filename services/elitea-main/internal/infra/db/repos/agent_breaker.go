@@ -186,10 +186,7 @@ func (b *AgentBreaker) IngestRuns(ctx context.Context, lookback time.Duration) (
 const spendOverLimitSQL = `
 WITH calls AS (
     SELECT l.execution_id, l.occurred_at,
-           CASE WHEN l.operation = 'tool' THEN COALESCE(l.cost_usd, 0)
-                ELSE COALESCE(l.prompt_tokens::numeric * m.input_cost_per_1m_tokens / 1000000, 0)
-                   + COALESCE(l.completion_tokens::numeric * m.output_cost_per_1m_tokens / 1000000, 0)
-           END AS cost
+           ` + requestLogCostSQL + ` AS cost
     FROM gateway.llm_request_logs AS l
     LEFT JOIN gateway.gateway_models AS m
       ON m.provider = l.provider AND m.model_name = l.model AND l.operation <> 'tool'

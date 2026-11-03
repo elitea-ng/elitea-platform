@@ -127,6 +127,63 @@ message AgentExecutionInputV1 {
   // after an administrator saved a preamble, so inputs are unchanged while
   // workers from an earlier release run.
   PlatformPreambleSnapshotV1 platform_preamble = 67;
+  // The run's unattended grant (ADR-0045 decisions 1, 2 and 4, #1435,
+  // #1436), frozen at admission. Main sets it only when the person who
+  // starts the run gives a grant, or when Main starts a chain continuation
+  // of such a run. ABSENT for every other run, so inputs stay unchanged
+  // while workers from an earlier release run (they reject unknown tags).
+  // The legacy boolean auto_approve_sensitive_actions stays refused.
+  UnattendedGrantV1 unattended_grant = 68;
+}
+
+// One unattended grant (ADR-0045 decision 1). Main admitted every part of it
+// before the run started: the platform switch, the owner, each named tool
+// against the agent's resolved tools, the withheld categories and the tier
+// hitl rule. Nothing in it lifts a deny, a guardrail, a run cap or a budget.
+message UnattendedGrantV1 {
+  // The grant's id: a lowercase canonical UUID. The same on every link of
+  // the chain. The ledger rows of the grant's approvals name it.
+  string grant_id = 1;
+  // The execution id of the chain's first run. Empty on the first run.
+  string chain_root_execution_id = 2;
+  // The person who gave the grant: the owner of the chain's first run.
+  int64 owner_user_id = 3;
+  // The sensitive tools the owner named. At a sensitive pause for one of
+  // these pairs the worker approves the call itself, does not end the run,
+  // and emits one agent_unattended_approval node event. Any other pause ends
+  // the run with PAUSED_HITL as before.
+  repeated UnattendedGrantToolV1 sensitive_tools = 4;
+  // At the step limit, the worker ends the run with STEP_LIMIT_REACHED, and
+  // Main starts the next link of the chain.
+  bool continue_step_limit = 5;
+  // At the output limit, Main starts the output_limit continuation.
+  bool continue_output_limit = 6;
+  // The chain's effective limits. Main checks them before each link; the
+  // worker does not enforce them.
+  UnattendedChainLimitsV1 chain = 7;
+  // 0 on the chain's first run, then 1, 2 and so on.
+  uint32 continuation_index = 8;
+  reserved 9 to 15;
+}
+
+// One named sensitive tool: the toolkit name as the agent configures it,
+// and the tool name.
+message UnattendedGrantToolV1 {
+  string toolkit_name = 1;
+  string tool_name = 2;
+  reserved 3 to 7;
+}
+
+// The chain limits of a grant (ADR-0045 decision 4).
+message UnattendedChainLimitsV1 {
+  uint32 max_continuations = 1;
+  // US dollars, at most four decimals; 0 means no spend limit.
+  double max_spend_usd = 2;
+  // The chain's deadline, in Unix seconds. It is 0 on the chain's first run:
+  // the chain row holds the deadline, and a clock read there would make a
+  // retried start a different request.
+  int64 deadline_unix_seconds = 3;
+  reserved 4 to 7;
 }
 
 // One revision of the platform preamble (shared 0216). The command's
@@ -184,6 +241,12 @@ enum AgentExecutionTerminalStateV1 {
   // claims challenge; ADR-0039, #1117). Resumes on the authorization
   // continuation. Never emitted while the governance flag is off.
   AGENT_EXECUTION_TERMINAL_STATE_V1_PAUSED_CREDENTIAL_AUTHORIZATION = 5;
+  // The run used its model steps (ADR-0045 decision 4). The terminal event
+  // is a full_message with the text so far, as for COMPLETED, and its
+  // response_metadata has step_limit_reached true. The worker emits it only
+  // when the input's unattended_grant has continue_step_limit; Main then
+  // starts the next link of the chain.
+  AGENT_EXECUTION_TERMINAL_STATE_V1_STEP_LIMIT_REACHED = 6;
 }
 
 message AgentExecutionArtifactReferenceV1 {
