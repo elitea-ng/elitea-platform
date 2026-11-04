@@ -1741,9 +1741,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if sourcesErr != nil {
 			return fmt.Errorf("read Inventory source configuration: %w", sourcesErr)
 		}
-		// ADR-0038: the engine's model client takes the model's reasoning
-		// control from the catalogue, so `auto` is a per-step policy there.
-		inventorySourcesConfig.Reasoning = engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)
 		if inventorySourceSettings == nil {
 			logger.Warn("Inventory mounts without source expansion",
 				"settings_resolver", false)
@@ -1776,7 +1773,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				inventoryMinter,
+				// ADR-0038: the engine's model client takes the model's
+				// reasoning control from the catalogue, so `auto` is a
+				// per-step policy there.
+				material.WithModelReasoning(inventoryMinter,
+					engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)),
 				// What investigate's bearer was minted for: the record the
 				// test_tool source-tool gate reads (shared/0159).
 				inventoryGrants, inventorySourcesConfig)
@@ -1864,6 +1865,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if minterErr != nil {
 			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
 		}
+		// ADR-0038: every DeepWiki rewrite settles the model's reasoning
+		// control from the catalogue, so `auto` is a per-step policy there.
+		deepwikiMinter = material.WithModelReasoning(deepwikiMinter,
+			engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID))
 
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
@@ -1930,8 +1935,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
 			v2deepwiki.WithHop(deepwikiHop),
-			v2deepwiki.WithModelReasoning(
-				engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)

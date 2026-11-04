@@ -44,10 +44,6 @@ type SourcesConfig struct {
 	// CallbackTokenTTL is the minted bearer's lifetime. DefaultCallbackTokenTTL
 	// unless CallbackTokenTTLEnv says otherwise.
 	CallbackTokenTTL time.Duration
-	// Reasoning, when set, adds the model's catalogue reasoning control to
-	// the engine's llm_settings (ADR-0038). Not from the environment: the
-	// composition root sets it from the configurations runtime.
-	Reasoning material.ModelReasoning
 }
 
 // SourcesFromEnv reads it. Lenient where a default is honest and strict where

@@ -250,7 +250,7 @@ func (rw SourceRewriter) Rewrite(
 	if err := envelope.LiftToolLLMSettings(block); err != nil {
 		return nil, grant, err
 	}
-	if err := SettleReasoning(ctx, rw.Reasoning, block, projectID); err != nil {
+	if err := SettleReasoning(ctx, reasoningFor(rw.Reasoning, rw.Minter), block, projectID); err != nil {
 		return nil, grant, err
 	}
 	if err := envelope.Set("llm_settings", block); err != nil {

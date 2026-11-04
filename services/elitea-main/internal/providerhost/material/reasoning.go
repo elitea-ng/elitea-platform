@@ -38,6 +38,39 @@ type ModelCatalog interface {
 	Get(context.Context, configurationapp.CurrentModelCatalogQuery) (configurationapp.CurrentModelCatalogResponse, error)
 }
 
+// WithModelReasoning returns a Minter that also reads the model's reasoning
+// for every rewrite it mints for: Settle and SourceRewriter settle the
+// callback block with it when they name no reader of their own. The
+// composition root wraps each facade's minter once, so no facade carries
+// the plumbing (ADR-0012 budget). A nil reasoning returns minter unchanged.
+func WithModelReasoning(minter Minter, reasoning ModelReasoning) Minter {
+	if minter == nil || reasoning == nil {
+		return minter
+	}
+	return reasoningMinter{Minter: minter, reasoning: reasoning}
+}
+
+// reasoningMinter names its reader: an embedded ModelReasoning field would
+// shadow the method of the same name, and the type would not satisfy it.
+type reasoningMinter struct {
+	Minter
+	reasoning ModelReasoning
+}
+
+func (m reasoningMinter) ModelReasoning(ctx context.Context, projectID int64, model string) (Reasoning, error) {
+	return m.reasoning.ModelReasoning(ctx, projectID, model)
+}
+
+// reasoningFor is the reader a rewrite settles with: its own, else the one
+// its minter carries.
+func reasoningFor(own ModelReasoning, minter Minter) ModelReasoning {
+	if own != nil {
+		return own
+	}
+	carried, _ := minter.(ModelReasoning)
+	return carried
+}
+
 // CatalogueReasoning resolves a model through the project catalogue, shared
 // models included: the project's own row of the name first.
 type CatalogueReasoning struct {

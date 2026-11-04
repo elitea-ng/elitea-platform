@@ -150,3 +150,28 @@ func TestCallbackOnlyRewriteCarriesTheReasoningControl(t *testing.T) {
 		t.Fatalf("llm_settings = %v", settings)
 	}
 }
+
+// The composition root wraps a facade's minter once; every rewrite built on
+// it settles the block from the reader it carries (ADR-0012 budget).
+func TestAMinterCarriesTheReasoningReader(t *testing.T) {
+	if got := WithModelReasoning(oneMinter{}, nil); got != (oneMinter{}) {
+		t.Fatalf("a nil reader must return the minter unchanged: %T", got)
+	}
+	if got := WithModelReasoning(nil, &reasoningStub{control: "toggle"}); got != nil {
+		t.Fatalf("a nil minter must stay nil: %T", got)
+	}
+	minter := WithModelReasoning(oneMinter{}, &reasoningStub{control: "budget"})
+	rewrite := CallbackOnly("deepwiki", minter, nil, PlatformRouteBase, time.Minute)
+	body := `{"configuration":{"parameters":{"llm_model":"claude-sonnet"}},"parameters":{}}`
+	rewritten, _, err := rewrite(context.Background(), strings.NewReader(body), 7, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rewritten), `"reasoning_control":"budget"`) {
+		t.Fatalf("the carried reader must settle the block: %s", rewritten)
+	}
+	// A rewrite's own reader wins over the carried one.
+	if got := reasoningFor(&reasoningStub{control: "toggle"}, minter); got.(*reasoningStub).control != "toggle" {
+		t.Fatalf("own reader lost: %v", got)
+	}
+}

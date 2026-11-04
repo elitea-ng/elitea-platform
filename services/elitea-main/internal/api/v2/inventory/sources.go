@@ -133,7 +133,6 @@ func NewSources(
 		OutputField:  "source",
 		Decorate:     mergeSourceConfig,
 		Grants:       grants,
-		Reasoning:    cfg.Reasoning,
 	}}, nil
 }
 

@@ -246,7 +246,7 @@ func Settle(
 	if err := envelope.LiftToolLLMSettings(block); err != nil {
 		return nil, grant, err
 	}
-	if err := SettleReasoning(ctx, reasoning, block, projectID); err != nil {
+	if err := SettleReasoning(ctx, reasoningFor(reasoning, minter), block, projectID); err != nil {
 		return nil, grant, err
 	}
 	if err := envelope.Set("llm_settings", block); err != nil {
