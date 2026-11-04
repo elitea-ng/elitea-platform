@@ -215,13 +215,27 @@ use_account() {
 # JetStream layer starts (compose's health probe, healthz?js-enabled-only,
 # reads only the configuration), and the first stream add then fails the Job.
 # So the wait is over when this account's JetStream API answers too.
+#
+# The probe is a raw $JS.API.INFO request, the one JetStream subject every
+# bootstrap identity holds; `nats account info` also asks $SYS.REQ.USER.INFO,
+# which none does. `nats req` exits 0 on "no responders", so the probe reads
+# the reply: an account_info_response without an error.
+jetstream_answers() {
+  reply=$($NATS req '$JS.API.INFO' '' --raw 2>/dev/null) || return 1
+  case "$reply" in
+    *'"error"'*) return 1 ;;
+    *account_info_response*) return 0 ;;
+  esac
+  return 1
+}
+
 wait_for_server() {
   waited=0
-  until $NATS rtt >/dev/null 2>&1 && $NATS account info >/dev/null 2>&1; do
+  until $NATS rtt >/dev/null 2>&1 && jetstream_answers; do
     if [ "$waited" -ge "$CONNECT_WAIT" ]; then
       log "FAILED: account ${acct}: the server did not accept this identity, or its JetStream did not answer, within ${CONNECT_WAIT}s:"
       $NATS rtt 2>&1 | sed 's/^/[nats-bootstrap]   /' || true
-      $NATS account info 2>&1 | sed 's/^/[nats-bootstrap]   /' || true
+      $NATS req '$JS.API.INFO' '' --raw 2>&1 | sed 's/^/[nats-bootstrap]   /' || true
       exit 1
     fi
     if [ "$waited" -eq 0 ]; then
