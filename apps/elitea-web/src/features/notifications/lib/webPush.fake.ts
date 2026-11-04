@@ -20,9 +20,10 @@ export function createFakePushBrowser(options: { readonly supported?: boolean } 
     subscription: null,
     calls: [],
   };
-  const pushSubscription = (endpoint: string): PushSubscription =>
+  const pushSubscription = (endpoint: string, key: Uint8Array | null): PushSubscription =>
     ({
       endpoint,
+      options: { userVisibleOnly: true, applicationServerKey: key === null ? null : key.slice().buffer },
       toJSON: () => ({ endpoint, keys: { p256dh: 'p-key', auth: 'a-key' } }),
       unsubscribe: () => {
         fake.calls.push('unsubscribe');
@@ -31,11 +32,11 @@ export function createFakePushBrowser(options: { readonly supported?: boolean } 
       },
     }) as unknown as PushSubscription;
   const pushManager = {
-    getSubscription: () => Promise.resolve(fake.subscription === null ? null : pushSubscription(fake.subscription.endpoint)),
+    getSubscription: () => Promise.resolve(fake.subscription === null ? null : pushSubscription(fake.subscription.endpoint, fake.subscription.key)),
     subscribe: (opts: PushSubscriptionOptionsInit) => {
       fake.calls.push('subscribe');
       fake.subscription = { endpoint: 'https://push.example/ep-1', key: opts.applicationServerKey as Uint8Array };
-      return Promise.resolve(pushSubscription(fake.subscription.endpoint));
+      return Promise.resolve(pushSubscription(fake.subscription.endpoint, fake.subscription.key));
     },
   };
   const registration = {

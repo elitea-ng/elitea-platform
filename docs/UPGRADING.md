@@ -7,10 +7,12 @@ newest entry is first.
 ## Run finished notifications and web push (#1437, ADR-0045 decisions 5 and 6)
 
 New shared migration `0223_web_push`. It adds the table
-`centry.push_subscriptions`, and the tables `elitea_runtime.web_push_cursor`
-and `elitea_runtime.web_push_deliveries`. The migration only adds objects.
-It sets the cursor to the newest notification row, so Main does not send
-old notifications.
+`centry.push_subscriptions`, the tables `elitea_runtime.web_push_queue` and
+`elitea_runtime.web_push_deliveries`, and an `AFTER INSERT` trigger
+`web_push_enqueue` on `centry.notifications`. The migration only adds
+objects. The trigger queues new `run_finished` and `agent_approval_required`
+rows of users with a subscription, so Main does not send old notifications.
+Every replica of Main sends; each claims different deliveries.
 
 New notification type `run_finished`. Main writes one row when a chain
 ends, or when a schedule, webhook or handed-off cloud run settles. A
@@ -35,8 +37,10 @@ these hosts: `fcm.googleapis.com`, `updates.push.services.mozilla.com`,
 `web.push.apple.com` and `*.notify.windows.com`. Main uses `HTTPS_PROXY`
 and `NO_PROXY` when you set them. Without a proxy, Main connects directly and
 refuses private and reserved addresses. When Main cannot reach a push
-service, it tries again for at most 24 hours, then drops the send. The bell
-is not affected.
+service, it tries again for at most 24 hours, then drops the send. When a
+push service refuses the key (401 or 403), Main drops that send without a
+retry; after three refusals in a row a subscription is removed, and that
+browser must turn web push on again. The bell is not affected.
 
 ## Run brief and goal check (#1564, ADR-0045 decision 11)
 

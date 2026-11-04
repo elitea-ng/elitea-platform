@@ -9,6 +9,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { server } from '../../../test/setup';
+import { STORAGE_NAMESPACE } from '../../lib/storage';
 import { configureGeneratedClient, resetGeneratedClient } from '../generated/mutator';
 
 import { performLogout } from './logout';
@@ -100,6 +101,22 @@ describe('performLogout and web push', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('sweeps the namespace again right before the hand-off, so keys written during the teardown do not survive', async () => {
+    const late = `${STORAGE_NAMESPACE}late.key`;
+    let resolveList: (list: ServiceWorkerRegistration[]) => void = () => undefined;
+    const slow = { getRegistrations: () => new Promise<ServiceWorkerRegistration[]>((resolve) => (resolveList = resolve)) } as unknown as ServiceWorkerContainer;
+    let atRedirect: string | null = 'unset';
+    const redirect = vi.fn(() => {
+      atRedirect = window.localStorage.getItem(late);
+    });
+    const done = performLogout({ redirect, serviceWorker: slow });
+    window.localStorage.setItem(late, 'written after the first sweep');
+    resolveList([]);
+    await done;
+    expect(redirect).toHaveBeenCalledTimes(1);
+    expect(atRedirect).toBeNull();
   });
 
   it('removes a push worker without a subscription and makes no request', async () => {

@@ -61,7 +61,7 @@ Web push also needs these items. When one is missing, web push is off and the sw
 - A contact for the push services: `ELITEA_WEB_PUSH_SUBJECT` (a `mailto:` address or an `https:` URL). When it is empty, Main uses `PUBLIC_BASE_URL` if it is `https`.
 - Egress to the browsers' push services (see [Notifications](/menus/settings/notifications#web-push)). Main uses `HTTPS_PROXY` when you set it. Without a proxy, Main connects directly and refuses private and reserved addresses.
 
-Main sends the notification ids and the outcome only, never a message text. Each send is encrypted for one browser (RFC 8291) and signed with the install's key (RFC 8292). A push service that answers 404 or 410 removes that subscription. Main tries other failures again with a longer wait each time, for at most 24 hours. A person keeps at most 10 browsers.
+Main sends the notification ids and the outcome only, never a message text. Each send is encrypted for one browser (RFC 8291) and signed with the install's key (RFC 8292). A push service that answers 404 or 410 removes that subscription. A push service that refuses the key (401 or 403) drops that send; three refusals in a row remove the subscription. Main tries other failures again with a longer wait each time, for at most 24 hours. A person keeps at most 10 browsers.
 </Accordion>
 
 <Accordion title="Authentication, LLM Proxy, MCP Servers, Branding (dedicated pages)">

@@ -7,11 +7,14 @@
 // lands in centry.push_subscriptions (at most 10 per person).
 //
 // The Dispatcher reads new run_finished and agent_approval_required
-// notification rows through a PostgreSQL outbox (a cursor over
-// centry.notifications.id), adds one delivery per subscription, and sends
-// each one encrypted (RFC 8291, aes128gcm) with a VAPID token (RFC 8292).
-// One replica sends at a time. A 404 or 410 deletes the subscription; any
-// other failure retries with backoff until the 24-hour TTL ends.
+// notification rows through a PostgreSQL outbox (a queue row that a trigger
+// writes in the notification's own transaction), adds one delivery per
+// subscription, and sends each one encrypted (RFC 8291, aes128gcm) with a
+// VAPID token (RFC 8292). Replicas claim different deliveries under a lease
+// and send with no transaction open. A 404 or 410 deletes the subscription;
+// a 401 or 403 drops the send, and MaxRejectedSends of them in a row delete
+// the subscription; a 429, a 5xx or no answer retries with backoff until the
+// 24-hour TTL ends.
 package webpush
 
 import (
@@ -22,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // VAPIDSecretName is the name of the private key in the global vault's
@@ -41,13 +46,19 @@ type KeyVault interface {
 // before it tries again.
 const keyRetry = time.Minute
 
+// keyLoadTimeout bounds one vault round trip. The load runs detached from
+// the caller that started it: every caller waiting on it shares the result.
+const keyLoadTimeout = 30 * time.Second
+
 // KeySource loads the install's key pair from the vault, once, and keeps it.
 // A vault that is missing or fails leaves push disabled; it never stops the
-// boot. A failed load is tried again after keyRetry.
+// boot. A failed load is tried again after keyRetry. Concurrent callers share
+// one vault round trip, and none holds the mutex across it.
 type KeySource struct {
 	vault  KeyVault
 	logger *slog.Logger
 	now    func() time.Time
+	loads  singleflight.Group
 
 	mu       sync.Mutex
 	keys     Keys
@@ -69,31 +80,67 @@ func (s *KeySource) Keys(ctx context.Context) (Keys, bool) {
 	if s == nil || s.vault == nil {
 		return Keys{}, false
 	}
+	if keys, known, ok := s.cached(); known {
+		return keys, ok
+	}
+	result, _, _ := s.loads.Do(VAPIDSecretName, func() (any, error) {
+		// A caller that waited on the previous load finds its result.
+		if keys, known, ok := s.cached(); known {
+			return keyResult{keys: keys, ok: ok}, nil
+		}
+		return s.load(ctx), nil
+	})
+	loaded, _ := result.(keyResult)
+	return loaded.keys, loaded.ok
+}
+
+// keyResult is one load's answer, shared by the callers that waited on it.
+type keyResult struct {
+	keys Keys
+	ok   bool
+}
+
+// cached answers the kept key pair (known, ok), or a recent failure (known,
+// not ok); not known means a load is due.
+func (s *KeySource) cached() (Keys, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loaded {
-		return s.keys, true
+		return s.keys, true, true
 	}
 	if !s.failedAt.IsZero() && s.now().Sub(s.failedAt) < keyRetry {
-		return Keys{}, false
+		return Keys{}, true, false
 	}
-	stored, err := s.vault.EnsureAdminHiddenSecret(ctx, VAPIDSecretName, func() (string, error) {
+	return Keys{}, false, false
+}
+
+// load reads (or makes and stores) the key pair with no lock held, then
+// publishes the result under the lock.
+func (s *KeySource) load(ctx context.Context) keyResult {
+	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), keyLoadTimeout)
+	defer cancel()
+	stored, err := s.vault.EnsureAdminHiddenSecret(loadCtx, VAPIDSecretName, func() (string, error) {
 		generated, err := GenerateKeys()
 		if err != nil {
 			return "", err
 		}
 		return generated.EncodePrivateKey()
 	})
+	var keys Keys
 	if err == nil {
-		var keys Keys
-		if keys, err = ParsePrivateKey(stored); err == nil {
-			s.keys, s.loaded = keys, true
-			return keys, true
-		}
+		keys, err = ParsePrivateKey(stored)
 	}
-	s.failedAt = s.now()
-	s.logger.WarnContext(ctx, "web push: the VAPID key is not available; web push stays off", "err", err)
-	return Keys{}, false
+	if err != nil {
+		s.logger.WarnContext(ctx, "web push: the VAPID key is not available; web push stays off", "err", err)
+		s.mu.Lock()
+		s.failedAt = s.now()
+		s.mu.Unlock()
+		return keyResult{}
+	}
+	s.mu.Lock()
+	s.keys, s.loaded = keys, true
+	s.mu.Unlock()
+	return keyResult{keys: keys, ok: true}
 }
 
 // Settings reads the admin switch notifications.web_push.

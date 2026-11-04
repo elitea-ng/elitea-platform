@@ -3,13 +3,15 @@ package repos
 // The run_finished notification (ADR-0045 decision 5, #1437; package
 // runfinished). Every writer runs in the transaction that ends the chain, so
 // the row commits with the end state, and the uuid is derived from the chain
-// root, so a replay writes nothing new.
+// root, so a replay writes nothing new. The row is best-effort: it is
+// written in a savepoint, and a failure never holds the end state back.
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"strconv"
 	"time"
@@ -21,6 +23,7 @@ import (
 
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runfinished"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 )
 
 // chainExecutor is what a chain end needs: a transaction (or, in a test, a
@@ -54,12 +57,25 @@ func scanChainEnd(row pgx.Row) (chainEnd, error) {
 }
 
 // notifyChainEnd writes the run_finished row of an ended chain when the noise
-// rule asks for one.
-func notifyChainEnd(ctx context.Context, tx chainExecutor, end chainEnd) error {
+// rule asks for one. Best-effort: the write runs in a savepoint of tx, and a
+// failure rolls back to it and is logged, so the caller's end state still
+// commits (a chain end, a sweep batch or a local turn commit never waits on
+// its notification).
+func notifyChainEnd(ctx context.Context, tx pgx.Tx, end chainEnd) {
+	err := pgx.BeginFunc(ctx, tx, func(savepoint pgx.Tx) error {
+		return writeChainEndNotification(ctx, savepoint, end)
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "run finished: the chain end commits without its notification",
+			"root_execution_id", end.Root, "end_state", end.State, "err", err)
+	}
+}
+
+func writeChainEndNotification(ctx context.Context, tx pgx.Tx, end chainEnd) error {
 	handedOff := false
 	if end.Origin == runfinished.OriginCloud {
 		var err error
-		if handedOff, err = handedOffThread(ctx, tx, end.ProjectID, end.ConversationUUID); err != nil {
+		if handedOff, _, err = handOffOwner(ctx, tx, end.ProjectID, end.ConversationUUID); err != nil {
 			return err
 		}
 	}
@@ -70,31 +86,65 @@ func notifyChainEnd(ctx context.Context, tx chainExecutor, end chainEnd) error {
 	if !runfinished.Notify(facts) {
 		return nil
 	}
-	return insertRunFinished(ctx, tx, end.OwnerUserID, runfinished.Meta{
+	if skip, err := waitAlreadyNotified(ctx, tx, end.State, end.LastExecutionID); err != nil || skip {
+		return err
+	}
+	meta := runfinished.Meta{
 		Outcome: end.State, Limit: end.Limit, ProjectID: end.ProjectID, ConversationUUID: end.ConversationUUID,
 		ChainRootExecutionID: end.Root, ExecutionID: end.LastExecutionID, Origin: end.Origin,
 		Continuations: end.Continuations,
-	})
+	}
+	if end.Origin == runfinished.OriginDesktop {
+		var err error
+		if meta.ThreadID, err = desktopThreadID(ctx, tx, end.ProjectID, end.ConversationUUID); err != nil {
+			return err
+		}
+	}
+	return insertRunFinished(ctx, tx, end.OwnerUserID, meta)
 }
 
-// handedOffThread reports a conversation that the cloud executor owns after
-// a hand-off (ADR-0034): its turns run in the cloud while the person is
-// away from the desktop.
-func handedOffThread(ctx context.Context, tx chainExecutor, projectID int64, conversationUUID string) (bool, error) {
+// desktopThreadID is the desktop app's thread id of a conversation: its
+// numeric id in decimal (the app keeps a Local work thread under the id it
+// created the conversation with). It reads the chain's own project and
+// conversation, so it cannot name another tenant's row. "" when the
+// conversation is gone.
+func desktopThreadID(ctx context.Context, tx rowQueryer, projectID int64, conversationUUID string) (string, error) {
 	if _, err := uuid.Parse(conversationUUID); err != nil {
+		return "", nil
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return "", nil
+	}
+	var id int64
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT id FROM %s.chat_conversations WHERE uuid = $1::uuid`, schema), conversationUUID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("run finished: read the desktop thread: %w", err)
+	}
+	return strconv.FormatInt(id, 10), nil
+}
+
+// waitAlreadyNotified reports a waiting run whose pause already told its
+// owner: an unattended run under notify_and_wait gets its
+// agent_approval_required row in the pause's transaction, together with the
+// intent row read here (notifyApprovalOwner), so a run_finished "waiting"
+// row would be a second "Run needs you" for the same pause.
+func waitAlreadyNotified(ctx context.Context, tx rowQueryer, outcome, executionID string) (bool, error) {
+	if outcome != runfinished.OutcomeWaiting || executionID == "" {
 		return false, nil
 	}
-	var handedOff bool
-	err := tx.QueryRow(ctx, `
+	var notified bool
+	if err := tx.QueryRow(ctx, `
 SELECT EXISTS (
-    SELECT 1 FROM elitea_runtime.workspace_handoffs
-    WHERE project_id = $1 AND conversation_uuid = $2::uuid
-      AND state IN ('CLOUD_IDLE', 'CLOUD_RUNNING', 'RECLAIMING') AND deleted_at IS NULL)`,
-		projectID, conversationUUID).Scan(&handedOff)
-	if err != nil {
-		return false, fmt.Errorf("run finished: read the hand-off: %w", err)
+    SELECT 1 FROM elitea_runtime.unattended_approval_actions
+    WHERE execution_id = $1 AND action = 'notify_and_wait')`, executionID).Scan(&notified); err != nil {
+		return false, fmt.Errorf("run finished: read the approval wait: %w", err)
 	}
-	return handedOff, nil
+	return notified, nil
 }
 
 // insertRunFinished writes one run_finished row. The uuid comes from the
@@ -150,7 +200,7 @@ func (r *RunFinishedRepository) RecordSettledRun(
 			return err
 		}
 		handedOff, owner := false, run.ActorUserID
-		if !runfinishedUnattended(run.TriggerOrigin) {
+		if !unattended.IsSystemTrigger(run.TriggerOrigin) {
 			if handedOff, owner, err = handOffOwner(ctx, tx, run.ProjectID, run.ConversationUUID); err != nil || !handedOff {
 				return err
 			}
@@ -174,15 +224,14 @@ func (r *RunFinishedRepository) RecordSettledRun(
 		}) {
 			return nil
 		}
+		if skip, err := waitAlreadyNotified(ctx, tx, state, executionID); err != nil || skip {
+			return err
+		}
 		return insertRunFinished(ctx, tx, owner, runfinished.Meta{
 			Outcome: state, ProjectID: run.ProjectID, ConversationUUID: run.ConversationUUID,
 			ChainRootExecutionID: executionID, ExecutionID: executionID, Origin: runfinished.OriginCloud,
 		})
 	})
-}
-
-func runfinishedUnattended(origin string) bool {
-	return origin == "schedule" || origin == "webhook"
 }
 
 // standaloneRun is a settled agent run that is not a chain link.
@@ -218,9 +267,10 @@ LIMIT 1`, executionID).Scan(&run.TriggerOrigin, &actor, &project, &run.Conversat
 	return run, true, nil
 }
 
-// handOffOwner answers whether the conversation is a handed-off thread and
-// its owner.
-func handOffOwner(ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID string) (bool, int64, error) {
+// handOffOwner answers whether the conversation is a handed-off thread (the
+// cloud executor owns it after a hand-off, ADR-0034: its turns run in the
+// cloud while the person is away from the desktop) and its owner.
+func handOffOwner(ctx context.Context, tx rowQueryer, projectID int64, conversationUUID string) (bool, int64, error) {
 	if _, err := uuid.Parse(conversationUUID); err != nil {
 		return false, 0, nil
 	}

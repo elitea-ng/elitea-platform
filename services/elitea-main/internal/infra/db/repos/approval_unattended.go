@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -66,11 +67,6 @@ type unattendedPolicy struct {
 	OwnerUserID   int64
 	TriggerOrigin string
 	Wait          time.Duration
-}
-
-// unattendedOrigin reports whether a trigger origin has no person behind it.
-func unattendedOrigin(origin string) bool {
-	return origin == "schedule" || origin == "webhook"
 }
 
 // loadApprovalsSettingsTx reads the approvals section on the caller's
@@ -111,7 +107,7 @@ WHERE execution_id = $1 ORDER BY generation DESC LIMIT 1`, executionID).Scan(&or
 	if err != nil {
 		return unattendedPolicy{}, false, fmt.Errorf("read the run's trigger origin: %w", err)
 	}
-	if !unattendedOrigin(origin) {
+	if !unattended.IsSystemTrigger(origin) {
 		return unattendedPolicy{TriggerOrigin: origin}, false, nil
 	}
 	settings, err := loadApprovalsSettingsTx(ctx, tx)

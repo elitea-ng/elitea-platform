@@ -107,7 +107,7 @@ func (p *webPushParts) route(authConfig apimw.AuthConfig, permissions auth.Permi
 }
 
 // startDispatcher sends the outbox until ctx ends. Every replica runs one;
-// the sender lock lets one of them send at a time.
+// each claims different deliveries (webpush.Store.ClaimDue).
 func (p *webPushParts) startDispatcher(ctx context.Context, logger *slog.Logger) {
 	if p == nil {
 		return

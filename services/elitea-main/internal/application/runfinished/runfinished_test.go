@@ -77,7 +77,7 @@ func TestNotificationKeyIsPerChainRoot(t *testing.T) {
 	if NotificationKey("a") == NotificationKey("b") {
 		t.Fatal("two roots share a key")
 	}
-	if NotificationKey("a") != NotificationKey("a") {
+	if root := strings.Repeat("a", 32); NotificationKey(root) != "elitea.run-finished.v1\x00"+root {
 		t.Fatal("the key is not stable")
 	}
 }

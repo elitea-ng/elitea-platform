@@ -24,6 +24,10 @@
     waiting: { title: 'Run needs you', body: 'A run waits for your answer.' },
     limit_reached: { title: 'Run stopped at its limit', body: 'A run reached its chain limit.' },
   };
+  // Shown for a payload this worker cannot read or does not know (a newer
+  // server's type): the subscription is userVisibleOnly, and a push that shows
+  // nothing makes the browser show its own notice and can cost the subscription.
+  var FALLBACK = { title: 'Elitea', body: 'There is new activity.' };
 
   function readPayload(event) {
     try {
@@ -34,10 +38,9 @@
   }
 
   function noticeText(payload) {
-    if (!payload) return null;
     if (payload.type === 'agent_approval_required') return TEXT.waiting;
     if (payload.type === 'run_finished') return TEXT[payload.outcome] || TEXT.completed;
-    return null;
+    return FALLBACK;
   }
 
   function present(value) {
@@ -67,13 +70,12 @@
 
   function onPush(payload) {
     var text = noticeText(payload);
-    if (!text) return Promise.resolve();
     return windowClients().then(function (clients) {
       var watching = clients.some(function (client) {
         return client.focused && showsConversation(client.url, payload.conversation_uuid);
       });
       if (watching) return undefined;
-      var tag = 'elitea-' + (present(payload.notification_id) ? payload.notification_id : payload.type);
+      var tag = 'elitea-' + (present(payload.notification_id) ? payload.notification_id : present(payload.type) ? payload.type : 'activity');
       return sw.registration.showNotification(text.title, {
         body: text.body,
         tag: tag,
@@ -152,8 +154,7 @@
     event.waitUntil(sw.clients.claim());
   });
   sw.addEventListener('push', function (event) {
-    var payload = readPayload(event);
-    if (payload) event.waitUntil(onPush(payload));
+    event.waitUntil(onPush(readPayload(event) || {}));
   });
   sw.addEventListener('notificationclick', function (event) {
     event.waitUntil(onClick(event.notification));

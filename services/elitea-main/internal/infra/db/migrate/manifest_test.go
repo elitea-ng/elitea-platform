@@ -1020,9 +1020,9 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the link kind goal_not_met. No data, no permission.
 	//
 	// 223: shared/0223_web_push.sql, web push (ADR-0045 decision 6, #1437):
-	// centry.push_subscriptions, the outbox cursor
-	// elitea_runtime.web_push_cursor (starts at the newest notification) and
-	// elitea_runtime.web_push_deliveries. No permission.
+	// centry.push_subscriptions, the outbox elitea_runtime.web_push_queue
+	// (an AFTER INSERT trigger on centry.notifications writes it, so nothing
+	// old is sent) and elitea_runtime.web_push_deliveries. No permission.
 	require.EqualValues(t, 223, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)

@@ -91,7 +91,7 @@ describe('push-sw.js: push', () => {
     expect(fake.registration.showNotification).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores an unknown type and a payload that is not JSON, and never shows fetched content', async () => {
+  it('shows the generic text for an unknown type, a payload that is not JSON and an empty push, and never fetches content', async () => {
     const { fake, push, fire } = worker();
     await push({ type: 'something_else', title: 'secret' });
     await fire('push', {
@@ -102,7 +102,11 @@ describe('push-sw.js: push', () => {
       },
     });
     await fire('push', { data: null });
-    expect(fake.registration.showNotification).not.toHaveBeenCalled();
+    expect(fake.registration.showNotification).toHaveBeenCalledTimes(3);
+    for (const call of vi.mocked(fake.registration.showNotification).mock.calls) {
+      expect(call[0]).toBe('Elitea');
+      expect(call[1]).toEqual(expect.objectContaining({ body: 'There is new activity.', data: { url: SCOPE } }));
+    }
     expect(fake.fetch).not.toHaveBeenCalled();
   });
 

@@ -68,7 +68,8 @@ WHERE c.root_execution_id = k.root_execution_id
 // is how long a chain waits for a continuation after its latest run ended.
 // It is idempotent: an ended chain is never selected again. Each ended chain
 // gets its run_finished notification in the same transaction (ADR-0045
-// decision 5).
+// decision 5), best-effort: a notification that fails never holds the batch
+// back.
 func (r *RunChainsRepository) SweepChains(ctx context.Context, quiet time.Duration, limit int) ([]SweptChain, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -94,9 +95,7 @@ func (r *RunChainsRepository) SweepChains(ctx context.Context, quiet time.Durati
 			return err
 		}
 		for _, end := range ends {
-			if err := notifyChainEnd(ctx, tx, end); err != nil {
-				return err
-			}
+			notifyChainEnd(ctx, tx, end)
 			swept = append(swept, SweptChain{RootExecutionID: end.Root, EndState: end.State})
 		}
 		return nil

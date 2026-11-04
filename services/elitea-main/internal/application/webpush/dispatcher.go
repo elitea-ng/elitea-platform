@@ -26,7 +26,7 @@ const (
 	TTL = 24 * time.Hour
 	// PollInterval is how often the dispatcher looks for new rows.
 	PollInterval = 5 * time.Second
-	// NotificationBatch bounds the rows one pass reads.
+	// NotificationBatch bounds the outbox rows one fan-out takes.
 	NotificationBatch = 256
 	// DeliveryBatch bounds the sends of one pass.
 	DeliveryBatch = 64
@@ -34,14 +34,27 @@ const (
 	sendConcurrency = 8
 	// sendTimeout bounds one send.
 	sendTimeout = 15 * time.Second
+	// ClaimLease is how long a claimed delivery stays invisible to the other
+	// senders: well past a whole pass (DeliveryBatch / sendConcurrency rounds
+	// of sendTimeout, and the record). A sender that dies leaves its claim to
+	// expire, and the delivery goes out again.
+	ClaimLease = 5 * time.Minute
+	// recordAttempts and recordTimeout bound the write of a pass's
+	// outcomes: a failed write leaves the deliveries to their lease, which
+	// sends them again.
+	recordAttempts = 3
+	recordTimeout  = 30 * time.Second
 	// firstRetry and maxRetry bound the backoff.
 	firstRetry = 30 * time.Second
 	maxRetry   = time.Hour
 	// MaxSubscriptionsPerUser is the cap on a person's browsers.
 	MaxSubscriptionsPerUser = 10
+	// MaxRejectedSends is how many 401 or 403 answers in a row, with no
+	// success between, delete a subscription.
+	MaxRejectedSends = 3
 )
 
-// Notification is one new notification row the outbox reads.
+// Notification is one outbox row: a new notification.
 type Notification struct {
 	ID        int64
 	UserID    int64
@@ -54,13 +67,15 @@ type Notification struct {
 type Delivery struct {
 	NotificationID int64
 	SubscriptionID string
-	Endpoint       string
-	P256dh         string
-	Auth           string
-	Payload        []byte
-	Urgency        string
-	Attempts       int
-	ExpiresAt      time.Time
+	// LeaseID is the claim the delivery was handed out under.
+	LeaseID   string
+	Endpoint  string
+	P256dh    string
+	Auth      string
+	Payload   []byte
+	Urgency   string
+	Attempts  int
+	ExpiresAt time.Time
 }
 
 // Action is what a send's result does to its delivery.
@@ -77,6 +92,10 @@ const (
 	Retry
 	// Drop: the failure cannot heal or the TTL ends before the next try.
 	Drop
+	// Rejected: the push service refused the VAPID token (401 or 403). The
+	// delivery is dropped, and the subscription is removed at its
+	// MaxRejectedSends-th refusal in a row.
+	Rejected
 )
 
 // Outcome is the result of one send.
@@ -87,27 +106,23 @@ type Outcome struct {
 	RetryAt  time.Time
 }
 
-// Pass is one dispatcher pass inside the single-sender lock.
-type Pass interface {
-	// NewNotifications reads at most limit run_finished and
-	// agent_approval_required rows above the cursor, oldest first, and the
-	// highest id it looked at (rows of other types move the cursor too).
-	NewNotifications(ctx context.Context, limit int) ([]Notification, int64, error)
-	// Enqueue adds one delivery of the payload per subscription of the user.
-	Enqueue(ctx context.Context, notification Notification, payload []byte, urgency string, expiresAt time.Time) error
-	// AdvanceCursor moves the cursor to the id.
-	AdvanceCursor(ctx context.Context, to int64) error
-	// DueDeliveries removes the expired deliveries and reads at most limit
-	// due ones, oldest first.
-	DueDeliveries(ctx context.Context, limit int) ([]Delivery, error)
-	// Record applies the outcomes.
-	Record(ctx context.Context, outcomes []Outcome) error
-}
+// Plan builds what one outbox row sends; false sends nothing.
+type Plan func(Notification) (payload []byte, urgency string, ok bool)
 
-// Store runs a pass under the single-sender lock. It answers false, and
-// runs nothing, when another replica holds the lock.
+// Store is the outbox. Each method is one short transaction; no
+// transaction is open while the dispatcher sends.
 type Store interface {
-	WithSenderLock(ctx context.Context, pass func(Pass) error) (bool, error)
+	// FanOut removes at most limit outbox rows and, for each row plan
+	// accepts, adds one delivery per subscription of the row's user that
+	// expires at expiresAt. It answers how many outbox rows it removed.
+	FanOut(ctx context.Context, limit int, plan Plan, expiresAt time.Time) (int, error)
+	// ClaimDue removes the expired deliveries and claims at most limit due
+	// ones, oldest first, for lease: no other sender gets them before the
+	// lease ends. Replicas never claim the same delivery at once.
+	ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]Delivery, error)
+	// Record applies the outcomes. An outcome whose claim another sender
+	// took over after the lease leaves the delivery alone.
+	Record(ctx context.Context, outcomes []Outcome) error
 }
 
 // HTTPDoer sends a request (an *http.Client).
@@ -156,56 +171,68 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 }
 
-// Dispatch runs one pass: it moves the outbox cursor (adding deliveries
-// while push is on, and skipping the rows while it is off), then sends the
-// due deliveries. Another replica's pass makes this one a no-op.
+// Dispatch runs one pass: it moves the outbox rows to deliveries (or drops
+// them while push is off), claims the due deliveries, sends them with no
+// transaction open, and records the outcomes. Replicas run passes side by
+// side; each claims different deliveries.
 func (d *Dispatcher) Dispatch(ctx context.Context) error {
 	keys, subject, enabled := d.service.sender(ctx)
-	_, err := d.store.WithSenderLock(ctx, func(pass Pass) error {
-		if err := d.enqueue(ctx, pass, enabled); err != nil {
-			return err
-		}
-		if !enabled {
-			return nil
-		}
-		due, err := pass.DueDeliveries(ctx, DeliveryBatch)
-		if err != nil || len(due) == 0 {
-			return err
-		}
-		return pass.Record(ctx, d.sendAll(ctx, keys, subject, due))
-	})
-	return err
+	if err := d.fanOut(ctx, enabled); err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	due, err := d.store.ClaimDue(ctx, DeliveryBatch, ClaimLease)
+	if err != nil || len(due) == 0 {
+		return err
+	}
+	return d.record(ctx, d.sendAll(ctx, keys, subject, due))
 }
 
-func (d *Dispatcher) enqueue(ctx context.Context, pass Pass, enabled bool) error {
+func (d *Dispatcher) fanOut(ctx context.Context, enabled bool) error {
+	plan := func(row Notification) ([]byte, string, bool) {
+		if !enabled {
+			// Push is off: the row is drained, so turning push on later
+			// sends nothing old.
+			return nil, "", false
+		}
+		return BuildPayload(row)
+	}
 	for ctx.Err() == nil {
-		rows, last, err := pass.NewNotifications(ctx, NotificationBatch)
-		if err != nil {
+		taken, err := d.store.FanOut(ctx, NotificationBatch, plan, d.now().Add(TTL))
+		if err != nil || taken < NotificationBatch {
 			return err
-		}
-		if last == 0 {
-			return nil
-		}
-		if enabled {
-			expires := d.now().Add(TTL)
-			for _, row := range rows {
-				payload, urgency, ok := BuildPayload(row)
-				if !ok {
-					continue
-				}
-				if err := pass.Enqueue(ctx, row, payload, urgency, expires); err != nil {
-					return err
-				}
-			}
-		}
-		if err := pass.AdvanceCursor(ctx, last); err != nil {
-			return err
-		}
-		if len(rows) < NotificationBatch {
-			return nil
 		}
 	}
 	return ctx.Err()
+}
+
+// record writes the outcomes of sends that already happened, so it outlives
+// a cancelled ctx (a shutdown mid-pass) and tries again before it gives up:
+// an outcome that is not written leaves its delivery to the lease, which
+// sends it a second time.
+func (d *Dispatcher) record(ctx context.Context, outcomes []Outcome) error {
+	for _, outcome := range outcomes {
+		if outcome.Action == Rejected {
+			d.logger.WarnContext(ctx, "web push: the push service refused the VAPID token",
+				"status", outcome.Status, "subscription_id", outcome.Delivery.SubscriptionID)
+		}
+	}
+	detached := context.WithoutCancel(ctx)
+	var err error
+	for attempt := range recordAttempts {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 200 * time.Millisecond)
+		}
+		recordCtx, cancel := context.WithTimeout(detached, recordTimeout)
+		err = d.store.Record(recordCtx, outcomes)
+		cancel()
+		if err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func (d *Dispatcher) sendAll(ctx context.Context, keys Keys, subject string, due []Delivery) []Outcome {
@@ -266,8 +293,16 @@ func (d *Dispatcher) send(ctx context.Context, keys Keys, subject string, delive
 	case response.StatusCode == http.StatusRequestEntityTooLarge || response.StatusCode == http.StatusBadRequest:
 		// The same request fails the same way again.
 		outcome.Action = Drop
+	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
+		// RFC 8292: 403 is a token whose key is not the one the
+		// subscription was made with (the browser must subscribe again),
+		// 401 a token the service does not accept. Neither heals by
+		// waiting. Some services (Apple) answer 403 for any bad token too,
+		// an install-wide fault, so one refusal does not delete the
+		// subscription: MaxRejectedSends in a row do.
+		outcome.Action = Rejected
 	default:
-		// 401/403 (a key problem that an operator fixes), 429 and 5xx.
+		// 429, 5xx and any other answer.
 		return d.retry(outcome)
 	}
 	return outcome

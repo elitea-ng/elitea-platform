@@ -117,6 +117,12 @@ function activated(registration: ServiceWorkerRegistration): Promise<void> {
   });
 }
 
+function sameKey(current: ArrayBuffer | null, expected: Uint8Array): boolean {
+  if (current === null) return false;
+  const bytes = new Uint8Array(current);
+  return bytes.length === expected.length && bytes.every((byte, i) => byte === expected[i]);
+}
+
 /**
  * Asks for the browser's permission (when not already given), registers the
  * worker, subscribes with the install's VAPID key and sends the subscription
@@ -131,8 +137,16 @@ export async function enableWebPush(env: WebPushEnv, place: WebPushPlace, public
   if (permission !== 'granted') return 'off';
   const registration = await env.serviceWorker.register(place.scriptUrl, { scope: place.scope });
   await activated(registration);
-  const existing = await registration.pushManager.getSubscription();
-  const subscription = existing ?? (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(publicKey) }));
+  const applicationServerKey = base64UrlToBytes(publicKey);
+  let existing = await registration.pushManager.getSubscription();
+  // A subscription made with another key (the install's key changed, or another
+  // install once served this origin) is refused by the push service on every
+  // send: replace it.
+  if (existing !== null && !sameKey(existing.options.applicationServerKey, applicationServerKey)) {
+    await existing.unsubscribe().catch(() => false);
+    existing = null;
+  }
+  const subscription = existing ?? (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }));
   try {
     await save(subscriptionBody(subscription));
   } catch (error) {

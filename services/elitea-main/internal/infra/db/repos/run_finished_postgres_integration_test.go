@@ -191,6 +191,60 @@ func TestPostgresRunFinishedDesktopCommit(t *testing.T) {
 		rows[0].ConversationUUID != conversation || rows[0].ExecutionID != started.ExecutionID {
 		t.Fatalf("meta = %+v", rows[0])
 	}
+	// The desktop thread id is the conversation's numeric id.
+	var thread string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM p_1.chat_conversations WHERE uuid = $1::uuid`,
+		conversation).Scan(&thread); err != nil || rows[0].ThreadID != thread {
+		t.Fatalf("thread_id = %q, want %q (%v)", rows[0].ThreadID, thread, err)
+	}
+}
+
+// TestPostgresRunFinishedNotifyIsBestEffort: a notification write that fails
+// rolls back to its savepoint; the chain end and the sweep batch commit.
+func TestPostgresRunFinishedNotifyIsBestEffort(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `
+CREATE FUNCTION public.refuse_run_finished() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'notifications are down';
+END
+$$;
+CREATE TRIGGER refuse_run_finished BEFORE INSERT ON centry.notifications
+    FOR EACH ROW WHEN (NEW.event_type = 'run_finished') EXECUTE FUNCTION public.refuse_run_finished();`); err != nil {
+		t.Fatal(err)
+	}
+	chains := NewRunChainsRepository(pool)
+	ended := strings.Repeat("1", 32)
+	swept := strings.Repeat("2", 32)
+	startCloudChain(t, pool, ended, 4708)
+	startCloudChain(t, pool, swept, 4708)
+	if ok, err := chains.EndChain(ctx, ended, unattended.EndFailed, ""); err != nil || !ok {
+		t.Fatalf("end = %v, %v", ok, err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.run_chains SET deadline = created_at WHERE root_execution_id = $1`, swept); err != nil {
+		t.Fatal(err)
+	}
+	got, err := chains.SweepChains(ctx, 10*time.Minute, 64)
+	if err != nil || len(got) != 1 || got[0].RootExecutionID != swept {
+		t.Fatalf("sweep = %+v, %v", got, err)
+	}
+	for _, root := range []string{ended, swept} {
+		var state *string
+		if err := pool.QueryRow(ctx, `
+SELECT end_state FROM elitea_runtime.run_chains WHERE root_execution_id = $1`, root).Scan(&state); err != nil ||
+			state == nil {
+			t.Fatalf("%s: the end state did not commit: %v", root, err)
+		}
+		if rows := runFinishedRows(t, pool, root); len(rows) != 0 {
+			t.Fatalf("%s: rows = %+v", root, rows)
+		}
+	}
+	// A later sweep does not pick the ended chains again.
+	if again, err := chains.SweepChains(ctx, 10*time.Minute, 64); err != nil || len(again) != 0 {
+		t.Fatalf("second sweep = %+v, %v", again, err)
+	}
 }
 
 // TestPostgresRunFinishedSweep: a chain the sweep ends at its deadline
@@ -227,32 +281,7 @@ func TestPostgresRunFinishedScheduleRun(t *testing.T) {
 	conversation := "3d4e5f6a-7b8c-4d9e-8f0a-1b2c3d4e5f6a"
 	seed := func(execution, origin string) {
 		t.Helper()
-		if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `
-INSERT INTO elitea_runtime.execution_jobs (
-    execution_id, generation, command_id, tenant_id, resource_project_id,
-    projection_project_id, actor_id, principal_ref, capability_id,
-    capability_version, input_bundle_id, request_digest, idempotency_scope,
-    idempotency_key, state, desired_state, admitted_at, trigger_origin, settled_at
-) VALUES (
-    $1, 1, 'cmd-'||$1, '1', 1, 1, '4705', '4705', 'agent.execute.application.v1', 'v1', 'bundle-'||$1,
-    decode(repeat('61', 32), 'hex'), 'scope-'||$1, 'key-'||$1, 'SUCCEEDED', 'RUNNING', now(), $2, now())`,
-				execution, origin); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `
-INSERT INTO elitea_runtime.agent_execution_jobs (
-    execution_id, generation, capability_id, input_bundle_id, request_entry_id,
-    client_stream_id, client_message_id, client_execution_generation, sio_event)
-VALUES ($1, 1, 'agent.execute.application.v1', 'bundle-' || $1, 'request', $2, 'not-a-uuid', 'generation',
-        'chat_predict')`, execution, conversation)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
+		seedSettledAgentRun(t, pool, execution, origin, conversation, "not-a-uuid")
 	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_runtime.unattended_run_policies
@@ -284,5 +313,96 @@ SELECT user_id FROM centry.notifications WHERE meta ->> 'chain_root_execution_id
 	}
 	if rows := runFinishedRows(t, pool, attended); len(rows) != 0 {
 		t.Fatalf("attended rows = %+v", rows)
+	}
+}
+
+// seedSettledAgentRun writes the job and agent rows of a settled agent run
+// that is not a chain link.
+func seedSettledAgentRun(t *testing.T, pool *pgxpool.Pool, execution, origin, conversation, message string) {
+	t.Helper()
+	ctx := t.Context()
+	if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_jobs (
+    execution_id, generation, command_id, tenant_id, resource_project_id,
+    projection_project_id, actor_id, principal_ref, capability_id,
+    capability_version, input_bundle_id, request_digest, idempotency_scope,
+    idempotency_key, state, desired_state, admitted_at, trigger_origin, settled_at
+) VALUES (
+    $1, 1, 'cmd-'||$1, '1', 1, 1, '4705', '4705', 'agent.execute.application.v1', 'v1', 'bundle-'||$1,
+    decode(repeat('61', 32), 'hex'), 'scope-'||$1, 'key-'||$1, 'SUCCEEDED', 'RUNNING', now(), $2, now())`,
+			execution, origin); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.agent_execution_jobs (
+    execution_id, generation, capability_id, input_bundle_id, request_entry_id,
+    client_stream_id, client_message_id, client_execution_generation, sio_event)
+VALUES ($1, 1, 'agent.execute.application.v1', 'bundle-' || $1, 'request', $2, $3, 'generation',
+        'chat_predict')`, execution, conversation, message)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPostgresRunFinishedApprovalWaitNotifiedOnce: a schedule run that
+// paused under notify_and_wait already has its agent_approval_required row,
+// so it gets no run_finished "waiting" row; a paused run without that wait
+// gets one.
+func TestPostgresRunFinishedApprovalWaitNotifiedOnce(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	repo, err := NewRunFinishedRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation := "4e5f6a7b-8c9d-4e0f-8a1b-2c3d4e5f6a7b"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.unattended_run_policies
+    (project_id, conversation_uuid, trigger_origin, version_id, owner_user_id, on_approval_required)
+VALUES (1, $1::uuid, 'schedule', 41, 4709, 'notify_and_wait')`, conversation); err != nil {
+		t.Fatal(err)
+	}
+	paused := func(execution, message string) {
+		t.Helper()
+		seedSettledAgentRun(t, pool, execution, "schedule", conversation, message)
+		if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, created_at)
+VALUES ($1::uuid, 1, 1, '{"hitl_interrupt": {"id": "i1"}}'::jsonb, now() AT TIME ZONE 'UTC')`, message)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notified := strings.Repeat("7", 32)
+	plain := strings.Repeat("8", 32)
+	paused(notified, "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a81")
+	paused(plain, "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a82")
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.unattended_approval_actions (
+    execution_id, interrupt_id, project_id, response_message_id, conversation_uuid, path, action,
+    owner_user_id, trigger_origin, state, expires_at)
+VALUES ($1, 'i1', 1, '5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a81', $2::uuid, 'root', 'notify_and_wait', 4709, 'schedule',
+        'WAITING', clock_timestamp() + interval '1 hour')`, notified, conversation); err != nil {
+		t.Fatal(err)
+	}
+	for _, execution := range []string{notified, plain} {
+		if err := repo.RecordSettledRun(ctx, execution, executionapp.SettlementSucceeded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rows := runFinishedRows(t, pool, notified); len(rows) != 0 {
+		t.Fatalf("a notified wait got a run_finished row: %+v", rows)
+	}
+	if rows := runFinishedRows(t, pool, plain); len(rows) != 1 || rows[0].Outcome != runfinished.OutcomeWaiting {
+		t.Fatalf("plain wait rows = %+v", rows)
 	}
 }

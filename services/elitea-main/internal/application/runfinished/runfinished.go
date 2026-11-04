@@ -17,10 +17,16 @@
 //     that has no chain: the settle hook in this package (Hook).
 //
 // The notification uuid is derived from the chain root, so a replayed settle
-// or commit writes nothing new (ON CONFLICT (uuid) DO NOTHING).
+// or commit writes nothing new (ON CONFLICT (uuid) DO NOTHING). The write is
+// best-effort: it runs in a savepoint, and a failure leaves the end state to
+// commit without its row.
 package runfinished
 
-import "time"
+import (
+	"time"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+)
 
 // EventType is centry.notifications.event_type of the row.
 const EventType = "run_finished"
@@ -75,14 +81,9 @@ func Notify(facts Facts) bool {
 		return true
 	case OutcomeCompleted:
 		return facts.Continuations >= 1 || facts.Duration >= MinDuration ||
-			unattendedOrigin(facts.TriggerOrigin) || facts.HandedOff
+			unattended.IsSystemTrigger(facts.TriggerOrigin) || facts.HandedOff
 	}
 	return false
-}
-
-// unattendedOrigin reports a run that no person started.
-func unattendedOrigin(origin string) bool {
-	return origin == "schedule" || origin == "webhook"
 }
 
 // Meta is the notification's meta. It holds ids and the outcome only.
@@ -94,7 +95,9 @@ type Meta struct {
 	ProjectID int64  `json:"project_id"`
 	// ConversationUUID is the chain's conversation.
 	ConversationUUID string `json:"conversation_uuid,omitempty"`
-	// ThreadID is the desktop host's thread id, when Main knows it.
+	// ThreadID is the desktop host's thread id of a desktop chain: the
+	// conversation's numeric id in decimal (the id the desktop app keeps its
+	// Local work threads under). Empty when Main cannot resolve it.
 	ThreadID             string `json:"thread_id,omitempty"`
 	ChainRootExecutionID string `json:"chain_root_execution_id"`
 	// ExecutionID is the chain's last run.

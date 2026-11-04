@@ -142,6 +142,10 @@ export function performLogout(deps: LogoutDeps = {}): Promise<void> {
 }
 
 function handOffToServerLogout(deps: LogoutDeps): void {
+  // The app stayed live through the push teardown (up to `pushTeardownWaitMs`),
+  // so a query or a store may have written `el.*` keys again since the first
+  // sweep: sweep once more, right before the page goes.
+  clearNamespace();
   const origin = deps.origin ?? window.location.origin;
   const redirect =
     deps.redirect ??

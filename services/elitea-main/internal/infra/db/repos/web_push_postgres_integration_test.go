@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/webpush"
@@ -168,127 +169,188 @@ SELECT NOT EXISTS (SELECT 1 FROM centry.push_subscriptions WHERE id = $1::uuid)`
 	}
 }
 
-// TestPostgresWebPushOutboxPass: the pass reads past the cursor, enqueues
-// one delivery per subscription, records a retry, and a Gone answer removes
-// the subscription with its deliveries.
-func TestPostgresWebPushOutboxPass(t *testing.T) {
+// webPushQueue reads the outbox's notification ids.
+func webPushQueue(t *testing.T, pool *pgxpool.Pool) []int64 {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), `SELECT notification_id FROM elitea_runtime.web_push_queue ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ids
+}
+
+// TestPostgresWebPushOutbox: the trigger queues the two watched types of a
+// subscribed user only; a notification whose transaction commits after a
+// higher id was fanned out still goes out; a fan-out adds one delivery per
+// subscription; a claim hides its deliveries from a second claim; outcomes
+// apply only under their lease; a Gone answer removes the subscription.
+func TestPostgresWebPushOutbox(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := t.Context()
 	repo, err := NewWebPushRepository(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const user int64 = 4811
+	const user, unsubscribed int64 = 4811, 4812
 	for _, endpoint := range []string{"https://push.example.com/one", "https://push.example.com/two"} {
 		if _, _, err := repo.SaveSubscription(ctx, pushSubscriptionFixture(t, user, endpoint)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	other := seedPushNotification(t, pool, user, "chat_mention", `{}`)
-	finished := seedPushNotification(t, pool, user, webpush.EventRunFinished,
-		`{"outcome":"failed","project_id":1,"chain_root_execution_id":"r","execution_id":"r","origin":"cloud","continuations":0}`)
+	const meta = `{"outcome":"failed","project_id":1,"chain_root_execution_id":"r","execution_id":"r","origin":"cloud","continuations":0}`
+	seedPushNotification(t, pool, user, "chat_mention", `{}`)
+	seedPushNotification(t, pool, unsubscribed, webpush.EventRunFinished, meta)
 
-	var due []webpush.Delivery
-	ran, err := repo.WithSenderLock(ctx, func(pass webpush.Pass) error {
-		rows, last, err := pass.NewNotifications(ctx, 10)
-		if err != nil {
-			return err
-		}
-		if last != finished || len(rows) != 1 || rows[0].ID != finished || rows[0].UserID != user {
-			t.Fatalf("new = %+v last %d, want only %d (skipped %d)", rows, last, finished, other)
-		}
-		payload, urgency, ok := webpush.BuildPayload(rows[0])
-		if !ok {
-			t.Fatal("no payload")
-		}
-		for range 2 { // a second enqueue adds nothing
-			if err := pass.Enqueue(ctx, rows[0], payload, urgency, time.Now().Add(webpush.TTL)); err != nil {
-				return err
-			}
-		}
-		if err := pass.AdvanceCursor(ctx, last); err != nil {
-			return err
-		}
-		due, err = pass.DueDeliveries(ctx, 10)
-		return err
-	})
-	if err != nil || !ran {
-		t.Fatalf("pass = %v, %v", ran, err)
+	// A writer takes a lower id and commits late.
+	late, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(due) != 2 || due[0].Urgency != "normal" {
-		t.Fatalf("due = %+v", due)
+	defer func() { _ = late.Rollback(ctx) }()
+	var lateID int64
+	if err := late.QueryRow(ctx, `
+INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type, created_at, updated_at)
+VALUES ($1::uuid, FALSE, 1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC')
+RETURNING id`, uuid.NewString(), user, meta, webpush.EventApprovalWaiting).Scan(&lateID); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := repo.WithSenderLock(ctx, func(pass webpush.Pass) error {
-		rows, _, err := pass.NewNotifications(ctx, 10)
-		if err == nil && len(rows) != 0 {
-			t.Fatalf("the cursor did not move: %+v", rows)
+	finished := seedPushNotification(t, pool, user, webpush.EventRunFinished, meta)
+	if queued := webPushQueue(t, pool); len(queued) != 1 || queued[0] != finished {
+		t.Fatalf("queue = %v, want only %d", queued, finished)
+	}
+	expires := time.Now().Add(webpush.TTL)
+	var planned []int64
+	plan := func(row webpush.Notification) ([]byte, string, bool) {
+		planned = append(planned, row.ID)
+		return webpush.BuildPayload(row)
+	}
+	if taken, err := repo.FanOut(ctx, 10, plan, expires); err != nil || taken != 1 {
+		t.Fatalf("fan out = %d, %v", taken, err)
+	}
+	if err := late.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if taken, err := repo.FanOut(ctx, 10, plan, expires); err != nil || taken != 1 {
+		t.Fatalf("fan out of the late row = %d, %v", taken, err)
+	}
+	if len(planned) != 2 || planned[0] != finished || planned[1] != lateID {
+		t.Fatalf("planned = %v, want %d then %d", planned, finished, lateID)
+	}
+	if taken, err := repo.FanOut(ctx, 10, plan, expires); err != nil || taken != 0 {
+		t.Fatalf("an empty outbox = %d, %v", taken, err)
+	}
+
+	due, err := repo.ClaimDue(ctx, 10, webpush.ClaimLease)
+	if err != nil || len(due) != 4 {
+		t.Fatalf("due = %+v, %v", due, err)
+	}
+	if again, err := repo.ClaimDue(ctx, 10, webpush.ClaimLease); err != nil || len(again) != 0 {
+		t.Fatalf("a second claim got %d, %v", len(again), err)
+	}
+	var retried, gone webpush.Delivery
+	for _, delivery := range due {
+		if delivery.NotificationID != finished {
+			continue
 		}
-		if err != nil {
-			return err
+		if retried.SubscriptionID == "" {
+			retried = delivery
+		} else {
+			gone = delivery
 		}
-		return pass.Record(ctx, []webpush.Outcome{
-			{Delivery: due[0], Action: webpush.Retry, Status: 503, RetryAt: time.Now().Add(time.Hour)},
-			{Delivery: due[1], Action: webpush.Gone, Status: 410},
-		})
+	}
+	// A record under another lease (a sender whose claim expired) changes
+	// nothing.
+	stale := retried
+	stale.LeaseID = uuid.NewString()
+	if err := repo.Record(ctx, []webpush.Outcome{{Delivery: stale, Action: webpush.Drop}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Record(ctx, []webpush.Outcome{
+		{Delivery: retried, Action: webpush.Retry, Status: 503, RetryAt: time.Now().Add(time.Hour)},
+		{Delivery: gone, Action: webpush.Gone, Status: 410},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	var attempts, status int
 	if err := pool.QueryRow(ctx, `
-SELECT attempts, last_status FROM elitea_runtime.web_push_deliveries WHERE subscription_id = $1::uuid`,
-		due[0].SubscriptionID).Scan(&attempts, &status); err != nil || attempts != 1 || status != 503 {
+SELECT attempts, last_status FROM elitea_runtime.web_push_deliveries
+WHERE subscription_id = $1::uuid AND notification_id = $2 AND lease_id IS NULL`,
+		retried.SubscriptionID, finished).Scan(&attempts, &status); err != nil || attempts != 1 || status != 503 {
 		t.Fatalf("retry row = %d %d %v", attempts, status, err)
 	}
 	var left int
 	if err := pool.QueryRow(ctx, `
 SELECT (SELECT count(*) FROM centry.push_subscriptions WHERE id = $1::uuid)
      + (SELECT count(*) FROM elitea_runtime.web_push_deliveries WHERE subscription_id = $1::uuid)`,
-		due[1].SubscriptionID).Scan(&left); err != nil || left != 0 {
+		gone.SubscriptionID).Scan(&left); err != nil || left != 0 {
 		t.Fatalf("gone subscription left %d rows: %v", left, err)
 	}
-	// A retry that is not due is not handed out again.
-	if _, err := repo.WithSenderLock(ctx, func(pass webpush.Pass) error {
-		again, err := pass.DueDeliveries(ctx, 10)
-		if err == nil && len(again) != 0 {
-			t.Fatalf("due again = %+v", again)
-		}
-		return err
-	}); err != nil {
+	// The lease ends: the claimed late delivery is handed out again; the
+	// retry that is not due is not.
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.web_push_deliveries SET next_attempt_at = clock_timestamp() - interval '1 second'
+WHERE lease_id IS NOT NULL`); err != nil {
 		t.Fatal(err)
+	}
+	reclaimed, err := repo.ClaimDue(ctx, 10, webpush.ClaimLease)
+	if err != nil || len(reclaimed) != 1 || reclaimed[0].NotificationID != lateID ||
+		reclaimed[0].SubscriptionID != retried.SubscriptionID {
+		t.Fatalf("reclaimed = %+v, %v", reclaimed, err)
 	}
 }
 
-// TestPostgresWebPushSingleSender: while one pass holds the lock, another
-// replica's pass does not run.
-func TestPostgresWebPushSingleSender(t *testing.T) {
+// TestPostgresWebPushRejectedSends: a 401 or 403 drops the delivery; the
+// MaxRejectedSends-th in a row deletes the subscription; a success resets
+// the count.
+func TestPostgresWebPushRejectedSends(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := t.Context()
 	repo, err := NewWebPushRepository(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		_, err := repo.WithSenderLock(ctx, func(webpush.Pass) error {
-			close(held)
-			<-release
-			return nil
-		})
-		done <- err
-	}()
-	<-held
-	ran, err := repo.WithSenderLock(ctx, func(webpush.Pass) error { return nil })
-	if err != nil || ran {
-		t.Fatalf("second sender ran = %v, %v", ran, err)
-	}
-	close(release)
-	if err := <-done; err != nil {
+	const user int64 = 4815
+	id, _, err := repo.SaveSubscription(ctx, pushSubscriptionFixture(t, user, "https://push.example.com/refused"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if ran, err := repo.WithSenderLock(ctx, func(webpush.Pass) error { return nil }); err != nil || !ran {
-		t.Fatalf("pass after release = %v, %v", ran, err)
+	expires := time.Now().Add(webpush.TTL)
+	sendOnce := func(action webpush.Action) {
+		t.Helper()
+		seedPushNotification(t, pool, user, webpush.EventRunFinished,
+			`{"outcome":"failed","project_id":1,"chain_root_execution_id":"r","execution_id":"r","origin":"cloud"}`)
+		if _, err := repo.FanOut(ctx, 10, webpush.BuildPayload, expires); err != nil {
+			t.Fatal(err)
+		}
+		due, err := repo.ClaimDue(ctx, 10, webpush.ClaimLease)
+		if err != nil || len(due) != 1 {
+			t.Fatalf("due = %+v, %v", due, err)
+		}
+		if err := repo.Record(ctx, []webpush.Outcome{{Delivery: due[0], Action: action, Status: 403}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range webpush.MaxRejectedSends - 1 {
+		sendOnce(webpush.Rejected)
+	}
+	sendOnce(webpush.Delivered)
+	for range webpush.MaxRejectedSends - 1 {
+		sendOnce(webpush.Rejected)
+	}
+	var rejected, deliveries int
+	if err := pool.QueryRow(ctx, `
+SELECT s.rejected_sends, (SELECT count(*) FROM elitea_runtime.web_push_deliveries)
+FROM centry.push_subscriptions AS s WHERE s.id = $1::uuid`, id).Scan(&rejected, &deliveries); err != nil ||
+		rejected != webpush.MaxRejectedSends-1 || deliveries != 0 {
+		t.Fatalf("rejected = %d, deliveries = %d, %v", rejected, deliveries, err)
+	}
+	sendOnce(webpush.Rejected)
+	if pushSubscriptionCount(t, pool, user) != 0 {
+		t.Fatal("the subscription outlived its refusals")
 	}
 }
 

@@ -69,11 +69,22 @@ describe('enableWebPush', () => {
   it('does not ask again when permission was given, and reuses a subscription that exists', async () => {
     const browser = createFakePushBrowser();
     browser.permission = 'granted';
-    browser.subscription = { endpoint: 'https://push.example/old', key: null };
+    browser.subscription = { endpoint: 'https://push.example/old', key: base64UrlToBytes(KEY) };
     const save = vi.fn().mockResolvedValue({ id: 's-1' });
     expect(await enableWebPush(browser.env, place, KEY, save)).toBe('on');
     expect(browser.calls).toEqual(['register']);
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ endpoint: 'https://push.example/old' }));
+  });
+
+  it('replaces a subscription that was made with another key', async () => {
+    const browser = createFakePushBrowser();
+    browser.permission = 'granted';
+    browser.subscription = { endpoint: 'https://push.example/old', key: new Uint8Array([4, 9, 9]) };
+    const save = vi.fn().mockResolvedValue({ id: 's-1' });
+    expect(await enableWebPush(browser.env, place, KEY, save)).toBe('on');
+    expect(browser.calls).toEqual(['register', 'unsubscribe', 'subscribe']);
+    expect(Array.from(browser.subscription?.key ?? [])).toEqual(Array.from(base64UrlToBytes(KEY)));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ endpoint: 'https://push.example/ep-1' }));
   });
 
   it('ends blocked when the person refuses, and off when they only close the prompt', async () => {

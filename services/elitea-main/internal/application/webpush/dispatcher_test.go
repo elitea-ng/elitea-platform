@@ -48,12 +48,14 @@ func (v *memoryVault) EnsureAdminHiddenSecret(_ context.Context, name string, ge
 // memoryStore is the outbox in memory.
 type memoryStore struct {
 	mu            sync.Mutex
-	locked        bool
-	cursor        int64
-	notifications []Notification
+	queue         []int64
+	notifications map[int64]Notification
 	subscriptions map[string]memorySubscription
-	deliveries    map[string]*Delivery
+	deliveries    map[string]*memoryDelivery
 	successes     map[string]int
+	recordFails   int
+	records       int
+	leases        int
 	now           func() time.Time
 }
 
@@ -61,95 +63,138 @@ type memorySubscription struct {
 	userID       int64
 	endpoint     string
 	p256dh, auth string
+	rejected     int
+}
+
+type memoryDelivery struct {
+	Delivery
+	nextAttempt time.Time
 }
 
 func newMemoryStore(now func() time.Time) *memoryStore {
-	return &memoryStore{subscriptions: map[string]memorySubscription{}, deliveries: map[string]*Delivery{},
-		successes: map[string]int{}, now: now}
+	return &memoryStore{notifications: map[int64]Notification{}, subscriptions: map[string]memorySubscription{},
+		deliveries: map[string]*memoryDelivery{}, successes: map[string]int{}, now: now}
 }
 
-func (s *memoryStore) WithSenderLock(_ context.Context, pass func(Pass) error) (bool, error) {
+// notify writes notification rows as their writers do; the outbox trigger
+// queues the two types it watches.
+func (s *memoryStore) notify(rows ...Notification) {
 	s.mu.Lock()
-	if s.locked {
-		s.mu.Unlock()
-		return false, nil
-	}
-	s.locked = true
-	s.mu.Unlock()
-	defer func() { s.mu.Lock(); s.locked = false; s.mu.Unlock() }()
-	return true, pass(s)
-}
-
-func (s *memoryStore) NewNotifications(_ context.Context, limit int) ([]Notification, int64, error) {
-	var rows []Notification
-	last := int64(0)
-	for _, row := range s.notifications {
-		if row.ID <= s.cursor || len(rows) >= limit {
-			continue
-		}
-		last = row.ID
+	defer s.mu.Unlock()
+	for _, row := range rows {
+		s.notifications[row.ID] = row
 		if row.EventType == EventRunFinished || row.EventType == EventApprovalWaiting {
-			rows = append(rows, row)
+			s.queue = append(s.queue, row.ID)
 		}
 	}
-	return rows, last, nil
 }
 
-func (s *memoryStore) Enqueue(_ context.Context, row Notification, payload []byte, urgency string, expires time.Time) error {
-	for id, sub := range s.subscriptions {
-		if sub.userID != row.UserID {
+func deliveryKey(subscriptionID string, notificationID int64) string {
+	return subscriptionID + "/" + string(rune(notificationID))
+}
+
+func (s *memoryStore) FanOut(_ context.Context, limit int, plan Plan, expires time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	taken := s.queue[:min(limit, len(s.queue))]
+	s.queue = s.queue[len(taken):]
+	for _, id := range taken {
+		row, ok := s.notifications[id]
+		if !ok {
 			continue
 		}
-		key := id + "/" + string(rune(row.ID))
-		if _, ok := s.deliveries[key]; ok {
+		payload, urgency, ok := plan(row)
+		if !ok {
 			continue
 		}
-		s.deliveries[key] = &Delivery{NotificationID: row.ID, SubscriptionID: id, Endpoint: sub.endpoint,
-			P256dh: sub.p256dh, Auth: sub.auth, Payload: payload, Urgency: urgency, ExpiresAt: expires}
+		for subID, sub := range s.subscriptions {
+			key := deliveryKey(subID, row.ID)
+			if _, ok := s.deliveries[key]; ok || sub.userID != row.UserID {
+				continue
+			}
+			s.deliveries[key] = &memoryDelivery{Delivery: Delivery{NotificationID: row.ID, SubscriptionID: subID,
+				Endpoint: sub.endpoint, P256dh: sub.p256dh, Auth: sub.auth, Payload: payload, Urgency: urgency,
+				ExpiresAt: expires}, nextAttempt: s.now()}
+		}
 	}
-	return nil
+	return len(taken), nil
 }
 
-func (s *memoryStore) AdvanceCursor(_ context.Context, to int64) error {
-	s.cursor = to
-	return nil
-}
-
-func (s *memoryStore) DueDeliveries(_ context.Context, limit int) ([]Delivery, error) {
+func (s *memoryStore) ClaimDue(_ context.Context, limit int, lease time.Duration) ([]Delivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.leases++
+	leaseID := "lease-" + string(rune('a'+s.leases))
 	var due []Delivery
 	for key, delivery := range s.deliveries {
 		if !s.now().Before(delivery.ExpiresAt) {
 			delete(s.deliveries, key)
 			continue
 		}
-		if len(due) < limit {
-			due = append(due, *delivery)
+		if len(due) < limit && !s.now().Before(delivery.nextAttempt) {
+			delivery.LeaseID, delivery.nextAttempt = leaseID, s.now().Add(lease)
+			due = append(due, delivery.Delivery)
 		}
 	}
 	return due, nil
 }
 
 func (s *memoryStore) Record(_ context.Context, outcomes []Outcome) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records++
+	if s.recordFails > 0 {
+		s.recordFails--
+		return errors.New("database down")
+	}
 	for _, outcome := range outcomes {
-		key := outcome.Delivery.SubscriptionID + "/" + string(rune(outcome.Delivery.NotificationID))
+		subID := outcome.Delivery.SubscriptionID
+		key := deliveryKey(subID, outcome.Delivery.NotificationID)
+		held := s.deliveries[key] != nil && s.deliveries[key].LeaseID == outcome.Delivery.LeaseID
 		switch outcome.Action {
 		case Delivered:
-			delete(s.deliveries, key)
-			s.successes[outcome.Delivery.SubscriptionID]++
+			if held {
+				delete(s.deliveries, key)
+			}
+			if sub, ok := s.subscriptions[subID]; ok {
+				sub.rejected = 0
+				s.subscriptions[subID] = sub
+			}
+			s.successes[subID]++
 		case Gone:
-			delete(s.subscriptions, outcome.Delivery.SubscriptionID)
-			for k, d := range s.deliveries {
-				if d.SubscriptionID == outcome.Delivery.SubscriptionID {
-					delete(s.deliveries, k)
+			s.deleteSubscription(subID)
+		case Rejected:
+			if held {
+				delete(s.deliveries, key)
+			}
+			if sub, ok := s.subscriptions[subID]; ok {
+				sub.rejected++
+				s.subscriptions[subID] = sub
+				if sub.rejected >= MaxRejectedSends {
+					s.deleteSubscription(subID)
 				}
 			}
 		case Retry:
-			s.deliveries[key].Attempts++
+			if held {
+				s.deliveries[key].Attempts++
+				s.deliveries[key].LeaseID, s.deliveries[key].nextAttempt = "", outcome.RetryAt
+			}
 		case Drop:
-			delete(s.deliveries, key)
+			if held {
+				delete(s.deliveries, key)
+			}
 		}
 	}
 	return nil
+}
+
+func (s *memoryStore) deleteSubscription(id string) {
+	delete(s.subscriptions, id)
+	for k, d := range s.deliveries {
+		if d.SubscriptionID == id {
+			delete(s.deliveries, k)
+		}
+	}
 }
 
 // browser is a push subscriber: its keys decrypt what the endpoint gets.
@@ -251,13 +296,13 @@ func TestDispatcherSendsAContentFreeDecryptablePayload(t *testing.T) {
 	f := newDispatchFixture(t)
 	f.subscribe("s1", 7, "/a")
 	f.subscribe("s2", 8, "/other-user")
-	f.store.notifications = []Notification{
+	f.store.notify(
 		runFinishedRow(1, 7, "waiting"),
-		{ID: 2, UserID: 7, ProjectID: 3, EventType: "mention", Meta: json.RawMessage(`{"text":"secret prompt"}`)},
-		{ID: 3, UserID: 7, ProjectID: 3, EventType: EventApprovalWaiting, Meta: json.RawMessage(
+		Notification{ID: 2, UserID: 7, ProjectID: 3, EventType: "mention", Meta: json.RawMessage(`{"text":"secret prompt"}`)},
+		Notification{ID: 3, UserID: 7, ProjectID: 3, EventType: EventApprovalWaiting, Meta: json.RawMessage(
 			`{"conversation_uuid":"0b7f5c86-29f4-4c5a-9b0f-5a6f8e0b2c11","message_id":"0b7f5c86-29f4-4c5a-9b0f-5a6f8e0b2c12",` +
 				`"execution_id":"` + strings.Repeat("c", 32) + `","tool_name":"delete_repo","message":"A schedule run waits"}`)},
-	}
+	)
 	if err := f.d.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +326,8 @@ func TestDispatcherSendsAContentFreeDecryptablePayload(t *testing.T) {
 			t.Fatalf("headers = %v", header)
 		}
 	}
-	if f.store.cursor != 3 || len(f.store.deliveries) != 0 || f.store.successes["s1"] != 2 {
-		t.Fatalf("cursor = %d, deliveries = %d, successes = %v", f.store.cursor, len(f.store.deliveries), f.store.successes)
+	if len(f.store.queue) != 0 || len(f.store.deliveries) != 0 || f.store.successes["s1"] != 2 {
+		t.Fatalf("queue = %v, deliveries = %d, successes = %v", f.store.queue, len(f.store.deliveries), f.store.successes)
 	}
 	// A second pass sends nothing new.
 	if err := f.d.Dispatch(context.Background()); err != nil {
@@ -299,7 +344,7 @@ func TestDispatcherDeletesAGoneSubscription(t *testing.T) {
 		f.subscribe("gone", 7, "/gone")
 		f.subscribe("live", 7, "/live")
 		f.push.status["/gone"] = status
-		f.store.notifications = []Notification{runFinishedRow(1, 7, "completed")}
+		f.store.notify(runFinishedRow(1, 7, "completed"))
 		if err := f.d.Dispatch(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -316,7 +361,7 @@ func TestDispatcherRetriesWithBackoffInsideTheTTL(t *testing.T) {
 	f := newDispatchFixture(t)
 	f.subscribe("s1", 7, "/flaky")
 	f.push.status["/flaky"] = http.StatusServiceUnavailable
-	f.store.notifications = []Notification{runFinishedRow(1, 7, "failed")}
+	f.store.notify(runFinishedRow(1, 7, "failed"))
 	var outcome Outcome
 	f.d.client = recordingDoer{next: f.server.Client(), seen: func(*http.Request) {}}
 	if err := f.d.Dispatch(context.Background()); err != nil {
@@ -329,13 +374,14 @@ func TestDispatcherRetriesWithBackoffInsideTheTTL(t *testing.T) {
 		if delivery.Attempts != 1 {
 			t.Fatalf("attempts = %d", delivery.Attempts)
 		}
-		outcome = f.d.send(context.Background(), Keys{}, "", *delivery)
+		outcome = f.d.send(context.Background(), Keys{}, "", delivery.Delivery)
 	}
 	if outcome.Action != Drop {
 		t.Fatal("a send without keys must drop")
 	}
-	// The push service heals: the next pass delivers.
+	// The push service heals: the pass after the backoff delivers.
 	f.push.status["/flaky"] = http.StatusCreated
+	f.clock = f.clock.Add(firstRetry)
 	if err := f.d.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +391,7 @@ func TestDispatcherRetriesWithBackoffInsideTheTTL(t *testing.T) {
 
 	// After 24 hours the delivery is dropped, not retried.
 	f.push.status["/flaky"] = http.StatusInternalServerError
-	f.store.notifications = append(f.store.notifications, runFinishedRow(2, 7, "failed"))
+	f.store.notify(runFinishedRow(2, 7, "failed"))
 	if err := f.d.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -384,12 +430,12 @@ func TestDispatcherSkipsWhilePushIsOff(t *testing.T) {
 	f := newDispatchFixture(t)
 	f.subscribe("s1", 7, "/a")
 	f.enabled = false
-	f.store.notifications = []Notification{runFinishedRow(1, 7, "completed")}
+	f.store.notify(runFinishedRow(1, 7, "completed"))
 	if err := f.d.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if f.store.cursor != 1 || len(f.store.deliveries) != 0 || len(f.push.got) != 0 {
-		t.Fatal("a pass with push off queued or sent, or did not move the cursor")
+	if len(f.store.queue) != 0 || len(f.store.deliveries) != 0 || len(f.push.got) != 0 {
+		t.Fatal("a pass with push off added a delivery or sent, or did not drain the outbox")
 	}
 	// Turning push on later does not send the old row.
 	f.enabled = true
@@ -401,16 +447,89 @@ func TestDispatcherSkipsWhilePushIsOff(t *testing.T) {
 	}
 }
 
-func TestDispatcherIsASingleSender(t *testing.T) {
+func TestDispatcherClaimsUnderALease(t *testing.T) {
 	f := newDispatchFixture(t)
-	f.store.locked = true // another replica holds the lock
 	f.subscribe("s1", 7, "/a")
-	f.store.notifications = []Notification{runFinishedRow(1, 7, "completed")}
+	f.store.notify(runFinishedRow(1, 7, "completed"))
+	if _, err := f.store.FanOut(context.Background(), NotificationBatch, BuildPayload, f.clock.Add(TTL)); err != nil {
+		t.Fatal(err)
+	}
+	// Another replica claimed the delivery and is sending it.
+	claimed, _ := f.store.ClaimDue(context.Background(), DeliveryBatch, ClaimLease)
+	if len(claimed) != 1 {
+		t.Fatalf("claimed = %d", len(claimed))
+	}
 	if err := f.d.Dispatch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if f.store.cursor != 0 || len(f.push.got) != 0 {
-		t.Fatal("a pass ran without the lock")
+	if len(f.push.got) != 0 {
+		t.Fatal("a claimed delivery was sent by a second sender")
+	}
+	// That replica died: after the lease the delivery goes out once.
+	f.clock = f.clock.Add(ClaimLease)
+	if err := f.d.Dispatch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.push.got["/a"]) != 1 || len(f.store.deliveries) != 0 {
+		t.Fatalf("after the lease: sends = %d, deliveries = %d", len(f.push.got["/a"]), len(f.store.deliveries))
+	}
+	// The dead replica's late record changes nothing.
+	if err := f.store.Record(context.Background(), []Outcome{{Delivery: claimed[0], Action: Retry,
+		RetryAt: f.clock.Add(time.Hour)}}); err != nil || len(f.store.deliveries) != 0 {
+		t.Fatalf("a stale claim's record = %v, deliveries = %d", err, len(f.store.deliveries))
+	}
+}
+
+func TestDispatcherRecordsAgainAfterAFailedWrite(t *testing.T) {
+	f := newDispatchFixture(t)
+	f.subscribe("s1", 7, "/a")
+	f.store.notify(runFinishedRow(1, 7, "completed"))
+	f.store.recordFails = recordAttempts - 1
+	ctx, cancel := context.WithCancel(context.Background())
+	f.d.client = cancelAfterDoer{next: f.server.Client(), cancel: cancel}
+	// The pass is cancelled once the send is out (a shutdown); the write
+	// still happens, and a failed write is tried again.
+	if err := f.d.Dispatch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.store.records != recordAttempts || len(f.store.deliveries) != 0 || f.store.successes["s1"] != 1 {
+		t.Fatalf("records = %d, deliveries = %d", f.store.records, len(f.store.deliveries))
+	}
+}
+
+func TestDispatcherRejectedTokenDropsAndThenDeletes(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		f := newDispatchFixture(t)
+		f.subscribe("refused", 7, "/refused")
+		f.push.status["/refused"] = status
+		for id := range int64(MaxRejectedSends) {
+			f.store.notify(runFinishedRow(id+1, 7, "failed"))
+			if err := f.d.Dispatch(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(f.store.deliveries) != 0 {
+				t.Fatalf("%d: a refused send waits for a retry", status)
+			}
+			if _, ok := f.store.subscriptions["refused"]; ok != (id+1 < MaxRejectedSends) {
+				t.Fatalf("%d: after %d refusals the subscription stayed = %v", status, id+1, ok)
+			}
+		}
+	}
+	// A success between refusals starts the count again.
+	f := newDispatchFixture(t)
+	f.subscribe("s1", 7, "/flip")
+	for id := range int64(2 * MaxRejectedSends) {
+		f.push.status["/flip"] = http.StatusForbidden
+		if id%2 == 1 {
+			f.push.status["/flip"] = http.StatusCreated
+		}
+		f.store.notify(runFinishedRow(id+1, 7, "failed"))
+		if err := f.d.Dispatch(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := f.store.subscriptions["s1"]; !ok {
+		t.Fatal("refusals with successes between deleted the subscription")
 	}
 }
 
@@ -484,6 +603,47 @@ func TestKeySourceKeepsOneKeyPerInstall(t *testing.T) {
 	}
 }
 
+// slowVault answers after release; it counts the round trips.
+type slowVault struct {
+	memoryVault
+	started chan struct{}
+	release chan struct{}
+}
+
+func (v *slowVault) EnsureAdminHiddenSecret(ctx context.Context, name string, generate func() (string, error)) (string, error) {
+	v.started <- struct{}{}
+	<-v.release
+	return v.memoryVault.EnsureAdminHiddenSecret(ctx, name, generate)
+}
+
+func TestKeySourceSharesOneVaultRoundTrip(t *testing.T) {
+	vault := &slowVault{started: make(chan struct{}, 8), release: make(chan struct{})}
+	source := NewKeySource(vault, nil)
+	var group sync.WaitGroup
+	publics := make([]string, 4)
+	for i := range publics {
+		group.Go(func() {
+			keys, _ := source.Keys(context.Background())
+			publics[i] = keys.Public
+		})
+	}
+	<-vault.started
+	// While the vault answers, the source's lock is free.
+	if _, known, _ := source.cached(); known {
+		t.Fatal("a load in flight reads as known")
+	}
+	close(vault.release)
+	group.Wait()
+	if vault.calls != 1 {
+		t.Fatalf("vault round trips = %d, want 1", vault.calls)
+	}
+	for _, public := range publics {
+		if public == "" || public != publics[0] {
+			t.Fatalf("callers disagree: %v", publics)
+		}
+	}
+}
+
 func TestSubject(t *testing.T) {
 	cases := []struct{ explicit, base, want string }{
 		{"mailto:ops@example.com", "", "mailto:ops@example.com"},
@@ -499,6 +659,17 @@ func TestSubject(t *testing.T) {
 			t.Errorf("Subject(%q, %q) = %q, %v; want %q", tc.explicit, tc.base, got, err, tc.want)
 		}
 	}
+}
+
+// cancelAfterDoer sends, then cancels the pass.
+type cancelAfterDoer struct {
+	next   HTTPDoer
+	cancel context.CancelFunc
+}
+
+func (d cancelAfterDoer) Do(request *http.Request) (*http.Response, error) {
+	defer d.cancel()
+	return d.next.Do(request.WithContext(context.WithoutCancel(request.Context())))
 }
 
 type recordingDoer struct {

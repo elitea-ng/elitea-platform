@@ -43,6 +43,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
@@ -532,7 +533,7 @@ func recordRootApprovalDecisions(
 	if err != nil {
 		return err
 	}
-	system := unattendedOrigin(triggerOrigin)
+	system := unattended.IsSystemTrigger(triggerOrigin)
 	for _, decision := range decisions {
 		entry := approvalEntry{
 			ProjectID: turn.ProjectID, ExecutionID: pausedExecution, ResponseMessageID: turn.ResponseMessageID,

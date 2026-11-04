@@ -256,9 +256,9 @@ WHERE k.execution_id = $1`, executionID).Scan(
 // endRunChain writes a chain's end state once and, in the same
 // transaction, its run_finished notification when the noise rule asks for
 // one (ADR-0045 decision 5). It answers false when the chain already ended
-// or does not exist; then it writes nothing. tx must be a transaction: the
-// end state and the notification commit together.
-func endRunChain(ctx context.Context, tx chainExecutor, root, state, limit string) (bool, error) {
+// or does not exist; then it writes nothing. The notification is
+// best-effort (notifyChainEnd): it never fails the end.
+func endRunChain(ctx context.Context, tx pgx.Tx, root, state, limit string) (bool, error) {
 	if !unattended.ValidEndState(state) {
 		return false, errors.New("unattended chain: unknown end state")
 	}
@@ -275,9 +275,7 @@ WHERE c.root_execution_id = $1 AND c.end_state IS NULL`+chainEndReturning, root,
 	if err != nil {
 		return false, fmt.Errorf("unattended chain: end: %w", err)
 	}
-	if err := notifyChainEnd(ctx, tx, end); err != nil {
-		return false, err
-	}
+	notifyChainEnd(ctx, tx, end)
 	return true, nil
 }
 
