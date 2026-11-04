@@ -209,7 +209,7 @@ impl ModelFacadeInvocation {
     ///
     /// `auto` switches thinking off on a step only for a model whose catalogue
     /// row declares its control form. An undeclared model may not take the
-    /// off form at all: an OpenAI o-series model refuses `reasoning_effort:
+    /// off form at all: an `OpenAI` o-series model refuses `reasoning_effort:
     /// none`, so a routine tool step would fail. There `auto` thinks at the
     /// default level on every step, the single-call rule.
     pub(crate) fn step_thinking(&self, request: &LlmRequest) -> Option<StepThinking> {

@@ -202,13 +202,30 @@ pub trait DefinitionSource: Send + Sync {
 // ModelTransport
 // ---------------------------------------------------------------------------
 
-/// Reasoning control preserved from the frozen agent settings.
+/// Reasoning control preserved from the frozen agent settings: the
+/// canonical setting of ADR-0038 decision 1. `None` is `off`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReasoningEffort {
     Low,
     Medium,
     High,
     None,
+    /// The per-step policy ([`crate::thinking::resolve`]).
+    Auto,
+}
+
+impl ReasoningEffort {
+    /// The canonical setting this effort is.
+    #[must_use]
+    pub const fn thinking(self) -> crate::thinking::Thinking {
+        match self {
+            Self::Low => crate::thinking::Thinking::Low,
+            Self::Medium => crate::thinking::Thinking::Medium,
+            Self::High => crate::thinking::Thinking::High,
+            Self::None => crate::thinking::Thinking::Off,
+            Self::Auto => crate::thinking::Thinking::Auto,
+        }
+    }
 }
 
 /// Frozen generation controls for one bound model (the worker's
@@ -223,6 +240,10 @@ pub struct ModelRequest {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// The catalogue's thinking data for the model (ADR-0038 decision 3):
+    /// how `reasoning_effort` is sent, and the `auto` tool-step rule. `None`
+    /// when the catalogue row declares no control form.
+    pub reasoning: Option<crate::request::ModelReasoning>,
     pub response_schema: Option<Value>,
     /// Pipeline output is validated after joining bounded continuations.
     pub allow_text_continuation: bool,

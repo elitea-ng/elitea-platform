@@ -928,11 +928,22 @@ pub(super) fn request_body_in(
     if let Some(temperature) = model.temperature {
         body.insert("temperature".into(), json!(temperature));
     }
-    if let Some(effort) = model.reasoning_effort {
-        body.insert(
-            "reasoning_effort".into(),
-            json!(super::definition::effort_name(effort)),
-        );
+    // The translation table and the `auto` per-step policy (ADR-0038
+    // decisions 2 and 4), as the worker facades apply them.
+    let structured = request
+        .config
+        .as_ref()
+        .is_some_and(|config| config.response_schema.is_some());
+    if elitea_agent_runtime::thinking::apply_openai_step(
+        &mut body,
+        model
+            .reasoning_effort
+            .map(elitea_agent_runtime::host::ReasoningEffort::thinking),
+        model.reasoning,
+        &request.contents,
+        structured,
+    ) {
+        body.remove("temperature");
     }
     Ok(Value::Object(body))
 }
@@ -1461,6 +1472,7 @@ mod tests {
             max_tokens: Some(100),
             temperature: Some(0.5),
             reasoning_effort: None,
+            reasoning: None,
             response_schema: None,
             allow_text_continuation: false,
             max_model_turns: 5,

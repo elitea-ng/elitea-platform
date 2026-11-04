@@ -28,7 +28,7 @@
 //! built yet.
 
 use adk_core::{Content, Part};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub use elitea_llm_wire::thinking::{
     DEFAULT_LEVEL, Level, ReasoningControl, StepThinking, Thinking,
@@ -133,6 +133,54 @@ pub const fn effective_control(
         Some(control) => control,
         None => ReasoningControl::legacy(native_anthropic),
     }
+}
+
+/// The thinking of one request on a model that has `reasoning` (the
+/// catalogue's data, or `None` when the row declares no control form).
+///
+/// A declared form takes the `auto` per-step policy. An undeclared one never
+/// switches thinking off by itself: an `OpenAI` o-series model refuses
+/// `reasoning_effort: none`, so `auto` there thinks at the default level on
+/// every step (the single-call rule). The worker facades apply the same rule.
+#[must_use]
+pub fn step(
+    setting: Option<Thinking>,
+    reasoning: Option<crate::request::ModelReasoning>,
+    contents: &[Content],
+    structured: bool,
+) -> Option<StepThinking> {
+    let setting = setting?;
+    match reasoning {
+        None => Some(setting.single_call()),
+        Some(reasoning) => resolve(
+            Some(setting),
+            classify(contents, structured),
+            reasoning.auto_policy(),
+        ),
+    }
+}
+
+/// Writes the thinking form of one OpenAI-compatible chat-completions request
+/// into `body`, for a host that builds its own body (the desktop): the
+/// translation table, with the catalogue's control form (`reasoning_effort`
+/// when undeclared, the form such a host always sent) and [`step`]. It
+/// returns whether the request must carry no temperature.
+pub fn apply_openai_step(
+    body: &mut Map<String, Value>,
+    setting: Option<Thinking>,
+    reasoning: Option<crate::request::ModelReasoning>,
+    contents: &[Content],
+    structured: bool,
+) -> bool {
+    let Some(step) = step(setting, reasoning, contents, structured) else {
+        return false;
+    };
+    let control = reasoning.map_or(ReasoningControl::Effort, |reasoning| reasoning.control);
+    elitea_llm_wire::thinking::apply_openai(
+        body,
+        elitea_llm_wire::thinking::openai_form(control, step),
+    );
+    control.refuses_temperature(step)
 }
 
 #[cfg(test)]
@@ -280,5 +328,49 @@ mod tests {
             effective_control(Some(ReasoningControl::Toggle), false),
             ReasoningControl::Toggle
         );
+    }
+
+    #[test]
+    fn a_host_body_takes_the_table_and_the_policy() {
+        let toggle = crate::request::ModelReasoning::parse("toggle", false);
+        let after_tool = vec![user("go"), call(), result(json!({"value": 1}))];
+
+        let mut body = Map::new();
+        let refuses = apply_openai_step(
+            &mut body,
+            Some(Thinking::Auto),
+            toggle,
+            &[user("go")],
+            false,
+        );
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
+        assert!(!refuses, "a toggle model takes a temperature");
+
+        let mut body = Map::new();
+        apply_openai_step(&mut body, Some(Thinking::Auto), toggle, &after_tool, false);
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
+        );
+
+        // Undeclared: reasoning_effort, and auto never sends the off form.
+        let mut body = Map::new();
+        let refuses = apply_openai_step(&mut body, Some(Thinking::Auto), None, &after_tool, false);
+        assert_eq!(body["reasoning_effort"], json!("medium"));
+        assert!(refuses);
+
+        let mut body = Map::new();
+        apply_openai_step(&mut body, Some(Thinking::Off), None, &after_tool, false);
+        assert_eq!(body["reasoning_effort"], json!("none"));
+
+        let mut body = Map::new();
+        assert!(!apply_openai_step(
+            &mut body,
+            None,
+            toggle,
+            &after_tool,
+            false
+        ));
+        assert!(body.is_empty(), "no setting sends nothing");
     }
 }

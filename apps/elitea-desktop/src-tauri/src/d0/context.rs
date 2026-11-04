@@ -89,6 +89,8 @@ pub struct ModelFacts {
     /// A paid provider with a prompt cache (`catalogue::caches_paid_prompts`):
     /// only such a model's thread is compacted while idle (`super::idle`).
     pub prompt_cache: bool,
+    /// The catalogue's thinking data (`catalogue::model_reasoning`).
+    pub reasoning: Option<elitea_agent_runtime::request::ModelReasoning>,
 }
 
 /// A low-tier model a compaction may summarise with.
@@ -155,6 +157,7 @@ pub async fn model_facts(
             replay: known.as_ref().map(|facts| facts.replay).unwrap_or_default(),
             vision: known.as_ref().is_some_and(|facts| facts.vision),
             prompt_cache: known.as_ref().is_some_and(|facts| facts.prompt_cache),
+            reasoning: known.as_ref().and_then(|facts| facts.reasoning),
             low_tier: known.and_then(|facts| facts.low_tier),
         };
     }
@@ -175,6 +178,7 @@ pub async fn model_facts(
             vision: false,
             low_tier: None,
             prompt_cache: false,
+            reasoning: None,
         };
     };
     let facts = facts_of(&catalogue, model_name);
@@ -198,6 +202,7 @@ fn facts_of(catalogue: &Catalogue, model_name: &str) -> ModelFacts {
             .and_then(Value::as_bool)
             .unwrap_or(false),
         prompt_cache: catalogue::caches_paid_prompts(model, model_name),
+        reasoning: catalogue::model_reasoning(model),
         low_tier: catalogue.low_tier_default().and_then(|model| {
             Some(LowTierModel {
                 name: model.name.clone(),
