@@ -6,6 +6,7 @@ import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { ThreadTargetLine, ThreadTargetSection, useThreadTargetForm, type ThreadTargetForm } from '@/entities/thread-target';
 import type { PipelineInboundTrigger } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
@@ -129,14 +130,15 @@ function fullUrl(trigger: PipelineInboundTrigger | undefined): string {
 interface TriggerActionsProps {
   readonly settings: AgentWebhookTrigger;
   readonly state: TriggerState;
-  readonly mode: AgentWebhookMode;
+  /** Creates or rotates the trigger, with the "Runs" choice when it changed. */
+  readonly onRotate: () => void;
 }
 
-function TriggerActions({ settings, state, mode }: TriggerActionsProps): ReactNode {
+function TriggerActions({ settings, state, onRotate }: TriggerActionsProps): ReactNode {
   const { secret } = settings;
   return (
     <Box sx={actionsSx}>
-      <Button variant="contained" size="small" disabled={state.disabled} onClick={() => void settings.rotate(mode)} data-testid="agent-trigger-rotate">
+      <Button variant="contained" size="small" disabled={state.disabled} onClick={onRotate} data-testid="agent-trigger-rotate">
         {state.live
           ? t('pages.pipelines.editPipeline.triggers.trigger.rotate', 'Rotate')
           : t('pages.pipelines.editPipeline.triggers.trigger.create', 'Create trigger URL')}
@@ -165,8 +167,45 @@ function TriggerActions({ settings, state, mode }: TriggerActionsProps): ReactNo
   );
 }
 
-function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhookTrigger; readonly isReadOnly: boolean }): ReactNode {
+/**
+ * The rotate button's action (ADR-0045 decision 9): with a changed "Runs"
+ * choice it sends the target, and a refusal of it shows on its field; else
+ * the rotation it always was.
+ */
+function rotateAction(settings: AgentWebhookTrigger, form: ThreadTargetForm, mode: AgentWebhookMode): () => void {
+  return () => {
+    if (!form.changed) {
+      void settings.rotate(mode);
+      return;
+    }
+    const pending = form.pending();
+    if (pending.kind !== 'body') return;
+    void form.submit(() => settings.rotateTarget(mode, pending.body));
+  };
+}
+
+/** A changed "Runs" choice on a live trigger: applying it rotates the credential, as a change of type does. */
+function TargetPending({ show }: { readonly show: boolean }): ReactNode {
+  if (!show) return null;
+  return (
+    <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-target-pending">
+      {t(
+        'pipelines.pipelineWebhookModal.targetPending',
+        'Applying this target rotates the credential: the current secret stops working and the sender has to be given the new one.',
+      )}
+    </Typography>
+  );
+}
+
+interface TriggerBodyProps {
+  readonly projectId: string | undefined;
+  readonly settings: AgentWebhookTrigger;
+  readonly isReadOnly: boolean;
+}
+
+function TriggerBody({ projectId, settings, isReadOnly }: TriggerBodyProps): ReactNode {
   const storedMode = agentWebhookModeOf(settings.trigger);
+  const form = useThreadTargetForm(true, settings.trigger, 'agent');
   const [mode, setMode] = useState<AgentWebhookMode>(storedMode);
   // A rotate answers with the stored mode; the selection follows it.
   useEffect(() => setMode(storedMode), [storedMode]);
@@ -202,6 +241,8 @@ function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhook
         {modeHint(mode, settings)}
       </Typography>
       <TriggerRisks trigger={settings.trigger} />
+      <ThreadTargetSection projectId={projectId} {...form.section} disabled={state.disabled} />
+      <TargetPending show={state.live && form.changed} />
       {state.modeChanged && (
         <Typography variant="bodySmall" color="text.secondary" data-testid="agent-trigger-mode-pending">
           {t(
@@ -220,6 +261,7 @@ function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhook
           {fullUrl(settings.trigger)}
         </Typography>
       )}
+      {state.live && <ThreadTargetLine projectId={projectId} target={settings.trigger} testId="agent-trigger-thread" />}
       {settings.secret !== undefined && (
         <Typography variant="bodySmall" sx={valueSx} data-testid="agent-trigger-secret">
           {settings.secret}
@@ -235,7 +277,7 @@ function TriggerBody({ settings, isReadOnly }: { readonly settings: AgentWebhook
           {t('pages.pipelines.editPipeline.triggers.trigger.lastUsed', 'Last called: {{when}}', { when: new Date(lastUsed).toLocaleString() })}
         </Typography>
       )}
-      <TriggerActions settings={settings} state={state} mode={mode} />
+      <TriggerActions settings={settings} state={state} onRotate={rotateAction(settings, form, mode)} />
     </Box>
   );
 }
@@ -273,13 +315,14 @@ export function EditApplicationTriggersPanel({ projectId, versionId, isReadOnly 
         content: (
           <TriggerBody
             key={versionId}
+            projectId={projectId}
             settings={settings}
             isReadOnly={isReadOnly}
           />
         ),
       },
     ],
-    [settings, isReadOnly, versionId],
+    [settings, isReadOnly, versionId, projectId],
   );
   if (projectId === undefined || versionId === undefined) return null;
   return <BasicAccordion items={items} data-testid="edit-application-triggers-panel" />;

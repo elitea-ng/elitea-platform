@@ -9,6 +9,7 @@ import {
   rotatePipelineInboundTrigger,
   useGetPipelineInboundTrigger,
 } from '@/shared/api/generated/applications/applications';
+import { threadTargetRefusal, type ThreadTargetFieldsBody } from '@/entities/thread-target';
 import type { PipelineInboundTrigger, PipelineInboundTriggerModeRequest } from '@/shared/api/generated/model';
 
 /**
@@ -101,6 +102,13 @@ export interface AgentWebhookTrigger {
   readonly error: string | undefined;
   readonly isBusy: boolean;
   readonly rotate: (mode: AgentWebhookMode) => Promise<void>;
+  /**
+   * Rotates (or creates) the trigger with a new target (ADR-0045 decision 9):
+   * the `workspace_thread` fields, or `target_kind: agent` to clear a stored
+   * thread. Resolves to the error it caught; a refusal of the target is not
+   * put in `error`, because the form shows it on its field.
+   */
+  readonly rotateTarget: (mode: AgentWebhookMode, target: ThreadTargetFieldsBody) => Promise<unknown>;
   readonly reveal: () => Promise<void>;
   readonly revoke: () => Promise<void>;
   readonly hideSecret: () => void;
@@ -136,8 +144,8 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
   const trigger = envelope?.status === 200 ? envelope.data : undefined;
 
   const run = useCallback(
-    async (action: () => Promise<{ readonly status: number; readonly data: unknown } | undefined>): Promise<void> => {
-      if (!enabled) return;
+    async (action: () => Promise<{ readonly status: number; readonly data: unknown } | undefined>, withTarget = false): Promise<unknown> => {
+      if (!enabled) return undefined;
       setIsBusy(true);
       setError(undefined);
       try {
@@ -145,8 +153,11 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
         const body = answer?.status === 200 ? (answer.data as PipelineInboundTrigger) : undefined;
         setSecret({ scope, value: body?.secret });
         await queryClient.invalidateQueries({ queryKey: getGetPipelineInboundTriggerQueryKey(projectId, version) });
+        return undefined;
       } catch (cause) {
-        setError({ scope, value: cause instanceof Error ? cause.message : String(cause) });
+        // A refusal of a thread target shows on its field, not here.
+        if (!withTarget || threadTargetRefusal(cause) === undefined) setError({ scope, value: cause instanceof Error ? cause.message : String(cause) });
+        return cause;
       } finally {
         setIsBusy(false);
       }
@@ -155,18 +166,27 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
   );
 
   const rotate = useCallback(
-    (mode: AgentWebhookMode) => run(() => rotatePipelineInboundTrigger(projectId, version, agentWebhookRotateRequest(trigger, mode))),
+    async (mode: AgentWebhookMode) => {
+      await run(() => rotatePipelineInboundTrigger(projectId, version, agentWebhookRotateRequest(trigger, mode)));
+    },
     [run, projectId, version, trigger],
   );
-  const reveal = useCallback(() => run(() => revealPipelineInboundTrigger(projectId, version)), [run, projectId, version]);
-  const revoke = useCallback(
-    () =>
-      run(async () => {
-        await revokePipelineInboundTrigger(projectId, version);
-        return undefined;
-      }),
-    [run, projectId, version],
+  // A body with only the target fields names no mode, so the server keeps the
+  // stored mode, header and events, as a rotate with no body does.
+  const rotateTarget = useCallback(
+    (mode: AgentWebhookMode, target: ThreadTargetFieldsBody) =>
+      run(() => rotatePipelineInboundTrigger(projectId, version, { ...agentWebhookRotateRequest(trigger, mode), ...target }), true),
+    [run, projectId, version, trigger],
   );
+  const reveal = useCallback(async () => {
+    await run(() => revealPipelineInboundTrigger(projectId, version));
+  }, [run, projectId, version]);
+  const revoke = useCallback(async () => {
+    await run(async () => {
+      await revokePipelineInboundTrigger(projectId, version);
+      return undefined;
+    });
+  }, [run, projectId, version]);
   const hideSecret = useCallback(() => setSecret(undefined), []);
 
   return {
@@ -175,6 +195,7 @@ export function useAgentWebhookTrigger(projectIdText: string | undefined, versio
     error: error?.scope === scope ? error.value : undefined,
     isBusy,
     rotate,
+    rotateTarget,
     reveal,
     revoke,
     hideSecret,

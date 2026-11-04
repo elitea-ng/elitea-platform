@@ -54,6 +54,7 @@ export function EditPipelineTriggersPanel(props: EditPipelineTriggersPanelProps)
               </Typography>
             )}
             <EditPipelineTriggerCard
+              projectId={projectId}
               trigger={settings.trigger}
               secretUrl={settings.secretUrl}
               isBusy={settings.isBusy}
@@ -64,6 +65,7 @@ export function EditPipelineTriggersPanel(props: EditPipelineTriggersPanelProps)
               onHideSecret={settings.hideSecret}
             />
             <EditPipelineScheduleCard
+              projectId={projectId}
               schedule={settings.schedule}
               isBusy={settings.isBusy}
               isReadOnly={isReadOnly}
@@ -74,7 +76,7 @@ export function EditPipelineTriggersPanel(props: EditPipelineTriggersPanelProps)
         ),
       },
     ],
-    [settings, isReadOnly],
+    [settings, isReadOnly, projectId],
   );
 
   if (projectId === undefined || versionId === undefined) return null;
