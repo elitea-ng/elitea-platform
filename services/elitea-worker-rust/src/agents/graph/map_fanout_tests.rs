@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use adk_rust::graph::checkpoint::{Checkpointer, MemoryCheckpointer};
 use adk_rust::graph::{
-    Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, NodeOutput, START, State,
-    StateGraph,
+    Channel, Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, NodeOutput,
+    START, State, StateGraph, StateSchema,
 };
 use async_trait::async_trait;
 use elitea_agent_runtime::graph::fanout_budget::{MAX_CHILD_RESULT_BYTES, MAX_JOINED_RESULT_BYTES};
@@ -38,6 +38,7 @@ use super::parallel::{
     ParallelCheckpointAppender, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
     ParallelChildOrigin, ParallelDecision, ParallelOccurrenceCheckpointer, ParallelPauseCard,
 };
+use super::state_reducers::StateReducer;
 use crate::agents::graph::application::{
     ApplicationExecutionError, PipelineApplicationResolver, PipelineApplicationSelection,
     ResolvedApplicationParticipant,
@@ -336,6 +337,16 @@ const V2_CONTINUE: Option<MapPolicy> = Some(MapPolicy {
 });
 
 fn harness(definition: MapDefinition, behavior: ItemBehavior) -> Harness {
+    harness_with(definition, behavior, None)
+}
+
+/// `reducer`: the destination key's declared reducer (append lands on an
+/// ADK list channel, which concatenates).
+fn harness_with(
+    definition: MapDefinition,
+    behavior: ItemBehavior,
+    reducer: Option<StateReducer>,
+) -> Harness {
     let children = Arc::new(ItemChildren::default());
     let parent = Arc::new(ParentRows::default());
     let runs = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -355,8 +366,20 @@ fn harness(definition: MapDefinition, behavior: ItemBehavior) -> Harness {
     ));
     let source = FanoutSource::Map(MapSource::new(definition, WORKER_DIGEST).expect("Map source"));
     let parent_checkpointer = runtime.parent_checkpointer();
-    let graph = StateGraph::with_channels(&["items", "prefix", "mapped"])
-        .add_node(DurableParallelNode::from_source(source, runtime))
+    let mut schema = StateSchema::new();
+    for key in ["items", "prefix"] {
+        schema.channels.insert(key.to_owned(), Channel::new(key));
+    }
+    schema.channels.insert(
+        "mapped".to_owned(),
+        if reducer == Some(StateReducer::Append) {
+            Channel::list("mapped")
+        } else {
+            Channel::new("mapped")
+        },
+    );
+    let graph = StateGraph::new(schema)
+        .add_node(DurableParallelNode::from_source(source, runtime).with_output_reducer(reducer))
         .add_edge(START, "each")
         .add_edge("each", adk_rust::graph::END)
         .compile()
@@ -769,4 +792,80 @@ fn a_map_agent_worker_without_a_proven_participant_is_refused_readably() {
         Err(other) => panic!("expected a readable refusal, got {other:?}"),
         Ok(_) => panic!("an unproved Agent worker compiled"),
     }
+}
+
+/// Commit 5: a v2 Map lands through its destination's declared reducer. An
+/// `append` join on an `append` key concatenates onto what the key held.
+#[tokio::test]
+async fn a_v2_map_appends_through_its_declared_append_reducer() {
+    let harness = harness_with(
+        map_definition(8, 2, V2_CONTINUE),
+        echo(),
+        Some(StateReducer::Append),
+    );
+    let state = run(&harness, json!(["a", "b"]), "root-reducer")
+        .await
+        .unwrap();
+    assert_eq!(
+        state["mapped"],
+        json!([
+            {"previous": true},
+            {"index": 0, "node": "worker", "status": "succeeded", "outputs": {"item_result": "a"}},
+            {"index": 1, "node": "worker", "status": "succeeded", "outputs": {"item_result": "b"}},
+        ])
+    );
+}
+
+fn v2(join: &str, on_error: &str, destination: &str) -> String {
+    PIPELINE
+        .replace(
+            "reduction: ordered_collection",
+            &format!("on_error: {on_error}, join: {join}"),
+        )
+        .replace(
+            "  mapped: {type: list, value: []}\n",
+            &format!("  mapped: {destination}\n"),
+        )
+}
+
+/// Commit 5: the save-time join check (`JoinMode::check`) admits a join
+/// that can land on the destination's reducer and refuses one that cannot,
+/// readably; a v1 Map keeps main's overwrite rule.
+#[test]
+fn a_map_join_is_checked_against_its_destination_reducer_at_save_time() {
+    const LIST_APPEND: &str = "{type: list, value: [], reducer: append}";
+    const DICT_MERGE: &str = "{type: dict, value: {}, reducer: merge}";
+    const KIND: &str = "its destination a list (append) or dict (keyed, merge)";
+    const JOIN: &str = "a Map join does not match its destination reducer or On Error";
+    for yaml in [
+        v2("append", "continue", LIST_APPEND),
+        v2("append", "continue", "{type: list, value: []}"),
+        v2("keyed", "continue", DICT_MERGE),
+        v2("merge", "stop", DICT_MERGE),
+    ] {
+        PipelineDefinition::from_yaml(&yaml).unwrap_or_else(|error| panic!("{yaml}: {error}"));
+    }
+    // A destination of the wrong kind is refused by its type first; a
+    // well-typed join that cannot land (merge needs stop) by the join check.
+    for (yaml, expected) in [
+        (v2("append", "continue", DICT_MERGE), KIND),
+        (v2("keyed", "continue", LIST_APPEND), KIND),
+        (v2("merge", "continue", DICT_MERGE), JOIN),
+    ] {
+        let Err(error) = PipelineDefinition::from_yaml(&yaml) else {
+            panic!("a join that cannot land compiled: {yaml}");
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    let v1 = PIPELINE.replace(
+        "  mapped: {type: list, value: []}\n",
+        &format!("  mapped: {LIST_APPEND}\n"),
+    );
+    let Err(error) = PipelineDefinition::from_yaml(&v1) else {
+        panic!("a v1 Map compiled onto a typed reducer");
+    };
+    assert!(
+        error.to_string().contains("must use the overwrite reducer"),
+        "{error}"
+    );
 }

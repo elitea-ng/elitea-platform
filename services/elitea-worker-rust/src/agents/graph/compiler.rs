@@ -989,7 +989,7 @@ impl PipelineDefinition {
             .cloned()
             .collect();
         validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
-        validate_parallel_joins(&nodes, &state_reducers)?;
+        validate_fanout_joins(&nodes, &state_reducers)?;
         let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
@@ -2805,13 +2805,19 @@ fn validate_node_state(
     match node {
         PipelineNodeDefinition::Map(node) => {
             let map = node.runtime();
+            // As a Parallel output: append (v1 included) lands the ordered
+            // collection, keyed and merge land one object.
+            let destination = match map.join() {
+                JoinMode::Append => "list",
+                JoinMode::Keyed | JoinMode::Merge => "dict",
+            };
             if state.get(&map.source).map(String::as_str) != Some("list")
-                || state.get(&map.destination).map(String::as_str) != Some("list")
+                || state.get(&map.destination).map(String::as_str) != Some(destination)
                 || builtin_state_key(&map.source)
                 || builtin_state_key(&map.destination)
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "Map source and destination must be declared business list roots",
+                    "a Map source must be a declared business list and its destination a list (append) or dict (keyed, merge)",
                 ));
             }
         }
@@ -3028,8 +3034,8 @@ fn typed_reducer(
     Ok(Some(reducer))
 }
 
-/// Channels whose writes must replace the value: a Map destination, a
-/// Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
+/// Channels whose writes must replace the value: a v1 Map destination (it
+/// writes main's whole `{index, outputs}` collection), a Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
 /// every output of a node that runs inside a Parallel or Map parent (its
 /// updates never pass the top-level [`ReducerGuard`]).
 fn validate_overwrite_channels(
@@ -3050,7 +3056,11 @@ fn validate_overwrite_channels(
                 .collect()
         } else {
             match node {
-                PipelineNodeDefinition::Map(map) => vec![map.runtime().destination.as_str()],
+                // A v2 Map lands through its declared reducer, checked in
+                // `validate_fanout_joins`; a v1 Map keeps main's overwrite.
+                PipelineNodeDefinition::Map(map) if map.runtime().policy.is_none() => {
+                    vec![map.runtime().destination.as_str()]
+                }
                 PipelineNodeDefinition::SplitOut(_) | PipelineNodeDefinition::Aggregate(_) => {
                     node.output_keys().iter().map(String::as_str).collect()
                 }
@@ -3059,8 +3069,9 @@ fn validate_overwrite_channels(
                     node.cleaned_keys().iter().map(String::as_str).collect()
                 }
                 // A Parallel output lands through its declared reducer; the
-                // join mode is checked against it in `validate_parallel_joins`.
+                // join mode is checked against it in `validate_fanout_joins`.
                 PipelineNodeDefinition::Parallel(_)
+                | PipelineNodeDefinition::Map(_)
                 | PipelineNodeDefinition::Code(_)
                 | PipelineNodeDefinition::Application(_)
                 | PipelineNodeDefinition::Decision(_)
@@ -3079,10 +3090,10 @@ fn validate_overwrite_channels(
     Ok(())
 }
 
-/// Save-time check that every Parallel join can land on its output key's
-/// declared reducer (`JoinMode::check`), so no combination is discovered at
-/// run time.
-fn validate_parallel_joins(
+/// Save-time check that every Parallel and v2 Map join can land on its
+/// output key's declared reducer (`JoinMode::check`), so no combination is
+/// discovered at run time.
+fn validate_fanout_joins(
     nodes: &[PipelineNodeDefinition],
     reducers: &BTreeMap<String, StateReducer>,
 ) -> Result<(), PipelineConfigurationError> {
@@ -3097,6 +3108,18 @@ fn validate_parallel_joins(
                 .map_err(|_| {
                     PipelineConfigurationError::Invalid(
                         "a fixed Parallel join does not match its output reducer or On Error",
+                    )
+                })?;
+        }
+        if let PipelineNodeDefinition::Map(map) = node
+            && map.runtime().policy.is_some()
+        {
+            let map = map.runtime();
+            map.join()
+                .check(map.on_error(), reducers.get(&map.destination).copied())
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "a Map join does not match its destination reducer or On Error",
                     )
                 })?;
         }
