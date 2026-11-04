@@ -114,6 +114,19 @@ test('at the round limit the best failing candidate is returned unverified', asy
   });
 });
 
+test('a pass on changed check files never becomes the best candidate', async () => {
+  await withRun(async (run) => {
+    const { chat } = fakeChat({ values: [1, 3, 2], review: (r) => ({ decision: 'continue', next_task: `task ${r + 1}` }) });
+    // Round 1 "passes" by changing the check; rounds 2 and 3 fail honestly.
+    const verifier = verifierFrom((v) => (v === '1'
+      ? { pass: false, rawPass: true, changed: ['test/a.test.mjs'], score: 1e6, detail: 'verifier changed' }
+      : { pass: false, score: Number(v), detail: v }));
+    const r = await runVerifiedLoop({ chat, run, task, verifier, maxRounds: 3 });
+    assert.equal(r.outcome, 'verifier_changed');
+    assert.equal(readFileSync(join(run.ws, 'out.txt'), 'utf8'), '3');
+  });
+});
+
 test('a cut-off worker gets a summary call with thinking off', async () => {
   await withRun(async (run) => {
     const { chat, log } = fakeChat({ values: [1, 1, 1, 1], review: () => ({ decision: 'done' }), workerAlwaysTools: true });

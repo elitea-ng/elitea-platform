@@ -128,14 +128,16 @@ export async function runVerifiedLoop({
         note = 'flaky: the confirm re-run failed';
       }
     }
-    // Regression guard.
+    // Regression guard. A result with changed check files ranks lowest: its
+    // score comes from a check it altered, so it never becomes the best.
+    const tampered = Boolean(verdict.changed?.length);
     if (verdict.pass) {
       best = { dir: snapshot(run), pass: true, score: verdict.score, round };
     } else if (best?.pass) {
       restore(run, best.dir);
       restores++;
       note = `${note ? `${note}; ` : ''}regression: restored the passing result of round ${best.round}`;
-    } else if (!best || verdict.score >= best.score) {
+    } else if (!tampered && (!best || verdict.score >= best.score)) {
       best = { dir: snapshot(run), pass: false, score: verdict.score, round };
     }
     last = verdict;
