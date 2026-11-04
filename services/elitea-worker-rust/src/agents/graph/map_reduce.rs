@@ -10,6 +10,7 @@ use adk_rust::graph::{
     CompiledGraph, ExecutionConfig, GraphError, Node, NodeContext, NodeOutput, State,
 };
 use async_trait::async_trait;
+use elitea_agent_runtime::graph::fanout::plan::{JoinMode, OnError};
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -47,17 +48,83 @@ pub(crate) struct MapDefinition {
     pub(crate) destination: String,
     pub(crate) max_items: usize,
     pub(crate) max_concurrency: usize,
-    /// V1 supports ordered collection only. The parent schema owns its reducer.
-    pub(crate) reduction: MapReduction,
+    /// The v1 shape: ordered collection, stop on the first failed item. The
+    /// parent schema owns its reducer. Absent in the v2 shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reduction: Option<MapReduction>,
+    /// The v2 shape's On Error and Join. Absent in a v1 document, so a v1
+    /// definition serializes, and therefore digests, as it always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) policy: Option<MapPolicy>,
 }
 
-#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MapReduction {
     OrderedCollection,
 }
 
+/// On Error and Join of a v2 Map node, as the shared fan-out plan reads them.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MapPolicy {
+    pub(crate) on_error: MapOnError,
+    pub(crate) join: MapJoin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapOnError {
+    Continue,
+    Stop,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MapJoin {
+    Append,
+    Keyed,
+    Merge,
+}
+
+impl From<OnError> for MapOnError {
+    fn from(value: OnError) -> Self {
+        match value {
+            OnError::Continue => Self::Continue,
+            OnError::Stop => Self::Stop,
+        }
+    }
+}
+
+impl From<JoinMode> for MapJoin {
+    fn from(value: JoinMode) -> Self {
+        match value {
+            JoinMode::Append => Self::Append,
+            JoinMode::Keyed => Self::Keyed,
+            JoinMode::Merge => Self::Merge,
+        }
+    }
+}
+
 impl MapDefinition {
+    /// The node's On Error. A v1 document stops on the first failed item.
+    pub(crate) fn on_error(&self) -> OnError {
+        match self.policy.map(|policy| policy.on_error) {
+            None | Some(MapOnError::Stop) => OnError::Stop,
+            Some(MapOnError::Continue) => OnError::Continue,
+        }
+    }
+
+    /// How the joined collection lands. A v1 document's ordered collection
+    /// is `append`.
+    pub(crate) fn join(&self) -> JoinMode {
+        match self.policy.map(|policy| policy.join) {
+            None | Some(MapJoin::Append) => JoinMode::Append,
+            Some(MapJoin::Keyed) => JoinMode::Keyed,
+            Some(MapJoin::Merge) => JoinMode::Merge,
+        }
+    }
+
     pub(crate) fn validate(&self) -> Result<(), GraphError> {
         if !super::yaml::valid_graph_id(&self.id)
             || !super::yaml::valid_graph_id(&self.worker)

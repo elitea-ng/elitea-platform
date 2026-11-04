@@ -546,7 +546,8 @@ fn map_definition() -> MapDefinition {
         max_items: 64,
         // One item at a time makes "items 0 and 1 saved, item 2 running" exact.
         max_concurrency: 1,
-        reduction: MapReduction::OrderedCollection,
+        reduction: Some(MapReduction::OrderedCollection),
+        policy: None,
     }
 }
 

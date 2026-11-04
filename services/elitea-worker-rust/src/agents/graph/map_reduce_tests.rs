@@ -406,7 +406,8 @@ fn definition() -> MapDefinition {
         destination: "mapped".to_owned(),
         max_items: 64,
         max_concurrency: 4,
-        reduction: MapReduction::OrderedCollection,
+        reduction: Some(MapReduction::OrderedCollection),
+        policy: None,
     }
 }
 fn context(items: Value, append: bool) -> NodeContext {

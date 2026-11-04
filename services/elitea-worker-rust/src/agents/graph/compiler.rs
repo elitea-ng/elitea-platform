@@ -72,7 +72,7 @@ use elitea_agent_runtime::graph::fanout::plan::JoinMode;
 mod map_compiler;
 #[path = "parallel_compiler.rs"]
 mod parallel_compiler;
-use super::map_yaml::MapNodeDefinition;
+use super::map_yaml::{MAP_REDUCTION_AND_JOIN, MapNodeDefinition, MapYamlError};
 use super::{pipeline_completed_event, pipeline_result_event};
 pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
@@ -2691,7 +2691,12 @@ fn parse_pipeline_node(
             }),
         "map" => MapNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Map)
-            .map_err(|_| PipelineConfigurationError::Invalid("a Map node is invalid")),
+            .map_err(|error| match error {
+                MapYamlError::ReductionAndJoin => {
+                    PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_JOIN)
+                }
+                MapYamlError::Invalid => PipelineConfigurationError::Invalid("a Map node is invalid"),
+            }),
         "parallel" => ParallelNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Parallel)
             .map_err(|error| match error {
