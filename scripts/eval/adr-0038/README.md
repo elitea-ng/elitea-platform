@@ -62,7 +62,10 @@ The run appends each finished run to `<out>.jsonl`. When you start the same
 command again, it skips the runs that are already in that file. At the end
 it writes `<out>.json` (all records and the run settings) and `<out>.md`
 (the summary tables). `node summarize.mjs <out>.json` prints the tables
-again.
+again. The analysis at the end of a committed `.md` is written by hand. A
+new run to the same `--out` overwrites it, so copy it first.
+
+Results so far: `results/qwen-2026-11-04.md`.
 
 ## Variants
 
