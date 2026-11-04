@@ -122,8 +122,10 @@
 - **Sign-in challenge (`0fc86ed42`).** `MCPAuthorizationChallenge`
   (`internal/api/v2/eliteacore/mcp_authorization_challenge.go`, routed in `internal/api/router.go` next to
   `mcp_sync_tools`) answers the public consent metadata of one saved MCP toolkit. The card names only its toolkit.
-  - **Permission.** `requireMCPToolWrite`, i.e. `models.applications.tool.patch` through the always-on
-    `projectPermission` gate: the permission `test_tool` uses, never the flag-disableable `toolkitGate`.
+  - **Permission.** `requireMCPConnect`, i.e. `models.applications.predict.post` through the always-on
+    `projectPermission` gate: the run permission of `mcp_oauth_proxy` and `mcp_dcr_proxy`, which the same dialog
+    calls next. The run's own user may be a viewer, who does not hold `tool.patch` (migration 0068, #6885); the first
+    version used `tool.patch` and so refused a viewer (REVIEW-1566 R1).
   - **The endpoint comes from storage.** `ResolveDelegatedAuthToolkitSettings(project, actor, toolkit)`, the resolver
     the OAuth exchange uses, then `mcpoauth.ToolkitResource`. The request body is not read. Unknown, another
     project's and an invisible toolkit all answer the same 404 `toolkit_not_found`. Only `mcp` toolkits with an https
@@ -182,7 +184,8 @@ listed in the sections above; the full list is `git diff --name-only 9934b07c0..
 | agent-runtime | `a_projected_token_is_never_logged_at_trace` | E2: TRACE capture (hyper's connection lines included) holds no token bytes |
 | Main | `TestAuthorizationChallengeAnswersOnlyTheStoredToolkitsPublicMetadata` (`mcp_authorization_challenge_internal_test.go`) | The exact key set; a URL in the body or query never steers discovery; discovery dials only through the guarded client; no stored secret, token or client secret in the answer |
 | Main | `TestAuthorizationChallengeIdentityMatrix` | Gate §3a at the handler: session and token-with-owner allowed; token without an owning user and unauthenticated 401; another user, another project's toolkit and an unknown toolkit the same 404; malformed ids 400; no refused request reaches the network |
-| Main | `TestEliteaCoreRoutesRefuseAnotherProject`, `…RefuseAnUnderPrivilegedMember`, `…AdmitAnEntitledMember` (new row in `router_elitea_core_project_scope_test.go`) | Gate §3a at the router: foreign project 403, a member without `tool.patch` 403, an entitled member admitted |
+| Main | `TestEliteaCoreRoutesRefuseAnotherProject`, `…RefuseAnUnderPrivilegedMember`, `…AdmitAnEntitledMember` (new row in `router_elitea_core_project_scope_test.go`) | Gate §3a at the router: foreign project 403, a member without `predict.post` 403, an entitled member admitted |
+| Main | `TestViewerCanReachTheMCPAuthorizationProxies` (new path, `router_mcp_connect_and_project_settings_test.go`) | A viewer (`predict.post` without `tool.patch`) passes the gate; it fails with 403 against the earlier `tool.patch` gate |
 | Main | `…RefusesANonMCPToolkitWithoutFetching`, `…RefusesAStoredURLThatIsNotHTTPS`, `…RefusesAGuardedDestination`, `…FailureIsNeutral`, `…RefusesMetadataForAnotherResource` | Typed refusals with no fetch; the guard refuses a private destination; no upstream body or internal URL in the answer; another resource's metadata refused |
 | Main | `TestAuthorizationChallengeLogsNoMetadataOrStoredSecrets` | slog capture over success and failure: no stored header secret, upstream body, endpoint or metadata URL |
 | Web | `LedgerSignIn.test.tsx` (real `useMcpLogin`, `useMcpAuthModal`, `McpAuthModal`; only MSW and the recording test socket) | One challenge request with no body and no card URL, no `test_mcp_connection` emit, the dialog's Authorize enabled; three refusals show readable text, no dialog, Skip works; a retry clears the message. All four original cases fail against the previous card |
@@ -343,7 +346,7 @@ listed in the sections above; the full list is `git diff --name-only 9934b07c0..
     without an owning user is refused (challenge matrix).
   - *Object-level authorization:* Decide checks the run actor and the grant's full binding in its transaction
     (`checkDelegatedCredential`); redemption takes project and actor from the claim's authorization
-    (`configurations_materializer.go:114`); the challenge route takes `tool.patch` and resolves only an
+    (`configurations_materializer.go:114`); the challenge route takes the run permission (`predict.post`) and resolves only an
     actor-visible toolkit, with one 404 for unknown, foreign and invisible toolkits.
   - *Input and amplification:* references bounded (16, fixed sizes, int32 ids, https only); the challenge reads no
     body and its discovery is size-, count- and time-bounded by the existing fetcher.

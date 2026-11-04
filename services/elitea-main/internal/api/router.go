@@ -5041,9 +5041,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(requireMCPConnect).Post("/mcp_dcr_proxy/{projectID}", coreHandler.MCPDCRProxy)
 				r.With(requireMCPToolWrite).Post("/mcp_sync_tools/prompt_lib/{projectID}", coreHandler.MCPSyncTools)
 				// FU-250: a fan-out sign-in card's consent metadata, read from
-				// the stored toolkit. It takes test_tool's `tool.patch`, never
-				// the flag-disabled toolkitGate, and reads no request URL.
-				r.With(requireMCPToolWrite).Post("/mcp_authorization_challenge/prompt_lib/{projectID}/{toolkitID}", coreHandler.MCPAuthorizationChallenge)
+				// the stored toolkit the actor can see; it reads no request
+				// URL. It takes the run permission, as the two proxies the
+				// same dialog calls next do: the run's own user may be a
+				// viewer, who does not hold `tool.patch` (#6885).
+				r.With(requireMCPConnect).Post("/mcp_authorization_challenge/prompt_lib/{projectID}/{toolkitID}", coreHandler.MCPAuthorizationChallenge)
 
 				// The MCP REST surface (issue 252 P1). All three stay at the
 				// MEMBERSHIP tier, and unlike the tag writes above that is not a
