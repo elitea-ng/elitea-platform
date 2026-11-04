@@ -109,7 +109,7 @@ export const ProfileIdentity = memo(function ProfileIdentity({
   isFetching,
 }: ProfileIdentityProps) {
   const onLogout = useCallback(() => {
-    performLogout();
+    void performLogout();
   }, []);
 
   return (

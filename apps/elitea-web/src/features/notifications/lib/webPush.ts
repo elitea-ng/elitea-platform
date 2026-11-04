@@ -13,6 +13,8 @@
  * and is removed again when they turn it off. The browser APIs come in
  * through {@link WebPushEnv} so the steps can be tested without a browser.
  */
+import { PUSH_WORKER_FILE } from '@/shared/api/webPushTeardown';
+
 export type WebPushState = 'unsupported' | 'blocked' | 'off' | 'on';
 
 interface NotificationApi {
@@ -38,12 +40,12 @@ export interface WebPushPlace {
   readonly scriptUrl: string;
 }
 
-/**
- * The worker's file name. Served from the app's public directory, so it sits
- * at the app's base path (`/app/push-sw.js` in a deployment, `/push-sw.js` in
- * dev) and its default scope covers the whole app.
+/*
+ * The worker (`PUSH_WORKER_FILE`) is served from the app's public directory,
+ * so it sits at the app's base path (`/app/push-sw.js` in a deployment,
+ * `/push-sw.js` in dev) and its default scope covers the whole app. Sign-out
+ * finds it by that name (`shared/api/webPushTeardown.ts`).
  */
-const PUSH_WORKER_FILE = 'push-sw.js';
 
 /**
  * `api` (the REST base, `vite_server_url`) and `project` (a project the person

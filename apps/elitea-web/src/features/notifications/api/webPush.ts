@@ -9,6 +9,7 @@
  * envelope — typing it as the body would read `undefined` with a 200.
  */
 import { eliteaFetch } from '@/shared/api/generated/mutator';
+import { pushSubscriptionsPath } from '@/shared/api/webPushTeardown';
 
 export interface PushConfig {
   /** `false` when the administrator turned web push off or this install has no key. */
@@ -31,17 +32,13 @@ function pushConfigUrl(projectId: string | number): string {
   return `/notifications/push_config/prompt_lib/${projectId}`;
 }
 
-function pushSubscriptionsUrl(projectId: string | number): string {
-  return `/notifications/push_subscriptions/prompt_lib/${projectId}`;
-}
-
 export function getPushConfig(projectId: string | number): Promise<PushConfig> {
   return unwrap<PushConfig>(pushConfigUrl(projectId));
 }
 
 /** 201 for a new endpoint, 200 when the endpoint was known (its keys are updated). */
 export function postPushSubscription(projectId: string | number, body: PushSubscriptionBody): Promise<{ readonly id: string }> {
-  return unwrap<{ readonly id: string }>(pushSubscriptionsUrl(projectId), {
+  return unwrap<{ readonly id: string }>(pushSubscriptionsPath(projectId), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -50,7 +47,7 @@ export function postPushSubscription(projectId: string | number, body: PushSubsc
 
 /** 204, also when the endpoint is not known. */
 export async function deletePushSubscription(projectId: string | number, endpoint: string): Promise<void> {
-  await unwrap<unknown>(pushSubscriptionsUrl(projectId), {
+  await unwrap<unknown>(pushSubscriptionsPath(projectId), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ endpoint }),
