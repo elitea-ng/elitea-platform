@@ -356,7 +356,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		// A cloud turn on the handed-off thread (workspacethread.go). Each
 		// call is a new question; a signed delivery that repeats is answered
 		// from the delivery log above.
-		outcome, err = h.admitThread(r.Context(), request, trigger.Target, trigger.Target.Grant, uuid.NewString())
+		outcome, err = h.admitThread(r.Context(), schema, request, trigger.Target, trigger.Target.Grant, uuid.NewString())
 	} else {
 		outcome, err = h.admit(r.Context(), schema, request)
 	}

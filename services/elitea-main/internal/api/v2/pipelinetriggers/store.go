@@ -69,10 +69,10 @@ type triggerRow struct {
 	// (0159).
 	LastExecutionID *string
 	CreatedBy       int64
-	CreatedAt              time.Time
-	RotatedAt              *time.Time
-	RevokedAt              *time.Time
-	LastUsedAt             *time.Time
+	CreatedAt       time.Time
+	RotatedAt       *time.Time
+	RevokedAt       *time.Time
+	LastUsedAt      *time.Time
 }
 
 // scheduleRow is one `pipeline_schedules` row.

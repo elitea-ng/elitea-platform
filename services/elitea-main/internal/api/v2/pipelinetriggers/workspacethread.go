@@ -37,6 +37,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
@@ -64,7 +66,9 @@ const maxThreadPrompt = workspacehandoff.MaxContinuePromptRunes
 
 // ThreadRuns is the handed-off thread seam (*handoffcontinue.Service).
 type ThreadRuns interface {
-	ThreadHandedOff(ctx context.Context, projectID int64, conversationUUID string) (bool, error)
+	HandedOffThread(
+		ctx context.Context, projectID int64, conversationUUID string,
+	) (handoffcontinue.ThreadTarget, bool, error)
 	RunActive(ctx context.Context, projectID int64, executionID string) (bool, error)
 	StartThreadTurn(ctx context.Context, turn handoffcontinue.ThreadTurn) (handoffcontinue.ThreadTurnStarted, error)
 }
@@ -297,12 +301,19 @@ func (h *Handler) admitThreadGrant(ctx context.Context, grant *threadGrantWire) 
 	return json.Marshal(stored)
 }
 
+// codeThreadNotGovernable: credential governance is on, and the thread's
+// next turn does not address an agent at the version the row's mandate
+// binds (a model thread, or another version). Every occurrence would skip,
+// so the save is refused.
+const codeThreadNotGovernable = "thread_not_governable"
+
 // checkThreadTarget is the save's check of a thread target: the grant, the
-// conversation in this project, the caller's right to write to it, and a
-// handoff row. It answers the target to store; false means the response is
-// written.
+// conversation in this project, the caller's right to write to it, a
+// handoff row, and under credential governance an agent participant at the
+// row's version. It answers the target to store; false means the response
+// is written.
 func (h *Handler) checkThreadTarget(
-	w http.ResponseWriter, r *http.Request, projectID int64, requested requestedTarget,
+	w http.ResponseWriter, r *http.Request, projectID, versionID int64, requested requestedTarget,
 ) (threadTarget, bool) {
 	if h.threads == nil {
 		writeError(w, http.StatusServiceUnavailable, ErrThreadRunsUnavailable.Error())
@@ -335,7 +346,7 @@ func (h *Handler) checkThreadTarget(
 		writeError(w, http.StatusInternalServerError, "the conversation could not be checked")
 		return threadTarget{}, false
 	}
-	handedOff, err := h.threads.ThreadHandedOff(r.Context(), projectID, conversation)
+	thread, handedOff, err := h.threads.HandedOffThread(r.Context(), projectID, conversation)
 	if err != nil {
 		h.log().Error("pipelinetriggers: read the thread's handoff", "err", err)
 		writeError(w, http.StatusInternalServerError, "the conversation could not be checked")
@@ -345,6 +356,17 @@ func (h *Handler) checkThreadTarget(
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"error": "this conversation was never handed off to the cloud; hand it off from the desktop first",
 			"code":  "not_handed_off",
+		})
+		return threadTarget{}, false
+	}
+	// GOVERNED: a mandate binds the version, so only an agent thread at that
+	// version can run under it. The occurrence checks again
+	// (skipped_mandate_scope), for a thread whose participant changes later.
+	if h.governed != nil && (!thread.Agent || thread.VersionID != versionID) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "credential governance is on: a governed run is bound to this version, and this thread's " +
+				"next turn does not address an agent at this version",
+			"code": codeThreadNotGovernable,
 		})
 		return threadTarget{}, false
 	}
@@ -386,7 +408,7 @@ func threadRunText(prompt, input string, payload []byte, source payloadSource) (
 // admitThread is admit for a `workspace_thread` target: authorize the run
 // identity, then start the cloud turn on the thread.
 func (h *Handler) admitThread(
-	ctx context.Context, request runRequest, target threadTarget, grant []byte, questionID string,
+	ctx context.Context, schema string, request runRequest, target threadTarget, grant []byte, questionID string,
 ) (runOutcome, error) {
 	if h.threads == nil {
 		return runOutcome{}, ErrThreadRunsUnavailable
@@ -405,10 +427,21 @@ func (h *Handler) admitThread(
 	if err != nil {
 		return runOutcome{}, err
 	}
+	if request.TriggerID != 0 {
+		// The agent trigger's run limit, over the thread's turns this
+		// trigger started.
+		if err := h.threadTriggerAdmissible(ctx, schema, request.TriggerID, target.conversation()); err != nil {
+			return runOutcome{}, err
+		}
+	}
+	run, err := h.threadRun(ctx, request)
+	if err != nil {
+		return runOutcome{}, err
+	}
 	turn := handoffcontinue.ThreadTurn{
 		ProjectID: request.ProjectID, ConversationUUID: target.conversation(), ActorUserID: request.ActorUserID,
 		QuestionID: questionID, Prompt: text, Grant: storedGrant(grant).request(),
-		TriggerOrigin: executionTriggerOrigin(request.Origin),
+		TriggerOrigin: executionTriggerOrigin(request.Origin), Run: run,
 	}
 	if request.Authority != nil {
 		// A governed run: the mandate binds the version, so the thread's
@@ -419,18 +452,60 @@ func (h *Handler) admitThread(
 	if err != nil {
 		return runOutcome{}, err
 	}
-	// ADR-0041 decision 5: the run's on_approval_required snapshot. The
-	// thread's row is replaced at each started turn (one turn at a time owns
-	// the thread), and only after the start, so a busy occurrence never
-	// changes the snapshot of a run in flight.
-	if err := h.recordRunApprovalPolicy(ctx, request, started.ConversationUUID, true); err != nil {
-		h.log().Error("pipelinetriggers: record the thread run's approval policy; the run applies the platform default",
-			"project_id", request.ProjectID, "execution_id", started.ExecutionID, "err", err)
-	}
 	return runOutcome{
 		ExecutionID: started.ExecutionID, ConversationUUID: started.ConversationUUID,
 		ResponseMessageID: started.ResponseMessageID, VersionID: request.VersionID, InputSource: inputSource,
 	}, nil
+}
+
+// threadRun is what the turn's admission records (agentexecution.ThreadRun):
+// the row that started it, and the run's on_approval_required snapshot
+// (ADR-0041 decision 5). The admission writes the snapshot over the
+// thread's previous one, behind the CLOUD_IDLE fence, so a refused
+// occurrence never changes the snapshot of a turn that runs. An error
+// refuses the run, as admit's recordRunApprovalPolicy does.
+func (h *Handler) threadRun(ctx context.Context, request runRequest) (*agentexecutionapp.ThreadRun, error) {
+	run := &agentexecutionapp.ThreadRun{TriggerID: request.TriggerID, ScheduleID: request.ScheduleID}
+	if request.ActorUserID <= 0 {
+		return run, nil
+	}
+	action, err := h.effectiveOnApprovalRequired(ctx, request.ProjectID, approvalTargetOf(request.Origin), request.VersionID)
+	if err != nil {
+		return nil, fmt.Errorf("pipelinetriggers: read the run's approval action: %w", err)
+	}
+	run.Policy = &agentexecutionapp.RunPolicy{
+		VersionID: request.VersionID, OwnerUserID: request.ActorUserID, OnApprovalRequired: action,
+	}
+	return run, nil
+}
+
+// threadTriggerAdmissible is agentTriggerAdmissible for a trigger that
+// targets a handed-off thread. It makes no conversation of its own, so the
+// limit counts the thread's questions this trigger started (the question's
+// `trigger_id` meta, agentexecution.ThreadRun) and the thread's answers
+// that still stream. The limits, the refusal (ErrRunLimited, 429) and the
+// UTC wall-clock window are the same.
+func (h *Handler) threadTriggerAdmissible(ctx context.Context, schema string, triggerID int64, conversationUUID string) error {
+	var recent, inFlight int
+	err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT
+    count(*) FILTER (WHERE question.meta ->> 'trigger_id' = $2
+                       AND question.created_at > (now() AT TIME ZONE 'UTC') - $3::interval),
+    count(*) FILTER (WHERE question.is_streaming
+                       AND question.created_at > (now() AT TIME ZONE 'UTC') - $4::interval)
+  FROM %[1]s.chat_message_group AS question
+  JOIN %[1]s.chat_conversations AS conversation ON conversation.id = question.conversation_id
+ WHERE conversation.uuid = $1::uuid
+   AND question.created_at > (now() AT TIME ZONE 'UTC') - GREATEST($3::interval, $4::interval)`, schema),
+		conversationUUID, strconv.FormatInt(triggerID, 10), agentTriggerWindow, agentTriggerInFlightHorizon,
+	).Scan(&recent, &inFlight)
+	if err != nil {
+		return fmt.Errorf("pipelinetriggers: read the thread trigger's run limit: %w", err)
+	}
+	if recent >= agentTriggerMaxPerWindow || inFlight >= agentTriggerMaxInFlight {
+		return ErrRunLimited
+	}
+	return nil
 }
 
 // threadRunsActive is the schedule's overlap check for a thread target: the

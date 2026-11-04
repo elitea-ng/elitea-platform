@@ -171,13 +171,7 @@ func approvalTargetOf(origin string) string {
 // recordRunApprovalPolicy writes the run's snapshot before the run starts.
 // An error refuses the run: a run without a snapshot would fall back to the
 // platform default, not to the action its schedule or trigger set.
-//
-// replace is for a run on a handed-off thread (workspacethread.go): the
-// thread keeps one row, and each started turn writes its own snapshot over
-// the previous turn's.
-func (h *Handler) recordRunApprovalPolicy(
-	ctx context.Context, request runRequest, conversationUUID string, replace bool,
-) error {
+func (h *Handler) recordRunApprovalPolicy(ctx context.Context, request runRequest, conversationUUID string) error {
 	if request.ActorUserID <= 0 {
 		// No owner to notify or to continue as: Main applies the platform
 		// default, read when the pause happens.
@@ -187,16 +181,11 @@ func (h *Handler) recordRunApprovalPolicy(
 	if err != nil {
 		return err
 	}
-	conflict := `DO NOTHING`
-	if replace {
-		conflict = `DO UPDATE SET trigger_origin = EXCLUDED.trigger_origin, version_id = EXCLUDED.version_id,
-    owner_user_id = EXCLUDED.owner_user_id, on_approval_required = EXCLUDED.on_approval_required`
-	}
 	_, err = h.pool.Exec(ctx, `
 INSERT INTO elitea_runtime.unattended_run_policies
     (project_id, conversation_uuid, trigger_origin, version_id, owner_user_id, on_approval_required)
 VALUES ($1, $2::uuid, $3, $4, $5, $6)
-ON CONFLICT (project_id, conversation_uuid) `+conflict,
+ON CONFLICT (project_id, conversation_uuid) DO NOTHING`,
 		request.ProjectID, conversationUUID, string(executionTriggerOrigin(request.Origin)),
 		request.VersionID, request.ActorUserID, string(action))
 	if platformconfig.UndefinedTable(err) {

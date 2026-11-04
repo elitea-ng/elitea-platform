@@ -27,14 +27,16 @@ import (
 type fakeThreadRuns struct {
 	mu        sync.Mutex
 	handedOff bool
+	// thread is what HandedOffThread answers.
+	thread    handoffcontinue.ThreadTarget
 	active    bool
 	activeIDs []string
 	err       error
 	turns     []handoffcontinue.ThreadTurn
 }
 
-func (f *fakeThreadRuns) ThreadHandedOff(context.Context, int64, string) (bool, error) {
-	return f.handedOff, nil
+func (f *fakeThreadRuns) HandedOffThread(context.Context, int64, string) (handoffcontinue.ThreadTarget, bool, error) {
+	return f.thread, f.handedOff, nil
 }
 
 func (f *fakeThreadRuns) RunActive(_ context.Context, _ int64, executionID string) (bool, error) {
@@ -274,11 +276,12 @@ func TestAThreadScheduleStoresAndShowsItsTarget(t *testing.T) {
 
 func TestAThreadScheduleFiresSkipsAndOverlaps(t *testing.T) {
 	h, threads := newThreadHarness(t)
+	installApprovalTables(t, h.pool)
 	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
 	thread := seedThread(t, h, ownerUserID)
 	response := h.do(t, http.MethodPut, scheduleRoute(versionID), threadBody(t, map[string]any{
 		"cron": "* * * * *", "active": true, "input": "ignored", "target_kind": "workspace_thread",
-		"conversation_uuid": thread, "prompt": "Run the nightly checks.",
+		"conversation_uuid": thread, "prompt": "Run the nightly checks.", "on_approval_required": "skip",
 	}), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("save: status = %d, body = %s", response.Code, response.Body.String())
@@ -296,6 +299,18 @@ func TestAThreadScheduleFiresSkipsAndOverlaps(t *testing.T) {
 	if turn.ConversationUUID != thread || turn.Prompt != "Run the nightly checks." || turn.ActorUserID != ownerUserID ||
 		turn.TriggerOrigin != executiondomain.TriggerOriginSchedule || turn.QuestionID == "" || turn.VersionID != 0 {
 		t.Fatalf("turn = %+v", turn)
+	}
+	// The run's approval snapshot goes with the start, for the admission
+	// to write behind the CLOUD_IDLE fence: the schedule's own action.
+	if run := turn.Run; run == nil || run.ScheduleID == 0 || run.TriggerID != 0 || run.Policy == nil ||
+		run.Policy.OnApprovalRequired != "skip" || run.Policy.OwnerUserID != ownerUserID ||
+		run.Policy.VersionID != versionID {
+		t.Fatalf("run = %+v", turn.Run)
+	}
+	var policies int
+	if err := h.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM elitea_runtime.unattended_run_policies`).Scan(&policies); err != nil || policies != 0 {
+		t.Fatalf("the handler wrote a policy row itself: %d, %v", policies, err)
 	}
 	// The absent grant is the decision 10 default.
 	if turn.Grant == nil || !turn.Grant.ContinueStepLimit || !turn.Grant.ContinueOutputLimit || !turn.Grant.GoalCheck ||
@@ -379,7 +394,8 @@ func TestAThreadTriggerStartsATurnAndAnswers409WhenBusy(t *testing.T) {
 	}
 	turn := threads.turns[0]
 	if turn.Prompt != "Triage the alert.\n\ndisk full on db-2" || turn.TriggerOrigin != executiondomain.TriggerOriginWebhook ||
-		turn.ActorUserID != ownerUserID || turn.Grant == nil || !turn.Grant.GoalCheck {
+		turn.ActorUserID != ownerUserID || turn.Grant == nil || !turn.Grant.GoalCheck ||
+		turn.Run == nil || turn.Run.TriggerID == 0 || turn.Run.ScheduleID != 0 {
 		t.Fatalf("turn = %+v", turn)
 	}
 	if h.start.count() != 0 {
@@ -434,5 +450,123 @@ func TestARotationKeepsTheThreadTarget(t *testing.T) {
 	}
 	if view := decode(t, response); view["target_kind"] != "pipeline" || view["conversation_uuid"] != nil {
 		t.Fatalf("view = %v", view)
+	}
+}
+
+// seedTriggerQuestions writes n questions of the thread that the trigger
+// started (the `trigger_id` meta its admission stamps), created now.
+func seedTriggerQuestions(t *testing.T, h *harness, thread string, triggerID int64, n int) {
+	t.Helper()
+	if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(`
+INSERT INTO %[1]s.chat_message_group (uuid, conversation_id, author_participant_id, is_streaming, meta, created_at)
+SELECT gen_random_uuid(), conversation.id, mapping.participant_id, FALSE,
+       jsonb_build_object('trigger_id', $2::bigint), now() AT TIME ZONE 'UTC'
+  FROM %[1]s.chat_conversations AS conversation
+  JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
+ CROSS JOIN generate_series(1, $3)
+ WHERE conversation.uuid = $1::uuid`, homeSchema), thread, triggerID, n); err != nil {
+		t.Fatalf("seed trigger questions: %v", err)
+	}
+}
+
+func triggerIDOf(t *testing.T, h *harness, versionID int64) int64 {
+	t.Helper()
+	var id int64
+	if err := h.pool.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT id FROM %s.pipeline_triggers WHERE version_id = $1`, homeSchema), versionID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// A thread trigger has the agent trigger's run limit: 30 turns in 10
+// minutes, and 4 answers streaming, with the same 429 and Retry-After.
+func TestAThreadTriggerHasTheAgentRunLimit(t *testing.T) {
+	h, threads := newThreadHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, h, ownerUserID)
+	tokenID, secret := mintThreadTrigger(t, h, versionID, thread, nil)
+	bearer := map[string]string{"Authorization": "Bearer " + secret}
+	triggerID := triggerIDOf(t, h, versionID)
+
+	// 29 started turns in the window: the 30th call is admitted.
+	seedTriggerQuestions(t, h, thread, triggerID, 29)
+	// Another trigger's turns do not count.
+	seedTriggerQuestions(t, h, thread, triggerID+1000, 10)
+	if response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), "", bearer); response.Code != http.StatusAccepted {
+		t.Fatalf("under the limit: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	seedTriggerQuestions(t, h, thread, triggerID, 1)
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), "", bearer)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") == "" {
+		t.Fatalf("over the window: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if threads.count() != 1 {
+		t.Fatalf("turns = %d, want 1", threads.count())
+	}
+	// Old turns leave the window.
+	if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(
+		`UPDATE %s.chat_message_group SET created_at = created_at - interval '11 minutes'`, homeSchema)); err != nil {
+		t.Fatal(err)
+	}
+	if response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), "", bearer); response.Code != http.StatusAccepted {
+		t.Fatalf("after the window: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	// Four answers that stream: refused.
+	seedStreamingResponse(t, h.pool, homeSchema, thread)
+	seedStreamingResponse(t, h.pool, homeSchema, thread)
+	seedStreamingResponse(t, h.pool, homeSchema, thread)
+	seedStreamingResponse(t, h.pool, homeSchema, thread)
+	if response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), "", bearer); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("in flight: status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+// Under credential governance a thread target must address an agent at the
+// row's version; a model thread is refused at save time.
+func TestAGovernedThreadTargetNeedsTheVersionsAgent(t *testing.T) {
+	g := newGovernedHarness(t)
+	threads := &fakeThreadRuns{handedOff: true}
+	g.handler = pipelinetriggers.NewPlatformHandler(
+		g.pool, g.start, g.vault,
+		multiUserPermissions{users: map[int64]bool{ownerUserID: true, subjectUserID: true}},
+		g.recorder, nil, nil, nil,
+		pipelinetriggers.WithGovernedRuns(g.mandates.Service()),
+		pipelinetriggers.WithThreadRuns(threads),
+	)
+	g.router = mountRoutes(g.handler)
+	h := g.harness
+	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, h, ownerUserID)
+	body := threadBody(t, map[string]any{
+		"cron": "0 7 * * *", "target_kind": "workspace_thread", "conversation_uuid": thread, "prompt": "Go.",
+	})
+	trigger := threadBody(t, map[string]any{"target_kind": "workspace_thread", "conversation_uuid": thread, "prompt": "Go."})
+
+	for name, participant := range map[string]handoffcontinue.ThreadTarget{
+		"model thread":  {Target: handoffcontinue.Target{ConversationUUID: thread, ParticipantID: 3}},
+		"other version": {Target: handoffcontinue.Target{ConversationUUID: thread, ParticipantID: 3, Agent: true}, VersionID: versionID + 1},
+	} {
+		threads.thread = participant
+		for route, payload := range map[string]string{scheduleRoute(versionID): body} {
+			response := h.do(t, http.MethodPut, route, payload, nil)
+			if response.Code != http.StatusUnprocessableEntity || decode(t, response)["code"] != "thread_not_governable" {
+				t.Fatalf("%s schedule: status = %d, body = %s", name, response.Code, response.Body.String())
+			}
+		}
+		response := h.do(t, http.MethodPost, triggerRoute(versionID), trigger, nil)
+		if response.Code != http.StatusUnprocessableEntity || decode(t, response)["code"] != "thread_not_governable" {
+			t.Fatalf("%s trigger: status = %d, body = %s", name, response.Code, response.Body.String())
+		}
+	}
+	if view := h.readSchedule(t, versionID); view["configured"] != false {
+		t.Fatalf("a refused save stored a schedule: %v", view)
+	}
+
+	threads.thread = handoffcontinue.ThreadTarget{
+		Target: handoffcontinue.Target{ConversationUUID: thread, ParticipantID: 3, Agent: true}, VersionID: versionID,
+	}
+	if response := h.do(t, http.MethodPut, scheduleRoute(versionID), body, nil); response.Code != http.StatusOK {
+		t.Fatalf("the version's agent: status = %d, body = %s", response.Code, response.Body.String())
 	}
 }

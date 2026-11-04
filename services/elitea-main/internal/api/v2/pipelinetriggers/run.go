@@ -349,7 +349,7 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	}
 	// ADR-0041 decision 5 (#1491): the run's on_approval_required snapshot
 	// is written before the run can pause.
-	if err := h.recordRunApprovalPolicy(ctx, request, conversationUUID, false); err != nil {
+	if err := h.recordRunApprovalPolicy(ctx, request, conversationUUID); err != nil {
 		h.discardRunConversation(ctx, schema, conversationUUID)
 		return runOutcome{}, err
 	}

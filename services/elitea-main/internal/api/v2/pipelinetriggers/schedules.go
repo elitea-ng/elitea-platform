@@ -289,7 +289,7 @@ func (h *Handler) scheduleTargetOf(
 	if !requested.thread {
 		return TargetKindPipeline, threadTarget{}, true
 	}
-	thread, ok := h.checkThreadTarget(w, r, projectID, requested)
+	thread, ok := h.checkThreadTarget(w, r, projectID, versionID, requested)
 	return TargetKindWorkspaceThread, thread, ok
 }
 

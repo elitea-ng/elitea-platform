@@ -306,7 +306,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	kind := targetKindOf(target)
 	var thread threadTarget
 	if requestedThread.thread {
-		if thread, ok = h.checkThreadTarget(w, r, projectID, requestedThread); !ok {
+		if thread, ok = h.checkThreadTarget(w, r, projectID, versionID, requestedThread); !ok {
 			return
 		}
 		kind = TargetKindWorkspaceThread
