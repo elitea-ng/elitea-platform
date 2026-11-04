@@ -117,7 +117,7 @@ async function runJob(chat, task, vkey, rep) {
     rec.wall_ms = Date.now() - t0;
     Object.assign(rec, await scoreFinal(task, run));
   } catch (err) {
-    rec.error = String(err?.stack ?? err).slice(0, 2000);
+    rec.error = `${String(err?.stack ?? err)}${err?.cause ? `\ncause: ${err.cause}` : ""}`.slice(0, 2000);
     rec.wall_ms = Date.now() - t0;
     rec.pass = false;
   } finally {
@@ -177,7 +177,10 @@ async function main() {
     variants: Object.fromEntries(variants.map((k) => [k, VARIANTS[k].name])),
     max_steps: Number(args['max-steps']), worker_steps: Number(args['worker-steps']),
     max_rounds: Number(args['max-rounds']), sandbox: sandboxKindAvailable(),
-    tasks: tasks.map((t) => ({ id: t.id, group: t.group, hidden: t.hasHidden })),
+    // Every task with a record, also those from earlier filtered runs.
+    tasks: loadTasks(args['tasks-dir'])
+      .filter((t) => records.some((r) => r.task === t.id))
+      .map((t) => ({ id: t.id, group: t.group, hidden: t.hasHidden })),
   };
   writeFileSync(`${out}.json`, `${JSON.stringify({ meta, records }, null, 1)}\n`);
   writeFileSync(`${out}.md`, summarize({ meta, records }));

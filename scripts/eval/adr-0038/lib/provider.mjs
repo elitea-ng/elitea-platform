@@ -2,6 +2,8 @@
 // A provider is one entry of providers.json. The thinking control kinds
 // follow ADR-0038 decision 2: effort, budget, toggle.
 import { readFileSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
 
 export function loadProviders(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
@@ -58,9 +60,36 @@ export function parseUsage(usage) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// node:http instead of fetch: fetch (undici) drops a request whose response
+// headers take longer than 300 s, and a long non-streamed generation under
+// load does take that long.
+function postJson(url, body, key, timeoutMs) {
+  const u = new URL(url);
+  const lib = u.protocol === 'https:' ? https : http;
+  const payload = JSON.stringify(body);
+  return new Promise((resolve, reject) => {
+    const req = lib.request(u, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
+      },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+      res.on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`request timed out after ${timeoutMs} ms`)));
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
 // Returns a chat(messages, opts) function bound to one provider.
 // The result: { message, finish, usage: {prompt, completion, reasoning}, ms }.
-export function makeClient(provider, { timeoutMs = 600_000, retries = 3 } = {}) {
+export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3 } = {}) {
   const key = provider.key_env ? process.env[provider.key_env] : null;
   if (provider.key_env && !key) {
     throw new Error(`provider needs env ${provider.key_env}`);
@@ -72,17 +101,9 @@ export function makeClient(provider, { timeoutMs = 600_000, retries = 3 } = {}) 
     for (let attempt = 0; attempt <= retries; attempt++) {
       const t0 = Date.now();
       try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(key ? { authorization: `Bearer ${key}` } : {}),
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(timeoutMs),
-        });
-        const text = await res.text();
-        if (!res.ok) {
+        const res = await postJson(url, body, key, timeoutMs);
+        const text = res.text;
+        if (res.status < 200 || res.status >= 300) {
           const err = new Error(`HTTP ${res.status}: ${text.slice(0, 500)}`);
           err.status = res.status;
           throw err;
