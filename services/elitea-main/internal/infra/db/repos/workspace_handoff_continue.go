@@ -101,6 +101,40 @@ FOR SHARE`, projectID, conversationUUID).Scan(&state, &reclaim)
 	return agentexecutionapp.ErrLocalWorkThread
 }
 
+// writeThreadRunPolicy writes the on_approval_required snapshot of a
+// schedule's or a trigger's turn on a handed-off thread, over the thread's
+// previous one (agentexecution.ThreadRun). The project and the conversation
+// are the admission's own. A database without the table (shared 0211) has no
+// snapshot, as for every unattended run.
+func writeThreadRunPolicy(
+	ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID string,
+	policy *agentexecutionapp.UnattendedRunPolicy,
+) error {
+	if policy == nil {
+		return nil
+	}
+	var present bool
+	if err := tx.QueryRow(ctx,
+		`SELECT to_regclass('elitea_runtime.unattended_run_policies') IS NOT NULL`).Scan(&present); err != nil {
+		return fmt.Errorf("workspace handoff: read the run policy table: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.unattended_run_policies
+    (project_id, conversation_uuid, trigger_origin, version_id, owner_user_id, on_approval_required)
+VALUES ($1, $2::uuid, $3, $4, $5, $6)
+ON CONFLICT (project_id, conversation_uuid) DO UPDATE SET
+    trigger_origin = EXCLUDED.trigger_origin, version_id = EXCLUDED.version_id,
+    owner_user_id = EXCLUDED.owner_user_id, on_approval_required = EXCLUDED.on_approval_required`,
+		projectID, conversationUUID, policy.TriggerOrigin, policy.VersionID, policy.OwnerUserID,
+		policy.OnApprovalRequired); err != nil {
+		return fmt.Errorf("workspace handoff: write the run policy: %w", err)
+	}
+	return nil
+}
+
 // startHandoffCloudTurn moves the completed send to CLOUD_RUNNING for the
 // admitted execution.
 func startHandoffCloudTurn(

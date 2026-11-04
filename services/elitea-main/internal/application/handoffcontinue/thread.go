@@ -85,6 +85,9 @@ type ThreadTurn struct {
 	// VersionID is set for a governed occurrence: the thread's participant
 	// must be an agent at this version (ErrThreadVersion).
 	VersionID int64
+	// Run is what the admission records with the turn: the row that
+	// started it and the run's approval snapshot (agentexecution.ThreadRun).
+	Run *agentexecution.ThreadRun
 }
 
 // ThreadTurnStarted is the turn an occurrence started.
@@ -105,21 +108,24 @@ func (s *Service) WithThreads(threads Threads) *Service {
 	return s
 }
 
-// ThreadHandedOff reports whether the conversation is a thread that was
-// handed off at least once (it has a handoff row that is not erased). Its
-// current state does not matter.
-func (s *Service) ThreadHandedOff(ctx context.Context, projectID int64, conversationUUID string) (bool, error) {
+// HandedOffThread reads a thread that was handed off at least once (it has
+// a handoff row that is not erased), and the participant its next turn
+// addresses. Its current state does not matter. false: never handed off,
+// or gone.
+func (s *Service) HandedOffThread(
+	ctx context.Context, projectID int64, conversationUUID string,
+) (ThreadTarget, bool, error) {
 	if s == nil || s.threads == nil {
-		return false, workspacehandoff.ErrUnavailable
+		return ThreadTarget{}, false, workspacehandoff.ErrUnavailable
 	}
-	_, err := s.threads.ThreadTarget(ctx, projectID, conversationUUID)
+	target, err := s.threads.ThreadTarget(ctx, projectID, conversationUUID)
 	switch {
 	case errors.Is(err, workspacehandoff.ErrNotFound), errors.Is(err, workspacehandoff.ErrNotLocalWork):
-		return false, nil
+		return ThreadTarget{}, false, nil
 	case err != nil:
-		return false, err
+		return ThreadTarget{}, false, err
 	}
-	return true, nil
+	return target, true, nil
 }
 
 // RunActive reports whether the previous occurrence's run still goes.
@@ -160,13 +166,13 @@ func (s *Service) StartThreadTurn(ctx context.Context, turn ThreadTurn) (ThreadT
 		outcome, err = s.starter.StartCurrentApplication(ctx, agentexecution.CurrentApplicationStartRequest{
 			ProjectID: turn.ProjectID, ActorUserID: turn.ActorUserID, ConversationUUID: target.ConversationUUID,
 			TargetParticipantID: target.ParticipantID, QuestionID: turn.QuestionID, UserInput: turn.Prompt,
-			TriggerOrigin: turn.TriggerOrigin, Unattended: grant,
+			TriggerOrigin: turn.TriggerOrigin, Unattended: grant, ThreadRun: turn.Run,
 		})
 	} else {
 		outcome, err = s.starter.StartCurrentAdhoc(ctx, agentexecution.CurrentAdhocStartRequest{
 			ProjectID: turn.ProjectID, ActorUserID: turn.ActorUserID, ConversationUUID: target.ConversationUUID,
 			TargetParticipantID: target.ParticipantID, QuestionID: turn.QuestionID, UserInput: turn.Prompt,
-			LLMSettings: emptyLLMSettings, TriggerOrigin: turn.TriggerOrigin, Unattended: grant,
+			LLMSettings: emptyLLMSettings, TriggerOrigin: turn.TriggerOrigin, Unattended: grant, ThreadRun: turn.Run,
 		})
 	}
 	if err != nil {

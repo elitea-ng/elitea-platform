@@ -53,6 +53,7 @@ func TestStartThreadTurnStartsTheThreadsParticipantWithASystemOrigin(t *testing.
 		starter := &recordingStarter{}
 		turn := threadTurn()
 		turn.TriggerOrigin = executiondomain.TriggerOriginWebhook
+		turn.Run = &agentexecution.ThreadRun{TriggerID: 9}
 		turn.Grant = &unattended.Request{
 			GrantID: "stored", ChainRootExecutionID: root, Kind: "x", ContinueStepLimit: true,
 			ContinueToolCallCap: true, HookAsks: true, RemoteConfirmations: true, GoalCheck: true,
@@ -72,7 +73,7 @@ func TestStartThreadTurnStartsTheThreadsParticipantWithASystemOrigin(t *testing.
 			request := starter.applications[0]
 			if request.TargetParticipantID != 21 || request.UserInput != "Check the build." ||
 				request.TriggerOrigin != executiondomain.TriggerOriginWebhook || request.HandoffCompletion != nil ||
-				request.UnattendedContinuation != nil {
+				request.UnattendedContinuation != nil || request.ThreadRun == nil || request.ThreadRun.TriggerID != 9 {
 				t.Fatalf("agent request = %+v", request)
 			}
 			grant = request.Unattended
@@ -81,6 +82,9 @@ func TestStartThreadTurnStartsTheThreadsParticipantWithASystemOrigin(t *testing.
 				t.Fatal("a model thread did not start a model turn")
 			}
 			grant = starter.adhoc[0].Unattended
+			if run := starter.adhoc[0].ThreadRun; run == nil || run.TriggerID != 9 {
+				t.Fatalf("model request run = %+v", run)
+			}
 		}
 		// A new chain: no stored grant id, no chain root, no desktop parts.
 		if grant == nil || grant.GrantID != "" || grant.ChainRootExecutionID != "" || grant.Kind != "" ||
@@ -172,7 +176,7 @@ func TestThreadSeamWithoutThreads(t *testing.T) {
 	if _, err := service.StartThreadTurn(context.Background(), threadTurn()); !errors.Is(err, workspacehandoff.ErrUnavailable) {
 		t.Fatalf("start err = %v", err)
 	}
-	if _, err := service.ThreadHandedOff(context.Background(), 1, thread); !errors.Is(err, workspacehandoff.ErrUnavailable) {
+	if _, _, err := service.HandedOffThread(context.Background(), 1, thread); !errors.Is(err, workspacehandoff.ErrUnavailable) {
 		t.Fatalf("handed off err = %v", err)
 	}
 	var nilService *Service
@@ -183,12 +187,12 @@ func TestThreadSeamWithoutThreads(t *testing.T) {
 
 func TestThreadHandedOffAndRunActive(t *testing.T) {
 	service := threadService(&fakeThreads{target: idleThread(true, 5), active: true}, &recordingStarter{})
-	if ok, err := service.ThreadHandedOff(context.Background(), 1, thread); err != nil || !ok {
-		t.Fatalf("handed off = %v, %v", ok, err)
+	if target, ok, err := service.HandedOffThread(context.Background(), 1, thread); err != nil || !ok || target.VersionID != 5 {
+		t.Fatalf("handed off = %+v, %v, %v", target, ok, err)
 	}
 	for _, missing := range []error{workspacehandoff.ErrNotFound, workspacehandoff.ErrNotLocalWork} {
 		service := threadService(&fakeThreads{err: missing}, &recordingStarter{})
-		if ok, err := service.ThreadHandedOff(context.Background(), 1, thread); err != nil || ok {
+		if _, ok, err := service.HandedOffThread(context.Background(), 1, thread); err != nil || ok {
 			t.Fatalf("%v: handed off = %v, %v", missing, ok, err)
 		}
 	}

@@ -537,6 +537,12 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			if err := fenceCloudIdleThread(ctx, tx, currentProjectID, conversationID); err != nil {
 				return executionapp.AdmissionOutcome{}, nil, err
 			}
+			// A schedule's or a trigger's turn: its approval snapshot is
+			// written behind the fence, so a refused occurrence writes
+			// nothing and a started turn has it from its first moment.
+			if err := writeThreadRunPolicy(ctx, tx, currentProjectID, conversationID, admission.RunPolicy); err != nil {
+				return executionapp.AdmissionOutcome{}, nil, err
+			}
 		}
 		if _, err := txQueries.LockCurrentAgentConversation(ctx, conversationUUID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {

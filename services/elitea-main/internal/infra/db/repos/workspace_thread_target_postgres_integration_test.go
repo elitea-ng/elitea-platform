@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 
 	agentapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -229,5 +230,98 @@ WHERE event_type = 'run_finished' AND meta ->> 'chain_root_execution_id' = $1`, 
 	}
 	if user != owner || origin != unattended.OriginCloud || conversation != f.thread.thread.ConversationUUID {
 		t.Fatalf("run_finished = user %d, origin %s, conversation %s", user, origin, conversation)
+	}
+}
+
+// A schedule's turn writes its approval snapshot in its own admission
+// transaction, behind the fence: the started turn has the schedule's action
+// from its first moment, and a refused occurrence leaves the running turn's
+// snapshot as it is.
+func TestPostgresThreadRunPolicyIsWrittenWithTheAdmission(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedHandoffContinueSchema(t, pool)
+	ctx := context.Background()
+	const owner int64 = 5504
+	admissions := handoffContinueAdmissions(t, pool)
+	f := newHandoffContinueFixture(t, pool, owner)
+	conversation := f.thread.thread.ConversationUUID
+	policy := func(action string, version int64) *agentapp.UnattendedRunPolicy {
+		return &agentapp.UnattendedRunPolicy{
+			ProjectID: 1, ConversationUUID: conversation, TriggerOrigin: "schedule",
+			VersionID: version, OwnerUserID: owner, OnApprovalRequired: action,
+		}
+	}
+	read := func() (action string, version int64, found bool) {
+		t.Helper()
+		err := pool.QueryRow(ctx, `
+SELECT on_approval_required, version_id FROM elitea_runtime.unattended_run_policies
+WHERE project_id = 1 AND conversation_uuid = $1::uuid`, conversation).Scan(&action, &version)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", 0, false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return action, version, true
+	}
+
+	// HANDING_OFF: the fence refuses, and no snapshot is written.
+	refused := f.question(owner, nil)
+	refused.RunPolicy = policy("skip", 7)
+	if _, err := admissions.Submit(ctx, refused); !errors.Is(err, agentapp.ErrLocalWorkThread) {
+		t.Fatalf("handing off = %v", err)
+	}
+	if _, _, found := read(); found {
+		t.Fatal("a fenced occurrence wrote a snapshot")
+	}
+
+	f.completeStopped(t, owner, "")
+	started := f.question(owner, nil)
+	started.RunPolicy = policy("skip", 7)
+	outcome, err := admissions.Submit(ctx, started)
+	if err != nil || !outcome.Created {
+		t.Fatalf("start = %+v, %v", outcome, err)
+	}
+	// One read of the execution row and the snapshot: the snapshot is there
+	// when the turn is.
+	var action string
+	if err := pool.QueryRow(ctx, `
+SELECT p.on_approval_required FROM elitea_runtime.execution_jobs j
+JOIN elitea_runtime.unattended_run_policies p ON p.project_id = 1 AND p.conversation_uuid = $2::uuid
+WHERE j.execution_id = $1`, outcome.ExecutionID, conversation).Scan(&action); err != nil || action != "skip" {
+		t.Fatalf("snapshot with the turn = %q, %v", action, err)
+	}
+
+	// A second occurrence while the answer streams: refused, and the
+	// running turn's snapshot stays.
+	busy := f.question(owner, nil)
+	busy.RunPolicy = policy("notify_and_wait", 8)
+	if _, err := admissions.Submit(ctx, busy); err == nil {
+		t.Fatal("a second occurrence started while the first streams")
+	}
+	if action, version, _ := read(); action != "skip" || version != 7 {
+		t.Fatalf("snapshot after a refused occurrence = %s, %d", action, version)
+	}
+
+	// The next started turn replaces it.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET is_streaming = FALSE WHERE conversation_id = $1`,
+		f.thread.conversationID); err != nil {
+		t.Fatal(err)
+	}
+	next := f.question(owner, nil)
+	next.RunPolicy = policy("notify_and_wait", 8)
+	if _, err := admissions.Submit(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if action, version, _ := read(); action != "notify_and_wait" || version != 8 {
+		t.Fatalf("snapshot of the next turn = %s, %d", action, version)
+	}
+
+	// A snapshot without the cloud thread fence is refused.
+	plain := f.question(owner, nil)
+	plain.CloudThread = false
+	plain.RunPolicy = policy("skip", 7)
+	if _, err := admissions.Submit(ctx, plain); !errors.Is(err, agentapp.ErrInvalidAgentAdmission) {
+		t.Fatalf("snapshot without the fence = %v", err)
 	}
 }

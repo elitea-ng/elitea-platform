@@ -202,6 +202,9 @@ type CurrentApplicationStartRequest struct {
 	// HandoffCompletion is set only when Main starts the turn a send
 	// continues with (handoff_continue.go); never from a request body.
 	HandoffCompletion *HandoffCompletion
+	// ThreadRun is set only for a schedule's or a trigger's turn on a
+	// handed-off thread (thread_run.go); never from a request body.
+	ThreadRun *ThreadRun
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -215,7 +218,8 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		!validCurrentAgentInput(request.UserInput, request.AllowEmptyUserInput) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validCurrentMCPTokens(request.MCPTokens) ||
-		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 {
+		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 ||
+		!request.ThreadRun.valid(request.TriggerOrigin) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -355,7 +359,8 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	target.VersionDetails = frozenVersion
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
+	questionMeta := request.ThreadRun.questionMeta(
+		currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone))
 	attachments, err := currentTurnAttachmentsWithImages(
 		ctx,
 		int64(request.ProjectID),
@@ -437,6 +442,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		Release:           target.Release.Clone(),
 		HandoffCompletion: request.HandoffCompletion.Clone(),
 		CloudThread:       target.CloudWorkspace,
+		RunPolicy:         request.ThreadRun.snapshot(int64(request.ProjectID), request.ConversationUUID, request.TriggerOrigin),
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,
