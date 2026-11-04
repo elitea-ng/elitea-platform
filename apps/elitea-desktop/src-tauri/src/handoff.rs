@@ -1726,7 +1726,7 @@ impl HandoffHost {
             object.insert("sent_from_here".into(), json!(record.is_some()));
             // "Take back the remaining turns" is offered while > 0.
             object.insert("rest_turns".into(), json!(rest_turns));
-            // The server's flag (U5 contract §2); this desktop's record
+            // The server's flag (`WorkspaceHandoffState`); this desktop's record
             // where the server has none yet.
             if !object.contains_key("take_back_when_done") {
                 let local = name != "LOCAL" && self.take_back_of(&uuid).is_some();
@@ -2469,7 +2469,7 @@ struct Finish {
     continue_body: Option<Value>,
 }
 
-/// `complete.continue` for a stopped turn (U5 contract §1, §3): the run
+/// `complete.continue` for a stopped turn (ADR-0045 decision 8, `WorkspaceHandoffContinue` in v2.yaml): the run
 /// brief's continuation text when the chain has a brief, else
 /// [`CONTINUE_PROMPT`]; the turn's mode; and the turn's grant with the
 /// local chain's root (absent for a turn the person attends).
@@ -2482,9 +2482,10 @@ fn continue_body(turn: &RunningTurn) -> Value {
         .unwrap_or_else(|| CONTINUE_PROMPT.to_owned());
     let mut body = json!({ "prompt": prompt, "mode": turn.mode });
     if let Some(unattended) = &turn.unattended {
-        // The cloud turn's grant (`ChatUnattendedRequest`): the fields both
-        // executors share, and the chain the cloud turn continues. U5: the
-        // wire names are the contract's; Main's schema decides the rest.
+        // The cloud turn's grant (`LocalTurnUnattendedRequest` in v2.yaml):
+        // the fields both executors share, and the chain the cloud turn
+        // continues. No `kind`: Main links the turn to the chain as `handoff`
+        // and checks that `grant_id` is the chain's.
         let grant = &unattended.grant;
         let mut wire = json!({
             "grant_id": grant.id(),
@@ -2724,7 +2725,7 @@ impl HandoffHost {
             self.forget_take_back(uuid);
             return;
         }
-        // U5: `last_cloud_run` of the state view (contract §2).
+        // `last_cloud_run` of the state view (`WorkspaceHandoffState`).
         let last = state.get("last_cloud_run").filter(|last| last.is_object());
         let outcome = last
             .and_then(|last| str_of(last, "outcome"))

@@ -137,7 +137,7 @@ struct Platform {
     completes: Vec<Value>,
     /// A `complete` with `continue` answers 422 `unattended_grant_refused`.
     refuse_grant: bool,
-    /// The state's `take_back_when_done` and `last_cloud_run` (U5 contract §2).
+    /// The state's `take_back_when_done` and `last_cloud_run` (`WorkspaceHandoffState`, ADR-0045 decision 8).
     take_back_when_done: bool,
     last_cloud_run: Option<Value>,
 }

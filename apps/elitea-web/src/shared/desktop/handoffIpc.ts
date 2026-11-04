@@ -7,6 +7,8 @@
  * (`secret_found`, `include_confirm_required`), the cap breakdown (`handoff_too_large`) or the server's
  * quota figures.
  */
+import type { WorkspaceHandoffContinued, WorkspaceHandoffState } from '@/shared/api/generated/model';
+
 import type { HostInvoke } from './hostBridge';
 import { tauriListen, WorkspaceIpcError, type ChangedFile, type ListenFn, type TauriEventInternals } from './workspaceIpc';
 
@@ -148,8 +150,8 @@ export interface HandoffSent {
   env_vars: number;
   /** The send stopped the thread's running turn first (ADR-0045 decision 8). */
   stopped_turn?: boolean;
-  /** The cloud went on with the stopped turn at once (`complete`'s `continued`). U5: replace with the generated type. */
-  continued?: { execution_id: string; message_id: string } | null;
+  /** The cloud went on with the stopped turn at once: `complete`'s `continued`, relayed as the server sent it. */
+  continued?: WorkspaceHandoffContinued | null;
   /** The server refused the turn's grant: the thread waits in the cloud for the next message. What to tell the person. */
   continue_refused?: string | null;
   /** This computer takes the thread back by itself when its cloud run completes. */
@@ -182,8 +184,8 @@ export interface HandoffStatus {
   rest_turns?: number;
   /** Sent with "Take back when done" (ADR-0045 decision 8): the owner's desktop takes it back when its cloud run completes. */
   take_back_when_done?: boolean;
-  /** The last finished cloud run of the handoff. U5: replace with the generated type. */
-  last_cloud_run?: { outcome: string; execution_id: string; finished_at: string } | null;
+  /** The last finished cloud run of the handoff, relayed from the state view. */
+  last_cloud_run?: WorkspaceHandoffState['last_cloud_run'];
 }
 
 /** `handoff_reclaim`: `RECLAIMING`, or `CLOUD_RUNNING` with `reclaim_pending` while a cloud turn runs. */
