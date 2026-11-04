@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "Modell des Agents",
   "workspace.model.choose": "Modell: {{label}}",
   "workspace.model.effort": "Reasoning-Aufwand",
+  "workspace.model.effort.auto": "Automatisch",
   "workspace.model.effort.high": "Hoch",
   "workspace.model.effort.low": "Niedrig",
   "workspace.model.effort.medium": "Mittel",

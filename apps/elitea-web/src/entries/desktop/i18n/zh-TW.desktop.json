@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "代理的模型",
   "workspace.model.choose": "模型：{{label}}",
   "workspace.model.effort": "推理強度",
+  "workspace.model.effort.auto": "自動",
   "workspace.model.effort.high": "高",
   "workspace.model.effort.low": "低",
   "workspace.model.effort.medium": "中",

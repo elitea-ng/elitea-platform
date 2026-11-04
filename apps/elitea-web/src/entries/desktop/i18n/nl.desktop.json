@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "Model van de agent",
   "workspace.model.choose": "Model: {{label}}",
   "workspace.model.effort": "Redeneerinspanning",
+  "workspace.model.effort.auto": "Automatisch",
   "workspace.model.effort.high": "Hoog",
   "workspace.model.effort.low": "Laag",
   "workspace.model.effort.medium": "Gemiddeld",

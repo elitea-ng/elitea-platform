@@ -18,6 +18,16 @@ describe('ModelChip', () => {
     expect(modelChipLabel(null, undefined)).toBe('Agent’s model');
   });
 
+  it('shows auto and off, and hands either back unchanged (ADR-0038)', async () => {
+    expect(modelChipLabel('qwen3.5', 'auto')).toBe('qwen3.5 · Auto');
+    expect(modelChipLabel('qwen3.5', 'off')).toBe('qwen3.5 · No reasoning');
+    const onChoose = vi.fn();
+    renderWithTheme(<ModelChip current="gpt-5" effort="auto" models={MODELS} onChoose={onChoose} />);
+    await userEvent.click(screen.getByTestId('model-chip'));
+    await userEvent.click(screen.getByTestId('model-effort-off'));
+    expect(onChoose).toHaveBeenCalledWith({ name: 'gpt-5', reasoning_effort: 'off' });
+  });
+
   it('offers the project’s chat models and hands back the one picked', async () => {
     const onChoose = vi.fn();
     renderWithTheme(<ModelChip current="gpt-5" models={MODELS} onChoose={onChoose} />);

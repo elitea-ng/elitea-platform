@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "مدل عامل",
   "workspace.model.choose": "مدل: {{label}}",
   "workspace.model.effort": "تلاش استدلال",
+  "workspace.model.effort.auto": "خودکار",
   "workspace.model.effort.high": "بالا",
   "workspace.model.effort.low": "پایین",
   "workspace.model.effort.medium": "متوسط",

@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "نموذج الوكيل",
   "workspace.model.choose": "النموذج: {{label}}",
   "workspace.model.effort": "جهد الاستدلال",
+  "workspace.model.effort.auto": "تلقائي",
   "workspace.model.effort.high": "مرتفع",
   "workspace.model.effort.low": "منخفض",
   "workspace.model.effort.medium": "متوسط",
