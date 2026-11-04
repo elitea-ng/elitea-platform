@@ -5,7 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
-import { getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
+import { ThreadGrantFieldContext } from '@/entities/thread-target';
+import { ThreadGrantField } from '@/features/unattended';
+import { getGetConversationMockHandler, getGetConversationResponseMock, getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -302,10 +304,45 @@ describe('EditApplicationTriggersPanel — Runs on a handed-off workspace thread
 
   it('shows a stored thread target as "Runs on <thread>"', async () => {
     serve({ ...CONFIGURED_TRIGGER, target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' });
-    server.use(getListConversationsMockHandler(LISTING));
+    server.use(getListConversationsMockHandler(LISTING), getGetConversationMockHandler(getGetConversationResponseMock({ uuid: THREAD, name: 'Alert triage' })));
     renderPanel();
     await waitFor(() => expect(screen.getByTestId('agent-trigger-thread')).toHaveTextContent('Runs on Alert triage'));
     expect(screen.getByLabelText('A handed-off workspace thread')).toBeChecked();
+  });
+  it('shows the new stored grant when a save answers with it (the form seeds again)', async () => {
+    const user = userEvent.setup();
+    const grantOf = (max: number) => ({ continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: max } });
+    let saved = false;
+    let readsAfterSave = 0;
+    let stored: Record<string, unknown> = { ...CONFIGURED_TRIGGER, target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.', grant: grantOf(5) };
+    server.use(
+      http.get('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () => {
+        if (saved) readsAfterSave += 1;
+        return HttpResponse.json(stored as Record<string, string>);
+      }),
+      http.post('*/pipeline_triggers/prompt_lib/:projectId/:versionId', () => {
+        saved = true;
+        stored = { ...stored, grant: grantOf(7) };
+        return HttpResponse.json({ ...(stored as Record<string, string>), secret: 'fresh-secret' });
+      }),
+      http.get('*/pipeline_schedules/prompt_lib/:projectId/:versionId', () => HttpResponse.json({ configured: false, active: false })),
+      getListConversationsMockHandler(LISTING),
+      getGetConversationMockHandler(getGetConversationResponseMock({ uuid: THREAD, name: 'Alert triage' })),
+    );
+    renderAgentsRoute(
+      <ThreadGrantFieldContext.Provider value={ThreadGrantField}>
+        <EditApplicationTriggersPanel projectId="9" versionId={1} isReadOnly={false} />
+      </ThreadGrantFieldContext.Provider>,
+      '/agents/all/42',
+      { projectId: '9' },
+    );
+    await user.click(await screen.findByRole('button', { name: 'Run to completion settings' }));
+    expect(screen.getByTestId('unattended-chain-line')).toHaveTextContent('up to 5 continuations');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByTestId('agent-trigger-rotate'));
+    await waitFor(() => expect(readsAfterSave).toBeGreaterThan(0));
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    await waitFor(() => expect(screen.getByTestId('unattended-chain-line')).toHaveTextContent('up to 7 continuations'));
   });
 });
 

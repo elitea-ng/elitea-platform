@@ -18,7 +18,6 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { RadioButtonGroup } from '@/shared/ui/RadioButtonGroup';
 import { SingleSelect, type SingleSelectOption } from '@/shared/ui/SingleSelect';
@@ -40,8 +39,6 @@ export interface ThreadTargetSectionProps {
   readonly onChoiceChange: (choice: TargetChoice) => void;
   readonly draft: ThreadTargetDraft;
   readonly onDraftChange: (draft: ThreadTargetDraft) => void;
-  /** The stored grant: it seeds the grant field. */
-  readonly storedGrant?: ChatUnattendedRequest | undefined;
   readonly errors?: ThreadTargetErrors | undefined;
   readonly disabled?: boolean | undefined;
 }
@@ -53,7 +50,7 @@ type FieldsProps = Omit<ThreadTargetSectionProps, 'versionKind' | 'choice' | 'on
 
 /** The thread picker: the threads in the cloud now, and a stored thread that is not (so the form still names it). */
 function ThreadPicker({ projectId, draft, onDraftChange, errors, disabled = false }: FieldsProps): ReactNode {
-  const { threads, names, isLoading } = useHandedOffThreads(projectId);
+  const { threads, names, isLoading, capped } = useHandedOffThreads(projectId);
   const options: SingleSelectOption[] = threads.map(thread => ({ label: thread.name, value: thread.uuid }));
   if (draft.conversationUuid !== '' && !threads.some(thread => thread.uuid === draft.conversationUuid)) {
     options.push({ label: names.get(draft.conversationUuid) ?? draft.conversationUuid, value: draft.conversationUuid });
@@ -61,16 +58,23 @@ function ThreadPicker({ projectId, draft, onDraftChange, errors, disabled = fals
   const empty = !isLoading && threads.length === 0;
   const threadError = errors?.thread ?? (empty ? t('threadTarget.noThreads', 'You have no thread in the cloud. On the desktop app, send a thread to the cloud first.') : undefined);
   return (
-    <SingleSelect
-      id="thread-target-thread"
-      label={t('threadTarget.thread', 'Thread')}
-      placeholder={t('threadTarget.threadPlaceholder', 'Select a thread')}
-      value={draft.conversationUuid}
-      options={options}
-      onChange={value => onDraftChange({ ...draft, conversationUuid: value })}
-      disabled={disabled || isLoading}
-      {...(threadError === undefined ? {} : { error: threadError })}
-    />
+    <>
+      <SingleSelect
+        id="thread-target-thread"
+        label={t('threadTarget.thread', 'Thread')}
+        placeholder={t('threadTarget.threadPlaceholder', 'Select a thread')}
+        value={draft.conversationUuid}
+        options={options}
+        onChange={value => onDraftChange({ ...draft, conversationUuid: value })}
+        disabled={disabled || isLoading}
+        {...(threadError === undefined ? {} : { error: threadError })}
+      />
+      {capped && (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="thread-target-capped">
+          {t('threadTarget.capped', 'You have more than 1000 Local work threads. The list shows the first 1000.')}
+        </Typography>
+      )}
+    </>
   );
 }
 
@@ -93,7 +97,7 @@ function PromptField({ draft, onDraftChange, errors, disabled = false }: FieldsP
 }
 
 function ThreadFields(props: FieldsProps): ReactNode {
-  const { draft, onDraftChange, storedGrant, errors, disabled } = props;
+  const { draft, onDraftChange, errors, disabled } = props;
   const GrantField = useContext(ThreadGrantFieldContext);
   return (
     <Box sx={fieldsSx} data-testid="thread-target-fields">
@@ -103,7 +107,7 @@ function ThreadFields(props: FieldsProps): ReactNode {
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <Typography variant="labelMedium">{t('threadTarget.grant', 'Run to completion')}</Typography>
           <GrantField
-            stored={storedGrant}
+            value={draft.grant}
             onChange={grant => onDraftChange({ ...draft, grant })}
             refusal={errors?.grant}
             disabled={disabled}

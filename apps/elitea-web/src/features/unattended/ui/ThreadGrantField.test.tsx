@@ -1,15 +1,31 @@
+import { useState } from 'react';
+
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
+import type { ThreadGrantDraft } from '@/entities/thread-target';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { ThreadGrantField } from './ThreadGrantField';
 
-function setup(stored?: ChatUnattendedRequest, refusal?: unknown) {
-  const onChange = vi.fn();
-  renderWithTheme(<ThreadGrantField stored={stored} onChange={onChange} refusal={refusal} />);
+/** The field under a parent that keeps the draft, as the thread target form does. */
+function setup(initial: ThreadGrantDraft = { kind: 'default' }, refusal?: unknown) {
+  const onChange = vi.fn<(next: ThreadGrantDraft) => void>();
+  function Host(): React.JSX.Element {
+    const [value, setValue] = useState(initial);
+    return (
+      <ThreadGrantField
+        value={value}
+        onChange={next => {
+          onChange(next);
+          setValue(next);
+        }}
+        refusal={refusal}
+      />
+    );
+  }
+  renderWithTheme(<Host />);
   return { onChange, user: userEvent.setup() };
 }
 
@@ -17,6 +33,8 @@ async function openDetails(user: ReturnType<typeof userEvent.setup>): Promise<HT
   await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
   return screen.getByRole('dialog', { name: 'Run to completion' });
 }
+
+const STORED: ThreadGrantDraft = { kind: 'set', grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } } };
 
 describe('ThreadGrantField', () => {
   it('shows the continue parts, the chain limits and the goal check, and no part that answers for a person', async () => {
@@ -36,33 +54,40 @@ describe('ThreadGrantField', () => {
     const dialog = await openDetails(user);
     await user.click(within(dialog).getByRole('button', { name: 'Change limits' }));
     await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5');
-    expect(onChange).toHaveBeenLastCalledWith({
-      kind: 'set',
-      grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } },
-    });
-    const sent = onChange.mock.lastCall?.[0] as { grant: Record<string, unknown> };
-    expect(Object.keys(sent.grant)).not.toContain('sensitive_tools');
-    expect(Object.keys(sent.grant)).not.toContain('hook_asks');
-    expect(Object.keys(sent.grant)).not.toContain('remote_confirmations');
-    expect(Object.keys(sent.grant)).not.toContain('continue_tool_call_cap');
+    const sent = onChange.mock.lastCall?.[0];
+    expect(sent?.kind).toBe('set');
+    const grant = sent?.kind === 'set' ? sent.grant : {};
+    expect(grant).toEqual({ continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } });
+    for (const part of ['sensitive_tools', 'hook_asks', 'remote_confirmations', 'continue_tool_call_cap']) expect(Object.keys(grant)).not.toContain(part);
   });
 
-  it('reports chain limits that are not valid', async () => {
+  it('says that chain limits are not valid, under the field and on the closed chip', async () => {
     const { onChange, user } = setup();
     const dialog = await openDetails(user);
     await user.click(within(dialog).getByRole('button', { name: 'Change limits' }));
     await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5.5');
-    expect(onChange).toHaveBeenLastCalledWith({ kind: 'invalid' });
+    expect(onChange.mock.lastCall?.[0].kind).toBe('invalid');
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('thread-target-grant-invalid')).toHaveTextContent('A chain limit is not valid. Open the settings and correct it.');
+    expect(screen.getByTestId('thread-target-grant')).toHaveAttribute('data-tone', 'invalid');
   });
 
-  it('seeds from the stored grant, and the chip turns continuing off', async () => {
-    const { onChange, user } = setup({ continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } });
+  it('shows the stored grant, and the chip turns continuing off', async () => {
+    const { onChange, user } = setup(STORED);
     expect(screen.getByRole('button', { name: 'Run to completion' })).toHaveAttribute('aria-pressed', 'true');
     const dialog = await openDetails(user);
     expect(within(dialog).getByTestId('unattended-chain-line')).toHaveTextContent('up to 5 continuations');
     await user.keyboard('{Escape}');
     await user.click(screen.getByRole('button', { name: 'Run to completion' }));
-    expect(onChange).toHaveBeenLastCalledWith({ kind: 'set', grant: { continue_step_limit: false, continue_output_limit: false, goal_check: true } });
+    expect(onChange.mock.lastCall?.[0]).toMatchObject({ kind: 'set', grant: { continue_step_limit: false, continue_output_limit: false, goal_check: true } });
+  });
+
+  it('is controlled: a new value from the form replaces what it shows', async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderWithTheme(<ThreadGrantField value={STORED} onChange={vi.fn()} />);
+    rerender(<ThreadGrantField value={{ kind: 'default' }} onChange={vi.fn()} />);
+    const dialog = await openDetails(user);
+    expect(within(dialog).getByTestId('unattended-chain-line')).toHaveTextContent('up to 20 continuations');
   });
 
   it('shows Main’s refusal of the grant as text', () => {

@@ -46,6 +46,12 @@ function storedKey(stored: StoredThreadTarget | undefined): string {
   return isThreadTarget(stored) ? JSON.stringify([stored?.conversation_uuid, stored?.prompt, stored?.grant]) : '';
 }
 
+/** What a draft would save: the grant field's own `edit` state is not part of it. */
+function draftKey(draft: ThreadTargetDraft): string {
+  const grant = draft.grant.kind === 'set' ? draft.grant.grant : draft.grant.kind;
+  return JSON.stringify([draft.conversationUuid, draft.prompt, grant]);
+}
+
 export function useThreadTargetForm(open: boolean, stored: StoredThreadTarget | undefined, versionKind: VersionKind): ThreadTargetForm {
   const key = storedKey(stored);
   const storedIsThread = key !== '';
@@ -62,7 +68,7 @@ export function useThreadTargetForm(open: boolean, stored: StoredThreadTarget | 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, key]);
 
-  const changed = choice !== (storedIsThread ? 'thread' : 'version') || (choice === 'thread' && JSON.stringify(draft) !== JSON.stringify(threadTargetDraftOf(stored)));
+  const changed = choice !== (storedIsThread ? 'thread' : 'version') || (choice === 'thread' && draftKey(draft) !== draftKey(threadTargetDraftOf(stored)));
 
   const pending = useCallback((): PendingTarget => {
     if (choice === 'version') return storedIsThread ? { kind: 'body', body: { target_kind: versionKind } } : { kind: 'unchanged' };
@@ -93,10 +99,9 @@ export function useThreadTargetForm(open: boolean, stored: StoredThreadTarget | 
         setDraft(next);
         setErrors(undefined);
       },
-      storedGrant: storedIsThread ? stored?.grant : undefined,
       errors,
     }),
-    [versionKind, choice, draft, storedIsThread, stored?.grant, errors],
+    [versionKind, choice, draft, errors],
   );
 
   return { section, changed, pending, submit };

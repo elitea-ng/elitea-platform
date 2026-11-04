@@ -6,52 +6,67 @@
  * from these origins; the control offers only the `continue` parts, the chain
  * limits and the goal check.
  *
- * It fills `entities/thread-target`'s grant slot (`app/providers`). It reports
- * a grant only after the person changes it: with no edit, the form sends the
- * stored grant, or none (Main's default).
+ * It fills `entities/thread-target`'s grant slot (`app/App.tsx`). It is
+ * controlled: it shows the form's draft and keeps no state of its own, so a
+ * switch of "Runs" away and back, or a new stored target, shows what the
+ * form will send. The control's own state of an edit travels in the draft
+ * (`edit`), because chain limits that are not valid yet have no wire form.
  */
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 import Typography from '@mui/material/Typography';
 
 import type { ThreadGrantDraft, ThreadGrantFieldProps } from '@/entities/thread-target';
 import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
+import { t } from '@/shared/i18n';
+import { isRecord } from '@/shared/lib/object';
 
 import { fromCloudGrant, toCloudGrant, unattendedRefusalText } from '../model/cloud';
 import { defaultChoice, type RunChoice } from '../model/runChoice';
 import { RunToCompletionControl } from './RunToCompletionControl';
 
 /** The control's state of a stored grant: off when the grant continues at no limit. */
-function choiceOf(stored: ChatUnattendedRequest | undefined): RunChoice {
-  if (stored === undefined) return defaultChoice();
-  return { on: stored.continue_step_limit !== false || stored.continue_output_limit !== false, grant: fromCloudGrant(stored) };
+function choiceOfGrant(grant: ChatUnattendedRequest): RunChoice {
+  return { on: grant.continue_step_limit !== false || grant.continue_output_limit !== false, grant: fromCloudGrant(grant) };
 }
 
-/** The grant a choice sends: off continues at no limit; on continues at both, inside the typed chain limits. */
+/** The `edit` this field put in the draft, read back. */
+function editOf(edit: unknown): RunChoice | undefined {
+  return isRecord(edit) && typeof edit['on'] === 'boolean' && isRecord(edit['grant']) ? (edit as unknown as RunChoice) : undefined;
+}
+
+/** What the control shows for a draft: the person's edit, else the grant to send, else Main's default. */
+function choiceOf(value: ThreadGrantDraft): RunChoice {
+  if (value.kind === 'default') return defaultChoice();
+  return editOf(value.edit) ?? (value.kind === 'set' ? choiceOfGrant(value.grant) : defaultChoice());
+}
+
+/** The draft of a choice: off continues at no limit; on continues at both, inside the typed chain limits. */
 function draftOf(choice: RunChoice): ThreadGrantDraft {
-  if (!choice.on) return { kind: 'set', grant: { continue_step_limit: false, continue_output_limit: false, goal_check: choice.grant.goal_check } };
+  if (!choice.on) return { kind: 'set', grant: { continue_step_limit: false, continue_output_limit: false, goal_check: choice.grant.goal_check }, edit: choice };
   const wire = toCloudGrant({ ...choice.grant, continue_step_limit: true, continue_output_limit: true, sensitive_tools: [] });
-  return wire.ok ? { kind: 'set', grant: wire.grant } : { kind: 'invalid' };
+  return wire.ok ? { kind: 'set', grant: wire.grant, edit: choice } : { kind: 'invalid', edit: choice };
 }
 
-export function ThreadGrantField({ stored, onChange, refusal, disabled = false }: ThreadGrantFieldProps): ReactNode {
-  const [choice, setChoice] = useState<RunChoice>(() => choiceOf(stored));
+export function ThreadGrantField({ value, onChange, refusal, disabled = false }: ThreadGrantFieldProps): ReactNode {
   const refused = refusal === undefined ? undefined : unattendedRefusalText(refusal);
   return (
     <>
       <span>
         <RunToCompletionControl
-          value={choice}
-          onChange={next => {
-            setChoice(next);
-            onChange(draftOf(next));
-          }}
+          value={choiceOf(value)}
+          onChange={next => onChange(draftOf(next))}
           scope="cloud"
           optIns={false}
           disabled={disabled}
           testId="thread-target-grant"
         />
       </span>
+      {value.kind === 'invalid' && (
+        <Typography variant="bodySmall" color="error" role="alert" data-testid="thread-target-grant-invalid">
+          {t('unattended.control.invalidSummary', 'A chain limit is not valid. Open the settings and correct it.')}
+        </Typography>
+      )}
       {refused !== undefined && (
         <Typography variant="bodySmall" color="error" role="alert" data-testid="thread-target-grant-error">
           {refused}

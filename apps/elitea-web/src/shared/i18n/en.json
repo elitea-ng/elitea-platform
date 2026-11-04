@@ -5717,5 +5717,6 @@
   "threadTarget.runsOn": "Runs on",
   "threadTarget.thread": "Thread",
   "threadTarget.threadPlaceholder": "Select a thread",
-  "threadTarget.unnamedThread": "a handed-off thread"
+  "threadTarget.unnamedThread": "a handed-off thread",
+  "threadTarget.capped": "You have more than 1000 Local work threads. The list shows the first 1000."
 }

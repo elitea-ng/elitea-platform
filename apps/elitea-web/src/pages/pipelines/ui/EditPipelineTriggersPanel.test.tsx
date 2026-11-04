@@ -7,7 +7,7 @@ import {
   getGetPipelineInboundTriggerResponseMock,
   getGetPipelineScheduleResponseMock,
 } from '@/shared/api/generated/applications/applications.msw';
-import { getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
+import { getGetConversationMockHandler, getGetConversationResponseMock } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -314,12 +314,7 @@ describe('EditPipelineTriggersPanel', () => {
   it('shows a thread target as "Runs on <thread>" with a link, and a busy thread as skipped', async () => {
     const thread = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
     serve({ trigger: getGetPipelineInboundTriggerResponseMock(), schedule: getGetPipelineScheduleResponseMock() });
-    server.use(
-      getListConversationsMockHandler({
-        total: 1,
-        rows: [{ id: 11, uuid: thread, name: 'Nightly checks', source: 'local_work', workspace_executor: 'cloud', created_at: '2026-11-03T18:00:00Z', updated_at: '2026-11-03T18:00:00Z', duration: -1, message_groups_count: 4, is_pinned: false, is_archived: false }],
-      }),
-    );
+    server.use(getGetConversationMockHandler(getGetConversationResponseMock({ uuid: thread, name: 'Nightly checks' })));
     renderPanel();
 
     expect(await screen.findByTestId('pipeline-schedule-last-result')).toHaveTextContent('Skipped: the thread was busy');

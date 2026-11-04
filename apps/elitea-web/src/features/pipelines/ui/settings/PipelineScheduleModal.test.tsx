@@ -273,4 +273,41 @@ describe('PipelineScheduleModal — Runs on a handed-off workspace thread (ADR-0
     expect(await screen.findByTestId('thread-target-grant-error')).toHaveTextContent('Most automatic continuations: the value is more than the platform maximum.');
     expect(onClose).not.toHaveBeenCalled();
   });
+  it('keeps an edited grant when Runs switches away and back', async () => {
+    const { onSubmit, user } = renderTargeted({}, true);
+    await chooseThread(user);
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Run to completion' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change limits' }));
+    await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '7');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByLabelText('This pipeline'));
+    await user.click(screen.getByLabelText('A handed-off workspace thread'));
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    expect(within(screen.getByRole('dialog', { name: 'Run to completion' })).getByTestId('unattended-chain-line')).toHaveTextContent('up to 7 continuations');
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('0 0 * * 6', {
+      target_kind: 'workspace_thread',
+      conversation_uuid: THREAD,
+      prompt: 'Run the nightly checks.',
+      grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 7 } },
+    }));
+  });
+
+  it('shows a chain limit that is not valid, and does not save', async () => {
+    const { onSubmit, onClose, user } = renderTargeted({}, true);
+    await chooseThread(user);
+    await user.click(screen.getByRole('button', { name: 'Run to completion settings' }));
+    const dialog = screen.getByRole('dialog', { name: 'Run to completion' });
+    await user.click(within(dialog).getByRole('button', { name: 'Change limits' }));
+    await user.type(within(dialog).getByTestId('unattended-chain-max-continuations'), '5.5');
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('thread-target-grant-invalid')).toHaveTextContent('A chain limit is not valid. Open the settings and correct it.');
+    expect(screen.getByTestId('thread-target-grant')).toHaveAttribute('data-tone', 'invalid');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('thread-target-grant-invalid')).toBeInTheDocument();
+  });
 });

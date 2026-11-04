@@ -16,12 +16,22 @@
 import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
+import { isRecord, nonBlankText } from '@/shared/lib/object';
 
 /** The most characters a target's prompt may have (v2.yaml `prompt.maxLength`). */
 export const THREAD_PROMPT_MAX = 32768;
 
 /** The grant as the form holds it: Main's default, a grant to send, or chain limits that are not valid. */
-export type ThreadGrantDraft = { readonly kind: 'default' } | { readonly kind: 'set'; readonly grant: ChatUnattendedRequest } | { readonly kind: 'invalid' };
+/**
+ * The grant as the form holds it: Main's default, a grant to send, or chain
+ * limits that are not valid. `edit` is the grant field's own state of the
+ * person's last edit (opaque here): the field reads it back, so the draft is
+ * the one source of truth and the field holds no state of its own.
+ */
+export type ThreadGrantDraft =
+  | { readonly kind: 'default' }
+  | { readonly kind: 'set'; readonly grant: ChatUnattendedRequest; readonly edit?: unknown }
+  | { readonly kind: 'invalid'; readonly edit: unknown };
 
 export interface ThreadTargetDraft {
   readonly conversationUuid: string;
@@ -51,6 +61,7 @@ export interface ThreadTargetErrors {
   readonly prompt?: string | undefined;
   /** The raw 422 `unattended_grant_refused` body; the grant field gives its text. */
   readonly grant?: unknown;
+  /** The grant's chain limits are not valid; the grant field says so from the draft. */
   readonly grantInvalid?: boolean | undefined;
   readonly form?: string | undefined;
 }
@@ -104,9 +115,18 @@ export function threadTargetBody(draft: ThreadTargetDraft): ThreadTargetBodyResu
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+/** The 404 body of the thread check (`workspacethread.go`, checkThreadTarget). */
+const THREAD_NOT_FOUND = /^no such conversation\b/u;
 
-const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
+/**
+ * A 404 is about the thread only when the thread check sent it: "no such
+ * conversation in this project" (with no code), for a thread that is not
+ * there or not the caller's. Any other 404 (the version is gone) is not.
+ */
+function notFoundRefusal(message: string | undefined): ThreadTargetErrors | undefined {
+  if (message === undefined || !THREAD_NOT_FOUND.test(message)) return undefined;
+  return { thread: t('threadTarget.refused.notFound', 'This thread is not in this project, or you are not a participant of it.') };
+}
 
 /** The refusal of a 422 or a 409, by its `code`. */
 function codedRefusal(code: string | undefined, message: string | undefined): ThreadTargetErrors | undefined {
@@ -129,21 +149,20 @@ function codedRefusal(code: string | undefined, message: string | undefined): Th
 
 /**
  * The refusal of a thread target save, by field, or undefined when `error` is
- * not one. A 404 is about the thread: it is not in this project, or the
- * caller is not its participant.
+ * not one (the caller then reports it as any failed write).
  */
 export function threadTargetRefusal(error: unknown): ThreadTargetErrors | undefined {
   if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return undefined;
   const { status, body } = error.failure;
   const record = isRecord(body) ? body : {};
-  const message = text(record['error']);
+  const message = nonBlankText(record['error']);
   if (message === 'unattended_grant_refused') return { grant: body };
   switch (status) {
     case 404:
-      return { thread: t('threadTarget.refused.notFound', 'This thread is not in this project, or you are not a participant of it.') };
+      return notFoundRefusal(message);
     case 409:
     case 422:
-      return codedRefusal(text(record['code']), message);
+      return codedRefusal(nonBlankText(record['code']), message);
     case 429:
       return { form: t('threadTarget.refused.tooMany', 'This thread started too many turns. Wait a few minutes and try again.') };
     case 400:
