@@ -1266,6 +1266,7 @@ async fn child_pause_and_completion_survive_loss_before_parent_pause_save() {
         node_id: "gather".to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     for branch in runtime
         .prepare(&mut activation, &definition, &context)
@@ -1771,6 +1772,7 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     for branch in runtime
         .prepare(&mut activation, &definition, &context)
@@ -1912,6 +1914,7 @@ async fn immutable_pre_freeze_replay_stays_unchanged_and_does_not_replace_latest
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     runtime
         .prepare(&mut activation, &definition, &context)
@@ -2079,6 +2082,7 @@ async fn new_parallel_revision_consumes_previous_graph_call_marker_and_retains_r
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     runtime
         .prepare(
@@ -2656,6 +2660,7 @@ async fn a_third_parent_row_in_one_visit_is_refused_with_a_typed_error() {
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     // Row 1: the frozen occurrence. Row 2: the ADK pause row.
     runtime

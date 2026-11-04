@@ -369,6 +369,7 @@ fn activation(thread: &str, definition: &ParallelNodeDefinition) -> ParallelActi
         node_id: definition.id().to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     }
 }
 

@@ -233,6 +233,7 @@ transition: END
         node_id: parallel.id().to_owned(),
         step: 4,
         config_digest: parallel.config_digest(),
+        map: None,
     };
     let origin = family
         .child_origin(&parallel_activation)

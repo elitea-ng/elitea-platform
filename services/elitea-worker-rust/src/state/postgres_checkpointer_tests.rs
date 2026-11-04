@@ -445,6 +445,7 @@ transition: END
         node_id: parallel_definition.id().to_owned(),
         step: 4,
         config_digest: parallel_definition.config_digest(),
+        map: None,
     };
     let short_branch = &parallel_definition.branches()[0];
     let child_input_digest = [0x42_u8; 32];

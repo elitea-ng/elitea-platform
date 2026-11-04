@@ -336,6 +336,7 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     let prepared = first_runtime
         .prepare(&mut activation, &definition, &context)
@@ -861,6 +862,7 @@ async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     first_runtime
         .prepare(&mut activation, &definition, &context)
@@ -1005,6 +1007,7 @@ async fn frozen_child_identity_cannot_be_reused_across_tenant_project_or_definit
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     let branch = &definition.branches()[0];
     let origin = owner
