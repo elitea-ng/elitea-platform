@@ -70,7 +70,10 @@ fn a_v2_map_defaults_to_continue_and_append_like_parallel() {
     assert_eq!(node.runtime().reduction, None);
     assert_eq!(
         node.runtime().policy,
-        Some(MapPolicy { on_error: MapOnError::Continue, join: MapJoin::Append })
+        Some(MapPolicy {
+            on_error: MapOnError::Continue,
+            join: MapJoin::Append
+        })
     );
     assert_eq!(node.runtime().on_error(), OnError::Continue);
     assert_eq!(node.runtime().join(), JoinMode::Append);
@@ -81,12 +84,28 @@ fn a_v2_map_defaults_to_continue_and_append_like_parallel() {
 #[test]
 fn a_v2_map_reads_every_on_error_and_join() {
     for (extra, on_error, join) in [
-        ("on_error: stop\njoin: append\n", OnError::Stop, JoinMode::Append),
-        ("on_error: continue\njoin: keyed\n", OnError::Continue, JoinMode::Keyed),
-        ("on_error: stop\njoin: merge\n", OnError::Stop, JoinMode::Merge),
+        (
+            "on_error: stop\njoin: append\n",
+            OnError::Stop,
+            JoinMode::Append,
+        ),
+        (
+            "on_error: continue\njoin: keyed\n",
+            OnError::Continue,
+            JoinMode::Keyed,
+        ),
+        (
+            "on_error: stop\njoin: merge\n",
+            OnError::Stop,
+            JoinMode::Merge,
+        ),
     ] {
         let node = MapNodeDefinition::from_yaml(&document(extra)).expect(extra);
-        assert_eq!((node.runtime().on_error(), node.runtime().join()), (on_error, join), "{extra}");
+        assert_eq!(
+            (node.runtime().on_error(), node.runtime().join()),
+            (on_error, join),
+            "{extra}"
+        );
     }
 }
 
@@ -105,11 +124,10 @@ fn reduction_with_an_explicit_on_error_is_a_v2_append() {
 // never resolved silently.
 #[test]
 fn reduction_and_join_together_are_refused_with_the_fix() {
-    let error = MapNodeDefinition::from_yaml(&document(
-        "reduction: ordered_collection\njoin: keyed\n",
-    ))
-    .err()
-    .expect("refused");
+    let error =
+        MapNodeDefinition::from_yaml(&document("reduction: ordered_collection\njoin: keyed\n"))
+            .err()
+            .expect("refused");
     assert_eq!(error, MapYamlError::ReductionAndJoin);
     assert!(MAP_REDUCTION_AND_JOIN.contains("remove `reduction`"));
 }

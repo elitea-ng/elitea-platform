@@ -2695,7 +2695,9 @@ fn parse_pipeline_node(
                 MapYamlError::ReductionAndJoin => {
                     PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_JOIN)
                 }
-                MapYamlError::Invalid => PipelineConfigurationError::Invalid("a Map node is invalid"),
+                MapYamlError::Invalid => {
+                    PipelineConfigurationError::Invalid("a Map node is invalid")
+                }
             }),
         "parallel" => ParallelNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Parallel)

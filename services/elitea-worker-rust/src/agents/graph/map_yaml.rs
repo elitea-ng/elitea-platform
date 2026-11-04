@@ -16,8 +16,7 @@ use super::map_reduce::{MapDefinition, MapPolicy, MapReduction};
 use crate::bounded_yaml;
 
 /// The readable refusal of a Map node that names both `reduction` and `join`.
-pub(crate) const MAP_REDUCTION_AND_JOIN: &str =
-    "a Map node sets both `reduction` and `join`; remove `reduction`, which `join: append` replaces";
+pub(crate) const MAP_REDUCTION_AND_JOIN: &str = "a Map node sets both `reduction` and `join`; remove `reduction`, which `join: append` replaces";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -96,7 +95,9 @@ impl MapNodeDefinition {
             reduction: raw.reduction,
             policy,
         };
-        runtime.validate().map_err(|_: GraphError| MapYamlError::Invalid)?;
+        runtime
+            .validate()
+            .map_err(|_: GraphError| MapYamlError::Invalid)?;
         let mut context = digest::Context::new(&digest::SHA256);
         context.update(b"elitea.graph.map.yaml.v1\0");
         context.update(&serde_json::to_vec(&runtime).map_err(|_| MapYamlError::Invalid)?);
