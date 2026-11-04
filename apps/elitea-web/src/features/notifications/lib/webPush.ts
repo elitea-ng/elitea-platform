@@ -8,7 +8,7 @@
  *    browser. Only the browser's site settings can undo that.
  *  - `off` / `on` — `on` means a push subscription exists in this browser.
  *
- * The service worker (`public/push-sw.js`) is registered only when the person
+ * The service worker (`entries/push-sw/`, served as `push-sw.js`) is registered only when the person
  * turns the switch on, at the app's base path with that path as its scope,
  * and is removed again when they turn it off. The browser APIs come in
  * through {@link WebPushEnv} so the steps can be tested without a browser.
@@ -41,8 +41,8 @@ export interface WebPushPlace {
 }
 
 /*
- * The worker (`PUSH_WORKER_FILE`) is served from the app's public directory,
- * so it sits at the app's base path (`/app/push-sw.js` in a deployment,
+ * The worker (`PUSH_WORKER_FILE`) is emitted by vite.config.ts's
+ * `elitea-push-worker` plugin, so it sits at the app's base path (`/app/push-sw.js` in a deployment,
  * `/push-sw.js` in dev) and its default scope covers the whole app. Sign-out
  * finds it by that name (`shared/api/webPushTeardown.ts`).
  */

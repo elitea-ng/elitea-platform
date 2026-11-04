@@ -3,7 +3,7 @@
  * ended. The row is content-free — an outcome and ids, never a prompt, an
  * answer or a title — so its text is fixed per outcome. The same words go
  * into the bell row, the desktop's native notice and (in English, without
- * the catalogue) the web push service worker (`public/push-sw.js`).
+ * the catalogue) the web push service worker (`entries/push-sw/pushWorker.ts`).
  */
 import { t } from '@/shared/i18n';
 

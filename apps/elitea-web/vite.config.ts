@@ -4,7 +4,7 @@ import { URL, fileURLToPath } from 'node:url';
 import babel from '@rolldown/plugin-babel';
 import { tanstackRouter } from '@tanstack/router-plugin/vite';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
-import { defineConfig, searchForWorkspaceRoot, type PluginOption, type UserConfig } from 'vite';
+import { build, defineConfig, searchForWorkspaceRoot, type Plugin, type PluginOption, type UserConfig } from 'vite';
 
 // No `.ts` extension: tsconfig.json does not set `allowImportingTsExtensions`
 // (TS5097), so adding one here to silence Vite's own `configLoader: 'native'`
@@ -119,6 +119,69 @@ const pdfjsNoWasmDecoders = (): PluginOption => ({
  * them. Verified via the installed package's own vite.js plugin ordering
  * example. `guardedLazyRouteComponent` must run before it.
  */
+/**
+ * The web push service worker (ADR-0045 decision 6) as `push-sw.js` at the
+ * app's base path.
+ *
+ * A service worker's URL sets its scope, and the app registers this one
+ * without `type: 'module'`, so it must be ONE classic script at a fixed,
+ * unhashed name. The source is TypeScript (`src/entries/push-sw/`), bundled
+ * on its own as an IIFE: nothing of the app's chunks can leak in, and the
+ * file needs no `import`. The build emits it as an asset of the app; the dev
+ * server compiles it per request, so `npm run dev` registers the same code.
+ */
+const PUSH_WORKER_FILE = 'push-sw.js';
+
+function pushWorker(): Plugin {
+  const entry = resolvePath('./src/entries/push-sw/push-sw.ts');
+  const compile = async (minify: boolean): Promise<string> => {
+    const result = await build({
+      configFile: false,
+      logLevel: 'silent',
+      root: resolvePath('.'),
+      publicDir: false,
+      build: {
+        write: false,
+        minify,
+        sourcemap: false,
+        emptyOutDir: false,
+        lib: { entry, formats: ['iife'], name: 'eliteaPushWorker', fileName: () => PUSH_WORKER_FILE },
+      },
+    });
+    const outputs = Array.isArray(result) ? result : [result];
+    for (const output of outputs) {
+      if ('output' in output) {
+        const chunk = output.output.find((item) => item.type === 'chunk');
+        if (chunk !== undefined && chunk.type === 'chunk') return chunk.code;
+      }
+    }
+    throw new Error(`elitea-push-worker: no output for ${entry}`);
+  };
+  return {
+    name: 'elitea-push-worker',
+    async generateBundle() {
+      this.emitFile({ type: 'asset', fileName: PUSH_WORKER_FILE, source: await compile(true) });
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = (req.url ?? '').split('?')[0] ?? '';
+        if (!path.endsWith(`/${PUSH_WORKER_FILE}`)) {
+          next();
+          return;
+        }
+        compile(false).then(
+          (code) => {
+            res.setHeader('Content-Type', 'text/javascript');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.end(code);
+          },
+          (error: unknown) => next(error),
+        );
+      });
+    },
+  };
+}
+
 function mainAppPlugins(basePlugins: PluginOption[]): PluginOption[] {
   return [
     guardedLazyRouteComponent(resolvePath('./src/routes')),
@@ -314,7 +377,7 @@ function configFor(mode: string): UserConfig {
   }
 
   return {
-    plugins: mainAppPlugins(basePlugins),
+    plugins: [...mainAppPlugins(basePlugins), pushWorker()],
     base: './', // contract C4: assets emitted with relative URLs
     build: {
       outDir: resolvePath('./dist/app'),

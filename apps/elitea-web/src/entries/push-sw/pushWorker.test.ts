@@ -1,14 +1,11 @@
 /**
- * `public/push-sw.js` run with a fake `self`: the push, click and
- * subscription-change logic of the web push service worker (U3 contract §4).
+ * The web push service worker installed on a fake `self`: the push, click and
+ * subscription-change logic (U3 contract §4).
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { runInNewContext } from 'node:vm';
-
 import { describe, expect, it, vi } from 'vitest';
 
-const SOURCE = readFileSync(resolve(import.meta.dirname, '../../../../public/push-sw.js'), 'utf8');
+import { installPushWorker, type PushWorkerScope } from './pushWorker';
+
 const SCOPE = 'https://elitea.example/app/';
 
 interface FakeClient {
@@ -44,8 +41,7 @@ function worker(clients: FakeClient[] = []) {
       pushManager: { subscribe: vi.fn() },
     },
   };
-  // A plain script: its free names are `self` and the web globals it uses.
-  runInNewContext(SOURCE, { self: fake, URL }, { filename: 'push-sw.js' });
+  installPushWorker(fake as unknown as PushWorkerScope);
   const fire = async (type: string, event: Record<string, unknown>): Promise<void> => {
     let work: Promise<unknown> = Promise.resolve();
     listeners.get(type)?.({ ...event, waitUntil: (promise: Promise<unknown>) => (work = promise) });
@@ -55,7 +51,7 @@ function worker(clients: FakeClient[] = []) {
   return { fake, fire, push };
 }
 
-describe('push-sw.js: push', () => {
+describe('push worker: push', () => {
   it.each([
     ['completed', 'Run finished', 'A run is done.'],
     ['failed', 'Run failed', 'A run stopped with an error.'],
@@ -117,7 +113,7 @@ describe('push-sw.js: push', () => {
   });
 });
 
-describe('push-sw.js: notification click', () => {
+describe('push worker: notification click', () => {
   const notification = () => ({ close: vi.fn(), data: { url: `${SCOPE}1/chat?conversation=c-1` } });
 
   it('focuses an open app window and navigates it to the conversation', async () => {
@@ -146,7 +142,7 @@ describe('push-sw.js: notification click', () => {
   });
 });
 
-describe('push-sw.js: pushsubscriptionchange', () => {
+describe('push worker: pushsubscriptionchange', () => {
   const subscription = (endpoint: string) => ({ endpoint, options: { userVisibleOnly: true }, toJSON: () => ({ endpoint, keys: { p256dh: 'p', auth: 'a' } }) });
 
   it('subscribes again with the old options, posts the new endpoint and deletes the old one', async () => {
