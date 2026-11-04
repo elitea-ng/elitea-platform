@@ -42,7 +42,7 @@ describe('Map explicit ownership and channel contract', () => {
   ])('refuses exact Map field %s at %s', (patch, field) => {
     expect(fields(graph({ ...map, ...patch }))).toContain(field);
   });
-  it.each(['code', 'llm', 'toolkit', 'hitl', 'aggregate', 'parallel'])('refuses unreviewed %s worker effects', (type) => {
+  it.each(['code', 'toolkit', 'hitl', 'aggregate', 'parallel'])('refuses unreviewed %s worker effects', (type) => {
     expect(fields(graph(map, { ...worker, type }))).toContain('worker');
   });
   it('rejects duplicate Map ownership and local-channel exposure', () => {

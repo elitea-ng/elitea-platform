@@ -230,6 +230,31 @@ function blockRunning(block: SubBlock): boolean {
   return block.actions.some((action) => !TERMINAL_STATUSES.has(asDraft(action).status));
 }
 
+/**
+ * Above this many sub-agent instances (a Map holds up to 64 items) the
+ * instances are grouped by status, each group one accordion, instead of one
+ * row each; a Parallel (at most 16 branches) keeps its rows (T-2A3).
+ */
+const MAX_UNGROUPED_INSTANCES = 16;
+type InstanceStatus = 'waiting' | 'running' | 'failed' | 'completed';
+const STATUS_ORDER: readonly InstanceStatus[] = ['waiting', 'running', 'failed', 'completed'];
+
+function instanceStatus(block: SubBlock, isStreaming: boolean, paused: boolean): InstanceStatus {
+  if (paused) return 'waiting';
+  if (isStreaming && blockRunning(block)) return 'running';
+  if (block.actions.some((action) => asDraft(action).status === 'error')) return 'failed';
+  return 'completed';
+}
+
+function statusLabel(status: InstanceStatus, count: number): string {
+  switch (status) {
+    case 'waiting': return t('features.chatMessages.fanoutWaiting', 'Waiting ({{count}})', { count });
+    case 'running': return t('features.chatMessages.fanoutRunning', 'Running ({{count}})', { count });
+    case 'failed': return t('features.chatMessages.fanoutFailed', 'Failed ({{count}})', { count });
+    case 'completed': return t('features.chatMessages.fanoutCompleted', 'Completed ({{count}})', { count });
+  }
+}
+
 function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKeys }: {
   readonly blocks: readonly PartitionedBlock[];
   readonly decorated: ReadonlyMap<string, DecoratedSub>;
@@ -237,16 +262,9 @@ function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKey
   readonly tools: readonly SubAgentTool[] | undefined;
   readonly pendingInstanceKeys: ReadonlySet<string> | undefined;
 }): ReactNode {
-  // Coordinator runs and sub-agent instances interleave in timeline order
-  // (reference `StreamingThinkBlocks`), never coordinator-first.
-  return blocks.map((block, index) => {
-    if (block.kind === 'coord') {
-      return block.actions.map((action, actionIndex) => (
-        <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
-      ));
-    }
+  const isPaused = (block: SubBlock): boolean => block.pausedForResume || Boolean(pendingInstanceKeys?.has(block.instanceKey));
+  const instance = (block: SubBlock): ReactNode => {
     const entry = decorated.get(block.instanceKey);
-    const paused = block.pausedForResume || Boolean(pendingInstanceKeys?.has(block.instanceKey));
     return (
       <SubAgentAccordion
         key={`sa-${block.instanceKey}`}
@@ -255,13 +273,51 @@ function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKey
         tools={tools}
         agentType={entry?.agentType}
         running={isStreaming && blockRunning(block)}
-        paused={paused}
+        paused={isPaused(block)}
       >
         {block.actions.map((action, actionIndex) => (
           <ActionView key={`${block.instanceKey}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action, true)} />
         ))}
       </SubAgentAccordion>
     );
+  };
+  const subs = blocks.filter((block): block is SubBlock => block.kind === 'sub');
+  if (subs.length > MAX_UNGROUPED_INSTANCES) {
+    const groups = new Map<InstanceStatus, SubBlock[]>();
+    for (const block of subs) {
+      const status = instanceStatus(block, isStreaming, isPaused(block));
+      groups.set(status, [...(groups.get(status) ?? []), block]);
+    }
+    return [
+      ...blocks.flatMap((block, index) => block.kind === 'coord'
+        ? block.actions.map((action, actionIndex) => (
+          <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
+        ))
+        : []),
+      ...STATUS_ORDER.filter((status) => groups.has(status)).map((status) => {
+        const members = groups.get(status) ?? [];
+        return (
+          <SubAgentAccordion
+            key={`group-${status}`}
+            name={statusLabel(status, members.length)}
+            running={status === 'running'}
+            paused={status === 'waiting'}
+          >
+            {members.map(instance)}
+          </SubAgentAccordion>
+        );
+      }),
+    ];
+  }
+  // Coordinator runs and sub-agent instances interleave in timeline order
+  // (reference `StreamingThinkBlocks`), never coordinator-first.
+  return blocks.map((block, index) => {
+    if (block.kind === 'coord') {
+      return block.actions.map((action, actionIndex) => (
+        <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
+      ));
+    }
+    return instance(block);
   });
 }
 
