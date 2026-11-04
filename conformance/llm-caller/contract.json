@@ -52,5 +52,90 @@
       {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 9, "total_tokens": 19, "completion_tokens_details": {"reasoning_tokens": 6}, "prompt_tokens_details": {"cached_tokens": 4}}}
     ],
     "expected": {"content": "The answer.", "reasoning": "Think first.", "reasoning_tokens": 6, "cached_tokens": 4}
+  },
+  "thinking": {
+    "description": "ADR-0038 decision 2: the OpenAI-compatible request form of one step's thinking per catalogue control kind. A null body member means the member is absent. Both Rust callers build their bodies with elitea-llm-wire thinking::openai_form.",
+    "settings": {
+      "auto": "auto",
+      "off": "off",
+      "none": "off",
+      "low": "low",
+      "medium": "medium",
+      "high": "high"
+    },
+    "refused_settings": [
+      "max",
+      "minimal",
+      "OFF",
+      ""
+    ],
+    "openai_compatible": [
+      {
+        "control": "effort",
+        "step": "off",
+        "reasoning_effort": "none",
+        "enable_thinking": null
+      },
+      {
+        "control": "effort",
+        "step": "high",
+        "reasoning_effort": "high",
+        "enable_thinking": null
+      },
+      {
+        "control": "budget",
+        "step": "off",
+        "reasoning_effort": "none",
+        "enable_thinking": null
+      },
+      {
+        "control": "budget",
+        "step": "low",
+        "reasoning_effort": "low",
+        "enable_thinking": null
+      },
+      {
+        "control": "toggle",
+        "step": "off",
+        "reasoning_effort": null,
+        "enable_thinking": false
+      },
+      {
+        "control": "toggle",
+        "step": "medium",
+        "reasoning_effort": null,
+        "enable_thinking": true
+      },
+      {
+        "control": "fixed_on",
+        "step": "high",
+        "reasoning_effort": null,
+        "enable_thinking": null
+      },
+      {
+        "control": "fixed_off",
+        "step": "off",
+        "reasoning_effort": null,
+        "enable_thinking": null
+      }
+    ],
+    "conflicts": [
+      {
+        "control": "fixed_on",
+        "setting": "off"
+      },
+      {
+        "control": "fixed_off",
+        "setting": "low"
+      },
+      {
+        "control": "fixed_off",
+        "setting": "medium"
+      },
+      {
+        "control": "fixed_off",
+        "setting": "high"
+      }
+    ]
   }
 }

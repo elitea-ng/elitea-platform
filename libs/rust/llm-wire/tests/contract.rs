@@ -188,3 +188,63 @@ fn the_reasoning_stream_reads_alike_in_both_profiles() {
     );
     assert_eq!(usage.cached_tokens, expected["cached_tokens"].as_u64());
 }
+
+#[test]
+fn the_thinking_table() {
+    use elitea_llm_wire::thinking::{
+        Level, ReasoningControl, StepThinking, Thinking, apply_openai, openai_form,
+    };
+    let contract = contract();
+    let table = &contract["thinking"];
+    for (stored, canonical) in table["settings"].as_object().into_iter().flatten() {
+        assert_eq!(
+            Thinking::parse(stored).map(Thinking::as_str),
+            canonical.as_str(),
+            "{stored}"
+        );
+    }
+    for refused in table["refused_settings"].as_array().into_iter().flatten() {
+        assert_eq!(Thinking::parse(refused.as_str().unwrap_or("?")), None);
+    }
+    let step = |name: &str| match name {
+        "off" => StepThinking::Off,
+        "low" => StepThinking::On(Level::Low),
+        "medium" => StepThinking::On(Level::Medium),
+        "high" => StepThinking::On(Level::High),
+        other => panic!("step {other}"),
+    };
+    let rows = table["openai_compatible"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 8);
+    for row in rows {
+        let control = ReasoningControl::parse(row["control"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("control {row}"));
+        let mut body = serde_json::Map::new();
+        apply_openai(
+            &mut body,
+            openai_form(control, step(row["step"].as_str().unwrap_or_default())),
+        );
+        assert_eq!(
+            body.get("reasoning_effort").cloned().unwrap_or(Value::Null),
+            row["reasoning_effort"],
+            "{row}"
+        );
+        assert_eq!(
+            body.get("chat_template_kwargs")
+                .and_then(|kwargs| kwargs.get("enable_thinking"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            row["enable_thinking"],
+            "{row}"
+        );
+    }
+    for row in table["conflicts"].as_array().into_iter().flatten() {
+        let control = ReasoningControl::parse(row["control"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("control {row}"));
+        let setting = Thinking::parse(row["setting"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("setting {row}"));
+        assert!(control.conflict(setting).is_some(), "{row}");
+    }
+}

@@ -63,6 +63,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 # The `web` family's direct fetch dials through the Rust twin of Main's
 # egress guard (#1238).
 elitea-egress-guard = { path = "../egress-guard" }
+# The canonical thinking setting and its provider forms (ADR-0038): the
+# per-step `auto` policy in `thinking` resolves to them.
+elitea-llm-wire = { path = "../llm-wire" }
 # The provider clients the toolkit families share with the indexing
 # connectors (ADR-0030 decision 3), over this crate's reqwest 0.12 (rustls on
 # ring): the connectors crate names no TLS stack of its own.

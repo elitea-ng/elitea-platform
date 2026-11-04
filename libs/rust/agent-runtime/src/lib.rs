@@ -25,6 +25,8 @@
 //!   (ADR-0043 decisions 3 and 4);
 //! * [`context`] — shrinking older tool results in a long turn's model
 //!   requests (host opt-in);
+//! * [`thinking`] — `auto` thinking as a per-step policy (ADR-0038
+//!   decision 4) over the canonical setting in `elitea_llm_wire::thinking`;
 //! * [`step_limit`] — the end of a run that used its model steps, and the
 //!   person's "Continue?" that runs it again on the same session;
 //! * [`egress`] — a run's public egress policy, the one HTTP client a
@@ -91,6 +93,7 @@ pub mod run_caps;
 pub mod step_limit;
 pub mod subagents;
 pub mod text;
+pub mod thinking;
 pub mod tool_category;
 pub mod tool_namespacing;
 pub mod toolkits;
