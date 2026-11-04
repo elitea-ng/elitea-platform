@@ -116,6 +116,12 @@ describe('TurnTranscript', () => {
     expect(screen.getByTestId('turn-continued-marker')).toHaveTextContent('Continued automatically (2)');
   });
 
+  it('marks a turn the host continued after an app restart', () => {
+    const view = { phase: 'running' as const, items: [], approvals: [], continuation: 3, resumed: true as const };
+    renderWithTheme(<TurnTranscript view={view} busy onContinue={vi.fn()} continuation={3} />);
+    expect(screen.getByTestId('turn-continued-marker')).toHaveTextContent('Resumed after restart (3)');
+  });
+
   it('says how an unattended run ended, with Continue only when it waits', async () => {
     const onContinue = vi.fn();
     const ended = (chainEnded: NonNullable<Parameters<typeof TurnTranscript>[0]['view']['chainEnded']>) => ({ phase: 'done' as const, items: [], approvals: [], chainEnded });

@@ -36,6 +36,7 @@ import (
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
@@ -221,6 +222,24 @@ func (h *Handler) authorizeRunIdentity(ctx context.Context, projectID, userID in
 	return ErrRunForbidden
 }
 
+// authorizeRun checks the run identity, and for a governed run writes the
+// mandate into the security context. A delegated_background mandate runs as
+// its subject, re-checked here as any run identity is; an autonomous one has
+// no subject, and ActorUserID is attribution only.
+func (h *Handler) authorizeRun(ctx context.Context, request runRequest) (context.Context, runRequest, error) {
+	if request.Authority != nil {
+		ctx = securitycontext.WithRunAuthority(ctx, *request.Authority)
+		if request.Authority.SubjectUserID > 0 {
+			request.ActorUserID = request.Authority.SubjectUserID
+			if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+				return ctx, request, err
+			}
+		}
+		return ctx, request, nil
+	}
+	return ctx, request, h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID)
+}
+
 // runOutcome is what an admitted run reports back.
 type runOutcome struct {
 	ExecutionID       string
@@ -277,6 +296,23 @@ type runRequest struct {
 	// with credential governance off. Its subject, when it has one, is the
 	// run identity in place of ActorUserID.
 	Authority *securitycontext.RunAuthority
+	// MandateTarget is what Authority's fire-time check read: a refusal the
+	// start makes later (a thread's agent at another version) is recorded
+	// against it (governed.go). Set with Authority.
+	MandateTarget runmandate.Target
+}
+
+// checkRunInput is the check of a run's caller or stored input, before
+// anything else: at most maxRunInput bytes (ErrInputTooLarge), UTF-8 text
+// without NUL characters (ErrInvalidInput). admit and admitThread share it.
+func checkRunInput(input string) error {
+	if len(input) > maxRunInput {
+		return ErrInputTooLarge
+	}
+	if !utf8.ValidString(input) || strings.ContainsRune(input, '\x00') {
+		return ErrInvalidInput
+	}
+	return nil
 }
 
 // admit runs the whole sequence: authorize, resolve, create the transcript,
@@ -285,25 +321,11 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if h.pool == nil || h.start == nil {
 		return runOutcome{}, ErrRuntimeUnavailable
 	}
-	if len(request.Input) > maxRunInput {
-		return runOutcome{}, ErrInputTooLarge
+	if err := checkRunInput(request.Input); err != nil {
+		return runOutcome{}, err
 	}
-	if !utf8.ValidString(request.Input) || strings.ContainsRune(request.Input, '\x00') {
-		return runOutcome{}, ErrInvalidInput
-	}
-	if request.Authority != nil {
-		// A governed run: the mandate is the authority, and admission writes
-		// it into the security context. A delegated_background mandate runs
-		// as its subject, re-checked here as any run identity is; an
-		// autonomous one has no subject, and ActorUserID is attribution only.
-		ctx = securitycontext.WithRunAuthority(ctx, *request.Authority)
-		if request.Authority.SubjectUserID > 0 {
-			request.ActorUserID = request.Authority.SubjectUserID
-			if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
-				return runOutcome{}, err
-			}
-		}
-	} else if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+	ctx, request, err := h.authorizeRun(ctx, request)
+	if err != nil {
 		return runOutcome{}, err
 	}
 	target, err := h.resolveRunTarget(ctx, schema, request.VersionID, request.Kinds)

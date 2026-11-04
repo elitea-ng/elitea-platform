@@ -432,10 +432,67 @@ func warmPool(t *testing.T, pool *pgxpool.Pool, maxConns int32) {
 		}
 		held = append(held, conn)
 	}
+	growWorkspaceTables(t, held[0])
+	settleDatabase(t, held[0])
 	for _, conn := range held {
 		conn.Release()
 	}
 	runtime.GC()
+}
+
+// growWorkspaceTables gives the tables a publish inserts into the free
+// pages the window needs, before the window: twice a window's rows, written
+// and deleted, and kept by settleDatabase's VACUUM (TRUNCATE false). A
+// running Main's tables have free pages; the fixture's are empty, so every
+// publish of a window extended them, and one slow extend on the runner's
+// disk queued every other inserter behind the relation's extend lock (p99
+// 88 ms, 40 samples waiting on `extend` of workspace_segments,
+// IO:DataFileExtend, no row lock).
+func growWorkspaceTables(t *testing.T, conn *pgxpool.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	rows := 2 * loadGateThreads
+	// project_id 0 is no fixture project; the rows are deleted below.
+	if _, err := conn.Exec(ctx, `
+INSERT INTO elitea_runtime.workspace_segments
+    (project_id, conversation_uuid, seq, epoch, kind, sha256, byte_length, refs, writer, object_key, physical_bucket)
+SELECT 0, gen_random_uuid(), 1, 1, 'PUSH', repeat('a', 64), 1,
+       jsonb_build_object('refs/elitea/base', repeat('b', 40), 'refs/elitea/handoff/1', repeat('c', 40)),
+       'desktop', 'workspaces/' || gen_random_uuid() || '/' || repeat('d', 64), 'workspace'
+FROM generate_series(1, $1)`, rows); err != nil {
+		t.Fatalf("grow workspace_segments: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `
+INSERT INTO elitea_runtime.workspace_refs (project_id, conversation_uuid, name, sha, seq)
+SELECT 0, gen_random_uuid(), name, repeat('e', 40), 1
+FROM generate_series(1, $1), unnest(ARRAY['refs/elitea/base', 'refs/elitea/handoff/1']) AS name`, rows); err != nil {
+		t.Fatalf("grow workspace_refs: %v", err)
+	}
+	for _, table := range []string{"workspace_segments", "workspace_refs"} {
+		if _, err := conn.Exec(ctx, `DELETE FROM elitea_runtime.`+table+` WHERE project_id = 0`); err != nil {
+			t.Fatalf("grow %s: %v", table, err)
+		}
+	}
+}
+
+// settleDatabase runs, before the measured window, the background work that
+// the fixture's seed makes due: autovacuum and analyze of the freshly
+// written tables, and a checkpoint of their dirty pages. Started by the
+// server inside the window, either one holds buffer content locks and WAL
+// while the publishes run; one such stall put the 10 slowest of 1,000
+// publishes into one 37 ms span (p99 76 ms, waits LWLock:BufferContent and
+// WALWrite, no row lock) on an otherwise unchanged run. CHECKPOINT needs
+// superuser or pg_checkpoint: without it the window is only vacuumed.
+func settleDatabase(t *testing.T, conn *pgxpool.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	// TRUNCATE false keeps the empty pages growWorkspaceTables made.
+	if _, err := conn.Exec(ctx, `VACUUM (ANALYZE, TRUNCATE false)`); err != nil {
+		t.Fatalf("settle the database: vacuum: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CHECKPOINT`); err != nil {
+		t.Logf("settle the database: no checkpoint (%v)", err)
+	}
 }
 
 // loadGateRate is the gated publish rate per second (owner decision).

@@ -10052,6 +10052,11 @@ export const getCompleteWorkspaceHandoffUrl = (
  * Client contract 1.8 (ADR-0034 decision 7). Moves HANDING_OFF to
  * CLOUD_IDLE (a new epoch) once the store holds the snapshot ref with
  * this sha, and appends the system event message to the conversation.
+ *
+ * From contract 1.33 (ADR-0045 decision 8), `take_back_when_done`
+ * is stored on the handoff, and `continue` starts the cloud turn in
+ * the same transaction: the answer is CLOUD_RUNNING with
+ * `continued`. A refused grant or chain leaves the send HANDING_OFF.
  * @summary Complete a send
  */
 export const completeWorkspaceHandoff = async (

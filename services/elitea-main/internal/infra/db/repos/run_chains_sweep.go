@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // SweptChain is one chain the sweep ended.
@@ -60,34 +62,48 @@ SET end_state = k.end_state,
 FROM candidates AS k
 WHERE c.root_execution_id = k.root_execution_id
   AND c.end_state IS NULL
-  AND c.last_execution_id = k.last_execution_id
-RETURNING c.root_execution_id, c.end_state`
+  AND c.last_execution_id = k.last_execution_id` + chainEndReturning
 
 // SweepChains ends at most limit chains that nothing else will end. quiet
 // is how long a chain waits for a continuation after its latest run ended.
-// It is idempotent: an ended chain is never selected again.
+// It is idempotent: an ended chain is never selected again. Each ended chain
+// gets its run_finished notification in the same transaction (ADR-0045
+// decision 5), best-effort: a notification that fails never holds the batch
+// back.
 func (r *RunChainsRepository) SweepChains(ctx context.Context, quiet time.Duration, limit int) ([]SweptChain, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
-	rows, err := r.pool.Query(ctx, sweepRunChainsSQL,
-		fmt.Sprintf("%d milliseconds", quiet.Milliseconds()), limit)
+	var swept []SweptChain
+	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		swept = nil
+		rows, err := tx.Query(ctx, sweepRunChainsSQL, fmt.Sprintf("%d milliseconds", quiet.Milliseconds()), limit)
+		if err != nil {
+			return err
+		}
+		var ends []chainEnd
+		for rows.Next() {
+			end, err := scanChainEnd(rows)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			ends = append(ends, end)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, end := range ends {
+			notifyChainEnd(ctx, tx, end)
+			swept = append(swept, SweptChain{RootExecutionID: end.Root, EndState: end.State})
+		}
+		return nil
+	})
 	if err != nil {
 		if undefinedColumnOrTable(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("unattended chain: sweep: %w", err)
-	}
-	defer rows.Close()
-	var swept []SweptChain
-	for rows.Next() {
-		var chain SweptChain
-		if err := rows.Scan(&chain.RootExecutionID, &chain.EndState); err != nil {
-			return nil, fmt.Errorf("unattended chain: sweep: %w", err)
-		}
-		swept = append(swept, chain)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("unattended chain: sweep: %w", err)
 	}
 	return swept, nil

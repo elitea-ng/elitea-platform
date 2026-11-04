@@ -330,6 +330,21 @@ func CronScope(expression string) string {
 	return ScopeCronPrefix + strings.Join(strings.Fields(expression), "_")
 }
 
+// ScheduleTargetWorkspaceThread is the pipeline schedule target kind that
+// starts a turn on a handed-off workspace thread (tenant 0159).
+const ScheduleTargetWorkspaceThread = "workspace_thread"
+
+// ScheduleInput is the input a pipeline schedule's mandate scope reads: the
+// stored `user_input`, or for a `workspace_thread` target the prompt each
+// occurrence starts with. The attach and the fire-time check both use it,
+// so a mandate that the attach accepts is the one the fire accepts.
+func ScheduleInput(targetKind, userInput, targetPrompt string) string {
+	if targetKind == ScheduleTargetWorkspaceThread {
+		return targetPrompt
+	}
+	return userInput
+}
+
 // InputScope is the resource scope that names input.
 func InputScope(input string) string {
 	digest := sha256.Sum256([]byte(input))

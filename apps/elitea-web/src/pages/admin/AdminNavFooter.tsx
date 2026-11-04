@@ -52,7 +52,7 @@ export function AdminNavFooter({ collapsed }: AdminNavFooterProps): ReactNode {
         collapsed={collapsed}
         version={version}
         onOpen={() => setOpened(true)}
-        onSignOut={performLogout}
+        onSignOut={() => void performLogout()}
         testIds={{ button: 'admin-nav-user-button', signOut: 'admin-nav-logout' }}
       >
         {(close) => [

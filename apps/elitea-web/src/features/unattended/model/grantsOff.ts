@@ -7,6 +7,8 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { isRecord } from '@/shared/lib/object';
+
 let off = false;
 const listeners = new Set<() => void>();
 
@@ -37,8 +39,6 @@ function subscribe(listener: () => void): () => void {
 export function useGrantsTurnedOff(): boolean {
   return useSyncExternalStore(subscribe, grantsTurnedOff, grantsTurnedOff);
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 /** True for Main's 422 body that refuses a grant because unattended grants are off. */
 export function isGrantsOffRefusal(body: unknown): boolean {

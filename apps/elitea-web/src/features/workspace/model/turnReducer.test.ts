@@ -492,7 +492,15 @@ describe('unattended chain events', () => {
     const early: AgentEvent = { turn_id: NEXT, seq: 1, kind: 'status', payload: { phase: 'running', continued_automatically: true, continuation_index: 1 } };
     const state = run([finished, early, continued(3)]);
     expect(activeView(state).continuation).toBe(1);
+    expect(activeView(state).resumed).toBeUndefined();
     expect(state.unclaimed).not.toContain(NEXT);
+  });
+
+  it('marks a continuation the host started after an app restart', () => {
+    const running: AgentEvent = { turn_id: T, seq: 1, kind: 'status', payload: { phase: 'running', continued_automatically: true, continuation_index: 2, continuation_kind: 'resume' } };
+    const view = activeView(run([running]));
+    expect(view.continuation).toBe(2);
+    expect(view.resumed).toBe(true);
   });
 
   it('ignores a turn_continued on a turn this hook did not begin, and a late duplicate', () => {

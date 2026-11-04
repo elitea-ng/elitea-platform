@@ -15,8 +15,9 @@ import (
 type unattendedBody struct {
 	unattendedwire.Grant
 	ChainRootExecutionID string `json:"chain_root_execution_id"`
-	// Kind is a continuation's link kind: step_limit, tool_call_cap or
-	// goal_not_met (ADR-0045 decision 11). Absent is continue.
+	// Kind is a continuation's link kind: step_limit, tool_call_cap,
+	// goal_not_met (ADR-0045 decision 11) or resume (decision 7). Absent is
+	// continue.
 	Kind string `json:"kind"`
 }
 

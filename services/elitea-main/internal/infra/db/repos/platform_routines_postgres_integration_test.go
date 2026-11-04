@@ -148,7 +148,12 @@ func TestPlatformRoutineLeaseHoldsAPassThatOutlastsItsIntervalPostgres(t *testin
 	const id = "scheduler.postgres.lease.outlast.v1"
 	definition := newRoutineForLeaseTest(t, pool, id)
 
-	const ttl = 300 * time.Millisecond
+	// The lease is as long as the interval. A holder gives up once a renewal
+	// (every ttl/3) is late by ttl-ttl/3, so the test tolerates a ~667 ms
+	// stall of the runner; at 300 ms a ~200 ms stall on a loaded shard made a
+	// give up as designed, b took the routine, and the test read the correct
+	// hand-over as an overlap.
+	const ttl = time.Second
 	a := &routines.Loop{Backend: routines.NewStore(pool), Def: definition, Poll: 50 * time.Millisecond,
 		LeaseTTL: ttl, Holder: "replica-a"}
 	b := &routines.Loop{Backend: routines.NewStore(other), Def: definition, Poll: 50 * time.Millisecond,
@@ -171,15 +176,15 @@ func TestPlatformRoutineLeaseHoldsAPassThatOutlastsItsIntervalPostgres(t *testin
 		}
 	}
 
-	// a's pass lasts 2.5 s: two and a half intervals and over eight lease
-	// lengths. b polls the whole time.
+	// a's pass lasts 3 s: three intervals and three lease lengths. b polls
+	// the whole time.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		a.Step(context.Background(), passOf(&runsA, 2500*time.Millisecond))
+		a.Step(context.Background(), passOf(&runsA, 3*time.Second))
 	}()
 	waitFor(t, func() bool { return runsA.Load() == 1 })
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		b.Step(context.Background(), passOf(&runsB, 0))
 		time.Sleep(50 * time.Millisecond)

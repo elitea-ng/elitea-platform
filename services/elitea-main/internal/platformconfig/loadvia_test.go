@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 )
 
 // fakeRows is a query result of (key, raw JSON value) pairs.
@@ -56,6 +58,77 @@ func TestLoadViaReadsOneSectionThroughTheCallersQuery(t *testing.T) {
 		return nil, refused
 	}, SectionApprovals); !errors.Is(err, refused) {
 		t.Fatalf("query error = %v", err)
+	}
+}
+
+// boolRows is the one-row, one-column answer of the to_regclass probe.
+type boolRows struct {
+	value bool
+	read  bool
+}
+
+func (r *boolRows) Close()     {}
+func (r *boolRows) Err() error { return nil }
+func (r *boolRows) Next() bool {
+	if r.read {
+		return false
+	}
+	r.read = true
+	return true
+}
+
+func (r *boolRows) Scan(dest ...any) error {
+	*dest[0].(*bool) = r.value
+	return nil
+}
+
+// TestLoadAgentLifecyclePolicyViaReadsOnTheCallersQuery: every read of the
+// tier table goes through the query it is handed (the lifecycle store's
+// transaction, never a second pool connection), and a database without the
+// table answers the defaults without the query that would fail and abort
+// that transaction.
+func TestLoadAgentLifecyclePolicyViaReadsOnTheCallersQuery(t *testing.T) {
+	var statements []string
+	query := func(exists bool, section Rows) QueryFunc {
+		return func(_ context.Context, sql string, _ ...any) (Rows, error) {
+			statements = append(statements, sql)
+			if len(statements) == 1 {
+				return &boolRows{value: exists}, nil
+			}
+			return section, nil
+		}
+	}
+
+	section := &fakeRows{rows: [][2]string{{"low_approvals", `1`}}}
+	policy, err := LoadAgentLifecyclePolicyVia(t.Context(), query(true, section))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 2 || !section.closed {
+		t.Fatalf("statements = %q, closed = %v", statements, section.closed)
+	}
+	if got := policy.Requirement(agentlifecycle.TierLow).Approvals; got != 1 {
+		t.Fatalf("low approvals = %d, want the saved 1", got)
+	}
+
+	statements = nil
+	policy, err = LoadAgentLifecyclePolicyVia(t.Context(), query(false, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 1 {
+		t.Fatalf("a missing table ran %d statements, want only the probe: %q", len(statements), statements)
+	}
+	if got, want := policy.Requirement(agentlifecycle.TierCritical).Approvals,
+		agentlifecycle.DefaultPolicy().Tiers[agentlifecycle.TierCritical].Approvals; got != want {
+		t.Fatalf("critical approvals = %d, want the default %d", got, want)
+	}
+
+	refused := errors.New("connection lost")
+	if _, err := LoadAgentLifecyclePolicyVia(t.Context(), func(context.Context, string, ...any) (Rows, error) {
+		return nil, refused
+	}); !errors.Is(err, refused) {
+		t.Fatalf("probe error = %v", err)
 	}
 }
 

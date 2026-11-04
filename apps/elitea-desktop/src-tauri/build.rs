@@ -31,6 +31,7 @@ fn main() {
             "agent_prewarm",
             "turn_commit_retry",
             "agent_turn_cancel",
+            "agent_turn_resume",
             "agent_turn_status",
             "agent_turn_steer",
             "agent_turn_steer_update",
@@ -115,6 +116,7 @@ fn main() {
             "handoff_status_many",
             "handoff_settings_get",
             "handoff_settings_set",
+            "handoff_run_finished",
         ]),
     ))
     .expect("tauri build configuration is valid");

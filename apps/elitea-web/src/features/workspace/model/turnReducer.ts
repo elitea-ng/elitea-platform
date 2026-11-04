@@ -28,8 +28,9 @@ import {
   type ChainEvent,
   type ChainView,
 } from './chainEvents';
-import { appended, compact, type StoredEvent } from './storedEvents';
+import { appended, compact, sortedUnique, type StoredEvent } from './storedEvents';
 import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
+import { NO_RESUMES, resumedHere, watchResumes, withResume, type ResumeState } from './resumeEvents';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { SteerView } from './steeringEvents';
 import type { TranscriptItem } from './transcriptItem';
@@ -101,10 +102,15 @@ export interface TurnsState {
   begun: string[];
   /** Turns heard of but not begun here, least recently heard first; at most `MAX_UNCLAIMED_TURNS`. */
   unclaimed: string[];
+  /** The thread's recorded turns that ran when the app stopped, as this page follows them (`resumeEvents.ts`). */
+  resumes: ResumeState;
 }
 
 export type TurnAction =
-  | { type: 'begin'; turnId: string }
+  /** `resumedFrom`: Continue on that recorded turn started it (no prompt of the person). */
+  | { type: 'begin'; turnId: string; resumedFrom?: string }
+  /** The page's recorded turns: a host resume of one becomes the active turn. */
+  | { type: 'watch'; turnIds: readonly string[] }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval-resolved'; turnId: string; requestId: string }
   /**
@@ -116,7 +122,7 @@ export type TurnAction =
   | { type: 'adopt'; turnId: string; events: readonly AgentEvent[] }
   | { type: 'reset' };
 
-export const initialTurnsState: TurnsState = { activeTurnId: null, turns: {}, begun: [], unclaimed: [] };
+export const initialTurnsState: TurnsState = { activeTurnId: null, turns: {}, begun: [], unclaimed: [], resumes: NO_RESUMES };
 
 /**
  * How many turns not begun here are kept. Only one of this hook's turns can
@@ -286,12 +292,6 @@ function withoutResolved(view: TurnView, requestId: string): TurnView {
   return next.planProposal?.request_id === requestId ? withoutProposal(next) : next;
 }
 
-function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
-  const bySeq = new Map<number, AgentEvent>();
-  for (const event of events) if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
-  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
-}
-
 /**
  * The view of a recorded turn (`thread_history`): its events folded exactly
  * as live ones. Nothing in it waits for an answer any more, so it carries
@@ -343,19 +343,22 @@ function begin(state: TurnsState, turnId: string): TurnsState {
   return { ...state, activeTurnId: turnId, begun, unclaimed: state.unclaimed.filter((id) => id !== turnId) };
 }
 
-/** One event; a `turn_continued` on a turn this hook began also makes the next turn the active one. */
+/** One event; a `turn_continued` on a turn this hook began (or a host resume of a watched one) also makes the next turn the active one. */
 function onEvent(state: TurnsState, event: AgentEvent): TurnsState {
   const next = reduceEvent(state, event);
-  const continued = next === state ? null : continuedTurn(next.begun, event);
-  return continued === null ? next : begin(next, continued);
+  if (next === state) return state;
+  const continued = continuedTurn(next.begun, event);
+  return withResume(continued === null ? next : begin(next, continued), event, begin);
 }
 
 export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
   switch (action.type) {
     case 'begin':
-      return begin(state, action.turnId);
+      return begin(resumedHere(state, action.resumedFrom, action.turnId), action.turnId);
+    case 'watch':
+      return watchResumes(state, action.turnIds, begin);
     case 'reset':
-      return initialTurnsState;
+      return { ...initialTurnsState, resumes: { ...NO_RESUMES, watched: state.resumes.watched, moved: state.resumes.moved } };
     case 'adopt': {
       const events = sortedUnique(action.events);
       const floor = events[events.length - 1]?.seq ?? -1;
@@ -376,13 +379,19 @@ export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
   }
 }
 
+/** A turn that Continue here started is marked `resumed` (it has no prompt of the person). */
+function shown(state: TurnsState, turnId: string): TurnView {
+  const view = state.turns[turnId]?.view ?? EMPTY_VIEW;
+  return state.resumes.started.includes(turnId) ? { ...view, resumed: true } : view;
+}
+
 export function activeView(state: TurnsState): TurnView {
-  return state.activeTurnId === null ? EMPTY_VIEW : (state.turns[state.activeTurnId]?.view ?? EMPTY_VIEW);
+  return state.activeTurnId === null ? EMPTY_VIEW : shown(state, state.activeTurnId);
 }
 
 /** The turns this session started before the active one, oldest first: the thread's earlier exchanges. */
 export function earlierViews(state: TurnsState): { turnId: string; view: TurnView }[] {
   return state.begun
     .filter((turnId) => turnId !== state.activeTurnId)
-    .map((turnId) => ({ turnId, view: state.turns[turnId]?.view ?? EMPTY_VIEW }));
+    .map((turnId) => ({ turnId, view: shown(state, turnId) }));
 }

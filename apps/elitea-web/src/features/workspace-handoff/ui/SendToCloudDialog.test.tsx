@@ -3,7 +3,7 @@
  * preview (ok, findings, caps), the send with live progress, and each kind of
  * refusal.
  */
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -454,5 +454,68 @@ describe('SendToCloudDialog cancel', () => {
     await waitFor(() => expect(sendButton()).toBeEnabled());
     await user.click(sendButton());
     expect(await screen.findByTestId('handoff-send-error')).toHaveTextContent(text);
+  });
+});
+
+describe('SendToCloudDialog while the thread runs (ADR-0045 decision 8)', () => {
+  it('says the running turn stops at its next step and leaves "Take back when done" on by default to the host', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { running_turn: true } });
+    const { onSent } = mount(ipc);
+
+    expect(await screen.findByTestId('handoff-running-turn')).toHaveTextContent('Sending stops it at its next step');
+    expect(screen.getByRole('checkbox', { name: /Take back when done/ })).toBeChecked();
+    await user.click(sendButton());
+
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ stopped_turn: true, take_back_when_done: true })));
+    // No choice made: the host decides from the turn it finds running.
+    expect(ipc.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: [], confirmIncludes: false }]);
+  });
+
+  it('sends the person’s own choice, and the title for the host’s notice', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc();
+    renderWithClient(<SendToCloudDialog open ipc={ipc} workspaceId="w1" conversationUuid="u1" title="Fix the build" onSent={vi.fn()} onClose={vi.fn()} />);
+
+    const box = await screen.findByRole('checkbox', { name: /Take back when done/ });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByTestId('handoff-running-turn')).toBeNull();
+    await user.click(box);
+    await user.click(sendButton());
+
+    await waitFor(() =>
+      expect(ipc.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: 'u1', leave: [], confirmIncludes: false, takeBackWhenDone: true, title: 'Fix the build' }]),
+    );
+  });
+
+  it('says why a refused grant leaves the thread waiting in the cloud, and closes on OK', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { running_turn: true } });
+    ipc.setSent({ continue_refused: 'The run limit is lower than this turn’s. The thread is in the cloud and waits for your next message.' });
+    const { onSent } = mount(ipc);
+
+    await user.click(await screen.findByRole('button', { name: 'Send to cloud' }));
+    expect(await screen.findByTestId('handoff-continue-refused')).toHaveTextContent('waits for your next message');
+    expect(onSent).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Send to cloud' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'OK' }));
+    expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ continue_refused: expect.stringContaining('waits') as unknown }));
+  });
+
+  it('reports a send whose continue was refused when the dialog closes by Escape', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { running_turn: true } });
+    ipc.setSent({ continue_refused: 'Plan mode does not run in the cloud. The thread is in the cloud and waits for your next message.' });
+    const { onSent, onClose } = mount(ipc);
+
+    await user.click(await screen.findByRole('button', { name: 'Send to cloud' }));
+    await screen.findByTestId('handoff-continue-refused');
+    expect(onSent).not.toHaveBeenCalled();
+
+    // Focus left with the Send button: Escape on the dialog, as MUI's modal handles it.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ continue_refused: expect.stringContaining('Plan mode') as unknown }));
   });
 });

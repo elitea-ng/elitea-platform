@@ -281,6 +281,7 @@ const LEGACY_INFO_PARSERS: Record<NotificationEventType, LegacyInfoParser> = {
   personal_access_token_expiring: parsePersonalAccessTokenExpiring,
   moderation_rejected: parseNothing,
   moderation_approved: parseNothing,
+  run_finished: parseNothing,
 };
 
 /**

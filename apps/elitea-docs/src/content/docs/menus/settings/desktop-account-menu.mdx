@@ -96,6 +96,19 @@ When **Check the goal before finishing** is on, a small model reads your message
 - The brief and the check use the project's low-tier model. Their cost counts against the spend limit of the run.
 - Your administrator can turn the brief and the check off for all users. The run then ends as before.
 
+#### Long runs: sleep, closing and restarts
+
+- While a turn runs, the computer does not go to sleep when it is idle. The menu of the menu-bar icon (the tray icon on Windows and Linux) shows **Keeping the computer awake**. When the last turn ends, the computer can sleep again. The screen can still turn off, and you can still put the computer to sleep.
+- On Windows, when you close the window while a turn runs, the app hides the window and the turn continues. Select the tray icon to show the window again.
+- On Linux, when you close the window while a turn runs, the app minimizes the window and the turn continues. Many Linux desktops do not show a tray icon. Select the app in the task bar or the dock to show the window again.
+- On Windows and Linux, when no turn runs, closing the window closes the app. On macOS, closing the window always hides it.
+- When you quit the app while a turn runs, the app asks first. Select **Quit** to stop the turn and quit, or **Keep running** to cancel. When the app restarts to install an update, it does not ask.
+- When the app stops during a run with **To completion** (for example, the computer restarts), the app continues the run when you open it again. The next turn shows **Resumed after restart** at its top. It continues from the last saved turn, with the brief and the last goal check. The chain limits still apply: a run that is past its time limit does not continue.
+- After a restart, the goal check reads the turns from before the restart and the turns after it.
+- A turn without **To completion** does not continue by itself. After a restart, the turn shows **This turn did not finish** and a **Continue** button. Select **Continue** to start the next turn.
+- When the platform refuses to continue the run (for example, at a chain limit), the run ends, and the last turn shows why.
+- When the app cannot continue the run yet (for example, you are not signed in, or the network is down), it tries again later: after each sign-in, and at most every 5 minutes. You can also select **Continue**.
+
 ### Send a thread to the cloud
 
 A thread that may move to the cloud shows **Send to cloud** in the row under the text. Select it to review what is sent and send the thread. The small **⌄** beside it opens **Handoff settings…**, where you choose what stays on your computer.
@@ -103,6 +116,25 @@ A thread that may move to the cloud shows **Send to cloud** in the row under the
 While the thread runs in the cloud, the same place shows **Take back**: select it to review the cloud's changes and apply them to your folder. Its **⌄** holds **Erase cloud copy…**, **Open in chat** and **Handoff settings…**. While the thread is on its way back it shows **Returning** and cannot be selected.
 
 When a thread cannot move (your deployment or project has the cloud executor off, or the thread has no messages yet), nothing is shown: the thread runs on your computer.
+
+#### Send a running task and continue in the cloud
+
+You can send a thread while its turn is still running, for example before you close your laptop:
+
+- The dialog says that a turn is running. When you select **Send to cloud**, the turn stops at its next step, so nothing it has done is lost. The turn is then saved, and the platform sends the thread and starts the cloud's first turn together: either both happen, or neither does. The cloud continues with the same mode.
+- When the thread runs with **To completion**, the cloud continues the same run. The chain limits (continuations, spend and hours) count across your computer and the cloud. When the run ends, the notification says it ended in the cloud.
+- If the platform does not allow the run to continue in the cloud (for example, a chain limit is reached, or your administrator turned unattended grants off), the thread is still sent. The dialog says why, and the thread waits in the cloud for your next message. Select **OK** to close the dialog.
+- A thread in **Plan** mode is sent without continuing: the cloud has no plan mode, so the turn stops, the thread is sent, and it waits in the cloud for your next message.
+- The send checks for secrets, files to confirm, environment variables and size limits before it stops the turn. If one of these checks fails, the turn keeps running.
+- If the send fails or you cancel it after the turn stopped, the run goes on on your computer at once. If it cannot go on, a notice tells you why.
+- A turn that is waiting for your answer (an approval, or **Continue?** at its step limit) stops only after you answer it, or when the question times out.
+- The cloud runs the turn as any cloud turn. Plan mode, hook asks and remote confirmations are parts of the desktop app and do not apply in the cloud.
+
+**Take back when done** brings the thread back to this computer by itself when its cloud run completes. It is on by default when a turn is running, and you can turn it on or off in the dialog before you send. A thread sent this way shows **Takes back when done** above the text box. The platform keeps your choice and the result of the last cloud run, but only your desktop app takes the thread back. When the run completes, the app takes the thread back even after a restart. It also checks when you sign in, and every few minutes. You do not need to keep the thread open:
+
+- If your folder did not change, or the changes do not overlap, the cloud's changes are applied to your folder. A notice says **Took back** and the thread's name.
+- If your folder and the cloud changed the same lines, the cloud's version opens as a separate worktree, and your folder is not changed. A notice says **Opened … as a worktree**.
+- If the run failed, waits for you, or stopped at its limit, the thread stays in the cloud. A notice tells you once, so that you can look at it and take it back yourself.
 
 ### The Changes tab
 

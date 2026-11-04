@@ -12,6 +12,7 @@ import (
 	"time"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
@@ -172,6 +173,39 @@ func refuseLocalWorkThread(
 	default:
 		return true, nil
 	}
+}
+
+// handingOffFenceQuerier answers whether the conversation is a Local work
+// thread whose send `handoffID` is HANDING_OFF at `epoch` (pgxExecutor).
+type handingOffFenceQuerier interface {
+	HandingOffFence(ctx context.Context, projectID int64, conversationUUID pgtype.UUID, handoffID string, epoch int64) (bool, error)
+}
+
+// refuseLocalWorkThreadOrSend is refuseLocalWorkThread, except for the turn a
+// send continues with (ADR-0045 decision 8): that turn is admitted while
+// the send is still HANDING_OFF, because its admission transaction completes
+// the send first (repos.completeHandoffInAdmission re-checks it under the
+// row lock). The fence opens only for that send at that epoch, and only
+// when the cloud executor is wired.
+func refuseLocalWorkThreadOrSend(
+	ctx context.Context, tx sqlExecutor, projectID int64, conversationUUID pgtype.UUID, cloudExecutor bool,
+	completion *agentexecutionapp.HandoffCompletion,
+) (bool, error) {
+	if completion == nil {
+		return refuseLocalWorkThread(ctx, tx, projectID, conversationUUID, cloudExecutor)
+	}
+	querier, ok := tx.(handingOffFenceQuerier)
+	if !ok || !cloudExecutor {
+		return false, agentexecutionapp.ErrLocalWorkThread
+	}
+	handingOff, err := querier.HandingOffFence(ctx, projectID, conversationUUID, completion.HandoffID, completion.Epoch)
+	if err != nil {
+		return false, fmt.Errorf("read the send: %w", err)
+	}
+	if !handingOff {
+		return false, workspacehandoff.ErrStaleEpoch
+	}
+	return true, nil
 }
 
 // localTurnExecutedByDesktop is localturn.ExecutedByDesktop.
@@ -351,7 +385,8 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor)
+				handedOff, err := refuseLocalWorkThreadOrSend(ctx, tx, request.ProjectID, conversationUUID,
+					repository.cloudExecutor, request.HandoffCompletion)
 				if err != nil {
 					return err
 				}
@@ -810,7 +845,8 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 			request.ProjectID,
 			pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly},
 			func(tx sqlExecutor) error {
-				handedOff, err := refuseLocalWorkThread(ctx, tx, request.ProjectID, conversationUUID, repository.cloudExecutor)
+				handedOff, err := refuseLocalWorkThreadOrSend(ctx, tx, request.ProjectID, conversationUUID,
+					repository.cloudExecutor, request.HandoffCompletion)
 				if err != nil {
 					return err
 				}

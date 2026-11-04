@@ -20,8 +20,10 @@ func ComposeAgentLifecycle(pool *pgxpool.Pool, gate agentlifecycle.ReleaseGate, 
 	if err != nil {
 		return nil, err
 	}
-	policy := func(ctx context.Context) (agentlifecycle.Policy, error) {
-		return platformconfig.LoadAgentLifecyclePolicy(ctx, pool)
+	// The tier table is read through the store's querier (its transaction
+	// when it holds one), never on the pool: see PolicySource.
+	policy := func(ctx context.Context, query platformconfig.QueryFunc) (agentlifecycle.Policy, error) {
+		return platformconfig.LoadAgentLifecyclePolicyVia(ctx, query)
 	}
 	releases, err := NewAgentReleases(pool)
 	if err != nil {

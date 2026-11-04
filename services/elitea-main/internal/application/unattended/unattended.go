@@ -34,6 +34,12 @@ const (
 	OriginDesktop = "desktop"
 )
 
+// IsSystemTrigger reports a trigger origin (execution_jobs.trigger_origin)
+// with no person behind it: a schedule or a webhook run.
+func IsSystemTrigger(triggerOrigin string) bool {
+	return triggerOrigin == "schedule" || triggerOrigin == "webhook"
+}
+
 // Link kinds (run_chain_links.kind).
 const (
 	LinkRoot        = "root"
@@ -46,13 +52,19 @@ const (
 	// LinkGoalNotMet is a continuation that a goal check started
 	// (ADR-0045 decision 11).
 	LinkGoalNotMet = "goal_not_met"
+	// LinkHandoff is the first cloud run of a chain that a desktop turn
+	// started: the send continues it (ADR-0045 decision 8). The chain's
+	// origin becomes cloud with it. Only Main starts one; a desktop host
+	// never names it.
+	LinkHandoff = "handoff"
 )
 
 // ValidDesktopContinuationKind reports whether kind is a link kind that a
-// desktop host may name on a continuation.
+// desktop host may name on a continuation. resume: the host continues a
+// chain after an app restart (ADR-0045 decision 7).
 func ValidDesktopContinuationKind(kind string) bool {
 	switch kind {
-	case LinkStepLimit, LinkToolCallCap, LinkGoalNotMet:
+	case LinkStepLimit, LinkToolCallCap, LinkGoalNotMet, LinkResume:
 		return true
 	}
 	return false
@@ -449,4 +461,7 @@ type ChainContinue struct {
 	ProjectID         int64
 	ConversationUUID  string
 	ResponseMessageID string
+	// Start is set on a LinkHandoff link only: how Main starts the chain's
+	// later cloud continuations. The link stores it in the chain's grant.
+	Start *CloudStart
 }

@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.31
+ * client contract:    1.34
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -3717,7 +3717,7 @@ export interface components {
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. */
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. */
             meta: {
                 /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
                 sender?: {
@@ -4364,6 +4364,15 @@ export interface components {
              */
             type: "github" | "gitlab";
         };
+        /** @description Contract 1.33 (ADR-0045 decision 8). A finished cloud run of the current handoff: an unattended chain that ended, or a cloud turn that is not a chain link. NOTE(W2): internal/api/v2/workspacehandoff/route.go (`cloudRunView`). */
+        WorkspaceHandoffCloudRun: {
+            /** @description The chain's last run, or the turn. */
+            execution_id: string;
+            /** Format: date-time */
+            finished_at: string;
+            /** @description `completed`, `failed`, `waiting` (a pause waits for a person), `limit_reached` or `cancelled`. A desktop with `take_back_when_done` takes the thread back on `completed`. */
+            outcome: string;
+        };
         /** @description An empty object. */
         WorkspaceHandoffEmpty: Record<string, never>;
         /** @description NOTE(W2): internal/api/v2/workspacehandoff/route.go:336 (`erase`). */
@@ -4376,7 +4385,15 @@ export interface components {
         WorkspaceHandoffError: {
             details?: components["schemas"]["WorkspaceHandoffErrorDetails"];
             error: string;
+            /** @description Contract 1.33. With `unattended_grant_refused`, the refused grant field; with `continue_refused`, the refused `continue` field (`mode`). */
+            field?: string;
+            /** @description Contract 1.33. With `chain_limit_reached`, the limit the chain reached: `continuations`, `spend` or `deadline`. */
+            limit?: string;
             message?: string;
+            /** @description Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn. With `continue_refused`: why the cloud cannot run the continue (`mode`: a cloud turn has no plan mode). */
+            reason?: string;
+            /** @description Contract 1.33. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`. */
+            tool?: string;
         };
         /** @description `current` for `ref_conflict` (the stored value, null when absent, of every ref the publish named), `names` for `env_name_denied`, `paths` for `path_denied`, `reason` for `cloud_handoff_disabled`. */
         WorkspaceHandoffErrorDetails: {
@@ -4394,7 +4411,35 @@ export interface components {
             /** @description The configuration to push and open pull requests through; null clears the choice. */
             credential: components["schemas"]["WorkspaceForgeCredential"] | null;
         };
-        /** @description The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`). */
+        /**
+         * @description The banner state; only `state` and `epoch` when the thread has no handoff. NOTE(W2): internal/api/v2/workspacehandoff/route.go:288 (`state`).
+         * @example {
+         *       "state": "CLOUD_IDLE",
+         *       "epoch": 4,
+         *       "reclaim_pending": false,
+         *       "rest_pending": false,
+         *       "handoff_id": "6f1c2a8e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+         *       "device_name": "Work laptop",
+         *       "history_mode": "none",
+         *       "has_upstream": true,
+         *       "stats": {
+         *         "files": 412,
+         *         "bytes": 1830400,
+         *         "excluded_count": 0
+         *       },
+         *       "cloud_sha": "8d2f1c0b9a8e7d6c5b4a39281706f5e4d3c2b1a0",
+         *       "updated_at": "2026-11-04T10:15:02.120Z",
+         *       "delete_after": "2026-11-11T10:15:02.120Z",
+         *       "workspace_bytes": 2097152,
+         *       "pull_request_credential": null,
+         *       "take_back_when_done": true,
+         *       "last_cloud_run": {
+         *         "outcome": "completed",
+         *         "execution_id": "3e9a1b7c5d2f4e6a8b0c1d2e3f4a5b6c",
+         *         "finished_at": "2026-11-04T10:15:02Z"
+         *       }
+         *     }
+         */
         WorkspaceHandoffState: {
             cloud_sha?: string | null;
             /** Format: date-time */
@@ -4406,6 +4451,8 @@ export interface components {
             handoff_id?: string;
             has_upstream?: boolean;
             history_mode?: string;
+            /** @description Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, outside CLOUD_IDLE and CLOUD_RUNNING, and whenever `take_back_when_done` is false (only the take back reads it, so the polled banner does not pay for it). */
+            last_cloud_run?: components["schemas"]["WorkspaceHandoffCloudRun"] | null;
             /** @description Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none. */
             pull_request_credential?: components["schemas"]["WorkspaceForgeCredential"] | null;
             reclaim_pending?: boolean;
@@ -4414,6 +4461,8 @@ export interface components {
             /** @description LOCAL, HANDING_OFF, CLOUD_IDLE, CLOUD_RUNNING or RECLAIMING. */
             state: string;
             stats?: components["schemas"]["WorkspaceHandoffStats"];
+            /** @description Contract 1.33 (ADR-0045 decision 8). The owner asked, at send, that the desktop take the thread back by itself when its cloud run completes. Main never takes a thread back by itself: the owner's desktop reads this flag and `last_cloud_run` and takes the thread back. Cleared by a take back, a release, an expiry or an erase. */
+            take_back_when_done?: boolean;
             /** Format: date-time */
             updated_at?: string;
             /** Format: int64 */

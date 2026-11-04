@@ -48,6 +48,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -116,6 +117,9 @@ contradict the description, a name that does not say what the agent does, leaked
 or wording that would confuse a reader outside the authoring team.
 Report at most five findings. If the definition reads well, reply with {"findings":[]}.
 Do not refuse, do not explain, and do not write anything outside the JSON object.`
+
+// publishAITimeout bounds the one model call of the advisory pass.
+const publishAITimeout = 20 * time.Second
 
 // maxPublishAIFindings bounds what one model answer can add to a response the
 // SPA renders as a list.
@@ -223,7 +227,13 @@ func (h *Handler) runPublishAIValidation(
 		return nil, false
 	}
 
-	content, err := h.publishModelClient.Complete(ctx, PublishModelRequest{
+	// Bounded: the predict completer carries no deadline of its own, and an
+	// advisory pass must not hold the validate request open for as long as a
+	// stuck upstream does. A timeout reads as "unavailable", like every other
+	// failure here.
+	modelCtx, cancel := context.WithTimeout(ctx, publishAITimeout)
+	defer cancel()
+	content, err := h.publishModelClient.Complete(modelCtx, PublishModelRequest{
 		ProjectID: projectID,
 		UserID:    userID,
 		Model:     model,

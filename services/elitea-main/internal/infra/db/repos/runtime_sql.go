@@ -215,6 +215,29 @@ FROM chat_conversations AS c WHERE c.uuid = $1`,
 	return localWork, state, err
 }
 
+// HandingOffFence answers whether the conversation (in the project schema
+// the transaction runs in) is a desktop Local work thread whose send
+// handoffID is HANDING_OFF at epoch and not expired: the turn that send
+// continues with may be resolved (ADR-0045 decision 8).
+func (e pgxExecutor) HandingOffFence(
+	ctx context.Context, projectID int64, conversationUUID pgtype.UUID, handoffID string, epoch int64,
+) (bool, error) {
+	var handingOff bool
+	err := e.queryer.QueryRow(ctx, `
+SELECT c.source = 'local_work' AND EXISTS (
+    SELECT 1 FROM elitea_runtime.workspace_handoffs AS h
+    WHERE h.project_id = $2 AND h.conversation_uuid = c.uuid AND h.handoff_id::text = $3
+      AND h.state = 'HANDING_OFF' AND h.epoch = $4
+      AND (h.expires_at IS NULL OR h.expires_at > clock_timestamp()))
+FROM chat_conversations AS c WHERE c.uuid = $1`,
+		conversationUUID, projectID, handoffID, epoch,
+	).Scan(&handingOff)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return handingOff, err
+}
+
 // CloudRegenerationCheck answers who executed a response (`executed_by` in its
 // meta, "" when unset) and whether it is the newest agent or model answer of
 // its conversation.

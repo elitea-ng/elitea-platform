@@ -1018,7 +1018,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// check (ADR-0045 decision 11, #1564): run_chains.brief, brief_state,
 	// brief_sha256 and goal_check_failures, run_chain_links.done_check, and
 	// the link kind goal_not_met. No data, no permission.
-	require.EqualValues(t, 222, Head(shared))
+	//
+	// 223: shared/0223_web_push.sql, web push (ADR-0045 decision 6, #1437):
+	// centry.push_subscriptions, the outbox elitea_runtime.web_push_queue
+	// (an AFTER INSERT trigger on centry.notifications writes it, so nothing
+	// old is sent) and elitea_runtime.web_push_deliveries. No permission.
+	//
+	// 224: shared/0224_handoff_take_back_when_done.sql, send a running task
+	// to the cloud (ADR-0045 decision 8, #1439):
+	// workspace_handoffs.take_back_when_done and the link kind handoff. No
+	// data, no permission.
+	require.EqualValues(t, 224, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1252,7 +1262,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// schedule (index_schedule_mandates), and the three governed schedule
 	// skips in last_result (#1122). NULL and empty with the flag off. No
 	// data, no permission.
-	require.EqualValues(t, 158, Head(tenant))
+	// 159: tenant/0159_workspace_thread_targets.sql, the workspace_thread
+	// target of a pipeline schedule and an inbound trigger (ADR-0045
+	// decision 9, #1440): target_kind on the schedule, the thread, prompt
+	// and grant columns on both tables, the trigger's last_execution_id and
+	// the skip skipped_thread_busy. No data, no permission.
+	require.EqualValues(t, 159, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

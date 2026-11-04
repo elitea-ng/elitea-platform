@@ -69,6 +69,44 @@ func (h *Handler) StoreAdminHiddenSecret(ctx context.Context, name, value string
 	})
 }
 
+// EnsureAdminHiddenSecret answers the hidden entry `name`, and writes the
+// value that generate makes when there is none, creating the vault on first
+// use. The read and the write run under the vault's row lock, so two
+// replicas that start at the same time agree on ONE value: the second sees
+// the first's commit and keeps it. A name already used by a regular global
+// secret is refused, as in StoreAdminHiddenSecret.
+//
+// The first user is the web push VAPID key (ADR-0045 decision 6): one key
+// pair per install, made at first boot.
+func (h *Handler) EnsureAdminHiddenSecret(
+	ctx context.Context, name string, generate func() (string, error),
+) (string, error) {
+	if !validSecretName.MatchString(name) || generate == nil {
+		return "", fmt.Errorf("secrets: %q is not a valid secret name", name)
+	}
+	var value string
+	err := h.mutateAdminVault(ctx, true, func(vault *vaultData) (bool, error) {
+		if existing, ok := vault.HiddenSecrets[name]; ok && existing != "" {
+			value = existing
+			return false, nil
+		}
+		if _, taken := vault.Secrets[name]; taken {
+			return false, fmt.Errorf("secrets: %q is already a global secret", name)
+		}
+		made, err := generate()
+		if err != nil {
+			return false, err
+		}
+		vault.HiddenSecrets[name] = made
+		value = made
+		return true, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
 // LookupAdminHiddenSecret reads one hidden entry.
 //
 // A vault that exists and holds no such name returns ErrSecretNotFound, which

@@ -67,6 +67,14 @@ pub const KEYS: &[(&str, &str)] = &[
     ("activity_approve", "Approve {tool}"),
     ("activity_approve_cloud", "Approve in cloud"),
     ("activity_running_cloud", "Running in cloud"),
+    ("activity_awake", "Keeping the computer awake"),
+    ("quit_running_title", "Quit Elitea?"),
+    (
+        "quit_running_message",
+        "A turn is running. Quit stops it until you open Elitea again.",
+    ),
+    ("quit_running_confirm", "Quit"),
+    ("quit_running_cancel", "Keep running"),
 ];
 
 const MAX_LABEL_CHARS: usize = 80;

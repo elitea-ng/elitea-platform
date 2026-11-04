@@ -1741,8 +1741,9 @@ natsBootstrap:
     # ELITEA_RT_V1_DEADLETTER: how long a poison command's record is kept.
     deadLetterTtl: "168h"
 
-  # Seconds bootstrap.sh waits for the server to accept each account's identity
-  # before failing (NATS_CONNECT_WAIT). Covers NATS still starting and a
+  # Seconds bootstrap.sh waits for the server to accept each account's identity,
+  # and for that account's JetStream API to answer, before failing
+  # (NATS_CONNECT_WAIT). Covers NATS or its JetStream still starting and a
   # bootstrap certificate cert-manager is still (re-)issuing: an upgrade finds
   # last install's expired certificate in the Secret, and the kubelet takes up to
   # about a minute to show the re-issued one in the mounted volume.
@@ -3292,6 +3293,17 @@ main:
     EMAIL_REPLY_TO: ""
     PUBLIC_BASE_URL: ""
     ELITEA_EMAIL_SUPPRESS: ""
+
+    # --- Web push (ADR-0045 decision 6, #1437) ---------------------------------
+    # The contact the push services see in the VAPID token: a mailto: or an
+    # https: URL. Empty uses PUBLIC_BASE_URL when it is https; with neither,
+    # web push is off (the bell still works). The VAPID key itself is made
+    # once per install in the global vault (hidden secret
+    # web_push_vapid_private_key); without a vault, push is off. Sends go
+    # through HTTPS_PROXY when it is set (allow the browsers' push services:
+    # fcm.googleapis.com, updates.push.services.mozilla.com,
+    # web.push.apple.com, *.notify.windows.com).
+    ELITEA_WEB_PUSH_SUBJECT: ""
 
     # --- Object storage (S17; ADR-0016) -----------------------------------------
     # STORAGE_BACKEND has no code default — ConfigFromEnv fails closed with no

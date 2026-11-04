@@ -23,6 +23,8 @@ import (
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	handoffapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -344,7 +346,21 @@ func (h *handler) state(writer http.ResponseWriter, request *http.Request) {
 		"updated_at":              timestamp(view.Handoff.UpdatedAt),
 		"delete_after":            optionalTimestamp(view.DeleteAfter),
 		"workspace_bytes":         bytes,
+		// Contract 1.33 (ADR-0045 decision 8): the owner's desktop takes the
+		// thread back by itself when the last cloud run completes.
+		"take_back_when_done": view.Handoff.TakeBackWhenDone,
+		"last_cloud_run":      cloudRunView(view.LastCloudRun),
 	})
+}
+
+// cloudRunView is WorkspaceHandoffCloudRun; null when none.
+func cloudRunView(run *handoffapp.CloudRun) any {
+	if run == nil {
+		return nil
+	}
+	return map[string]any{
+		"outcome": run.Outcome, "execution_id": run.ExecutionID, "finished_at": timestamp(run.FinishedAt),
+	}
 }
 
 // statsFor answers the send's stats for the state route. `excluded` lists
@@ -396,6 +412,41 @@ type completeBody struct {
 	Epoch      int64  `json:"epoch"`
 	HandoffRef string `json:"handoff_ref"`
 	SHA        string `json:"sha"`
+	// TakeBackWhenDone and Continue are contract 1.33 (ADR-0045 decision 8).
+	TakeBackWhenDone bool          `json:"take_back_when_done"`
+	Continue         *continueBody `json:"continue"`
+	// StoppedChainRootExecutionID: the chain of the unattended local turn
+	// the desktop stopped for the send; without `continue` the complete
+	// ends it as `waiting` (contract 1.33).
+	StoppedChainRootExecutionID string `json:"stopped_chain_root_execution_id"`
+}
+
+// continueBody is the complete's `continue`: the cloud turn's prompt, the
+// thread's mode and its unattended grant (the local turn's grant).
+type continueBody struct {
+	Prompt string         `json:"prompt"`
+	Mode   string         `json:"mode"`
+	Grant  *continueGrant `json:"grant"`
+}
+
+type continueGrant struct {
+	unattendedwire.Grant
+	ChainRootExecutionID string `json:"chain_root_execution_id"`
+	Kind                 string `json:"kind"`
+}
+
+func (b *continueBody) request() *handoffapp.Continue {
+	if b == nil {
+		return nil
+	}
+	out := &handoffapp.Continue{Prompt: b.Prompt, Mode: b.Mode}
+	if b.Grant != nil {
+		grant := b.Grant.Request()
+		grant.ChainRootExecutionID = b.Grant.ChainRootExecutionID
+		grant.Kind = b.Grant.Kind
+		out.Grant = &grant
+	}
+	return out
 }
 
 func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
@@ -415,12 +466,58 @@ func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
 	handoff, err := h.handoff.Complete(request.Context(), handoffapp.CompleteRequest{
 		ProjectID: projectID, HandoffID: chi.URLParam(request, "handoffID"), ActorUserID: actor,
 		Epoch: body.Epoch, HandoffRef: body.HandoffRef, SHA: body.SHA, AuditRoute: CompletePath,
+		TakeBackWhenDone: body.TakeBackWhenDone, Continue: body.Continue.request(),
+		StoppedChainRootExecutionID: body.StoppedChainRootExecutionID,
 	})
 	if err != nil {
+		if writeUnattendedError(writer, err) {
+			return
+		}
 		writeError(request.Context(), writer, "complete", err)
 		return
 	}
-	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{"state": string(handoff.State), "epoch": handoff.Epoch})
+	out := map[string]any{"state": string(handoff.State), "epoch": handoff.Epoch}
+	if handoff.Continued != nil {
+		out["continued"] = map[string]any{
+			"execution_id": handoff.Continued.ExecutionID,
+			"message_id":   handoff.Continued.ResponseMessageID,
+			"question_id":  handoff.Continued.QuestionID,
+		}
+	}
+	desktopwire.WriteJSON(writer, http.StatusOK, out)
+}
+
+// writeUnattendedError answers a complete whose continue turn was refused:
+// a continue the cloud cannot run (422 continue_refused with `reason` and
+// `field`), its grant (422 unattended_grant_refused) or its chain (409
+// chain_limit_reached with `limit`, 409 chain_ended), as a local turn's.
+func writeUnattendedError(writer http.ResponseWriter, err error) bool {
+	var (
+		limit   *unattended.ChainLimitError
+		refused *handoffapp.ContinueRefusedError
+	)
+	switch {
+	case errors.As(err, &refused):
+		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "continue_refused",
+			"message": "A cloud turn has no plan mode. Complete the send without `continue`.",
+			"reason":  refused.Reason,
+			"field":   refused.Field,
+		})
+	case unattendedwire.WriteRefusal(writer, err):
+	case errors.As(err, &limit):
+		desktopwire.WriteJSON(writer, http.StatusConflict, map[string]any{
+			"error":   "chain_limit_reached",
+			"message": "The unattended chain reached its " + limit.Limit + " limit. It does not continue.",
+			"limit":   limit.Limit,
+		})
+	case errors.Is(err, unattended.ErrChainEnded):
+		desktopwire.WriteError(writer, http.StatusConflict, "chain_ended",
+			"The unattended chain has ended. Complete with a grant without chain_root_execution_id.")
+	default:
+		return false
+	}
+	return true
 }
 
 type reclaimBody struct {

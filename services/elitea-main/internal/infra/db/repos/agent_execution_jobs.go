@@ -12,6 +12,7 @@ import (
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	interruptdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
@@ -474,6 +475,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		return executionapp.AdmissionOutcome{}, nil, err
 	}
 	txQueries := sqlcgen.New(tx)
+	// The send a continue turn completed in this transaction.
+	var completedHandoff *workspacehandoff.Handoff
 	currentProjectID := int64(0)
 	if admission.CurrentTurn != nil {
 		currentProjectID = admission.CurrentTurn.ProjectID
@@ -510,6 +513,37 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		if err != nil {
 			return executionapp.AdmissionOutcome{}, nil, executionapp.ErrInvalidAdmission
 		}
+		// A send's continue turn completes the send first (ADR-0045
+		// decision 8): the handoff row's lock comes before the
+		// conversation's, as on every handoff path.
+		if admission.HandoffCompletion != nil {
+			if admission.CurrentTurn == nil && admission.CurrentAdhocTurn == nil {
+				return executionapp.AdmissionOutcome{}, nil, executionapp.ErrInvalidAdmission
+			}
+			completed, err := completeHandoffInAdmission(ctx, tx, currentProjectID, conversationID,
+				admission.Record.Job.ActorID, admission.HandoffCompletion)
+			if err != nil {
+				return executionapp.AdmissionOutcome{}, nil, err
+			}
+			completedHandoff = &completed
+		}
+		// A new question of a handed-off thread (ADR-0045 decision 9): the
+		// resolve found it CLOUD_IDLE in its own read. The check repeats
+		// here under the handoff row's share lock, before the conversation
+		// lock (the handoff-first order), so a take back, a release or a
+		// claim that changed the thread since then refuses this turn.
+		if admission.CloudThread && admission.HandoffCompletion == nil &&
+			(admission.CurrentTurn != nil || admission.CurrentAdhocTurn != nil) {
+			if err := fenceCloudIdleThread(ctx, tx, currentProjectID, conversationID); err != nil {
+				return executionapp.AdmissionOutcome{}, nil, err
+			}
+			// A schedule's or a trigger's turn: its approval snapshot is
+			// written behind the fence, so a refused occurrence writes
+			// nothing and a started turn has it from its first moment.
+			if err := writeThreadRunPolicy(ctx, tx, currentProjectID, conversationID, admission.RunPolicy); err != nil {
+				return executionapp.AdmissionOutcome{}, nil, err
+			}
+		}
 		if _, err := txQueries.LockCurrentAgentConversation(ctx, conversationUUID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return executionapp.AdmissionOutcome{}, nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart
@@ -528,6 +562,11 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 	case err == nil:
 		if digest != admission.Record.RequestDigest {
 			return executionapp.AdmissionOutcome{}, nil, executionapp.ErrIdempotencyConflict
+		}
+		if completedHandoff != nil {
+			// The send completed above, so this question was never admitted
+			// at this epoch: a stored admission of it is another send's.
+			return executionapp.AdmissionOutcome{}, nil, workspacehandoff.ErrStaleEpoch
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("commit agent admission replay: %w", err)
@@ -760,6 +799,14 @@ WHERE execution_id = $1 AND generation = $2`,
 	// continuation admits nothing.
 	if err := admitAgentChain(ctx, tx, admission, projectionProject); err != nil {
 		return executionapp.AdmissionOutcome{}, nil, err
+	}
+	// The send's continue turn runs from here: CLOUD_IDLE -> CLOUD_RUNNING
+	// bound to this execution, in the transaction that completed the send.
+	if completedHandoff != nil {
+		if err := startHandoffCloudTurn(ctx, tx, *completedHandoff, admission.Record.Job.ID,
+			admission.Binding.ClientMessageID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 	}
 	if err := txQueries.InsertRuntimeCommandOutbox(
 		ctx,

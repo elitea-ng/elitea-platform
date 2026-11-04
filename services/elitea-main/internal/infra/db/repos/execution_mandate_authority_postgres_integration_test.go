@@ -347,3 +347,47 @@ ORDER BY seq`, string(securityaudit.TypeDecision), target.ResourceID)
 		t.Fatalf("audit events = %+v", events)
 	}
 }
+
+// A workspace_thread schedule's attach target reads the prompt, the input
+// the fire-time check reads (runmandate.ScheduleInput), not `user_input`:
+// a mandate scoped to the prompt attaches, and one scoped only to the
+// stored user_input is refused (#1440).
+func TestPostgresThreadScheduleAttachReadsThePrompt(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	appender, err := securityaudit.NewPostgresAppender("elitea-main/integration-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.application_versions (id) VALUES (942);
+INSERT INTO p_1.pipeline_schedules
+    (application_id, version_id, cron, active, user_input, author_id,
+     target_kind, target_conversation_uuid, target_prompt)
+VALUES (941, 942, '0 * * * *', true, 'stale input', 41,
+        'workspace_thread', '6f1c4a0e-1b2d-4c3e-8f4a-5b6c7d8e9f01', 'Run the nightly checks.');`); err != nil {
+		t.Fatal(err)
+	}
+	mandates := NewUnattendedRunMandates(pool, appender)
+	target, err := mandates.Target(ctx, MandateAttachment{
+		Origin: runmandate.OriginPipelineSchedule, ProjectID: 1, VersionID: 942, ActorID: 41,
+	})
+	if err != nil || target.Input == nil || *target.Input != "Run the nightly checks." {
+		t.Fatalf("target %+v err=%v", target, err)
+	}
+
+	store := runmandatetest.New()
+	store.PutBinding("binding-1", 1, 942)
+	store.PutMandate("prompt", 1, mandatedomain.KindAutonomous, "binding-1", 0,
+		runmandate.CronScope("0 * * * *"), runmandate.InputScope("Run the nightly checks."))
+	store.PutMandate("user-input", 1, mandatedomain.KindAutonomous, "binding-1", 0,
+		runmandate.CronScope("0 * * * *"), runmandate.InputScope("stale input"))
+	service := store.Service()
+	if _, err := service.CheckAttach(ctx, "prompt", target); err != nil {
+		t.Fatalf("a mandate covering the prompt: %v", err)
+	}
+	if _, err := service.CheckAttach(ctx, "user-input", target); !errors.Is(err, runmandate.ErrScopeMismatch) {
+		t.Fatalf("a mandate covering only user_input attached: %v", err)
+	}
+}

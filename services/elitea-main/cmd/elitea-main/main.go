@@ -580,6 +580,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotifications *notificationsapi.CurrentNotificationAPIRoute
 	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
+	// Web push (ADR-0045 decision 6): the routes join the notification
+	// routes below; the dispatcher runs whenever a pool exists.
+	var currentNotificationPush http.Handler
+	webPush := composeWebPush(ctx, pool, os.Getenv, logger)
+	webPush.startDispatcher(ctx, logger)
 	var formGraph *authcomposition.FormGraph
 	var principalValidator apimw.PrincipalValidator
 	// formSessions reads the Form plane's session cookie for every route's
@@ -1086,6 +1091,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 		if err != nil {
 			return fmt.Errorf("compose current notification events route: %w", err)
+		}
+		if webPush != nil {
+			pushRoute, pushErr := webPush.route(apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if pushErr != nil {
+				return fmt.Errorf("compose web push routes: %w", pushErr)
+			}
+			currentNotificationPush = pushRoute
 		}
 		logger.Info("browser project-list and notification routes enabled")
 	}
@@ -1638,6 +1650,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// dependencies. Its turn canceller is the runtime's own stop use case,
 	// bound once the runtime is composed (workspaceTurnCanceller.bind).
 	workspaceTurnCanceller := &deferredAgentCanceller{}
+	// The chat start use case of a send's continue turn, bound likewise.
+	workspaceTurnStarter := &deferredAgentStarter{}
 	var workspaceBus events.Bus
 	if liveNATSBus != nil {
 		workspaceBus = liveNATSBus
@@ -1654,7 +1668,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
-		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), workspaceForgeExpander, logger)
+		workspaceTurnCanceller, workspaceTurnStarter, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), workspaceForgeExpander, logger)
 	if err != nil {
 		return fmt.Errorf("compose workspace handoff routes: %w", err)
 	}
@@ -2327,6 +2341,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 		}
 		if publicRoutes.AgentStart != nil {
+			workspaceTurnStarter.bind(publicRoutes.AgentStart)
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
 			childAgentStart = publicRoutes.AgentStart
@@ -2345,6 +2360,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				domainEvents,
 				pipelineRunsRepo,
 				v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
+				pipelineThreadRuns(workspaceHandoff.Continuer),
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,
@@ -3075,6 +3091,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentNotifications:           currentNotifications,
 		CurrentNotificationStore:       currentNotificationStore,
 		CurrentNotificationEvents:      currentNotificationEvents,
+		CurrentNotificationPush:        currentNotificationPush,
 		CurrentModelCatalog:            currentModelCatalog,
 		CurrentModelDefault:            currentModelDefault,
 		GatewayProxy:                   gatewayProxy,

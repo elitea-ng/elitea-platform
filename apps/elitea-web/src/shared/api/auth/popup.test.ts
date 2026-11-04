@@ -683,7 +683,7 @@ describe('re-auth is refused while the document logs out (#482)', () => {
       createChannel: () => null,
     });
 
-    performLogout({ redirect: vi.fn(), origin: 'http://app.example' });
+    void performLogout({ redirect: vi.fn(), origin: 'http://app.example' });
 
     await expect(controller.reauthenticate()).rejects.toMatchObject({ reason: 'logging_out' });
     expect(opened).toEqual([]);
@@ -703,7 +703,7 @@ describe('re-auth is refused while the document logs out (#482)', () => {
     // The flight is live and its keys are in the namespace.
     expect(window.sessionStorage.getItem('el.auth.state')).not.toBeNull();
 
-    performLogout({ redirect: vi.fn(), origin: 'http://app.example' });
+    void performLogout({ redirect: vi.fn(), origin: 'http://app.example' });
 
     // The sweep took the keys...
     expect(window.sessionStorage.getItem('el.auth.state')).toBeNull();

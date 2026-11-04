@@ -13,6 +13,7 @@ import { createStorage } from '@/shared/lib/storage';
 
 import type { NormalizedNotification } from '../api/normalize';
 import { parseNotificationMessage } from './routes';
+import { runFinishedText } from './runFinished';
 
 const KEY = 'desktop.systemNotifications';
 
@@ -56,8 +57,13 @@ function kindTitle(eventType: string): string {
   return words === '' ? 'Notification' : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
-/** A native notice's title (the kind) and body (the message, links as their text). */
+/**
+ * A native notice's title (the kind) and body (the message, links as their
+ * text). A `run_finished` row has no message (it is content-free): its text
+ * is the fixed one for its outcome.
+ */
 export function systemNoticeText(notification: NormalizedNotification): { readonly title: string; readonly body: string } {
+  if (notification.eventType === 'run_finished') return runFinishedText(notification.meta?.outcome);
   const body = parseNotificationMessage(notification.meta?.message)
     .map((segment) => segment.text)
     .join('');

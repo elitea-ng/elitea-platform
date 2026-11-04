@@ -6,9 +6,12 @@
  * the grant's desktop wire (`toWireGrant`) and cloud wire (`toCloudGrant`),
  * the agent tools a grant can name, the text of Main's refusal, and the flag
  * that hides the control when an administrator turned grants off. The run
- * brief and the goal check (decision 11) are in `entities/run-brief`.
+ * brief and the goal check (decision 11) are in `entities/run-brief`. The
+ * grant field of a schedule or a webhook on a handed-off thread (decision 9)
+ * fills `entities/thread-target`'s slot.
  */
 export { RunToCompletionControl } from './ui/RunToCompletionControl';
+export { ThreadGrantField } from './ui/ThreadGrantField';
 export { defaultGrant, newGrantId, toWireGrant, type SensitiveToolRef } from './model/grant';
 export { defaultChoice, grantToSend, readChoice, type RunChoice } from './model/runChoice';
 export { grantsTurnedOff, isDesktopGrantsOff, isGrantsOffRefusal, markGrantsTurnedOff, resetGrantsTurnedOff, useGrantsTurnedOff } from './model/grantsOff';

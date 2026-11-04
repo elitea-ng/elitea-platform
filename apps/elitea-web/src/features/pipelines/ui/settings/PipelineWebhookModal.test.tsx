@@ -1,9 +1,15 @@
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { getGetPipelineInboundTriggerResponseMock } from '@/shared/api/generated/applications/applications.msw';
+import { getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
+import { configureGeneratedClient, EliteaApiError, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
+import { server } from '@/test/setup';
 
-import { PipelineWebhookModal } from './PipelineWebhookModal';
+import { renderWithRouterAndProject } from '../../__tests__/testUtils';
+import { PipelineWebhookModal, type PipelineWebhookModalProps } from './PipelineWebhookModal';
 
 const URL_PATH = '/api/v2/pipeline_trigger/1/tok-abc';
 
@@ -321,5 +327,71 @@ describe('PipelineWebhookModal', () => {
     await user.click(getByRole('option', { name: label }));
     await user.click(getByTestId('pipeline-webhook-apply-mode'));
     expect(onRotate).toHaveBeenCalledWith(mode);
+  });
+});
+
+/** The thread of the v2.yaml trigger examples, in the cloud. */
+const THREAD = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
+const LISTING = {
+  total: 1,
+  rows: [{ id: 11, uuid: THREAD, name: 'Alert triage', source: 'local_work', workspace_executor: 'cloud', created_at: '2026-11-04T09:00:00Z', updated_at: '2026-11-04T09:00:00Z', duration: -1, message_groups_count: 2, is_pinned: false, is_archived: false }],
+};
+
+function renderTargeted(target: PipelineWebhookModalProps['target']) {
+  const onRotate = vi.fn<PipelineWebhookModalProps['onRotate']>(() => Promise.resolve(undefined));
+  renderWithRouterAndProject(
+    <PipelineWebhookModal open onClose={noop} webhookUrl={URL_PATH} onReveal={noop} onRotate={onRotate} onRevoke={noop} projectId="1" target={target} />,
+    '1',
+  );
+  return { onRotate, user: userEvent.setup() };
+}
+
+describe('PipelineWebhookModal — Runs on a handed-off workspace thread (ADR-0045 decision 9)', () => {
+  beforeEach(() => {
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+    server.use(getListConversationsMockHandler(LISTING));
+  });
+  afterEach(() => resetGeneratedClient());
+
+  it('offers the target only when it changed, and rotates with it', async () => {
+    const { onRotate, user } = renderTargeted({ target_kind: 'pipeline' });
+    expect(await screen.findByLabelText('This pipeline')).toBeChecked();
+    expect(screen.queryByTestId('pipeline-webhook-apply-target')).toBeNull();
+    await user.click(screen.getByLabelText('A handed-off workspace thread'));
+    expect(screen.getByTestId('pipeline-webhook-target-pending')).toHaveTextContent('Applying this target rotates the credential');
+    await user.click(await screen.findByRole('combobox', { name: 'Thread' }));
+    await user.click(await screen.findByRole('option', { name: 'Alert triage' }));
+    await user.type(screen.getByTestId('thread-target-prompt'), 'Triage the alert.');
+    await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
+    expect(onRotate).toHaveBeenCalledWith(undefined, { target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' });
+  });
+
+  it('seeds a stored thread trigger (the v2.yaml example) and sends its stored grant back with an edited message', async () => {
+    const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
+    expect(await screen.findByLabelText('A handed-off workspace thread')).toBeChecked();
+    expect(screen.getByTestId('pipeline-webhook-thread-hint')).toBeInTheDocument();
+    await user.type(screen.getByTestId('thread-target-prompt'), ' Then report.');
+    await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
+    expect(onRotate).toHaveBeenCalledWith(undefined, {
+      target_kind: 'workspace_thread',
+      conversation_uuid: THREAD,
+      prompt: 'Triage the alert in the payload and open a fix branch. Then report.',
+      grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true },
+    });
+  });
+
+  it('clears a stored thread with target_kind pipeline', async () => {
+    const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
+    await user.click(await screen.findByLabelText('This pipeline'));
+    await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
+    expect(onRotate).toHaveBeenCalledWith(undefined, { target_kind: 'pipeline' });
+  });
+
+  it('shows a refusal of the thread on its field', async () => {
+    const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
+    onRotate.mockResolvedValue(new EliteaApiError({ kind: 'http', status: 404, url: '/api/v2/pipeline_triggers/prompt_lib/1/7', body: { error: 'no such conversation in this project', code: 'thread_not_found' } }));
+    await user.type(await screen.findByTestId('thread-target-prompt'), '!');
+    await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
+    await waitFor(() => expect(screen.getByText('This thread is not in this project, or you are not a participant of it.')).toBeInTheDocument());
   });
 });

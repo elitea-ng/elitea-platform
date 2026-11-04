@@ -7,6 +7,8 @@
  * (`secret_found`, `include_confirm_required`), the cap breakdown (`handoff_too_large`) or the server's
  * quota figures.
  */
+import type { WorkspaceHandoffContinued, WorkspaceHandoffState } from '@/shared/api/generated/model';
+
 import type { HostInvoke } from './hostBridge';
 import { tauriListen, WorkspaceIpcError, type ChangedFile, type ListenFn, type TauriEventInternals } from './workspaceIpc';
 
@@ -122,9 +124,11 @@ export interface HandoffPreview {
   policy: HandoffPolicy;
   /** `null` when the policy has no env harvest. */
   env: PreviewEnv | null;
+  /** The thread's own turn runs here: Send stops it at its next step and the cloud continues it (ADR-0045 decision 8). */
+  running_turn?: boolean;
 }
 
-type HandoffPhase = 'snapshot' | 'scan' | 'bundle' | 'begin' | 'upload' | 'publish' | 'complete' | 'cancelled' | 'error';
+type HandoffPhase = 'stopping' | 'snapshot' | 'scan' | 'bundle' | 'begin' | 'upload' | 'publish' | 'complete' | 'cancelled' | 'error';
 
 export interface HandoffEvent {
   conversation_uuid: string;
@@ -144,6 +148,14 @@ export interface HandoffSent {
   excluded: number;
   included: number;
   env_vars: number;
+  /** The send stopped the thread's running turn first (ADR-0045 decision 8). */
+  stopped_turn?: boolean;
+  /** The cloud went on with the stopped turn at once: `complete`'s `continued`, relayed as the server sent it. */
+  continued?: WorkspaceHandoffContinued | null;
+  /** The server refused the turn's grant: the thread waits in the cloud for the next message. What to tell the person. */
+  continue_refused?: string | null;
+  /** This computer takes the thread back by itself when its cloud run completes. */
+  take_back_when_done?: boolean;
 }
 
 export type HandoffExecutor = 'local' | 'cloud' | 'returning';
@@ -170,6 +182,10 @@ export interface HandoffStatus {
   rest_pending?: boolean;
   /** How many of those turns this desktop can still take back ("Take back the remaining turns"); 0 when none. */
   rest_turns?: number;
+  /** Sent with "Take back when done" (ADR-0045 decision 8): the owner's desktop takes it back when its cloud run completes. */
+  take_back_when_done?: boolean;
+  /** The last finished cloud run of the handoff, relayed from the state view. */
+  last_cloud_run?: WorkspaceHandoffState['last_cloud_run'];
 }
 
 /** `handoff_reclaim`: `RECLAIMING`, or `CLOUD_RUNNING` with `reclaim_pending` while a cloud turn runs. */
@@ -284,8 +300,13 @@ export interface HandoffIpc {
   allowed(): Promise<boolean>;
   /** What a send would transfer. `leaveOnLaptop` paths are left out of it. */
   preview(workspaceId: string, conversationUuid: string, leaveOnLaptop?: readonly string[]): Promise<HandoffPreview>;
-  /** `confirmIncludes`: the person confirmed the included files' findings for this send. */
-  send(workspaceId: string, conversationUuid: string, leaveOnLaptop: readonly string[], options?: { confirmIncludes?: boolean }): Promise<HandoffSent>;
+  /** `confirmIncludes`: included files' findings confirmed. `takeBackWhenDone` (absent: on while its turn runs); `title`: for its notice. */
+  send(
+    workspaceId: string,
+    conversationUuid: string,
+    leaveOnLaptop: readonly string[],
+    options?: { confirmIncludes?: boolean; takeBackWhenDone?: boolean; title?: string },
+  ): Promise<HandoffSent>;
   /** Stop a running send; the thread is `LOCAL` again and the send rejects `handoff_cancelled`. */
   cancel(conversationUuid: string): Promise<{ cancelled: boolean }>;
   /** `projectId`: for a thread this desktop holds no record of. */
@@ -305,6 +326,8 @@ export interface HandoffIpc {
   undo(checkpointId: string): Promise<{ restored: string[] }>;
   /** Erase the cloud copy; the local folder is kept. */
   erase(conversationUuid: string, projectId?: number): Promise<unknown>;
+  /** A `run_finished` notification arrived: the host takes back a thread sent with "Take back when done" (fire and forget). */
+  runFinished(conversationUuid: string, origin: string | undefined, outcome: string | undefined): Promise<void>;
   /** Subscribe to `handoff://event`; resolves once the subscription is live, with its unsubscribe. */
   onEvent(handler: HandoffEventHandler): Promise<() => void>;
 }
@@ -340,6 +363,8 @@ export function createHandoffIpc(hostInvoke: HostInvoke, listen: ListenFn): Hand
         conversation_uuid: uuid,
         leave_on_laptop: [...leave],
         ...(options?.confirmIncludes === true ? { confirm_includes: true } : {}),
+        ...(options?.takeBackWhenDone === undefined ? {} : { take_back_when_done: options.takeBackWhenDone }),
+        ...(options?.title === undefined || options.title === '' ? {} : { title: options.title }),
       }),
     cancel: (uuid) => invoke<{ cancelled: boolean }>('handoff_cancel', { conversation_uuid: uuid }),
     status: (uuid, projectId) => invoke<HandoffStatus>('handoff_status', withProject(uuid, projectId)),
@@ -357,6 +382,8 @@ export function createHandoffIpc(hostInvoke: HostInvoke, listen: ListenFn): Hand
       invoke<ApplyResult>('handoff_apply', upToTurn === undefined ? { preflight_id: preflightId, mode } : { preflight_id: preflightId, mode, up_to_turn: upToTurn }),
     undo: (checkpointId) => invoke<{ restored: string[] }>('handoff_undo', { checkpoint_id: checkpointId }),
     erase: (uuid, projectId) => invoke<unknown>('handoff_erase', withProject(uuid, projectId)),
+    runFinished: (uuid, origin, outcome) =>
+      invoke<void>('handoff_run_finished', { conversation_uuid: uuid, ...(origin === undefined ? {} : { origin }), ...(outcome === undefined ? {} : { outcome }) }),
     onEvent: (handler) => listen(HANDOFF_EVENT_CHANNEL, (payload) => handler(payload as HandoffEvent)),
   };
 }

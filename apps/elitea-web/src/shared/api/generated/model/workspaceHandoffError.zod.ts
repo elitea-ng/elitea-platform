@@ -48,6 +48,30 @@ export const WorkspaceHandoffError = zod
     error: zod.string(),
     message: zod.string().optional(),
     details: WorkspaceHandoffErrorDetails.optional(),
+    reason: zod
+      .string()
+      .optional()
+      .describe(
+        "Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn. With `continue_refused`: why the cloud cannot run the continue (`mode`: a cloud turn has no plan mode).",
+      ),
+    field: zod
+      .string()
+      .optional()
+      .describe(
+        "Contract 1.33. With `unattended_grant_refused`, the refused grant field; with `continue_refused`, the refused `continue` field (`mode`).",
+      ),
+    tool: zod
+      .string()
+      .optional()
+      .describe(
+        "Contract 1.33. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.",
+      ),
+    limit: zod
+      .string()
+      .optional()
+      .describe(
+        "Contract 1.33. With `chain_limit_reached`, the limit the chain reached: `continuations`, `spend` or `deadline`.",
+      ),
   })
   .describe(
     "A refused handoff or store call. `error` is a machine code (the operations name theirs); `details` is set for `ref_conflict`, `env_name_denied`, `path_denied` and `cloud_handoff_disabled`. NOTE(W2): internal/api/v2/workspacehandoff/route.go:740 (`writeError`).",

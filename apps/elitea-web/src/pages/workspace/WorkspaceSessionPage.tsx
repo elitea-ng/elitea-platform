@@ -150,7 +150,12 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <ForkNotices fork={forking} ipc={ipc} />
               <McpProposals workspaceId={workspace.id} />
               <HooksProposals workspaceId={workspace.id} />
-              <EarlierTurns history={session.history} shown={session.shown} onFork={forking.onFork} />
+              <EarlierTurns
+                history={session.history}
+                shown={session.shown}
+                onFork={forking.onFork}
+                resume={{ onResume: (turnId) => void turn.resume(turnId), busy, offers: turn.offersResume }}
+              />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
@@ -177,7 +182,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         planMode={commands.planMode}
         context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
       />
-      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
+      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
         open={createAgentOpen}
         onClose={() => setCreateAgentOpen(false)}

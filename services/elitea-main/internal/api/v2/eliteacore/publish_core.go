@@ -188,7 +188,7 @@ func (h *Handler) publishPrecheck(ctx context.Context, s, projectID, versionID, 
 	}
 	// Validation gate: if no token provided, run inline validation
 	if validation.token == "" {
-		valResult, _ := h.runPublishValidation(ctx, s, projectID, validation.callerID, versionID, versionName)
+		valResult, _ := h.runPublishValidation(ctx, s, projectID, validation.callerID, versionID, versionName, false)
 		if valResult != nil && valResult["status"] == "FAIL" {
 			criticals, _ := valResult["critical_issues"].([]map[string]any)
 			issues := make([]map[string]any, len(criticals))

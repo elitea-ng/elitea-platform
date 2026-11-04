@@ -159,6 +159,8 @@ const HREF_RESOLVERS: Record<NotificationEventType, HrefResolver> = {
   private_project_created: noHref,
   moderation_rejected: noHref,
   moderation_approved: noHref,
+  // Rendered by `../ui/RunFinishedMessage.tsx`, which opens its own target (`./runFinished.ts`).
+  run_finished: noHref,
 };
 
 /**

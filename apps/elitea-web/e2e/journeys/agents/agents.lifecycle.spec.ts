@@ -147,6 +147,22 @@ test('J14: create agent, save, and persist it', async ({ page }) => {
  */
 test('J15: a saved agent exposes a version selector listing its versions', async ({ page }) => {
   /*
+   * BUDGET. This one test walks four stages of JRNY-015 in sequence — create
+   * the agent, save v2, set it as the default, save v3 and delete it — so it
+   * pays for ~50 UI actions, two navigations onto a new version and the
+   * a11y scan. The suite's default 30 s is a per-JOURNEY-STEP budget and this
+   * is several steps. Measured on webkit (PR #1567 run 41729162319, retry
+   * trace): no action stalls (slowest single action 2.8 s, every API call
+   * 5-60 ms, the DELETE answered 204), yet the 30 s ran out while the delete
+   * dialog was opening and the next click was cancelled by the timeout, not
+   * by the page. The same timeout hit J15 on webkit on main (run
+   * 41598734346) and on PR #1565 before any of that PR's backend changed.
+   * 60 s is twice the measured ~33 s, which still fails a real hang well
+   * before the CI job does.
+   */
+  test.setTimeout(60_000);
+
+  /*
    * Was EXPECTED-FAIL until #134. The agent edit page mounted no
    * version-selection control at all: it fetched the version list and spent it
    * solely on `useIsVersionNotFound`'s 404 check, while both halves of the

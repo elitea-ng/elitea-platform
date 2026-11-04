@@ -205,6 +205,9 @@ type Handler struct {
 	// governed makes every unattended run mandate-bound (governed.go). Nil
 	// with credential governance off.
 	governed *runmandate.Service
+	// threads starts the turns of `workspace_thread` targets
+	// (workspacethread.go). Nil when no cloud executor is composed.
+	threads ThreadRuns
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so

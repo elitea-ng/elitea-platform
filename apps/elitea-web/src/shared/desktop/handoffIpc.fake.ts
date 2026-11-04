@@ -40,6 +40,7 @@ import type {
 } from './handoffIpc';
 import { HandoffIpcError } from './handoffIpc';
 import { previewEnv } from './handoffIpc.fakeEnv';
+import { DEFAULT_APPLY, DEFAULT_PREFLIGHT, type FakeApply } from './handoffIpc.fakeTakeBack';
 
 type FailableCommand =
   | 'allowed' | 'preview' | 'send' | 'cancel' | 'status' | 'statusMany' | 'reclaim'
@@ -101,6 +102,8 @@ export interface FakeHandoffIpc extends HandoffIpc {
   setReclaim(answer: ReclaimAnswer): void;
   setPreflight(preflight: Partial<Preflight>): void;
   setApply(result: Partial<ApplyResult>): void;
+  /** What `handoff_send` answers besides the send itself (`continued`, `continue_refused`, …). */
+  setSent(extra: Partial<HandoffSent>): void;
   /** Hold `handoff_send` until `releaseSend()` (to look at the progress, or cancel). */
   holdSend(): void;
   releaseSend(): void;
@@ -108,7 +111,8 @@ export interface FakeHandoffIpc extends HandoffIpc {
   subscriberCount(): number;
   readonly calls: {
     previews: { workspaceId: string; conversationUuid: string; leave: string[] }[];
-    sends: { workspaceId: string; conversationUuid: string; leave: string[]; confirmIncludes: boolean }[];
+    sends: { workspaceId: string; conversationUuid: string; leave: string[]; confirmIncludes: boolean; takeBackWhenDone?: boolean; title?: string }[];
+    runFinished: { conversationUuid: string; origin?: string; outcome?: string }[];
     cancels: string[];
     statuses: string[];
     statusManys: string[][];
@@ -155,42 +159,24 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
   const perThread = new Map<string, Partial<HandoffStatus>>();
   let queue: Partial<HandoffStatus>[] = [];
   let reclaim: ReclaimAnswer = { state: 'RECLAIMING', epoch: 3, cloud_sha: 'abc123' };
-  let preflight: Preflight = {
-    preflight_id: 'pf-1',
-    outcome: 'fast_path',
-    applied: false,
-    changed_paths: [{ path: 'src/main.rs', change: 'modified', from: null }],
-    conflict_paths: [],
-    skipped_paths: [],
-    base: 'b'.repeat(40),
-    result_tree: 'c'.repeat(40),
-    cloud_turns: 1,
-    up_to_turn: 1,
-    modes: ['apply', 'worktree', 'discard'],
-    files: [{ path: 'src/main.rs', status: 'modified', added: 1, removed: 1, diff: '--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-fn main() {}\n+fn main() { run() }\n' }],
-    diffs_truncated: false,
-  };
-  let apply: Omit<ApplyResult, 'report'> & { report?: ApplyResult['report'] } = {
-    applied: true,
-    outcome: 'applied',
-    checkpoint_id: 'w1:7',
-    worktree_path: null,
-    branch: 'elitea/cloud/abcd1234',
-    imported_turns: 1,
-    turns_not_taken: 0,
-    rest_branch: null,
-    released: true,
-    copied: [],
-  };
+  let preflight: Preflight = structuredClone(DEFAULT_PREFLIGHT);
+  let sentExtra: Partial<HandoffSent> = {};
+  let apply: FakeApply = structuredClone(DEFAULT_APPLY);
   let hold: Promise<void> | undefined;
   let release: (() => void) | undefined;
   let running: { uuid: string; cancel: () => void } | undefined;
   const handlers = new Set<HandoffEventHandler>();
   const failures = new Map<FailableCommand, HandoffIpcError>();
   const calls: FakeHandoffIpc['calls'] = {
-    previews: [], sends: [], cancels: [], statuses: [], statusManys: [], reclaims: [], reclaimRests: [],
+    previews: [], sends: [], runFinished: [], cancels: [], statuses: [], statusManys: [], reclaims: [], reclaimRests: [],
     preflights: [], preflightTurns: [], applies: [], undos: [], erases: [], settingsGets: [], settingsSets: [],
   };
+  // A send while the thread's turn runs stops it; "Take back when done" is then on unless chosen otherwise.
+  const sentAlso = (takeBackWhenDone: boolean | undefined): Partial<HandoffSent> => ({
+    stopped_turn: base.running_turn === true,
+    take_back_when_done: takeBackWhenDone ?? base.running_turn === true,
+    ...sentExtra,
+  });
   const failure = (command: FailableCommand): Promise<never> | undefined => {
     const error = failures.get(command);
     if (error === undefined) return undefined;
@@ -272,6 +258,9 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
     setApply: (next) => {
       apply = { ...apply, ...next };
     },
+    setSent: (next) => {
+      sentExtra = { ...sentExtra, ...next };
+    },
     holdSend: () => {
       hold = new Promise<void>((resolve) => {
         release = resolve;
@@ -287,9 +276,10 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
       calls.previews.push({ workspaceId, conversationUuid, leave: [...leave] });
       return failure('preview') ?? Promise.resolve(compute(workspaceId, leave));
     },
-    async send(workspaceId, conversationUuid, leave, options) {
-      const confirmIncludes = options?.confirmIncludes === true;
-      calls.sends.push({ workspaceId, conversationUuid, leave: [...leave], confirmIncludes });
+    async send(workspaceId, conversationUuid, leave, options = {}) {
+      const { confirmIncludes: confirmed, ...chosen } = options;
+      const confirmIncludes = confirmed === true;
+      calls.sends.push({ workspaceId, conversationUuid, leave: [...leave], confirmIncludes, ...chosen });
       const failed = failure('send');
       if (failed !== undefined) return failed;
       const now = compute(workspaceId, leave);
@@ -318,6 +308,7 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
         excluded: now.excluded.length,
         included: now.included.length,
         env_vars: now.env?.vars ?? 0,
+        ...sentAlso(chosen.takeBackWhenDone),
       };
       return sent;
     },
@@ -389,6 +380,10 @@ export function createFakeHandoffIpc(initial: FakeInitial = {}): FakeHandoffIpc 
       for (const name of next.env_names) if (!ENV_NAME.test(name)) return bad(`${name} is not a variable name.`, 'env_names', name);
       settings.set(workspaceId, structuredClone(next));
       return Promise.resolve(answer(workspaceId));
+    },
+    runFinished(conversationUuid, origin, outcome) {
+      calls.runFinished.push({ conversationUuid, ...(origin === undefined ? {} : { origin }), ...(outcome === undefined ? {} : { outcome }) });
+      return Promise.resolve();
     },
     onEvent(handler) {
       handlers.add(handler);

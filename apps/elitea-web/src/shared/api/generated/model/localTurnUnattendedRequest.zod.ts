@@ -85,7 +85,7 @@ export const LocalTurnUnattendedRequest = zod
       .string()
       .optional()
       .describe(
-        "Client contract 1.31. Why a continuation starts: `step_limit`, `tool_call_cap` or `goal_not_met`. Send it only with `chain_root_execution_id`. Absent is `continue`. Another value, or a kind on the first turn, answers 422 `unattended_grant_refused` (reason `invalid`, field `kind`).",
+        "Client contract 1.31. Why a continuation starts: `step_limit`, `tool_call_cap`, `goal_not_met` or `resume` (the desktop continues a chain after an app restart, ADR-0045 decision 7). Send it only with `chain_root_execution_id`. Absent is `continue`. Another value, or a kind on the first turn, answers 422 `unattended_grant_refused` (reason `invalid`, field `kind`).",
       ),
     chain: UnattendedChainLimits.optional(),
   })

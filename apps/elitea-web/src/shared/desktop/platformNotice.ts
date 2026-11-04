@@ -18,9 +18,20 @@ import { tauriInvoke, type HostInvoke } from './hostBridge';
 const NOTICE_TITLE_MAX = 120;
 export const NOTICE_BODY_MAX = 120;
 
+/**
+ * Which notification a notice is for. The host shows one notice per `id`,
+ * and none for a `run_finished` that did not run in the cloud (`origin`):
+ * the host already noticed its own local chain when it ended.
+ */
+export interface PlatformNoticeAbout {
+  readonly id: string;
+  readonly eventType: string;
+  readonly origin?: string | undefined;
+}
+
 export interface PlatformNotice {
   /** Shows a native notification while the window is not focused. */
-  show(title: string, body: string): Promise<void>;
+  show(title: string, body: string, about?: PlatformNoticeAbout): Promise<void>;
   /** The unread platform notifications, for the Dock badge. */
   setUnread(unread: number): Promise<void>;
 }
@@ -39,7 +50,12 @@ function clip(text: string, max: number): string {
 
 export function createPlatformNotice(invoke: HostInvoke): PlatformNotice {
   return {
-    show: (title, body) => invoke<void>('platform_notice_show', { title: clip(title, NOTICE_TITLE_MAX), body: clip(body, NOTICE_BODY_MAX) }),
+    show: (title, body, about) =>
+      invoke<void>('platform_notice_show', {
+        title: clip(title, NOTICE_TITLE_MAX),
+        body: clip(body, NOTICE_BODY_MAX),
+        ...(about === undefined ? {} : { notification_id: about.id, event_type: about.eventType, ...(about.origin === undefined ? {} : { origin: about.origin }) }),
+      }),
     setUnread: (unread) => invoke<void>('platform_notice_badge', { unread: Math.max(0, Math.floor(unread)) }),
   };
 }

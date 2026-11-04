@@ -126,8 +126,9 @@ impl ChainLimits {
     }
 }
 
-/// `agent_turn_start.unattended`: what the grant answers.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+/// `agent_turn_start.unattended`: what the grant answers. Serialized as
+/// the resume record keeps it (ADR-0045 decision 7).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct UnattendedGrant {
     /// A UUID; the host makes one when the UI sends none.
@@ -249,6 +250,8 @@ pub enum ContinuationKind {
     ToolCallCap,
     /// The goal check found a condition not met (ADR-0045 decision 11).
     GoalNotMet,
+    /// The app started again while the chain ran (ADR-0045 decision 7).
+    Resume,
 }
 
 impl ContinuationKind {
@@ -258,6 +261,7 @@ impl ContinuationKind {
             Self::StepLimit => "step_limit",
             Self::ToolCallCap => "tool_call_cap",
             Self::GoalNotMet => "goal_not_met",
+            Self::Resume => "resume",
         }
     }
 }
@@ -403,6 +407,9 @@ pub enum TurnEnd {
     },
     /// At the 512 tool-call cap.
     ToolCallCap,
+    /// Stopped at a step boundary for a send to the cloud (ADR-0045
+    /// decision 8).
+    Handoff,
 }
 
 /// What the host does after a turn of a chain.
@@ -412,6 +419,9 @@ pub enum ChainStep {
     Continue,
     /// The chain ends here, with this outcome.
     End(ChainOutcome),
+    /// The chain goes on in the cloud (ADR-0045 decision 8): no local
+    /// continuation, and the commit carries no outcome.
+    Handoff,
 }
 
 /// The chain's next step after a turn that ended with `end`.
@@ -420,6 +430,7 @@ pub const fn next_step(grant: &UnattendedGrant, end: TurnEnd) -> ChainStep {
     match end {
         TurnEnd::Answered => ChainStep::End(ChainOutcome::Completed),
         TurnEnd::Failed => ChainStep::End(ChainOutcome::Failed),
+        TurnEnd::Handoff => ChainStep::Handoff,
         TurnEnd::ToolCallCap if grant.continue_tool_call_cap => ChainStep::Continue,
         TurnEnd::StepLimit { exhausted: true } if grant.continue_step_limit => ChainStep::Continue,
         TurnEnd::ToolCallCap | TurnEnd::StepLimit { .. } => ChainStep::End(ChainOutcome::Waiting),
@@ -773,6 +784,9 @@ mod tests {
             next_step(&none, TurnEnd::StepLimit { exhausted: true }),
             ChainStep::End(ChainOutcome::Waiting)
         );
+        // A turn stopped for a send goes on in the cloud, under any grant.
+        assert_eq!(next_step(&none, TurnEnd::Handoff), ChainStep::Handoff);
+        assert_eq!(next_step(&all, TurnEnd::Handoff), ChainStep::Handoff);
         assert_eq!(all.step_policy(), ContinuePolicy::Granted);
         assert_eq!(none.step_policy(), ContinuePolicy::Ask);
         assert_eq!(

@@ -14,6 +14,7 @@ import (
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runfinished"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattendedchain"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -51,6 +52,17 @@ func unattendedSettlementHooks(
 		hook.WithGoals(briefs)
 	}
 	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(hook.AfterSettle)}
+}
+
+// runFinishedSettlementHooks writes the run_finished notification of a
+// schedule or webhook run, or a cloud turn of a handed-off thread, that has
+// no chain (ADR-0045 decision 5). A chain's row comes with its end state.
+func runFinishedSettlementHooks(pool *pgxpool.Pool, logger *slog.Logger) []executionapp.SettlementOption {
+	runs, err := repos.NewRunFinishedRepository(pool)
+	if err != nil {
+		return nil
+	}
+	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(runfinished.NewHook(runs, logger).AfterSettle)}
 }
 
 // runBriefStarter adapts runbrief.Service to agentexecution.RunBriefStarter.

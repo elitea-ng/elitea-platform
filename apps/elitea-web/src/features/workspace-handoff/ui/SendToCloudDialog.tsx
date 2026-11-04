@@ -9,6 +9,9 @@
  * environment variables you chose to send, the note that the platform can
  * read what is uploaded, then the send with live progress and its Cancel.
  * Refusals show their figures: the caps breakdown, the findings, the quota.
+ * While the thread's turn runs here, the send stops it at its next step and
+ * the cloud continues it; "Take back when done" (on by default then) brings
+ * it back by itself when the cloud run completes (ADR-0045 decision 8).
  */
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
@@ -18,12 +21,14 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import LinearProgress from '@mui/material/LinearProgress';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import type { HandoffEvent, HandoffIpc, HandoffPreview, HandoffSent } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
 import { capsOf, describeHandoffError, describeTooLarge, isCancelled, quotaOf } from '../model/describeHandoffError';
 import { formatBytes } from '../model/format';
@@ -39,6 +44,8 @@ export interface SendToCloudDialogProps {
   ipc: HandoffIpc;
   workspaceId: string;
   conversationUuid: string;
+  /** The thread's title, for the notice when it is taken back by itself. */
+  title?: string;
   /** The thread is in the cloud now. */
   onSent: (sent: HandoffSent) => void;
 }
@@ -75,6 +82,7 @@ function Summary({ preview }: { preview: HandoffPreview }): React.JSX.Element {
 }
 
 const PHASE_LABEL: Record<HandoffEvent['phase'], () => string> = {
+  stopping: () => t('workspace.handoff.phase.stopping', 'Stopping the running turn at its next step'),
   snapshot: () => t('workspace.handoff.phase.snapshot', 'Reading your folder'),
   scan: () => t('workspace.handoff.phase.scan', 'Checking for secrets'),
   bundle: () => t('workspace.handoff.phase.bundle', 'Packing the files'),
@@ -198,14 +206,46 @@ function Body({ state }: { state: SendToCloud }): React.JSX.Element {
       <Included included={preview.included} disabled={busy} onRemove={state.removeInclude} />
       <Excluded preview={preview} disabled={busy} onInclude={state.include} />
       {preview.env !== null && <EnvSection env={preview.env} preview={preview} disabled={busy} onToggle={state.toggleEnv} />}
+      <TakeBackWhenDone state={state} disabled={busy} />
       <SendOutcome state={state} />
     </>
+  );
+}
+
+/** The running turn's note and the "Take back when done" choice. */
+function TakeBackWhenDone({ state, disabled }: { state: SendToCloud; disabled: boolean }): React.JSX.Element {
+  return (
+    <Box sx={sectionSx}>
+      {state.runningTurn && (
+        <Alert severity="info" data-testid="handoff-running-turn">
+          {t('workspace.handoff.runningTurn', 'A turn is running in this thread. Sending stops it at its next step, saves it, and the cloud continues it.')}
+        </Alert>
+      )}
+      <FormControlLabel
+        control={
+          <BaseCheckbox
+            size="small"
+            checked={state.takeBackWhenDone}
+            disabled={disabled}
+            onChange={(event) => state.setTakeBackWhenDone(event.target.checked)}
+          />
+        }
+        label={t('workspace.handoff.takeBackWhenDoneLabel', 'Take back when done: bring the thread back to this computer by itself when the cloud run completes')}
+      />
+    </Box>
   );
 }
 
 /** The send's progress while it runs; afterwards, its cancellation (not an error) or its refusal. */
 function SendOutcome({ state }: { state: SendToCloud }): React.JSX.Element | null {
   const { sending, sendError, progress } = state;
+  if (state.continueRefused !== null) {
+    return (
+      <Alert severity="warning" data-testid="handoff-continue-refused">
+        {state.continueRefused}
+      </Alert>
+    );
+  }
   if (sending) return <Progress event={progress} cancelling={state.cancelling} />;
   if (!present(sendError)) return null;
   if (isCancelled(sendError)) {
@@ -227,26 +267,35 @@ function blocked(state: SendToCloud): boolean {
   return preview.env?.over_limit === true;
 }
 
-export function SendToCloudDialog({ open, onClose, ipc, workspaceId, conversationUuid, onSent }: SendToCloudDialogProps): React.JSX.Element {
-  const state = useSendToCloud(ipc, workspaceId, conversationUuid, onSent);
+export function SendToCloudDialog({ open, onClose, ipc, workspaceId, conversationUuid, title, onSent }: SendToCloudDialogProps): React.JSX.Element {
+  const state = useSendToCloud(ipc, workspaceId, conversationUuid, onSent, title);
   const { sending } = state;
+  // After a completed send (the cloud has the thread) every way out (OK, Escape, the backdrop) reports the send.
+  const close = state.continueRefused !== null ? state.acknowledge : onClose;
   return (
-    <Dialog open={open} onClose={sending ? undefined : onClose} aria-labelledby="handoff-send-title" fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={sending ? undefined : close} aria-labelledby="handoff-send-title" fullWidth maxWidth="sm">
       <DialogTitle id="handoff-send-title">{t('workspace.handoff.sendTitle', 'Send this thread to the cloud')}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Body state={state} />
       </DialogContent>
       <DialogActions>
-        {sending ? (
+        {state.continueRefused !== null ? (
+          // The thread is in the cloud already: only acknowledging is left.
+          <Button variant="contained" onClick={state.acknowledge}>
+            {t('workspace.handoff.ok', 'OK')}
+          </Button>
+        ) : sending ? (
           <Button disabled={state.cancelling} onClick={state.cancel}>
             {t('workspace.handoff.cancel', 'Cancel')}
           </Button>
         ) : (
           <Button onClick={onClose}>{t('workspace.handoff.cancel', 'Cancel')}</Button>
         )}
-        <Button variant="contained" disabled={blocked(state) || sending} onClick={state.send}>
-          {t('workspace.handoff.send', 'Send to cloud')}
-        </Button>
+        {state.continueRefused === null && (
+          <Button variant="contained" disabled={blocked(state) || sending} onClick={state.send}>
+            {t('workspace.handoff.send', 'Send to cloud')}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );

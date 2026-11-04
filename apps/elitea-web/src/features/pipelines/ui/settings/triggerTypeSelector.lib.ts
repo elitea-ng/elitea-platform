@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { load } from 'js-yaml';
 
+import { threadTargetRefusal, type StoredThreadTarget, type ThreadTargetFieldsBody } from '@/entities/thread-target';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { buildErrorMessage } from '@/shared/lib/http-error';
@@ -126,6 +127,8 @@ export interface TriggerListEntry {
   readonly kind: 'schedule' | 'webhook';
   readonly label: string;
   readonly detail: string;
+  /** The stored row: a `workspace_thread` target (ADR-0045 decision 9) shows as "Runs on <thread>". */
+  readonly target?: StoredThreadTarget | undefined;
 }
 
 export function buildTriggerList(args: {
@@ -133,13 +136,15 @@ export function buildTriggerList(args: {
   readonly cron: string | undefined;
   readonly hasWebhook: boolean;
   readonly webhookUrl: string | undefined;
+  readonly scheduleTarget?: StoredThreadTarget | undefined;
+  readonly webhookTarget?: StoredThreadTarget | undefined;
 }): readonly TriggerListEntry[] {
   const entries: TriggerListEntry[] = [];
   if (args.hasSchedule) {
-    entries.push({ kind: 'schedule', label: t('pipelines.triggerTypeSelector.scheduleRow', 'Schedule'), detail: args.cron ?? '' });
+    entries.push({ kind: 'schedule', label: t('pipelines.triggerTypeSelector.scheduleRow', 'Schedule'), detail: args.cron ?? '', target: args.scheduleTarget });
   }
   if (args.hasWebhook) {
-    entries.push({ kind: 'webhook', label: t('pipelines.triggerTypeSelector.webhookRow', 'Webhook'), detail: args.webhookUrl ?? '' });
+    entries.push({ kind: 'webhook', label: t('pipelines.triggerTypeSelector.webhookRow', 'Webhook'), detail: args.webhookUrl ?? '', target: args.webhookTarget });
   }
   return entries;
 }
@@ -176,17 +181,24 @@ export function useAutoResetTriggerOnInteractive(args: {
   }, [hasInteractiveElements, kinds.hasSchedule, kinds.hasWebhook]);
 }
 
+/**
+ * Each handler resolves to the error it caught (already reported through
+ * `onNotifyError`, unless it is a refusal of a thread target, which the
+ * dialog shows on its field), or to undefined.
+ */
 export interface TriggerActions {
   readonly handleTriggerTypeChange: (newType: string) => Promise<void>;
-  readonly handleScheduleSubmit: (cronExpression: string) => Promise<void>;
-  readonly handleDeleteKind: (kind: 'schedule' | 'webhook') => Promise<void>;
+  /** `target`: the `workspace_thread` fields (ADR-0045 decision 9), or `target_kind: pipeline` to clear a stored thread; absent keeps the stored target. */
+  readonly handleScheduleSubmit: (cronExpression: string, target?: ThreadTargetFieldsBody) => Promise<unknown>;
+  readonly handleDeleteKind: (kind: 'schedule' | 'webhook') => Promise<unknown>;
   /**
    * Rotate (or create) the inbound trigger. The MODE travels with it because
    * the backend writes it on this route and nowhere else (#970): a rotate
-   * without one moves a signing trigger back to the bearer mode.
+   * without one moves a signing trigger back to the bearer mode. The target
+   * is written on this route too; absent keeps the stored one.
    */
-  readonly handleRotateWebhook: (mode?: WebhookMode) => Promise<void>;
-  readonly handleRevealWebhook: () => Promise<void>;
+  readonly handleRotateWebhook: (mode?: WebhookMode, target?: ThreadTargetFieldsBody) => Promise<unknown>;
+  readonly handleRevealWebhook: () => Promise<unknown>;
   readonly removeAll: () => Promise<void>;
 }
 
@@ -205,13 +217,17 @@ interface TriggerActionsArgs {
 export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
   const { triggers, kinds, setIsUpdating, setIsScheduleModalOpen, setIsWebhookModalOpen, setRevealedSecret, onNotifySuccess, onNotifyError } = args;
 
+  // `withTarget`: the write carries a thread target, so the dialog shows a
+  // refusal of it on its field, and the toast would only repeat it.
   const run = useCallback(
-    async (action: () => Promise<void>, fallback: string): Promise<void> => {
+    async (action: () => Promise<void>, fallback: string, withTarget = false): Promise<unknown> => {
       try {
         setIsUpdating(true);
         await action();
+        return undefined;
       } catch (error) {
-        onNotifyError?.(pipelineTriggerErrorMessage(error, fallback));
+        if (!withTarget || threadTargetRefusal(error) === undefined) onNotifyError?.(pipelineTriggerErrorMessage(error, fallback));
+        return error;
       } finally {
         setIsUpdating(false);
       }
@@ -220,20 +236,20 @@ export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
   );
 
   const handleScheduleSubmit = useCallback(
-    (cronExpression: string) => run(async () => {
-      await triggers.saveSchedule(cronExpression);
+    (cronExpression: string, target?: ThreadTargetFieldsBody) => run(async () => {
+      await triggers.saveSchedule(cronExpression, target);
       onNotifySuccess?.(t('pipelines.triggerTypeSelector.scheduleConfigured', 'Schedule configured successfully'));
-    }, t('pipelines.triggerTypeSelector.scheduleConfigureFailed', 'Failed to configure schedule')),
+    }, t('pipelines.triggerTypeSelector.scheduleConfigureFailed', 'Failed to configure schedule'), target !== undefined),
     [run, triggers, onNotifySuccess],
   );
 
   const handleRotateWebhook = useCallback(
-    (mode?: WebhookMode) => run(async () => {
-      const rotated = await triggers.rotateWebhook(mode === undefined ? undefined : modeRequest(mode));
+    (mode?: WebhookMode, target?: ThreadTargetFieldsBody) => run(async () => {
+      const rotated = await triggers.rotateWebhook(mode === undefined && target === undefined ? undefined : { ...(mode === undefined ? {} : modeRequest(mode)), ...target });
       setRevealedSecret(rotated.secret);
       setIsWebhookModalOpen(true);
       onNotifySuccess?.(t('pipelines.triggerTypeSelector.webhookConfigured', 'Webhook configured successfully'));
-    }, t('pipelines.triggerTypeSelector.webhookConfigureFailed', 'Failed to configure webhook')),
+    }, t('pipelines.triggerTypeSelector.webhookConfigureFailed', 'Failed to configure webhook'), target !== undefined),
     [run, triggers, setRevealedSecret, setIsWebhookModalOpen, onNotifySuccess],
   );
 

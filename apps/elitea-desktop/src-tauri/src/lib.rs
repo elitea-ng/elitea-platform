@@ -26,6 +26,7 @@ mod history;
 mod hooks;
 mod hooks_commands;
 mod index;
+mod keep_awake;
 mod labels;
 mod local_commands;
 mod logging;
@@ -133,6 +134,8 @@ pub fn run() {
         .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
+        .manage(notices::NoticeFilter::default())
+        .manage(window::QuitGate::default())
         // A (re)loading page is not listening to app://command yet: hold
         // commands until it calls `app_ready`.
         .on_page_load(|webview, payload| {
@@ -361,6 +364,23 @@ pub fn run() {
                 })
                 .map_err(|error| error.message)?,
             );
+            // The computer stays awake while a turn runs, and the tray says
+            // so (ADR-0045 decision 7).
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            agents
+                .keep_awake()
+                .set_backend(Arc::new(keep_awake::OsPower));
+            {
+                let handle = app.handle().clone();
+                agents.keep_awake().set_listener(Arc::new(move |awake| {
+                    if let Some(activity) = handle.try_state::<Arc<activity::Activity>>() {
+                        activity.awake(awake);
+                    }
+                }));
+            }
+            // The turns that ran when the app stopped: an unattended one
+            // continues, any other offers Continue (ADR-0045 decision 7).
+            tauri::async_runtime::spawn(agents.clone().resume_until_settled());
             // The app-wide compaction settings (threshold, idle compaction).
             agents.set_compaction_store(Arc::new(
                 compaction_settings::CompactionSettingsStore::open(data_dir.clone()),
@@ -391,6 +411,9 @@ pub fn run() {
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
             app.manage(handoff::HandoffState(handoff.clone()));
+            // Threads sent with "Take back when done" whose cloud run
+            // completed while the app was off (ADR-0045 decision 8).
+            tauri::async_runtime::spawn(handoff.clone().take_back_loop());
             let doctor_files = SettingsFiles::new(config_dir.clone());
             let history_retention_days = match doctor_files.settings() {
                 Ok(settings) => crate::settings::history_retention_days(&settings),
@@ -479,6 +502,7 @@ pub fn run() {
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
+            local_commands::agent_turn_resume,
             local_commands::agent_turn_status,
             local_commands::agent_turn_steer,
             local_commands::agent_turn_steer_update,
@@ -553,6 +577,7 @@ pub fn run() {
             handoff::handoff_status_many,
             handoff::handoff_settings_get,
             handoff::handoff_settings_set,
+            handoff::handoff_run_finished,
         ])
         .build(tauri::generate_context!());
     let app = match built {
@@ -572,6 +597,20 @@ const EXIT_COMMIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10)
 
 #[allow(clippy::needless_pass_by_value)] // the signature `App::run` takes
 fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    // A quit (the menu, the tray, ⌘Q) with a running turn asks first
+    // (ADR-0045 decision 7); a confirmed one goes through.
+    if let tauri::RunEvent::ExitRequested { api, code, .. } = &event
+        && window::quit_asks(
+            *code,
+            window::running_turns(app),
+            app.try_state::<window::QuitGate>()
+                .is_some_and(|gate| gate.confirmed()),
+        )
+    {
+        api.prevent_exit();
+        window::confirm_quit(app);
+        return;
+    }
     // The history writer commits what it still holds before the process ends.
     if matches!(event, tauri::RunEvent::Exit)
         && let Some(local) = app.try_state::<LocalState>()
@@ -607,6 +646,12 @@ fn on_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
                 "quitting with {pending} local turn commit(s) still running and {failed} failed; \
                  those turns are not in their conversations"
             );
+        }
+        // Again after the wait: the commits that settled in it wrote the
+        // history and the resume records (a chain's end deletes its record,
+        // a continuing commit updates it, ADR-0045 decision 7).
+        if let Some(history) = &local.history {
+            history.flush();
         }
     }
     #[cfg(target_os = "macos")]

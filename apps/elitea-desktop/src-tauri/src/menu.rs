@@ -1,6 +1,6 @@
 //! The native menu bar and its shortcuts (README, "Native features").
 //!
-//! Standard items (Edit's undo/redo/cut/copy/paste/select all, Hide, Quit,
+//! Standard items (Edit's undo/redo/cut/copy/paste/select all, Hide,
 //! Minimize, Close Window) are the OS's own predefined items: they act on
 //! the focused text field, so they keep working everywhere in the webview.
 //! The app's own items either act host-side (Open Folder…, zoom, reload,
@@ -115,7 +115,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             .item(&separator()?)
             .item(&forwarded(app, "settings")?)
             .item(&separator()?)
-            .item(&PredefinedMenuItem::quit(app, Some(&text("quit")))?);
+            .item(&quit_item(app)?);
     }
     let file = file.build()?;
 
@@ -237,7 +237,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 )?)
                 .item(&PredefinedMenuItem::show_all(app, Some(&text("show_all")))?)
                 .item(&separator()?)
-                .item(&PredefinedMenuItem::quit(app, Some(&text("quit")))?)
+                .item(&quit_item(app)?)
                 .build()?,
         );
     }
@@ -247,6 +247,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .map(|m| m as &dyn tauri::menu::IsMenuItem<Wry>)
         .collect();
     Menu::with_items(app, &refs)
+}
+
+/// Quit: the app's own item, not the OS's, so a quit with a running turn
+/// asks first (`window::confirm_quit`, from the run loop's exit request).
+const QUIT: &str = "quit";
+
+fn quit_item(app: &AppHandle) -> tauri::Result<MenuItem<Wry>> {
+    MenuItem::with_id(app, QUIT, text("quit"), true, Some("CmdOrCtrl+Q"))
 }
 
 /// A menu item was chosen.
@@ -269,6 +277,7 @@ pub fn on_event(app: &AppHandle, event: &MenuEvent) {
         }
         ZOOM_IN | ZOOM_OUT | ZOOM_RESET => zoom(app, id),
         HELP => open_help(app),
+        QUIT => app.exit(0),
         RUN_DIAGNOSTICS => {
             app_events::show_main(app);
             app_events::emit_live(app, RUN_DIAGNOSTICS);

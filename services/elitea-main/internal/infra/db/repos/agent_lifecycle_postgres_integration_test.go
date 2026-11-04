@@ -12,6 +12,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -29,7 +30,7 @@ func newLifecycleTestStore(t *testing.T, pool *pgxpool.Pool, policy agentlifecyc
 	}
 	releases, _ := newReleaseTestStores(t, pool)
 	options = append([]AgentLifecycleOption{WithCandidateDigester(releases)}, options...)
-	store, err := NewAgentLifecycle(pool, appender, func(context.Context) (agentlifecycle.Policy, error) {
+	store, err := NewAgentLifecycle(pool, appender, func(context.Context, platformconfig.QueryFunc) (agentlifecycle.Policy, error) {
 		return policy, nil
 	}, options...)
 	if err != nil {
@@ -71,6 +72,55 @@ func requireRefusal(t *testing.T, err error, code string) {
 	refusal, ok := agentlifecycle.AsRefusal(err)
 	if !ok || refusal.Code != code {
 		t.Fatalf("got %v, want the refusal %s", err, code)
+	}
+}
+
+// TestAgentLifecycle_DirectPublishNeedsOneConnection pins the publish
+// deadlock of PR #1567's E2E run: RecordDirectPublishTx read the tier table on
+// the POOL while the publish transaction held a connection, so every direct
+// publish needed two. Four concurrent publishes on elitea-main's default
+// 4-connection pool each held one and waited for another until the clients
+// gave up. On a pool of ONE connection the whole direct publish path (the
+// registry lock and the tier check under it) must still finish: it reads
+// everything on the transaction it was given.
+func TestAgentLifecycle_DirectPublishNeedsOneConnection(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+
+	config := pool.Config()
+	config.MaxConns = 1
+	config.MinConns = 0
+	single, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(single.Close)
+	appender, err := securityaudit.NewPostgresAppender("elitea-main-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The production policy source (ComposeAgentLifecycle's), not a fake that
+	// ignores the querier it is handed.
+	store, err := NewAgentLifecycle(single, appender,
+		func(ctx context.Context, query platformconfig.QueryFunc) (agentlifecycle.Policy, error) {
+			return platformconfig.LoadAgentLifecyclePolicyVia(ctx, query)
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	tx, err := single.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := store.LockRegistryTx(ctx, tx, 1, 31); err != nil {
+		t.Fatalf("lock the registry row: %v", err)
+	}
+	if err := store.RecordDirectPublishTx(ctx, tx, agentlifecycle.DirectPublish{ProjectID: 1, ApplicationID: 31}); err != nil {
+		t.Fatalf("a direct publish on a one-connection pool: %v (a deadline here is the second connection it waited for)", err)
 	}
 }
 

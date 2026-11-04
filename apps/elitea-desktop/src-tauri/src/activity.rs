@@ -100,6 +100,9 @@ pub struct ActivityState {
     approvals: BTreeMap<String, Approval>,
     index: HashMap<String, Progress>,
     sends: HashMap<String, Progress>,
+    /// The OS keeps the computer awake for a running turn
+    /// (`crate::keep_awake`, ADR-0045 decision 7).
+    awake: bool,
 }
 
 fn shown(text: &str, limit: usize) -> String {
@@ -273,6 +276,28 @@ impl ActivityState {
             .and_then(|run| run.workspace_id.clone())
     }
 
+    /// The OS power assertion started (`true`) or ended.
+    pub fn set_awake(&mut self, awake: bool) {
+        self.awake = awake;
+    }
+
+    /// The tray item's tooltip: the title (or the app's name), and the
+    /// keep-awake line while the computer is kept awake.
+    #[must_use]
+    pub fn tooltip(&self, now: Instant) -> String {
+        let title = self.title(now);
+        let base = if title.is_empty() {
+            "Elitea"
+        } else {
+            title.as_str()
+        };
+        if self.awake {
+            format!("{base} · {}", labels::text("activity_awake"))
+        } else {
+            base.to_owned()
+        }
+    }
+
     /// Whether a timer is on screen (so something must re-render each second).
     #[must_use]
     pub fn has_timer(&self) -> bool {
@@ -384,6 +409,9 @@ impl ActivityState {
         if list.is_empty() {
             list.push(Entry::Note(labels::text("activity_nothing")));
         }
+        if self.awake {
+            list.push(Entry::Note(labels::text("activity_awake")));
+        }
         list.extend([Entry::Separator, Entry::Show, Entry::Quit]);
         list
     }
@@ -411,6 +439,7 @@ pub struct Activity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Rendered {
     title: String,
+    tooltip: String,
     dock: Dock,
     entries: Vec<Entry>,
 }
@@ -495,6 +524,12 @@ impl Activity {
         self.changed();
     }
 
+    /// The OS keeps the computer awake (`true`) or no longer does.
+    pub fn awake(&self, awake: bool) {
+        self.state().set_awake(awake);
+        self.changed();
+    }
+
     pub fn index(&self, workspace_id: &str, building: bool, message: Option<&str>) {
         self.state().observe_index(workspace_id, building, message);
         self.changed();
@@ -564,6 +599,7 @@ impl Activity {
             let state = self.state();
             Rendered {
                 title: state.title(Instant::now()),
+                tooltip: state.tooltip(Instant::now()),
                 dock: state.dock(),
                 entries: state.entries(&|turn| names.get(turn).cloned()),
             }
@@ -586,7 +622,7 @@ impl Activity {
         let _ = self.app.run_on_main_thread(move || {
             apply(
                 &app,
-                &now.title,
+                (&now.title, &now.tooltip),
                 now.dock,
                 menu_changed.then_some(&now.entries),
             );
@@ -594,10 +630,15 @@ impl Activity {
     }
 }
 
-fn apply(app: &AppHandle, title: &str, dock: Dock, entries: Option<&Vec<Entry>>) {
+fn apply(
+    app: &AppHandle,
+    (title, tooltip): (&str, &str),
+    dock: Dock,
+    entries: Option<&Vec<Entry>>,
+) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_title((!title.is_empty()).then_some(title));
-        let _ = tray.set_tooltip(Some(if title.is_empty() { "Elitea" } else { title }));
+        let _ = tray.set_tooltip(Some(tooltip));
         if let Some(entries) = entries
             && let Ok(menu) = build_menu(app, entries)
         {
@@ -682,6 +723,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             if id == SHOW {
                 app_events::show_main(app);
             } else if id == QUIT {
+                // A running turn asks first (`window::confirm_quit`).
                 app.exit(0);
             } else if let Some(turn) = turn_of(id) {
                 focus_turn(app, turn);
@@ -974,6 +1016,21 @@ mod tests {
             .filter(|e| matches!(e, Entry::Turn { .. }))
             .count();
         assert_eq!(turns, MAX_ENTRIES);
+    }
+
+    #[test]
+    fn the_tray_says_when_it_keeps_the_computer_awake() {
+        let t0 = Instant::now();
+        let mut state = ActivityState::default();
+        assert_eq!(state.tooltip(t0), "Elitea");
+        state.observe_agent(&running("t1"), t0);
+        state.set_awake(true);
+        let awake = Entry::Note("Keeping the computer awake".into());
+        assert!(state.entries(&names).contains(&awake));
+        assert_eq!(state.tooltip(t0), "◐ 0:00 · Keeping the computer awake");
+        state.set_awake(false);
+        assert!(!state.entries(&names).contains(&awake));
+        assert_eq!(state.tooltip(t0), "◐ 0:00");
     }
 
     #[test]

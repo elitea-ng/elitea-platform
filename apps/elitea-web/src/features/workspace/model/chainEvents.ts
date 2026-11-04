@@ -12,12 +12,14 @@ import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
-export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'>;
+export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'> | EventOf<'resume_offered'>;
 
 /** The part of a turn's view that the chain sets. */
 export interface ChainView {
   /** The host started this turn by itself: the n-th continuation of the chain (from 1). */
   continuation?: number;
+  /** The host started this turn after an app restart (link kind `resume`). */
+  resumed?: true;
   /** The grant the turn runs under (the first `running` of an unattended turn). */
   unattended?: Omit<UnattendedGrant, 'chain'> & { grant_id: string };
   /** The host continued this turn in `nextTurnId` by itself: the person does not click Continue. */
@@ -31,7 +33,8 @@ export interface ChainView {
 }
 
 export function isChainEvent(event: AgentEvent): event is ChainEvent {
-  return event.kind === 'turn_continued' || event.kind === 'chain_ended' || event.kind === 'run_brief' || event.kind === 'goal_checked';
+  const kinds: readonly AgentEvent['kind'][] = ['turn_continued', 'chain_ended', 'run_brief', 'goal_checked', 'resume_offered'];
+  return kinds.includes(event.kind);
 }
 
 export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent): V {
@@ -53,6 +56,9 @@ export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent)
       const { next_turn_id: nextTurnId, continuation_index: index, kind } = event.payload;
       return { ...view, continuedTo: { nextTurnId, index, ...(kind === undefined ? {} : { kind }) } };
     }
+    // On a recorded turn: the page offers Continue (`resumeEvents.ts`); the view does not change.
+    case 'resume_offered':
+      return view;
   }
 }
 
@@ -69,6 +75,7 @@ export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true 
 export function withChainStatus<V extends ChainView>(view: V, payload: EventOf<'status'>['payload']): V {
   let next = view;
   if (payload.continued_automatically === true) next = { ...next, continuation: payload.continuation_index ?? 1 };
+  if (payload.continued_automatically === true && payload.continuation_kind === 'resume') next = { ...next, resumed: true };
   if (payload.unattended !== undefined) next = { ...next, unattended: payload.unattended };
   return next;
 }

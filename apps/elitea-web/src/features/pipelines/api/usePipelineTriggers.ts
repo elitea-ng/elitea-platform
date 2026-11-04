@@ -45,6 +45,7 @@ import {
   useGetPipelineInboundTrigger,
   useGetPipelineSchedule,
 } from '@/shared/api/generated/applications/applications';
+import type { ThreadTargetFieldsBody } from '@/entities/thread-target';
 import type { PipelineInboundTrigger, PipelineInboundTriggerModeRequest, PipelineSchedule } from '@/shared/api/generated/model';
 
 export interface UsePipelineTriggersResult {
@@ -53,8 +54,12 @@ export interface UsePipelineTriggersResult {
   /** The inbound trigger WITHOUT its secret — the plain read never carries one. */
   readonly webhook: PipelineInboundTrigger | undefined;
   readonly isFetching: boolean;
-  /** Create or replace the schedule. The caller becomes its author. */
-  readonly saveSchedule: (cron: string) => Promise<void>;
+  /**
+   * Create or replace the schedule. The caller becomes its author. `target`
+   * names the `workspace_thread` target or clears it; absent keeps the stored
+   * target (ADR-0045 decision 9).
+   */
+  readonly saveSchedule: (cron: string, target?: ThreadTargetFieldsBody) => Promise<void>;
   readonly removeSchedule: () => Promise<void>;
   /**
    * Create the trigger, or rotate an existing one. Answers WITH the new
@@ -125,9 +130,9 @@ export function usePipelineTriggers(projectId: string | undefined, versionId: nu
   );
 
   const saveSchedule = useCallback(
-    async (cron: string): Promise<void> => {
+    async (cron: string, threadTarget?: ThreadTargetFieldsBody): Promise<void> => {
       const target = requireScope();
-      await savePipelineSchedule(target.projectId, target.versionId, { cron, active: true });
+      await savePipelineSchedule(target.projectId, target.versionId, { cron, active: true, ...threadTarget });
       await invalidate(target, 'schedule');
     },
     [requireScope, invalidate],

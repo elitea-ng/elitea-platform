@@ -6,6 +6,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useGetApplication } from '@/shared/api/generated/applications/applications';
+import { ThreadTargetLine, type StoredThreadTarget } from '@/entities/thread-target';
 import type { ApplicationDetail } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
@@ -129,10 +130,12 @@ function ScheduleRows({ schedule }: { readonly schedule: ScheduleTriggerDetails 
 interface PipelineTriggerRowsProps {
   readonly triggerType: string | null | undefined;
   readonly schedule: ScheduleTriggerDetails;
+  readonly projectId?: string | undefined;
+  readonly target?: StoredThreadTarget | undefined;
 }
 
 /** The trigger-type/schedule/webhook-type rows — split out of `ApplicationInformation` purely to stay under the §3.5 complexity budget (12); no behaviour change from having them inline. */
-function PipelineTriggerRows({ triggerType, schedule }: PipelineTriggerRowsProps): ReactNode {
+function PipelineTriggerRows({ triggerType, schedule, projectId, target }: PipelineTriggerRowsProps): ReactNode {
   if (triggerType === undefined || triggerType === null) return null;
   return (
     <>
@@ -140,6 +143,7 @@ function PipelineTriggerRows({ triggerType, schedule }: PipelineTriggerRowsProps
         <Typography variant="bodyMedium">{t('agents.applicationInformation.triggerLabel', 'Trigger:')}</Typography>
         <Typography variant="bodyMedium">{TRIGGER_TYPE_LABELS[triggerType] ?? triggerType}</Typography>
       </Box>
+      <ThreadTargetLine projectId={projectId} target={target} testId="application-information-thread" />
       {triggerType === 'schedule' && <ScheduleRows schedule={schedule} />}
       {triggerType === 'webhook' && schedule.webhookType !== undefined && (
         <Box sx={pipelineLinkSx}>
@@ -203,6 +207,8 @@ interface ApplicationInformationRowsProps {
   readonly isPipeline: boolean;
   readonly triggerType: string | null | undefined;
   readonly schedule: ScheduleTriggerDetails;
+  /** The project and the trigger's row: a `workspace_thread` target shows as "Runs on <thread>". */
+  readonly triggerThread: { readonly projectId: string | undefined; readonly target: StoredThreadTarget | undefined };
   readonly isForked: boolean;
   readonly originalApplicationName: string | undefined;
   readonly forkedApplicationError: unknown;
@@ -218,6 +224,7 @@ function ApplicationInformationRows({
   isPipeline,
   triggerType,
   schedule,
+  triggerThread,
   isForked,
   originalApplicationName,
   forkedApplicationError,
@@ -240,7 +247,7 @@ function ApplicationInformationRows({
         />
       )}
       {isPipeline && (
-        <PipelineTriggerRows triggerType={triggerType} schedule={schedule} />
+        <PipelineTriggerRows triggerType={triggerType} schedule={schedule} projectId={triggerThread.projectId} target={triggerThread.target} />
       )}
       {isForked && <ForkedFromRow originalApplicationName={originalApplicationName} error={forkedApplicationError} />}
       {showPipeline && <PipelineShowRow onShow={onShowPipeline} />}
@@ -329,6 +336,7 @@ export function ApplicationInformation({
       isPipeline={isPipeline}
       triggerType={trigger.type}
       schedule={scheduleDetails}
+      triggerThread={{ projectId, target: trigger.target }}
       isForked={isForked}
       originalApplicationName={forkedApplication.name}
       forkedApplicationError={forkedApplication.error}

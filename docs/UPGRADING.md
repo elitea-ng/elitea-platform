@@ -4,6 +4,100 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Schedules and webhooks on a handed-off workspace (#1440, ADR-0045 decision 9)
+
+New tenant migration `0159_workspace_thread_targets`. It adds the columns
+`target_kind` (default `pipeline`), `target_conversation_uuid`,
+`target_prompt` and `target_grant` to `pipeline_schedules`, and the last
+three and `last_execution_id` to `pipeline_triggers`. The trigger's
+`target_kind` check admits `workspace_thread`, and the schedule's
+`last_result` check admits `skipped_thread_busy`. The migration only adds
+objects. An existing schedule or trigger keeps its kind.
+
+Client contract 1.34: `savePipelineSchedule` and
+`rotatePipelineInboundTrigger` take `target_kind: workspace_thread` with
+`conversation_uuid`, `prompt` and an optional `grant` (the `continue` and
+`chain` parts and `goal_check`; `sensitive_tools`, `hook_asks` and
+`remote_confirmations` answer 422 `unattended_grant_refused`). The save
+answers 404 for a conversation that is not in the project or not the
+caller's, and 422 `not_handed_off` for one never sent to the cloud. The
+reads add the same fields, and the trigger read adds `last_execution_id`.
+An occurrence on a thread that is not idle in the cloud records
+`skipped_thread_busy`, and a webhook call answers 409 `thread_busy`.
+
+A new question on a handed-off thread now takes a share lock on the
+thread's handoff row in the admission transaction and checks CLOUD_IDLE
+again. A posted message and an occurrence cannot both start a turn. No
+setting and no operator action. A deployment without the cloud executor
+answers 503 to a `workspace_thread` save.
+
+## Send and continue, take back when done (#1439, ADR-0045 decision 8)
+
+New shared migration `0224_handoff_take_back_when_done`. It adds the column
+`take_back_when_done` (boolean, default false) to
+`elitea_runtime.workspace_handoffs`, and the link kind `handoff` to
+`elitea_runtime.run_chain_links`. The migration only adds objects. An
+existing handoff keeps false.
+
+Client contract 1.33: the complete of a send (`completeWorkspaceHandoff`)
+takes `take_back_when_done` and `continue` (`prompt`, `mode`, `grant`).
+With `continue`, Main completes the send, writes the person's message and
+starts the cloud turn in one transaction, and answers `continued`. A
+refused grant or chain answers 422 `unattended_grant_refused`, 409
+`chain_limit_reached` or 409 `chain_ended`, and the send stays
+HANDING_OFF. A `continue` in mode `plan` answers 422 `continue_refused`
+(`reason` `mode`, `field` `mode`): a cloud turn has no plan mode. A
+complete without `continue` may name `stopped_chain_root_execution_id`, the
+chain of the local turn the desktop stopped for the send: Main ends that
+chain as `waiting` (origin `cloud`) in the same transaction, instead of the
+chain sweep ending it later as `failed`. The state (`getWorkspaceHandoff`)
+adds `take_back_when_done` and `last_cloud_run`; `last_cloud_run` is read
+only for a handoff with `take_back_when_done` (null otherwise).
+
+A grant that names the chain of the running desktop turn continues that
+chain in the cloud. Its limits count across the desktop and the cloud, and
+its `run_finished` notification names `origin` `cloud`. Main never takes a
+thread back by itself: the owner's desktop takes it back. No setting and no
+operator action.
+
+## Run finished notifications and web push (#1437, ADR-0045 decisions 5 and 6)
+
+New shared migration `0223_web_push`. It adds the table
+`centry.push_subscriptions`, the tables `elitea_runtime.web_push_queue` and
+`elitea_runtime.web_push_deliveries`, and an `AFTER INSERT` trigger
+`web_push_enqueue` on `centry.notifications`. The migration only adds
+objects. The trigger queues new `run_finished` and `agent_approval_required`
+rows of users with a subscription, so Main does not send old notifications.
+Every replica of Main sends; each claims different deliveries.
+
+New notification type `run_finished`. Main writes one row when a chain
+ends, or when a schedule, webhook or handed-off cloud run settles. A
+cancelled run and a short completed run without a continuation get no row.
+
+New Configuration section **Notifications** with the switch `web_push`
+(default on). Client contract 1.32: the operations `getPushConfig`,
+`createPushSubscription` and `deletePushSubscription`.
+
+**VAPID key.** At first boot, Main makes one P-256 key for the install. Main
+keeps it in the global vault as the hidden secret
+`web_push_vapid_private_key`. Do not copy this secret to a different install.
+Do not delete it: a new key stops all stored subscriptions. Without a vault,
+web push is off and Main starts as usual.
+
+**Contact.** Set `ELITEA_WEB_PUSH_SUBJECT` to a `mailto:` address or an
+`https:` URL. When it is empty, Main uses `PUBLIC_BASE_URL` if it is `https`.
+With neither, web push is off.
+
+**Egress.** Main sends to the push service of each browser. Allow HTTPS to
+these hosts: `fcm.googleapis.com`, `updates.push.services.mozilla.com`,
+`web.push.apple.com` and `*.notify.windows.com`. Main uses `HTTPS_PROXY`
+and `NO_PROXY` when you set them. Without a proxy, Main connects directly and
+refuses private and reserved addresses. When Main cannot reach a push
+service, it tries again for at most 24 hours, then drops the send. When a
+push service refuses the key (401 or 403), Main drops that send without a
+retry; after three refusals in a row a subscription is removed, and that
+browser must turn web push on again. The bell is not affected.
+
 ## Run brief and goal check (#1564, ADR-0045 decision 11)
 
 New shared migration `0222_run_brief_goal_check`. It adds the columns

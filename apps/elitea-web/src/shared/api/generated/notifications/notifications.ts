@@ -66,6 +66,10 @@ import type {
   NotificationBulkSeenRequest,
   NotificationErrorResponse,
   NotificationListing,
+  PushConfig,
+  PushSubscriptionDeleteRequest,
+  PushSubscriptionRequest,
+  PushSubscriptionSaved,
   StreamNotificationEventsParams,
   SyncCursorError,
   SyncCursorExpiredResponse,
@@ -1809,6 +1813,831 @@ export function useStreamNotificationEvents<
   const queryOptions = getStreamNotificationEventsQueryOptions(
     projectId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPushConfigResponse200 = {
+  data: PushConfig;
+  status: 200;
+};
+
+export type getPushConfigResponse400 = {
+  data: InvalidClientVersionError;
+  status: 400;
+};
+
+export type getPushConfigResponse401 = {
+  data: NotificationErrorResponse;
+  status: 401;
+};
+
+export type getPushConfigResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getPushConfigResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type getPushConfigResponseSuccess = getPushConfigResponse200 & {
+  headers: Headers;
+};
+export type getPushConfigResponseError = (
+  | getPushConfigResponse400
+  | getPushConfigResponse401
+  | getPushConfigResponse403
+  | getPushConfigResponse426
+) & {
+  headers: Headers;
+};
+
+export type getPushConfigResponse =
+  getPushConfigResponseSuccess | getPushConfigResponseError;
+
+export const getGetPushConfigUrl = (projectId: string) => {
+  return `/notifications/push_config/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.32 (ADR-0045 decision 6). `enabled` is false when
+ * the administrator switch `notifications.web_push` is off, when the
+ * install has no VAPID key (no vault) or when no contact for the push
+ * services is set. `public_key` is the install's VAPID public key (the
+ * `applicationServerKey`), base64url without padding, an uncompressed
+ * P-256 point; it is empty when there is no key. The project in the path
+ * is the permission scope only: subscriptions belong to the caller.
+ * @summary Whether this browser can opt in to web push, and the key to subscribe with
+ */
+export const getPushConfig = async (
+  projectId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPushConfigResponse> => {
+  return eliteaFetch<getPushConfigResponse>(getGetPushConfigUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPushConfigQueryKey = (projectId: string) => {
+  return [`/notifications/push_config/prompt_lib/${projectId}`] as const;
+};
+
+export const getGetPushConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPushConfig>>,
+  TError =
+    | InvalidClientVersionError
+    | NotificationErrorResponse
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getPushConfig>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPushConfigQueryKey(projectId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getPushConfig>>> = ({
+    signal,
+  }) => getPushConfig(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPushConfig>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPushConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPushConfig>>
+>;
+export type GetPushConfigQueryError =
+  | InvalidClientVersionError
+  | NotificationErrorResponse
+  | N403Response
+  | ClientUpgradeRequiredResponse;
+
+export function useGetPushConfig<
+  TData = Awaited<ReturnType<typeof getPushConfig>>,
+  TError =
+    | InvalidClientVersionError
+    | NotificationErrorResponse
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getPushConfig>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPushConfig>>,
+          TError,
+          Awaited<ReturnType<typeof getPushConfig>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPushConfig<
+  TData = Awaited<ReturnType<typeof getPushConfig>>,
+  TError =
+    | InvalidClientVersionError
+    | NotificationErrorResponse
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getPushConfig>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPushConfig>>,
+          TError,
+          Awaited<ReturnType<typeof getPushConfig>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPushConfig<
+  TData = Awaited<ReturnType<typeof getPushConfig>>,
+  TError =
+    | InvalidClientVersionError
+    | NotificationErrorResponse
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getPushConfig>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Whether this browser can opt in to web push, and the key to subscribe with
+ */
+
+export function useGetPushConfig<
+  TData = Awaited<ReturnType<typeof getPushConfig>>,
+  TError =
+    | InvalidClientVersionError
+    | NotificationErrorResponse
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getPushConfig>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPushConfigQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createPushSubscriptionResponse200 = {
+  data: PushSubscriptionSaved;
+  status: 200;
+};
+
+export type createPushSubscriptionResponse201 = {
+  data: PushSubscriptionSaved;
+  status: 201;
+};
+
+export type createPushSubscriptionResponse400 = {
+  data: NotificationErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type createPushSubscriptionResponse401 = {
+  data: NotificationErrorResponse;
+  status: 401;
+};
+
+export type createPushSubscriptionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createPushSubscriptionResponse409 = {
+  data: NotificationErrorResponse;
+  status: 409;
+};
+
+export type createPushSubscriptionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type createPushSubscriptionResponse500 = {
+  data: NotificationErrorResponse;
+  status: 500;
+};
+
+export type createPushSubscriptionResponseSuccess = (
+  createPushSubscriptionResponse200 | createPushSubscriptionResponse201
+) & {
+  headers: Headers;
+};
+export type createPushSubscriptionResponseError = (
+  | createPushSubscriptionResponse400
+  | createPushSubscriptionResponse401
+  | createPushSubscriptionResponse403
+  | createPushSubscriptionResponse409
+  | createPushSubscriptionResponse426
+  | createPushSubscriptionResponse500
+) & {
+  headers: Headers;
+};
+
+export type createPushSubscriptionResponse =
+  createPushSubscriptionResponseSuccess | createPushSubscriptionResponseError;
+
+export const getCreatePushSubscriptionUrl = (projectId: string) => {
+  return `/notifications/push_subscriptions/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.32 (ADR-0045 decision 6). The body is the browser's
+ * `PushSubscription.toJSON()`. Idempotent on the endpoint: the same
+ * endpoint keeps its row and gets the new keys (200 with the same id).
+ * A new endpoint is 201; an endpoint that another user saved moves to
+ * the caller (one browser, one subscription). A person keeps at most 10
+ * subscriptions: the 11th replaces the one with the oldest last
+ * success. The endpoint must be an https URL of at most 2 KiB that is
+ * not a private or reserved address (400 `push_endpoint_refused`). 409
+ * `web_push_disabled` while push_config answers enabled false.
+ * @summary Save this browser's web push subscription
+ */
+export const createPushSubscription = async (
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createPushSubscriptionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createPushSubscriptionResponse>(
+    getCreatePushSubscriptionUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pushSubscriptionRequest),
+    },
+  );
+};
+
+export const getCreatePushSubscriptionQueryKey = (
+  projectId: string,
+  pushSubscriptionRequest?: PushSubscriptionRequest,
+) => {
+  return [
+    "POST",
+    `/notifications/push_subscriptions/prompt_lib/${projectId}`,
+    pushSubscriptionRequest,
+  ] as const;
+};
+
+export const getCreatePushSubscriptionQueryOptions = <
+  TData = Awaited<ReturnType<typeof createPushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreatePushSubscriptionQueryKey(projectId, pushSubscriptionRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createPushSubscription>>
+  > = ({ signal }) =>
+    createPushSubscription(projectId, pushSubscriptionRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createPushSubscription>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreatePushSubscriptionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createPushSubscription>>
+>;
+export type CreatePushSubscriptionQueryError =
+  | NotificationErrorResponse
+  | InvalidClientVersionError
+  | N403Response
+  | ClientUpgradeRequiredResponse;
+
+export function useCreatePushSubscription<
+  TData = Awaited<ReturnType<typeof createPushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPushSubscription>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createPushSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof createPushSubscription>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreatePushSubscription<
+  TData = Awaited<ReturnType<typeof createPushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPushSubscription>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createPushSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof createPushSubscription>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreatePushSubscription<
+  TData = Awaited<ReturnType<typeof createPushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Save this browser's web push subscription
+ */
+
+export function useCreatePushSubscription<
+  TData = Awaited<ReturnType<typeof createPushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionRequest: PushSubscriptionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createPushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreatePushSubscriptionQueryOptions(
+    projectId,
+    pushSubscriptionRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deletePushSubscriptionResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deletePushSubscriptionResponse400 = {
+  data: NotificationErrorResponse | InvalidClientVersionError;
+  status: 400;
+};
+
+export type deletePushSubscriptionResponse401 = {
+  data: NotificationErrorResponse;
+  status: 401;
+};
+
+export type deletePushSubscriptionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deletePushSubscriptionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type deletePushSubscriptionResponse500 = {
+  data: NotificationErrorResponse;
+  status: 500;
+};
+
+export type deletePushSubscriptionResponseSuccess =
+  deletePushSubscriptionResponse204 & {
+    headers: Headers;
+  };
+export type deletePushSubscriptionResponseError = (
+  | deletePushSubscriptionResponse400
+  | deletePushSubscriptionResponse401
+  | deletePushSubscriptionResponse403
+  | deletePushSubscriptionResponse426
+  | deletePushSubscriptionResponse500
+) & {
+  headers: Headers;
+};
+
+export type deletePushSubscriptionResponse =
+  deletePushSubscriptionResponseSuccess | deletePushSubscriptionResponseError;
+
+export const getDeletePushSubscriptionUrl = (projectId: string) => {
+  return `/notifications/push_subscriptions/prompt_lib/${projectId}`;
+};
+
+/**
+ * Client contract 1.32 (ADR-0045 decision 6). Removes the caller's
+ * subscription of the endpoint. 204 also when there is none.
+ * @summary Remove this browser's web push subscription
+ */
+export const deletePushSubscription = async (
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deletePushSubscriptionResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<deletePushSubscriptionResponse>(
+    getDeletePushSubscriptionUrl(projectId),
+    {
+      ...options,
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(pushSubscriptionDeleteRequest),
+    },
+  );
+};
+
+export const getDeletePushSubscriptionQueryKey = (
+  projectId: string,
+  pushSubscriptionDeleteRequest?: PushSubscriptionDeleteRequest,
+) => {
+  return [
+    "DELETE",
+    `/notifications/push_subscriptions/prompt_lib/${projectId}`,
+    pushSubscriptionDeleteRequest,
+  ] as const;
+};
+
+export const getDeletePushSubscriptionQueryOptions = <
+  TData = Awaited<ReturnType<typeof deletePushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeletePushSubscriptionQueryKey(projectId, pushSubscriptionDeleteRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deletePushSubscription>>
+  > = ({ signal }) =>
+    deletePushSubscription(projectId, pushSubscriptionDeleteRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deletePushSubscription>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeletePushSubscriptionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deletePushSubscription>>
+>;
+export type DeletePushSubscriptionQueryError =
+  | NotificationErrorResponse
+  | InvalidClientVersionError
+  | N403Response
+  | ClientUpgradeRequiredResponse;
+
+export function useDeletePushSubscription<
+  TData = Awaited<ReturnType<typeof deletePushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePushSubscription>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePushSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof deletePushSubscription>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePushSubscription<
+  TData = Awaited<ReturnType<typeof deletePushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePushSubscription>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deletePushSubscription>>,
+          TError,
+          Awaited<ReturnType<typeof deletePushSubscription>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeletePushSubscription<
+  TData = Awaited<ReturnType<typeof deletePushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove this browser's web push subscription
+ */
+
+export function useDeletePushSubscription<
+  TData = Awaited<ReturnType<typeof deletePushSubscription>>,
+  TError =
+    | NotificationErrorResponse
+    | InvalidClientVersionError
+    | N403Response
+    | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  pushSubscriptionDeleteRequest: PushSubscriptionDeleteRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deletePushSubscription>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeletePushSubscriptionQueryOptions(
+    projectId,
+    pushSubscriptionDeleteRequest,
     options,
   );
 

@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
 
 export const PipelineInboundTrigger = zod
   .object({
@@ -112,13 +113,32 @@ export const PipelineInboundTrigger = zod
       .string()
       .optional()
       .describe(
-        "`pipeline` or `agent`: the kind of version the credential was issued for. An inbound call is refused with the one 401 when the version is now of the other kind, because a version update can change `agent_type`. A create or a rotation records the current kind.\n",
+        "`pipeline` or `agent`: the kind of version the credential was issued for. An inbound call is refused with the one 401 when the version is now of the other kind, because a version update can change `agent_type`. A create or a rotation records the current kind. Client contract 1.34: `workspace_thread` when each call starts a cloud turn on a handed-off Local work thread (`conversation_uuid`) in place of a run of the version. The version stays the anchor of the setting and of its mandate.\n",
+      ),
+    conversation_uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.34. `workspace_thread` only: the handed-off Local work thread each occurrence starts a cloud turn on.\n",
+      ),
+    prompt: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. `workspace_thread` only: the message each occurrence starts the turn with.\n",
+      ),
+    grant: ChatUnattendedRequest.optional(),
+    last_execution_id: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. The execution the last admitted call started. Its outcome comes as the `run_finished` notification.\n",
       ),
     events: zod
       .array(zod.string())
       .optional()
       .describe(
-        "The provider events this trigger admits, read from `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event. A new GitHub or GitLab trigger on an AGENT version admits only push and pull or merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no run. The event header is not signed, so this is a cost control, not an authentication step.\n",
+        "The provider events this trigger admits, read from `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event. A new GitHub or GitLab trigger on an AGENT version, or with `target_kind: workspace_thread`, admits only push and pull or merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no run. The event header is not signed, so this is a cost control, not an authentication step.\n",
       ),
     allow_variable_overrides: zod
       .boolean()

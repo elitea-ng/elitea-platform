@@ -36,6 +36,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -59,8 +60,15 @@ type CandidateDigester interface {
 }
 
 // PolicySource reads the platform's tier table (the agent_lifecycle
-// Configuration section).
-type PolicySource func(ctx context.Context) (agentlifecycle.Policy, error)
+// Configuration section) through query.
+//
+// query is the store's querier of the moment: the transaction when the read
+// runs under the registry row's lock. It used to read on the pool, which
+// took a SECOND connection while the transaction held one. N concurrent
+// direct publishes on a pool of N connections then each held one and waited
+// for another, and elitea-main stopped answering until a client gave up
+// (the publish journeys on a 4-connection CI pool, 4 workers).
+type PolicySource func(ctx context.Context, query platformconfig.QueryFunc) (agentlifecycle.Policy, error)
 
 // AgentLifecycle stores the registry, change requests and attestations.
 type AgentLifecycle struct {
@@ -249,8 +257,12 @@ ON CONFLICT (tenant_project_id, application_id) DO NOTHING`, projectID, applicat
 	return savepoint.Commit(ctx)
 }
 
-func (s *AgentLifecycle) currentPolicy(ctx context.Context) (agentlifecycle.Policy, error) {
-	policy, err := s.policy(ctx)
+// currentPolicy reads the tier table through q: the caller's transaction
+// when it holds one (never the pool inside a transaction: see PolicySource).
+func (s *AgentLifecycle) currentPolicy(ctx context.Context, q lifecycleQuerier) (agentlifecycle.Policy, error) {
+	policy, err := s.policy(ctx, func(ctx context.Context, sql string, args ...any) (platformconfig.Rows, error) {
+		return q.Query(ctx, sql, args...)
+	})
 	if err != nil {
 		return agentlifecycle.Policy{}, fmt.Errorf("agent lifecycle: read the tier table: %w", err)
 	}
@@ -498,7 +510,7 @@ func (s *AgentLifecycle) applyTierCadence(ctx context.Context, tx pgx.Tx, regist
 	if registry.State == agentlifecycle.StateUncertified || registry.CertifiedAt == nil {
 		return nil, nil
 	}
-	policy, err := s.currentPolicy(ctx)
+	policy, err := s.currentPolicy(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -702,11 +714,11 @@ func (s *AgentLifecycle) CheckDirectPublish(ctx context.Context, projectID, appl
 	if err != nil {
 		return err
 	}
-	return s.directPublishAllowed(ctx, registry)
+	return s.directPublishAllowed(ctx, s.pool, registry)
 }
 
-func (s *AgentLifecycle) directPublishAllowed(ctx context.Context, registry agentlifecycle.Registry) error {
-	policy, err := s.currentPolicy(ctx)
+func (s *AgentLifecycle) directPublishAllowed(ctx context.Context, q lifecycleQuerier, registry agentlifecycle.Registry) error {
+	policy, err := s.currentPolicy(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -736,7 +748,7 @@ func (s *AgentLifecycle) RecordDirectPublishTx(ctx context.Context, tx pgx.Tx, p
 	if err != nil {
 		return err
 	}
-	if err := s.directPublishAllowed(ctx, registry); err != nil {
+	if err := s.directPublishAllowed(ctx, tx, registry); err != nil {
 		return err
 	}
 	if publish.ReleaseID <= 0 {
@@ -946,7 +958,7 @@ func (s *AgentLifecycle) CreateChangeRequest(ctx context.Context, request agentl
 		if err != nil {
 			return err
 		}
-		policy, err := s.currentPolicy(ctx)
+		policy, err := s.currentPolicy(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -1097,7 +1109,7 @@ func (s *AgentLifecycle) SubmitChangeRequest(ctx context.Context, projectID, app
 		if !agentlifecycle.CanMove(current.State, agentlifecycle.ChangeSubmitted) {
 			return agentlifecycle.Refuse(agentlifecycle.StateConflictCode, "Only a draft change request can be submitted.")
 		}
-		policy, err := s.currentPolicy(ctx)
+		policy, err := s.currentPolicy(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -1241,7 +1253,7 @@ func (s *AgentLifecycle) ApproveChangeRequest(ctx context.Context, approval Appr
 		if err := s.checkFresh(ctx, tx, change); err != nil {
 			return err
 		}
-		policy, err := s.currentPolicy(ctx)
+		policy, err := s.currentPolicy(ctx, tx)
 		if err != nil {
 			return err
 		}

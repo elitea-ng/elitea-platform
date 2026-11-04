@@ -25,6 +25,7 @@ import {
 
 import { waitsForNextTurn } from './chainEvents';
 import { describeWorkspaceError } from './describeWorkspaceError';
+import { offersResume } from './resumeEvents';
 import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
 
 export interface WorkspaceTurn {
@@ -47,6 +48,8 @@ export interface WorkspaceTurn {
    * the platform refused because grants are off).
    */
   start(request: TurnStartRequest, retry?: StartRetry): Promise<boolean>;
+  /** Continue a recorded turn that ran when the app stopped (ADR-0045 decision 7); resolves like `start`. */
+  resume(turnId: string): Promise<boolean>;
   /** Let the host read ahead for a turn to this agent (fire and forget: a failure only means the turn reads it itself). */
   prewarm(request: TurnPrewarmRequest): void;
   /** Send a turn's failed commit again; a refusal comes back as another `commit_failed` on the turn. */
@@ -58,6 +61,10 @@ export interface WorkspaceTurn {
   clear(): void;
   /** Take over a turn still running from an earlier visit (its recorded events), so its live events, Stop and `done` land here. */
   adopt(turnId: string, events: readonly AgentEvent[]): void;
+  /** The thread's recorded turns: a host resume of one after a restart becomes the active turn (ADR-0045 decision 7). */
+  watch: (turnIds: readonly string[]) => void;
+  /** Whether the recorded turn offers Continue now (`resumable` as read, or offered since; not continued yet). */
+  offersResume: (turnId: string, resumable: boolean) => boolean;
 }
 
 /** Reads a refused start (`code`, `message`); a request to send once instead, or undefined to keep the refusal. */
@@ -116,6 +123,25 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
           return ipc.startTurn(again);
         });
         dispatch({ type: 'begin', turnId: started.turn_id });
+        return true;
+      } catch (error) {
+        setRefusal(toRefusal(error));
+        return false;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [ipc],
+  );
+
+  const resume = useCallback(
+    async (stopped: string): Promise<boolean> => {
+      setRefusal(null);
+      setStarting(true);
+      try {
+        await ready.current;
+        const started = await ipc.resumeTurn(stopped);
+        dispatch({ type: 'begin', turnId: started.turn_id, resumedFrom: stopped });
         return true;
       } catch (error) {
         setRefusal(toRefusal(error));
@@ -189,6 +215,9 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
   }, [busy]);
 
   const adopt = useCallback((adopted: string, events: readonly AgentEvent[]) => dispatch({ type: 'adopt', turnId: adopted, events }), []);
+  const watch = useCallback((turnIds: readonly string[]) => dispatch({ type: 'watch', turnIds }), []);
+  const { resumes } = state;
+  const offers = useCallback((recorded: string, resumable: boolean) => offersResume(resumes, recorded, resumable), [resumes]);
 
   const prewarm = useCallback(
     (request: TurnPrewarmRequest) => {
@@ -218,5 +247,5 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     [ipc],
   );
 
-  return { view, turnId, earlier, busy, startError: refusal?.message ?? null, startErrorCode: refusal?.code ?? null, start, prewarm, retryCommit, cancel, answer, clear, adopt };
+  return { view, turnId, earlier, busy, startError: refusal?.message ?? null, startErrorCode: refusal?.code ?? null, start, resume, prewarm, retryCommit, cancel, answer, clear, adopt, watch, offersResume: offers };
 }

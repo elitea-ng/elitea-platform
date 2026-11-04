@@ -10,6 +10,12 @@
  * The host's preview already honours `leave_on_laptop` (a file left behind
  * and its findings are gone from it); the only findings merged in here are a
  * `secret_found` rejection's, de-duplicated against the preview's.
+ *
+ * While the thread's own turn runs (the preview's `running_turn`), Send
+ * stops it at its next step boundary and the cloud continues it (ADR-0045
+ * decision 8); "Take back when done" is then on by default. A grant the
+ * server refused is not a failure: the thread is in the cloud, and the
+ * dialog says why it waits there before it closes.
  */
 import { useEffect, useMemo, useState } from 'react';
 
@@ -46,6 +52,15 @@ export interface SendToCloud {
   send: () => void;
   cancelling: boolean;
   cancel: () => void;
+  /** The thread's turn runs here: the send stops it at its next step and continues it in the cloud. */
+  runningTurn: boolean;
+  /** "Take back when done": on by default while the thread's turn runs. */
+  takeBackWhenDone: boolean;
+  setTakeBackWhenDone: (on: boolean) => void;
+  /** The send went, but the cloud refused the turn's grant: why the thread waits there. `null` otherwise. */
+  continueRefused: string | null;
+  /** Close after reading `continueRefused`. */
+  acknowledge: () => void;
 }
 
 const previewKey = (workspaceId: string) => ['workspace', 'handoff', 'preview', workspaceId] as const;
@@ -58,8 +73,11 @@ async function updateSettings(ipc: HandoffIpc, workspaceId: string, change: (set
 
 const without = (list: readonly string[], value: string): string[] => list.filter((entry) => entry !== value);
 
-export function useSendToCloud(ipc: HandoffIpc, workspaceId: string, conversationUuid: string, onSent: (sent: HandoffSent) => void): SendToCloud {
+export function useSendToCloud(ipc: HandoffIpc, workspaceId: string, conversationUuid: string, onSent: (sent: HandoffSent) => void, title?: string): SendToCloud {
   const queryClient = useQueryClient();
+  // `null`: the person did not choose; the default follows the preview.
+  const [takeBackChoice, setTakeBackChoice] = useState<boolean | null>(null);
+  const [refused, setRefused] = useState<HandoffSent | null>(null);
   const [leave, setLeave] = useState<readonly string[]>([]);
   const [progress, setProgress] = useState<HandoffEvent | null>(null);
   // The preview (by its update time) the person confirmed the include warnings for.
@@ -96,12 +114,23 @@ export function useSendToCloud(ipc: HandoffIpc, workspaceId: string, conversatio
 
   const includesConfirmed = confirmedAt !== null && confirmedAt === query.dataUpdatedAt && (query.data?.include_findings.length ?? 0) > 0;
 
+  const runningTurn = query.data?.running_turn === true;
+  const takeBackWhenDone = takeBackChoice ?? runningTurn;
+
   const mutation = useMutation({
     mutationFn: () => {
       setProgress(null);
-      return ipc.send(workspaceId, conversationUuid, leave, includesConfirmed ? { confirmIncludes: true } : undefined);
+      return ipc.send(workspaceId, conversationUuid, leave, {
+        ...(includesConfirmed ? { confirmIncludes: true } : {}),
+        // Only a choice the person made: otherwise the host decides from the turn it finds running at send time.
+        ...(takeBackChoice === null ? {} : { takeBackWhenDone: takeBackChoice }),
+        ...(title === undefined ? {} : { title }),
+      });
     },
-    onSuccess: onSent,
+    onSuccess: (sent) => {
+      if (typeof sent.continue_refused === 'string' && sent.continue_refused !== '') setRefused(sent);
+      else onSent(sent);
+    },
   });
 
   const settings = useMutation({
@@ -157,5 +186,12 @@ export function useSendToCloud(ipc: HandoffIpc, workspaceId: string, conversatio
     },
     cancelling: cancel.isPending,
     cancel: () => cancel.mutate(),
+    runningTurn,
+    takeBackWhenDone,
+    setTakeBackWhenDone: setTakeBackChoice,
+    continueRefused: refused?.continue_refused ?? null,
+    acknowledge: () => {
+      if (refused !== null) onSent(refused);
+    },
   };
 }

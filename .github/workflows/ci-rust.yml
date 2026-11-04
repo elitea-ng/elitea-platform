@@ -314,6 +314,11 @@ jobs:
           echo "ELITEA_TEST_NATS_SECURE_ENV=$env_file" >> "$GITHUB_ENV"
 
       - name: Run all targets and features
+        # About 15 min. A test that hangs ran this step into the job's
+        # timeout twice, and a cancelled job keeps no log; failing the step
+        # first keeps libtest's "has been running for over 60 seconds" line,
+        # which names the test.
+        timeout-minutes: 30
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS: "1"

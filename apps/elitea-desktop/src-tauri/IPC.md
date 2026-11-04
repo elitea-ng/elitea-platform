@@ -319,6 +319,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
+| `agent_turn_resume` | `{turn_id}` | `{turn_id, execution_id}` — continues a turn that ran when the app stopped (`StoredTurn.resumable`, **Resume after restart** below): the host starts the turn that continues it, as `agent_turn_start` would, and the new turn's events come under the new `turn_id`. Rejects `resume_unknown` (no resume record of the signed-in account for that turn, or it is past its chain's deadline), `resume_invalid` (the record cannot make a turn), or what `agent_turn_start` rejects. Only the platform's refusal of the continuation (409 `chain_limit_reached` or `chain_ended`, 422 `unattended_grant_refused` or `unattended_grants_off`, 404 `chain_not_found`) deletes the record; any other error (a 401, 429 or 5xx, no network, `workspace_busy`) keeps it for another try. |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
@@ -461,7 +462,7 @@ starts with it, a refused start keeps it):
   [{name, mime, bytes}]` (a server that does not know it ignores it); the
   bytes are not uploaded. `thread_history` turns carry `images: [{name, mime,
   bytes, thumbnail}]`, a JPEG thumbnail of at most 64 KiB as a data URI
-  (`threads.sqlite`, schema 3). The session store keeps no image: a later
+  (`threads.sqlite`, schema 5). The session store keeps no image: a later
   turn (and a "Continue?" after the step limit) sees a note for it.
 * **`read_file` on an image.** `read_file` on a PNG, JPEG, WebP or GIF
   returns `{kind: "image", path, mime, bytes, width, height}` and the image
@@ -628,8 +629,47 @@ person before the start:
   host started carries its `host_prompt` (the text the model got) and
   `continuation_kind`.
 - **Link kinds.** Each continuation's local turn start carries
-  `unattended.kind`: `step_limit`, `tool_call_cap` or `goal_not_met`; so
-  does its `turn_continued` (`kind`).
+  `unattended.kind`: `step_limit`, `tool_call_cap`, `goal_not_met` or
+  `resume` (below); so does its `turn_continued` (`kind`).
+- **Resume after restart** (ADR-0045 decision 7, #1438). The host keeps one
+  resume record per running turn in `threads.sqlite` (table
+  `resume_turns`, one row per workspace): the thread, the workspace, the
+  agent, the mode, the grant (with `goal_check`), the chain root, the
+  continuation index, the link kind, the run brief, the last goal check,
+  the goal check's transcript excerpt of the chain's turns so far (at most
+  32 KiB, newest kept) and the last committed execution. It writes the record when the turn starts,
+  updates it at each commit that continues the chain, and deletes it when
+  the chain ends (or the turn is cancelled, or the next turn does not start
+  in time). A record survives only when the app stops while the turn runs.
+  About 5 seconds after the next start, for the signed-in account, then
+  again while a record of the account waits (30 s, 1 min, 2 min, 4 min,
+  then every 5 minutes) and after each sign-in:
+  - A record past its chain's deadline (the platform's `chain.deadline_seconds`,
+    else the grant's, else 12 hours from the chain's start) is deleted.
+  - An unattended record (a grant the platform admitted) continues the chain
+    by itself: a turn with link kind `resume`, the next continuation index,
+    the same chain root and the text "Continue from where you stopped."
+    with the stored brief and last check (the `goal_not_met` text form).
+    The chain's goal state gets the stored transcript back, so the goal
+    check after the restart reads the turns from before it too.
+    A brief still pending is asked for again (at most 20 seconds). The old
+    turn sends `turn_continued` with `kind: "resume"` and
+    `resumed_after_restart: true`; the new turn's `status` `running` carries
+    `continuation_kind: "resume"`. When the platform refuses it (409
+    `chain_limit_reached` or `chain_ended`, 422 `unattended_grant_refused`
+    with grants turned off too, 404 `chain_not_found`), the record is
+    deleted and the old turn sends `chain_ended` (`limit_reached` or
+    `failed`). Any other failure (a 401 before the sign-in, a 429 or 5xx,
+    no network, the workspace busy) keeps the record for the next try, and
+    the turn is offered as below meanwhile (`resume_offered` once).
+  - Any other record (an attended turn) starts nothing: the old turn sends
+    `resume_offered` (once), and `thread_history` marks the turn
+    `resumable`. The UI shows **Continue** under it, which calls
+    `agent_turn_resume`.
+  An open thread page follows these: a `turn_continued` of kind `resume`
+  on one of its recorded turns makes the new turn its live turn, a
+  `resume_offered` shows **Continue**, and a turn continued either way
+  offers Continue no more.
 - **Run brief and goal check** (ADR-0045 decision 11; #1564). With
   `goal_check` (absent = on) the chain's first turn asks the platform for
   the run brief in the background (`POST run_brief`, with the person's
@@ -1437,6 +1477,7 @@ type StoredTurn = {
   events_truncated: boolean;        // the turn outgrew the per-turn cap
   state: "done" | "running" | "interrupted"; // interrupted: never ended (the app quit)
   live: boolean;                    // turn_changes / checkpoint_restore still answer for it
+  resumable: boolean;               // interrupted, with a resume record: `agent_turn_resume` continues it
   origin: "local" | "cloud";        // cloud: imported when the thread came back (ADR-0034)
 };
 ```
@@ -1900,15 +1941,16 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `handoff_preview` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `Preview` — what a send would transfer under the effective policy and the folder's settings; sends nothing |
-| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean}` | `{handoff_id, state, epoch, files, excluded, included, env_vars}` — progress on `handoff://event` |
+| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean, take_back_when_done?: boolean, title?: string}` | `{handoff_id, state, epoch, files, excluded, included, env_vars, stopped_turn, continued, continue_refused, take_back_when_done}` — progress on `handoff://event`. While the thread's own turn runs here the send stops it at its next step first (**Send while running**); `take_back_when_done` defaults to whether it did; `title` (the thread's name) is only for the take-back notice. `stopped_turn: boolean`; `continued: {execution_id, message_id} \| null` (the cloud went on with the stopped turn); `continue_refused: string \| null` (the turn was not continued in the cloud, because the server refused the continue or the turn ran in plan mode: what to tell the person; the thread is in the cloud, waiting) |
 | `handoff_cancel` | `{conversation_uuid}` | `{cancelled: boolean}` — stops a running send; after begin the host cancels the handoff on the server (`DELETE workspace_handoff`), so the thread is `LOCAL` again; the send rejects `handoff_cancelled` |
-| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9, `rest_pending` and `delete_after` included) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean`, `rest_turns: number` (the cloud turns after a take-back up to turn k that can still be taken back; 0 when none or the grace is over) |
+| `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9, `rest_pending` and `delete_after` included) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean`, `rest_turns: number` (the cloud turns after a take-back up to turn k that can still be taken back; 0 when none or the grace is over); the server's `take_back_when_done` and `last_cloud_run: {outcome, execution_id, finished_at} \| null` (`WorkspaceHandoffState`, ADR-0045 decision 8), `take_back_when_done` from this desktop's record when the server has none |
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
 | `handoff_reclaim` | `{conversation_uuid, rest?: boolean}` | `{state: "RECLAIMING", epoch, cloud_sha}`, or `{state: "CLOUD_RUNNING", reclaim_pending: true, …}` while a cloud turn runs; with `rest`, the remaining turns after a take-back up to turn k (`rest_unknown` when this desktop keeps none, the server's `handoff_erased` once the grace is over: the record goes) |
 | `handoff_preflight` | `{conversation_uuid, up_to_turn?: number}` | `ApplyOutcome & {preflight_id, cloud_turns, up_to_turn, from_turn, modes: TakeBackMode[], files: ChangedFile[], diffs_truncated: boolean}` — `up_to_turn` (1-based, default the latest) takes back the cloud turns up to that one; `invalid_request` (`turn_out_of_range`) for a turn the chain does not have. After a `rest` reclaim it takes back the remaining turns `from_turn+1..up_to_turn` (no `up_to_turn` then: `invalid_request`) |
 | `handoff_apply` | `{preflight_id, mode: TakeBackMode, up_to_turn?: number}` | `{applied, outcome: "applied" \| "applied_with_markers" \| "worktree" \| "discarded", report: ApplyOutcome, checkpoint_id, worktree_path, branch, imported_turns, turns_not_taken, rest_branch: string \| null, released, release_refused: string \| null, copied: string[]}` — `up_to_turn`, when given, must be the preflight's (`invalid_request` otherwise; the preview is kept) |
 | `handoff_undo` | `{checkpoint_id}` | `{restored: string[]}` — restores the folder to before a take-back |
 | `handoff_erase` | `{conversation_uuid, project_id?}` | the server's answer; the local folder is kept |
+| `handoff_run_finished` | `{conversation_uuid, origin?: string, outcome?: string}` | `null` at once — the page saw a fresh `run_finished` notification; for `origin: "cloud"` and a thread this desktop takes back when done, the host looks at it in the background (**Take back when done**). Never rejects |
 | `handoff_settings_get` | `{workspace_id}` | `{settings: FolderHandoffSettings, policy: HandoffPolicy, env_offered: EnvVar[], env_notice: string \| null}` |
 | `handoff_settings_set` | `{workspace_id, settings: FolderHandoffSettings}` | as `handoff_settings_get`; `invalid_request` for a bad pattern, an include that escapes the folder, or an env name that is not a variable name |
 
@@ -1941,6 +1983,7 @@ type Preview = {
   caps: { violations: { cap: string; limit: number; actual: number; path: string | null }[];
           largest: { path: string; bytes: number }[] };
   shadow: boolean; // the folder is not a repository: a shadow git directory in the app data is used
+  running_turn: boolean; // the thread's own turn runs here: a send stops it at its next step (the preview skips the claim then)
   policy: HandoffPolicy;
   // null when the policy has no env harvest
   // notice: the login shell could not be read (failed, timed out); nothing is offered then
@@ -1960,7 +2003,7 @@ type EnvVar = { name: string; length: number }; // the value is never sent to th
 type FolderHandoffSettings = { exclude_patterns: string[]; include: string[]; env_names: string[] };
 type ChangedFile = { path: string; status: "added" | "modified" | "deleted"; added: number; removed: number; diff: string };
 type HandoffEvent = { conversation_uuid: string;
-  phase: "snapshot" | "scan" | "bundle" | "begin" | "upload" | "publish" | "complete" | "cancelled" | "error";
+  phase: "stopping" | "snapshot" | "scan" | "bundle" | "begin" | "upload" | "publish" | "complete" | "cancelled" | "error";
   done: number; total: number; message: string | null };
 ```
 
@@ -2113,6 +2156,69 @@ type HandoffEvent = { conversation_uuid: string;
   release carries the epoch the preflight read, so a take-back asked while
   a cloud turn ran (202 `reclaim_pending`, `RECLAIMING` one epoch later)
   releases with the later epoch.
+- **Send while running** (ADR-0045 decision 8, U5). A send of a thread
+  whose own turn runs here does not cancel it. First the send's own checks
+  run on a snapshot read without the claim (secret scan, includes to
+  confirm, env limits, the policy's caps): a send they refuse never stops
+  the turn. Then the host emits the phase
+  `stopping`, asks the turn to stop at its next step boundary (the adk
+  steering safe point: the step's tool results are in history, the next
+  model request is not sent), waits for the turn to commit (`done` with
+  `handed_off: true`, the `status` note `handoff_stopped`; an empty answer
+  reads "The agent stopped here to continue in the cloud."), then claims
+  the workspace (retried for up to 10 s while the commit lets it go) and
+  sends. Request, claim and withdraw are one atomic state: a cancel while
+  it waits withdraws the stop only if the run has not claimed it. Once a
+  stop is requested, any end that would start a local continuation (the
+  step limit, the tool-call cap a grant continues, a goal check that would
+  go on) ends as handed off instead; an end that ends the chain
+  (`completed`, `failed`) settles as usual and the send goes without
+  `continue`. A stopped turn starts no local continuation and writes no
+  `chain_outcome`; its resume record stays until the send settles. A send
+  that lands forgets it. A send that fails or is cancelled after the stop
+  resumes the run here at once (`turn_continued` with `kind: "resume"`,
+  `resumed_after_send: true`; the error message says so). If the
+  continuation is refused the chain ends (`chain_ended`); any other failure
+  keeps the record for the resume loop and offers **Continue**. Both come
+  with a native notice. `complete` carries
+  `continue: {prompt, mode, grant}` — the prompt is the run brief's
+  continuation prompt, else "Continue where you left off."; `mode` is
+  `build`, `plan` or `bypass`; `grant` (unattended turns only) is the
+  turn's `{grant_id, continue_step_limit, goal_check, chain?,
+  chain_root_execution_id}` — and `take_back_when_done`. A plan-mode turn
+  is never sent with `continue` (a cloud turn has no plan mode): the
+  thread waits in the cloud, and `continue_refused` says why. A refusal of
+  the continue alone is answered by completing again without `continue`,
+  and the send succeeds with `continue_refused` set. The refusals are
+  422 `unattended_grant_refused`, 422 `continue_refused` (`reason`
+  `mode`), 409 `chain_limit_reached`, 409 `chain_ended`, 503
+  `handoff_unavailable` and `invalid_handoff`. A complete without
+  `continue` after a stopped unattended turn carries
+  `stopped_chain_root_execution_id`, so Main ends that chain `waiting`. A turn
+  waiting on a person's answer (an approval, "Continue?" at the step
+  limit) reaches the boundary only once that is answered or times out.
+- **Take back when done** (ADR-0045 decision 8, U5). A send with
+  `take_back_when_done` writes a record before `complete` (`threads.sqlite`
+  table `take_back_threads`, schema 5: thread, owner, workspace, project,
+  title, when, the last notice's key, `phase`); it survives a restart and is
+  dropped by a take-back's acknowledged release, an erase, or a thread
+  found `LOCAL`. The host looks at its recorded threads when a cloud
+  `run_finished` arrives (`handoff_run_finished`), at startup, at sign-in
+  and every 5 minutes (catch-up, from `handoff_status`'s `last_cloud_run`;
+  an older server without it follows the notification's outcome). A
+  completed run whose thread is not `CLOUD_RUNNING` or `HANDING_OFF` is
+  taken back: reclaim, preflight, then by the preflight's outcome —
+  `fast_path` and `clean_merge` apply to the folder, `conflicts` open as a
+  worktree, `error` is not taken back (the person is told; the record
+  stays). An apply refused for any reason but `workspace_busy` falls back
+  to a worktree. `reclaim_pending` and `workspace_busy` wait for the next
+  look, silently. The record's `phase` (`reclaim_pending`, `reclaimed`)
+  remembers a take-back that began: a later look that finds the thread
+  `RECLAIMING` (which has no `last_cloud_run`) goes on from the preflight. Each result is a native notice, shown even while the
+  window is focused: "Took back {title}", "Opened {title} as a worktree"
+  (with why), "Could not take back {title}"; a run that `failed`, is
+  `waiting`, hit its `limit_reached` or was `cancelled` is noticed once per
+  run and not taken back.
 - **Records.** What take-back needs is kept in the app data
   (`handoff/threads/<uuid>.json`, owner-only); a shadow repository in
   `handoff/shadow/`. Nothing is written into the folder but the take-back's
@@ -2200,7 +2306,7 @@ on a change to the handoff code (`reaches-handoff` in
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
 | `context_menu_show` | `{request_id: string, items: Item[]}`; `Item` is `{id, label, enabled?}`, `{separator: true}` or a submenu `{label, enabled?, children: {id, label, enabled?}[]}` (one level) | `null`, once the menu is closed — pops the OS's native context menu at the cursor (`src/context_menu.rs`). The outcome arrives on `app://context-menu` as `{request_id, id}`: `id` is the id the page gave the item, or `null` when the menu was dismissed (sent by the host ~150 ms after the menu closed with no choice). The page ignores events whose `request_id` is not its own. `request_id`: ≤ 64 chars of `[A-Za-z0-9_-]`. At most 60 choosable items across the menu and its submenu; a non-separator needs a unique `id` (≤ 64 chars) and a `label` (≤ 120); rejects with the reason for anything else. |
 | `activity_cloud_run` | `{conversation_uuid: string, running: boolean, waiting?: boolean, workspace_id?: string, workspace_name?: string}` | `null` — the page tells the host a cloud turn of this window is streaming (`running`) and/or waits on the person (`waiting`: an approval or continue prompt); both `false` ends it (completion and errors both send that). The menu-bar item shows it like a local turn (`◐ m:ss`, a "Running in cloud" entry); a waiting thread counts in `⚠ n`, adds an "Approve in cloud" entry and is counted on the Dock badge with the local approvals. A click sends `focus_turn`. The chat stream to a cloud thread runs in the page (the web chat transport), so the host cannot see it itself. |
-| `platform_notice_show` | `{title: string, body: string}` | `null` — the page saw a new platform notification (the bell's SSE stream) and asks the host to show it as a native notification (`src/notices.rs`). Checked before anything else: a `title` over 120 characters or a `body` over 1000 (counted in characters, not bytes) rejects with the reason. Then both are sanitized — control characters (newlines and tabs included) and bidi embeddings/overrides/isolates (U+202A–U+202E, U+2066–U+2069) removed, whitespace runs collapsed to one space, trimmed — and a title empty after that rejects (`"a notice needs a title"`); the body is shown cut to 120 characters ending in `…`. Resolves `null` without showing anything while the main window is focused and visible (the same check as the host's own notifications) or when the OS refused notifications (asked once, on the first notification). A click only activates the app (no click callback on desktop). |
+| `platform_notice_show` | `{title: string, body: string, notification_id?: string, event_type?: string, origin?: string}` | `null` — the page saw a new platform notification (the bell's SSE stream) and asks the host to show it as a native notification (`src/notices.rs`). The optional fields name the notification: the host shows one notice per `notification_id` (≤ 64 characters; the last 512 are remembered; a longer or absent id is not remembered), and none for an `event_type` of `run_finished` (ADR-0045 decision 5) whose `origin` is not `cloud` — a chain that ran on this computer was already noticed when its last turn ended. Neither is an error. Checked before anything else: a `title` over 120 characters or a `body` over 1000 (counted in characters, not bytes) rejects with the reason. Then both are sanitized — control characters (newlines and tabs included) and bidi embeddings/overrides/isolates (U+202A–U+202E, U+2066–U+2069) removed, whitespace runs collapsed to one space, trimmed — and a title empty after that rejects (`"a notice needs a title"`); the body is shown cut to 120 characters ending in `…`. Resolves `null` without showing anything while the main window is focused and visible (the same check as the host's own notifications) or when the OS refused notifications (asked once, on the first notification). A click only activates the app (no click callback on desktop). |
 | `platform_notice_badge` | `{unread: number}` (u32) | `null` — the number of unread platform notifications (send it whenever it changes, `0` once read or on sign-out). The Dock badge shows open approvals + waiting cloud threads (`activity_cloud_run`) + this, capped at 999 per source; the badge is only redrawn when the number changed. Never rejects (a non-integer or negative `unread` fails argument parsing). |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
@@ -2354,9 +2460,30 @@ them). The host folds the same `agent://event`, `index://event` and
 `⚠ n` while n approvals wait, else `◐ m:ss` (the longest-running turn), else
 only the icon; its menu lists the waiting approvals (tool and folder, never a
 command or a path) and the running turns, then Show / Quit, and choosing a
-turn shows the window and sends `focus_turn`. The Dock's progress bar follows a
-send to the cloud (`done`/`total`), else the index builds (files read of files
-to read; indeterminate until that is known), and is removed when they end.
+turn shows the window and sends `focus_turn`. While a turn runs its menu
+also says "Keeping the computer awake" (and so does its tooltip). The Dock's
+progress bar follows a send to the cloud (`done`/`total`), else the index
+builds (files read of files to read; indeterminate until that is known), and
+is removed when they end.
+
+**Keep awake, close and quit** (`src/keep_awake.rs`, `src/window.rs`,
+ADR-0045 decision 7). While one or more local turns run (a chain holds it
+between its turns too), the host holds one OS power assertion against
+**idle** sleep only: `IOPMAssertion` `PreventUserIdleSystemSleep` on macOS,
+`SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)` on Windows,
+logind `Inhibit("idle", …, "block")` on Linux. The last turn's end (or
+panic, or cancel) releases it. The display may still sleep, and the person
+can still put the computer to sleep. A worker thread of the host makes and
+ends the assertion; a turn's start and end only change the count, so a slow
+OS call (D-Bus on Linux) never holds up a turn, the window's close or the
+quit. Closing the window while a turn runs hides it on macOS (always, in
+fact) and on Windows (the tray shows it again), and minimizes it on Linux
+(many Linux desktops show no tray icon); with no turn running it closes on
+Windows and Linux. Quit (the menu, the tray, ⌘Q / Ctrl+Q) while a turn runs
+asks first, in a native dialog ("Quit Elitea?", **Quit** / **Keep
+running**); a restart for an update (`RESTART_EXIT_CODE`) does not ask. At
+exit the history writer (the thread history and the resume records) is
+flushed before and again after the wait for the turns' commits.
 
 **Open Folder… is host-side**: the menu item runs the native folder picker
 in the host (the same picker and `WorkspaceStore::add` as `workspace_open`)
@@ -2372,8 +2499,8 @@ fires the command, and a page keydown handler for the same keys could run
 the action twice.
 
 Standard actions are the OS's own and never reach the UI: Edit's
-undo/redo/cut/copy/paste/select all, Hide, Quit, Minimize, Zoom, Full
-Screen, Close Window (on macOS it hides the window; the dock icon shows
+undo/redo/cut/copy/paste/select all, Hide, Minimize, Zoom, Full
+Screen, Quit (the host's own item: it asks first while a turn runs), Close Window (on macOS it hides the window; the dock icon shows
 it again), the zoom items (Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, the
 host sets the webview zoom), Reload ⌘R (debug builds only) and Help ▸
 Elitea Help (opens `<deployment>/docs/` in the browser when connected).
@@ -2513,9 +2640,10 @@ order. Kinds and payloads:
 | `steer_injected` | `{steer_id, text}` — the agent loop took the message: it is a user message of the turn from this point |
 | `steer_dropped` | `{steer_id, text, reason: "removed" \| "turn_ended"}` — the message does not wait any more: the person removed it, or the turn ended before a safe point (the UI sends it as the next turn) |
 | `error` | `{code, message}` |
+| `resume_offered` | `{workspace_id, conversation_id}` — after an app start, on a turn that ran when the app stopped and that the host does not continue by itself: the UI may offer **Continue** (`agent_turn_resume`) (**Resume after restart**) |
 | `done` | `{committed: boolean, commit: "pending" \| "none", execution_id?, conversation_id, message_ids: string[], changed_files: number, continuing?: true}` — sent before the turn's commit (below): `committed` is `false` and `commit` `pending` for a turn being saved, `none` for a cancelled one; `continuing` says the host starts the unattended chain's next turn by itself (**Unattended turns**) |
 | `commit_failed` | `{execution_id, code, message}` — after `done`: the turn's commit did not land after its retries; `turn_commit_retry` sends it again |
-| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met"}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain (**Unattended turns**); its events come under `next_turn_id` |
+| `turn_continued` | `{next_turn_id, execution_id, continuation_index, chain_root_execution_id, kind: "step_limit" \| "tool_call_cap" \| "goal_not_met" \| "resume", resumed_after_restart?: true}` — after `done` and the commit of an unattended turn: the host started the next turn of the chain; with `kind` `resume` (and `resumed_after_restart`), on the turn that ran when the app stopped, after the next start (**Resume after restart**) (**Unattended turns**); its events come under `next_turn_id` |
 | `chain_ended` | `{outcome: "completed" \| "failed" \| "waiting" \| "limit_reached" \| "cancelled", limit?: "continuations" \| "spend" \| "deadline", message?, goal?: {outcome: "met" \| "not_met" \| "blocked" \| "not_checked", met: number, total: number, reason?}}` — after `done`: the unattended chain ends with this turn; `goal` is the last goal check's summary, when one was made |
 | `run_brief` | `{turn_id, chain_root_execution_id, state: "ready" \| "failed" \| "off" \| "none", brief?}` — on the chain's first turn (possibly after its `done`), when the platform answered the run brief (**Run brief and goal check**, under **Unattended turns**) |
 | `goal_checked` | `{turn_id, outcome: "met" \| "not_met" \| "blocked" \| "not_checked", conditions: {id, text, verdict, reason}[], met, total, reason?}` — after `done` of a turn that would end its chain, before `turn_continued` or `chain_ended` |

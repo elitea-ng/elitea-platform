@@ -1296,96 +1296,29 @@ export const getBeginWorkspaceHandoffResponseMock = (
   ...overrideResponse,
 });
 
-export const getGetWorkspaceHandoffResponseMock = (
-  overrideResponse: Partial<Extract<WorkspaceHandoffState, object>> = {},
-): WorkspaceHandoffState => ({
-  state: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  epoch: faker.number.int(),
-  reclaim_pending: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  rest_pending: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  handoff_id: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
-  device_name: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  history_mode: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  has_upstream: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  stats: faker.helpers.arrayElement([
-    {
-      files: faker.helpers.arrayElement([
-        faker.number.int({ min: 0 }),
-        undefined,
-      ]),
-      bytes: faker.helpers.arrayElement([
-        faker.number.int({ min: 0 }),
-        undefined,
-      ]),
-      unpacked_bytes: faker.helpers.arrayElement([
-        faker.number.int({ min: 0 }),
-        undefined,
-      ]),
-      excluded: faker.helpers.arrayElement([
-        Array.from(
-          { length: faker.number.int({ min: 1, max: 10 }) },
-          (_, i) => i + 1,
-        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-        undefined,
-      ]),
-      excluded_count: faker.helpers.arrayElement([
-        faker.number.int({ min: 0 }),
-        undefined,
-      ]),
-      scan_findings: faker.helpers.arrayElement([
-        faker.number.int({ min: 0 }),
-        undefined,
-      ]),
+export const getGetWorkspaceHandoffResponseMock =
+  (): WorkspaceHandoffState => ({
+    state: "CLOUD_IDLE",
+    epoch: 4,
+    reclaim_pending: false,
+    rest_pending: false,
+    handoff_id: "6f1c2a8e-3b4d-4e5f-8a9b-0c1d2e3f4a5b",
+    device_name: "Work laptop",
+    history_mode: "none",
+    has_upstream: true,
+    stats: { files: 412, bytes: 1830400, excluded_count: 0 },
+    cloud_sha: "8d2f1c0b9a8e7d6c5b4a39281706f5e4d3c2b1a0",
+    updated_at: "2026-11-04T10:15:02.120Z",
+    delete_after: "2026-11-11T10:15:02.120Z",
+    workspace_bytes: 2097152,
+    pull_request_credential: null,
+    take_back_when_done: true,
+    last_cloud_run: {
+      outcome: "completed",
+      execution_id: "3e9a1b7c5d2f4e6a8b0c1d2e3f4a5b6c",
+      finished_at: "2026-11-04T10:15:02Z",
     },
-    undefined,
-  ]),
-  cloud_sha: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      null,
-    ]),
-    undefined,
-  ]),
-  updated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  delete_after: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      faker.date.past().toISOString().slice(0, 19) + "Z",
-      null,
-    ]),
-    undefined,
-  ]),
-  workspace_bytes: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  pull_request_credential: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      {
-        type: faker.helpers.arrayElement(["github", "gitlab"] as const),
-        elitea_title: faker.string.alpha({ length: { min: 1, max: 256 } }),
-        private: faker.datatype.boolean(),
-      },
-      null,
-    ]),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
+  });
 
 export const getEraseWorkspaceHandoffResponseMock = (
   overrideResponse: Partial<Extract<WorkspaceHandoffErased, object>> = {},
@@ -1400,6 +1333,11 @@ export const getCompleteWorkspaceHandoffResponseMock = (
 ): WorkspaceHandoffTransition => ({
   state: faker.string.alpha({ length: { min: 10, max: 20 } }),
   epoch: faker.number.int(),
+  continued: {
+    execution_id: "3e9a1b7c5d2f4e6a8b0c1d2e3f4a5b6c",
+    message_id: "2c4e6a8b-0d1f-4a3b-8c5d-7e9f1a2b3c4d",
+    question_id: "7a9c1e3f-5b7d-4f9a-9b1c-3d5e7f9a1b2c",
+  },
   ...overrideResponse,
 });
 

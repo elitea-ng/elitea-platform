@@ -307,6 +307,11 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 			cfg.CurrentNotificationEvents,
 		)
 	}
+	if cfg.CurrentNotificationPush != nil {
+		r.Method(http.MethodGet, notificationsapi.PushConfigPath, cfg.CurrentNotificationPush)
+		r.Method(http.MethodPost, notificationsapi.PushSubscriptionsPath, cfg.CurrentNotificationPush)
+		r.Method(http.MethodDelete, notificationsapi.PushSubscriptionsPath, cfg.CurrentNotificationPush)
+	}
 	if cfg.CurrentModelCatalog != nil {
 		r.Method(http.MethodGet, configurationapi.CurrentModelCatalogPath, cfg.CurrentModelCatalog)
 	}

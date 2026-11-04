@@ -7,8 +7,14 @@
  *  - the "Take back requested" banner — the latest unread rows;
  *  - native OS notices — one per notification that arrives while the window
  *    is in the background (the host skips them while it is focused), unless
- *    Settings › Notifications turned "Show system notifications" off;
- *  - the Dock badge — the unread count, beside the approvals waiting.
+ *    Settings › Notifications turned "Show system notifications" off (the
+ *    host drops a `run_finished` that ran on this computer — it noticed that
+ *    chain itself — and any row it already showed);
+ *  - the Dock badge — the unread count, beside the approvals waiting;
+ *  - the cloud handoff — a fresh `run_finished` of a cloud run goes to the
+ *    host (`handoff_run_finished`), notices on or off, so a thread sent with
+ *    "Take back when done" comes back as soon as its run completes (ADR-0045
+ *    decision 8; the host also catches up by itself every few minutes).
  *
  * It listens like the web bell does: the stream signals, the list says what;
  * once the stream's reconnects are spent, the list is polled slowly — in the
@@ -28,6 +34,7 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { NOTIFICATIONS_QUERY_ROOT, systemNoticesEnabled, systemNoticeText, useNotificationsList, useNotificationsSSE, type NormalizedNotification } from '@/features/notifications';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
+import { tauriHandoffIpc, type HandoffIpc } from '@/shared/desktop/handoffIpc';
 import { platformNotice, type PlatformNotice } from '@/shared/desktop/platformNotice';
 import { personalProjectIdOf } from '@/shared/lib/personalProject';
 
@@ -60,8 +67,18 @@ export interface DesktopNotificationsFeed {
   readonly rows: readonly NormalizedNotification[];
 }
 
+/** What the feed tells the cloud handoff host. */
+type HandoffRunFinished = Pick<HandoffIpc, 'runFinished'>;
+
+/** A cloud run's `run_finished`, forwarded to the handoff host whatever the notice setting says. */
+function forwardCloudRun(row: NormalizedNotification, handoff: HandoffRunFinished | undefined): void {
+  const uuid = row.meta?.conversationUuid;
+  if (handoff === undefined || row.eventType !== 'run_finished' || row.meta?.origin !== 'cloud' || uuid === undefined || uuid === '') return;
+  void handoff.runFinished(uuid, row.meta.origin, row.meta.outcome).catch(() => undefined);
+}
+
 /** Announces the rows not seen before, natively; the first read only marks what is there. */
-function useNativeNotices(rows: readonly NormalizedNotification[] | undefined, host: PlatformNotice | undefined): void {
+function useNativeNotices(rows: readonly NormalizedNotification[] | undefined, host: PlatformNotice | undefined, handoff: HandoffRunFinished | undefined): void {
   const seen = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (rows === undefined) return;
@@ -71,13 +88,16 @@ function useNativeNotices(rows: readonly NormalizedNotification[] | undefined, h
     }
     const known = seen.current;
     const fresh = rows.filter((row) => !known.has(row.id));
-    for (const row of fresh) known.add(row.id);
+    for (const row of fresh) {
+      known.add(row.id);
+      forwardCloudRun(row, handoff);
+    }
     if (host === undefined || !systemNoticesEnabled()) return;
     for (const row of fresh.slice(0, MAX_NOTICES_AT_ONCE)) {
       const { title, body } = systemNoticeText(row);
-      void host.show(title, body).catch(() => undefined);
+      void host.show(title, body, { id: row.id, eventType: String(row.eventType), origin: row.meta?.origin }).catch(() => undefined);
     }
-  }, [rows, host]);
+  }, [rows, host, handoff]);
 }
 
 function usePersonalProjectId(): string | undefined {
@@ -85,9 +105,10 @@ function usePersonalProjectId(): string | undefined {
   return personalProjectIdOf(unwrapBody(author.data));
 }
 
-/** `notices` stands in for the host (tests); by default the desktop host's, none in a plain browser tab. */
-export function useDesktopNotifications(notices?: PlatformNotice): DesktopNotificationsFeed {
+/** `notices` and `handoff` stand in for the host (tests); by default the desktop host's, none in a plain browser tab. */
+export function useDesktopNotifications(notices?: PlatformNotice, handoff?: HandoffRunFinished): DesktopNotificationsFeed {
   const host = useMemo(() => notices ?? platformNotice(), [notices]);
+  const handoffHost = useMemo(() => handoff ?? tauriHandoffIpc(), [handoff]);
   const queryClient = useQueryClient();
   const projectId = usePersonalProjectId();
   const [pushed, setPushed] = useState(false);
@@ -113,6 +134,6 @@ export function useDesktopNotifications(notices?: PlatformNotice): DesktopNotifi
   }, [host, unread]);
   // The badge is the host's: clear it when this feed goes away.
   useEffect(() => () => void host?.setUnread(0).catch(() => undefined), [host]);
-  useNativeNotices(data?.rows, host);
+  useNativeNotices(data?.rows, host, handoffHost);
   return { projectId, rows: data?.rows ?? [] };
 }

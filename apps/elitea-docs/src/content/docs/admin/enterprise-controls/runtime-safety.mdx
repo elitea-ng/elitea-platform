@@ -572,6 +572,8 @@ The platform never narrows a grant. One refused pair refuses the start.
 
 Before each continuation, Main reads **Unattended Grants** again. When an administrator turned it off, Main does not start the continuation, and the chain ends as `cancelled`. A desktop continuation is refused with HTTP 422 `unattended_grant_refused`, reason `disabled`.
 
+**A desktop chain can continue in the cloud (ADR-0045 decision 8).** When a person sends a running thread to the cloud and continues it, the cloud's first turn is a link of kind `handoff` of the same chain. The platform checks the chain's stored grant against the cloud turn's toolkits, as for a cloud start, and the limits count across both executors. A refused grant or a chain at a limit refuses the whole send: the thread stays on the desktop. From that link, Main continues the chain as a cloud chain, and its `run_finished` names `origin` `cloud`.
+
 A continuation always keeps the chain's stored limits. The limits that a desktop continuation sends again are ignored, so a maximum that an administrator lowers while a chain runs does not stop that chain.
 
 Each continued question and answer has `meta.continued_automatically` true and `meta.unattended` (`grant_id`, `chain_root_execution_id`, `continuation_index`).

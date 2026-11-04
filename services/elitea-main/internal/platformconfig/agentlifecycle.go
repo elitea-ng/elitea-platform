@@ -4,8 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 )
 
@@ -70,15 +68,42 @@ func AgentLifecyclePolicyFromValues(values Values) agentlifecycle.Policy {
 	return policy
 }
 
-// LoadAgentLifecyclePolicy reads the section. A database without the table
-// never saved it and answers the ADR defaults.
-func LoadAgentLifecyclePolicy(ctx context.Context, pool *pgxpool.Pool) (agentlifecycle.Policy, error) {
-	values, err := Load(ctx, pool, SectionAgentLifecycle)
-	if UndefinedTable(err) {
+// LoadAgentLifecyclePolicyVia reads the section through query: the caller's
+// own transaction, not a second pool connection. The lifecycle store reads
+// the tier table while it holds the registry row's lock in a transaction, and
+// a read on the pool there needs a second connection per caller: as many
+// concurrent publishes as the pool has connections then each hold one and
+// wait for another, and the process stops answering until a request's
+// context ends. A database without the table answers the ADR defaults
+// without running a query that fails, so the caller's transaction is not
+// aborted.
+func LoadAgentLifecyclePolicyVia(ctx context.Context, query QueryFunc) (agentlifecycle.Policy, error) {
+	present, err := tableExists(ctx, query, "centry.platform_config")
+	if err != nil {
+		return agentlifecycle.Policy{}, err
+	}
+	if !present {
 		return agentlifecycle.DefaultPolicy(), nil
 	}
+	values, err := LoadVia(ctx, query, SectionAgentLifecycle)
 	if err != nil {
 		return agentlifecycle.Policy{}, err
 	}
 	return AgentLifecyclePolicyFromValues(values), nil
+}
+
+// tableExists answers whether the named relation exists, through query.
+func tableExists(ctx context.Context, query QueryFunc, name string) (bool, error) {
+	rows, err := query(ctx, `SELECT to_regclass($1) IS NOT NULL`, name)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	present := false
+	if rows.Next() {
+		if err := rows.Scan(&present); err != nil {
+			return false, err
+		}
+	}
+	return present, rows.Err()
 }
