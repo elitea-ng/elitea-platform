@@ -71,6 +71,7 @@ var tenantMigrations = []string{
 	"tenant/0139_pipeline_trigger_gitlab_modes.sql",
 	"tenant/0140_pipeline_trigger_deliveries.sql",
 	"tenant/0142_pipeline_trigger_agent_controls.sql",
+	"tenant/0159_workspace_thread_targets.sql",
 }
 
 /* ── doubles ───────────────────────────────────────────────────────────── */
