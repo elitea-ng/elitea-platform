@@ -72,14 +72,16 @@ pub struct ModelChoice {
 /// The state key of a thread's model choice in its session (#1212 store).
 pub const MODEL_CHOICE_KEY: &str = "elitea.model.v1";
 
-/// A reasoning effort's wire name.
+/// A reasoning effort's wire name: the canonical setting of ADR-0038
+/// decision 1, so no thinking is `off` (an older build wrote `none`, which
+/// [`parse_effort`] still reads as `off`).
 #[must_use]
 pub const fn effort_name(effort: ReasoningEffort) -> &'static str {
     match effort {
         ReasoningEffort::Low => "low",
         ReasoningEffort::Medium => "medium",
         ReasoningEffort::High => "high",
-        ReasoningEffort::None => "none",
+        ReasoningEffort::None => "off",
         ReasoningEffort::Auto => "auto",
     }
 }
@@ -704,6 +706,20 @@ mod tests {
             "a kept auto choice reads back"
         );
         assert!(ModelChoice::parse("gpt-x", Some("off")).is_ok());
+    }
+
+    /// The host names no thinking `off`, the canonical value, in a running
+    /// event and in the kept choice; a choice an older build kept as `none`
+    /// reads back as `off`.
+    #[test]
+    fn no_thinking_is_named_off_and_a_kept_none_reads_as_off() {
+        assert_eq!(effort_name(ReasoningEffort::None), "off");
+        let off = ModelChoice::parse("gpt-x", Some("off")).expect("off is a choice");
+        assert_eq!(off.to_state()["reasoning_effort"], "off");
+        let kept = json!({"name": "gpt-x", "reasoning_effort": "none"});
+        let read = ModelChoice::from_state(&kept).expect("a kept none reads");
+        assert_eq!(read.reasoning_effort, Some(ReasoningEffort::None));
+        assert_eq!(read.to_state()["reasoning_effort"], "off");
     }
 
     #[test]
