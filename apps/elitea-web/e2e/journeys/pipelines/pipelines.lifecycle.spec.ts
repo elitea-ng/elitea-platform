@@ -42,7 +42,7 @@ import {
 } from '../../fixtures/pipelines';
 
 /**
- * The Add-node menu labels for the twelve node types the Rust pipeline
+ * The Add-node menu labels for the node types the Rust pipeline
  * compiler admits (`parse_pipeline_node` in
  * `services/elitea-worker-rust/src/agents/graph/compiler.rs`); Split Out and
  * Aggregate are admitted by default since #1262.
@@ -56,6 +56,7 @@ const ADMITTED_NODE_LABELS = [
   'Human-in-the-loop',
   'LLM',
   'MCP',
+  'Map',
   'Parallel',
   'Printer',
   'Router',
@@ -85,7 +86,8 @@ const ADMITTED_NODE_LABELS = [
  */
 // Split Out and Aggregate (#1262) are left out too until their seeded
 // defaults are shown to save unconfigured; Parallel needs its declared branches
-// (Agent nodes) first. The id-minting test still adds them.
+// (Agent nodes) first, and Map needs its owned worker. The id-minting test
+// still adds them.
 const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
   label =>
     label !== 'Agent' &&
@@ -94,7 +96,8 @@ const SAVEABLE_NODE_LABELS = ADMITTED_NODE_LABELS.filter(
     label !== 'Code' &&
     label !== 'Aggregate' &&
     label !== 'SplitOut' &&
-    label !== 'Parallel',
+    label !== 'Parallel' &&
+    label !== 'Map',
 );
 
 /** Add one node of `label` through the editor's own menu — no store pokes. */
