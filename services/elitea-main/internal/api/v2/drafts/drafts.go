@@ -568,6 +568,18 @@ func (h *Handler) complete(
 		request.ReasoningEffort = settings.ReasoningEffort
 	}
 
+	request, err := v2predict.PrepareReasoning(r.Context(), h.completer, request)
+	if message, refused := v2predict.IsReasoningError(err); refused {
+		writeError(w, http.StatusBadRequest, message)
+		return "", false
+	}
+	if err != nil {
+		slog.ErrorContext(r.Context(), "draft: model resolution failed",
+			"project_id", projectID, "model", request.Model, "err", err)
+		writeError(w, http.StatusBadGateway, "the LLM gateway could not complete this request")
+		return "", false
+	}
+
 	content, err := h.completer.Complete(r.Context(), request)
 	if err != nil {
 		// 502, not 500: the failure is one identifiable hop away, and an

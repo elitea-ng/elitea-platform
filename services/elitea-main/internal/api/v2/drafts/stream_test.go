@@ -282,3 +282,17 @@ func TestDraftStreamSendsTheResponseHeadBeforeTheFirstToken(t *testing.T) {
 		t.Fatalf("status = %d content-type = %q", response.StatusCode, response.Header.Get("Content-Type"))
 	}
 }
+
+// ADR-0038: the thinking setting is canonical, and a value outside it is a
+// plain 400 before the stream opens; it never reaches the gateway.
+func TestDraftStreamRefusesANonCanonicalReasoningEffortBeforeTheStream(t *testing.T) {
+	completer := &streamingStub{pieces: []string{validDraft}}
+	recorder := serveStream(t, completer,
+		`{"user_description":"an incident triager","llm_settings":{"model_name":"m","reasoning_effort":"max"}}`)
+	if recorder.Code != http.StatusBadRequest || recorder.Header().Get("Content-Type") == "text/event-stream" {
+		t.Fatalf("status = %d content-type = %q body = %s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "reasoning_effort must be one of") {
+		t.Errorf("the refusal does not say why: %s", recorder.Body.String())
+	}
+}

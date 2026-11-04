@@ -571,3 +571,30 @@ func TestApplicationDraftSuggestsMatchingProjectResources(t *testing.T) {
 		t.Errorf("SuggestedSkills = %+v, want exactly jira-notes (id 20), not the unrelated skill", draft.SuggestedSkills)
 	}
 }
+
+// ADR-0038: every draft route reads the canonical setting (none as off) and
+// refuses anything else with a readable 400 before the gateway is called.
+func TestEveryDraftRouteReadsTheCanonicalReasoningEffort(t *testing.T) {
+	for _, r := range routes {
+		t.Run(r.name, func(t *testing.T) {
+			completer := &stubCompleter{content: r.modelAnswer}
+			body := strings.TrimSuffix(r.minimalBody, "}") + `,"llm_settings":{"model_name":"m","reasoning_effort":"none"}}`
+			if recorder := serve(t, r, completer, body); recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+			}
+			if completer.got.ReasoningEffort != "off" {
+				t.Errorf("ReasoningEffort = %q, want none read as off", completer.got.ReasoningEffort)
+			}
+
+			refused := &stubCompleter{content: r.modelAnswer}
+			body = strings.TrimSuffix(r.minimalBody, "}") + `,"llm_settings":{"model_name":"m","reasoning_effort":"xhigh"}}`
+			recorder := serve(t, r, refused, body)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "reasoning_effort must be one of") {
+				t.Errorf("status = %d body = %s, want a readable 400", recorder.Code, recorder.Body.String())
+			}
+			if refused.called != 0 {
+				t.Error("a refused setting reached the gateway")
+			}
+		})
+	}
+}

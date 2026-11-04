@@ -205,3 +205,50 @@ func ApplyModelReasoningDefaults(item *CurrentModelCatalogItem, defaults []Model
 		return
 	}
 }
+
+// OpenAIThinking is the thinking form of one OpenAI-compatible
+// chat-completions request: the Go mirror of llm-wire
+// `thinking::openai_form` for a caller that makes one request per answer
+// (predict_llm and the AI drafts). conformance/llm-caller/contract.json pins
+// both.
+type OpenAIThinking struct {
+	// ReasoningEffort is the `reasoning_effort` member; "" means absent.
+	ReasoningEffort string
+	// EnableThinking is `chat_template_kwargs.enable_thinking`; nil means
+	// absent.
+	EnableThinking *bool
+	// RefusesTemperature reports that the request must carry no temperature:
+	// a model that thinks by effort or budget refuses one while it thinks.
+	RefusesTemperature bool
+}
+
+// SingleCallOpenAIThinking translates a canonical setting for a model of
+// the given control form into one request's form. An empty setting sends
+// nothing, as before ADR-0038. auto thinks at the medium level, as the first
+// step of an agent turn does (llm-wire `Thinking::single_call`). An empty
+// control is the form callers used before ADR-0038: reasoning_effort.
+//
+// The setting must be canonical (CanonicalReasoningEffort) and must not
+// conflict with the control (ReasoningEffortConflict); a fixed form sends
+// nothing whatever the setting.
+func SingleCallOpenAIThinking(control, setting string) OpenAIThinking {
+	if setting == "" {
+		return OpenAIThinking{}
+	}
+	level := setting
+	if setting == ReasoningEffortAuto {
+		level = ReasoningEffortMedium
+	}
+	thinks := level != ReasoningEffortOff
+	switch control {
+	case ReasoningControlToggle:
+		return OpenAIThinking{EnableThinking: &thinks}
+	case ReasoningControlFixedOn, ReasoningControlFixedOff:
+		return OpenAIThinking{}
+	default: // effort, budget, and an undeclared form
+		if !thinks {
+			return OpenAIThinking{ReasoningEffort: reasoningEffortNone}
+		}
+		return OpenAIThinking{ReasoningEffort: level, RefusesTemperature: true}
+	}
+}

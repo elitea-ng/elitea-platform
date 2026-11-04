@@ -49,11 +49,11 @@ type CurrentModelCatalogItem struct {
 	// and the caller then keeps its previous form.
 	ReasoningControl   *string `json:"reasoning_control,omitempty"`
 	ReasoningToolSteps *bool   `json:"reasoning_tool_steps,omitempty"`
-	SupportsVision        *bool `json:"supports_vision,omitempty"`
-	LowTier               *bool `json:"low_tier,omitempty"`
-	HighTier              *bool `json:"high_tier,omitempty"`
-	OpenAICompatible      *bool `json:"openai_compatible,omitempty"`
-	Default               bool  `json:"default"`
+	SupportsVision     *bool   `json:"supports_vision,omitempty"`
+	LowTier            *bool   `json:"low_tier,omitempty"`
+	HighTier           *bool   `json:"high_tier,omitempty"`
+	OpenAICompatible   *bool   `json:"openai_compatible,omitempty"`
+	Default            bool    `json:"default"`
 
 	// The price fields are the gateway's own catalogue price for this model
 	// (model_prices.go), served on section=llm items only and only to a caller

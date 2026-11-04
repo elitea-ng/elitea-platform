@@ -3240,7 +3240,10 @@ export interface components {
         DraftLlmSettings: {
             max_tokens?: number;
             model_name?: string;
-            /** @description One of low, medium or high, for reasoning models. */
+            /**
+             * @description The thinking setting (ADR-0038 decision 1): auto, off, low, medium or high. A stored none reads as off. Not an enum in this schema, because the field was a free string in client contract 1 and an enum would narrow it. The model's catalogue reasoning_control translates it: reasoning_effort for effort and budget, chat_template_kwargs.enable_thinking for toggle, nothing for a fixed form. auto thinks at the medium level, as one call has no steps. 400 for any other value, for off on a model that always thinks, and for a level on a model that cannot think (internal/api/v2/predict/reasoning.go). Absent sends nothing.
+             * @example auto
+             */
             reasoning_effort?: string;
             temperature?: number;
         };

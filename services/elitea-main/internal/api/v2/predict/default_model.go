@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -40,31 +41,87 @@ func (c *defaultModelCompleter) Complete(ctx context.Context, req CompletionRequ
 	return c.next.Complete(ctx, resolved)
 }
 
-// resolve fills an omitted model from the project catalog default. Complete
-// and CompleteStream share it, so the two modes cannot pick different models.
+// resolve fills an omitted model from the project catalog default, and
+// resolves the model's reasoning control form when the request carries a
+// thinking setting. Complete and CompleteStream share it, so the two modes
+// cannot pick different models.
 func (c *defaultModelCompleter) resolve(ctx context.Context, req CompletionRequest) (CompletionRequest, error) {
-	if req.Model != "" {
+	if req.reasoningResolved || (req.Model != "" && req.ReasoningEffort == "") {
 		return req, nil
 	}
+	if req.ReasoningEffort != "" {
+		return c.resolveReasoning(ctx, req)
+	}
+	resolved, _, err := c.resolveModel(ctx, req)
+	return resolved, err
+}
+
+// resolveReasoning resolves the model (an omitted one from the default) and
+// its control form, and refuses a setting the model cannot honour. A
+// catalogue that cannot be read for an explicit model keeps the form from
+// before ADR-0038: the gateway still governs the call.
+func (c *defaultModelCompleter) resolveReasoning(ctx context.Context, req CompletionRequest) (CompletionRequest, error) {
+	if req.reasoningResolved {
+		return req, nil
+	}
+	if canonical, ok := configurationapp.CanonicalReasoningEffort(req.ReasoningEffort); ok {
+		req.ReasoningEffort = canonical
+	}
+	resolved, item, err := c.resolveModel(ctx, req)
+	if err != nil {
+		if req.Model == "" {
+			return resolved, err
+		}
+		slog.WarnContext(ctx, "predict: model catalogue unavailable; the thinking setting keeps the effort form",
+			"project_id", req.ProjectID, "model", req.Model, "err", err)
+		resolved.reasoningResolved = true
+		return resolved, nil
+	}
+	return applyItemReasoning(resolved, item)
+}
+
+// resolveModel reads the project catalog. It fills an omitted model from the
+// default and returns the catalogue item of the request's model, or nil when
+// the catalogue has none of that name.
+func (c *defaultModelCompleter) resolveModel(ctx context.Context, req CompletionRequest) (CompletionRequest, *configurationapp.CurrentModelCatalogItem, error) {
 	projectID, err := strconv.ParseInt(req.ProjectID, 10, 32)
 	if err != nil || projectID <= 0 {
-		return req, ErrDefaultModelUnavailable
+		return req, nil, ErrDefaultModelUnavailable
 	}
 	catalog, err := c.models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
 		Section: configurationapp.CurrentModelSectionLLM, ProjectID: int32(projectID),
 		PublicProjectID: c.publicProjectID, IncludeShared: true,
 	})
 	if err != nil {
-		return req, fmt.Errorf("predict: resolve default model: %w", err)
+		return req, nil, fmt.Errorf("predict: resolve default model: %w", err)
 	}
-	if catalog.DefaultModelName == nil || catalog.DefaultModelProjectID == nil || *catalog.DefaultModelName == "" {
-		return req, ErrDefaultModelUnavailable
+	if req.Model == "" {
+		if catalog.DefaultModelName == nil || catalog.DefaultModelProjectID == nil || *catalog.DefaultModelName == "" {
+			return req, nil, ErrDefaultModelUnavailable
+		}
+		for i := range catalog.Items {
+			item := &catalog.Items[i]
+			if item.Name == *catalog.DefaultModelName && item.ProjectID == *catalog.DefaultModelProjectID {
+				req.Model = item.Name
+				return req, item, nil
+			}
+		}
+		return req, nil, ErrDefaultModelUnavailable
 	}
-	for _, item := range catalog.Items {
-		if item.Name == *catalog.DefaultModelName && item.ProjectID == *catalog.DefaultModelProjectID {
-			req.Model = item.Name
-			return req, nil
+	// The project's own model of that name first, then a shared one: the
+	// gateway resolves the name the same way.
+	var shared *configurationapp.CurrentModelCatalogItem
+	for i := range catalog.Items {
+		item := &catalog.Items[i]
+		if item.Name != req.Model {
+			continue
+		}
+		if item.ProjectID == int32(projectID) {
+			return req, item, nil
+		}
+		if shared == nil {
+			shared = item
 		}
 	}
-	return req, ErrDefaultModelUnavailable
+	return req, shared, nil
 }

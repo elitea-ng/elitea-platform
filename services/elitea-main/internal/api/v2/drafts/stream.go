@@ -129,6 +129,19 @@ func (h *Handler) GenerateApplicationDraftStream(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The thinking setting is checked before the stream opens, so a setting
+	// the model cannot honour is a plain 400 (ADR-0038).
+	request, err = v2predict.PrepareReasoning(r.Context(), h.completer, request)
+	if message, refused := v2predict.IsReasoningError(err); refused {
+		writeError(w, http.StatusBadRequest, message)
+		return
+	}
+	if err != nil {
+		slog.ErrorContext(r.Context(), "draft stream: model resolution failed",
+			"project_id", projectID, "model", request.Model, "err", err)
+		writeError(w, http.StatusBadGateway, "the LLM gateway could not complete this request")
+		return
+	}
 
 	// New sets the event-stream headers and refuses a writer that cannot
 	// flush; the frames themselves go through the keepalive, one write each,
