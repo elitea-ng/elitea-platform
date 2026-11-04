@@ -5680,5 +5680,19 @@
   "unattended.check.notMetNoReason": "Not done yet",
   "unattended.check.blocked": "Blocked on: {{reason}}",
   "unattended.check.blockedNoReason": "Blocked",
-  "unattended.check.notChecked": "Not checked"
+  "unattended.check.notChecked": "Not checked",
+  "notifications.runFinished.completed.body": "A run is done.",
+  "notifications.runFinished.completed.title": "Run finished",
+  "notifications.runFinished.failed.body": "A run stopped with an error.",
+  "notifications.runFinished.failed.title": "Run failed",
+  "notifications.runFinished.limitReached.body": "A run reached its chain limit.",
+  "notifications.runFinished.limitReached.title": "Run stopped at its limit",
+  "notifications.runFinished.openConversation": "Open the conversation",
+  "notifications.runFinished.openThread": "Open the thread",
+  "notifications.runFinished.waiting.body": "A run waits for your answer.",
+  "notifications.runFinished.waiting.title": "Run needs you",
+  "notifications.webPush.blocked": "Your browser blocks notifications from this site. Allow them in the site settings of your browser.",
+  "notifications.webPush.failed": "Web push did not change. Try again.",
+  "notifications.webPush.hint": "This browser shows a notice when a run finishes or waits for you, also when no Elitea tab is open.",
+  "notifications.webPush.label": "Web push in this browser"
 }

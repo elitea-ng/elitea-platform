@@ -48,8 +48,18 @@ interface LegacyNotificationMeta {
   readonly initiator?: string;
 }
 
+/** `run_finished` meta (ADR-0045 decision 5): how a chain of runs ended, and where it ran. */
+interface RunFinishedMeta {
+  readonly outcome?: string;
+  readonly limit?: string;
+  readonly conversationUuid?: string;
+  readonly threadId?: string;
+  readonly origin?: string;
+  readonly continuations?: number;
+}
+
 /** Structural superset of `entities/notification`'s `NotificationMeta` — see module doc comment. */
-export interface FullNotificationMeta extends LegacyNotificationMeta {
+export interface FullNotificationMeta extends LegacyNotificationMeta, RunFinishedMeta {
   readonly message?: string;
   readonly conversationId?: string;
   readonly messageId?: string;
@@ -89,8 +99,8 @@ function toEventType(raw: string): NotificationEventType {
  * `exactOptionalPropertyTypes` (spec §2.1) forbids assigning `undefined` to
  * an optional (`key?: T`, not `key?: T | undefined`) property — every field
  * below is present-or-absent on the wire, not present-with-`undefined`, so
- * building the object with all 27 keys unconditionally and stripping the
- * undefined ones afterward (rather than 27 individual conditional spreads)
+ * building the object with every key unconditionally and stripping the
+ * undefined ones afterward (rather than one individual conditional spreads)
  * is the pragmatic middle ground `shared/api/generated/mutator.ts` uses at
  * smaller scale (`...(options.signal ? { signal: options.signal } : {})`).
  * The cast is safe: `Object.entries`/`Object.fromEntries` round-trip loses
@@ -128,6 +138,12 @@ function normalizeMeta(meta: NotificationMetaWire | undefined): FullNotification
     updated: meta.updated,
     reindex: meta.reindex,
     initiator: meta.initiator,
+    outcome: meta.outcome,
+    limit: meta.limit,
+    conversationUuid: meta.conversation_uuid,
+    threadId: meta.thread_id,
+    origin: meta.origin,
+    continuations: meta.continuations,
   };
   return Object.fromEntries(Object.entries(mapped).filter(([, value]) => value !== undefined));
 }

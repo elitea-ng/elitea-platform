@@ -1,6 +1,6 @@
 ---
 title: "Notifications"
-description: "Review recent alerts from the bell, get system notifications in the desktop app, or browse your full history in Notifications Center."
+description: "Review recent alerts from the bell, get system notifications in the desktop app or web push in a browser, or browse your full history in Notifications Center."
 ---
 
 Elitea delivers real-time notifications over a live connection for events like publish decisions, mentions, budget thresholds, and expiring tokens.
@@ -17,23 +17,31 @@ While the desktop app's window is in the background, a new notification also sho
 
 To stop system notifications, turn off **Show system notifications** at the top of Settings › Notifications (desktop app only). The bell and Notifications Center are not affected. Your operating system's own notification settings for Elitea also apply.
 
-## Web push
+## Web push (browser)
 
-Web push shows a browser notification when a long run ends or when a run waits for your approval. You get it also when no Elitea tab is open.
+Web push shows a notice from your browser when a run finishes or waits for you. The notice also shows when no Elitea tab is open.
 
 To turn on web push:
 
-1. In the browser that you want to use, open Settings › Notifications. The desktop app does not show this switch, because it has system notifications.
+1. Go to Settings › Notifications.
 2. Turn on **Web push in this browser**.
-3. Allow notifications when the browser asks.
+3. When the browser asks, allow notifications.
 
-Do these steps in each browser that you use. You can turn on web push in at most 10 browsers. When you turn it on in an 11th browser, Elitea removes the browser that received a notification least recently. To stop web push in a browser, turn off the switch in that browser.
+The setting applies to this browser only. Turn it on in each browser where you want notices. To stop the notices, turn off the switch.
 
-The notification does not contain the message text. It shows the outcome only. Select the notification to open the conversation.
+You can turn on web push in at most 10 browsers. When you turn it on in an 11th browser, Elitea removes the browser that received a notice least recently.
 
-When the switch is not available, your administrator turned off web push, or the install cannot send it. Administrators: see [Features and configuration](/admin/features-and-configuration).
+A notice contains no content from the run. It tells you only how the run ended. Select the notice to open the conversation.
 
-The install sends to the push service of each browser. Your network must allow these hosts: `fcm.googleapis.com` (Chrome, Edge on Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari), and `*.notify.windows.com` (Edge on Windows).
+Elitea does not show the switch in these cases:
+
+- Your administrator turned off web push.
+- Your browser cannot receive push notices. For example, Safari on iPhone and iPad can receive them only for an Elitea web app on the Home Screen.
+- You use the desktop app. The desktop app shows system notifications instead.
+
+If your browser blocks notifications from Elitea, the switch is off and you cannot change it. Allow notifications for this site in the site settings of your browser, then come back to the page.
+
+Administrators: see [Features and configuration](/admin/features-and-configuration). The install sends to the push service of each browser. Your network must allow these hosts: `fcm.googleapis.com` (Chrome, Edge on Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari), and `*.notify.windows.com` (Edge on Windows).
 
 ## Notifications Center
 
@@ -53,11 +61,14 @@ Settings › Notifications shows every notification, read and unread, with searc
 
 Several of these link straight to the relevant page — for example, an expiring-token notification opens Settings › Personal Tokens, and a budget notification opens Settings › Usage.
 
+A run notification contains only the result of the run, not its content. **Open the conversation** opens the conversation of the run. In the desktop app, **Open the thread** opens a thread that ran on your computer. The desktop app shows a system notification for a run in the cloud. For a run on your computer, it shows its own system notification when the run ends, so it does not show a second one.
+
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="The bell still shows unread after I opened everything">Opening the popover does not mark items read automatically — use **Mark as read** or **Mark all as read** explicitly.</Accordion>
   <Accordion title="No system notifications in the desktop app">Check that **Show system notifications** is on in Settings › Notifications and that your operating system allows notifications from Elitea. System notifications show only while the app's window is in the background.</Accordion>
+  <Accordion title="No web push notices in the browser">Make sure that **Web push in this browser** is on in Settings › Notifications and that your browser allows notifications from Elitea. A notice does not show while you look at the conversation of that run. Some browsers show notices only while the browser is open.</Accordion>
   <Accordion title="A notification's link goes somewhere unexpected">Some links (for example, a mention) open the exact conversation and message; others open a settings page scoped to the relevant project.</Accordion>
 </AccordionGroup>
 

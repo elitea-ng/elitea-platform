@@ -134,6 +134,7 @@ pub fn run() {
         .manage(context_menu::Pending::default())
         .manage(app_events::PendingOpens::default())
         .manage(app_events::CommandQueue::default())
+        .manage(notices::NoticeFilter::default())
         .manage(window::QuitGate::default())
         // A (re)loading page is not listening to app://command yet: hold
         // commands until it calls `app_ready`.

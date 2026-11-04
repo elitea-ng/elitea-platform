@@ -47,7 +47,9 @@ export type NotificationEventType =
   | 'agent_unpublished'
   | 'personal_access_token_expiring'
   | 'moderation_rejected'
-  | 'moderation_approved';
+  | 'moderation_approved'
+  /** ADR-0045 decision 5: a chain of runs ended. The meta is content-free (outcome and ids only). */
+  | 'run_finished';
 
 /**
  * Freeform per-event-type payload (`notification.helpers.js:10-54`,
