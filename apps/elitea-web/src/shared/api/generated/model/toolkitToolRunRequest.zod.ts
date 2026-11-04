@@ -81,7 +81,17 @@ export const ToolkitToolRunRequest = zod
           .max(toolkitToolRunRequestLlmSettingsMaxTokensMax)
           .optional(),
         reasoning_effort: zod
-          .enum(["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+          .enum([
+            "auto",
+            "off",
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+          ])
           .optional(),
       })
       .optional()

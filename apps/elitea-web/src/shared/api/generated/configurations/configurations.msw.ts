@@ -247,6 +247,8 @@ export const getListConfigurationModelsResponseMock = (
       faker.datatype.boolean(),
       undefined,
     ]),
+    reasoning_control: "toggle",
+    reasoning_tool_steps: false,
     supports_vision: faker.helpers.arrayElement([
       faker.datatype.boolean(),
       undefined,
