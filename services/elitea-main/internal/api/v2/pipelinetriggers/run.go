@@ -221,6 +221,24 @@ func (h *Handler) authorizeRunIdentity(ctx context.Context, projectID, userID in
 	return ErrRunForbidden
 }
 
+// authorizeRun checks the run identity, and for a governed run writes the
+// mandate into the security context. A delegated_background mandate runs as
+// its subject, re-checked here as any run identity is; an autonomous one has
+// no subject, and ActorUserID is attribution only.
+func (h *Handler) authorizeRun(ctx context.Context, request runRequest) (context.Context, runRequest, error) {
+	if request.Authority != nil {
+		ctx = securitycontext.WithRunAuthority(ctx, *request.Authority)
+		if request.Authority.SubjectUserID > 0 {
+			request.ActorUserID = request.Authority.SubjectUserID
+			if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+				return ctx, request, err
+			}
+		}
+		return ctx, request, nil
+	}
+	return ctx, request, h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID)
+}
+
 // runOutcome is what an admitted run reports back.
 type runOutcome struct {
 	ExecutionID       string
@@ -291,19 +309,8 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	if !utf8.ValidString(request.Input) || strings.ContainsRune(request.Input, '\x00') {
 		return runOutcome{}, ErrInvalidInput
 	}
-	if request.Authority != nil {
-		// A governed run: the mandate is the authority, and admission writes
-		// it into the security context. A delegated_background mandate runs
-		// as its subject, re-checked here as any run identity is; an
-		// autonomous one has no subject, and ActorUserID is attribution only.
-		ctx = securitycontext.WithRunAuthority(ctx, *request.Authority)
-		if request.Authority.SubjectUserID > 0 {
-			request.ActorUserID = request.Authority.SubjectUserID
-			if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
-				return runOutcome{}, err
-			}
-		}
-	} else if err := h.authorizeRunIdentity(ctx, request.ProjectID, request.ActorUserID); err != nil {
+	ctx, request, err := h.authorizeRun(ctx, request)
+	if err != nil {
 		return runOutcome{}, err
 	}
 	target, err := h.resolveRunTarget(ctx, schema, request.VersionID, request.Kinds)
@@ -342,7 +349,7 @@ func (h *Handler) admit(ctx context.Context, schema string, request runRequest) 
 	}
 	// ADR-0041 decision 5 (#1491): the run's on_approval_required snapshot
 	// is written before the run can pause.
-	if err := h.recordRunApprovalPolicy(ctx, request, conversationUUID); err != nil {
+	if err := h.recordRunApprovalPolicy(ctx, request, conversationUUID, false); err != nil {
 		h.discardRunConversation(ctx, schema, conversationUUID)
 		return runOutcome{}, err
 	}

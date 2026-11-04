@@ -2360,6 +2360,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				domainEvents,
 				pipelineRunsRepo,
 				v2pipelinetriggers.WithGovernedRuns(governedTriggers.Runs),
+				pipelineThreadRuns(workspaceHandoff.Continuer),
 			)
 			// The schedule TICK. It rides elitea-main's platform scheduler —
 			// the same framework `index.schedule.scan.v1` uses — so the clock,

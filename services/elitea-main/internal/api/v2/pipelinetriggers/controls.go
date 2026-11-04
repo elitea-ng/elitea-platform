@@ -203,7 +203,16 @@ func resolveControls(
 	requested requestedControls, mode triggerAuthMode, modeNamed bool,
 	previous triggerRow, hasPrevious bool, target runTarget,
 ) (triggerControls, error) {
-	controls := triggerControls{TargetKind: targetKindOf(target)}
+	return resolveControlsForKind(requested, mode, modeNamed, previous, hasPrevious, targetKindOf(target))
+}
+
+// resolveControlsForKind is resolveControls for a stated kind: the version's
+// kind, or `workspace_thread` (0159), which has no default event filter.
+func resolveControlsForKind(
+	requested requestedControls, mode triggerAuthMode, modeNamed bool,
+	previous triggerRow, hasPrevious bool, kind string,
+) (triggerControls, error) {
+	controls := triggerControls{TargetKind: kind}
 
 	keepStored := hasPrevious && !modeNamed && previous.TargetKind == controls.TargetKind
 	switch {

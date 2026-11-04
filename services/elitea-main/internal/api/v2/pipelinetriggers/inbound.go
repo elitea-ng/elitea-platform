@@ -29,9 +29,13 @@ import (
 	"crypto/subtle"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
@@ -330,7 +334,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	outcome, err := h.admit(r.Context(), schema, runRequest{
+	request := runRequest{
 		ProjectID:   projectID,
 		ActorUserID: trigger.CreatedBy,
 		VersionID:   trigger.VersionID,
@@ -346,7 +350,16 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		TriggerID:     trigger.ID,
 		TriggerKind:   storedTargetKind(trigger),
 		Authority:     authority,
-	})
+	}
+	var outcome runOutcome
+	if trigger.TargetKind == TargetKindWorkspaceThread {
+		// A cloud turn on the handed-off thread (workspacethread.go). Each
+		// call is a new question; a signed delivery that repeats is answered
+		// from the delivery log above.
+		outcome, err = h.admitThread(r.Context(), request, trigger.Target, trigger.Target.Grant, uuid.NewString())
+	} else {
+		outcome, err = h.admit(r.Context(), schema, request)
+	}
 	if deliveryKey != "" {
 		if err != nil {
 			h.releaseDelivery(r.Context(), schema, trigger.TokenID, deliveryKey)
@@ -430,6 +443,41 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity,
 			"`input` is required: this trigger starts an agent, and an agent needs text or a payload to read")
 		return
+	case errors.Is(err, handoffcontinue.ErrThreadBusy):
+		// The thread is not CLOUD_IDLE (ADR-0045 decision 9): no turn
+		// started. The credential was accepted, so naming the state is no
+		// oracle, and the sender can retry when the thread is idle.
+		record(http.StatusConflict, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the workspace thread is busy; no turn started")
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "the workspace thread is busy: it is not idle in the cloud; retry when the current turn ends",
+			"code":  "thread_busy",
+		})
+		return
+	case errors.Is(err, workspacehandoff.ErrNotFound):
+		// The missing result: the thread is gone, or no longer handed off.
+		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the workspace thread is gone, or it is no longer handed off")
+		writeError(w, http.StatusUnauthorized, refusal)
+		return
+	case errors.Is(err, handoffcontinue.ErrThreadVersion):
+		record(http.StatusForbidden, projectID, trigger.CreatedBy, trigger.VersionID, runmandate.CodeMandateScopeMismatch)
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "the thread's agent is not the version this trigger's mandate binds",
+			"code":  runmandate.CodeMandateScopeMismatch,
+		})
+		return
+	case isGrantRefusal(err):
+		// The stored grant no longer fits the platform's limits.
+		record(http.StatusUnprocessableEntity, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the trigger's grant was refused")
+		unattendedwire.WriteRefusal(w, err)
+		return
+	case errors.Is(err, ErrThreadRunsUnavailable), errors.Is(err, workspacehandoff.ErrUnavailable):
+		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
+			"no cloud executor for workspace threads on this deployment")
+		writeError(w, http.StatusServiceUnavailable, "this deployment cannot start a turn on a handed-off thread")
+		return
 	case errors.Is(err, ErrRuntimeUnavailable):
 		record(http.StatusServiceUnavailable, projectID, trigger.CreatedBy, trigger.VersionID,
 			"no agent runtime on this deployment")
@@ -444,7 +492,7 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.stampTriggerUse(r.Context(), schema, trigger.ID)
+	h.stampTriggerUse(r.Context(), schema, trigger.ID, outcome.ExecutionID)
 	record(http.StatusAccepted, projectID, trigger.CreatedBy, trigger.VersionID,
 		admittedNote(outcome.InputSource, variablesNote))
 

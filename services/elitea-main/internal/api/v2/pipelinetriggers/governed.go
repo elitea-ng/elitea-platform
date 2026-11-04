@@ -72,8 +72,14 @@ func (h *Handler) attachedMandate(ctx context.Context, schema, table string, id 
 }
 
 // scheduleTarget is what a schedule's mandate must cover.
+//
+// For a `workspace_thread` target (0159) the input is the prompt each
+// occurrence starts with: that is the text the mandate's scope reads.
 func scheduleTarget(projectID int64, schedule scheduleRow) runmandate.Target {
 	input := schedule.UserInput
+	if schedule.TargetKind == TargetKindWorkspaceThread {
+		input = schedule.Target.prompt()
+	}
 	return runmandate.Target{
 		Origin: runmandate.OriginPipelineSchedule, TenantProjectID: projectID,
 		ResourceID: strconv.FormatInt(schedule.ID, 10), ApplicationVersionID: schedule.VersionID,
@@ -178,6 +184,7 @@ func (h *Handler) triggerAuthority(
 // ok false means the response is written.
 func (h *Handler) saveCovered(
 	w http.ResponseWriter, r *http.Request, schema string, projectID, versionID int64, cron, input string,
+	kind string, thread threadTarget,
 ) bool {
 	existing, err := h.scheduleByVersion(r.Context(), schema, versionID)
 	if errors.Is(err, ErrNotFound) {
@@ -198,6 +205,7 @@ func (h *Handler) saveCovered(
 		return true
 	}
 	existing.Cron, existing.UserInput = cron, input
+	existing.TargetKind, existing.Target = kind, thread
 	switch err := h.governed.Covers(r.Context(), mandateID, scheduleTarget(projectID, existing)); {
 	case err == nil, errors.Is(err, runmandate.ErrMandateNotFound):
 		// A mandate that is gone stops the next fire; it does not block

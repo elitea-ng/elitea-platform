@@ -73,6 +73,11 @@ type scheduleView struct {
 	LastResultText  string     `json:"last_result_detail,omitempty"`
 	LastResultAt    *time.Time `json:"last_result_at,omitempty"`
 	LastExecutionID string     `json:"last_execution_id,omitempty"`
+	// TargetKind is `pipeline` (the version runs) or `workspace_thread` (a
+	// cloud turn starts on a handed-off thread, 0159). The thread fields are
+	// set only for `workspace_thread`.
+	TargetKind string `json:"target_kind,omitempty"`
+	threadView
 	// OnApprovalRequired is what a run of this schedule does at a step that
 	// needs an approval (#1491): the schedule's own value, else the platform
 	// default.
@@ -95,6 +100,8 @@ func scheduleViewOf(row scheduleRow) scheduleView {
 		UpdatedAt:    &row.UpdatedAt,
 		LastRun:      row.LastRun,
 		LastResultAt: row.LastResultAt,
+		TargetKind:   row.TargetKind,
+		threadView:   threadViewOf(row.TargetKind, row.Target),
 	}
 	if row.LastResult != nil {
 		view.LastResult = *row.LastResult
@@ -200,8 +207,24 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	if body.Active != nil {
 		active = *body.Active
 	}
+	requested, err := parseThreadTarget(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	kind, thread, ok := h.scheduleTargetOf(w, r, schema, projectID, versionID, requested)
+	if !ok {
+		return
+	}
+	// A thread target keeps the version as its anchor (the setting, its
+	// writers, its mandate), and the version does not run, so an agent
+	// version is an anchor too.
+	kinds := pipelinesOnly
+	if kind == TargetKindWorkspaceThread {
+		kinds = pipelinesAndAgents
+	}
 
-	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesOnly)
+	target, err := h.resolveRunTarget(r.Context(), schema, versionID, kinds)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
 		writeError(w, http.StatusNotFound, "no such pipeline version in this project")
@@ -214,7 +237,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 
 	// GOVERNED: the save keeps the attached mandate (the upsert never writes
 	// it), so the new cron and input must stay inside its scope.
-	if h.governed != nil && !h.saveCovered(w, r, schema, projectID, versionID, expression, input) {
+	if h.governed != nil && !h.saveCovered(w, r, schema, projectID, versionID, expression, input, kind, thread) {
 		return
 	}
 
@@ -224,7 +247,7 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
 		var writeErr error
 		row, writeErr = upsertSchedule(r.Context(), tx, schema,
-			target.ApplicationID, versionID, actorID, expression, active, input)
+			target.ApplicationID, versionID, actorID, expression, active, input, kind, thread)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -239,6 +262,35 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 	view := scheduleViewOf(row)
 	view.OnApprovalRequired = h.viewOnApprovalRequired(r.Context(), projectID, approvalTargetSchedule, versionID)
 	writeJSON(w, http.StatusOK, view)
+}
+
+// scheduleTargetOf is the target a save writes. A body with no
+// `target_kind` keeps the stored target. A thread target, new or kept, is
+// checked again: the save makes the caller the schedule's author, so the
+// caller must be able to write to the thread. ok false means the response
+// is written.
+func (h *Handler) scheduleTargetOf(
+	w http.ResponseWriter, r *http.Request, schema string, projectID, versionID int64, requested requestedTarget,
+) (string, threadTarget, bool) {
+	if !requested.named {
+		existing, err := h.scheduleByVersion(r.Context(), schema, versionID)
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return TargetKindPipeline, threadTarget{}, true
+		case err != nil:
+			h.log().Error("pipelinetriggers: read schedule", "err", err)
+			writeError(w, http.StatusInternalServerError, "the schedule could not be read")
+			return "", threadTarget{}, false
+		case existing.TargetKind != TargetKindWorkspaceThread:
+			return TargetKindPipeline, threadTarget{}, true
+		}
+		requested = requestedTarget{named: true, thread: true, target: existing.Target}
+	}
+	if !requested.thread {
+		return TargetKindPipeline, threadTarget{}, true
+	}
+	thread, ok := h.checkThreadTarget(w, r, projectID, requested)
+	return TargetKindWorkspaceThread, thread, ok
 }
 
 // DeleteSchedule removes the schedule.

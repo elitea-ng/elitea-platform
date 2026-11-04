@@ -218,7 +218,17 @@ func (h *Handler) fireSchedule(
 	// OVERLAP. Asked before the run is authorized, because a schedule whose
 	// previous run is still going must not start a second one even if
 	// everything else about it is fine.
-	active, err := h.previousRunActive(ctx, tenant.Schema, schedule.ID)
+	thread := schedule.TargetKind == TargetKindWorkspaceThread
+	var active bool
+	var err error
+	if thread {
+		// A thread target makes no conversation of its own: the overlap is
+		// the run its last occurrence started (last_execution_id), and the
+		// chain that run is the root of.
+		active, err = h.threadRunActive(ctx, tenant.ProjectID, schedule)
+	} else {
+		active, err = h.previousRunActive(ctx, tenant.Schema, schedule.ID)
+	}
 	if err != nil {
 		h.log().Error("pipelinetriggers: overlap check", "schedule_id", schedule.ID, "err", err)
 		result.Failed++
@@ -249,7 +259,7 @@ func (h *Handler) fireSchedule(
 		authority = &granted
 	}
 
-	outcome, err := h.admit(ctx, tenant.Schema, runRequest{
+	request := runRequest{
 		ProjectID:   tenant.ProjectID,
 		ActorUserID: schedule.AuthorID,
 		VersionID:   schedule.VersionID,
@@ -257,7 +267,28 @@ func (h *Handler) fireSchedule(
 		Origin:      OriginSchedule,
 		ScheduleID:  schedule.ID,
 		Authority:   authority,
-	})
+	}
+	var outcome runOutcome
+	if thread {
+		// A cloud turn on the handed-off thread (workspacethread.go), with
+		// the prompt as its message.
+		request.Input = ""
+		outcome, err = h.admitThread(ctx, request, schedule.Target, schedule.Target.Grant,
+			scheduleQuestionID(tenant.ProjectID, schedule.ID, now))
+		if skip, detail := threadOutcome(err); skip != "" {
+			if skip == resultFailed {
+				h.log().Error("pipelinetriggers: scheduled thread turn refused",
+					"project_id", tenant.ProjectID, "schedule_id", schedule.ID, "err", err)
+				result.Failed++
+			} else {
+				result.Skipped++
+			}
+			record(skip, detail, "")
+			return
+		}
+	} else {
+		outcome, err = h.admit(ctx, tenant.Schema, request)
+	}
 	switch {
 	case errors.Is(err, safety.ErrExecutionSuspended):
 		// The kill switch (ADR-0041 decision 1). The tenant table's result
