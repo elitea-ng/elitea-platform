@@ -102,6 +102,21 @@ pub(crate) struct ParallelActivation {
     pub(crate) node_id: String,
     pub(crate) step: u64,
     pub(crate) config_digest: [u8; 32],
+    /// The per-family identity input of a Map activation, not a Parallel
+    /// concept: a Map child's thread id binds the worker and the frozen
+    /// source as well (`map_children.rs`). Only `FanoutSource::Map` sets it;
+    /// a Parallel activation never carries it, so its stored bytes stay as
+    /// they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) map: Option<MapIdentity>,
+}
+
+/// The fields a Map child id binds beyond Parallel's activation fields.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MapIdentity {
+    pub(crate) worker_digest: [u8; 32],
+    pub(crate) source_digest: [u8; 32],
 }
 
 impl ParallelActivation {
@@ -126,6 +141,7 @@ impl ParallelActivation {
             node_id: source.id().to_owned(),
             step,
             config_digest: source.config_digest(),
+            map: None,
         })
     }
 }

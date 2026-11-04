@@ -54,6 +54,17 @@ impl ParallelBranchDefinition {
     pub fn node(&self) -> &str {
         &self.node
     }
+
+    /// A fan-out child that no Parallel YAML declares: a Map item, keyed by
+    /// its decimal 0-based index and run by the Map's worker node. The key is
+    /// checked by the fan-out plan (`FanoutKind::Map`), not as a graph id.
+    #[must_use]
+    pub fn map_item(index: usize, worker: &str) -> Self {
+        Self {
+            id: index.to_string(),
+            node: worker.to_owned(),
+        }
+    }
 }
 
 /// Strict v1 YAML contract for a true graph parallel node.
