@@ -1,0 +1,7 @@
+{
+  "id": "extract-recipe",
+  "group": "extraction",
+  "title": "Extract and scale a recipe with fractions and mixed units",
+  "prompt": "User request: read input/recipe.md and write output.json in the workspace root that conforms to schema.json. I am baking for 6 people, so scale every ingredient quantity proportionally from the recipe's stated servings to 6, and set servings to 6. Rules: ingredients are the author's ingredient list only (ignore the glaze note and readers' comments), in the order listed (loaf first, then topping); quantities as decimal numbers (no fractions, do not round); when a metric amount is given in brackets use that metric amount and unit (g or ml), otherwise keep the unit as written (cup, tsp, tbsp), and use 'piece' for counted items such as eggs or a lemon's zest; optional is true only for ingredients marked optional; prep_minutes and cook_minutes are the stated times in minutes (unscaled); total_minutes is prep + cook + the stated cooling time; oven_temp_c is the conventional (non-fan) oven temperature in Celsius.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

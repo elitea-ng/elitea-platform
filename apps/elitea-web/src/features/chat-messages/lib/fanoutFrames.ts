@@ -45,6 +45,10 @@ function record(value: unknown): Raw | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Raw) : undefined;
 }
 
+function toolkitIdOf(value: unknown): { readonly toolkit_id?: number } {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? { toolkit_id: value } : {};
+}
+
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -261,6 +265,7 @@ export function cardToInterrupt(card: FanoutInterruptCard, ledger: LedgerState =
     ledger_kind: card.kind,
     ledger_revision: ledger.revision,
     server_url: text(display['server_url']),
+    ...toolkitIdOf(display['toolkit_id']),
     ...(ledger.state === 'DECIDED' ? { decided: true, hidden: true } : {}),
   };
 }

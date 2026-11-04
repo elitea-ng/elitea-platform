@@ -175,6 +175,14 @@ pub(crate) fn nested_pause_checkpoints(pause: &ParallelBranchPause) -> Vec<(Stri
     Vec::new()
 }
 
+/// FU-250: the MCP server a child's delegated sign-in pause is for.
+pub(crate) fn delegated_auth_server(pause: &ParallelBranchPause) -> Option<String> {
+    let event = pause_event(pause);
+    pipeline_mcp_auth_event_binding(&event, FANOUT_CHILD_AUTHOR, &pause.thread_id)
+        .ok()
+        .map(|binding| binding.server_url().to_owned())
+}
+
 /// Classify and bind the child's pause. Exactly one typed binding accepts
 /// a given pause shape; anything else is refused typed.
 pub(crate) fn child_card(pause: &ParallelBranchPause) -> Result<FanoutCard, GraphError> {
@@ -284,7 +292,10 @@ pub(crate) async fn child_resume(
                 .await
         }
         FanoutCardKind::DelegatedAuth => {
-            PipelineMcpAuthorizationContinuation::fanout(id, call, &decision.action)
+            // FU-250: an authorize binds exactly the card's server, whose
+            // token the run holds (checked before resuming, `run_child`).
+            let server = delegated_auth_server(pause).filter(|_| decision.action == "authorize");
+            PipelineMcpAuthorizationContinuation::fanout(id, call, &decision.action, server)
                 .map_err(resume_error)?
                 .resolve_event(&event, checkpointer, FANOUT_CHILD_AUTHOR, thread)
                 .await

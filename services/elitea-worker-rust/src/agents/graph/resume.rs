@@ -208,11 +208,14 @@ impl PipelineMcpAuthorizationContinuation {
     }
 
     /// One fan-out card's authorization decision. The credential travels by
-    /// reference on the decision, never here, so no server collection binds.
+    /// reference on the decision and reaches the run only as the token Main
+    /// resolved for the run's actor (FU-250): an `authorize` binds exactly the
+    /// card's server, so the pause's own requirement must name it.
     pub(crate) fn fanout(
         interrupt_id: &str,
         tool_call_id: &str,
         action: &str,
+        server_url: Option<String>,
     ) -> Result<Self, PipelineResumeError> {
         let action = match action {
             "authorize" => PipelineMcpAuthorizationAction::Authorize,
@@ -222,9 +225,16 @@ impl PipelineMcpAuthorizationContinuation {
         if !valid_identity(interrupt_id) || !valid_identity(tool_call_id) {
             return Err(PipelineResumeError::invalid());
         }
+        let server_urls = match (action, server_url) {
+            (PipelineMcpAuthorizationAction::Authorize, Some(url)) => BTreeSet::from([url]),
+            (PipelineMcpAuthorizationAction::Authorize, None) => {
+                return Err(PipelineResumeError::invalid());
+            }
+            (PipelineMcpAuthorizationAction::Skip, _) => BTreeSet::new(),
+        };
         Ok(Self {
             action,
-            server_urls: BTreeSet::new(),
+            server_urls,
             card: Some(PipelineMcpAuthorizationCard {
                 interrupt_id: interrupt_id.to_owned(),
                 tool_call_id: tool_call_id.to_owned(),

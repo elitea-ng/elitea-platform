@@ -1,0 +1,12 @@
+{
+  "id": "code-template-sections",
+  "group": "coding",
+  "title": "Implement a mustache-style template renderer",
+  "prompt": "src/template.mjs only does a naive `{{name}}` replace. We need a proper mustache-style render(template, data) for our notification emails:\n\n- `{{ name }}` (whitespace inside the braces allowed) interpolates HTML-escaped: & < > \" ' become &amp; &lt; &gt; &quot; &#39;. `{{{name}}}` and `{{& name}}` interpolate without escaping.\n- null/undefined/missing values render as an empty string; other values via String().\n- Dotted names (`{{user.address.city}}`) and `{{.}}` (the current item).\n- Name lookup uses a context stack like mustache: the first segment of a name is resolved by searching from the innermost context outwards; once found, the remaining segments are resolved only inside that value (no further fall-through).\n- `{{#name}}...{{/name}}` renders once per element for a non-empty array (element pushed as the context), once with the value pushed for any other truthy value, and nothing for falsy values or empty arrays. `{{^name}}...{{/name}}` renders only when the value is falsy or an empty array. Sections nest, including sections with the same name.\n- `{{! comment }}` renders nothing.\n- Unclosed or mismatched section tags throw an Error.\n- Whitespace and newlines around tags are kept verbatim (no standalone-line trimming).\n\nRun `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/template.test.mjs"]
+  },
+  "final": { "hidden_command": "node --test \"test_hidden/*.test.mjs\"" }
+}

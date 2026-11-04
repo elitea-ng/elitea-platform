@@ -1,0 +1,20 @@
+{
+  "title": "Lemon Blueberry Loaf",
+  "servings": 6,
+  "ingredients": [
+    { "name": "plain flour", "quantity": 285, "unit": "g", "section": "loaf", "optional": false },
+    { "name": "caster sugar", "quantity": 225, "unit": "g", "section": "loaf", "optional": false },
+    { "name": "large eggs", "quantity": 3, "unit": "piece", "section": "loaf", "optional": false },
+    { "name": "fine salt", "quantity": 0.75, "unit": "tsp", "section": "loaf", "optional": false },
+    { "name": "baking powder", "quantity": 1.875, "unit": "tsp", "section": "loaf", "optional": false },
+    { "name": "whole milk", "quantity": 360, "unit": "ml", "section": "loaf", "optional": false },
+    { "name": "unsalted butter", "quantity": 172.5, "unit": "g", "section": "loaf", "optional": false },
+    { "name": "fresh blueberries", "quantity": 1, "unit": "cup", "section": "loaf", "optional": false },
+    { "name": "demerara sugar", "quantity": 3, "unit": "tbsp", "section": "topping", "optional": false },
+    { "name": "lemon zest", "quantity": 1.5, "unit": "piece", "section": "topping", "optional": true }
+  ],
+  "prep_minutes": 20,
+  "cook_minutes": 65,
+  "total_minutes": 100,
+  "oven_temp_c": 180
+}

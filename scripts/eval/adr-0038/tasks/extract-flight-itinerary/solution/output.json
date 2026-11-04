@@ -1,0 +1,11 @@
+{
+  "booking_reference": "9FJ3LM",
+  "passengers": ["Oluwaseun Adeyemi", "Claire Adeyemi"],
+  "segments": [
+    { "flight_number": "LH901", "origin": "LHR", "destination": "FRA", "departure_utc": "2026-12-03T06:45:00Z", "arrival_utc": "2026-12-03T08:30:00Z", "duration_minutes": 105, "cabin": "economy" },
+    { "flight_number": "LH760", "origin": "FRA", "destination": "DEL", "departure_utc": "2026-12-03T13:05:00Z", "arrival_utc": "2026-12-03T20:10:00Z", "duration_minutes": 425, "cabin": "economy" },
+    { "flight_number": "AI121", "origin": "DEL", "destination": "FRA", "departure_utc": "2026-12-12T08:15:00Z", "arrival_utc": "2026-12-12T17:35:00Z", "duration_minutes": 560, "cabin": "business" },
+    { "flight_number": "LH908", "origin": "FRA", "destination": "LHR", "departure_utc": "2026-12-12T19:55:00Z", "arrival_utc": "2026-12-12T21:40:00Z", "duration_minutes": 105, "cabin": "economy" }
+  ],
+  "total_fare": { "amount": 1284.60, "currency": "GBP" }
+}

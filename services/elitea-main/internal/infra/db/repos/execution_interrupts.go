@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	recoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
 	domain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 )
 
 // ExecutionInterruptRepository is the per-interrupt HITL decision ledger
@@ -36,6 +39,21 @@ type ExecutionInterruptRepository struct {
 	shared      sharedStore
 	permissions interruptPermissionCheck
 	signals     *ExecutionInterruptSignals
+	// tokens checks a delegated sign-in's reference at Decide (FU-250);
+	// nil refuses every `authorize`.
+	tokens DelegatedTokenValidator
+}
+
+// DelegatedTokenValidator checks a delegated grant reference against its
+// full binding without decrypting it (mcpoauth.Tokens.Validate).
+type DelegatedTokenValidator interface {
+	Validate(context.Context, string, mcpoauth.TokenBinding) (mcpoauth.TokenReference, error)
+}
+
+// SetDelegatedTokens installs the delegated grant store (FU-250). Call it
+// during composition, before the repository serves anything.
+func (r *ExecutionInterruptRepository) SetDelegatedTokens(tokens DelegatedTokenValidator) {
+	r.tokens = tokens
 }
 
 // SetSignals installs the after-commit signals (live replay wake for
@@ -277,21 +295,26 @@ WHERE root_response_id = $1::uuid AND project_id = $2`, selector.ResponseMessage
 			return err
 		}
 		rows, err := tx.Query(ctx, `
-SELECT card_json, state, revision FROM elitea_runtime.execution_interrupts
-WHERE root_response_id = $1::uuid AND project_id = $2 AND state IN ('PENDING', 'DECIDED')
-ORDER BY raised_at, interrupt_key
+SELECT card.card_json, card.state, card.revision,
+       COALESCE((SELECT job.actor_id FROM elitea_runtime.execution_jobs job
+                 WHERE job.execution_id = card.execution_id ORDER BY job.generation DESC LIMIT 1), '')
+FROM elitea_runtime.execution_interrupts card
+WHERE card.root_response_id = $1::uuid AND card.project_id = $2 AND card.state IN ('PENDING', 'DECIDED')
+ORDER BY card.raised_at, card.interrupt_key
 LIMIT $3`, selector.ResponseMessageID, selector.ProjectID, domain.MaxOpenInterrupts+1)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
+		viewer := strconv.FormatInt(selector.ActorUserID, 10)
 		for rows.Next() {
 			var card []byte
+			var actor string
 			var listed domain.ListedInterrupt
-			if err := rows.Scan(&card, &listed.State, &listed.Revision); err != nil {
+			if err := rows.Scan(&card, &listed.State, &listed.Revision, &actor); err != nil {
 				return err
 			}
-			listed.Card = card
+			listed.Card = viewerCard(card, actor == viewer)
 			list.Interrupts = append(list.Interrupts, listed)
 		}
 		if err := rows.Err(); err != nil {
@@ -315,6 +338,8 @@ type lockedInterrupt struct {
 	decision    []byte
 	actions     []string
 	interruptID string
+	card        []byte
+	executionID string
 }
 
 // Decide records one decision exactly once (contract §6 POST): one
@@ -369,11 +394,12 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 		}
 		var row lockedInterrupt
 		err = tx.QueryRow(ctx, `
-SELECT state, revision, request_id, decision_json, available_actions, interrupt_id
+SELECT state, revision, request_id, decision_json, available_actions, interrupt_id, card_json, execution_id
 FROM elitea_runtime.execution_interrupts
 WHERE root_response_id = $1::uuid AND interrupt_key = $2 AND project_id = $3
 FOR UPDATE`, selector.ResponseMessageID, input.InterruptKey, selector.ProjectID).
-			Scan(&row.state, &row.revision, &row.requestID, &row.decision, &row.actions, &row.interruptID)
+			Scan(&row.state, &row.revision, &row.requestID, &row.decision, &row.actions, &row.interruptID,
+				&row.card, &row.executionID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrNotFound
 		}
@@ -399,6 +425,13 @@ FOR UPDATE`, selector.ResponseMessageID, input.InterruptKey, selector.ProjectID)
 		}
 		if decision.ExpectedRevision != row.revision {
 			return domain.ErrAlreadyResolved
+		}
+		// FU-250 (E4): after the response lock, before the compare-and-set.
+		// A refusal writes nothing: the card stays PENDING at its revision.
+		if decision.Action == domain.ActionAuthorize {
+			if err := r.checkDelegatedCredential(ctx, tx, selector, row, decision.CredentialRef); err != nil {
+				return err
+			}
 		}
 		err = tx.QueryRow(ctx, `
 WITH decided AS (
@@ -806,4 +839,85 @@ func sameRaisedCard(stored, replay []byte) bool {
 	}
 	delete(nextDisplay, "argument_digest")
 	return reflect.DeepEqual(old, next)
+}
+
+// checkDelegatedCredential admits an `authorize` only with a credential the
+// run's own actor holds for exactly this card's toolkit and resource (FU-250):
+//   - the card names its frozen toolkit (a card raised before it did stays
+//     skip-only: ErrAuthorizeUnavailable);
+//   - the decider is the actor of the execution that raised the card (never
+//     another member, whatever their permissions);
+//   - the reference validates for (project, actor, toolkit, canonical resource
+//     of the card's server). The grant was saved only after the sign-in
+//     exchange checked that resource against that toolkit's own settings
+//     (api/v2/eliteacore/mcp_delegated_tokens.go), so a card naming another
+//     server never matches.
+//
+// Every refusal of the credential is the same ErrCredentialRefused.
+func (r *ExecutionInterruptRepository) checkDelegatedCredential(
+	ctx context.Context, tx sqlExecutor, selector domain.Selector, row lockedInterrupt, credentialRef *string,
+) error {
+	toolkitID, resource, ok := delegatedCardBinding(row.card)
+	if !ok {
+		return domain.ErrAuthorizeUnavailable
+	}
+	if r.tokens == nil || credentialRef == nil || selector.ActorUserID <= 0 || selector.ActorUserID > math.MaxInt32 ||
+		selector.ProjectID <= 0 || selector.ProjectID > math.MaxInt32 {
+		return domain.ErrCredentialRefused
+	}
+	var actor string
+	err := tx.QueryRow(ctx, `SELECT actor_id FROM elitea_runtime.execution_jobs WHERE execution_id = $1 ORDER BY generation DESC LIMIT 1`,
+		row.executionID).Scan(&actor)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrCredentialRefused
+	}
+	if err != nil {
+		return fmt.Errorf("read the run actor: %w", err)
+	}
+	if actor != strconv.FormatInt(selector.ActorUserID, 10) {
+		return domain.ErrCredentialRefused
+	}
+	binding := mcpoauth.TokenBinding{
+		ProjectID: int32(selector.ProjectID), ActorID: int32(selector.ActorUserID), ToolkitID: toolkitID, Resource: resource,
+	}
+	if _, err := r.tokens.Validate(ctx, *credentialRef, binding); err != nil {
+		if errors.Is(err, mcpoauth.ErrTokenUnavailable) {
+			return domain.ErrCredentialRefused
+		}
+		return fmt.Errorf("validate the delegated grant: %w", err)
+	}
+	return nil
+}
+
+// viewerCard is a card as one viewer may act on it (FU-250, D2): only the
+// run's own actor may sign in, and only on a card that names its frozen
+// toolkit, so for anyone else (or an older card) a delegated sign-in card
+// offers Skip only. Nothing else changes, and no viewer ever sees a grant.
+func viewerCard(card []byte, viewerIsActor bool) []byte {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(card, &fields) != nil {
+		return card
+	}
+	var kind string
+	if json.Unmarshal(fields["kind"], &kind) != nil || kind != "delegated_auth" {
+		return card
+	}
+	if _, _, bound := delegatedCardBinding(card); viewerIsActor && bound {
+		return card
+	}
+	var actions []string
+	if json.Unmarshal(fields["available_actions"], &actions) != nil {
+		return card
+	}
+	actions = slices.DeleteFunc(actions, func(action string) bool { return action == string(domain.ActionAuthorize) })
+	encoded, err := json.Marshal(actions)
+	if err != nil {
+		return card
+	}
+	fields["available_actions"] = encoded
+	viewed, err := json.Marshal(fields)
+	if err != nil {
+		return card
+	}
+	return viewed
 }

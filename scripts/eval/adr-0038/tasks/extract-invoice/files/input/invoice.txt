@@ -1,0 +1,75 @@
+================================================================================
+ NORTHWIND OFFICE SUPPLY GmbH
+ Hafenstraße 22 · 20457 Hamburg · Germany
+ USt-IdNr. / VAT ID: DE 812 345 678
+ Tel +49 40 555 0192 · billing@northwind-office.example
+================================================================================
+
+                                                        RECHNUNG / INVOICE
+
+ Invoice no.:        NW-2026-10417
+ Invoice date:       14.10.2026
+ Customer no.:       K-30871
+ Your order (PO):    PO-88213
+ Delivery date:      09.10.2026
+ Payment terms:      Due 13.11.2026 (30 days net)
+
+ Bill to:
+   Brightline Analytics B.V.
+   Attn. Ms. Sanne de Vries, Facilities
+   Keizersgracht 410
+   1016 GC Amsterdam
+   Netherlands
+   VAT ID: NL 8642.13.579.B01
+
+ All amounts in EUR. German number format: decimal comma, "." as thousands
+ separator. Intra-community supply with installation on site; German VAT
+ charged because the installation service was performed in Hamburg showroom.
+
+ ------------------------------------------------------------------------------
+ Pos  Art.-No.      Description                          Qty  Unit price    Amount
+ ------------------------------------------------------------------------------
+  1   PAP-A4-80     Copy paper A4 80 g/m²,                12       24,90    298,80
+                    box of 5 reams
+  2   TON-HP-410X   Toner cartridge HP 410X black          3      139,50    418,50
+  3   CHR-ERG-200   Ergonomic office chair "Aero",         2    1.249,00  2.498,00
+                    graphite, 5-year warranty
+  4   DSK-LMP-LED   LED desk lamp, dimmable,               4       45,75    183,00
+ ------------------------------------------------------------------------------
+                                                    carried forward     3.398,30
+
+                                                                     Page 1 of 2
+================================================================================
+ NORTHWIND OFFICE SUPPLY GmbH · Invoice NW-2026-10417 · Page 2 of 2
+================================================================================
+ Pos  Art.-No.      Description                          Qty  Unit price    Amount
+ ------------------------------------------------------------------------------
+                    brought forward                                      3.398,30
+      (pos 4 cont.) with USB-C charging port
+  5   SRV-INST      Installation & assembly on site,   1,5 h       68,00    102,00
+                    billed per hour
+ ------------------------------------------------------------------------------
+                                               Net total               3.500,30
+                                               VAT 19 %                  665,06
+                                               ================================
+                                               INVOICE TOTAL (EUR)     4.165,36
+
+ Account summary
+   Previous balance (invoice NW-2026-09233)                 1.312,00
+   Payment received 02.10.2026 - thank you                 -1.312,00
+   Balance brought forward                                       0,00
+   This invoice                                             4.165,36
+   Amount due now                                           4.165,36
+
+ For comparison only: list price of chair "Aero" at our competitor OfficeHub
+ is 1.399,00 EUR per unit - you save 150,00 EUR per chair with Northwind!
+
+ Bank: Hamburger Sparkasse · IBAN DE44 2005 0550 1234 5678 90 · BIC HASPDEHHXXX
+ Please quote the invoice number with your payment.
+ Managing director: Henrik Thal · Register court Hamburg HRB 112233
+
+ ------------------------------------------------------------------------------
+ NOTE ADDED 17.10.2026 (Accounts Receivable, J. Albers):
+ As agreed with Ms. de Vries by phone, the payment due date for this invoice
+ is extended to 30.11.2026. All other terms remain unchanged.
+ ------------------------------------------------------------------------------

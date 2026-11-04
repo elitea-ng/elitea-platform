@@ -1,0 +1,21 @@
+{
+  "checks": [
+    { "path": "versions", "op": "len", "value": 5 },
+    { "path": "versions.0.version", "op": "eq", "value": "3.2.0" },
+    { "path": "versions.0.counts", "op": "eq", "value": { "added": 3, "changed": 2, "deprecated": 1, "removed": 0, "fixed": 2, "security": 1 } },
+    { "path": "versions.0.breaking", "op": "eq", "value": false },
+    { "path": "versions.1.release_date", "op": "eq", "value": "2026-09-02" },
+    { "path": "versions.1.counts.fixed", "op": "eq", "value": 3 },
+    { "path": "versions.2.version", "op": "eq", "value": "3.1.0" },
+    { "path": "versions.2.yanked", "op": "eq", "value": true },
+    { "path": "versions.2.release_date", "op": "eq", "value": "2026-08-14" },
+    { "path": "versions.0.yanked", "op": "eq", "value": false },
+    { "path": "versions.3.release_date", "op": "eq", "value": "2026-07-03" },
+    { "path": "versions.3.breaking", "op": "eq", "value": true },
+    { "path": "versions.3.counts.changed", "op": "eq", "value": 2 },
+    { "path": "versions.3.counts.removed", "op": "eq", "value": 2 },
+    { "path": "versions.3.counts.fixed", "op": "eq", "value": 3 },
+    { "path": "versions.4.release_date", "op": "eq", "value": "2026-06-11" },
+    { "path": "versions.4.counts.security", "op": "eq", "value": 1 }
+  ]
+}

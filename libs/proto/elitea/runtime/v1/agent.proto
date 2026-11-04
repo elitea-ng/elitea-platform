@@ -134,13 +134,21 @@ message AgentExecutionInputV1 {
   // while workers from an earlier release run (they reject unknown tags).
   // The legacy boolean auto_approve_sensitive_actions stays refused.
   UnattendedGrantV1 unattended_grant = 68;
+  // FU-250: the delegated sign-ins a fan-out wake applies, by reference only.
+  // Main adds one entry per DECIDED (not yet consumed) `authorize` card of the
+  // parked response when it admits the wake, and only a claim that sets
+  // ClaimCommandRequestV1.fanout_delegated_credentials may run such a wake.
+  // The claim-checked content materializer resolves each reference for the
+  // claim's project and actor and projects it into `mcp_tokens`; the stored
+  // input never holds a token. At most 16 entries (the open-card cap).
+  repeated McpTokenReferenceV1 mcp_token_references = 69;
   // How the task model's thinking can be controlled (ADR-0038 decision 3,
   // #1452), frozen from the authorized catalogue at admission. Main sets it
   // only for a model whose thinking a request can set or that declares a
   // fixed kind. ABSENT: the worker keeps the form it used before the
   // catalogue declared one. Workers are upgraded before Main, because a
   // worker from an earlier release refuses this tag.
-  ModelReasoningV1 model_reasoning = 69;
+  ModelReasoningV1 model_reasoning = 70;
 }
 
 // The catalogue's thinking data for one model (ADR-0038 decisions 3 and 4).
@@ -207,6 +215,21 @@ message UnattendedChainLimitsV1 {
   // retried start a different request.
   int64 deadline_unix_seconds = 3;
   reserved 4 to 7;
+}
+
+// McpTokenReferenceV1 names one delegated MCP grant in Main's token store. It
+// grants nothing by itself: Main resolves it only under a live claim, for the
+// claim's own project and actor, and only for this toolkit and resource.
+message McpTokenReferenceV1 {
+  // The canonical https resource the grant is bound to.
+  string resource = 1;
+  // The opaque store reference (43 base64url characters).
+  string reference = 2;
+  // At least 1.
+  uint64 revision = 3;
+  // The frozen toolkit the grant is bound to; at least 1.
+  uint64 toolkit_id = 4;
+  reserved 5 to 15;
 }
 
 // One revision of the platform preamble (shared 0216). The command's

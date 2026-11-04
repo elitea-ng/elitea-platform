@@ -3145,6 +3145,12 @@ pub fn build_agent_claim_request(
     // fanout_wake continuation. Recovery claims clear it again: Main reads the
     // opt-in on ordinary claims only.
     request.fanout_interrupt_decisions = true;
+    // FU-250: this Worker applies a fan-out `authorize` only with its
+    // credential (the card's server bound, its Main-resolved token required),
+    // so Main may grant it a wake that carries mcp_token_references. It is a
+    // capability, not a recovery mode: recovery claims keep it, so a reclaim
+    // of such a wake is never refused for lack of it.
+    request.fanout_delegated_credentials = true;
     Ok(request)
 }
 
@@ -3163,6 +3169,8 @@ fn build_claim_request(
         node_recovery: false,
         // Agent claims opt in (`build_agent_claim_request`); toolkit claims never run a wake.
         fanout_interrupt_decisions: false,
+        // Agent claims opt in (`build_agent_claim_request`).
+        fanout_delegated_credentials: false,
         // Legacy by default; AgentControlClient::fresh_claim_request sets it
         // for a worker that serves the governed security context (#1115).
         governed_security_context_v1: false,

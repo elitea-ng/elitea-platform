@@ -341,8 +341,17 @@ type ClaimCommandRequestV1 struct {
 	// to a claim without this opt-in; the claim is answered retry-later, so an
 	// older worker cannot run a wake as a fresh turn.
 	FanoutInterruptDecisions bool `protobuf:"varint,19,opt,name=fanout_interrupt_decisions,json=fanoutInterruptDecisions,proto3" json:"fanout_interrupt_decisions,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// FU-250: opt in only when the worker applies a fan-out `authorize` decision
+	// with its credential: it binds the decided card's server and requires that
+	// server's token, resolved by Main from AgentExecutionInputV1
+	// .mcp_token_references, before resuming the branch. Main never grants a
+	// fanout_wake job whose input carries mcp_token_references to a claim
+	// without this opt-in, under any disposition; the claim is answered
+	// retry-later, so an older worker can never resume an authorization without
+	// its credential.
+	FanoutDelegatedCredentials bool `protobuf:"varint,20,opt,name=fanout_delegated_credentials,json=fanoutDelegatedCredentials,proto3" json:"fanout_delegated_credentials,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *ClaimCommandRequestV1) Reset() {
@@ -420,6 +429,13 @@ func (x *ClaimCommandRequestV1) GetGovernedSecurityContextV1() bool {
 func (x *ClaimCommandRequestV1) GetFanoutInterruptDecisions() bool {
 	if x != nil {
 		return x.FanoutInterruptDecisions
+	}
+	return false
+}
+
+func (x *ClaimCommandRequestV1) GetFanoutDelegatedCredentials() bool {
+	if x != nil {
+		return x.FanoutDelegatedCredentials
 	}
 	return false
 }
@@ -2219,7 +2235,7 @@ var File_elitea_runtime_v1_control_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a$elitea/runtime/v1/egress_audit.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a elitea/runtime/v1/run_step.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\xb2\x03\n" +
+	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a$elitea/runtime/v1/egress_audit.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a elitea/runtime/v1/run_step.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\xf4\x03\n" +
 	"\x15ClaimCommandRequestV1\x12.\n" +
 	"\x13workload_session_id\x18\x01 \x01(\tR\x11workloadSessionId\x12\x1f\n" +
 	"\vproducer_id\x18\x02 \x01(\tR\n" +
@@ -2228,7 +2244,8 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x1fagent_model_checkpoint_recovery\x18\x10 \x01(\bR\x1cagentModelCheckpointRecovery\x12#\n" +
 	"\rnode_recovery\x18\x11 \x01(\bR\fnodeRecovery\x12?\n" +
 	"\x1cgoverned_security_context_v1\x18\x12 \x01(\bR\x19governedSecurityContextV1\x12<\n" +
-	"\x1afanout_interrupt_decisions\x18\x13 \x01(\bR\x18fanoutInterruptDecisionsJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
+	"\x1afanout_interrupt_decisions\x18\x13 \x01(\bR\x18fanoutInterruptDecisions\x12@\n" +
+	"\x1cfanout_delegated_credentials\x18\x14 \x01(\bR\x1afanoutDelegatedCredentialsJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
 	"\x14SettlementRecoveryV1\x12C\n" +
 	"\bproposal\x18\x01 \x01(\v2'.elitea.runtime.v1.SettlementProposalV1R\bproposal\x12D\n" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +

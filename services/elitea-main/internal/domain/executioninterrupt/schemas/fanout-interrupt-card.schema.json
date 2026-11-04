@@ -113,6 +113,11 @@
           "maxLength": 512,
           "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
         },
+        "toolkit_id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
         "toolkit_type": {
           "type": "string",
           "minLength": 1,
@@ -168,7 +173,7 @@
           "pattern": "^https://[^\\x00-\\x20\\x7f]+$"
         }
       },
-      "maxProperties": 14
+      "maxProperties": 15
     },
     "parent_agent_name": {
       "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_name"

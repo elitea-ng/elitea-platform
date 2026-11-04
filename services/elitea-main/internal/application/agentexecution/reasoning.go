@@ -26,12 +26,12 @@ import (
 //  3. It freezes the control form and the tool-step rule into the version as
 //     `model_reasoning`, so the worker translates the setting for this model
 //     and applies the `auto` policy. The worker reads it from the execution
-//     input (field 69) for the top-level agent and from the nested version
+//     input (field 70) for the top-level agent and from the nested version
 //     for an agent tool. A model that cannot think freezes fixed_off, so auto
 //     sends nothing there. A reasoning model that declares no form freezes
 //     nothing, and the worker keeps the form it used before.
 //
-// The worker must understand field 69 before Main sends it: workers are
+// The worker must understand field 70 before Main sends it: workers are
 // upgraded before Main (docs/UPGRADING.md).
 
 const currentModelReasoningKey = "model_reasoning"

@@ -17,6 +17,8 @@
 import type { ChatContinueProps, ChatMessageListProps } from '@/features/chat-messages';
 import { McpAuthModal } from '@/features/mcps';
 
+import { LedgerSignIn } from './LedgerSignIn';
+
 type ContinuationProps = NonNullable<ChatMessageListProps['continuation']>;
 type AuthModalSlotProps = Parameters<NonNullable<ChatContinueProps['renderAuthModal']>>[0];
 
@@ -45,5 +47,7 @@ export function buildChatBoxContinuationProps(
         onCancel={slotProps.onCancel}
       />
     ),
+    // FU-250: a fan-out sign-in card the run's own user authorizes.
+    renderLedgerSignIn: (slot) => <LedgerSignIn projectId={projectId} slot={slot} />,
   };
 }

@@ -1,0 +1,19 @@
+{
+  "landlord": "Harbor View Properties LLC",
+  "tenants": ["Maria Elena Ruiz", "Kwame Mensah"],
+  "property_address": "2210 Westlake Avenue N, Unit 504, Seattle, WA 98109",
+  "start_date": "2027-02-01",
+  "end_date": "2028-07-31",
+  "term_months": 18,
+  "currency": "USD",
+  "monthly_rent": 2395,
+  "security_deposit": 4900,
+  "rent_due_day": 1,
+  "late_fee": { "amount": 75, "grace_days": 5 },
+  "annual_increase_percent": 3.5,
+  "first_increase_date": "2028-02-01",
+  "notice_period_days": 56,
+  "included_utilities": ["water", "trash"],
+  "parking_spaces": 2,
+  "pets_allowed": false
+}

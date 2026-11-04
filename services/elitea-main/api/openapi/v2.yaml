@@ -501,6 +501,54 @@ components:
         software_id: { type: string }
         software_version: { type: string }
 
+    McpAuthorizationChallenge:
+      type: object
+      additionalProperties: false
+      required: [server_url, resource_metadata_url, resource_metadata]
+      description: Public consent metadata only. No token, client secret or stored setting appears.
+      properties:
+        server_url: { type: string, description: The stored toolkit's canonical https endpoint. }
+        resource_metadata_url: { type: string }
+        resource_metadata:
+          type: object
+          additionalProperties: false
+          required: [resource, authorization_servers, oauth_authorization_server]
+          properties:
+            resource: { type: string }
+            authorization_servers:
+              type: array
+              items: { type: string }
+            scopes_supported:
+              type: array
+              items: { type: string }
+            oauth_authorization_server:
+              type: object
+              description: |
+                The first authorization server's metadata, projected to the RFC 8414 fields the consent flow uses
+                (mcpoauth.Fetcher.project). No other field crosses back to the browser.
+              additionalProperties: false
+              required: [issuer, authorization_endpoint, token_endpoint]
+              properties:
+                issuer: { type: string }
+                authorization_endpoint: { type: string }
+                token_endpoint: { type: string }
+                registration_endpoint: { type: string }
+                revocation_endpoint: { type: string }
+                scopes_supported:
+                  type: array
+                  items: { type: string }
+                grant_types_supported:
+                  type: array
+                  items: { type: string }
+                response_types_supported:
+                  type: array
+                  items: { type: string }
+                code_challenge_methods_supported:
+                  type: array
+                  items: { type: string }
+                token_endpoint_auth_methods_supported:
+                  type: array
+                  items: { type: string }
     McpDcrProxyResponse:
       type: object
       required: [client_id]
@@ -6216,7 +6264,7 @@ components:
     ExecutionInterruptCardDisplay:
       type: object
       additionalProperties: false
-      maxProperties: 14
+      maxProperties: 15
       description: >-
         Only fields today's card shows. Headers, tokens, resource metadata and
         checkpoint ids are never in a card. argument_digest is the worker's
@@ -6232,6 +6280,15 @@ components:
         node_name: {type: string, minLength: 1, maxLength: 128}
         tool_name: {type: string, minLength: 1, maxLength: 512}
         toolkit_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_id:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: >-
+            The frozen toolkit of a delegated sign-in card (FU-250). Only a
+            card that names it can be authorized; a card raised before it
+            offers Skip only.
         toolkit_type: {type: string, minLength: 1, maxLength: 128}
         action_label: {type: string, minLength: 1, maxLength: 512}
         tool_call_id: {type: string, minLength: 1, maxLength: 512}
@@ -6251,6 +6308,7 @@ components:
           type: string
           enum:
             - agent_interrupt_already_resolved
+            - agent_interrupt_credential_refused
             - agent_interrupt_invalid_decision
             - agent_interrupt_not_found
         message:
@@ -19924,6 +19982,46 @@ paths:
         '403': { $ref: '#/components/responses/403' }
         default:
           description: Safe OAuth error. No credential values or raw provider response appear.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpOAuthError'
+
+  /elitea_core/mcp_authorization_challenge/prompt_lib/{project_id}/{toolkit_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: toolkit_id
+        in: path
+        required: true
+        description: The saved MCP toolkit. Its endpoint is read from storage; the request carries no URL.
+        schema: { type: integer, format: int32, minimum: 1 }
+    post:
+      operationId: getMcpAuthorizationChallenge
+      summary: Public consent metadata of one saved MCP toolkit
+      description: |
+        FU-250. A fan-out sign-in card names only its toolkit. Main resolves
+        the endpoint from the stored toolkit the caller can see, discovers its
+        protected-resource and authorization-server metadata through the
+        guarded egress client, and answers only public metadata. The request
+        body is not read. An unknown toolkit, another project's and one the
+        caller cannot see answer the same 404.
+      tags: [toolkits]
+      responses:
+        '200':
+          description: Credential-free challenge. Cache-Control is no-store.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpAuthorizationChallenge'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        default:
+          description: |
+            Typed refusal (`invalid_toolkit_id`, `toolkit_not_found`,
+            `unsupported_toolkit_type`, `invalid_toolkit_resource`,
+            `authorization_discovery_failed`, `authorization_discovery_timeout`,
+            `authorization_resource_mismatch`, `authorization_challenge_unavailable`).
+            No upstream body, internal URL or cause appears.
           content:
             application/json:
               schema:

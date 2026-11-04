@@ -1,0 +1,11 @@
+{
+  "id": "code-business-days",
+  "group": "coding",
+  "title": "Implement business-day arithmetic with holidays (UTC)",
+  "prompt": "Implement the three stubbed functions in src/bizdays.mjs for our SLA calculator. Everything works on UTC calendar days regardless of the machine's time zone; Saturday and Sunday are never business days, and `holidays` is an optional list of 'YYYY-MM-DD' strings (UTC dates) that are also not business days.\n\n- isBusinessDay(date, { holidays }) -> boolean.\n- addBusinessDays(date, n, { holidays }) -> a NEW Date (input untouched) with the same UTC time of day. For n > 0 step forward day by day and stop on the n-th business day after the start (the start day itself never counts); n < 0 does the same backwards. n = 0 returns the date itself if it is a business day, otherwise the next business day forward.\n- businessDaysBetween(start, end, { holidays }) -> number of business days d with start < d <= end, compared by UTC calendar day (time of day ignored); if end is before start, return the negated count for (end, start]; 0 for the same day.\n\nThrow RangeError when n is not an integer or a holiday string is not in YYYY-MM-DD form. Run `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/bizdays.test.mjs"]
+  }
+}

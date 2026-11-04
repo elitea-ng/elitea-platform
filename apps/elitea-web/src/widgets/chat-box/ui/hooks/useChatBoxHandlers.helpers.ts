@@ -24,6 +24,8 @@ export interface HitlInterruptAction {
   readonly childThreadId?: string;
   /** The card's `getInterruptIdentity` — what a decision is routed by. */
   readonly interruptId?: string;
+  /** FU-250: an `authorize` on a fan-out sign-in card carries the grant's opaque reference. */
+  readonly credentialRef?: string;
 }
 /** A single edited message item (baseline: `updatedItems`; matches `UserMessage.tsx`'s `UserMessageUpdatedItem` shape structurally). */
 export interface UpdatedMessageItem { readonly uuid?: string | undefined; readonly content: string; readonly item_type: string; }

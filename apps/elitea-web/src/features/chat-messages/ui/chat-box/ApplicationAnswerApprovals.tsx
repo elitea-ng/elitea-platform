@@ -69,7 +69,7 @@ export interface ApplicationAnswerApprovalsProps {
   readonly messageId: string;
   readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
   readonly staticPause: ApplicationAnswerStaticPause | undefined;
-  readonly authorization: Pick<ApplicationAnswerContinuation, 'onContinueMcpExecution' | 'renderAuthModal'>;
+  readonly authorization: Pick<ApplicationAnswerContinuation, 'onContinueMcpExecution' | 'renderAuthModal' | 'renderLedgerSignIn'>;
   readonly confirmation: ReactNode;
 }
 
@@ -90,6 +90,7 @@ export function ApplicationAnswerApprovals({ model, messageId, onHitlResume, sta
       hitlBuckets={hitlBuckets}
       ledgerAuthorizationBuckets={ledgerAuthorizationBuckets}
       renderAuthModal={authorization.renderAuthModal}
+      renderLedgerSignIn={authorization.renderLedgerSignIn}
       onHitlResume={onHitlResume}
       extraBuckets={staticCards.buckets.filter((bucket) => !hitlBuckets.subAgents.some((hitl) => hitl.instanceKey === bucket.instanceKey))}
       extraCards={staticCards.cards.map((card) => ({

@@ -1,0 +1,12 @@
+{
+  "id": "code-go-intervals",
+  "group": "coding",
+  "title": "Implement closed integer interval merge/insert/remove (Go)",
+  "prompt": "Implement the three stubbed functions in intervals.go; our booking service uses them for blocked-out minute ranges. An Interval{Start, End} is a CLOSED range of integers (both ends included) and is valid only when Start <= End.\n\n- Merge(in) returns a new slice, sorted by Start, in which overlapping intervals and intervals that share an endpoint ([1,3] and [3,5]) are combined. Intervals that are merely adjacent integers ([1,2] and [3,4]) stay separate. The input slice must not be modified. Any invalid interval -> error.\n- Insert(set, x) takes a set that is already sorted, valid and non-overlapping (as returned by Merge), adds x and returns the merged result as a new slice (input untouched). Invalid x -> error.\n- Remove(set, x) subtracts the closed range x from such a set and returns a new slice; because ranges are closed integers, removing [3,5] from [1,10] leaves [1,2] and [6,10]. Invalid x -> error.\n\nFor an empty result return an empty (len 0) slice. Run `go test ./...`.",
+  "verifier": {
+    "kind": "command",
+    "command": "go test ./...",
+    "check_files": ["intervals_test.go", "go.mod"]
+  },
+  "final": { "hidden_command": "go test -run Hidden ./..." }
+}

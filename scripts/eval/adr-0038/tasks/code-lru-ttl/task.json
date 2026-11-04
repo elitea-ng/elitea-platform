@@ -1,0 +1,11 @@
+{
+  "id": "code-lru-ttl",
+  "group": "coding",
+  "title": "Fix recency and expiry bugs in the LRU cache with TTL",
+  "prompt": "src/lru.mjs (an LRU cache with per-entry TTL and an injected clock) is evicting the wrong entries and keeps stale ones alive. Intended semantics:\n\n- get(key) returns the value and marks the entry most-recently-used, but does NOT extend its expiry.\n- has(key) reports presence without touching recency.\n- set(key, value, { ttlMs }) inserts or overwrites; overwriting makes the entry most-recently-used and restarts its expiry. ttlMs per call overrides the cache default; a ttl of 0/undefined means never expires.\n- An entry is expired once now >= insertedAt + ttl; expired entries are invisible to get/has/size/keys().\n- When a set pushes the number of live entries above `max`, expired entries are dropped first and only then the least-recently-used live entry is evicted.\n- size counts live entries; keys() lists live keys from most- to least-recently-used.\n\nFix the implementation; `node --test \"test/*.test.mjs\"` must pass.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/lru.test.mjs"]
+  }
+}

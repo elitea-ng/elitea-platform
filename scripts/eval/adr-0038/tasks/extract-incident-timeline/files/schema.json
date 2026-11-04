@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["incident_id", "severity", "impact_start_utc", "detected_utc", "resolved_utc", "time_to_resolve_minutes", "customer_impact_minutes", "affected_services", "root_cause_category", "timeline"],
+  "properties": {
+    "incident_id": { "type": "string", "minLength": 1 },
+    "severity": { "type": "string", "enum": ["sev1", "sev2", "sev3", "sev4"] },
+    "impact_start_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:00Z$" },
+    "detected_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:00Z$" },
+    "resolved_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:00Z$" },
+    "time_to_resolve_minutes": { "type": "integer", "minimum": 0 },
+    "customer_impact_minutes": { "type": "integer", "minimum": 0 },
+    "affected_services": { "type": "array", "items": { "type": "string" } },
+    "root_cause_category": { "type": "string", "enum": ["deploy", "config", "capacity", "dependency", "hardware", "security", "unknown"] },
+    "timeline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["time_utc", "event"],
+        "properties": {
+          "time_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:00Z$" },
+          "event": { "type": "string", "enum": ["detected", "paged", "acknowledged", "escalated", "root_cause_identified", "mitigation_deployed", "resolved"] }
+        }
+      }
+    }
+  }
+}

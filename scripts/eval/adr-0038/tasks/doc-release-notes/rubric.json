@@ -1,0 +1,18 @@
+{
+  "checks": [
+    { "kind": "heading", "pattern": "^#\\s.*v?2\\.8\\.0", "desc": "title contains the version" },
+    { "kind": "heading", "pattern": "^#{2,3}\\s*Breaking\\b", "desc": "Breaking changes section" },
+    { "kind": "heading", "pattern": "^#{2,3}\\s*(New )?Features\\b", "desc": "Features section" },
+    { "kind": "heading", "pattern": "^#{2,3}\\s*(Bug )?Fix(es)?\\b", "desc": "Fixes section" },
+    { "kind": "regex", "pattern": "#436", "desc": "breaking: --config renamed (feat!)" },
+    { "kind": "regex", "pattern": "#446", "desc": "breaking: Node.js 22 required (build!)" },
+    { "kind": "regex", "pattern": "#452", "desc": "breaking: exit code change (BREAKING CHANGE footer on a fix)" },
+    { "kind": "regex", "pattern": "--config-file", "desc": "names the new flag" },
+    { "kind": "regex", "pattern": "#431", "desc": "PDF export feature" },
+    { "kind": "regex", "pattern": "#443", "desc": "perf commit listed under features" },
+    { "kind": "regex", "pattern": "#453", "desc": "security fix (fix(deps)) included" },
+    { "kind": "absent", "pattern": "CSV|#440|#449", "flags": "i", "desc": "reverted CSV export not mentioned" },
+    { "kind": "absent", "pattern": "eslint|pnpm|setup-node|golden|README|#434|#437|#441|#442|#447|#451|#455", "flags": "i", "desc": "no chore/ci/docs/test/refactor/release commits" },
+    { "kind": "max_words", "value": 400 }
+  ]
+}

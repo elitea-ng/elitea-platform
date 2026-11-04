@@ -1,0 +1,43 @@
+{
+  "qwen": {
+    "label": "Qwen3.8-27B-NVFP4 on the Spark vLLM",
+    "base_url_env": "ELITEA_EVAL_QWEN_BASE_URL",
+    "key_env": null,
+    "model": "RadixArk/Qwen3.8-27B-NVFP4",
+    "thinking": { "kind": "toggle" },
+    "temperature": 0,
+    "max_tokens": 12288,
+    "concurrency": 6
+  },
+  "gpt": {
+    "label": "OpenAI GPT (untested template)",
+    "base_url": "https://api.openai.com/v1",
+    "key_env": "OPENAI_API_KEY",
+    "model": "gpt-5.2",
+    "thinking": { "kind": "effort", "on": "medium", "off": "none" },
+    "temperature": null,
+    "max_tokens_field": "max_completion_tokens",
+    "max_tokens": 12288,
+    "concurrency": 4
+  },
+  "claude": {
+    "label": "Anthropic Claude via its OpenAI-compatible endpoint (untested template)",
+    "base_url": "https://api.anthropic.com/v1",
+    "key_env": "ANTHROPIC_API_KEY",
+    "model": "claude-sonnet-5",
+    "thinking": { "kind": "budget", "style": "anthropic", "budget": 4096 },
+    "temperature": null,
+    "max_tokens": 12288,
+    "concurrency": 4
+  },
+  "gemini": {
+    "label": "Google Gemini via its OpenAI-compatible endpoint (untested template)",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "key_env": "GEMINI_API_KEY",
+    "model": "gemini-3-pro",
+    "thinking": { "kind": "budget", "style": "gemini", "budget": 4096 },
+    "temperature": 0,
+    "max_tokens": 12288,
+    "concurrency": 4
+  }
+}

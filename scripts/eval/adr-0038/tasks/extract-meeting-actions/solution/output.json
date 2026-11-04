@@ -1,0 +1,17 @@
+{
+  "meeting_date": "2026-03-10",
+  "attendees": ["Priya Natarajan", "Tom Becker", "Marta Kowalska", "Daniel Osei"],
+  "apologies": ["Hannah Lee"],
+  "action_items": [
+    { "description": "Draft a shortlist of two or three observability vendors with a cost comparison", "owner": "Priya Natarajan", "due_date": "2026-03-13", "status": "open" },
+    { "description": "Update the capacity spreadsheet with current node prices and new reserved-instance terms", "owner": "Marta Kowalska", "due_date": "2026-03-20", "status": "open" },
+    { "description": "Find out who owns the SSO certificate renewal", "owner": null, "due_date": null, "status": "open" },
+    { "description": "Prepare the Q2 budget deck before the board meeting", "owner": "Daniel Osei", "due_date": "2026-03-24", "status": "open" },
+    { "description": "Book a venue for the team offsite", "owner": "Marta Kowalska", "due_date": "2026-04-02", "status": "cancelled" }
+  ],
+  "decisions": [
+    "Keep the 75% storage threshold as the trigger for ordering more disks; no change to the compute threshold",
+    "Offsite format is one day, in person, no external facilitator"
+  ],
+  "next_meeting_utc": "2026-03-17T14:00:00Z"
+}

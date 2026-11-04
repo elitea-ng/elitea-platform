@@ -1,0 +1,19 @@
+{
+  "checks": [
+    { "kind": "heading", "pattern": "^#{1,4}\\s*`?retry\\b", "desc": "retry section" },
+    { "kind": "heading", "pattern": "^#{1,4}\\s*`?backoffDelay\\b", "desc": "backoffDelay section" },
+    { "kind": "heading", "pattern": "^#{1,4}\\s*`?isRetryable\\b", "desc": "isRetryable section" },
+    { "kind": "heading", "pattern": "^#{1,4}\\s*`?(class\\s+)?RetryError\\b", "desc": "RetryError section" },
+    { "kind": "absent", "pattern": "^#{1,6}\\s*`?(jitter|sleep|DEFAULTS)\\b", "flags": "m", "desc": "no section for internal helpers" },
+    { "kind": "regex", "pattern": "maxAttempts[^\\n]*\\b5\\b", "desc": "maxAttempts default 5" },
+    { "kind": "regex", "pattern": "baseDelayMs[^\\n]*\\b200\\b", "desc": "baseDelayMs default 200" },
+    { "kind": "regex", "pattern": "maxDelayMs[^\\n]*(10[_,]?000|10\\s?s)", "desc": "maxDelayMs default 10000" },
+    { "kind": "regex", "pattern": "TypeError", "desc": "retry throws TypeError for non-function fn" },
+    { "kind": "regex", "pattern": "RangeError", "desc": "RangeError for invalid attempt / maxAttempts" },
+    { "kind": "regex", "pattern": "429", "desc": "isRetryable retries 429" },
+    { "kind": "regex", "pattern": "ECONNRESET", "desc": "isRetryable network codes" },
+    { "kind": "regex", "pattern": "lastError", "desc": "RetryError.lastError property" },
+    { "kind": "regex", "pattern": "(```(js|javascript)\\b[\\s\\S]*?```[\\s\\S]*?){3}", "desc": "at least three js examples" },
+    { "kind": "max_words", "value": 900 }
+  ]
+}

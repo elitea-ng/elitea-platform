@@ -47,6 +47,8 @@ export interface HitlResumePayload {
   readonly value?: string | undefined;
   readonly toolCallId?: string | undefined;
   readonly interruptId?: string | undefined;
+  /** FU-250: the delegated grant's opaque store reference an `authorize` is sent with; never a token. */
+  readonly credentialRef?: string | undefined;
 }
 
 /** The HITL interrupt data shared by every `ChatHitlActions` branch. */
@@ -71,6 +73,9 @@ export interface HitlInterrupt {
   /** Per-interrupt ledger cards only (`lib/fanoutFrames.ts`): the card kind and an auth card's server. */
   readonly ledger_kind?: string;
   readonly server_url?: string;
+  /** FU-250: a delegated-auth ledger card's frozen toolkit. */
+  readonly toolkit_id?: number;
+  readonly toolkit_type?: string;
 }
 
 /** @public Props for `ChatHitlActions`. */

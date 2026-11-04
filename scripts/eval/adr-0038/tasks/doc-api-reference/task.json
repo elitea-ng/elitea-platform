@@ -1,0 +1,7 @@
+{
+  "id": "doc-api-reference",
+  "group": "doc",
+  "title": "Write an API reference for a small JavaScript module",
+  "prompt": "User request: write API.md in the workspace root, an API reference for the module input/src/retry.js (input/USAGE-NOTES.md has extra context). Give each exported symbol (and only exported symbols) its own Markdown heading that starts with the symbol's name, e.g. '## retry(fn, options)'. For each exported function document: every parameter and option with its type and default value (write the option name and its default on the same line), the return value, every error it can throw and when, and one fenced JavaScript code block (```js) with a usage example. For the exported error class document its properties. Do not give internal helpers (jitter, sleep, DEFAULTS) their own section. At most 900 words.",
+  "verifier": { "kind": "review", "output": "API.md" }
+}

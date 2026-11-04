@@ -53,6 +53,7 @@ import type {
   IndexWriteAck,
   InternalMcpPatStatus,
   ListToolkitAvailableTools200,
+  McpAuthorizationChallenge,
   McpDcrProxyResponse,
   McpOAuthProxyResponse,
   McpRegisteredServer,
@@ -163,6 +164,78 @@ export const getRegisterMcpOAuthClientResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getGetMcpAuthorizationChallengeResponseMock = (
+  overrideResponse: Partial<Extract<McpAuthorizationChallenge, object>> = {},
+): McpAuthorizationChallenge => ({
+  server_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  resource_metadata_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  resource_metadata: {
+    resource: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    authorization_servers: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+    scopes_supported: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      undefined,
+    ]),
+    oauth_authorization_server: {
+      issuer: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      authorization_endpoint: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+      token_endpoint: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      registration_endpoint: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      revocation_endpoint: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      scopes_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      grant_types_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      response_types_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      code_challenge_methods_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      token_endpoint_auth_methods_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+    },
+  },
   ...overrideResponse,
 });
 
@@ -972,6 +1045,32 @@ export const getRegisterMcpOAuthClientMockHandler = (
   );
 };
 
+export const getGetMcpAuthorizationChallengeMockHandler = (
+  overrideResponse?:
+    | McpAuthorizationChallenge
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<McpAuthorizationChallenge> | McpAuthorizationChallenge),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/mcp_authorization_challenge/prompt_lib/:projectId/:toolkitId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetMcpAuthorizationChallengeResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetConnectorCatalogueMockHandler = (
   overrideResponse?:
     | ConnectorCatalogue
@@ -1521,6 +1620,7 @@ export const getGetInternalMcpPatStatusMockHandler = (
 export const getToolkitsMock = () => [
   getExchangeMcpOAuthGrantMockHandler(),
   getRegisterMcpOAuthClientMockHandler(),
+  getGetMcpAuthorizationChallengeMockHandler(),
   getGetConnectorCatalogueMockHandler(),
   getListConnectorRequestsMockHandler(),
   getCreateConnectorRequestMockHandler(),

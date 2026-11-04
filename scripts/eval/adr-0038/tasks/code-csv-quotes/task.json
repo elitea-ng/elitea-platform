@@ -1,0 +1,12 @@
+{
+  "id": "code-csv-quotes",
+  "group": "coding",
+  "title": "Fix RFC 4180 edge cases in the CSV parser and writer",
+  "prompt": "Our little CSV module (src/csv.mjs) breaks on real exports. parseCSV mangles quoted fields that contain doubled quotes (\"\"), leaves stray \\r characters when the file uses CRLF line endings, can't cope with a quoted field that spans several lines, and silently drops the last record when it ends with an empty field (e.g. `a,b,` with no trailing newline). An unterminated quoted field should throw instead of returning garbage. A single trailing line break at the end of the input must not create an extra empty record. stringifyCSV has the mirror-image problems: it should quote a field whenever it contains the delimiter, a double quote, CR or LF (doubling embedded quotes), render null/undefined as empty fields, and join records with CRLF (no trailing line break), so that parseCSV(stringifyCSV(rows)) gives back the same rows. Both functions take an optional { delimiter } (default ','). Please fix it; `node --test \"test/*.test.mjs\"` must pass.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/csv.test.mjs"]
+  },
+  "final": { "hidden_command": "node --test \"test_hidden/*.test.mjs\"" }
+}

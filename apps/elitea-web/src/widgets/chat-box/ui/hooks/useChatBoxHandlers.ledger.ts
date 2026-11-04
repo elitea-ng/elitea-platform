@@ -41,6 +41,8 @@ function refusalText(reason: string): string {
   switch (reason) {
     case 'forbidden':
       return t('widgets.chatBox.ledger.forbidden', 'You cannot answer this request.');
+    case 'credential_refused':
+      return t('widgets.chatBox.ledger.credentialRefused', 'The sign-in could not be used for this run. Only the person who started the run can sign in for it.');
     case 'not_found':
       return t('widgets.chatBox.ledger.notFound', 'This request is no longer waiting for an answer. Reload the conversation to see its current state.');
     case 'invalid':
@@ -52,7 +54,7 @@ function refusalText(reason: string): string {
 
 function unsendableText(action: string): string {
   if (action === 'authorize') {
-    return t('widgets.chatBox.ledger.authorizeUnavailable', 'Sign-in cannot be completed from this card yet. Skip it to let the run continue without it.');
+    return t('widgets.chatBox.ledger.authorizeUnavailable', 'Sign-in could not be completed for this card. Sign in again, or skip it to let the run continue without it.');
   }
   return t('widgets.chatBox.ledger.invalid', 'This answer could not be accepted. Check it and try again.');
 }
@@ -82,7 +84,10 @@ export async function decideLedgerCard(
   // retry after a lost answer replays (`replay: true`) instead of conflicting.
   const slot = `${message.id}:${interruptKey}`;
   const requestId = requestIdFor(slot, JSON.stringify([action.action, value ?? '', revision]));
-  const body = interruptLedger.buildRequest({ requestId, expectedRevision: revision, action: action.action, value });
+  const body = interruptLedger.buildRequest({
+    requestId, expectedRevision: revision, action: action.action, value,
+    ...(action.action === 'authorize' && action.credentialRef ? { credentialRef: action.credentialRef } : {}),
+  });
   if (!body) {
     putBack(unsendableText(action.action));
     return;
