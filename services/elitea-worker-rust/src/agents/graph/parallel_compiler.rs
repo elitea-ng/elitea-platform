@@ -161,7 +161,7 @@ impl PipelineNodeRuntimes {
         // absolute scope path (PM-2: a Parallel two Agent-node levels down).
         let descendants = format!("{node}/");
         if !definitions.iter().any(|(key, definition)| {
-            (key == node || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+            (key == node || key.starts_with(&descendants)) && definition.has_fanout_nodes()
         }) {
             return Ok(None);
         }
@@ -287,9 +287,16 @@ impl PipelineDefinition {
             .any(|node| matches!(node, PipelineNodeDefinition::Parallel(_)))
     }
 
-    pub(crate) fn first_parallel_node(&self) -> Option<&str> {
+    /// Whether this pipeline holds a fan-out node (a Parallel or a Map): both
+    /// bind the run's fan-out authority (T-2A3).
+    pub(crate) fn has_fanout_nodes(&self) -> bool {
+        self.has_parallel_nodes() || self.has_map_nodes()
+    }
+
+    /// The first fan-out node (a Parallel or a Map), by declaration order.
+    pub(crate) fn first_fanout_node(&self) -> Option<&str> {
         self.nodes.iter().find_map(|node| match node {
-            PipelineNodeDefinition::Parallel(node) => Some(node.id()),
+            PipelineNodeDefinition::Parallel(_) | PipelineNodeDefinition::Map(_) => Some(node.id()),
             _ => None,
         })
     }
@@ -301,7 +308,7 @@ impl PipelineDefinition {
     ) -> Result<(Arc<dyn Checkpointer>, PipelineNodeRuntimes), PipelineConfigurationError> {
         let mut runtimes = runtimes.clone();
         // A Map runs on the same fan-out adapter and binds the same authority.
-        if !self.has_parallel_nodes() && !self.has_map_nodes() {
+        if !self.has_fanout_nodes() {
             return Ok((checkpointer, runtimes));
         }
         let binding = runtimes
@@ -586,7 +593,7 @@ fn reject_nested_parallel(
             let path = node.id().to_owned();
             let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
-                (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+                (key == &path || key.starts_with(&descendants)) && definition.has_fanout_nodes()
             }) {
                 return Err(PipelineConfigurationError::FanoutChildUnsupported {
                     node: node.id().to_owned(),
@@ -608,9 +615,9 @@ pub(crate) fn refuse_child_parallel(
         return Ok(());
     };
     for (path, definition) in definitions {
-        if let Some(parallel) = definition.first_parallel_node() {
+        if let Some(fanout) = definition.first_fanout_node() {
             return Err(PipelineConfigurationError::FanoutChildUnsupported {
-                node: format!("{path}/{parallel}"),
+                node: format!("{path}/{fanout}"),
                 refusal: FanoutChildRefusal::ContainsParallel,
             });
         }

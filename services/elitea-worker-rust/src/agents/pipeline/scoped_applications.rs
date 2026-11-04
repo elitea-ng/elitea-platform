@@ -1158,23 +1158,6 @@ impl PipelineApplicationScopeRegistry {
         ))
     }
 
-    pub(crate) fn wrap_map_authority(
-        &self,
-        path: &str,
-        inner: std::sync::Arc<dyn crate::agents::graph::MapCheckpointAuthority>,
-    ) -> Result<
-        std::sync::Arc<dyn crate::agents::graph::MapCheckpointAuthority>,
-        NativeAgentAssemblyError,
-    > {
-        let runtime = self.by_path.get(path).ok_or_else(invalid_scope)?;
-        Ok(std::sync::Arc::new(
-            super::scope_receipts::PipelineMapReceiptAuthority::new(
-                inner,
-                runtime.metadata_gate.clone(),
-            ),
-        ))
-    }
-
     /// Preserve all protocols from one already-verified graph checkpoint authority.
     pub(crate) fn wrap_parallel_authority(
         &self,

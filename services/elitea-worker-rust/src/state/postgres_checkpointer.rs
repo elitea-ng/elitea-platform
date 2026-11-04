@@ -22,16 +22,13 @@ use super::StateWriterLease;
 mod application_children;
 mod child_batch;
 mod fanout_children;
-mod map_children;
 mod node_attempts;
 #[cfg(test)]
 pub(in crate::state) use node_attempts::journal_activation_id;
 mod parallel_append;
 mod parallel_children;
-/// Both child-id derivations, for the test that a Map child on the shared
-/// adapter keeps main's id.
-#[cfg(test)]
-pub(crate) use map_children::map_child_thread_id;
+/// The child-id derivation, for the test that a Map child on the shared
+/// adapter keeps main's ids.
 #[cfg(test)]
 pub(crate) use parallel_children::derive_child_thread_id;
 

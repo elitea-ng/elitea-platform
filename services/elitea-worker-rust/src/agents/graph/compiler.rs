@@ -1068,15 +1068,18 @@ impl PipelineDefinition {
         self.nodes.iter().any(|node| node.id() == id)
     }
 
-    /// Whether `id` is a Parallel node no other fan-out owns: the only node a
-    /// recovery walk's leaf may be parked on (PM-2).
-    pub(crate) fn is_unowned_parallel(&self, id: &str) -> bool {
+    /// Whether `id` is a fan-out node (a Parallel or a Map) no other fan-out
+    /// owns: the only node a recovery walk's leaf may be parked on (PM-2).
+    pub(crate) fn is_unowned_fanout(&self, id: &str) -> bool {
         !self.parallel_owned_nodes.contains(id)
             && !self.map_owned_nodes.contains(id)
-            && self
-                .nodes
-                .iter()
-                .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Parallel(_)))
+            && self.nodes.iter().any(|node| {
+                node.id() == id
+                    && matches!(
+                        node,
+                        PipelineNodeDefinition::Parallel(_) | PipelineNodeDefinition::Map(_)
+                    )
+            })
     }
 
     /// Whether `id` is a direct toolkit/MCP node no fan-out owns: the leaf a

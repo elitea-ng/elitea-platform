@@ -1,14 +1,10 @@
 //! The Map definition, its limits and its frozen-item digests. A Map runs on
-//! the shared fan-out adapter (`fanout_source.rs`); the item-identity types
-//! below serve the Map checkpoint seams commit 6 deletes.
-#![allow(dead_code)] // The private compiler packet composes these explicit seams later.
+//! the shared fan-out adapter (`fanout_source.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
-use std::sync::Arc;
 
-use adk_rust::graph::{GraphError, NodeContext, State};
-use async_trait::async_trait;
+use adk_rust::graph::{GraphError, State};
 use elitea_agent_runtime::graph::fanout::plan::{JoinMode, OnError};
 use ring::digest;
 use serde::{Deserialize, Serialize};
@@ -19,7 +15,6 @@ const _: () = assert!(MAX_ITEMS == super::fanout_budget::MAX_FANOUT_CHILDREN);
 pub(crate) const MAX_CONCURRENCY: usize = 8;
 pub(crate) const MAX_ITEM_BYTES: usize = 512 * 1024;
 pub(crate) const MAX_PLAN_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const MAX_COLLECTED_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
 // A typed state channel at its bound fits the whole-state fan-out boundary.
 const _: () = assert!(super::state_reducers::MAX_REDUCED_BYTES <= MAX_CHECKPOINT_BYTES);
@@ -206,56 +201,6 @@ impl MapDefinition {
         }
         Ok(frozen)
     }
-
-    pub(super) fn freeze(
-        &self,
-        context: &NodeContext,
-        worker_digest: [u8; 32],
-        origin: MapExecutionIdentity,
-    ) -> Result<FrozenMap, GraphError> {
-        self.validate()?;
-        validate_state_structure(&context.state)?;
-        if context.config.thread_id.is_empty()
-            || context.config.thread_id.len() > 512
-            || context.config.thread_id.chars().any(char::is_control)
-            || worker_digest == [0; 32]
-        {
-            return Err(map_error("invalid_activation"));
-        }
-        let items = self.source_items(&context.state)?;
-        let source_digest = source_digest(items)?;
-        let config_digest = self.config_digest()?;
-        let activation = MapActivation {
-            root_thread_id: context.config.thread_id.clone(),
-            node_id: self.id.clone(),
-            step: u64::try_from(context.step).map_err(|_| map_error("resource_exhausted"))?,
-            config_digest,
-            worker_digest,
-            source_digest,
-        };
-        let frozen = self.item_inputs(&context.state, items)?;
-        let plan = FrozenMap {
-            activation,
-            items: frozen,
-            origin,
-            // Minted by the child factory once the activation and items exist.
-            item_threads: Vec::new(),
-            stop: None,
-        };
-        bounded(&plan, MAX_PLAN_BYTES)?;
-        Ok(plan)
-    }
-}
-
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct MapActivation {
-    pub(crate) root_thread_id: String,
-    pub(crate) node_id: String,
-    pub(crate) step: u64,
-    pub(crate) config_digest: [u8; 32],
-    pub(crate) worker_digest: [u8; 32],
-    pub(crate) source_digest: [u8; 32],
 }
 
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
@@ -264,83 +209,6 @@ pub(crate) struct FrozenMapItem {
     pub(crate) index: usize,
     pub(crate) input_digest: [u8; 32],
     pub(crate) input: State,
-}
-
-/// The opaque authority factory adds tenant, execution and generation binding.
-/// This public digest label contains no item data and grants no authority.
-pub(crate) fn item_identity(
-    activation: &MapActivation,
-    item: &FrozenMapItem,
-) -> Result<[u8; 32], GraphError> {
-    hash_json(
-        b"elitea.graph.map.item-identity.v1\0",
-        &(activation, item.index, item.input_digest),
-        MAX_PLAN_BYTES,
-    )
-}
-
-#[derive(Clone, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct FrozenMap {
-    pub(crate) activation: MapActivation,
-    pub(crate) items: Vec<FrozenMapItem>,
-    /// The execution identity under which the occurrence first froze its items.
-    pub(crate) origin: MapExecutionIdentity,
-    /// Frozen child threads, index-aligned with `items`.
-    pub(crate) item_threads: Vec<String>,
-    pub(crate) stop: Option<MapStop>,
-}
-
-/// Typed non-success. Public classification must read the exact saved receipt.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum MapStop {
-    Failed { index: usize },
-    ResourceExhausted { index: usize },
-    UnexpectedPause { index: usize },
-    Blocked { index: usize },
-    Cancelled,
-    DeadlineExceeded,
-}
-
-pub(crate) struct MapChildCheckpoint {
-    pub(crate) thread_id: String,
-    pub(crate) checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
-    pub(crate) admitted_threads: BTreeSet<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum MapWorkerKind {
-    StateModifier,
-    Application,
-}
-
-/// The Map name for the shared fan-out origin (`parallel::FanoutChildOrigin`).
-pub(crate) type MapExecutionIdentity = super::parallel::FanoutChildOrigin;
-
-/// The implementation mints descendant authority from the original parent claim.
-/// Hashes and thread names provide identity only. They do not grant authority.
-#[async_trait]
-pub(crate) trait MapChildCheckpointerFactory: Send + Sync {
-    fn execution_identity(&self, _root_thread: &str) -> Result<MapExecutionIdentity, GraphError> {
-        Err(map_error("invalid_turn_authority"))
-    }
-    /// Pure derivation of an item thread from a frozen origin. Activates nothing.
-    fn item_thread_id(
-        &self,
-        activation: &MapActivation,
-        item: &FrozenMapItem,
-        worker: &str,
-        origin: &MapExecutionIdentity,
-    ) -> Result<String, GraphError>;
-    async fn for_item(
-        &self,
-        activation: &MapActivation,
-        item: &FrozenMapItem,
-        worker: &str,
-        kind: MapWorkerKind,
-        origin: &MapExecutionIdentity,
-    ) -> Result<MapChildCheckpoint, GraphError>;
 }
 
 fn has_duplicates(values: &[String]) -> bool {
@@ -422,32 +290,8 @@ pub(super) fn validate_values<'a>(
     validate_values_with_limits(values, 48, 32_768)
 }
 
-pub(super) fn validate_state_boundary(state: &State, maximum: usize) -> Result<(), GraphError> {
-    validate_state_structure(state)?;
-    bounded(state, maximum)
-}
-
 pub(super) fn validate_state_structure(state: &State) -> Result<(), GraphError> {
     validate_values_with_limits(state.values(), 64, 65_536)
-}
-
-pub(crate) fn validate_checkpoint_boundary(
-    checkpoint: &adk_rust::graph::Checkpoint,
-) -> Result<(), GraphError> {
-    validate_values_with_limits(
-        checkpoint
-            .state
-            .values()
-            .chain(checkpoint.metadata.values())
-            .chain(checkpoint.child_ledger.values()),
-        64,
-        65_536,
-    )?;
-    bounded(checkpoint, MAX_CHECKPOINT_BYTES)
-}
-
-pub(super) fn validate_metadata(value: &Value) -> Result<(), GraphError> {
-    validate_values_with_limits(std::iter::once(value), 64, 65_536)
 }
 
 fn validate_values_with_limits<'a>(

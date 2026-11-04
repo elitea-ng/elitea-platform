@@ -1795,7 +1795,7 @@ impl PipelineStateServices {
             if super::graph::holds_parallel_occurrence(&child) {
                 if validates
                     && !level.is_some_and(|(definition, _)| {
-                        definition.is_unowned_parallel(&child.pending_nodes[0])
+                        definition.is_unowned_fanout(&child.pending_nodes[0])
                     })
                 {
                     return Err(child_refused(CHILD_FRONTIER_UNSUPPORTED));
@@ -2817,15 +2817,16 @@ pub(super) async fn assemble_pipeline_native(
     )
     .await?;
     let is_resume = resume.is_some();
-    // The run binds a Parallel when the root or a saved child pipeline beneath
-    // it holds one (FU-249): the child's binds through the run's binding.
-    let has_parallel = definition.has_parallel_nodes()
+    // The run binds the fan-out authority when the root or a saved child
+    // pipeline beneath it holds a Parallel or a Map (FU-249, T-2A3): a child's
+    // binds through the run's binding.
+    let has_parallel = definition.has_fanout_nodes()
         || node_runtimes
             .composition_definitions()
             .is_some_and(|definitions| {
                 definitions
                     .values()
-                    .any(PipelineDefinition::has_parallel_nodes)
+                    .any(PipelineDefinition::has_fanout_nodes)
             });
     let (turn_checkpointer, node_runtimes, fanout_stop) = pipeline_turn(
         &fanout,

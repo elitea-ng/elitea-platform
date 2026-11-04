@@ -8,10 +8,10 @@ use adk_rust::graph::{ExecutionConfig, NodeContext};
 use serde_json::json;
 
 use super::super::fanout_source::{FanoutSource, MapSource};
-use super::super::map_reduce::{MapDefinition, MapReduction};
+use super::super::map_reduce::{MapDefinition, MapReduction, source_digest};
 use super::super::yaml::ParallelNodeDefinition;
 use super::{FanoutChildOrigin, ParallelActivation};
-use crate::state::{CheckpointWriterAuthority, derive_child_thread_id, map_child_thread_id};
+use crate::state::{CheckpointWriterAuthority, derive_child_thread_id};
 
 const WORKER_DIGEST: [u8; 32] = [0x5a; 32];
 
@@ -91,15 +91,28 @@ transition: END
     .expect("parallel fixture")
 }
 
-/// The same item derives the same child thread through main's Map function
-/// and through the shared adapter's activation, children and inputs.
+/// Main's Map child threads for this fixture, captured from main's
+/// `map_child_thread_id` (`state/postgres_checkpointer/map_children.rs`)
+/// before that function was deleted with the old Map path (T-2A3 commit 6).
+const MAIN_MAP_CHILD_IDS: [&str; 3] = [
+    "m1:V9KNIZ94knM1hI84jjLtU81ED2Ygrj1ckL411hO_DC8",
+    "m1:bMN-UGLwU6pfF7LKL0jO9Vk1fPxi_dxeIKeUJGRubaI",
+    "m1:dQAaGRsi0Bm0VqbydTEylnCKyqlwO799P5NT2XhlLEw",
+];
+
+/// Every item derives main's child thread through the shared adapter's
+/// activation, children and inputs, with main's config, worker, source and
+/// item-input digests.
 #[test]
 fn a_map_child_on_the_shared_adapter_keeps_mains_child_id() {
     let context = context();
     let definition = map_definition();
-    let main = definition
-        .freeze(&context, WORKER_DIGEST, origin())
-        .expect("main's frozen Map");
+    let items = definition.source_items(&context.state).expect("items");
+    let main_inputs = definition
+        .item_inputs(&context.state, items)
+        .expect("main's item inputs");
+    let main_source = source_digest(items).expect("main's source digest");
+    let main_config = definition.config_digest().expect("main's config digest");
     let source =
         FanoutSource::Map(MapSource::new(definition, WORKER_DIGEST).expect("the Map source"));
     let activation = ParallelActivation::from_context(&source, &context).expect("activation");
@@ -107,9 +120,9 @@ fn a_map_child_on_the_shared_adapter_keeps_mains_child_id() {
         .map
         .as_ref()
         .expect("a Map activation carries its identity");
-    assert_eq!(identity.worker_digest, main.activation.worker_digest);
-    assert_eq!(identity.source_digest, main.activation.source_digest);
-    assert_eq!(activation.config_digest, main.activation.config_digest);
+    assert_eq!(identity.worker_digest, WORKER_DIGEST);
+    assert_eq!(identity.source_digest, main_source);
+    assert_eq!(activation.config_digest, main_config);
     let children = source.children(&context).expect("children");
     let inputs = source
         .frozen_inputs(&children, &context.state)
@@ -117,14 +130,12 @@ fn a_map_child_on_the_shared_adapter_keeps_mains_child_id() {
         .expect("inputs");
     assert_eq!(children.len(), 3);
     assert_eq!(inputs.len(), 3);
-    for (index, item) in main.items.iter().enumerate() {
+    for (index, item) in main_inputs.iter().enumerate() {
         assert_eq!(children[index].id(), index.to_string());
         assert_eq!(children[index].node(), "worker");
         assert_eq!(inputs[index].input_digest, item.input_digest);
         assert_eq!(inputs[index].input, item.input);
         assert_eq!(inputs[index].owned_definition_digest, WORKER_DIGEST);
-        let expected = map_child_thread_id(&writer(), &main.activation, item, "worker", &origin())
-            .expect("main's id");
         let derived = derive_child_thread_id(
             &writer(),
             &activation,
@@ -134,8 +145,7 @@ fn a_map_child_on_the_shared_adapter_keeps_mains_child_id() {
             &origin(),
         )
         .expect("the shared adapter's id");
-        assert!(derived.starts_with("m1:"), "{derived}");
-        assert_eq!(derived, expected);
+        assert_eq!(derived, MAIN_MAP_CHILD_IDS[index]);
     }
 }
 

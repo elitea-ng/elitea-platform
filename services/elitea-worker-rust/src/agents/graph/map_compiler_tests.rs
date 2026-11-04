@@ -1,18 +1,10 @@
-//! Map save-time validation: ownership, item channels, worker kinds and the
-//! checkpoint codec boundary. Map execution is proven on the shared fan-out
+//! Map save-time validation: ownership, item channels and worker kinds. Map execution is proven on the shared fan-out
 //! adapter (`map_fanout_tests.rs`, `parallel_compiler_map_tests.rs`).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeSet;
 
-use adk_rust::graph::{Checkpoint, State};
-use serde_json::Value;
-
 use super::*;
-
-fn exact(checkpoint: &Checkpoint) -> Value {
-    serde_json::to_value(checkpoint).unwrap()
-}
 
 fn document() -> String {
     "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}'}\n".to_owned()
@@ -45,24 +37,6 @@ fn map_yaml_rejects_ownership_routes_pauses_and_local_global_collisions() {
     ] {
         assert!(PipelineDefinition::from_yaml(&yaml).is_err());
     }
-}
-
-#[test]
-fn map_checkpoint_json_roundtrip_reserves_codec_envelope_depth() {
-    let mut value = Value::Null;
-    for _ in 0..47 {
-        value = Value::Array(vec![value]);
-    }
-    let checkpoint = Checkpoint::new(
-        "root",
-        State::from([("opaque".to_owned(), value)]),
-        0,
-        vec![],
-    );
-    crate::agents::graph::map_reduce::validate_checkpoint_boundary(&checkpoint).unwrap();
-    let decoded: Checkpoint =
-        serde_json::from_slice(&serde_json::to_vec(&checkpoint).unwrap()).unwrap();
-    assert_eq!(exact(&decoded), exact(&checkpoint));
 }
 
 #[test]

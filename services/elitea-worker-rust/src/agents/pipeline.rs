@@ -2147,7 +2147,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
     let parallel = if runtime.materialization.is_graph_path() {
         Ok(())
     } else {
-        definition.first_parallel_node().map_or_else(
+        definition.first_fanout_node().map_or_else(
             || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
             |node| {
                 Err(PipelineConfigurationError::FanoutChildUnsupported {

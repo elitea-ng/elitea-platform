@@ -869,3 +869,102 @@ fn a_map_join_is_checked_against_its_destination_reducer_at_save_time() {
         "{error}"
     );
 }
+
+/// Commit 6: a Map over an empty source lands its empty collection and
+/// mints no child: v1 writes main's empty collection, v2 lands no entry
+/// onto what the destination held.
+#[tokio::test]
+async fn an_empty_map_lands_its_empty_collection_without_a_child() {
+    let v1 = harness(map_definition(8, 2, None), echo());
+    let state = run(&v1, json!([]), "root-empty-v1").await.unwrap();
+    assert_eq!(state["mapped"], json!([]));
+    assert!(v1.children.issued.lock().await.is_empty());
+    let v2 = harness(map_definition(8, 2, V2_CONTINUE), echo());
+    let state = run(&v2, json!([]), "root-empty-v2").await.unwrap();
+    assert_eq!(state["mapped"], json!([{"previous": true}]));
+    assert!(v2.children.issued.lock().await.is_empty());
+    assert!(v2.runs.lock().unwrap().is_empty());
+}
+
+const SIBLINGS: &str = "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  topic: str\n  detail: str\n  joined: list\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: gather}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ entity }}'}\n  - {id: gather, type: parallel, branches: [{id: left, node: workerA}, {id: right, node: workerB}], max_concurrency: 2, wait: all, output: [joined], transition: END}\n  - {id: workerA, type: agent, tool: Research Agent, input: [topic], input_mapping: {task: {type: fixed, value: Research}}, output: [detail]}\n  - {id: workerB, type: agent, tool: Research Agent, input: [topic], input_mapping: {task: {type: fixed, value: Compare}}, output: [detail]}\n";
+
+/// A resolver that proves its saved participants (they are never run here).
+struct ProvedResolver;
+
+impl PipelineApplicationResolver for ProvedResolver {
+    fn fixed_parallel_definition_digest(
+        &self,
+        _node: &str,
+    ) -> Result<[u8; 32], ApplicationExecutionError> {
+        Ok([9; 32])
+    }
+
+    fn resolve(
+        &self,
+        _: &PipelineApplicationSelection,
+        _: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        Err(ApplicationExecutionError::Unavailable)
+    }
+}
+
+/// Commit 6: a Map and a Parallel in one pipeline bind the same fan-out
+/// authority; the old Map + Parallel refusal is gone.
+#[test]
+fn a_map_and_a_parallel_compile_as_siblings() {
+    let definition = PipelineDefinition::from_yaml(SIBLINGS).unwrap();
+    assert!(definition.has_fanout_nodes());
+    assert_eq!(definition.first_fanout_node(), Some("map_entities"));
+    let authority: Arc<dyn ParallelCheckpointAuthority> = Arc::new(MemoryAuthority::default());
+    let checkpointer: Arc<dyn Checkpointer> = authority.clone();
+    let runtimes = PipelineNodeRuntimes::new(None, None, Some(Arc::new(ProvedResolver)))
+        .with_parallel(ParallelCompilerBinding::for_tests(
+            authority,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            None,
+        ));
+    definition
+        .compile_subgraph_with_runtime(checkpointer, &runtimes)
+        .expect("a Map and a Parallel compile together");
+}
+
+/// Commit 6 (FU-259): a saved child pipeline beneath an Agent node that holds
+/// a Map binds through the run's fan-out binding, as one holding a Parallel
+/// does; without the binding (a pipeline run as an Agent's tool) it is
+/// refused by the path of its Map node.
+#[test]
+fn a_saved_child_pipeline_with_a_map_binds_through_the_runs_fanout() {
+    let child = PipelineDefinition::from_yaml(PIPELINE).unwrap();
+    let definitions = std::collections::BTreeMap::from([("delegate".to_owned(), child)]);
+    let authority = Arc::new(MemoryAuthority::default());
+    let (_, bound_runtimes) = bound(&authority);
+    let runtimes = bound_runtimes.with_composition_definitions(definitions.clone());
+    assert!(
+        runtimes
+            .child_fanout("delegate")
+            .expect("child fan-out")
+            .is_some(),
+        "the Map child got no fan-out binding"
+    );
+    let unbound = PipelineNodeRuntimes::default().with_composition_definitions(definitions);
+    match super::compiler::refuse_child_parallel(&unbound) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert!(
+                error.to_string().contains("delegate/map_entities"),
+                "{error}"
+            );
+        }
+        other => panic!("expected a typed refusal by path, got {other:?}"),
+    }
+}
+
+/// Commit 6: a recovery walk may park on an unowned Map, never on its worker.
+#[test]
+fn a_recovery_leaf_may_be_an_unowned_map_but_not_its_worker() {
+    let definition = PipelineDefinition::from_yaml(PIPELINE).unwrap();
+    assert!(definition.is_unowned_fanout("map_entities"));
+    assert!(!definition.is_unowned_fanout("render"));
+    let siblings = PipelineDefinition::from_yaml(SIBLINGS).unwrap();
+    assert!(siblings.is_unowned_fanout("gather"));
+    assert!(!siblings.is_unowned_fanout("workerA"));
+}

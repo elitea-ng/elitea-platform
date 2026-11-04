@@ -68,11 +68,9 @@ mod hitl_tests;
 mod llm;
 #[cfg(test)]
 mod llm_tests;
-pub(crate) mod map_authority;
 #[cfg(test)]
 mod map_fanout_tests;
 pub(crate) mod map_reduce;
-pub(crate) mod map_turn;
 mod map_yaml;
 mod node_events;
 pub(crate) use elitea_agent_runtime::graph::node_recovery;
@@ -81,11 +79,6 @@ mod node_recovery_compiler_tests;
 pub(crate) mod node_recovery_owner;
 pub(crate) mod node_recovery_receipt;
 pub(crate) mod node_recovery_runtime;
-pub(crate) use map_authority::MapCheckpointAuthority;
-pub(crate) use map_reduce::{
-    FrozenMapItem, MapActivation, MapChildCheckpoint, MapChildCheckpointerFactory,
-    MapExecutionIdentity, MapWorkerKind,
-};
 #[cfg(test)]
 pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,

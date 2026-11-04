@@ -1968,6 +1968,17 @@ impl DurableParallelNode {
         self.validate()?;
         validate_input_state(&context.state)?;
         self.check_running(context)?;
+        // A Map over no items lands its empty collection: no activation, no
+        // child (the runner admits 1-64 children).
+        if let Some(update) = self
+            .source
+            .empty_update(context, self.output_reducer)
+            .map_err(join_error)?
+        {
+            return Ok(ParallelNodeOutcome::Completed(
+                NodeOutput::new().with_update(self.source.output_key(), update),
+            ));
+        }
         let mut activation = ParallelActivation::from_context(&self.source, context)?;
         let prepared = self
             .runtime

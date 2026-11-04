@@ -20,9 +20,6 @@ use super::scoped_applications::PipelineApplicationActivation;
 #[path = "scope_receipts_parallel.rs"]
 mod parallel_authority;
 pub(crate) use parallel_authority::PipelineGraphReceiptAuthority;
-#[path = "scope_receipts_map.rs"]
-mod map_authority;
-pub(crate) use map_authority::PipelineMapReceiptAuthority;
 
 pub(crate) const GRAPH_CALL_RECEIPTS_METADATA_KEY: &str = "elitea.pipeline.graph-calls.v1";
 pub(crate) const GRAPH_CALL_REVISION_METADATA_KEY: &str = "elitea.pipeline.graph-call-revision.v1";

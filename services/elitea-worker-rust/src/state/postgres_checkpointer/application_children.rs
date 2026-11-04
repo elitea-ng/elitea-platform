@@ -380,6 +380,22 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
 
 impl ParallelCheckpointAuthority for ApplicationCheckpointers {}
 
+#[async_trait]
+impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for ApplicationCheckpointers {
+    async fn open(
+        &self,
+        activation: &crate::agents::graph::node_recovery_runtime::NodeAttemptActivation,
+        policy: &crate::agents::graph::node_recovery::NodeRecoveryPolicy,
+    ) -> Result<crate::agents::graph::node_recovery_runtime::NodeAttemptJournal, GraphError> {
+        crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory::open(
+            self.for_thread(&activation.root_thread_id)?,
+            activation,
+            policy,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ApplicationBranchCatalog, admitted_application_paths};
@@ -455,135 +471,5 @@ mod tests {
         }
         let oversized = (0..129).map(|n| format!("node_{n}")).collect::<Vec<_>>();
         assert!(admitted_application_paths(&oversized).is_err());
-    }
-}
-
-#[async_trait]
-impl crate::agents::graph::MapChildCheckpointerFactory for ApplicationCheckpointers {
-    fn execution_identity(
-        &self,
-        root_thread: &str,
-    ) -> Result<crate::agents::graph::MapExecutionIdentity, GraphError> {
-        crate::agents::graph::MapChildCheckpointerFactory::execution_identity(
-            self.for_thread(root_thread)?,
-            root_thread,
-        )
-    }
-    fn item_thread_id(
-        &self,
-        activation: &crate::agents::graph::MapActivation,
-        item: &crate::agents::graph::FrozenMapItem,
-        worker: &str,
-        origin: &crate::agents::graph::MapExecutionIdentity,
-    ) -> Result<String, GraphError> {
-        crate::agents::graph::MapChildCheckpointerFactory::item_thread_id(
-            self.for_thread(&activation.root_thread_id)?,
-            activation,
-            item,
-            worker,
-            origin,
-        )
-    }
-    async fn for_item(
-        &self,
-        activation: &crate::agents::graph::MapActivation,
-        item: &crate::agents::graph::FrozenMapItem,
-        worker: &str,
-        kind: crate::agents::graph::MapWorkerKind,
-        origin: &crate::agents::graph::MapExecutionIdentity,
-    ) -> Result<crate::agents::graph::MapChildCheckpoint, GraphError> {
-        let parent = self.for_thread(&activation.root_thread_id)?;
-        let paths = self
-            .branch_paths
-            .for_map_worker(&activation.root_thread_id, worker, kind)?;
-        let child = parent
-            .activate_map_item(activation, item, worker, origin)
-            .await?;
-        let thread_id = child.scope.authority.thread_id.clone();
-        let child = child.with_application_paths(paths).await?;
-        let admitted_threads = child.threads.keys().cloned().collect();
-        Ok(crate::agents::graph::MapChildCheckpoint {
-            thread_id,
-            checkpointer: Arc::new(child),
-            admitted_threads,
-        })
-    }
-}
-impl crate::agents::graph::map_authority::sealed::Sealed for ApplicationCheckpointers {}
-impl crate::agents::graph::MapCheckpointAuthority for ApplicationCheckpointers {}
-
-impl ApplicationBranchCatalog {
-    fn for_map_worker(
-        &self,
-        parent: &str,
-        worker: &str,
-        kind: crate::agents::graph::MapWorkerKind,
-    ) -> Result<&[String], GraphError> {
-        match kind {
-            crate::agents::graph::MapWorkerKind::StateModifier => Ok(&[]),
-            crate::agents::graph::MapWorkerKind::Application => self.for_owned_node(parent, worker),
-        }
-    }
-}
-
-#[cfg(test)]
-mod map_catalog_tests {
-    use super::*;
-    use crate::agents::graph::MapWorkerKind;
-
-    #[test]
-    fn map_state_modifier_has_no_synthetic_application_authority() {
-        let paths = BTreeSet::from(["ordinary_agent"]);
-        let catalog = ApplicationBranchCatalog::from_admitted_paths("root", &paths);
-        assert_eq!(
-            catalog
-                .for_map_worker("root", "render", MapWorkerKind::StateModifier)
-                .unwrap(),
-            [] as [String; 0]
-        );
-        assert!(
-            catalog
-                .for_map_worker("root", "render", MapWorkerKind::Application)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn map_application_requires_exact_original_owned_family() {
-        let paths = BTreeSet::from(["render", "render/inner", "other"]);
-        let catalog = ApplicationBranchCatalog::from_admitted_paths("root", &paths);
-        assert_eq!(
-            catalog
-                .for_map_worker("root", "render", MapWorkerKind::Application)
-                .unwrap(),
-            ["render", "render/inner"]
-        );
-        for (parent, worker) in [
-            ("foreign", "render"),
-            ("root", "inner"),
-            ("root", "render/inner"),
-        ] {
-            assert!(
-                catalog
-                    .for_map_worker(parent, worker, MapWorkerKind::Application)
-                    .is_err()
-            );
-        }
-    }
-}
-
-#[async_trait]
-impl crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory for ApplicationCheckpointers {
-    async fn open(
-        &self,
-        activation: &crate::agents::graph::node_recovery_runtime::NodeAttemptActivation,
-        policy: &crate::agents::graph::node_recovery::NodeRecoveryPolicy,
-    ) -> Result<crate::agents::graph::node_recovery_runtime::NodeAttemptJournal, GraphError> {
-        crate::agents::graph::node_recovery_runtime::NodeRecoveryFactory::open(
-            self.for_thread(&activation.root_thread_id)?,
-            activation,
-            policy,
-        )
-        .await
     }
 }

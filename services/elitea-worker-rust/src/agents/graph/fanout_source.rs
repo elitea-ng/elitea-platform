@@ -15,13 +15,14 @@ use std::borrow::Cow;
 
 use adk_rust::graph::{GraphError, NodeContext, State};
 use elitea_agent_runtime::graph::fanout::plan::{
-    ChildTerminal, FanoutKind as JoinKind, JoinMode, OnError, SettledChild,
+    self, ChildTerminal, FanoutKind as JoinKind, FanoutPlanError, JoinMode, OnError, SettledChild,
 };
 use serde_json::{Value, json};
 
 use super::fanout_trace::FanoutKind;
 use super::map_reduce::{MapDefinition, map_error, source_digest, validate_state_structure};
 use super::parallel::{MapIdentity, parallel_error};
+use super::state_reducers::StateReducer;
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 
 #[derive(Clone)]
@@ -230,6 +231,38 @@ impl FanoutSource {
                 child
             })
             .collect()
+    }
+
+    /// The update a Map over an empty source lands without any child: v1
+    /// writes main's empty collection, v2 lands no entries through its join.
+    /// `None` when the source has children (a Parallel always does).
+    pub(crate) fn empty_update(
+        &self,
+        context: &NodeContext,
+        reducer: Option<StateReducer>,
+    ) -> Result<Option<Value>, FanoutPlanError> {
+        let Self::Map(map) = self else {
+            return Ok(None);
+        };
+        let empty = context
+            .state
+            .get(&map.definition.source)
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty);
+        if !empty {
+            return Ok(None);
+        }
+        if map.definition.policy.is_none() {
+            return Ok(Some(Value::Array(Vec::new())));
+        }
+        plan::land(
+            map.definition.join(),
+            reducer,
+            JoinKind::Map,
+            context.state.get(&map.definition.destination),
+            Vec::new(),
+        )
+        .map(Some)
     }
 
     /// The update a v1 Map document writes (M2): its ordered `{index,
