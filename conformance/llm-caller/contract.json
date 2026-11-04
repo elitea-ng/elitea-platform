@@ -167,6 +167,12 @@
         {"structured": false, "results": [{"text": "ok"}, {"error": "denied"}], "kind": "recovery"},
         {"structured": false, "results": [{"status": "error"}], "kind": "recovery"},
         {"structured": false, "results": [{"error": null, "text": "ok"}], "kind": "tool_follow_up"},
+        {"note": "a command that exits 0 succeeded", "structured": false, "results": [{"exit_code": 0, "stdout": "ok"}], "kind": "tool_follow_up"},
+        {"note": "a command that exits 1 failed", "structured": false, "results": [{"exit_code": 1, "stderr": "boom"}], "kind": "recovery"},
+        {"note": "exitCode, a negative code (killed or timed out)", "structured": false, "results": [{"exitCode": -1}], "kind": "recovery"},
+        {"note": "a string is not an exit code", "structured": false, "results": [{"exit_code": "1"}], "kind": "tool_follow_up"},
+        {"note": "a null exit code (killed by a signal) is not a failure by itself", "structured": false, "results": [{"exit_code": null, "timed_out": false}], "kind": "tool_follow_up"},
+        {"note": "a wrapped result is read one level down", "structured": false, "results": [{"result": {"exit_code": 2}}], "kind": "recovery"},
         {"structured": true, "results": [{"text": "ok"}], "kind": "structured_answer"}
       ]
     },

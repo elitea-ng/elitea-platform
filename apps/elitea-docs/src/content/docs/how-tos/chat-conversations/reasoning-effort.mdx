@@ -20,7 +20,7 @@ An explicit value always wins over Auto. An agent saved before Auto existed keep
 Auto thinks where thinking helps, and saves tokens where it does not:
 
 - On the first step of a turn, the model thinks at the medium level.
-- After a tool error or a refused tool call, the model thinks at the medium level.
+- After a tool error, a refused tool call, or a command that exits non-zero, the model thinks at the medium level.
 - On a routine step after successful tool results, the model does not think. A model that your administrator marks to keep thinking on tool steps thinks on them, because it fails or degrades when thinking changes inside one tool loop.
 - On a model with a thinking budget (Claude, Gemini 2.5 Flash), the model thinks at the medium level on every step of a tool loop. The thinking never goes off and then on again inside one loop.
 - On a model that refuses thinking beside tools (OpenAI GPT-5.6), a request that carries tools does not think on any step, the first one included. A request without tools still thinks. A level that you choose is sent as you chose it.

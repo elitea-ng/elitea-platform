@@ -172,19 +172,47 @@ pub enum StepKind {
     Auxiliary,
 }
 
-/// Whether a tool result reports a failure: an `error` member that is not
-/// null, or `status: "error"` (the agent loop writes the first for a failed,
-/// denied or unknown call; the platform's own tools write the second).
+/// Whether a tool result reports a failure:
+///
+/// * an `error` member that is not null (the agent loop writes it for a
+///   failed, denied or unknown call);
+/// * `status: "error"` (the platform's own tools);
+/// * a command that exited non-zero: `exit_code` (local-tools `run_command`,
+///   the sandbox tools) or `exitCode`, a non-zero integer. Zero, null, a
+///   missing member or a value that is not an integer (the string `"1"`)
+///   is not a failure. A result the runtime wrapped as `{"result": {...}}`
+///   is read one level down.
+///
+/// The phase 0 re-run (ADR-0038, Qwen3.8-27B) measured why the exit code
+/// counts: `auto` that also thinks after a failed command scored 92 %
+/// against 77 % for thinking after tool errors only.
 #[must_use]
 pub fn reports_error(response: &Value) -> bool {
     response.as_object().is_some_and(|fields| {
         fields.get("error").is_some_and(|error| !error.is_null())
             || fields.get("status").and_then(Value::as_str) == Some("error")
+            || exited_non_zero(fields)
+            || fields
+                .get("result")
+                .and_then(Value::as_object)
+                .is_some_and(exited_non_zero)
+    })
+}
+
+/// `exit_code` or `exitCode` is a non-zero integer.
+fn exited_non_zero(fields: &serde_json::Map<String, Value>) -> bool {
+    ["exit_code", "exitCode"].iter().any(|key| {
+        fields
+            .get(*key)
+            .is_some_and(|code| code.as_i64().map_or(code.is_u64(), |code| code != 0))
     })
 }
 
 /// The kind of an agent-loop request from the tool results of its last
-/// conversation turn (none: the turn is not a tool turn). `structured` is
+/// conversation turn (none: the turn is not a tool turn). A turn with any
+/// result that [`reports_error`] (a tool error, a refused call, or a command
+/// that exits non-zero) is [`StepKind::Recovery`]; otherwise
+/// [`StepKind::ToolFollowUp`]. `structured` is
 /// whether the request carries a response schema: every step of such an
 /// agent thinks, because the runtime cannot tell which one answers.
 #[must_use]
@@ -558,6 +586,30 @@ pub fn anthropic_adaptive(model_name: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// ADR-0038 phase 0 re-run: a command that exits non-zero is a failed
+    /// step under `auto`, as a tool error is.
+    #[test]
+    fn a_non_zero_exit_code_reports_an_error() {
+        for (result, failed) in [
+            (json!({"exit_code": 0, "stdout": "ok"}), false),
+            (json!({"exit_code": 1}), true),
+            (json!({"exitCode": -1}), true),
+            (json!({"exit_code": "1"}), false),
+            (json!({"exit_code": null}), false),
+            (json!({"exit_code": 1.5}), false),
+            (json!({"stdout": "ok"}), false),
+            (json!({"result": {"exit_code": 2}}), true),
+            (json!({"result": {"exit_code": 0}}), false),
+            (json!(1), false),
+        ] {
+            assert_eq!(reports_error(&result), failed, "{result}");
+        }
+        assert_eq!(
+            classify(false, [&json!({"exit_code": 0}), &json!({"exitCode": 127})]),
+            StepKind::Recovery
+        );
+    }
 
     #[test]
     fn none_is_read_as_off_and_unknown_values_are_refused() {
