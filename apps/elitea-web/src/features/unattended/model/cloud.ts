@@ -10,7 +10,7 @@
 import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
-import { chainErrors, type ChainField, type SensitiveToolRef, type UnattendedGrantValue } from './grant';
+import { chainErrors, defaultGrant, type ChainField, type SensitiveToolRef, type UnattendedGrantValue } from './grant';
 
 /** The cloud grant; `goal_check` (contract #1564, absent = true) is sent always. */
 export type CloudGrantResult = { ok: true; grant: ChatUnattendedRequest } | { ok: false; invalid: ChainField[] };
@@ -36,6 +36,29 @@ export function toCloudGrant(value: UnattendedGrantValue, grantId?: string): Clo
     ...(Object.keys(chain).length === 0 ? {} : { chain }),
   };
   return { ok: true, grant };
+}
+
+/** A number as the chain field types it; absent is the empty field (the platform default). */
+const typed = (value: number | undefined): string => (value === undefined ? '' : String(value));
+
+/**
+ * The form value of a stored cloud grant (a schedule's or a trigger's, ADR-0045
+ * decision 9): the inverse of `toCloudGrant`. An absent part takes the default.
+ */
+export function fromCloudGrant(grant: ChatUnattendedRequest): UnattendedGrantValue {
+  const value = defaultGrant();
+  const seconds = grant.chain?.deadline_seconds;
+  return {
+    ...value,
+    continue_step_limit: grant.continue_step_limit ?? value.continue_step_limit,
+    continue_output_limit: grant.continue_output_limit ?? value.continue_output_limit,
+    goal_check: grant.goal_check ?? value.goal_check,
+    chain: {
+      max_continuations: typed(grant.chain?.max_continuations),
+      max_spend: typed(grant.chain?.max_spend),
+      deadline_hours: seconds === undefined ? '' : String(seconds / SECONDS_PER_HOUR),
+    },
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;

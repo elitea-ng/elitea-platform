@@ -8,6 +8,8 @@ import { createRealtimeStatusStore, RealtimeStatusContext } from '@/shared/api/s
 import { authPlaneFromProbeStatus, buildLoginUrl, loginPathForPlane } from '@/shared/api/auth/login-redirect';
 
 import { useSelectedProjectStore } from '@/widgets/app-shell';
+import { ThreadGrantField } from '@/features/unattended';
+import { ThreadGrantFieldContext } from '@/entities/thread-target';
 
 import { isPublicRoutePath } from './public-routes';
 import { AppProviders, getAppBasename } from './providers';
@@ -286,7 +288,10 @@ export function App() {
         </Suspense>
       )}
       <RealtimeStatusContext.Provider value={realtimeStatus}>
-        <RouterProvider router={router} context={{ auth: sessionAuthContext }} />
+        {/* The grant field of a schedule or a webhook on a handed-off thread: see `entities/thread-target`'s `threadGrantSlot.ts`. */}
+        <ThreadGrantFieldContext.Provider value={ThreadGrantField}>
+          <RouterProvider router={router} context={{ auth: sessionAuthContext }} />
+        </ThreadGrantFieldContext.Provider>
       </RealtimeStatusContext.Provider>
     </AppProviders>
   );
