@@ -26,9 +26,12 @@ const rowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5
  * a turn on a handed-off workspace thread.
  *
  * The target is written on the create/rotate route and nowhere else, so
- * applying it rotates the credential, as a change of type does — and the
- * dialog says so beside the button, in the words the type change uses. A
- * refusal of the target stays here, on its field.
+ * applying it rotates the credential, as a change of type does. It sends NO
+ * mode: the dialog's mode is a lossy reading of the stored row (a custom
+ * HMAC header reads as GitHub), and a body that names a mode rewrites the
+ * provider and the header; with none named the server keeps them. The
+ * dialog says that the credential rotates beside the button, in the words the
+ * type change uses. A refusal of the target stays here, on its field.
  */
 export function WebhookTargetSection({ projectId, open, stored, isLoading, onApply }: WebhookTargetSectionProps): ReactNode {
   const form = useThreadTargetForm(open, stored, 'pipeline');

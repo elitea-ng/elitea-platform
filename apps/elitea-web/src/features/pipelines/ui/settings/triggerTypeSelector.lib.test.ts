@@ -277,7 +277,7 @@ describe('useTriggerActions', () => {
     it('saves the cron expression, reports success, and tracks isUpdating', async () => {
       const { result, triggers, setIsUpdating, onNotifySuccess } = setup();
       await result.current.handleScheduleSubmit('0 9 * * 1');
-      expect(triggers.saveSchedule).toHaveBeenCalledWith('0 9 * * 1');
+      expect(triggers.saveSchedule).toHaveBeenCalledWith('0 9 * * 1', undefined);
       expect(onNotifySuccess).toHaveBeenCalledWith('Schedule configured successfully');
       expect(setIsUpdating).toHaveBeenCalledWith(true);
       expect(setIsUpdating).toHaveBeenLastCalledWith(false);

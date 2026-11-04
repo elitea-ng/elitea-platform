@@ -363,7 +363,7 @@ describe('PipelineWebhookModal — Runs on a handed-off workspace thread (ADR-00
     await user.click(await screen.findByRole('option', { name: 'Alert triage' }));
     await user.type(screen.getByTestId('thread-target-prompt'), 'Triage the alert.');
     await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
-    expect(onRotate).toHaveBeenCalledWith('custom', { target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' });
+    expect(onRotate).toHaveBeenCalledWith(undefined, { target_kind: 'workspace_thread', conversation_uuid: THREAD, prompt: 'Triage the alert.' });
   });
 
   it('seeds a stored thread trigger (the v2.yaml example) and sends its stored grant back with an edited message', async () => {
@@ -372,7 +372,7 @@ describe('PipelineWebhookModal — Runs on a handed-off workspace thread (ADR-00
     expect(screen.getByTestId('pipeline-webhook-thread-hint')).toBeInTheDocument();
     await user.type(screen.getByTestId('thread-target-prompt'), ' Then report.');
     await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
-    expect(onRotate).toHaveBeenCalledWith('custom', {
+    expect(onRotate).toHaveBeenCalledWith(undefined, {
       target_kind: 'workspace_thread',
       conversation_uuid: THREAD,
       prompt: 'Triage the alert in the payload and open a fix branch. Then report.',
@@ -384,12 +384,12 @@ describe('PipelineWebhookModal — Runs on a handed-off workspace thread (ADR-00
     const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
     await user.click(await screen.findByLabelText('This pipeline'));
     await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
-    expect(onRotate).toHaveBeenCalledWith('custom', { target_kind: 'pipeline' });
+    expect(onRotate).toHaveBeenCalledWith(undefined, { target_kind: 'pipeline' });
   });
 
   it('shows a refusal of the thread on its field', async () => {
     const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
-    onRotate.mockResolvedValue(new EliteaApiError({ kind: 'http', status: 404, url: '/api/v2/pipeline_triggers/prompt_lib/1/7', body: { error: 'no such conversation' } }));
+    onRotate.mockResolvedValue(new EliteaApiError({ kind: 'http', status: 404, url: '/api/v2/pipeline_triggers/prompt_lib/1/7', body: { error: 'no such conversation in this project' } }));
     await user.type(await screen.findByTestId('thread-target-prompt'), '!');
     await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
     await waitFor(() => expect(screen.getByText('This thread is not in this project, or you are not a participant of it.')).toBeInTheDocument());

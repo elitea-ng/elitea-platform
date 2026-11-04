@@ -260,7 +260,7 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
             onSelect={setSelectedMode}
             onApply={() => onRotate(selectedMode)}
           />
-          <WebhookTargetSection projectId={projectId} open={open} stored={target} isLoading={isLoading} onApply={body => onRotate(storedMode, body)} />
+          <WebhookTargetSection projectId={projectId} open={open} stored={target} isLoading={isLoading} onApply={body => onRotate(undefined, body)} />
 
           {storedSignatureHeader !== undefined && (
             <ValueRow

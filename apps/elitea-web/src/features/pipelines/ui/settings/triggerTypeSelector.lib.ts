@@ -237,7 +237,7 @@ export function useTriggerActions(args: TriggerActionsArgs): TriggerActions {
 
   const handleScheduleSubmit = useCallback(
     (cronExpression: string, target?: ThreadTargetFieldsBody) => run(async () => {
-      await (target === undefined ? triggers.saveSchedule(cronExpression) : triggers.saveSchedule(cronExpression, target));
+      await triggers.saveSchedule(cronExpression, target);
       onNotifySuccess?.(t('pipelines.triggerTypeSelector.scheduleConfigured', 'Schedule configured successfully'));
     }, t('pipelines.triggerTypeSelector.scheduleConfigureFailed', 'Failed to configure schedule'), target !== undefined),
     [run, triggers, onNotifySuccess],
