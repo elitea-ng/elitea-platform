@@ -4,6 +4,8 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
+import { getGetPipelineScheduleResponseMock } from '@/shared/api/generated/applications/applications.msw';
+import { getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -254,5 +256,27 @@ describe('TriggerTypeSelector', () => {
   it('does not throw when projectId/versionId are undefined', async () => {
     const { findByText } = renderWithRouterAndProject(<TriggerTypeSelector />, undefined);
     expect(await findByText('Trigger')).toBeInTheDocument();
+  });
+
+  /** ADR-0045 decision 9: a schedule on a handed-off thread (the v2.yaml example) names its thread under the row. */
+  it('lists a thread schedule as "Runs on <thread>"', async () => {
+    const thread = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json(getGetPipelineScheduleResponseMock())),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: false })),
+      getListConversationsMockHandler({
+        total: 1,
+        rows: [{ id: 11, uuid: thread, name: 'Nightly checks', source: 'local_work', workspace_executor: 'cloud', created_at: '2026-11-03T18:00:00Z', updated_at: '2026-11-03T18:00:00Z', duration: -1, message_groups_count: 4, is_pinned: false, is_archived: false }],
+      }),
+    );
+    const { findByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+    const line = await findByTestId('pipeline-trigger-thread-schedule');
+    await waitFor(() => expect(line).toHaveTextContent('Runs on Nightly checks'));
   });
 });

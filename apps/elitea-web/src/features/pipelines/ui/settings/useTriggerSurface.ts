@@ -1,5 +1,6 @@
 import { useContext, useMemo, useState } from 'react';
 
+import type { PipelineInboundTrigger, PipelineSchedule } from '@/shared/api/generated/model';
 import { hasBackendCapability } from '@/shared/config';
 import type { SingleSelectOption } from '@/shared/ui/SingleSelect';
 
@@ -54,6 +55,10 @@ export interface TriggerSurface {
   /** The stored provider — what tells a GitLab bearer trigger from a Custom one. */
   readonly webhookProvider: string | undefined;
   readonly revealedSecret: string | undefined;
+  /** The project, and the stored rows the dialogs seed their "Runs" choice from (ADR-0045 decision 9). */
+  readonly projectId: string | undefined;
+  readonly schedule: PipelineSchedule | undefined;
+  readonly webhook: PipelineInboundTrigger | undefined;
   readonly isScheduleModalOpen: boolean;
   readonly isWebhookModalOpen: boolean;
   readonly openScheduleModal: () => void;
@@ -115,7 +120,14 @@ export function useTriggerSurface(input: TriggerSurfaceInput): TriggerSurface {
   return {
     options: triggerOptions(hasInteractiveElements),
     currentTriggerType: currentTriggerKind(kinds),
-    entries: buildTriggerList({ hasSchedule: kinds.hasSchedule, cron: triggers.schedule?.cron, hasWebhook: kinds.hasWebhook, webhookUrl: triggers.webhook?.url }),
+    entries: buildTriggerList({
+      hasSchedule: kinds.hasSchedule,
+      cron: triggers.schedule?.cron,
+      hasWebhook: kinds.hasWebhook,
+      webhookUrl: triggers.webhook?.url,
+      scheduleTarget: triggers.schedule,
+      webhookTarget: triggers.webhook,
+    }),
     tooltip: buildTriggerTooltip(hasInteractiveElements),
     isLoading: triggers.isFetching || isUpdating,
     isUpdating,
@@ -126,6 +138,9 @@ export function useTriggerSurface(input: TriggerSurfaceInput): TriggerSurface {
     webhookSignatureHeader: triggers.webhook?.signature_header,
     webhookProvider: triggers.webhook?.provider,
     revealedSecret,
+    projectId,
+    schedule: triggers.schedule,
+    webhook: triggers.webhook,
     isScheduleModalOpen,
     isWebhookModalOpen,
     openScheduleModal: () => setIsScheduleModalOpen(true),

@@ -12,6 +12,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import type { StoredThreadTarget, ThreadTargetFieldsBody } from '@/entities/thread-target';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { BaseModal } from '@/shared/ui/BaseModal';
@@ -27,6 +28,7 @@ import {
   webhookModeFromValue,
   type WebhookMode,
 } from './pipelineWebhookModal.lib';
+import { WebhookTargetSection } from './PipelineWebhookTarget';
 
 /**
  * The inbound trigger's settings dialog (baseline:
@@ -83,9 +85,12 @@ export interface PipelineWebhookModalProps {
   readonly signatureHeader?: string | undefined;
   readonly isLoading?: boolean | undefined;
   readonly onReveal: () => void;
-  /** Rotates the credential. The mode is passed because the rotate route is where the backend writes it. */
-  readonly onRotate: (mode?: WebhookMode) => void;
+  /** Rotates the credential. The mode and the target (ADR-0045 decision 9) are passed because the rotate route is where the backend writes them. */
+  readonly onRotate: (mode?: WebhookMode, target?: ThreadTargetFieldsBody) => unknown;
   readonly onRevoke: () => void;
+  /** Shows the "Runs" choice, seeded from the stored trigger's `target`; see `PipelineWebhookTarget.tsx`. */
+  readonly projectId?: string | undefined;
+  readonly target?: StoredThreadTarget | undefined;
   /** Fires with a short confirmation message on copy actions (baseline: `toastSuccess`). See `TriggerTypeSelector.tsx`'s doc comment for the "no global toast hook" convention this replaces. */
   readonly onNotify?: ((message: string) => void) | undefined;
 }
@@ -204,7 +209,7 @@ function WebhookModeSection({ selectedMode, storedMode, signatureHeader, isLoadi
 }
 
 export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNode {
-  const { open, onClose, webhookUrl, secretValue, authMode, provider, signatureHeader, isLoading = false, onReveal, onRotate, onRevoke, onNotify } = props;
+  const { open, onClose, webhookUrl, secretValue, authMode, provider, signatureHeader, isLoading = false, onReveal, onRotate, onRevoke, onNotify, projectId, target } = props;
 
   const [showSecret, setShowSecret] = useState(false);
   const storedMode: WebhookMode = webhookModeFromAuthMode(authMode, provider);
@@ -255,6 +260,7 @@ export function PipelineWebhookModal(props: PipelineWebhookModalProps): ReactNod
             onSelect={setSelectedMode}
             onApply={() => onRotate(selectedMode)}
           />
+          <WebhookTargetSection projectId={projectId} open={open} stored={target} isLoading={isLoading} onApply={body => onRotate(storedMode, body)} />
 
           {storedSignatureHeader !== undefined && (
             <ValueRow
