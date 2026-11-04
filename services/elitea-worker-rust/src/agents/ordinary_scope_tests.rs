@@ -61,6 +61,7 @@ async fn nested_agent_compacts_its_tool_loop_without_compacting_parent_or_losing
     request.payload.summary_model = Some(crate::agents::request::SummaryModelSnapshot {
         llm_settings: serde_json::json!({"model_name":"dedicated-summary","model_project_id":23,"max_tokens":1024,"temperature":null,"openai_compatible":true}).as_object().unwrap().clone(),
         model_context_limits: ModelContextLimits { context_window_tokens: 32_000, max_output_tokens: 4_000, context_window_fallback: false, max_output_fallback: false, max_input_tokens: None },
+        model_reasoning: None,
     });
     let mut child = nested_agent_version(
         "Answer only the delegated task.",

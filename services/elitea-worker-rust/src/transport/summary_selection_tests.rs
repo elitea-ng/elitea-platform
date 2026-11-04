@@ -31,6 +31,7 @@ fn selection(native: bool) -> SummaryModelProfile {
                 max_output_fallback: false,
                 max_input_tokens: Some(20_000),
             },
+            model_reasoning: None,
         },
         &Map::new(),
     )

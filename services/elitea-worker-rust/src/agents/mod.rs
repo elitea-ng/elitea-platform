@@ -38,6 +38,7 @@ pub(crate) mod sensitive_tools;
 pub(crate) mod session;
 pub(crate) mod skipped_capabilities;
 pub(crate) mod subagents;
+pub(crate) use elitea_agent_runtime::thinking;
 pub(crate) mod unattended;
 pub(crate) mod untrusted_gate;
 pub(crate) use elitea_agent_runtime::tool_namespacing;

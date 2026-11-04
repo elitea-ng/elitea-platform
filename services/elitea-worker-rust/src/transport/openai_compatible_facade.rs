@@ -30,6 +30,7 @@ use elitea_llm_wire::openai::{
 };
 use elitea_llm_wire::refusal::{BudgetScope, Detail, MessageShapes, Refusal};
 use elitea_llm_wire::sse::{SseDialect, SseError, SseLimits, SseOptions, SseSplitter};
+use elitea_llm_wire::thinking::{ReasoningControl, StepThinking, Thinking};
 use elitea_llm_wire::tool_calls::{
     ToolCallAssembler, ToolCallError, ToolCallLimits, ToolCallProfile,
 };
@@ -139,6 +140,10 @@ pub(crate) struct ModelFacadeInvocation {
     pub(crate) system_instruction: String,
     pub(crate) max_tokens: Option<u32>,
     pub(crate) reasoning_effort: Option<ModelReasoningEffort>,
+    /// The model's thinking control from the catalogue (ADR-0038 decision
+    /// 3). `None`: the form this facade sent before the catalogue declared
+    /// one (`reasoning_effort` as is; a budget on the native facade).
+    pub(crate) reasoning: Option<crate::agents::request::ModelReasoning>,
     pub(crate) temperature: Option<f32>,
     pub(crate) max_model_turns: u32,
     /// The run's caps meter (ADR-0041 decision 3): an agent loop's model
@@ -166,23 +171,65 @@ impl ModelFacadeInvocation {
     }
 }
 
-/// OpenAI-compatible reasoning control preserved from the frozen SDK input.
+/// The frozen thinking setting (ADR-0038 decision 1). `None` is `off`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelReasoningEffort {
     Low,
     Medium,
     High,
     None,
+    /// The runtime decides per step (ADR-0038 decision 4).
+    Auto,
 }
 
 impl ModelReasoningEffort {
-    const fn as_str(self) -> &'static str {
+    /// The canonical setting.
+    pub(crate) const fn thinking(self) -> Thinking {
         match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::None => "none",
+            Self::Low => Thinking::Low,
+            Self::Medium => Thinking::Medium,
+            Self::High => Thinking::High,
+            Self::None => Thinking::Off,
+            Self::Auto => Thinking::Auto,
         }
+    }
+}
+
+impl ModelFacadeInvocation {
+    /// The control kind requests of this invocation are built for.
+    pub(crate) fn reasoning_control(&self, native_anthropic: bool) -> ReasoningControl {
+        crate::agents::thinking::effective_control(
+            self.reasoning.map(|reasoning| reasoning.control),
+            native_anthropic,
+        )
+    }
+
+    /// The thinking of one request: the setting, resolved for the step the
+    /// request is (`auto`), or `None` when nothing is configured.
+    pub(crate) fn step_thinking(&self, request: &LlmRequest) -> Option<StepThinking> {
+        let setting = self.reasoning_effort?.thinking();
+        let structured = request
+            .config
+            .as_ref()
+            .is_some_and(|config| config.response_schema.is_some());
+        crate::agents::thinking::resolve(
+            Some(setting),
+            crate::agents::thinking::classify(&request.contents, structured),
+            self.reasoning
+                .map(crate::agents::request::ModelReasoning::auto_policy)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Whether the frozen setting conflicts with a sampling temperature on
+    /// a model of `control`: a setting that can think, on a model that
+    /// thinks by effort or by budget.
+    pub(crate) fn temperature_conflicts(&self, control: ReasoningControl) -> bool {
+        self.temperature.is_some()
+            && self
+                .reasoning_effort
+                .is_some_and(|effort| effort != ModelReasoningEffort::None)
+            && matches!(control, ReasoningControl::Effort | ReasoningControl::Budget)
     }
 }
 
@@ -717,10 +764,7 @@ pub(super) fn validate_invocation(
         || invocation
             .max_tokens
             .is_some_and(|value| i32::try_from(value).is_err())
-        || (invocation
-            .reasoning_effort
-            .is_some_and(|effort| effort != ModelReasoningEffort::None)
-            && invocation.temperature.is_some())
+        || invocation.temperature_conflicts(invocation.reasoning_control(false))
         || invocation
             .temperature
             .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
@@ -793,15 +837,6 @@ fn encode_request_body(
             "tool_choice".to_owned(),
             serde_json::Value::String("auto".to_owned()),
         );
-        // GPT-5.6 defaults to medium reasoning, but Chat Completions tool
-        // calls require effective reasoning `none`. Match ADK 2.1+'s provider
-        // contract when Main has not frozen an explicit effort.
-        if invocation.model_name.starts_with("gpt-5.6") && invocation.reasoning_effort.is_none() {
-            body.insert(
-                "reasoning_effort".to_owned(),
-                serde_json::Value::String("none".to_owned()),
-            );
-        }
     }
     if let Some(schema) = request
         .config
@@ -833,16 +868,23 @@ fn encode_request_body(
             serde_json::Value::from(max_tokens),
         );
     }
-    if let Some(temperature) = invocation.temperature {
+    // The thinking of this step, in the model's form (ADR-0038: the
+    // translation table in `elitea_llm_wire::thinking`). No setting sends
+    // nothing; the model's own default applies.
+    let control = invocation.reasoning_control(false);
+    let step = invocation.step_thinking(request);
+    if let Some(temperature) = invocation.temperature
+        && !step.is_some_and(|step| control.refuses_temperature(step))
+    {
         body.insert(
             "temperature".to_owned(),
             serde_json::Value::from(temperature),
         );
     }
-    if let Some(reasoning_effort) = invocation.reasoning_effort {
-        body.insert(
-            "reasoning_effort".to_owned(),
-            serde_json::Value::String(reasoning_effort.as_str().to_owned()),
+    if let Some(step) = step {
+        elitea_llm_wire::thinking::apply_openai(
+            &mut body,
+            elitea_llm_wire::thinking::openai_form(control, step),
         );
     }
     let encoding_error = |_| {
@@ -2200,6 +2242,7 @@ pub(super) fn test_model_facade_invocation() -> ModelFacadeInvocation {
         system_instruction: "review carefully\nbe concise".to_owned(),
         max_tokens: Some(4_000),
         reasoning_effort: Some(ModelReasoningEffort::Medium),
+        reasoning: None,
         temperature: None,
         max_model_turns: 25,
         run_caps: None,

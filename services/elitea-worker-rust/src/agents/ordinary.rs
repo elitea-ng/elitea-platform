@@ -975,6 +975,7 @@ impl OrdinaryNativeAgentAssembler {
                 system_instruction: String::new(),
                 max_tokens,
                 reasoning_effort: None,
+                reasoning: None,
                 temperature,
                 // Single use, enforced by the facade; never the agent's turns.
                 max_model_turns: 1,
@@ -1076,6 +1077,7 @@ fn model_invocation(
         reasoning_effort: profile
             .reasoning_effort()
             .map(|effort| continuation_reasoning_effort(effort, output_continuation)),
+        reasoning: profile.model_reasoning(),
         temperature: profile.temperature(),
         max_model_turns: profile.step_limit(),
         // The run's model turns (ADR-0041 decision 3), shared with every
@@ -1440,14 +1442,15 @@ fn invalid_tool_authorization_catalog() -> NativeAgentAssemblyError {
 ///   enable reasoning the user turned off, and `validate_invocation` refuses
 ///   a non-`none` effort beside a temperature, so every Continue would fail at
 ///   binding.
-/// - **No effort** (the common case: the catalogue does not mark the model
-///   `supports_reasoning`, so Main sends `reasoning_effort: null`): NO knob is
-///   sent. Nothing proves one is safe. The catalogue has no field that names a
-///   vLLM/Qwen-style model, so `chat_template_kwargs.enable_thinking` cannot be
-///   targeted. The gateway also drops that field: its chat-request decode keeps
-///   no extra parameters. And `reasoning_effort` on a model the catalogue says
-///   does not reason is an unsupported parameter. On native Anthropic, no
-///   effort already means thinking off. For this family only the direct-answer
+/// - **`auto`**: the continuation runs at `low`, as an explicit level does.
+/// - The form of `low` follows the model's `reasoning_control` (ADR-0038,
+///   `elitea_llm_wire::thinking`): a `toggle` model gets `enable_thinking:
+///   true`, because it has no levels.
+/// - **No effort** (the catalogue does not mark the model as one whose
+///   thinking can be controlled, so Main sends `reasoning_effort: null`): NO
+///   knob is sent. `reasoning_effort` on a model the catalogue says does not
+///   reason is an unsupported parameter. On native Anthropic, no effort
+///   already means thinking off. For this family only the direct-answer
 ///   prompt reduces reasoning. The cap in `AgentEventProjector::finish_after_eos`
 ///   ends a second reasoning-only cut.
 const fn continuation_reasoning_effort(
@@ -1467,6 +1470,7 @@ const fn model_reasoning_effort(effort: ReasoningEffort) -> ModelReasoningEffort
         ReasoningEffort::Medium => ModelReasoningEffort::Medium,
         ReasoningEffort::High => ModelReasoningEffort::High,
         ReasoningEffort::None => ModelReasoningEffort::None,
+        ReasoningEffort::Auto => ModelReasoningEffort::Auto,
     }
 }
 

@@ -255,9 +255,14 @@ pub fn request_from(
                                 ),
                             )?,
                         ),
+                        model_reasoning: summary
+                            .model_reasoning
+                            .map(model_reasoning)
+                            .transpose()?,
                     })
                 })
                 .transpose()?,
+            model_reasoning: message.model_reasoning.map(model_reasoning).transpose()?,
             platform_preamble: message
                 .platform_preamble
                 .map(platform_preamble_snapshot)
@@ -285,6 +290,17 @@ fn model_context_limits(
         max_output_fallback: limits.max_output_fallback,
         max_input_tokens: limits.max_input_tokens,
     }
+}
+
+/// The catalogue's thinking data. An unknown control kind is refused: a
+/// newer catalogue value this worker cannot translate is never sent as
+/// another form.
+fn model_reasoning(
+    reasoning: crate::protocol::elitea::runtime::v1::ModelReasoningV1,
+) -> Result<super::request::ModelReasoning, AgentProtocolError> {
+    super::request::ModelReasoning::parse(&reasoning.control, reasoning.tool_steps).ok_or(
+        AgentProtocolError::InvalidInput("the model reasoning control is not known"),
+    )
 }
 
 fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolError> {

@@ -111,6 +111,7 @@ fn invocation(model: &str, effort: Option<ModelReasoningEffort>) -> ModelFacadeI
         system_instruction: "review carefully\nbe concise".to_owned(),
         max_tokens: Some(4_000),
         reasoning_effort: effort,
+        reasoning: None,
         temperature: effort.is_none().then_some(0.7),
         max_model_turns: 25,
         run_caps: None,

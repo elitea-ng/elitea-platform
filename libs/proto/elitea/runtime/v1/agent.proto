@@ -134,6 +134,25 @@ message AgentExecutionInputV1 {
   // while workers from an earlier release run (they reject unknown tags).
   // The legacy boolean auto_approve_sensitive_actions stays refused.
   UnattendedGrantV1 unattended_grant = 68;
+  // How the task model's thinking can be controlled (ADR-0038 decision 3,
+  // #1452), frozen from the authorized catalogue at admission. Main sets it
+  // only for a model whose thinking a request can set or that declares a
+  // fixed kind. ABSENT: the worker keeps the form it used before the
+  // catalogue declared one. Workers are upgraded before Main, because a
+  // worker from an earlier release refuses this tag.
+  ModelReasoningV1 model_reasoning = 69;
+}
+
+// The catalogue's thinking data for one model (ADR-0038 decisions 3 and 4).
+// Nested application version snapshots use this same JSON field shape under
+// the key `model_reasoning`.
+message ModelReasoningV1 {
+  // One of effort, budget, toggle, fixed_on, fixed_off.
+  string control = 1;
+  // `auto` keeps thinking on for a routine step after successful tool
+  // results (families whose interleaved thinking helps tool choice).
+  bool tool_steps = 2;
+  reserved 3 to 15;
 }
 
 // One unattended grant (ADR-0045 decision 1). Main admitted every part of it
@@ -204,7 +223,10 @@ message PlatformPreambleSnapshotV1 {
 message SummaryModelSnapshotV1 {
   bytes llm_settings = 1;
   ModelContextLimitsV1 model_context_limits = 2;
-  reserved 3 to 15;
+  // The summary model's thinking control. A summary call sends thinking
+  // off where the model can be switched. Absent: nothing is sent.
+  ModelReasoningV1 model_reasoning = 3;
+  reserved 4 to 15;
 }
 
 // Limits describe one model, not cumulative execution usage.

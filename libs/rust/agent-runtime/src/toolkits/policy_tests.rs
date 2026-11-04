@@ -286,6 +286,7 @@ fn request(tools: Vec<Value>) -> AgentExecutionRequest {
             model_context_limits: None,
             summary_model: None,
             platform_preamble: None,
+            model_reasoning: None,
         },
     }
 }
