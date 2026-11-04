@@ -45,7 +45,7 @@ A schedule or a webhook trigger can start a turn on a desktop thread that you se
 3. Optional: add a `grant` with the `continue` and `chain` parts. Without a grant, each turn runs to completion: it continues at the step and output limits, inside the platform's chain limits, with the goal check.
 </Steps>
 
-The save checks three things. The conversation must be in this project, you must be a participant of it (else `404`), and it must have been sent to the cloud at least once (else `422 not_handed_off`). The schedule or the trigger stays on its pipeline or agent version: the version keeps the setting, the people who can change it, and its mandate. The version does not run.
+The save checks three things. The conversation must be in this project, you must be a participant of it (else `404`), and it must have been sent to the cloud at least once (else `422 not_handed_off`). When credential governance is on, a governed run is bound to the version, so the thread's next turn must address an agent at that version. A model thread, or an agent at another version, is refused with `422 thread_not_governable`. If the thread's participant changes after the save, the occurrence records `skipped_mandate_scope`. The schedule or the trigger stays on its pipeline or agent version: the version keeps the setting, the people who can change it, and its mandate. The version does not run.
 
 Each occurrence starts a turn on the thread as a message that you post there starts one. It addresses the agent or the model that the thread's last turn addressed, and it runs as the schedule's author or the trigger's creator. A schedule's message is the `prompt`. A webhook's message is the `prompt`, then the call's `input`, or its payload in the untrusted-data envelope. Each occurrence starts a new chain. Its `run_finished` notification goes to you, with the thread's conversation, so you can open the result or take the thread back.
 
@@ -55,11 +55,12 @@ Each occurrence starts a turn on the thread as a message that you post there sta
 | A cloud turn runs, a take back is pending, or the thread is on the desktop again | Starts nothing, records `skipped_thread_busy`. | `409 thread_busy`. Retry later. |
 | Erased, or the conversation is gone | Records `skipped_missing_version`. | The one `401`. |
 | The previous occurrence's run or chain still goes | Records `skipped_overlap`. | — |
+| The trigger started 30 turns on the thread in 10 minutes, or 4 answers of the thread stream | — | `429` with `Retry-After`. This is the agent trigger's limit. |
 
 A posted message and an occurrence never both start a turn: the check that the thread is idle and the start happen in one transaction.
 
 <Note>
-No person is there when an occurrence starts. So the grant cannot name sensitive tools, hook asks or remote confirmations: the save refuses them with `422 unattended_grant_refused`. A step that needs an approval takes the schedule's or the trigger's **On approval required** action. When an administrator turns **Unattended Grants** off, an occurrence runs with no grant and is not refused.
+No person is there when an occurrence starts. So the grant cannot name sensitive tools, hook asks or remote confirmations: the save refuses them with `422 unattended_grant_refused`. A step that needs an approval takes the schedule's or the trigger's **On approval required** action. The action is fixed when the turn starts, in the same transaction: a later change to the setting, or an occurrence that the thread refuses, does not change the action of a turn that runs. When an administrator turns **Unattended Grants** off, an occurrence runs with no grant and is not refused.
 </Note>
 
 ## Webhooks
