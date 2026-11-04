@@ -19,8 +19,10 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/mandate"
 )
 
 // fakeThreadRuns is the handed-off thread seam.
@@ -343,9 +345,30 @@ func TestAThreadScheduleFiresSkipsAndOverlaps(t *testing.T) {
 		t.Fatalf("busy tick = %+v, %v", result, err)
 	}
 	view = h.readSchedule(t, versionID)
-	if view["last_result"] != "skipped_thread_busy" || view["last_run"] != firstRun ||
+	// The busy skip uses up the occurrence: it stamps last_run (the one
+	// exception to 0133's no-stamp rule), and keeps the last turn's id.
+	if view["last_result"] != "skipped_thread_busy" || view["last_run"] == firstRun ||
 		view["last_execution_id"] != "thread-exec-1" {
 		t.Fatalf("busy view = %v", view)
+	}
+	busyAudits := func() int {
+		n := 0
+		for _, event := range h.recorder.all() {
+			if strings.HasPrefix(event.Action, "pipeline schedule skipped_thread_busy") {
+				n++
+			}
+		}
+		return n
+	}
+	busyAt := view["last_result_at"]
+	// A second tick in the same cron slot: not due, so no second result and
+	// no second audit row, although the thread is still busy.
+	result, err = h.handler.RunDueSchedules(context.Background(), now.Add(4*time.Minute+30*time.Second))
+	if err != nil || result.Considered != 0 {
+		t.Fatalf("same-slot tick = %+v, %v", result, err)
+	}
+	if view := h.readSchedule(t, versionID); view["last_result_at"] != busyAt || busyAudits() != 1 {
+		t.Fatalf("same slot: view = %v, busy audits = %d", view, busyAudits())
 	}
 
 	// GONE: the existing missing result.
@@ -568,5 +591,202 @@ func TestAGovernedThreadTargetNeedsTheVersionsAgent(t *testing.T) {
 	}
 	if response := h.do(t, http.MethodPut, scheduleRoute(versionID), body, nil); response.Code != http.StatusOK {
 		t.Fatalf("the version's agent: status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+// removeFromThread drops the user's participant mapping from the thread.
+func removeFromThread(t *testing.T, h *harness, thread string, user int64) {
+	t.Helper()
+	if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(`
+DELETE FROM %[1]s.chat_participant_mapping AS mapping
+ USING %[1]s.chat_conversations AS conversation, %[1]s.chat_participants AS participant
+ WHERE mapping.conversation_id = conversation.id AND participant.id = mapping.participant_id
+   AND conversation.uuid = $1::uuid AND participant.entity_name = 'user'
+   AND participant.entity_meta ->> 'id' = $2::text`, homeSchema), thread, fmt.Sprint(user)); err != nil {
+		t.Fatalf("remove from thread: %v", err)
+	}
+}
+
+// The right to write to the thread is checked again at each occurrence: an
+// author removed from the thread stops the schedule (skipped_unauthorized)
+// and the webhook (the refusal for a missing permission).
+func TestAThreadOccurrenceChecksTheWriterAgain(t *testing.T) {
+	h, threads := newThreadHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, h, ownerUserID)
+	if response := h.do(t, http.MethodPut, scheduleRoute(versionID), threadBody(t, map[string]any{
+		"cron": "* * * * *", "active": true, "target_kind": "workspace_thread",
+		"conversation_uuid": thread, "prompt": "Run the nightly checks.",
+	}), nil); response.Code != http.StatusOK {
+		t.Fatalf("save: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	tokenID, secret := mintThreadTrigger(t, h, versionID, thread, nil)
+	removeFromThread(t, h, thread, ownerUserID)
+
+	result, err := h.handler.RunDueSchedules(context.Background(), time.Now().UTC().Truncate(time.Minute).Add(5*time.Second))
+	if err != nil || result.Skipped != 1 || threads.count() != 0 {
+		t.Fatalf("tick = %+v, %v, turns = %d", result, err, threads.count())
+	}
+	if view := h.readSchedule(t, versionID); view["last_result"] != "skipped_unauthorized" ||
+		!strings.Contains(fmt.Sprint(view["last_result_detail"]), "participant") {
+		t.Fatalf("view = %v", view)
+	}
+	response := h.do(t, http.MethodPost, inboundTarget(homeProject, tokenID), "", map[string]string{"Authorization": "Bearer " + secret})
+	if response.Code != http.StatusUnauthorized || threads.count() != 0 {
+		t.Fatalf("webhook: status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	// A conversation that is gone keeps the existing missing result.
+	if _, err := h.pool.Exec(context.Background(), fmt.Sprintf(
+		`DELETE FROM %s.chat_conversations WHERE uuid = $1::uuid`, homeSchema), thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.handler.RunDueSchedules(context.Background(), time.Now().UTC().Truncate(time.Minute).Add(65*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if view := h.readSchedule(t, versionID); view["last_result"] != "skipped_missing_version" {
+		t.Fatalf("gone: view = %v", view)
+	}
+}
+
+// A thread trigger with a provider preset takes the agent trigger's default
+// event list.
+func TestAThreadTriggerTakesTheAgentDefaultEvents(t *testing.T) {
+	h, _ := newThreadHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, h, ownerUserID)
+	response := h.do(t, http.MethodPost, triggerRoute(versionID), threadBody(t, map[string]any{
+		"type": "github", "target_kind": "workspace_thread", "conversation_uuid": thread, "prompt": "Review.",
+	}), nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("mint: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	events, _ := json.Marshal(decode(t, response)["events"])
+	if string(events) != `["push","pull_request"]` {
+		t.Fatalf("events = %s", events)
+	}
+}
+
+// A save that keeps the target and leaves the schedule paused does not
+// check the thread again: a schedule whose thread was erased can be paused.
+// Setting it active checks the thread.
+func TestAPauseDoesNotCheckTheThreadAgain(t *testing.T) {
+	h, threads := newThreadHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, h, ownerUserID)
+	if response := h.do(t, http.MethodPut, scheduleRoute(versionID), threadBody(t, map[string]any{
+		"cron": "0 7 * * *", "active": true, "target_kind": "workspace_thread",
+		"conversation_uuid": thread, "prompt": "Run the nightly checks.",
+	}), nil); response.Code != http.StatusOK {
+		t.Fatalf("save: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	threads.mu.Lock()
+	threads.handedOff = false // the thread was erased
+	threads.mu.Unlock()
+
+	response := h.do(t, http.MethodPut, scheduleRoute(versionID), `{"cron":"0 8 * * *","active":false}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("pause: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if view := decode(t, response); view["active"] != false || view["target_kind"] != "workspace_thread" ||
+		view["conversation_uuid"] != thread || view["cron"] != "0 8 * * *" {
+		t.Fatalf("view = %v", view)
+	}
+	response = h.do(t, http.MethodPut, scheduleRoute(versionID), `{"cron":"0 8 * * *","active":true}`, nil)
+	if response.Code != http.StatusUnprocessableEntity || decode(t, response)["code"] != "not_handed_off" {
+		t.Fatalf("resume: status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+// A target_kind that the row cannot hold is refused: `agent` on a
+// schedule, and on a trigger the kind that is not the version's.
+func TestATargetKindMustFitTheRow(t *testing.T) {
+	h, _ := newThreadHarness(t)
+	versionID := seedPipeline(t, h.pool, homeSchema, "Pipeline", ownerUserID)
+	response := h.do(t, http.MethodPut, scheduleRoute(versionID), `{"cron":"0 7 * * *","target_kind":"agent"}`, nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("agent schedule: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response := h.do(t, http.MethodPut, scheduleRoute(versionID), `{"cron":"0 7 * * *","target_kind":"pipeline"}`, nil); response.Code != http.StatusOK {
+		t.Fatalf("pipeline schedule: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	response = h.do(t, http.MethodPost, triggerRoute(versionID), `{"target_kind":"agent"}`, nil)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("agent trigger on a pipeline: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response := h.do(t, http.MethodPost, triggerRoute(versionID), `{"target_kind":"pipeline"}`, nil); response.Code != http.StatusOK {
+		t.Fatalf("pipeline trigger: status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+// newGovernedThreadHarness is the governed harness with the thread seam and
+// a thread whose next turn addresses an agent at the version, under an
+// attached autonomous mandate.
+func newGovernedThreadHarness(t *testing.T) (*governedHarness, *fakeThreadRuns, int64) {
+	t.Helper()
+	g := newGovernedHarness(t)
+	threads := &fakeThreadRuns{handedOff: true}
+	g.handler = pipelinetriggers.NewPlatformHandler(
+		g.pool, g.start, g.vault,
+		multiUserPermissions{users: map[int64]bool{ownerUserID: true, subjectUserID: true}},
+		g.recorder, nil, nil, nil,
+		pipelinetriggers.WithGovernedRuns(g.mandates.Service()),
+		pipelinetriggers.WithThreadRuns(threads),
+	)
+	g.router = mountRoutes(g.handler)
+	versionID := seedPipeline(t, g.pool, homeSchema, "Thread anchor", ownerUserID)
+	thread := seedThread(t, g.harness, ownerUserID)
+	threads.thread = handoffcontinue.ThreadTarget{
+		Target: handoffcontinue.Target{ConversationUUID: thread, ParticipantID: 3, Agent: true}, VersionID: versionID,
+	}
+	if response := g.do(t, http.MethodPut, scheduleRoute(versionID), threadBody(t, map[string]any{
+		"cron": "* * * * *", "active": true, "target_kind": "workspace_thread",
+		"conversation_uuid": thread, "prompt": "Go.",
+	}), nil); response.Code != http.StatusOK {
+		t.Fatalf("save: status = %d, body = %s", response.Code, response.Body.String())
+	}
+	g.mandates.PutBinding("binding-1", 1, versionID)
+	g.mandates.PutMandate("auto", 1, mandate.KindAutonomous, "binding-1", 0)
+	g.attachSchedule(t, versionID, "auto")
+	return g, threads, versionID
+}
+
+// The start's ErrThreadVersion skip under a mandate is a mandate refusal:
+// the security audit records MANDATE_SCOPE_MISMATCH, as the fire-time
+// check's refusals do.
+func TestAGovernedThreadVersionSkipIsAudited(t *testing.T) {
+	g, threads, versionID := newGovernedThreadHarness(t)
+	threads.set(handoffcontinue.ErrThreadVersion, false)
+	result, err := g.handler.RunDueSchedules(context.Background(), governedNow())
+	if err != nil || result.Skipped != 1 {
+		t.Fatalf("tick = %+v, %v", result, err)
+	}
+	if view := g.readSchedule(t, versionID); view["last_result"] != "skipped_mandate_scope" {
+		t.Fatalf("view = %v", view)
+	}
+	refusals := g.mandates.Refusals()
+	if len(refusals) != 1 || refusals[0].Code != runmandate.CodeMandateScopeMismatch ||
+		refusals[0].MandateID != "auto" || refusals[0].Target.Origin != runmandate.OriginPipelineSchedule {
+		t.Fatalf("refusals = %+v", refusals)
+	}
+}
+
+// A run identity that is not a user (an autonomous mandate on a row with no
+// author) is refused before the start, so no turn runs with the previous
+// turn's policy row.
+func TestAThreadOccurrenceWithNoIdentityIsRefused(t *testing.T) {
+	g, threads, versionID := newGovernedThreadHarness(t)
+	if _, err := g.pool.Exec(context.Background(), fmt.Sprintf(
+		`UPDATE %s.pipeline_schedules SET author_id = 0 WHERE version_id = $1`, homeSchema), versionID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := g.handler.RunDueSchedules(context.Background(), governedNow())
+	if err != nil || result.Skipped != 1 || threads.count() != 0 {
+		t.Fatalf("tick = %+v, %v, turns = %d", result, err, threads.count())
+	}
+	// Refused as a run identity, before the thread's writer check.
+	if view := g.readSchedule(t, versionID); view["last_result"] != "skipped_unauthorized" ||
+		strings.Contains(fmt.Sprint(view["last_result_detail"]), "participant") {
+		t.Fatalf("view = %v", view)
 	}
 }

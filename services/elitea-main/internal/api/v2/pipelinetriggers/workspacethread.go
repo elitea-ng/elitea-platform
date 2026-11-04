@@ -27,9 +27,10 @@ package pipelinetriggers
 //   - THE OCCURRENCE. One new chain per occurrence, with the trigger origin
 //     `schedule` or `webhook`, under the row's run identity (the author, the
 //     creator, or the governed mandate). A thread that is not CLOUD_IDLE
-//     starts nothing: the schedule records `skipped_thread_busy`, and the
-//     webhook answers 409 `thread_busy`. A thread that is gone records the
-//     existing missing result. `last_execution_id` links to the run, and
+//     starts nothing: the schedule records `skipped_thread_busy` and the
+//     occurrence is used up (last_run is stamped, so the next attempt is
+//     the next cron time), and the webhook answers 409 `thread_busy`. A
+//     thread that is gone records the existing missing result. `last_execution_id` links to the run, and
 //     its outcome comes as `run_finished`.
 
 import (
@@ -49,8 +50,10 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -58,7 +61,7 @@ import (
 
 // TargetKindWorkspaceThread is the target of a schedule or a trigger that
 // starts a cloud turn on a handed-off thread (0159).
-const TargetKindWorkspaceThread = "workspace_thread"
+const TargetKindWorkspaceThread = runmandate.ScheduleTargetWorkspaceThread
 
 // maxThreadPrompt bounds the prompt, in characters (the continue prompt's
 // bound, workspacehandoff.MaxContinuePromptRunes).
@@ -185,6 +188,8 @@ type requestedTarget struct {
 	named bool
 	// thread: the body names `workspace_thread`.
 	thread bool
+	// kind is the `target_kind` the body names, when named.
+	kind   string
 	target threadTarget
 	grant  *threadGrantWire
 }
@@ -224,6 +229,7 @@ func parseThreadTarget(raw []byte) (requestedTarget, error) {
 	}
 	requested.named = true
 	kind := strings.TrimSpace(*body.TargetKind)
+	requested.kind = kind
 	switch kind {
 	case TargetKindWorkspaceThread:
 	case TargetKindPipeline, TargetKindAgent:
@@ -252,6 +258,24 @@ func parseThreadTarget(raw []byte) (requestedTarget, error) {
 		requested.grant = &grant
 	}
 	return requested, nil
+}
+
+// scheduleKindError: a schedule runs a pipeline or starts a thread turn; it
+// has no `agent` target (an agent version is only a thread target's anchor).
+func (r requestedTarget) scheduleKindError() error {
+	if r.named && !r.thread && r.kind != TargetKindPipeline {
+		return invalidTarget("`target_kind` of a schedule must be `pipeline` or `workspace_thread`")
+	}
+	return nil
+}
+
+// triggerKindError: a trigger's `pipeline` or `agent` kind is the version's
+// own kind; a body that names the other one contradicts the version.
+func (r requestedTarget) triggerKindError(versionKind string) error {
+	if r.named && !r.thread && r.kind != versionKind {
+		return invalidTarget("`target_kind` must be `" + versionKind + "` (this version's kind) or `workspace_thread`")
+	}
+	return nil
 }
 
 func canonicalUUID(value string) bool {
@@ -405,22 +429,40 @@ func threadRunText(prompt, input string, payload []byte, source payloadSource) (
 	return prompt + "\n\n" + extra, inputSourceInput, nil
 }
 
+// ErrThreadNotWritable: the run identity is no longer a user participant of
+// the thread, so it may not post the occurrence's message. It is an
+// ErrRunForbidden: the schedule records skipped_unauthorized, and the
+// webhook gets the refusal for a missing permission.
+var ErrThreadNotWritable = fmt.Errorf("%w: the run identity is not a participant of the workspace thread", ErrRunForbidden)
+
 // admitThread is admit for a `workspace_thread` target: authorize the run
-// identity, then start the cloud turn on the thread.
+// identity and its right to write to the thread, then start the cloud turn
+// on the thread.
 func (h *Handler) admitThread(
-	ctx context.Context, schema string, request runRequest, target threadTarget, grant []byte, questionID string,
+	ctx context.Context, schema string, request runRequest, target threadTarget, questionID string,
 ) (runOutcome, error) {
 	if h.threads == nil {
 		return runOutcome{}, ErrThreadRunsUnavailable
 	}
-	if len(request.Input) > maxRunInput {
-		return runOutcome{}, ErrInputTooLarge
-	}
-	if !utf8.ValidString(request.Input) || strings.ContainsRune(request.Input, '\x00') {
-		return runOutcome{}, ErrInvalidInput
+	if err := checkRunInput(request.Input); err != nil {
+		return runOutcome{}, err
 	}
 	ctx, request, err := h.authorizeRun(ctx, request)
 	if err != nil {
+		return runOutcome{}, err
+	}
+	// The turn runs as the run identity and its policy row names it as the
+	// owner, so an identity that is not a user is refused before the start.
+	// A schedule's author and a trigger's creator are always users; this
+	// stops a row that holds no identity from running with no owner, or
+	// with the previous turn's policy.
+	if request.ActorUserID <= 0 {
+		return runOutcome{}, ErrRunForbidden
+	}
+	// The save checked the right to write to the thread (checkThreadTarget);
+	// it is checked again for each occurrence, so an author removed from
+	// the thread since stops the occurrence.
+	if err := h.threadWritable(ctx, schema, request.ProjectID, request.ActorUserID, target.conversation()); err != nil {
 		return runOutcome{}, err
 	}
 	text, inputSource, err := threadRunText(target.prompt(), request.Input, request.Payload, request.PayloadSource)
@@ -440,7 +482,7 @@ func (h *Handler) admitThread(
 	}
 	turn := handoffcontinue.ThreadTurn{
 		ProjectID: request.ProjectID, ConversationUUID: target.conversation(), ActorUserID: request.ActorUserID,
-		QuestionID: questionID, Prompt: text, Grant: storedGrant(grant).request(),
+		QuestionID: questionID, Prompt: text, Grant: storedGrant(target.Grant).request(),
 		TriggerOrigin: executionTriggerOrigin(request.Origin), Run: run,
 	}
 	if request.Authority != nil {
@@ -450,6 +492,15 @@ func (h *Handler) admitThread(
 	}
 	started, err := h.threads.StartThreadTurn(ctx, turn)
 	if err != nil {
+		if errors.Is(err, handoffcontinue.ErrThreadVersion) && request.Authority != nil && h.governed != nil {
+			// A mandate refusal like the fire-time check's: the security
+			// audit records MANDATE_SCOPE_MISMATCH (scheduleAuthority).
+			if auditErr := h.governed.Refuse(ctx, request.MandateTarget, request.Authority.MandateID,
+				fmt.Errorf("%w: %w", runmandate.ErrScopeMismatch, err)); auditErr != nil {
+				h.log().Error("pipelinetriggers: record the mandate refusal",
+					"project_id", request.ProjectID, "err", auditErr)
+			}
+		}
 		return runOutcome{}, err
 	}
 	return runOutcome{
@@ -466,9 +517,6 @@ func (h *Handler) admitThread(
 // refuses the run, as admit's recordRunApprovalPolicy does.
 func (h *Handler) threadRun(ctx context.Context, request runRequest) (*agentexecutionapp.ThreadRun, error) {
 	run := &agentexecutionapp.ThreadRun{TriggerID: request.TriggerID, ScheduleID: request.ScheduleID}
-	if request.ActorUserID <= 0 {
-		return run, nil
-	}
 	action, err := h.effectiveOnApprovalRequired(ctx, request.ProjectID, approvalTargetOf(request.Origin), request.VersionID)
 	if err != nil {
 		return nil, fmt.Errorf("pipelinetriggers: read the run's approval action: %w", err)
@@ -477,6 +525,34 @@ func (h *Handler) threadRun(ctx context.Context, request runRequest) (*agentexec
 		VersionID: request.VersionID, OwnerUserID: request.ActorUserID, OnApprovalRequired: action,
 	}
 	return run, nil
+}
+
+// threadWritable is the save's write check (AuthorizeChatWrite: a user
+// participant of the conversation) for the run identity at fire time. A
+// conversation the identity may not write is ErrThreadNotWritable; one that
+// is gone is workspacehandoff.ErrNotFound, the existing missing result.
+func (h *Handler) threadWritable(ctx context.Context, schema string, projectID, userID int64, conversationUUID string) error {
+	id := strconv.FormatInt(userID, 10)
+	err := repos.NewConversationsRepo(h.pool).AuthorizeChatWrite(
+		auth.ContextWithUser(ctx, auth.User{ID: id, UserID: id}),
+		strconv.FormatInt(projectID, 10), "conversation", conversationUUID)
+	var refused *apierr.APIError
+	switch {
+	case errors.As(err, &refused) && (refused.Status == http.StatusNotFound || refused.Status == http.StatusForbidden):
+		var exists bool
+		if err := h.pool.QueryRow(ctx, fmt.Sprintf(
+			`SELECT EXISTS (SELECT 1 FROM %s.chat_conversations WHERE uuid = $1::uuid)`, schema),
+			conversationUUID).Scan(&exists); err != nil {
+			return fmt.Errorf("pipelinetriggers: read the thread: %w", err)
+		}
+		if !exists {
+			return workspacehandoff.ErrNotFound
+		}
+		return ErrThreadNotWritable
+	case err != nil:
+		return fmt.Errorf("pipelinetriggers: check the thread's writers: %w", err)
+	}
+	return nil
 }
 
 // threadTriggerAdmissible is agentTriggerAdmissible for a trigger that
@@ -531,6 +607,8 @@ func scheduleQuestionID(projectID, scheduleID int64, now time.Time) string {
 // last_result and its detail; "" for an error that is not one of them.
 func threadOutcome(err error) (string, string) {
 	switch {
+	case errors.Is(err, ErrThreadNotWritable):
+		return resultSkippedAuth, "the schedule author is no longer a participant of the workspace thread"
 	case errors.Is(err, handoffcontinue.ErrThreadBusy):
 		return resultSkippedThreadBusy, "the workspace thread was not idle in the cloud; no turn started"
 	case errors.Is(err, workspacehandoff.ErrNotFound):

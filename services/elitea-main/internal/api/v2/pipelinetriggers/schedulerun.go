@@ -268,12 +268,15 @@ func (h *Handler) fireSchedule(
 		ScheduleID:  schedule.ID,
 		Authority:   authority,
 	}
+	if authority != nil {
+		request.MandateTarget = scheduleTarget(tenant.ProjectID, schedule)
+	}
 	var outcome runOutcome
 	if thread {
 		// A cloud turn on the handed-off thread (workspacethread.go), with
 		// the prompt as its message.
 		request.Input = ""
-		outcome, err = h.admitThread(ctx, tenant.Schema, request, schedule.Target, schedule.Target.Grant,
+		outcome, err = h.admitThread(ctx, tenant.Schema, request, schedule.Target,
 			scheduleQuestionID(tenant.ProjectID, schedule.ID, now))
 		if skip, detail := threadOutcome(err); skip != "" {
 			if skip == resultFailed {

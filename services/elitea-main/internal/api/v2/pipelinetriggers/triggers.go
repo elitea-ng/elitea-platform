@@ -278,6 +278,10 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "the pipeline version could not be read")
 		return
 	}
+	if err := requestedThread.triggerKindError(targetKindOf(target)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	previous, previousErr := h.triggerByVersion(r.Context(), schema, versionID)
 	// A ROTATION THAT NAMES NO MODE KEEPS THE ONE THAT IS STORED.

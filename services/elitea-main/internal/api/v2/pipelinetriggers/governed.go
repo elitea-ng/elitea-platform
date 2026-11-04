@@ -74,12 +74,10 @@ func (h *Handler) attachedMandate(ctx context.Context, schema, table string, id 
 // scheduleTarget is what a schedule's mandate must cover.
 //
 // For a `workspace_thread` target (0159) the input is the prompt each
-// occurrence starts with: that is the text the mandate's scope reads.
+// occurrence starts with: that is the text the mandate's scope reads
+// (runmandate.ScheduleInput, which the admin attach reads too).
 func scheduleTarget(projectID int64, schedule scheduleRow) runmandate.Target {
-	input := schedule.UserInput
-	if schedule.TargetKind == TargetKindWorkspaceThread {
-		input = schedule.Target.prompt()
-	}
+	input := runmandate.ScheduleInput(schedule.TargetKind, schedule.UserInput, schedule.Target.prompt())
 	return runmandate.Target{
 		Origin: runmandate.OriginPipelineSchedule, TenantProjectID: projectID,
 		ResourceID: strconv.FormatInt(schedule.ID, 10), ApplicationVersionID: schedule.VersionID,
@@ -135,6 +133,14 @@ const releaseRolledBackAdvice = "the agent was rolled back to an earlier release
 	"binds the version this trigger names, not the release's version. Roll the agent forward to the " +
 	"release of this version, or point the trigger at the release's version with a mandate bound to it"
 
+// triggerMandateTarget is what a trigger's mandate must cover.
+func triggerMandateTarget(projectID int64, trigger triggerRow) runmandate.Target {
+	return runmandate.Target{
+		Origin: runmandate.OriginPipelineTrigger, TenantProjectID: projectID,
+		ResourceID: strconv.FormatInt(trigger.ID, 10), ApplicationVersionID: trigger.VersionID,
+	}
+}
+
 // triggerAuthority is the governed check of one inbound call. ok false means
 // the response is written.
 func (h *Handler) triggerAuthority(
@@ -148,10 +154,7 @@ func (h *Handler) triggerAuthority(
 		writeError(w, http.StatusServiceUnavailable, "this trigger could not be checked")
 		return securitycontext.RunAuthority{}, false
 	}
-	target := runmandate.Target{
-		Origin: runmandate.OriginPipelineTrigger, TenantProjectID: projectID,
-		ResourceID: strconv.FormatInt(trigger.ID, 10), ApplicationVersionID: trigger.VersionID,
-	}
+	target := triggerMandateTarget(projectID, trigger)
 	authority, err := h.governed.Admit(r.Context(), mandateID, target)
 	if err != nil {
 		code := runmandate.Code(err)

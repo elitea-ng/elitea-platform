@@ -107,7 +107,8 @@ const (
 	resultSkippedMissing = "skipped_missing_version"
 	resultFailed         = "failed"
 	// resultSkippedThreadBusy: the workspace thread was not CLOUD_IDLE, so
-	// the occurrence started no turn (0159, ADR-0045 decision 9).
+	// the occurrence started no turn (0159, ADR-0045 decision 9). It uses up
+	// the occurrence: it stamps last_run (recordScheduleOutcome).
 	resultSkippedThreadBusy = "skipped_thread_busy"
 )
 
@@ -393,6 +394,13 @@ func (h *Handler) activeSchedules(ctx context.Context, schema string) ([]schedul
 // elitea-scheduler's rule for a suppressed tick, applied to every non-dispatch
 // outcome for the same reason: `last_run` is the record that a run HAPPENED,
 // and writing it for one that did not is issue 305 reached by another route.
+//
+// ONE EXCEPTION: `skipped_thread_busy` (0159) stamps `last_run` and uses up
+// the occurrence. A busy thread is a person's (or another run's) work on
+// that thread, not a fault that clears, so the next attempt is the next cron
+// time: the schedule does not fire every minute until the thread is idle,
+// and a thread that becomes idle again does not get a turn off the
+// schedule's cadence. `last_execution_id` keeps the last turn that started.
 func (h *Handler) recordScheduleOutcome(
 	ctx context.Context, schema string, scheduleID int64,
 	result, detail, executionID string, ranAt time.Time,
@@ -411,6 +419,13 @@ UPDATE %s.pipeline_schedules
    SET last_run = $2, last_result = $3, last_result_detail = $4,
        last_result_at = $2, last_execution_id = $5
  WHERE id = $1`, schema), scheduleID, ranAt, result, detailValue, executionValue)
+		return err
+	}
+	if result == resultSkippedThreadBusy {
+		_, err := h.pool.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.pipeline_schedules
+   SET last_run = $2, last_result = $3, last_result_detail = $4, last_result_at = $2
+ WHERE id = $1`, schema), scheduleID, ranAt, result, detailValue)
 		return err
 	}
 	_, err := h.pool.Exec(ctx, fmt.Sprintf(`

@@ -20,8 +20,11 @@
 --   * `pipeline_triggers.last_execution_id` — the execution the trigger's
 --     last admitted call started. The schedule table has the column (0133).
 --   * The schedule outcome vocabulary gains `skipped_thread_busy`: the
---     thread was not CLOUD_IDLE when the occurrence fired, so no turn started
---     and `last_run` is not stamped (0133's rule for every skip).
+--     thread was not CLOUD_IDLE when the occurrence fired, so no turn
+--     started. It is the one exception to 0133's no-stamp rule: it stamps
+--     `last_run` and uses up the occurrence, so the next attempt is the next
+--     cron time. A busy thread does not fire every minute, and a thread that
+--     is idle again does not get a turn off the schedule's cadence.
 --
 -- No data and no permission. Every existing row keeps its kind and NULL
 -- target columns. Same guard as 0138: a tenant schema that has not reached

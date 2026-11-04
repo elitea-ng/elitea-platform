@@ -351,12 +351,15 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		TriggerKind:   storedTargetKind(trigger),
 		Authority:     authority,
 	}
+	if authority != nil {
+		request.MandateTarget = triggerMandateTarget(projectID, trigger)
+	}
 	var outcome runOutcome
 	if trigger.TargetKind == TargetKindWorkspaceThread {
 		// A cloud turn on the handed-off thread (workspacethread.go). Each
 		// call is a new question; a signed delivery that repeats is answered
 		// from the delivery log above.
-		outcome, err = h.admitThread(r.Context(), schema, request, trigger.Target, trigger.Target.Grant, uuid.NewString())
+		outcome, err = h.admitThread(r.Context(), schema, request, trigger.Target, uuid.NewString())
 	} else {
 		outcome, err = h.admit(r.Context(), schema, request)
 	}
@@ -396,6 +399,12 @@ func (h *Handler) Trigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error": "this trigger has no usable mandate", "code": code,
 		})
+		return
+	case errors.Is(err, ErrThreadNotWritable):
+		// The refusal for a missing permission; the audit row names why.
+		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,
+			"the trigger creator is no longer a participant of the workspace thread")
+		writeError(w, http.StatusUnauthorized, refusal)
 		return
 	case errors.Is(err, ErrRunForbidden):
 		record(http.StatusUnauthorized, projectID, trigger.CreatedBy, trigger.VersionID,

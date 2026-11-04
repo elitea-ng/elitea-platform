@@ -208,11 +208,14 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 		active = *body.Active
 	}
 	requested, err := parseThreadTarget(raw)
+	if err == nil {
+		err = requested.scheduleKindError()
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	kind, thread, ok := h.scheduleTargetOf(w, r, schema, projectID, versionID, requested)
+	kind, thread, ok := h.scheduleTargetOf(w, r, schema, projectID, versionID, requested, active)
 	if !ok {
 		return
 	}
@@ -265,12 +268,16 @@ func (h *Handler) SaveSchedule(w http.ResponseWriter, r *http.Request) {
 }
 
 // scheduleTargetOf is the target a save writes. A body with no
-// `target_kind` keeps the stored target. A thread target, new or kept, is
-// checked again: the save makes the caller the schedule's author, so the
-// caller must be able to write to the thread. ok false means the response
-// is written.
+// `target_kind` keeps the stored target. A thread target is checked when the
+// body names it, and a kept one when the save sets `active` to true: the
+// save makes the caller the schedule's author, so the caller must be able to
+// write to the thread. A save that keeps the target and leaves the schedule
+// paused (for example a pause of a schedule whose thread was erased) does
+// not check the thread; the occurrence checks it again in any case. ok
+// false means the response is written.
 func (h *Handler) scheduleTargetOf(
 	w http.ResponseWriter, r *http.Request, schema string, projectID, versionID int64, requested requestedTarget,
+	active bool,
 ) (string, threadTarget, bool) {
 	if !requested.named {
 		existing, err := h.scheduleByVersion(r.Context(), schema, versionID)
@@ -283,6 +290,9 @@ func (h *Handler) scheduleTargetOf(
 			return "", threadTarget{}, false
 		case existing.TargetKind != TargetKindWorkspaceThread:
 			return TargetKindPipeline, threadTarget{}, true
+		}
+		if !active {
+			return TargetKindWorkspaceThread, existing.Target, true
 		}
 		requested = requestedTarget{named: true, thread: true, target: existing.Target}
 	}
