@@ -1,0 +1,33 @@
+# Language-parameterised Code fixture for the language matrix (catalog/language-matrix.json). One template serves
+# python, javascript, typescript and rust; seed.py LANGUAGES holds each language's node sources and render()
+# indents them under `value: |`. `sleep` kinds record started_at_ms and a nonce, sleep {{sleep_ms}}, and return
+# {started_at_ms, nonce, count}, then a sentinel node of the same language prints the string the harness parses
+# (runner._answer). The `throw` kind is one node that fails on purpose and has no sentinel.
+state:
+  input: {type: str}
+  messages: {type: list}
+  probe: {type: dict}
+entry_point: {{first_id}}
+nodes:
+  - id: {{first_id}}
+    type: code
+    language: {{language}}
+    code:
+      type: fixed
+      value: |
+        {{first_code}}
+    input: [input]
+    output: [{{first_output}}]
+    transition: {{first_transition}}
+# @if sentinel
+  - id: sentinel_9999
+    type: code
+    language: {{language}}
+    code:
+      type: fixed
+      value: |
+        {{sentinel_code}}
+    input: [probe]
+    output: [messages]
+    transition: END
+# @end

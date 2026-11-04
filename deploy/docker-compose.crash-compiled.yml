@@ -1,0 +1,35 @@
+# Crash-rehearsal add-on: compiled Rust snapshots (P11, Code publication). Local only; CI never loads it.
+#
+# Apply after docker-compose.crash-rehearsal.yml. It mirrors docker-compose.sandbox-compiled-rust.yml without its
+# file binds: on the crash stack a nested file bind into the read-only runtime-material source, or into the
+# Supervisor's material volume, cannot be created. `crashctl material` instead places the manifest in the
+# gitignored deploy/certs/runtime/ (the stock installer copies it to Main and the Worker, install-material.sh:118-122)
+# and in the Rust Supervisor material (copied by crash-material).
+#
+# The manifest is a hand-measured, empty-bundle profile (built-in vendor material) for the locally built
+# rust-runtime image: scripts/crash-recovery/lib/compiled_manifest.py replicates the runner's own binding
+# measurement (services/elitea-code-runner/src/compiled_snapshot.rs). The Rust execution profile needs dependency
+# content (Main's :9445 content listener) to move the compiled executable, so it also gets a staging tmpfs.
+services:
+  runtime-material:
+    environment:
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "true"
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256: ${ELITEA_RUST_COMPILED_PROFILES_SHA256:?Set by crashctl material}
+
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "true"
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_FILE: /run/elitea-runtime/rust-compiled-profiles.json
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256: ${ELITEA_RUST_COMPILED_PROFILES_SHA256:?Set by crashctl material}
+      ELITEA_RUST_COMPILED_AGENTSTATE_DSN_FILE: /run/elitea-runtime/agent-checkpoint-connection
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_ENTRIES: ${ELITEA_RUST_COMPILED_GLOBAL_ENTRIES:-100}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_BYTES: ${ELITEA_RUST_COMPILED_GLOBAL_BYTES:-1073741824}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_ENTRIES: ${ELITEA_RUST_COMPILED_TENANT_ENTRIES:-10}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_BYTES: ${ELITEA_RUST_COMPILED_TENANT_BYTES:-268435456}
+      # Maximum TTL: a Publishing row must outlive a Main restart for the P11 scenario.
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PUBLISHING_TTL_SECONDS: ${ELITEA_RUST_COMPILED_PUBLISHING_TTL_SECONDS:-300}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_READY_TTL_SECONDS: ${ELITEA_RUST_COMPILED_READY_TTL_SECONDS:-3600}
+
+  elitea-sandbox:
+    tmpfs:
+      - /run/elitea-sandbox-content/rust:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001

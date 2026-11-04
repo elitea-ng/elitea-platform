@@ -1,0 +1,72 @@
+# Crash-rehearsal add-on: JavaScript and TypeScript npm/jsr preparation on the native Deno profile. Local only; CI
+# never loads it. Opt in with the stack feature `npm` (it builds on `preparation`).
+#
+# File order (crashctl composes it): standalone-full, standalone-rust-agent, sandbox, sandbox-preparation,
+# crash-rehearsal, crash-preparation, crash-npm. Like crash-preparation.yml it adds listeners to the existing
+# Supervisor process and re-adds the aliases and material on the crash topology:
+# - elitea-sandbox-deno-native (9449): offline execution of JavaScript and TypeScript. Python stays on the
+#   elitea-sandbox-deno listener, whose language list `crashctl material` narrows to python.
+# - elitea-sandbox-javascript-preparation (9450) and elitea-sandbox-typescript-preparation (9451): one trusted
+#   preparer listener per language. Their preparers join `elitea-python-preparation-resolver`, the same plain
+#   bridge `crashctl up` creates for the Python preparer; no new network and no new image (the Deno runner image).
+# The names resolve only on crash_sandbox. Their material comes from the crash_sandbox_npm volume with UID 10001
+# ownership (a host bind fails the private-file checks); `crashctl material` writes it under sandbox-npm/.
+#
+# Egress: Docker Compose cannot restrict a bridge to hostnames. A preparer reaches registry.npmjs.org and jsr.io
+# only because Deno's --allow-net names them; the network is shared with the Python preparer (pypi.org,
+# files.pythonhosted.org, cdn.jsdelivr.net). Execution stays offline. The harness checks that only this stack's
+# preparer containers are attached to the bridge.
+services:
+  crash-npm-material:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for profile in deno-native javascript-preparation typescript-preparation; do
+          mkdir -p /dst/$$profile && rm -rf /dst/$$profile/* && cp -p /src/sandbox-npm/$$profile/* /dst/$$profile/
+        done
+        chown -R 10001:10001 /dst && chmod 700 /dst /dst/* && chmod 600 /dst/*/*
+    volumes:
+      - type: bind
+        source: ${ELITEA_CRASH_MATERIAL_DIR:?Set the private crash material directory}
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - crash_sandbox_npm:/dst
+    restart: "no"
+
+  elitea-main:
+    environment:
+      # The stock preparation overlay sets the three Python-era audiences; the native ones are added to the list.
+      ELITEA_RUNTIME_SANDBOX_AUDIENCES: "dns:elitea-sandbox-deno,dns:elitea-sandbox-rust,dns:elitea-sandbox-preparation,dns:elitea-sandbox-deno-native,dns:elitea-sandbox-javascript-preparation,dns:elitea-sandbox-typescript-preparation"
+
+  elitea-sandbox:
+    command:
+      - --config
+      - /run/elitea-sandbox/deno/config.json
+      - --config
+      - /run/elitea-sandbox/rust/config.json
+      - --config
+      - /run/elitea-sandbox/preparation/config.json
+      - --config
+      - /run/elitea-sandbox/npm/deno-native/config.json
+      - --config
+      - /run/elitea-sandbox/npm/javascript-preparation/config.json
+      - --config
+      - /run/elitea-sandbox/npm/typescript-preparation/config.json
+    networks:
+      crash_sandbox:
+        aliases: [elitea-sandbox-deno-native, elitea-sandbox-javascript-preparation, elitea-sandbox-typescript-preparation]
+    volumes:
+      - crash_sandbox_npm:/run/elitea-sandbox/npm:ro
+    tmpfs:
+      - /run/elitea-sandbox-content/deno-native:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/javascript-preparation:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+      - /run/elitea-sandbox-content/typescript-preparation:rw,noexec,nosuid,nodev,size=268435456,mode=0700,uid=10001,gid=10001
+    depends_on:
+      crash-npm-material:
+        condition: service_completed_successfully
+
+volumes:
+  crash_sandbox_npm: {}

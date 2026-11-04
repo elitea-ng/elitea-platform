@@ -1,0 +1,31 @@
+{
+  "id": "BASE-code-50",
+  "cell": "baseline (no fault): Code fixture, 50 s node",
+  "now": "-",
+  "target": "R",
+  "matrix_cell": null,
+  "fixture": "code-nonce-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "admitted",
+    "timeout_s": 30
+  },
+  "faults": [],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 240
+  },
+  "repeat": 1,
+  "notes": "Control run. Its job count becomes the I2 oracle for every scenario on this fixture.",
+  "gap": null,
+  "browser": false,
+  "tier": "T0"
+}

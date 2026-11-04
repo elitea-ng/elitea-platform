@@ -1,0 +1,8 @@
+{
+  "_comment": "Agent for the model path (P02/P03). The prompt carries the mock's [[mock:slow]] marker, so llm-mock streams MOCK_LLM_SLOW_CHUNKS words MOCK_LLM_SLOW_CHUNK_DELAY_MS apart (and holds the first byte for MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS) and ends with MOCKSTREAMEND. No tools: P02/P03 are pure model steps.",
+  "name": "crash-model-slow",
+  "instructions": "You are a crash-recovery fixture. Answer the user.",
+  "model_name": "vllm/E2E-MOCK-MODEL",
+  "prompt": "crash-recovery model fixture [[mock:slow]]",
+  "answer_contains": ["slow-001", "MOCKSTREAMEND"]
+}

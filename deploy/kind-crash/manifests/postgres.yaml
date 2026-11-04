@@ -1,0 +1,83 @@
+# PostgreSQL on a PVC (KX-11 deletes the pod and expects the data to survive).
+# deploy/kind/manifests/infra.yaml uses an emptyDir; this does not.
+# The default kind StorageClass (`standard`, local-path) provisions the volume on
+# the node that runs the pod; the pod is pinned to the platform node.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: elitea
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: elitea
+data:
+  # dbInit is off in values-crash.yaml, so this creates what the chart's
+  # dbInit Job would: the extensions and the worker's agent-state database
+  # (dbInit.agentStateDatabase default elitea_v2_agentstate, values.yaml:~350).
+  00-extensions.sql: |
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    CREATE DATABASE elitea_v2_agentstate;
+  01-agentstate-extensions.sh: |
+    #!/bin/sh
+    psql -v ON_ERROR_STOP=1 -U elitea -d elitea_v2_agentstate -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: elitea
+spec:
+  replicas: 1
+  serviceName: postgres
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      nodeSelector:
+        elitea.ai/crash-role: platform
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          image: docker.io/pgvector/pgvector:0.8.5-pg16-trixie
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "max_connections=200"]
+          env:
+            - { name: POSTGRES_USER, value: elitea }
+            - { name: POSTGRES_PASSWORD, value: elitea }
+            - { name: POSTGRES_DB, value: elitea }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "elitea"] }
+            periodSeconds: 3
+            failureThreshold: 30
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+      volumes:
+        - { name: initdb, configMap: { name: postgres-initdb, defaultMode: 0555 } }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: elitea
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]

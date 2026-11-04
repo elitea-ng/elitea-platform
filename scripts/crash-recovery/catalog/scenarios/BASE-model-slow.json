@@ -1,0 +1,31 @@
+{
+  "id": "BASE-model-slow",
+  "cell": "baseline (no fault): agent model stream",
+  "now": "-",
+  "target": "R",
+  "matrix_cell": null,
+  "fixture": "model-slow",
+  "trigger": {
+    "kind": "obs",
+    "until": "admitted",
+    "timeout_s": 30
+  },
+  "faults": [],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 240
+  },
+  "repeat": 1,
+  "notes": "Control run for the model-path fixture.",
+  "gap": null,
+  "browser": false,
+  "tier": "T0"
+}

@@ -1,0 +1,48 @@
+# Object store, copied from deploy/kind/manifests/infra.yaml (emptyDir, throwaway).
+# Main configures bucket retention at boot; create the bucket first (crash-stack.sh).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs
+  namespace: elitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: rustfs }
+  template:
+    metadata:
+      labels: { app: rustfs }
+    spec:
+      nodeSelector:
+        elitea.ai/crash-role: platform
+      containers:
+        - name: rustfs
+          image: docker.io/rustfs/rustfs:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: RUSTFS_ACCESS_KEY, value: elitea }
+            - { name: RUSTFS_SECRET_KEY, value: elitea-dev-secret }
+          ports: [{ containerPort: 9000 }]
+          readinessProbe:
+            # The image ships no curl, and wget's exit code cannot tell
+            # "reachable but 403" from "refused" — the same workaround the two
+            # compose stacks carry.
+            exec:
+              command:
+                - sh
+                - -c
+                - 'out=$(wget -q -O /dev/null http://127.0.0.1:9000/ 2>&1); [ $? -eq 0 ] || echo "$out" | grep -q "server returned error"'
+            periodSeconds: 3
+            failureThreshold: 40
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+  namespace: elitea
+spec:
+  selector: { app: rustfs }
+  ports: [{ port: 9000, targetPort: 9000 }]

@@ -1,0 +1,67 @@
+{
+  "id": "CX-03b",
+  "cell": "Main + Worker + Supervisor together x P10",
+  "matrix_cell": null,
+  "now": "U",
+  "target": "R",
+  "fixture": "code-nonce-sleep-150",
+  "trigger": {
+    "kind": "obs",
+    "until": "code_runtime_running",
+    "timeout_s": 120,
+    "params": {
+      "sleep_s": 150,
+      "min_age_s": 3,
+      "remaining_s": 120
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "main"
+    },
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "kill9",
+      "target": "supervisor"
+    },
+    {
+      "action": "start",
+      "target": "supervisor",
+      "after_s": 2,
+      "healthy": false
+    },
+    {
+      "action": "start",
+      "target": "main",
+      "after_s": 0,
+      "healthy": true
+    },
+    {
+      "action": "start",
+      "target": "worker",
+      "after_s": 0,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 480
+  },
+  "notes": "Spool kept (container restart). All three processes lost within one second.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0"
+}

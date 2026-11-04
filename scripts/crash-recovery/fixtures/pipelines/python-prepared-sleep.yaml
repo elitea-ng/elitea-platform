@@ -1,0 +1,39 @@
+# Crash fixture for P09 (dependency preparation), hydration and P10 of a prepared job. The literal pinned
+# micropip.install makes the trusted preparer resolve and download the wheels (pypi.org, files.pythonhosted.org,
+# cdn.jsdelivr.net) before the node runs; several packages widen the preparation and hydration windows. The node
+# then records its start time and a nonce and sleeps, like code-nonce-sleep. {{sleep_s}} is filled by seed.py.
+state:
+  input: {type: str}
+  messages: {type: list}
+  probe: {type: dict}
+entry_point: prepared
+nodes:
+  - id: prepared
+    type: code
+    language: python
+    code:
+      type: fixed
+      value: |
+        import micropip
+        await micropip.install(['python-slugify==8.0.4', 'text-unidecode==1.3', 'python-dateutil==2.9.0.post0', 'six==1.16.0', 'pytz==2024.2', 'idna==3.10'])
+        import asyncio, time, uuid
+        import slugify
+        started_at_ms = int(time.time() * 1000)
+        nonce = str(uuid.uuid4())
+        await asyncio.sleep({{sleep_s}})
+        {'started_at_ms': started_at_ms, 'nonce': nonce, 'count': 2, 'slug': slugify.slugify('Crash Recovery')}
+    input: [input]
+    output: [probe]
+    transition: sentinel_9999
+  - id: sentinel_9999
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          return "CRASHRESULT " + JSON.stringify(state.probe) + " SENTINEL9999";
+        }
+    input: [probe]
+    output: [messages]
+    transition: END

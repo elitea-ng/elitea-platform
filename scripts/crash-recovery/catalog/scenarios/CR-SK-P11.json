@@ -1,0 +1,48 @@
+{
+  "id": "CR-SK-P11",
+  "cell": "Supervisor x P11, compiled snapshot publishing (chat 852)",
+  "matrix_cell": "Supervisor x P11",
+  "now": "F (expected gap FU-230)",
+  "target": "R",
+  "fixture": "rust-compiled",
+  "trigger": {
+    "kind": "obs",
+    "until": "snapshot_publishing",
+    "timeout_s": 360,
+    "interval_s": 0.1,
+    "params": {
+      "after_compile": true
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "supervisor"
+    },
+    {
+      "action": "start",
+      "target": "supervisor",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0,
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "budget_s": 600,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "Supervisor process loss while the compiled snapshot is published (after the compile, release phase). Found by LM-SK-rust r2 on 2026-10-16 (execution f02cdb5f94f719b4bec2d99bd639da90): the Worker settled a user-Code failure (PIPELINE_CODE_FAILED, \"Check its source\u2026\") with no takeover. Finding F5, tracked as FU-230; this scenario is its deterministic proof.",
+  "gap": "FU-230 (finding F5, 2026-10-16): Supervisor loss during compiled publication settles a user-Code failure; same misclassification class as FU-214, fixed after #1299",
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0b",
+  "expected_gap_class": "F"
+}

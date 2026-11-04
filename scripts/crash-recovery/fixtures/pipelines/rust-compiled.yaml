@@ -1,0 +1,38 @@
+# Crash fixture for P11 (compiled Rust snapshot publication). Dependency-free, so the empty-bundle compiled profile
+# selects it (services/elitea-worker-rust/src/sandbox/compiled_snapshot.rs:283-288). {{marker}} is fresh per run:
+# the snapshot key covers the source, and an identical source would reuse a Ready snapshot and skip compile and
+# publication. The 16 MiB static enlarges the executable so publication to Main lasts long enough to observe.
+state:
+  input: {type: str}
+  messages: {type: list}
+  probe: {type: dict}
+entry_point: compiled
+nodes:
+  - id: compiled
+    type: code
+    language: rust
+    code:
+      type: fixed
+      value: |
+        // crash-recovery marker {{marker}}
+        static PAD: [u8; 16777216] = [7u8; 16777216];
+        pub fn run(state: serde_json::Value) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let started_at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis() as u64;
+            let index = std::hint::black_box(if state.get("input").is_some() { 3usize } else { 5usize });
+            Ok(serde_json::json!({"started_at_ms": started_at_ms, "nonce": "{{marker}}", "count": 2, "pad": PAD[index]}))
+        }
+    input: [input]
+    output: [probe]
+    transition: sentinel_9999
+  - id: sentinel_9999
+    type: code
+    language: javascript
+    code:
+      type: fixed
+      value: |
+        export default async function run(state) {
+          return "CRASHRESULT " + JSON.stringify(state.probe) + " SENTINEL9999";
+        }
+    input: [probe]
+    output: [messages]
+    transition: END

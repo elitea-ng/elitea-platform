@@ -1,0 +1,46 @@
+# Crash-rehearsal add-on: the optional Python dependency-preparation profile. Local only; CI never loads it.
+#
+# File order (crashctl composes it): standalone-full, standalone-rust-agent, sandbox, sandbox-preparation,
+# crash-rehearsal, crash-preparation. The stock sandbox-preparation overlay adds the third --config, the 1 GiB
+# limit, the content staging tmpfs mounts and Main's third audience. The crash overlay's !override on the
+# Supervisor networks and volumes then drops its alias and material bind, and this file re-adds both on the
+# crash topology: the preparation name resolves only on crash_sandbox, and the material comes from a volume
+# with UID 10001 ownership (a host bind fails the private-file checks).
+#
+# The preparer image is the existing Deno code-runner image (it carries the trusted Pyodide launcher and the
+# resolver); no new image is built. Preparer containers join `elitea-python-preparation-resolver`, a plain
+# bridge that `crashctl up` creates outside Compose. The Supervisor, Worker and execution containers never join
+# it. Docker Compose cannot restrict that bridge's egress to registry hosts: the only destination limit is the
+# preparer's own Deno --allow-net (cdn.jsdelivr.net, pypi.org, files.pythonhosted.org). The crash stack accepts
+# open egress on that one isolated network, and the harness checks that only this stack's preparer containers
+# are attached to it.
+services:
+  crash-preparation-material:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        rm -rf /dst/* && cp -p /src/sandbox-preparation/* /dst/
+        chown -R 10001:10001 /dst && chmod 700 /dst && chmod 600 /dst/*
+    volumes:
+      - type: bind
+        source: ${ELITEA_CRASH_MATERIAL_DIR:?Set the private crash material directory}
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - crash_sandbox_preparation:/dst
+    restart: "no"
+
+  elitea-sandbox:
+    networks:
+      crash_sandbox:
+        aliases: [elitea-sandbox-preparation]
+    volumes:
+      - crash_sandbox_preparation:/run/elitea-sandbox/preparation:ro
+    depends_on:
+      crash-preparation-material:
+        condition: service_completed_successfully
+
+volumes:
+  crash_sandbox_preparation: {}

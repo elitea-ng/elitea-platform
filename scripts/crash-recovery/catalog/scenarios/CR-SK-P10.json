@@ -1,0 +1,47 @@
+{
+  "id": "CR-SK-P10",
+  "cell": "Supervisor x P10 (process loss, runtime alive)",
+  "matrix_cell": "Supervisor x P10",
+  "now": "R\u00b7P (PostgreSQL component only)",
+  "target": "R",
+  "fixture": "code-nonce-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "code_runtime_running",
+    "timeout_s": 120,
+    "params": {
+      "sleep_s": 50,
+      "min_age_s": 3,
+      "remaining_s": 30
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "supervisor"
+    },
+    {
+      "action": "start",
+      "target": "supervisor",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 300
+  },
+  "notes": "Supervisor alone, deployed. The replacement claims the ledger lease with epoch +1.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0"
+}
