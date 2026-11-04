@@ -74,8 +74,9 @@
 #                           land in its one global account.
 #   NATS_ARGS               extra args appended to every nats invocation
 #   NATS_CONNECT_WAIT       seconds to wait for the server to accept an
-#                           identity before its first command (default 120):
-#                           a server still starting, or a bootstrap
+#                           identity, and its JetStream API to answer, before
+#                           its first command (default 120): a server or its
+#                           JetStream still starting, or a bootstrap
 #                           certificate cert-manager has not issued yet.
 #
 # Tuning:
@@ -209,12 +210,18 @@ use_account() {
 # yet and a certificate cert-manager has not issued (or re-issued: the
 # bootstrap certificates are short-lived) look the same from here, so wait a
 # bounded time for either to change, then fail with the server's answer.
+#
+# A server that answers rtt can still refuse JetStream requests while its
+# JetStream layer starts (compose's health probe, healthz?js-enabled-only,
+# reads only the configuration), and the first stream add then fails the Job.
+# So the wait is over when this account's JetStream API answers too.
 wait_for_server() {
   waited=0
-  until $NATS rtt >/dev/null 2>&1; do
+  until $NATS rtt >/dev/null 2>&1 && $NATS account info >/dev/null 2>&1; do
     if [ "$waited" -ge "$CONNECT_WAIT" ]; then
-      log "FAILED: account ${acct}: the server did not accept this identity within ${CONNECT_WAIT}s:"
+      log "FAILED: account ${acct}: the server did not accept this identity, or its JetStream did not answer, within ${CONNECT_WAIT}s:"
       $NATS rtt 2>&1 | sed 's/^/[nats-bootstrap]   /' || true
+      $NATS account info 2>&1 | sed 's/^/[nats-bootstrap]   /' || true
       exit 1
     fi
     if [ "$waited" -eq 0 ]; then
