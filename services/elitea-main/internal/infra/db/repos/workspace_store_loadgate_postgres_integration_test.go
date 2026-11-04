@@ -432,10 +432,30 @@ func warmPool(t *testing.T, pool *pgxpool.Pool, maxConns int32) {
 		}
 		held = append(held, conn)
 	}
+	settleDatabase(t, held[0])
 	for _, conn := range held {
 		conn.Release()
 	}
 	runtime.GC()
+}
+
+// settleDatabase runs, before the measured window, the background work that
+// the fixture's seed makes due: autovacuum and analyze of the freshly
+// written tables, and a checkpoint of their dirty pages. Started by the
+// server inside the window, either one holds buffer content locks and WAL
+// while the publishes run; one such stall put the 10 slowest of 1,000
+// publishes into one 37 ms span (p99 76 ms, waits LWLock:BufferContent and
+// WALWrite, no row lock) on an otherwise unchanged run. CHECKPOINT needs
+// superuser or pg_checkpoint: without it the window is only vacuumed.
+func settleDatabase(t *testing.T, conn *pgxpool.Conn) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := conn.Exec(ctx, `VACUUM (ANALYZE)`); err != nil {
+		t.Fatalf("settle the database: vacuum: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `CHECKPOINT`); err != nil {
+		t.Logf("settle the database: no checkpoint (%v)", err)
+	}
 }
 
 // loadGateRate is the gated publish rate per second (owner decision).
