@@ -850,7 +850,7 @@ mod shared_adapter_golden {
                 "parts": {
                     "kind": format!("{:?}", parts.kind),
                     "available_actions": parts.available_actions,
-                    "display": format!("{:?}", parts.display),
+                    "display": serde_json::to_value(&parts.display).expect("display json"),
                     "payload_sha256": parts.payload_sha256,
                 },
             }));
@@ -1039,5 +1039,6 @@ mod shared_adapter_golden {
 
     const GOLDEN_CONFIG_DIGEST: &str =
         "609ff69f650951a18b0cb7e33c026ab68117c3b62db37f5dc3c9c5b7d57c6f00";
-    const GOLDEN_DIGEST: &str = "1f1df99eb7a27f04f26f93c7b2e60a8ba963d44aa5dd31b62a0ba8edc6d9f942";
+    // `display` is pinned as its serialized bytes (what is stored and sent), not as Debug text.
+    const GOLDEN_DIGEST: &str = "7ea1ad1952ce8a08aac8e948266833584900dc5d587595e4e448d2eec89bbc9a";
 }
