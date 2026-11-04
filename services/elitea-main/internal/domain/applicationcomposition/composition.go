@@ -835,7 +835,8 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string, ll
 			continue
 		}
 		var node AgentNode
-		var isAgent, isParallel, isLLM bool
+		var isAgent, isParallel, isLLM, isMap bool
+		var mapWorker string
 		for i := 0; i+1 < len(entry.Content); i += 2 {
 			value := aliased(entry.Content[i+1])
 			if aliased(entry.Content[i]).Value == "branches" && value.Kind == yaml.SequenceNode {
@@ -852,6 +853,9 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string, ll
 				isAgent = value.Value == "agent"
 				isParallel = value.Value == "parallel"
 				isLLM = value.Value == "llm"
+				isMap = value.Value == "map"
+			case "worker":
+				mapWorker = value.Value
 			case "id":
 				node.ID = value.Value
 			case "tool":
@@ -860,6 +864,11 @@ func agentNodes(sequence *yaml.Node) (nodes []AgentNode, parallelNode string, ll
 		}
 		if isAgent && node.Alias != "" {
 			nodes = append(nodes, node)
+		}
+		// A Map's worker is a fan-out child like a Parallel branch: the
+		// Worker runs an LLM worker in its own child family (T-2A3).
+		if isMap && mapWorker != "" {
+			branches[mapWorker] = true
 		}
 		if isParallel && parallelNode == "" && node.ID != "" {
 			parallelNode = node.ID

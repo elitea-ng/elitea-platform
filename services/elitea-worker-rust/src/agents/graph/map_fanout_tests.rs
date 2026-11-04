@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use adk_rust::graph::Node as _;
 use adk_rust::graph::checkpoint::{Checkpointer, MemoryCheckpointer};
 use adk_rust::graph::{
     Channel, Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, NodeOutput,
@@ -1000,7 +1001,146 @@ fn a_map_llm_worker_mapping_outside_its_item_input_is_refused() {
     assert!(
         error
             .to_string()
-            .contains("the Map LLM mapping reads outside its frozen item input"),
+            .contains("the Map worker mapping reads outside its frozen item input"),
         "{error}"
     );
+}
+
+/// Delta review: an LLM worker's `fstring` placeholder that names a parent
+/// state key outside the frozen item input is refused at save time too (it
+/// could never resolve and would reach the model as literal text); one that
+/// names the item, or no state key at all, is fine.
+#[test]
+fn a_map_llm_worker_template_reading_a_parent_key_is_refused() {
+    let llm = |template: &str| {
+        PIPELINE.replace(
+            "type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ entity }}-{{ item_index }}'",
+            &format!("type: llm, input: [entity], input_mapping: {{task: {{type: fstring, value: '{template}'}}}}, output: [item_result]"),
+        )
+    };
+    PipelineDefinition::from_yaml(&llm("Draft {entity} at {item_index}"))
+        .expect("item reads compile");
+    PipelineDefinition::from_yaml(&llm("Keep {literal} text"))
+        .expect("a non-state placeholder is text");
+    let Err(error) = PipelineDefinition::from_yaml(&llm("Summarise {mapped}")) else {
+        panic!("an LLM template reading a parent key compiled");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("the Map worker mapping reads outside its frozen item input"),
+        "{error}"
+    );
+}
+
+/// A worker factory that refuses one item's input when it is frozen (as an
+/// LLM worker refuses a mapped input over its bound).
+struct RefusingInput {
+    inner: ItemGraphs,
+    refused: usize,
+}
+
+#[async_trait]
+impl ParallelBranchGraphFactory for RefusingInput {
+    fn validate_branch(&self, branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
+        self.inner.validate_branch(branch)
+    }
+    fn owned_definition_digest(
+        &self,
+        branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        self.inner.owned_definition_digest(branch)
+    }
+    fn compile_branch(
+        &self,
+        branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        self.inner.compile_branch(branch, execution)
+    }
+    fn project_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        parent: &State,
+    ) -> Result<State, GraphError> {
+        if branch.id() == self.refused.to_string() {
+            return Err(GraphError::NodeExecutionFailed {
+                node: "worker".to_owned(),
+                message: "graph.parallel.resource_exhausted: the mapped input exceeds its bound"
+                    .to_owned(),
+            });
+        }
+        self.inner.project_input(branch, parent)
+    }
+    fn project_result(
+        &self,
+        branch: &ParallelBranchDefinition,
+        child: &State,
+    ) -> Result<ParallelBranchTerminal, GraphError> {
+        self.inner.project_result(branch, child)
+    }
+    fn pause_cards(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        self.inner.pause_cards(branch, pause)
+    }
+    async fn resume_input(
+        &self,
+        branch: &ParallelBranchDefinition,
+        pause: &ParallelBranchPause,
+        decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        self.inner.resume_input(branch, pause, decisions).await
+    }
+}
+
+/// Delta review: an item whose input its worker refuses while it is frozen
+/// fails the Map naming that item, before any child runs.
+#[tokio::test]
+async fn a_refused_item_input_names_the_item() {
+    let children = Arc::new(ItemChildren::default());
+    let parent = Arc::new(ParentRows::default());
+    let runs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let graphs = Arc::new(RefusingInput {
+        inner: ItemGraphs {
+            behavior: echo(),
+            runs: Arc::clone(&runs),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::new(AtomicUsize::new(0)),
+        },
+        refused: 1,
+    });
+    let checkpoint_factory: Arc<dyn ParallelChildCheckpointerFactory> = children.clone();
+    let appender: Arc<dyn ParallelCheckpointAppender> = parent;
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
+        checkpoint_factory,
+        graphs,
+        Arc::new(ParallelOccurrenceCheckpointer::new(appender)),
+    ));
+    let source = FanoutSource::Map(
+        MapSource::new(map_definition(8, 2, V2_CONTINUE), WORKER_DIGEST).expect("Map source"),
+    );
+    let error = DurableParallelNode::from_source(source, runtime)
+        .execute(&adk_rust::graph::NodeContext::new(
+            HashMap::from([
+                ("items".to_owned(), json!(["a", "b", "c"])),
+                ("prefix".to_owned(), json!("frozen")),
+                ("mapped".to_owned(), json!([])),
+            ]),
+            ExecutionConfig::new("root-refused-input"),
+            0,
+        ))
+        .await
+        .err()
+        .expect("the refused input fails the Map");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.map.item_input_refused: item '1'"),
+        "{error}"
+    );
+    assert!(children.issued.lock().await.is_empty());
+    assert!(runs.lock().unwrap().is_empty());
 }

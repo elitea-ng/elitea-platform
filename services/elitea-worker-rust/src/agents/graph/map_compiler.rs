@@ -109,7 +109,7 @@ pub(super) fn validate_map_ownership(
         child.insert(map.item.clone(), "__map_opaque_json".to_owned());
         child.insert(map.index.clone(), "int".to_owned());
         validate_node_state(worker, &child)?;
-        validate_worker_mappings(worker, &allowed)?;
+        validate_worker_mappings(worker, &allowed, state)?;
     }
     if nodes.iter().any(|node| {
         node.route_targets()
@@ -124,34 +124,34 @@ pub(super) fn validate_map_ownership(
 }
 
 /// The worker's mapped inputs read only the item, its index and the
-/// broadcasts (its frozen item input): an Agent's and an LLM node's
-/// `variable` mappings alike.
+/// broadcasts (its frozen item input), by one rule for every worker: an
+/// Agent's or an LLM node's `variable` sources, and an LLM node's `fstring`
+/// placeholders that name a declared parent state key (one that names no
+/// state key is literal text).
 fn validate_worker_mappings(
     worker: &PipelineNodeDefinition,
     allowed: &BTreeSet<&String>,
+    state: &BTreeMap<String, String>,
 ) -> Result<(), PipelineConfigurationError> {
-    if let PipelineNodeDefinition::Application(node) = worker {
-        // Guard fixed JSON before the complete pipeline hashes this worker definition.
-        node.validate_map_fixed_inputs()
-            .map_err(PipelineConfigurationError::Graph)?;
-        if node
-            .mapped_variables()
-            .any(|key| !allowed.iter().any(|allowed| allowed.as_str() == key))
-        {
-            return Err(PipelineConfigurationError::Invalid(
-                "the Map Agent mapping reads outside its frozen item input",
-            ));
+    let read: Vec<&str> = match worker {
+        PipelineNodeDefinition::Application(node) => {
+            // Guard fixed JSON before the complete pipeline hashes this worker definition.
+            node.validate_map_fixed_inputs()
+                .map_err(PipelineConfigurationError::Graph)?;
+            node.mapped_variables().collect()
         }
-    }
-    // An LLM worker reads its mapped inputs from the item's frozen state
-    // too: a variable outside it would reach the model as an empty value.
-    if let PipelineNodeDefinition::Llm(node) = worker
-        && node
+        PipelineNodeDefinition::Llm(node) => node
             .mapped_variables()
-            .any(|key| !allowed.iter().any(|allowed| allowed.as_str() == key))
+            .chain(node.template_keys().filter(|key| state.contains_key(*key)))
+            .collect(),
+        _ => return Ok(()),
+    };
+    if read
+        .iter()
+        .any(|key| !allowed.iter().any(|allowed| allowed.as_str() == *key))
     {
         return Err(PipelineConfigurationError::Invalid(
-            "the Map LLM mapping reads outside its frozen item input",
+            "the Map worker mapping reads outside its frozen item input",
         ));
     }
     Ok(())

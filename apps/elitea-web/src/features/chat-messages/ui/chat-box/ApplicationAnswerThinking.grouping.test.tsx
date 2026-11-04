@@ -66,3 +66,23 @@ describe('ApplicationAnswerThinking grouping keeps other instances and the timel
     expect(order.at(-1)).toBe('Summarise');
   });
 });
+
+describe('ApplicationAnswerThinking groups one contiguous fan-out, not a name across the turn', () => {
+  const coord = (id: string, name: string) => ({ id, type: 'llm', name, status: 'complete', content: name, created_at: at, timestamp: at });
+
+  it('keeps two same-worker fan-outs of 10, separated by a coordinator step, as rows', () => {
+    const list = [
+      ...Array.from({ length: 10 }, (_, i) => item(i + 1, 'complete')),
+      coord('c1', 'Between'),
+      ...Array.from({ length: 10 }, (_, i) => item(i + 11, 'complete')),
+    ];
+    renderWithTheme(<ApplicationAnswerThinking isStreaming actions={actions(list)} />);
+    expect(summaries().some((text) => /^(Waiting|Running|Failed|Completed) \(/u.test(text ?? ''))).toBe(false);
+  });
+
+  it('keeps 17 calls of one agent separated by coordinator steps as rows', () => {
+    const list = Array.from({ length: 17 }, (_, i) => [item(i + 1, 'complete'), coord(`c${i}`, `Step ${i}`)]).flat();
+    renderWithTheme(<ApplicationAnswerThinking isStreaming actions={actions(list)} />);
+    expect(summaries().some((text) => /^(Waiting|Running|Failed|Completed) \(/u.test(text ?? ''))).toBe(false);
+  });
+});

@@ -94,3 +94,12 @@ describe('Map On Error and Join', () => {
     expect([...(worker as HTMLSelectElement).options].map((option) => option.value)).toEqual(['', 'worker', 'drafter']);
   });
 });
+
+describe('Map settings read a YAML null key as absent, as admission and the Worker do', () => {
+  it('shows a v2 Map with join: null as append on continue, without the Reduction control', async () => {
+    const screen = renderExtensionCard(EditableMapSettings, mapYaml('    reduction: null\n    join: null\n'));
+    expect(await screen.findByRole('combobox', { name: 'On Error' })).toHaveTextContent('continue');
+    expect(screen.getByRole('combobox', { name: 'Join' })).toHaveTextContent('append');
+    expect(screen.queryByLabelText('Reduction')).toBeNull();
+  });
+});

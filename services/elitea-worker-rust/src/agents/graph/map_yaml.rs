@@ -13,7 +13,7 @@ use ring::digest;
 use serde::Deserialize;
 
 use super::compiler::PIPELINE_YAML_BUDGET;
-use super::map_reduce::{MapDefinition, MapPolicy, MapReduction};
+use super::map_reduce::{MapDefinition, MapJoin, MapPolicy, MapReduction};
 use crate::bounded_yaml;
 
 /// The readable refusal of a Map node that names both `reduction` and `join`.
@@ -160,14 +160,15 @@ fn policy(
     if reduction.is_some() {
         return Ok(None);
     }
-    if join == Some("merge") {
-        return Err(MapYamlError::JoinMerge);
-    }
     let on_error = OnError::parse(on_error).map_err(|_| MapYamlError::Invalid)?;
-    let join = JoinMode::parse(join).map_err(|_| MapYamlError::Invalid)?;
+    let join = match JoinMode::parse(join).map_err(|_| MapYamlError::Invalid)? {
+        JoinMode::Append => MapJoin::Append,
+        JoinMode::Keyed => MapJoin::Keyed,
+        JoinMode::Merge => return Err(MapYamlError::JoinMerge),
+    };
     Ok(Some(MapPolicy {
         on_error: on_error.into(),
-        join: join.into(),
+        join,
     }))
 }
 

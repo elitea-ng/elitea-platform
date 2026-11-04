@@ -66,10 +66,11 @@ pub(crate) enum MapOnError {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// A Map never merges: its items all land the same output keys
+/// (`map_yaml.rs` `MAP_JOIN_MERGE`), so the state is not representable.
 pub(crate) enum MapJoin {
     Append,
     Keyed,
-    Merge,
 }
 
 impl From<OnError> for MapOnError {
@@ -77,16 +78,6 @@ impl From<OnError> for MapOnError {
         match value {
             OnError::Continue => Self::Continue,
             OnError::Stop => Self::Stop,
-        }
-    }
-}
-
-impl From<JoinMode> for MapJoin {
-    fn from(value: JoinMode) -> Self {
-        match value {
-            JoinMode::Append => Self::Append,
-            JoinMode::Keyed => Self::Keyed,
-            JoinMode::Merge => Self::Merge,
         }
     }
 }
@@ -106,7 +97,6 @@ impl MapDefinition {
         match self.policy.map(|policy| policy.join) {
             None | Some(MapJoin::Append) => JoinMode::Append,
             Some(MapJoin::Keyed) => JoinMode::Keyed,
-            Some(MapJoin::Merge) => JoinMode::Merge,
         }
     }
 
@@ -170,13 +160,12 @@ impl MapDefinition {
 
     /// The activation's source items, bounded and validated.
     pub(super) fn source_items<'a>(&self, state: &'a State) -> Result<&'a [Value], GraphError> {
+        // The same admission as `item_count`, so the two never drift.
+        self.item_count(state)?;
         let items = state
             .get(&self.source)
             .and_then(Value::as_array)
             .ok_or_else(|| map_error("invalid_source"))?;
-        if items.len() > self.max_items {
-            return Err(map_error("resource_exhausted"));
-        }
         validate_values(items.iter())?;
         bounded(items, MAX_PLAN_BYTES)?;
         Ok(items)

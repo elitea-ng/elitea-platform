@@ -231,6 +231,18 @@ impl FanoutSource {
         }
     }
 
+    /// A child's input that its worker refused while it was frozen (a mapped
+    /// input over its bound, say), named by the child: a Map says which item.
+    pub(crate) fn child_input_error(&self, key: &str, error: GraphError) -> GraphError {
+        match self {
+            Self::Parallel(_) => error,
+            Self::Map(map) => GraphError::NodeExecutionFailed {
+                node: map.definition.id.clone(),
+                message: format!("graph.map.item_input_refused: item '{key}': {error}"),
+            },
+        }
+    }
+
     /// A child's outputs as its node lands them: a Parallel branch lands every
     /// declared output of its node, a Map item only the Map's own `outputs`.
     pub(crate) fn project_settled(&self, settled: Vec<SettledChild>) -> Vec<SettledChild> {

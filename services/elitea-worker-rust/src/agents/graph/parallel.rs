@@ -810,7 +810,10 @@ impl AdkParallelBranchRuntime {
                 .zip(branches)
                 .enumerate()
                 .map(|(ordinal, (input, branch))| {
-                    let projected = self.graphs.project_input(branch, &input.input)?;
+                    let projected = self
+                        .graphs
+                        .project_input(branch, &input.input)
+                        .map_err(|error| source.child_input_error(branch.id(), error))?;
                     validate_state(&projected)?;
                     Ok(FrozenBranchInput {
                         branch_id: branch.id().to_owned(),

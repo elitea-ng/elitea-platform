@@ -282,26 +282,32 @@ function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKey
       </SubAgentAccordion>
     );
   };
-  // A Map's items all run one worker, so they share one name: a name with
-  // more than 16 instances is grouped by status, in place of its first
-  // instance; everything else keeps its row and the timeline order.
-  const subs = blocks.filter((block): block is SubBlock => block.kind === 'sub');
-  const counts = new Map<string, number>();
-  for (const block of subs) counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
-  const grouped = new Set([...counts].filter(([, count]) => count > MAX_UNGROUPED_INSTANCES).map(([name]) => name));
-  const statusGroups = (name: string): ReactNode => {
+  const single = (block: PartitionedBlock, index: number): ReactNode => {
+    if (block.kind === 'coord') {
+      return block.actions.map((action, actionIndex) => (
+        <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
+      ));
+    }
+    return instance(block);
+  };
+  // A Map's items all run one worker while the Map node runs, so they form
+  // one contiguous run of same-name instances. A run of more than 16 is
+  // grouped by status in its own place; shorter runs, other fan-outs and
+  // calls separated by coordinator steps keep their rows, live and after a
+  // reload alike.
+  const statusGroups = (run: readonly SubBlock[], key: string): ReactNode => {
     const groups = new Map<InstanceStatus, SubBlock[]>();
-    for (const block of subs.filter((entry) => entry.name === name)) {
+    for (const block of run) {
       const status = instanceStatus(block, isStreaming, isPaused(block));
       groups.set(status, [...(groups.get(status) ?? []), block]);
     }
     return (
-      <SubAgentAccordion key={`group-${name}`} name={name} tools={tools} defaultExpanded
+      <SubAgentAccordion key={`group-${key}`} name={run[0]?.name ?? ''} tools={tools} defaultExpanded
         running={groups.has('running')} paused={groups.has('waiting')}>
         {STATUS_ORDER.filter((status) => groups.has(status)).map((status) => {
           const members = groups.get(status) ?? [];
           return (
-            <SubAgentAccordion key={`group-${name}-${status}`} name={statusLabel(status, members.length)}
+            <SubAgentAccordion key={`group-${key}-${status}`} name={statusLabel(status, members.length)}
               running={status === 'running'} paused={status === 'waiting'}>
               {members.map(instance)}
             </SubAgentAccordion>
@@ -310,22 +316,28 @@ function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKey
       </SubAgentAccordion>
     );
   };
-  const emitted = new Set<string>();
-  // Coordinator runs and sub-agent instances interleave in timeline order
-  // (reference `StreamingThinkBlocks`), never coordinator-first.
-  return blocks.map((block, index) => {
-    if (block.kind === 'sub' && grouped.has(block.name)) {
-      if (emitted.has(block.name)) return null;
-      emitted.add(block.name);
-      return statusGroups(block.name);
+  const rendered: ReactNode[] = [];
+  for (let index = 0; index < blocks.length;) {
+    const block = blocks[index]!;
+    if (block.kind === 'sub') {
+      let next = index + 1;
+      while (next < blocks.length) {
+        const candidate = blocks[next]!;
+        if (candidate.kind !== 'sub' || candidate.name !== block.name) break;
+        next += 1;
+      }
+      const run = blocks.slice(index, next) as SubBlock[];
+      if (run.length > MAX_UNGROUPED_INSTANCES) {
+        rendered.push(statusGroups(run, block.instanceKey));
+        index = next;
+        continue;
+      }
     }
-    if (block.kind === 'coord') {
-      return block.actions.map((action, actionIndex) => (
-        <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
-      ));
-    }
-    return instance(block);
-  });
+    rendered.push(single(block, index));
+    index += 1;
+  }
+  return rendered;
+
 }
 
 export function ApplicationAnswerThinking({

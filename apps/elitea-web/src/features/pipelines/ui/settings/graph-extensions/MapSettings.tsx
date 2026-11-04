@@ -13,13 +13,18 @@ import { ExtensionChoice, ExtensionField } from './ExtensionFields';
 import { MapWorkerInputs } from './MapWorkerInputs';
 import { StateChannelSelect } from './StateChannelSelect';
 
+/** A declared, non-null key: a YAML null is absent, as the Worker reads it. */
+function present(node: Readonly<Record<string, unknown>>, field: string): boolean {
+  return Object.hasOwn(node, field) && node[field] !== null && node[field] !== undefined;
+}
+
 /**
  * The stored On Error. Absent means `continue` in the v2 shape; a v1 document
  * (`reduction` without `on_error`) stops on the first failed item.
  */
 function onErrorOf(node: Readonly<Record<string, unknown>>): string {
-  if (Object.hasOwn(node, 'on_error')) return extensionText(node['on_error']);
-  return Object.hasOwn(node, 'reduction') ? 'stop' : 'continue';
+  if (present(node, 'on_error')) return extensionText(node['on_error']);
+  return present(node, 'reduction') ? 'stop' : 'continue';
 }
 const policyOption = (value: string): { value: string; label: string } => ({
   value, label: t(`pipelines.graphExtensions.values.${value}`, value),
@@ -31,21 +36,21 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
   const worker = extensionText(node['worker']);
   const workers = document?.nodes?.filter((entry) => entry.id !== node['id'] && MAP_WORKER_TYPES.includes(entry.type ?? '')) ?? [];
   const onError = onErrorOf(node);
-  const join = Object.hasOwn(node, 'join') ? extensionText(node['join']) : 'append';
-  const legacyReduction = Object.hasOwn(node, 'reduction');
+  const join = present(node, 'join') ? extensionText(node['join']) : 'append';
+  const legacyReduction = present(node, 'reduction');
   // Picking a policy moves a v1 document to the v2 shape in one YAML write:
   // `reduction` goes (with `join` or `on_error` it is refused) and its stop-on-failure is
   // kept explicitly, so the meaning never changes silently. A Map never merges
   // (its items land the same keys), so Join offers append and keyed only.
   const changePolicy = (field: 'on_error' | 'join', value: string): void => {
     if (disabled) return;
-    if (!context || !Object.hasOwn(node, 'reduction')) {
+    if (!context || !present(node, 'reduction')) {
       change(field, value);
       return;
     }
     const id = extensionText(node['id']);
     let next = patchGraphExtensionNode(context.yamlJsonObject, id, 'reduction', undefined, true);
-    if (field === 'join' && !Object.hasOwn(node, 'on_error')) next = patchGraphExtensionNode(next, id, 'on_error', onError);
+    if (field === 'join' && !present(node, 'on_error')) next = patchGraphExtensionNode(next, id, 'on_error', onError);
     context.setYamlJsonObject(patchGraphExtensionNode(next, id, field, value));
   };
   const workerNode = workers.find((entry) => entry.id === worker);
