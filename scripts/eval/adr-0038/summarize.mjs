@@ -18,12 +18,17 @@ export function dedupe(records) {
   return [...m.values()];
 }
 
-function row(label, rs, { rounds = false } = {}) {
+// Errored runs (harness or server errors) are left out of the pass rate
+// and the means, and are counted in their own column.
+function row(label, all, { rounds = false } = {}) {
+  const rs = all.filter((r) => !r.error);
+  const errors = all.length - rs.length;
   const pass = mean(rs.map((r) => (r.pass ? 1 : 0)));
   const t = (f) => mean(rs.map((r) => f(r.tokens ?? { prompt: 0, completion: 0, reasoning: 0, calls: 0 })));
   const cells = [
     label,
-    `${pct(pass)} (${rs.filter((r) => r.pass).length}/${rs.length})`,
+    rs.length ? `${pct(pass)} (${rs.filter((r) => r.pass).length}/${rs.length})` : 'n/a',
+    String(errors),
     k(t((x) => x.prompt)),
     k(t((x) => x.completion - x.reasoning)),
     k(t((x) => x.reasoning)),
@@ -42,10 +47,10 @@ export function summarize({ meta, records }) {
   out.push(`Model \`${meta.model}\` at ${meta.base_url}. Thinking control \`${meta.thinking?.kind}\`. Temperature ${meta.temperature}.`);
   const reps = Math.max(...recs.map((r) => r.repeat));
   out.push(`${meta.tasks.length} tasks, ${variants.length} variants, ${reps} repeat(s), ${recs.length} runs. Single run: at most ${meta.max_steps} steps. Loop: at most ${meta.max_rounds} rounds of at most ${meta.worker_steps} worker steps. Sandbox: ${meta.sandbox}.`, '');
-  out.push('Tokens are means per run. "Answer" is completion tokens without the reasoning tokens. Pass is the real check after the run (tests with the original test files, schema plus expected values, or the doc rubric).', '');
+  out.push('Tokens are means per run. Runs with a harness or server error are left out of the pass rate and the means and are counted under Errors. "Answer" is completion tokens without the reasoning tokens. Pass is the real check after the run (tests with the original test files, schema plus expected values, or the doc rubric).', '');
 
-  const head = '| Variant | Pass | Prompt | Answer | Reasoning | Calls | Wall |';
-  const sep = '|---|---|---|---|---|---|---|';
+  const head = '| Variant | Pass | Errors | Prompt | Answer | Reasoning | Calls | Wall |';
+  const sep = '|---|---|---|---|---|---|---|---|';
   out.push('## All tasks', '', `${head} Rounds |`, `${sep}---|`);
   for (const v of variants) out.push(row(NAMES[v] ?? v, recs.filter((r) => r.variant === v), { rounds: true }));
   out.push('');
@@ -58,7 +63,7 @@ export function summarize({ meta, records }) {
     out.push('');
   }
 
-  const hidden = recs.filter((r) => r.hidden_pass !== undefined);
+  const hidden = recs.filter((r) => r.hidden_pass !== undefined && !r.error);
   if (hidden.length) {
     out.push('## Held-out tests (coding tasks with a hidden test file)', '', '| Variant | Public pass | Hidden pass | Public pass but hidden fail |', '|---|---|---|---|');
     for (const v of variants) {
@@ -68,7 +73,7 @@ export function summarize({ meta, records }) {
     out.push('');
   }
 
-  const loops = recs.filter((r) => r.rounds);
+  const loops = recs.filter((r) => r.rounds && !r.error);
   if (loops.length) {
     const count = (f) => loops.filter(f).length;
     const outcomes = {};
@@ -99,7 +104,7 @@ export function summarize({ meta, records }) {
     out.push('## Noise between repeats', '', '| Variant | Tasks with the same result in every repeat |', '|---|---|');
     for (const v of variants) {
       const byTask = new Map();
-      for (const r of recs.filter((x) => x.variant === v)) {
+      for (const r of recs.filter((x) => x.variant === v && !x.error)) {
         const a = byTask.get(r.task) ?? [];
         a.push(Boolean(r.pass));
         byTask.set(r.task, a);
