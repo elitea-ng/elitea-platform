@@ -17,8 +17,14 @@ and nowhere else.
 
 ## Requirements
 
-- Node 22 or later. No npm packages. The harness uses global `fetch`,
-  `node:child_process`, `node:fs` and `node:test`.
+- Node 22 or later. No npm packages. The harness uses `node:http` and
+  `node:https`, `node:child_process`, `node:fs` and `node:test`.
+- The client posts with `node:http`, not the global `fetch`. `fetch`
+  (undici) drops a request when the response headers take longer than
+  300 s. A long reply that is not streamed, on a loaded server, takes that
+  long: the reply headers come only when the whole generation is done. The
+  client sets its own request timeout (30 min). A timeout is final and is
+  not retried.
 - `go` on `PATH` for the Go tasks.
 - macOS: `sandbox-exec` (built in). On Linux the harness uses
   `unshare -rn` when user namespaces are available. Without either,
