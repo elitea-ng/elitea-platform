@@ -14,25 +14,16 @@
  * side (a slow server cannot keep the browser subscribed), every failure is
  * swallowed, and the caller bounds the whole wait.
  */
-import { eliteaFetch } from './generated/mutator';
+import { deletePushSubscription } from './generated/notifications/notifications';
 
 /** The push service worker's file, at the app's base path. */
 export const PUSH_WORKER_FILE = 'push-sw.js';
-
-/** The push subscriptions route (U3 contract §2), relative to the REST base. */
-export function pushSubscriptionsPath(projectId: string | number): string {
-  return `/notifications/push_subscriptions/prompt_lib/${projectId}`;
-}
 
 /** How long a sign-out waits for the teardown before it goes on regardless. */
 const PUSH_TEARDOWN_WAIT_MS = 2000;
 
 function deleteOnServer(projectId: string, endpoint: string): Promise<unknown> {
-  return eliteaFetch<unknown>(pushSubscriptionsPath(projectId), {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ endpoint }),
-  });
+  return deletePushSubscription(projectId, { endpoint });
 }
 
 function pushWorkerUrl(registration: ServiceWorkerRegistration): URL | null {
