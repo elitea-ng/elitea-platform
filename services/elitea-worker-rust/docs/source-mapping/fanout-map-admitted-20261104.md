@@ -66,15 +66,26 @@ binds a Map as a fan-out node (`bind_map_node`, `:460`).
 
 | Layer | Tests | Result |
 |---|---|---|
-| Worker | full suite | 2662 passed, 18 ignored (PostgreSQL; run in CI). New: `map_fanout_tests.rs` (19), `parallel_map_identity_tests.rs` (3), `parallel_compiler_map_tests.rs` (3), `parallel_compiler_map_agent_tests.rs` (4), `map_yaml_tests.rs` (6). The Parallel golden (`parallel_cards_tests.rs` `shared_adapter_golden`) passes unchanged across the whole branch and the merge with main. |
-| Worker, real PostgreSQL 18 | `fanout_lineage` (incl. the two Map tests ported to the adapter) | green before and after the merge with main (throwaway database) |
+| Worker | full suite | 2669 passed at c6af819cb (no Worker change after it); PostgreSQL tests are ignored locally and run in CI. New: `map_fanout_tests.rs` (22), `parallel_map_identity_tests.rs` (3), `parallel_compiler_map_tests.rs` (3), `parallel_compiler_map_agent_tests.rs` (4), `map_yaml_tests.rs` (7). The Parallel golden (`parallel_cards_tests.rs` `shared_adapter_golden`) passes unchanged across the whole branch and the merge with main. |
+| Worker, real PostgreSQL 18 | `fanout_lineage` (11: incl. the two Map tests ported to the adapter and the three production-factory tests, one per worker family) | green before and after the merge with main (throwaway database) |
 | Main | `pipelinelimits` (`map_forms_test.go`, 3), `executioninterrupt` (`map_card_test.go`, 1), real PostgreSQL `TestAMapItemAuthorizeIsGatedToAnOptedInWorkerAndCarriesOnlyItsGrant` | green |
-| Web | full suite | 1991 files, 19573 passed; 6 expected fails and 1 skip are on main (e.g. `DataTypeValueField.test.tsx:146`, issue 1930). New: `graphMapAdmission.v2.test.ts` (10), `MapSettings.policy.test.tsx` (3), `ApplicationAnswerThinking.grouping.test.tsx` (2). |
+| Web | full suite on final head `52ff237a7` | node project: 1889 files, 18622 passed, 6 expected fails, 1 skip; storybook project: 69 files, 278 passed. New: `graphMapAdmission.v2.test.ts` (10 cases), `MapSettings.policy.test.tsx` (4), `ApplicationAnswerThinking.grouping.test.tsx` (6). |
 
 Existing tests edited (each approved by the orchestrator): 12 struct literals gained `map: None` (mechanical); the
 Parallel golden's `display` capture moved from Debug text to serialized bytes (digest recomputed before the merge,
 unchanged after it); `'llm'` removed from the refused Map worker list; seven Web assertions that pinned "Map not
-admitted" (commit 9).
+admitted" (commit 9); the E2E J16 Add-node menu list gained `Map` (also excluded from the saveable list, as
+Parallel is) in `52ff237a7`.
+
+The 6 expected fails (`it.fails`) are all on `origin/main`, in files this branch does not change (`git diff
+origin/main HEAD` is empty for each); none is new here:
+
+- `apps/elitea-web/src/features/pipelines/ui/settings/InputMappings/DataTypeValueField.test.tsx:146` (issue 1930)
+- `apps/elitea-web/src/features/chat-messages/lib/canvasFileSource.test.ts:85` (#5846/#5940)
+- `apps/elitea-web/src/features/chat-messages/lib/canvasFileSource.test.ts:92` (#5845)
+- `apps/elitea-web/src/pages/toolkits/EditToolkit.test.tsx:492` (elitea_issues 5722)
+- `apps/elitea-web/src/pages/credentials/CredentialForm.test.tsx:383` (elitea_issues 4864/5937)
+- `apps/elitea-web/src/widgets/sidebar/__tests__/ProjectSwitcher.test.tsx:489` (elitea_issues 6561)
 
 ## Performance
 
