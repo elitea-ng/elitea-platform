@@ -91,6 +91,7 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
     with_decision,
 };
+mod fanout_source;
 mod parallel;
 mod parallel_cards;
 mod parallel_child_authority;

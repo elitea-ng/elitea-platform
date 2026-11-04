@@ -21,9 +21,7 @@ use async_trait::async_trait;
 use elitea_agent_runtime::graph::fanout::admission::ChildPermits;
 use elitea_agent_runtime::graph::fanout::apply::{CardIdentity, ChildCheckpointView};
 use elitea_agent_runtime::graph::fanout::identity::{InterruptKeyInput, interrupt_key};
-use elitea_agent_runtime::graph::fanout::plan::{
-    self, ChildFailure, ChildTerminal, FanoutKind as JoinKind, JoinOutcome,
-};
+use elitea_agent_runtime::graph::fanout::plan::{self, ChildFailure, ChildTerminal, JoinOutcome};
 use elitea_agent_runtime::graph::fanout::runner::{
     ChildRun, DecisionSource, FanoutChildren, FanoutEvents, FanoutRunError, FanoutRunner,
     FanoutRunnerConfig, FanoutStop, FetchedDecision, NoDecisions, NoEvents, RestoredChild,
@@ -38,6 +36,7 @@ use serde_json::{Value, json};
 
 use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
 use super::fanout_frames::FanoutCardParts;
+use super::fanout_source::FanoutSource;
 use super::fanout_trace::{self, ActivationOutcome, ChildOutcome, ChildStart, FanoutKind};
 use super::state_reducers::StateReducer;
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
@@ -106,10 +105,7 @@ pub(crate) struct ParallelActivation {
 }
 
 impl ParallelActivation {
-    fn from_context(
-        definition: &ParallelNodeDefinition,
-        context: &NodeContext,
-    ) -> Result<Self, GraphError> {
+    fn from_context(source: &FanoutSource, context: &NodeContext) -> Result<Self, GraphError> {
         if context.config.thread_id.is_empty()
             || context.config.thread_id.len() > 512
             || context.config.thread_id.chars().any(char::is_control)
@@ -127,9 +123,9 @@ impl ParallelActivation {
         })?;
         Ok(Self {
             root_thread_id: context.config.thread_id.clone(),
-            node_id: definition.id().to_owned(),
+            node_id: source.id().to_owned(),
             step,
-            config_digest: definition.config_digest(),
+            config_digest: source.config_digest(),
         })
     }
 }
@@ -493,6 +489,14 @@ impl PreparedParallelBranch {
 pub(crate) trait ParallelBranchRuntime: Send + Sync {
     fn validate(&self, definition: &ParallelNodeDefinition) -> Result<(), GraphError>;
 
+    /// [`validate`](Self::validate) for any fan-out source. Only a Parallel
+    /// source has a default: a runtime that runs other sources overrides it.
+    fn validate_source(&self, source: &FanoutSource) -> Result<(), GraphError> {
+        match source {
+            FanoutSource::Parallel(definition) => self.validate(definition),
+        }
+    }
+
     /// Freeze the occurrence and restore every branch from its own checkpoint
     /// (one batched activation and one batched receipt read).
     async fn prepare(
@@ -501,6 +505,21 @@ pub(crate) trait ParallelBranchRuntime: Send + Sync {
         definition: &ParallelNodeDefinition,
         context: &NodeContext,
     ) -> Result<Vec<PreparedParallelBranch>, GraphError>;
+
+    /// [`prepare`](Self::prepare) for any fan-out source, with the same
+    /// default rule as [`validate_source`](Self::validate_source).
+    async fn prepare_source(
+        &self,
+        activation: &mut ParallelActivation,
+        source: &FanoutSource,
+        context: &NodeContext,
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
+        match source {
+            FanoutSource::Parallel(definition) => {
+                self.prepare(activation, definition, context).await
+            }
+        }
+    }
 
     /// Run one branch, or return what its checkpoint already proves.
     async fn invoke(
@@ -565,21 +584,7 @@ impl AdkParallelBranchRuntime {
 #[async_trait]
 impl ParallelBranchRuntime for AdkParallelBranchRuntime {
     fn validate(&self, definition: &ParallelNodeDefinition) -> Result<(), GraphError> {
-        definition.validate().map_err(|error| {
-            parallel_error(error.code(), "the parallel node configuration is invalid")
-        })?;
-        if !(2..=16).contains(&definition.branches().len())
-            || !(1..=8).contains(&definition.max_concurrency())
-        {
-            return Err(parallel_error(
-                "graph.parallel.invalid_configuration",
-                "the parallel contract requires 2-16 branches and concurrency 1-8",
-            ));
-        }
-        for branch in definition.branches() {
-            self.graphs.validate_branch(branch)?;
-        }
-        Ok(())
+        self.validate_source(&FanoutSource::Parallel(definition.clone()))
     }
 
     async fn prepare(
@@ -588,16 +593,45 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         definition: &ParallelNodeDefinition,
         context: &NodeContext,
     ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
-        self.validate(definition)?;
-        let inputs = self.project_inputs(activation, definition, &context.state)?;
-        let (origin, threads) = self.mint_lineage(activation, definition, &inputs)?;
+        self.prepare_source(
+            activation,
+            &FanoutSource::Parallel(definition.clone()),
+            context,
+        )
+        .await
+    }
+
+    fn validate_source(&self, source: &FanoutSource) -> Result<(), GraphError> {
+        source.validate()?;
+        for branch in source.declared_children().unwrap_or_default() {
+            self.graphs.validate_branch(branch)?;
+        }
+        Ok(())
+    }
+
+    async fn prepare_source(
+        &self,
+        activation: &mut ParallelActivation,
+        source: &FanoutSource,
+        context: &NodeContext,
+    ) -> Result<Vec<PreparedParallelBranch>, GraphError> {
+        self.validate_source(source)?;
+        let branches = source.children(context)?;
+        // Children that come from state are checked here, at activation.
+        if source.declared_children().is_none() {
+            for branch in branches.iter() {
+                self.graphs.validate_branch(branch)?;
+            }
+        }
+        let inputs = self.project_inputs(activation, &branches, &context.state)?;
+        let (origin, threads) = self.mint_lineage(activation, &branches, &inputs)?;
         let occurrence = self
             .parent
             .freeze(activation, context, inputs, origin, threads)
             .await?;
         self.restore_branches(
             activation,
-            definition,
+            &branches,
             &occurrence.branches,
             &occurrence.origin,
             &occurrence.child_threads,
@@ -679,13 +713,13 @@ impl AdkParallelBranchRuntime {
     fn mint_lineage(
         &self,
         activation: &ParallelActivation,
-        definition: &ParallelNodeDefinition,
+        branches: &[ParallelBranchDefinition],
         inputs: &[FrozenBranchInput],
     ) -> Result<(ParallelChildOrigin, Vec<String>), GraphError> {
         let origin = self.checkpoints.child_origin(activation)?;
         let mut threads = Vec::with_capacity(inputs.len());
         for input in inputs {
-            let branch = definition.branches().get(input.ordinal).ok_or_else(|| {
+            let branch = branches.get(input.ordinal).ok_or_else(|| {
                 parallel_error(
                     "graph.parallel.corrupt_occurrence",
                     "a frozen branch ordinal is invalid",
@@ -705,18 +739,18 @@ impl AdkParallelBranchRuntime {
     fn project_inputs(
         &self,
         activation: &mut ParallelActivation,
-        definition: &ParallelNodeDefinition,
+        branches: &[ParallelBranchDefinition],
         parent: &State,
     ) -> Result<Vec<FrozenBranchInput>, GraphError> {
         // Validate before business-state cloning or any mapping/child admission.
         validate_input_state(parent)?;
         // Evaluate every mapping before any branch runs.
         let business = business_state(parent);
-        let mut frozen = Vec::with_capacity(definition.branches().len());
+        let mut frozen = Vec::with_capacity(branches.len());
         let mut config = digest::Context::new(&digest::SHA256);
         config.update(b"elitea.graph.parallel.owned-config.v1\0");
         config.update(&activation.config_digest);
-        for (ordinal, branch) in definition.branches().iter().enumerate() {
+        for (ordinal, branch) in branches.iter().enumerate() {
             let input = self.graphs.project_input(branch, &business)?;
             validate_state(&input)?;
             if input != business_state(&input) {
@@ -758,7 +792,7 @@ impl AdkParallelBranchRuntime {
     async fn restore_branches(
         &self,
         activation: &ParallelActivation,
-        definition: &ParallelNodeDefinition,
+        declared: &[ParallelBranchDefinition],
         inputs: &[FrozenBranchInput],
         origin: &ParallelChildOrigin,
         child_threads: &[String],
@@ -766,8 +800,7 @@ impl AdkParallelBranchRuntime {
         let branches = inputs
             .iter()
             .map(|input| {
-                definition
-                    .branches()
+                declared
                     .get(input.ordinal)
                     .ok_or_else(|| {
                         parallel_error(
@@ -1174,6 +1207,8 @@ fn card_identities(
 /// returns owns its inputs (`'static`).
 struct ParallelChildren {
     runtime: Arc<dyn ParallelBranchRuntime>,
+    /// The source's `kind`, carried by every child span.
+    kind: FanoutKind,
     activation: ParallelActivation,
     context: Arc<NodeContext>,
     members: Vec<(String, String)>,
@@ -1221,6 +1256,7 @@ impl CardBoard {
 impl ParallelChildren {
     fn new(
         runtime: Arc<dyn ParallelBranchRuntime>,
+        kind: FanoutKind,
         activation: ParallelActivation,
         context: Arc<NodeContext>,
         prepared: Vec<PreparedParallelBranch>,
@@ -1261,6 +1297,7 @@ impl ParallelChildren {
         }
         Ok(Self {
             runtime,
+            kind,
             activation,
             context,
             members,
@@ -1406,6 +1443,7 @@ impl FanoutChildren for ParallelChildren {
     ) -> adk_rust::futures::future::BoxFuture<'static, ChildRun> {
         let runtime = Arc::clone(&self.runtime);
         let activation = self.activation.clone();
+        let kind = self.kind;
         let context = Arc::clone(&self.context);
         let fault = Arc::clone(&self.fault);
         let board = self.board.clone();
@@ -1426,8 +1464,7 @@ impl FanoutChildren for ParallelChildren {
                 );
                 return ChildRun::Cancelled;
             };
-            let span =
-                fanout_trace::child_span(FanoutKind::Parallel, &activation.node_id, branch.ordinal);
+            let span = fanout_trace::child_span(kind, &activation.node_id, branch.ordinal);
             let run = if unread {
                 // Prepared without a receipt moments ago: run it.
                 fanout_trace::child_admitted(&span, ChildStart::Fresh);
@@ -1688,7 +1725,7 @@ fn parallel_decision(
 /// stable effect identity because a process can die after an effect but before
 /// the branch graph reaches its checkpoint.
 pub(crate) struct DurableParallelNode {
-    definition: ParallelNodeDefinition,
+    source: FanoutSource,
     runtime: Arc<dyn ParallelBranchRuntime>,
     deadline: Option<tokio::time::Instant>,
     cancellation: Option<Arc<FanoutCancellation>>,
@@ -1711,7 +1748,7 @@ impl DurableParallelNode {
         runtime: Arc<dyn ParallelBranchRuntime>,
     ) -> Self {
         Self {
-            definition,
+            source: FanoutSource::Parallel(definition),
             runtime,
             deadline: None,
             cancellation: None,
@@ -1775,11 +1812,11 @@ impl DurableParallelNode {
         context: &NodeContext,
     ) -> Result<ParallelNodeOutcome, GraphError> {
         let span = fanout_trace::activation_span(
-            FanoutKind::Parallel,
-            self.definition.id(),
+            self.source.kind(),
+            self.source.id(),
             context.step,
-            Some(self.definition.branches().len()),
-            usize::try_from(self.definition.max_concurrency()).unwrap_or(usize::MAX),
+            self.source.declared_children().map(<[_]>::len),
+            usize::try_from(self.source.max_concurrency()).unwrap_or(usize::MAX),
             false,
         );
         fanout_trace::activation_started(&span);
@@ -1811,10 +1848,10 @@ impl DurableParallelNode {
         self.validate()?;
         validate_input_state(&context.state)?;
         self.check_running(context)?;
-        let mut activation = ParallelActivation::from_context(&self.definition, context)?;
+        let mut activation = ParallelActivation::from_context(&self.source, context)?;
         let prepared = self
             .runtime
-            .prepare(&mut activation, &self.definition, context)
+            .prepare_source(&mut activation, &self.source, context)
             .await?;
         self.check_running(context)?;
         let stop = Arc::new(FanoutStop::default());
@@ -1840,12 +1877,13 @@ impl DurableParallelNode {
         };
         let children = Arc::new(ParallelChildren::new(
             Arc::clone(&self.runtime),
+            self.source.kind(),
             activation,
             Arc::new(run_context),
             prepared,
             board,
         )?);
-        let max_concurrency = usize::try_from(self.definition.max_concurrency()).map_err(|_| {
+        let max_concurrency = usize::try_from(self.source.max_concurrency()).map_err(|_| {
             parallel_error(
                 "graph.parallel.invalid_configuration",
                 "the parallel concurrency does not fit this platform",
@@ -1859,7 +1897,7 @@ impl DurableParallelNode {
             Arc::clone(&stop),
             FanoutRunnerConfig {
                 max_concurrency,
-                on_error: self.definition.on_error(),
+                on_error: self.source.on_error(),
                 deadline: self.deadline,
             },
         )
@@ -1984,7 +2022,7 @@ impl DurableParallelNode {
         settled: Vec<plan::SettledChild>,
         context: &NodeContext,
     ) -> Result<ParallelNodeOutcome, GraphError> {
-        let entries = match plan::join(JoinKind::Parallel, self.definition.on_error(), settled)
+        let entries = match plan::join(self.source.join_kind(), self.source.on_error(), settled)
             .map_err(join_error)?
         {
             JoinOutcome::Joined(entries) => entries,
@@ -1994,14 +2032,14 @@ impl DurableParallelNode {
                     && let Some(stop) = events
                         .approved_call_stop(
                             crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
-                            self.definition.id(),
+                            self.source.id(),
                         )
                         .await
                 {
                     return Err(stop);
                 }
                 return Err(GraphError::NodeExecutionFailed {
-                    node: self.definition.id().to_owned(),
+                    node: self.source.id().to_owned(),
                     message: format!(
                         "graph.parallel.branch_failed: branch '{key}' failed after all admitted branches drained ({})",
                         failure.code,
@@ -2009,11 +2047,11 @@ impl DurableParallelNode {
                 });
             }
         };
-        let output_key = self.definition.output_key();
+        let output_key = self.source.output_key();
         let update = plan::land(
-            self.definition.join(),
+            self.source.join(),
             self.output_reducer,
-            JoinKind::Parallel,
+            self.source.join_kind(),
             context.state.get(output_key),
             entries,
         )
@@ -2045,7 +2083,7 @@ impl DurableParallelNode {
 #[async_trait]
 impl Node for DurableParallelNode {
     fn name(&self) -> &str {
-        self.definition.id()
+        self.source.id()
     }
 
     async fn execute(&self, context: &NodeContext) -> Result<NodeOutput, GraphError> {
@@ -2057,18 +2095,8 @@ impl Node for DurableParallelNode {
     }
 
     fn validate(&self) -> Result<(), GraphError> {
-        self.definition.validate().map_err(|error| {
-            parallel_error(error.code(), "the parallel node configuration is invalid")
-        })?;
-        if !(2..=16).contains(&self.definition.branches().len())
-            || !(1..=8).contains(&self.definition.max_concurrency())
-        {
-            return Err(parallel_error(
-                "graph.parallel.invalid_configuration",
-                "the parallel contract requires 2-16 branches and concurrency 1-8",
-            ));
-        }
-        self.runtime.validate(&self.definition)
+        self.source.validate()?;
+        self.runtime.validate_source(&self.source)
     }
 }
 
@@ -2487,7 +2515,7 @@ fn valid_failure_code(code: &str) -> bool {
     )
 }
 
-fn parallel_error(code: &str, message: &str) -> GraphError {
+pub(super) fn parallel_error(code: &str, message: &str) -> GraphError {
     GraphError::NodeExecutionFailed {
         node: "parallel".to_owned(),
         message: format!("{code}: {message}"),
