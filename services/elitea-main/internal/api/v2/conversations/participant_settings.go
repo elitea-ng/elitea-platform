@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func normalizeParticipantSettings(body map[string]any) error {
@@ -73,8 +75,15 @@ func normalizeParticipantLLM(raw any, read bool) (map[string]any, error) {
 				}
 			}
 		case "reasoning_effort":
-			if value != nil && value != "low" && value != "medium" && value != "high" {
-				return nil, fmt.Errorf("reasoning_effort must be low, medium or high")
+			// ADR-0038 decision 1: auto, off, low, medium or high. The
+			// stored none of an older client is written as off.
+			if value != nil {
+				text, isString := value.(string)
+				canonical, known := configurationapp.CanonicalReasoningEffort(text)
+				if !isString || !known {
+					return nil, fmt.Errorf("reasoning_effort must be auto, off, low, medium or high")
+				}
+				value = canonical
 			}
 		case "model_name":
 			if value != nil {
@@ -109,7 +118,10 @@ func normalizeParticipantLLM(raw any, read bool) (map[string]any, error) {
 		}
 		out[key] = value
 	}
-	if out["temperature"] != nil && out["reasoning_effort"] != nil {
+	// off thinks on no step, so it takes a temperature on every model. The
+	// model-aware rule for the other values is refuseParticipantReasoning.
+	if out["temperature"] != nil && out["reasoning_effort"] != nil &&
+		out["reasoning_effort"] != configurationapp.ReasoningEffortOff {
 		if !read {
 			return nil, fmt.Errorf("temperature is not allowed together with reasoning_effort")
 		}

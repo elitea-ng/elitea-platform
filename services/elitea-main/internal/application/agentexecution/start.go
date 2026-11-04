@@ -568,6 +568,10 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, err
 	}
+	modelReasoning, err := currentFrozenModelReasoning(version)
+	if err != nil {
+		return nil, err
+	}
 	summaryModel, err := currentFrozenSummaryModel(version)
 	if err != nil {
 		return nil, err
@@ -579,6 +583,7 @@ func currentApplicationInput(
 		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
 		ProjectContext:     projectContext,
 		ModelContextLimits: modelContextLimits,
+		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable

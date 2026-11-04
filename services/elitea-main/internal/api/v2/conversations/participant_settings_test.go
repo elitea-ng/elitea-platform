@@ -11,7 +11,7 @@ func TestParticipantSettingsRejectMalformedIdentityAndReasoningConflict(t *testi
 			t.Fatalf("accepted version_id=%v", value)
 		}
 	}
-	for _, raw := range []any{"not an object", map[string]any{"reasoning_effort": "none"}, map[string]any{"model_name": 9}, map[string]any{"temperature": 0.2, "reasoning_effort": "high"}} {
+	for _, raw := range []any{"not an object", map[string]any{"reasoning_effort": "minimal"}, map[string]any{"model_name": 9}, map[string]any{"temperature": 0.2, "reasoning_effort": "high"}} {
 		if _, err := normalizeParticipantLLM(raw, false); err == nil {
 			t.Fatalf("accepted settings %+v", raw)
 		}
@@ -20,6 +20,23 @@ func TestParticipantSettingsRejectMalformedIdentityAndReasoningConflict(t *testi
 		if p.Validate() == nil {
 			t.Fatalf("accepted participant %+v", p)
 		}
+	}
+}
+
+// ADR-0038 decision 1: the canonical values are accepted, none is written
+// as off, and off takes a temperature.
+func TestParticipantSettingsTakeTheCanonicalThinkingValues(t *testing.T) {
+	for input, want := range map[string]string{
+		"auto": "auto", "off": "off", "none": "off", "low": "low", "medium": "medium", "high": "high",
+	} {
+		got, err := normalizeParticipantLLM(map[string]any{"reasoning_effort": input}, false)
+		if err != nil || got["reasoning_effort"] != want {
+			t.Fatalf("%q: got=%v err=%v, want %q", input, got["reasoning_effort"], err, want)
+		}
+	}
+	got, err := normalizeParticipantLLM(map[string]any{"reasoning_effort": "off", "temperature": 0.4}, false)
+	if err != nil || got["temperature"] != 0.4 {
+		t.Fatalf("off with a temperature: got=%v err=%v", got, err)
 	}
 }
 

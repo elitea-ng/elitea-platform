@@ -91,7 +91,12 @@ func (service *CurrentApplicationToolSnapshotService) freezeCurrentSummaryModel(
 	if err != nil {
 		return ErrUnsupportedCurrentAgentStart
 	}
-	version["summary_model"] = &runtimev1.SummaryModelSnapshotV1{LlmSettings: encoded, ModelContextLimits: limits}
+	// The control form lets the worker switch thinking off for a summary
+	// (ADR-0038 decision 4); a model that declares none keeps its form.
+	version["summary_model"] = &runtimev1.SummaryModelSnapshotV1{
+		LlmSettings: encoded, ModelContextLimits: limits,
+		ModelReasoning: currentModelReasoningSnapshot(selected),
+	}
 	return nil
 }
 

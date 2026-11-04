@@ -3708,7 +3708,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				r.With(projectPermission(overrideCapPermission)).
 					Post(v2runcaps.ProjectPath, runCaps.override.Grant)
 				if cfg.AppsRepo != nil {
-					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool).WithRunCapsChecker(runCaps.checker)
+					// The save-time thinking rules (ADR-0038) read the
+					// model catalogue the chat participants read.
+					reasoningModels, _ := dbrepos.NewCurrentModelsRepository(cfg.Pool)
+					appHandler := v2apps.NewHandler(cfg.AppsRepo, cfg.Pool).
+						WithRunCapsChecker(runCaps.checker).
+						WithReasoningModels(chatDefaults{models: reasoningModels})
 					r.With(projectPermission("models.applications.applications.list")).
 						Get("/applications/prompt_lib/{projectID}", appHandler.List)
 					r.With(projectPermission("models.applications.applications.create")).

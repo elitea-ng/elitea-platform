@@ -158,7 +158,8 @@ func validModelSettings(raw json.RawMessage) bool {
 				return false
 			}
 			switch text {
-			case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+			// auto and off are the ADR-0038 canonical values.
+			case "auto", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max":
 			default:
 				return false
 			}

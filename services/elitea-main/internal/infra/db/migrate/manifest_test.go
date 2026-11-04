@@ -1028,7 +1028,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// to the cloud (ADR-0045 decision 8, #1439):
 	// workspace_handoffs.take_back_when_done and the link kind handoff. No
 	// data, no permission.
-	require.EqualValues(t, 224, Head(shared))
+	//
+	// 225: shared/0225_model_reasoning_control.sql, the reasoning control
+	// (ADR-0038 decisions 3 and 5, #1452): the family defaults
+	// elitea_runtime.model_reasoning_defaults with their seeds, and
+	// gateway.llm_request_logs.reasoning_tokens. No permission.
+	require.EqualValues(t, 225, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

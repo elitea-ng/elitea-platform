@@ -485,7 +485,8 @@ func frozenRunModel(frozen json.RawMessage) (string, json.RawMessage) {
 	var effort string
 	if raw, ok := version.LLMSettings["reasoning_effort"]; ok && json.Unmarshal(raw, &effort) == nil {
 		switch effort {
-		case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		// auto and off are the ADR-0038 canonical values.
+		case "auto", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max":
 			settings["reasoning_effort"] = effort
 		}
 	}

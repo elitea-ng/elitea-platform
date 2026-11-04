@@ -773,7 +773,7 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 		}
 		settings["model_name"] = modelName
 		settings["model_project_id"] = modelProjectID
-		normalizeCurrentAgentModelFamily(settings, selected.SupportsReasoning)
+		normalizeCurrentAgentModelFamily(settings, selected)
 	} else {
 		if !modelProjectSet {
 			settings["model_project_id"] = int64(selected.ProjectID)
@@ -806,8 +806,8 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 		// it only when the key is ABSENT keeps every version that already
 		// carries a temperature byte-identical to what it resolved to before.
 		_, hasTemperature := settings["temperature"]
-		if !hasTemperature || currentAgentModelFamilyConflict(settings) {
-			normalizeCurrentAgentModelFamily(settings, selected.SupportsReasoning)
+		if !hasTemperature || currentAgentModelFamilyConflict(settings, selected) {
+			normalizeCurrentAgentModelFamily(settings, selected)
 		}
 	}
 	compatible := false
@@ -837,6 +837,9 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 		settings["max_tokens"] = maxTokens
 	}
 	settings["openai_compatible"] = compatible
+	if err := freezeCurrentModelReasoning(version, settings, selected); err != nil {
+		return err
+	}
 	version["llm_settings"] = settings
 	return freezeCurrentModelContextLimits(version, selected)
 }
@@ -927,19 +930,42 @@ func selectCurrentAgentModel(
 	return configurationapp.CurrentModelCatalogItem{}, false
 }
 
-func currentAgentModelFamilyConflict(settings map[string]any) bool {
+// currentAgentModelFamilyConflict reports a temperature beside a thinking
+// setting on a model that refuses one. off, and the stored none, think on no
+// step, so they take a temperature on every form. A toggle or fixed form
+// takes one beside any setting (ADR-0038 decision 2; the worker's
+// check_temperature applies the same rule).
+func currentAgentModelFamilyConflict(settings map[string]any, model configurationapp.CurrentModelCatalogItem) bool {
 	_, hasTemperature := settings["temperature"]
 	if !hasTemperature || settings["temperature"] == nil {
 		return false
 	}
 	reasoning, _ := settings["reasoning_effort"].(string)
-	return reasoning != "" && reasoning != "none"
+	if reasoning == "" || reasoning == "none" || reasoning == configurationapp.ReasoningEffortOff {
+		return false
+	}
+	return configurationapp.ReasoningControlRefusesTemperature(currentModelReasoningControl(model))
 }
 
-func normalizeCurrentAgentModelFamily(settings map[string]any, supportsReasoning *bool) {
-	reasoning := supportsReasoning != nil && *supportsReasoning
+// currentModelReasoningControl is the model's resolved control form, or ""
+// when it declares none.
+func currentModelReasoningControl(model configurationapp.CurrentModelCatalogItem) string {
+	if model.ReasoningControl == nil {
+		return ""
+	}
+	return *model.ReasoningControl
+}
+
+func normalizeCurrentAgentModelFamily(settings map[string]any, model configurationapp.CurrentModelCatalogItem) {
+	reasoning := model.SupportsReasoning != nil && *model.SupportsReasoning
 	if reasoning {
-		settings["temperature"] = nil
+		// A toggle or fixed form keeps an authored temperature. The key is
+		// still written when absent: see the found branch of
+		// resolveCurrentAgentModel for why it must exist.
+		if _, exists := settings["temperature"]; !exists ||
+			configurationapp.ReasoningControlRefusesTemperature(currentModelReasoningControl(model)) {
+			settings["temperature"] = nil
+		}
 		if effort, _ := settings["reasoning_effort"].(string); effort == "" {
 			settings["reasoning_effort"] = "medium"
 		}

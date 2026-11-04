@@ -54,6 +54,9 @@ type currentModelQueryFactory func(sqlExecutor) (currentModelQueries, error)
 type CurrentModelsRepository struct {
 	projects projectStore
 	queries  currentModelQueryFactory
+	// reasoning is the family defaults of the reasoning control
+	// (model_reasoning_defaults.go). Nil applies none.
+	reasoning modelReasoningDefaultsSource
 }
 
 func NewCurrentModelsRepository(pool *pgxpool.Pool) (*CurrentModelsRepository, error) {
@@ -61,7 +64,12 @@ func NewCurrentModelsRepository(pool *pgxpool.Pool) (*CurrentModelsRepository, e
 	if err != nil {
 		return nil, err
 	}
-	return newCurrentModelsRepository(projects, newCurrentModelQueries)
+	repository, err := newCurrentModelsRepository(projects, newCurrentModelQueries)
+	if err != nil {
+		return nil, err
+	}
+	repository.reasoning = newModelReasoningDefaultsReader(pool)
+	return repository, nil
 }
 
 func newCurrentModelsRepository(projects projectStore, queries currentModelQueryFactory) (*CurrentModelsRepository, error) {
@@ -184,6 +192,12 @@ func (r *CurrentModelsRepository) List(
 	}
 	if section == configurationapp.CurrentModelSectionLLM {
 		orderCurrentLLMDuplicates(candidates)
+		if r.reasoning != nil && len(candidates) > 0 {
+			defaults := r.reasoning.Load(ctx)
+			for index := range candidates {
+				configurationapp.ApplyModelReasoningDefaults(&candidates[index].item, defaults)
+			}
+		}
 	}
 
 	items := make([]configurationapp.CurrentModelCatalogItem, len(candidates))
@@ -291,7 +305,31 @@ func mapCurrentModelCandidate(
 	if err != nil {
 		return currentModelCandidate{}, err
 	}
+	item.ReasoningControl, item.ReasoningToolSteps = currentModelReasoning(data)
 	return currentModelCandidate{id: row.ID, item: item}, nil
+}
+
+// currentModelReasoning reads the row's own reasoning keys (ADR-0038
+// decision 3). They are read tolerantly, like the description: every write
+// path validates them (configurations.ValidateLLMModelReasoning), and a row
+// stored before that with a malformed value keeps its place in the picker and
+// takes the family default instead.
+func currentModelReasoning(data map[string]json.RawMessage) (*string, *bool) {
+	var control *string
+	if raw, ok := data[configurationapp.ReasoningControlField]; ok && !currentModelJSONNull(raw) {
+		var value string
+		if json.Unmarshal(raw, &value) == nil && configurationapp.IsReasoningControl(value) {
+			control = &value
+		}
+	}
+	var toolSteps *bool
+	if raw, ok := data[configurationapp.ReasoningToolStepsField]; ok && !currentModelJSONNull(raw) {
+		var value bool
+		if json.Unmarshal(raw, &value) == nil {
+			toolSteps = &value
+		}
+	}
+	return control, toolSteps
 }
 
 // currentModelDescription reads the optional llm_model description. A value
