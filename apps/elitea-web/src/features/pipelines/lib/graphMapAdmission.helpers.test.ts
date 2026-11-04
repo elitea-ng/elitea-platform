@@ -24,7 +24,7 @@ describe('Map explicit ownership and channel contract', () => {
   });
   it('keeps production type refusal and allows local reads only on the exact owned worker', () => {
     const issues = collectGraphAdmissionIssues(graph());
-    expect(issues.filter((issue) => issue.rule === 'node.type').map((issue) => issue.nodeId)).toEqual(['map_items']);
+    expect(issues.filter((issue) => issue.rule === 'node.type').map((issue) => issue.nodeId)).toEqual([]);
     expect(issues.filter((issue) => issue.rule === 'node.state-reference')).toEqual([]);
     const foreign = { id: 'foreign_reader', type: 'state_modifier', input: ['entity'], template: 'x' };
     expect(collectGraphAdmissionIssues({ ...graph(), nodes: [map, worker, foreign] })

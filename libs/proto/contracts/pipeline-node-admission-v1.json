@@ -8,6 +8,7 @@
     "decision",
     "hitl",
     "llm",
+    "map",
     "mcp",
     "parallel",
     "printer",
@@ -16,12 +17,6 @@
     "state_modifier",
     "toolkit"
   ],
-  "pending_wave_2a": {
-    "comment": "KNOWN DRIFT, recorded so that any new drift fails. `map` is not composed yet: the Worker compiler parses it but refuses it when the graph is bound, Main's save check admits it, and the Web editor omits it. This object MUST become empty (and move `map` into `admitted`) when Wave 2a-3 composes Map. Each layer's test asserts its admitted set equals `admitted` plus exactly its own entry below.",
-    "worker": ["map"],
-    "main": ["map"],
-    "web": []
-  },
   "refused": [
     "condition",
     "custom",

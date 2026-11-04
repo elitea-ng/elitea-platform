@@ -21,7 +21,7 @@ describe('fixed Parallel is admitted for authoring (Point 5 2a-2)', () => {
       expect(canCreateNodeType('parallel', getNodeTypeFlags(type, undefined, undefined))).toBe(true);
       expect(canCreateNodeType('agent', getNodeTypeFlags(type, undefined, undefined))).toBe(true);
     }
-    expect(isCompilerAdmittedNodeType('map')).toBe(false);
+    expect(isCompilerAdmittedNodeType('map')).toBe(true);
     expect(isCompilerAdmittedNodeType('split_out')).toBe(true);
     expect(isCompilerAdmittedNodeType('aggregate')).toBe(true);
   });
@@ -30,7 +30,7 @@ describe('fixed Parallel is admitted for authoring (Point 5 2a-2)', () => {
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(entries).toHaveLength(13);
+    expect(entries).toHaveLength(14);
     expect(entries).toContain('Parallel');
     expect(entries).toContain('Code');
     expect(entries).toContain('Agent');

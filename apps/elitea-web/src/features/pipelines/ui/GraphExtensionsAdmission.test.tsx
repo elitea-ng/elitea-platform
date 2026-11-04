@@ -20,8 +20,8 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     expect(collectGraphAdmissionIssues(document).filter((issue) => issue.rule === 'node.type')).toEqual([]);
   });
 
-  it('still refuses a type no runtime runs, and the unmerged map type', () => {
-    expect(isCompilerAdmittedNodeType('map')).toBe(false);
+  it('still refuses a type no runtime runs', () => {
+    expect(isCompilerAdmittedNodeType('map')).toBe(true);
     const issues = collectGraphAdmissionIssues({ ...document, nodes: [{ id: 'split', type: 'custom', transition: 'END' }] })
       .filter((issue) => issue.rule === 'node.type');
     expect(issues).toHaveLength(1);
@@ -33,7 +33,7 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.textContent);
-    expect(entries).toHaveLength(13);
+    expect(entries).toHaveLength(14);
     expect(entries).toContain('SplitOut');
     expect(entries).toContain('Aggregate');
     expect(entries).toContain('Parallel');

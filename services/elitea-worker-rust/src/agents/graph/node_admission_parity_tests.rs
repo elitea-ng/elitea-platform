@@ -59,14 +59,11 @@ fn parse_arms() -> BTreeSet<String> {
 fn the_compiler_admits_exactly_the_contract_node_types() {
     let contract = contract();
     let admitted = names(&contract["admitted"]);
-    let pending = names(&contract["pending_wave_2a"]["worker"]);
     let refused = names(&contract["refused"]);
 
-    assert!(admitted.is_disjoint(&pending), "pending overlaps admitted");
     assert!(admitted.is_disjoint(&refused), "refused overlaps admitted");
-    assert!(pending.is_disjoint(&refused), "refused overlaps pending");
 
-    let expected: BTreeSet<String> = admitted.union(&pending).cloned().collect();
+    let expected: BTreeSet<String> = admitted;
     assert_eq!(
         parse_arms(),
         expected,
