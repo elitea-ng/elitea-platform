@@ -1,0 +1,48 @@
+---
+title: "Set the reasoning effort"
+description: "Choose how much a reasoning model thinks in an agent or a chat, with Auto, Off, Low, Medium or High."
+---
+
+A reasoning model can think before it answers. Thinking can make an answer better, but it uses more tokens and more time. The reasoning effort tells the model how much to think.
+
+## The values
+
+| Value | What it does |
+| --- | --- |
+| Auto | The runtime chooses for each step. This is the default for a new agent, and for a chat with no agent, on a model that can switch its thinking. |
+| Off | The model does not think. |
+| Low, Medium, High | The model thinks at this level on every step. |
+
+An explicit value always wins over Auto. An agent saved before Auto existed keeps its value. The older value `none` means Off.
+
+## What Auto does
+
+Auto thinks where thinking helps, and saves tokens where it does not:
+
+- On the first step of a turn, the model thinks at the medium level.
+- After a tool error or a refused tool call, the model thinks at the medium level.
+- On a routine step after successful tool results, the model does not think. Some models (Claude and Gemini) keep thinking on these steps, because they fail or degrade when thinking changes inside one tool loop.
+- On every step of an agent with a structured output schema, the model thinks at the medium level.
+- When the runtime summarizes or compacts a conversation, or names a chat, the model does not think.
+- On a model that has no reasoning control in the catalogue, Auto thinks at the medium level on every step.
+
+Your administrator sets the reasoning control of each model. See [AI Providers](/menus/settings/ai-providers#reasoning-control-of-a-model).
+
+## Values that a model refuses
+
+- A model that always thinks (for example QwQ or DeepSeek R1) refuses **Off**.
+- A model that cannot think refuses Low, Medium and High.
+
+The save of an agent refuses these values and shows the reason. Select **Auto**, or a value that the model accepts.
+
+## Temperature
+
+Some reasoning models refuse a temperature when they think. For these models, the agent keeps the reasoning effort and does not send a temperature. A model that switches its thinking with a toggle (for example Qwen on vLLM), or a model that always thinks or cannot think, accepts both.
+
+## Reasoning tokens
+
+The usage figures of a run show `reasoning_tokens`: the completion tokens that the model used to think. They are a part of the completion tokens, not an addition to them. A provider that does not report them shows 0.
+
+<Info title="Current status">
+The model settings screen shows Low, Medium and High. The API accepts Auto and Off now, and the screens will show them in a later release.
+</Info>

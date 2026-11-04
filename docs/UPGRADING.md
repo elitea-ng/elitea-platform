@@ -4,6 +4,51 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Thinking policy: auto and off, reasoning control, reasoning tokens (#1452, ADR-0038 decisions 1 to 5)
+
+Upgrade the workers (`elitea-worker-rust`) before Main. A
+worker of an earlier release refuses `reasoning_effort` `auto` and `off`
+with `invalid_profile`, and Main now writes `auto` on a new agent and on a
+chat with no agent. Main also sends the model's reasoning control in a new
+proto field (`AgentExecutionInputV1.model_reasoning`, field 69, and
+`SummaryModelSnapshotV1.model_reasoning`, field 3). An earlier worker
+ignores these fields.
+
+New shared migration `0225_model_reasoning_control`:
+
+- It creates `elitea_runtime.model_reasoning_defaults`, the family
+  defaults of the reasoning control form. It seeds Qwen (`toggle`),
+  Qwen thinking models, QwQ, DeepSeek R1 and Gemini Pro (`fixed_on`),
+  gpt-5.1 and later (`effort`), and Claude and Gemini 2.5 Flash
+  (`budget`). The seeds are `ON CONFLICT DO NOTHING`: a later run keeps a
+  row you changed. No API writes this table. Change it with SQL.
+- It adds `reasoning_tokens` (default 0) to `gateway.llm_request_logs`.
+  There is no backfill. The gateway writes the column when it exists. A
+  gateway that rolls out before the migration writes rows without it.
+
+A model's own `data.reasoning_control` and `data.reasoning_tool_steps` in
+the catalogue win over the family defaults. A default applies only to a
+model with `supports_reasoning: true`. A model with no form keeps the form
+of the earlier release: a thinking budget on the native Anthropic wire, a
+reasoning effort on every other wire. For such a model, `auto` thinks at
+the medium level on every step and never sends the off form.
+
+Existing agents keep their stored `reasoning_effort`. No migration rewrites
+them, and a stored `none` reads as `off`. A save now refuses `off` on a
+model that always thinks and a level on a model that cannot think, with
+HTTP 400. An llm_model save refuses a `reasoning_control` that is not
+`effort`, `budget`, `toggle`, `fixed_on` or `fixed_off`, and a form other
+than `fixed_off` on a model with `supports_reasoning: false`.
+
+Client contract 1.35:
+
+- `reasoning_effort` takes `auto` and `off`.
+- The model catalogue item returns `reasoning_control` and
+  `reasoning_tool_steps`.
+- The run analytics figures and the local child turn usage return
+  `reasoning_tokens`. These tokens are a part of `completion_tokens`, not
+  an addition to it.
+
 ## Schedules and webhooks on a handed-off workspace (#1440, ADR-0045 decision 9)
 
 New tenant migration `0159_workspace_thread_targets`. It adds the columns
