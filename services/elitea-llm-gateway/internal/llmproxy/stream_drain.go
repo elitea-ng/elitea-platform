@@ -391,8 +391,11 @@ type streamSettler struct {
 	gotCache              bool
 	// reasoning is the reasoning count of the same usage block (ADR-0038
 	// decision 5). It feeds the request log only, never the bill.
-	reasoning        int64
-	gotReasoning     bool
+	reasoning    int64
+	gotReasoning bool
+	// billedReasoning is the reasoning count recordLogTokens settled on; the
+	// detached billing context carries it to the usage ledger row.
+	billedReasoning  int64
 	observedOutBytes int64
 	settled          bool
 	// promptEstimate, seenPrompt, relayedChunks and relayedBytes feed the
@@ -563,6 +566,7 @@ func (s *streamSettler) recordLogTokens() {
 		}
 		if gotReasoning {
 			s.logUsage.SetReasoningTokens(reasoning)
+			s.billedReasoning = reasoning
 		}
 	}
 	// The key bifrost selected is on the request's own BifrostContext, which
@@ -1142,6 +1146,9 @@ func (s *streamSettler) billingContext() context.Context {
 	// besides the execution id.
 	if s.holds != nil {
 		base = failmode.WithHolds(base, s.holds)
+	}
+	if s.billedReasoning > 0 {
+		base = withLedgerReasoningTokens(base, s.billedReasoning)
 	}
 	if s.executionID == "" {
 		return base

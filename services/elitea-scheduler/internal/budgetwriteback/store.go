@@ -179,6 +179,9 @@ const (
 // Store applies coalesced budget deltas to the durable accumulator tier.
 type Store struct {
 	db DB
+	// reasoning remembers whether the ledger has shared migration 0225's
+	// reasoning_tokens column.
+	reasoning reasoningColumn
 }
 
 // NewStore builds a Store over the given DB seam.
@@ -276,6 +279,13 @@ func (s *Store) Apply(ctx context.Context, group []BudgetDelta) (applyOutcome, e
 		if d.Usage.Operation == usageOperationTool {
 			statement = meteredUsageEventSQL
 			args = append(args, usageOperationTool, d.Usage.Units, nullableUnit(d.Usage.Unit))
+		}
+		// The reasoning count (ADR-0038 decision 5) only for a row that has
+		// one, and only while the column exists: the report never fails the
+		// money in this transaction.
+		if d.Usage.ReasoningTokens > 0 && s.reasoning.present(ctx, tx) {
+			statement = withReasoningTokens(statement)
+			args = append(args, d.Usage.ReasoningTokens)
 		}
 		if _, err := tx.ExecAffected(ctx, statement, args...); err != nil {
 			return outcomeApplied, err

@@ -201,6 +201,17 @@ func (e *Enrichment) SetReasoningTokens(reasoning int64) {
 	e.reasoning = reasoning
 }
 
+// ReasoningTokens is the reasoning count SetReasoningTokens recorded, 0 when
+// none was. The billing path reads it for the usage ledger row.
+func (e *Enrichment) ReasoningTokens() int64 {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.reasoning
+}
+
 // SetGuardrailVerdicts records the request's guardrail verdicts (ADR-0043
 // decision 1). The handler sets them once, after the last stage ran.
 func (e *Enrichment) SetGuardrailVerdicts(verdicts []guardrail.Verdict) {

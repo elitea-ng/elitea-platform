@@ -917,6 +917,9 @@ func (h *Handler) updateUsageUnits(
 		// grouped by agent the same way the request log can. Empty for every
 		// caller that is not a runtime execution, which is most of them.
 		ExecutionID: identityExecutionFromCtx(ctx),
+		// The part of CompletionTokens the provider reported as reasoning
+		// (ADR-0038 decision 5): the count the request log recorded.
+		ReasoningTokens: ledgerReasoningTokens(ctx),
 	}
 
 	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin, "") {
@@ -924,6 +927,24 @@ func (h *Handler) updateUsageUnits(
 		return billBilled
 	}
 	return billRefused
+}
+
+// ledgerReasoningKey carries a streamed request's reasoning count on the
+// detached billing context, which has no request log of its own.
+type ledgerReasoningKey struct{}
+
+func withLedgerReasoningTokens(ctx context.Context, reasoning int64) context.Context {
+	return context.WithValue(ctx, ledgerReasoningKey{}, reasoning)
+}
+
+// ledgerReasoningTokens is the reasoning count for the usage ledger row: the
+// streamed request's settled count, else the one the request log recorded
+// for a unary answer, else 0.
+func ledgerReasoningTokens(ctx context.Context) int64 {
+	if reasoning, ok := ctx.Value(ledgerReasoningKey{}).(int64); ok {
+		return reasoning
+	}
+	return requestlog.FromContext(ctx).ReasoningTokens()
 }
 
 // optionalUserID renders the identity header's member id as a *int for the
