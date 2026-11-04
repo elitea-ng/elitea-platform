@@ -1537,6 +1537,11 @@ func newToolkitHandler(
 		options = append(options, v2toolkits.WithWorkerImplementation(cfg.WorkerImplementation))
 	}
 	if cfg.Pool != nil {
+		// The save-time thinking rule (ADR-0038) reads the catalogue the
+		// agent editor and the chat participants read.
+		if reasoningModels, err := dbrepos.NewCurrentModelsRepository(cfg.Pool); err == nil {
+			options = append(options, v2toolkits.WithReasoningModels(chatDefaults{models: reasoningModels}))
+		}
 		options = append(options,
 			v2toolkits.WithDynamicTypeSchemas(prebuiltMCPStore),
 			v2toolkits.WithSecretSealer(configurationSecretSealer(cfg.Pool)),

@@ -1,8 +1,10 @@
 package configurations
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 )
@@ -289,4 +291,76 @@ func ModelItemReasoningControl(item *CurrentModelCatalogItem) string {
 		return ReasoningControlFixedOff
 	}
 	return ""
+}
+
+// ModelReasoningInfo is one model's reasoning data, from one catalogue read
+// (ADR-0038 decision 3).
+type ModelReasoningInfo struct {
+	// Found is false when the catalogue has no row of the name.
+	Found bool
+	// SupportsReasoning is the row's supports_reasoning.
+	SupportsReasoning bool
+	// Control is ModelItemReasoningControl: the declared or family form,
+	// fixed_off for a model that cannot think and declares none, "" for a
+	// reasoning model that declares none.
+	Control string
+	// ToolSteps is reasoning_tool_steps, resolved.
+	ToolSteps bool
+}
+
+// ModelItemReasoningInfo reads an item's reasoning data. A nil item is not
+// found.
+func ModelItemReasoningInfo(item *CurrentModelCatalogItem) ModelReasoningInfo {
+	if item == nil {
+		return ModelReasoningInfo{}
+	}
+	return ModelReasoningInfo{
+		Found:             true,
+		SupportsReasoning: item.SupportsReasoning != nil && *item.SupportsReasoning,
+		Control:           ModelItemReasoningControl(item),
+		ToolSteps:         item.ReasoningToolSteps != nil && *item.ReasoningToolSteps,
+	}
+}
+
+// SaveReasoningConflict is the save-time rule, the same on every surface (an
+// agent version, a toolkit's settings, a chat participant): a setting the
+// model cannot honour (a level on a model that cannot think, off on one that
+// always thinks) is refused with the table's readable text. A model the
+// catalogue does not know is not judged: admission and the run read it again.
+func SaveReasoningConflict(info ModelReasoningInfo, effort string) error {
+	if !info.Found || effort == "" {
+		return nil
+	}
+	return ReasoningEffortConflict(info.Control, effort)
+}
+
+// RunReasoningEffort is the run-time rule, the same on every surface (agent
+// admission, a toolkit's engine call): a STORED setting the model cannot
+// honour, or one that is not canonical, runs as auto, and is logged at warn
+// with the model and the source. It is never refused at run time: the value
+// was saved before the model or the rule changed, and the caller cannot fix
+// it from a running turn. An empty setting stays empty.
+//
+// A request body that names a level itself (predict_llm, the AI drafts) is
+// not stored: it keeps the save-time refusal.
+func RunReasoningEffort(ctx context.Context, control, effort, model, source string) string {
+	if effort == "" {
+		return ""
+	}
+	canonical, known := CanonicalReasoningEffort(effort)
+	reason := ""
+	switch {
+	case !known:
+		reason = ErrInvalidReasoningEffort.Error()
+	default:
+		if conflict := ReasoningEffortConflict(control, canonical); conflict != nil {
+			reason = conflict.Error()
+		}
+	}
+	if reason == "" {
+		return canonical
+	}
+	slog.WarnContext(ctx, "a stored reasoning_effort the model cannot honour runs as auto",
+		"model", model, "source", source, "stored", effort, "reason", reason)
+	return ReasoningEffortAuto
 }

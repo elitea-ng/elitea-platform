@@ -23,10 +23,9 @@ import (
 //     a version save never adds the key.
 
 // ReasoningModelCatalog reads a model's reasoning metadata from the caller's
-// catalogue. The API composition passes the chat defaults reader.
+// catalogue, in one read. The API composition passes the chat defaults reader.
 type ReasoningModelCatalog interface {
-	SupportsReasoning(ctx context.Context, projectID, name string) (bool, error)
-	ReasoningControl(ctx context.Context, projectID, name string) (string, error)
+	ModelReasoning(ctx context.Context, projectID, name string) (configurationapp.ModelReasoningInfo, error)
 }
 
 // WithReasoningModels sets the catalogue reader of the save-time check. Nil
@@ -68,22 +67,20 @@ func (h *Handler) checkReasoningSetting(
 	if value := llm["model_project_id"]; value != nil && fmt.Sprint(value) != "" {
 		modelProject = fmt.Sprint(value)
 	}
-	// A failed read admits the save: admission checks the frozen setting
-	// against the catalogue again, and refuses a conflict there.
-	reasoning, err := h.reasoningModels.SupportsReasoning(r.Context(), modelProject, name)
-	if err != nil || !reasoning {
+	// A failed read admits the save: the run reads the catalogue again and
+	// runs a setting the model cannot honour as auto.
+	info, err := h.reasoningModels.ModelReasoning(r.Context(), modelProject, name)
+	if err != nil || !info.Found {
 		return true
 	}
-	control, err := h.reasoningModels.ReasoningControl(r.Context(), modelProject, name)
-	if err != nil {
-		return true
-	}
-	if effort == "" && creating &&
-		control != configurationapp.ReasoningControlFixedOn && control != configurationapp.ReasoningControlFixedOff {
+	if effort == "" && creating && info.SupportsReasoning &&
+		info.Control != configurationapp.ReasoningControlFixedOn && info.Control != configurationapp.ReasoningControlFixedOff {
 		llm["reasoning_effort"] = configurationapp.ReasoningEffortAuto
 		return true
 	}
-	if conflict := configurationapp.ReasoningEffortConflict(control, effort); conflict != nil {
+	// One rule on every surface: a level on a model that cannot think (a
+	// non-reasoning model included), or off on one that always thinks.
+	if conflict := configurationapp.SaveReasoningConflict(info, effort); conflict != nil {
 		apierr.Write(w, apierr.BadRequest(conflict.Error()))
 		return false
 	}

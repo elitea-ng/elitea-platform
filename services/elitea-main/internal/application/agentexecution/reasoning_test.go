@@ -1,8 +1,8 @@
 package agentexecution
 
 import (
+	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -21,7 +21,7 @@ func reasoningModel(control string, toolSteps bool) configurationapp.CurrentMode
 func TestFreezeModelReasoningCanonicalisesAndFreezesTheForm(t *testing.T) {
 	version := map[string]any{"model_reasoning": map[string]any{"control": "fixed_off"}}
 	settings := map[string]any{"reasoning_effort": "none"}
-	if err := freezeCurrentModelReasoning(version, settings, reasoningModel("toggle", true)); err != nil {
+	if err := freezeCurrentModelReasoning(context.Background(), version, settings, reasoningModel("toggle", true)); err != nil {
 		t.Fatal(err)
 	}
 	if settings["reasoning_effort"] != "off" {
@@ -40,7 +40,7 @@ func TestFreezeModelReasoningCanonicalisesAndFreezesTheForm(t *testing.T) {
 
 func TestFreezeModelReasoningWithoutAFormFreezesNothing(t *testing.T) {
 	version := map[string]any{"model_reasoning": map[string]any{"control": "toggle"}}
-	if err := freezeCurrentModelReasoning(version, map[string]any{"reasoning_effort": "auto"}, reasoningModel("", false)); err != nil {
+	if err := freezeCurrentModelReasoning(context.Background(), version, map[string]any{"reasoning_effort": "auto"}, reasoningModel("", false)); err != nil {
 		t.Fatal(err)
 	}
 	if _, present := version["model_reasoning"]; present {
@@ -51,10 +51,29 @@ func TestFreezeModelReasoningWithoutAFormFreezesNothing(t *testing.T) {
 	}
 }
 
-func TestFreezeModelReasoningRefusesAConflict(t *testing.T) {
-	err := freezeCurrentModelReasoning(map[string]any{}, map[string]any{"reasoning_effort": "off"}, reasoningModel("fixed_on", false))
-	if err == nil || !strings.Contains(err.Error(), "this model always thinks") {
-		t.Fatalf("off on fixed_on must be refused with the table's text: %v", err)
+// ADR-0038, one rule on every surface: a stored setting the model cannot
+// honour runs as auto at admission; it is never refused at run time.
+func TestFreezeModelReasoningRunsAConflictAsAuto(t *testing.T) {
+	settings := map[string]any{"reasoning_effort": "off"}
+	if err := freezeCurrentModelReasoning(context.Background(), map[string]any{}, settings, reasoningModel("fixed_on", false)); err != nil {
+		t.Fatalf("a stored conflict must not refuse the run: %v", err)
+	}
+	if settings["reasoning_effort"] != "auto" {
+		t.Fatalf("off on fixed_on runs as auto: %v", settings)
+	}
+
+	// A model that cannot think: the stored level runs as auto, and the
+	// frozen fixed_off form makes auto send nothing.
+	no := false
+	plain := configurationapp.CurrentModelCatalogItem{Name: "gpt-4o", SupportsReasoning: &no}
+	version := map[string]any{}
+	settings = map[string]any{"reasoning_effort": "high"}
+	if err := freezeCurrentModelReasoning(context.Background(), version, settings, plain); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := currentFrozenModelReasoning(version)
+	if settings["reasoning_effort"] != "auto" || err != nil || frozen == nil || frozen.Control != "fixed_off" {
+		t.Fatalf("settings=%v frozen=%+v err=%v, want auto and fixed_off", settings, frozen, err)
 	}
 }
 

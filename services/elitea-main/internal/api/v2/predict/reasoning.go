@@ -18,6 +18,14 @@ import (
 // anything is sent. The gateway completer then writes the form the llm-wire
 // table writes for one request (configurations.SingleCallOpenAIThinking):
 // reasoning_effort, chat_template_kwargs.enable_thinking, or nothing.
+//
+// The setting here always comes from the request body: the web's AI edit,
+// quick fix and pipeline assistant send none, an MCP client or an API caller
+// names one, and no Main caller (chat naming, publish review, run brief,
+// evaluation) sets one. No stored toolkit setting reaches this path, so a
+// value the model cannot honour is the caller's own and keeps the 400. A
+// STORED setting takes the run-time rule instead (configurations.
+// RunReasoningEffort: it runs as auto, logged at warn).
 
 // ReasoningError refuses a thinking setting: not a canonical value, or one
 // the model cannot honour. Its message is the readable reason; a handler

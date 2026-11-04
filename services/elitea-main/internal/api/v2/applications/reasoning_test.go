@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 type fakeReasoningCatalog struct {
@@ -13,12 +15,12 @@ type fakeReasoningCatalog struct {
 	control   string
 }
 
-func (f fakeReasoningCatalog) SupportsReasoning(context.Context, string, string) (bool, error) {
-	return f.reasoning, nil
-}
-
-func (f fakeReasoningCatalog) ReasoningControl(context.Context, string, string) (string, error) {
-	return f.control, nil
+func (f fakeReasoningCatalog) ModelReasoning(context.Context, string, string) (configurationapp.ModelReasoningInfo, error) {
+	control := f.control
+	if !f.reasoning && control == "" {
+		control = configurationapp.ReasoningControlFixedOff
+	}
+	return configurationapp.ModelReasoningInfo{Found: true, SupportsReasoning: f.reasoning, Control: control}, nil
 }
 
 func checkReasoning(h *Handler, llm map[string]any, creating bool) (bool, *httptest.ResponseRecorder) {
@@ -49,6 +51,21 @@ func TestReasoningConflictIsRefusedAtSave(t *testing.T) {
 	ok, w = checkReasoning(h, map[string]any{"model_name": "m", "reasoning_effort": "high"}, false)
 	if ok || !strings.Contains(w.Body.String(), "this model cannot think") {
 		t.Fatalf("a level on a fixed_off model must be refused: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// ADR-0038, one rule on every surface: a level on a model that does not
+// reason at all is refused at save, as on a fixed_off one; auto and off pass.
+func TestALevelOnANonReasoningModelIsRefusedAtSave(t *testing.T) {
+	h := NewHandler(nil).WithReasoningModels(fakeReasoningCatalog{reasoning: false})
+	ok, w := checkReasoning(h, map[string]any{"model_name": "gpt-4o", "reasoning_effort": "high"}, false)
+	if ok || w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "this model cannot think") {
+		t.Fatalf("a level on a non-reasoning model must be refused: %d %s", w.Code, w.Body.String())
+	}
+	for _, effort := range []string{"auto", "off"} {
+		if ok, _ := checkReasoning(h, map[string]any{"model_name": "gpt-4o", "reasoning_effort": effort}, false); !ok {
+			t.Fatalf("%s on a non-reasoning model must pass", effort)
+		}
 	}
 }
 

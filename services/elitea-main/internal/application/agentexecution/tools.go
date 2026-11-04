@@ -837,7 +837,7 @@ func (service *CurrentApplicationToolSnapshotService) resolveCurrentAgentModel(
 		settings["max_tokens"] = maxTokens
 	}
 	settings["openai_compatible"] = compatible
-	if err := freezeCurrentModelReasoning(version, settings, selected); err != nil {
+	if err := freezeCurrentModelReasoning(ctx, version, settings, selected); err != nil {
 		return err
 	}
 	version["llm_settings"] = settings

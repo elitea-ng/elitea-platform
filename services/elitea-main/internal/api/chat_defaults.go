@@ -26,22 +26,16 @@ func (d chatDefaults) ContextManagementEnabled(ctx context.Context, projectID st
 	}
 	return strings.ToLower(value) == "true", nil
 }
-func (d chatDefaults) SupportsReasoning(ctx context.Context, projectID, name string) (bool, error) {
-	item, found, err := d.model(ctx, projectID, name)
-	if err != nil || !found || item.SupportsReasoning == nil {
-		return false, err
-	}
-	return *item.SupportsReasoning, nil
-}
 
-// ReasoningControl is the model's resolved control form (ADR-0038 decision
-// 3), or "" when it declares none.
-func (d chatDefaults) ReasoningControl(ctx context.Context, projectID, name string) (string, error) {
+// ModelReasoning is the model's reasoning data (supports_reasoning, the
+// resolved control form and the tool-step rule) from ONE catalogue read
+// (ADR-0038 decision 3). A model the catalogue does not know is not Found.
+func (d chatDefaults) ModelReasoning(ctx context.Context, projectID, name string) (configurationapp.ModelReasoningInfo, error) {
 	item, found, err := d.model(ctx, projectID, name)
-	if err != nil || !found || item.ReasoningControl == nil {
-		return "", err
+	if err != nil || !found {
+		return configurationapp.ModelReasoningInfo{}, err
 	}
-	return *item.ReasoningControl, nil
+	return configurationapp.ModelItemReasoningInfo(&item), nil
 }
 
 // model is the first catalogue row of the project with this name.

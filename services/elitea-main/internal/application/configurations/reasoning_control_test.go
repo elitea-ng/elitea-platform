@@ -1,6 +1,7 @@
 package configurations
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -143,5 +144,40 @@ func TestCompileModelReasoningDefaultRefusesBadRows(t *testing.T) {
 	}
 	if _, err := CompileModelReasoningDefault("x", "adaptive", false); err == nil {
 		t.Fatal("an unknown control must be refused")
+	}
+}
+
+// ADR-0038: the one rule every surface applies. At save, a setting the model
+// cannot honour is refused; at run, the same stored setting runs as auto.
+// The surfaces' own tests (agent save, participant save, toolkit save,
+// admission, engines, predict and drafts) pin that each calls these two.
+func TestTheOneReasoningRuleAtSaveAndAtRun(t *testing.T) {
+	no, yes := false, true
+	alwaysOn := ReasoningControlFixedOn
+	for _, tc := range []struct {
+		name     string
+		item     *CurrentModelCatalogItem
+		effort   string
+		refuse   bool
+		runsWith string
+	}{
+		{"level on a non-reasoning model", &CurrentModelCatalogItem{Name: "gpt-4o", SupportsReasoning: &no}, "high", true, "auto"},
+		{"off on a model that always thinks", &CurrentModelCatalogItem{Name: "qwq", SupportsReasoning: &yes, ReasoningControl: &alwaysOn}, "off", true, "auto"},
+		{"stored none on a model that always thinks", &CurrentModelCatalogItem{Name: "qwq", SupportsReasoning: &yes, ReasoningControl: &alwaysOn}, "none", true, "auto"},
+		{"auto on a non-reasoning model", &CurrentModelCatalogItem{Name: "gpt-4o", SupportsReasoning: &no}, "auto", false, "auto"},
+		{"a level on an undeclared reasoning model", &CurrentModelCatalogItem{Name: "o3", SupportsReasoning: &yes}, "low", false, "low"},
+		{"a model the catalogue does not know", nil, "high", false, "high"},
+	} {
+		info := ModelItemReasoningInfo(tc.item)
+		canonical, _ := CanonicalReasoningEffort(tc.effort)
+		if refused := SaveReasoningConflict(info, canonical) != nil; refused != tc.refuse {
+			t.Errorf("%s: refused at save = %v, want %v", tc.name, refused, tc.refuse)
+		}
+		if got := RunReasoningEffort(context.Background(), info.Control, tc.effort, "m", "test"); got != tc.runsWith {
+			t.Errorf("%s: runs with %q, want %q", tc.name, got, tc.runsWith)
+		}
+	}
+	if got := RunReasoningEffort(context.Background(), "", "minimal", "m", "test"); got != "auto" {
+		t.Errorf("a stored value that is not canonical runs as auto, got %q", got)
 	}
 }

@@ -35,16 +35,26 @@ func TestSettleReasoningCarriesTheCatalogueControl(t *testing.T) {
 	}
 }
 
-func TestSettleReasoningRefusesWhatTheModelCannotHonour(t *testing.T) {
-	for effort, want := range map[string]string{
-		"off":     "this model always thinks",
-		"minimal": "reasoning_effort must be one of",
+// ADR-0038, one rule on every surface: a stored setting the engine's model
+// cannot honour runs as auto; the call is never refused for it.
+func TestSettleReasoningRunsWhatTheModelCannotHonourAsAuto(t *testing.T) {
+	for control, effort := range map[string]string{
+		"fixed_on":  "off",
+		"fixed_off": "high",
+		"toggle":    "minimal",
 	} {
-		block := map[string]any{"model_name": "qwq", "reasoning_effort": effort}
-		err := SettleReasoning(context.Background(), &reasoningStub{control: "fixed_on"}, block, 7)
-		if !errors.Is(err, ErrRejected) || !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: err = %v, want ErrRejected naming %q", effort, err, want)
+		block := map[string]any{"model_name": "m", "reasoning_effort": effort}
+		if err := SettleReasoning(context.Background(), &reasoningStub{control: control}, block, 7); err != nil {
+			t.Fatalf("%s/%s: err = %v, want no refusal", control, effort, err)
 		}
+		if block["reasoning_effort"] != "auto" || block["reasoning_control"] != control {
+			t.Errorf("%s/%s: block = %v, want auto with the control", control, effort, block)
+		}
+	}
+	block := map[string]any{"model_name": "m", "reasoning_effort": "none"}
+	_ = SettleReasoning(context.Background(), &reasoningStub{control: "effort"}, block, 7)
+	if block["reasoning_effort"] != "off" {
+		t.Errorf("none is canonical off: %v", block)
 	}
 }
 

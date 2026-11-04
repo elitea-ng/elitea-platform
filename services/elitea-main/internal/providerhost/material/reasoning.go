@@ -58,10 +58,13 @@ func (c CatalogueReasoning) ModelReasoning(ctx context.Context, projectID int64,
 }
 
 // SettleReasoning writes the model's control form and tool-step rule into
-// the callback block, and refuses a setting the model cannot honour with the
-// translation table's own text (ErrRejected). A block with no model, a nil
-// reader, or a catalogue that cannot be read keeps the block as it is: the
-// engine then sends the reasoning_effort form, as before ADR-0038.
+// the callback block. A stored setting the model cannot honour (the toolkit's
+// saved default, or a value a client lifted into the block) runs as auto and
+// is logged at warn: the one run-time rule of every surface
+// (configurations.RunReasoningEffort). It never refuses the call. A block
+// with no model, a nil reader, or a catalogue that cannot be read keeps the
+// block as it is: the engine then sends the reasoning_effort form, as before
+// ADR-0038.
 func SettleReasoning(ctx context.Context, reasoning ModelReasoning, block map[string]any, projectID int64) error {
 	model, _ := block["model_name"].(string)
 	if reasoning == nil || model == "" {
@@ -76,14 +79,8 @@ func SettleReasoning(ctx context.Context, reasoning ModelReasoning, block map[st
 	if control == "" {
 		return nil
 	}
-	if effort, ok := block["reasoning_effort"].(string); ok {
-		canonical, known := configurationapp.CanonicalReasoningEffort(effort)
-		if !known {
-			return fmt.Errorf("%w: llm_settings.%s", ErrRejected, configurationapp.ErrInvalidReasoningEffort)
-		}
-		if conflict := configurationapp.ReasoningEffortConflict(control, canonical); conflict != nil {
-			return fmt.Errorf("%w: llm_settings.reasoning_effort: %s", ErrRejected, conflict)
-		}
+	if effort, ok := block["reasoning_effort"].(string); ok && effort != "" {
+		block["reasoning_effort"] = configurationapp.RunReasoningEffort(ctx, control, effort, model, "engine")
 	}
 	block["reasoning_control"] = control
 	if toolSteps != nil {

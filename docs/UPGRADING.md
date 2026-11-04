@@ -49,6 +49,17 @@ HTTP 400. An llm_model save refuses a `reasoning_control` that is not
 `effort`, `budget`, `toggle`, `fixed_on` or `fixed_off`, and a form other
 than `fixed_off` on a model with `supports_reasoning: false`.
 
+One rule for a setting the model cannot honour, on every surface. At save
+(an agent version, a toolkit's settings, a chat participant), a level on a
+model that cannot think, a model with `supports_reasoning: false`
+included, and `off` on a model that always thinks, are refused with HTTP
+400. At run (agent admission, a toolkit's engine call), a stored value of
+that kind, or one that is not canonical, runs as `auto` and Main logs it at
+warn with the model and the source. A run is never refused for it: the
+earlier release refused such an agent at admission and an engine call at
+the callback. A model that cannot think is frozen as `fixed_off` for the
+worker, so `auto` sends nothing to it.
+
 `predict_llm` and the AI drafts translate `reasoning_effort` with the
 model's control, as agents do. They refuse a value that is not `auto`,
 `off`, `low`, `medium` or `high` (`none` reads as `off`), and a value the
