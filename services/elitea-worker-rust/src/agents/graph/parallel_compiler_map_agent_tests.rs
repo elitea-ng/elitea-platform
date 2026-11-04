@@ -584,3 +584,76 @@ async fn a_map_llm_worker_runs_once_per_item_on_its_frozen_input() {
         assert!(answer.contains(&format!("Draft {entity}")), "{mapped:?}");
     }
 }
+
+/// M1 (positive): a Map item's delegated sign-in authorized with a resolved
+/// token for a server the run holds resumes only that item, which then
+/// calls authorized; the sibling is skipped; the credential reference
+/// reaches no checkpoint of either item or their pipelines. That the token
+/// is presented only to the toolset of its own resource is the shared MCP
+/// toolset's rule (`a_projected_token_reaches_only_the_toolset_of_its_resource`,
+/// agent-runtime `mcp_tests.rs`), the same for every fan-out family.
+#[tokio::test(flavor = "current_thread")]
+async fn a_map_item_authorized_with_its_credential_resumes_only_that_item() {
+    let authorized = Arc::new(AtomicBool::new(false));
+    let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+        alias: "Customer Support".to_owned(),
+        tool: Arc::new(AuthorizationFixtureTool {
+            authorized: Arc::clone(&authorized),
+            toolkit_type: "mcp",
+        }),
+        sensitive: None,
+    });
+    let child = sensitive_pipeline_definition_yaml().replace("type: toolkit", "type: mcp");
+    let fixture = MapFixture::agent(
+        &child,
+        PipelineNodeRuntimes::new(None, Some(resolver), None),
+        &[DELEGATED_SERVER],
+    );
+    let [first, second] = fixture.both_paused(FanoutCardKind::DelegatedAuth).await;
+    authorized.store(true, Ordering::Release);
+    fixture
+        .ledger
+        .decide_with_credential(&second.0, TEST_CREDENTIAL_REF);
+    let remaining = parked(
+        &fixture
+            .node(2)
+            .execute(&context())
+            .await
+            .expect("item 1 resumed"),
+    );
+    assert_eq!(remaining, vec![first.clone()]);
+    assert!(
+        fixture.settled(1).await,
+        "the authorized item did not resume"
+    );
+    assert!(!fixture.settled(0).await, "the sibling item resumed");
+    let leaf = fixture
+        .store
+        .load(&format!("{}/workerA", MapFixture::thread(1)))
+        .await
+        .unwrap()
+        .expect("item 1's pipeline checkpoint");
+    assert_eq!(leaf.state["report"], json!({"authorized": true}));
+    fixture.ledger.decide(&first.0, "skip", None);
+    let output = fixture
+        .node(3)
+        .execute(&context())
+        .await
+        .expect("both items done");
+    assert!(output.interrupt.is_none());
+    for index in 0..2 {
+        for thread in [
+            MapFixture::thread(index),
+            format!("{}/workerA", MapFixture::thread(index)),
+        ] {
+            for saved in fixture.store.list(&thread).await.expect("list") {
+                let text = serde_json::to_string(&saved.state).expect("state")
+                    + &serde_json::to_string(&saved.metadata).expect("metadata");
+                assert!(
+                    !text.contains(TEST_CREDENTIAL_REF),
+                    "{thread} persisted the reference"
+                );
+            }
+        }
+    }
+}
