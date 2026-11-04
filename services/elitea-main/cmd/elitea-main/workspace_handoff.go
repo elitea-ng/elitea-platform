@@ -19,6 +19,7 @@ import (
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	workspacehandoffapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacechanges"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceexecutor"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
@@ -111,6 +112,7 @@ func composeWorkspaceHandoff(
 	inputs workspaceHandoffInputs,
 	device workspacehandoff.DevicePolicyReader,
 	canceller agentexecutionapi.CurrentAgentCanceller,
+	starter handoffcontinue.Starter,
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
 	liveEvents workspacehandoff.StateEvents,
@@ -210,6 +212,13 @@ func composeWorkspaceHandoff(
 	if resolver := newForgeCredentialResolver(forgeExpander); resolver != nil {
 		handoff.WithForgeCredentials(handoffRepo, resolver)
 	}
+	// Send and continue, take back when done (ADR-0045 decision 8): the
+	// complete starts the cloud turn through the chat start use case, bound
+	// once the runtime is composed; the state answers the last cloud run.
+	if continuer := handoffcontinue.New(handoffRepo, dbrepos.NewRunChainsRepository(pool), starter, logger); continuer != nil {
+		handoff.WithContinueStarter(continuer)
+	}
+	handoff.WithCloudRuns(handoffRepo)
 	// The Files changed view (ADR-0034 Phase 2): what the worker records after
 	// each cloud turn, filtered by the policy the handoff service answers.
 	changesRepo, err := dbrepos.NewWorkspaceChangesRepository(pool)
@@ -451,6 +460,50 @@ func (d *deferredAgentCanceller) Cancel(ctx context.Context, request agentexecut
 		return agentexecutionapp.CurrentAgentCancelOutcome{}, errors.New("no agent runtime is composed to cancel the cloud turn")
 	}
 	return next.Cancel(ctx, request)
+}
+
+// deferredAgentStarter is the chat start use case of a send's continue turn
+// (ADR-0045 decision 8), bound like deferredAgentCanceller once the runtime
+// is composed. Unbound, a complete with `continue` fails as unavailable and
+// the send stays HANDING_OFF.
+type deferredAgentStarter struct {
+	mu   sync.RWMutex
+	next handoffcontinue.Starter
+}
+
+func (d *deferredAgentStarter) bind(next handoffcontinue.Starter) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.next = next
+}
+
+func (d *deferredAgentStarter) starter() (handoffcontinue.Starter, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.next == nil {
+		return nil, workspacehandoff.ErrUnavailable
+	}
+	return d.next, nil
+}
+
+func (d *deferredAgentStarter) StartCurrentApplication(
+	ctx context.Context, request agentexecutionapp.CurrentApplicationStartRequest,
+) (agentexecutionapp.CurrentApplicationStartOutcome, error) {
+	next, err := d.starter()
+	if err != nil {
+		return agentexecutionapp.CurrentApplicationStartOutcome{}, err
+	}
+	return next.StartCurrentApplication(ctx, request)
+}
+
+func (d *deferredAgentStarter) StartCurrentAdhoc(
+	ctx context.Context, request agentexecutionapp.CurrentAdhocStartRequest,
+) (agentexecutionapp.CurrentApplicationStartOutcome, error) {
+	next, err := d.starter()
+	if err != nil {
+		return agentexecutionapp.CurrentApplicationStartOutcome{}, err
+	}
+	return next.StartCurrentAdhoc(ctx, request)
 }
 
 // workspaceExecutorComposition is the cloud executor's adapter set; nil when

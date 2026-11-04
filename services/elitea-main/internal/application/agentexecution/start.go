@@ -199,6 +199,9 @@ type CurrentApplicationStartRequest struct {
 	// UnattendedContinuation is set only when Main starts a step-limit
 	// continuation of a chain (unattendedchain); never from a request body.
 	UnattendedContinuation *UnattendedContinuation
+	// HandoffCompletion is set only when Main starts the turn a send
+	// continues with (handoff_continue.go); never from a request body.
+	HandoffCompletion *HandoffCompletion
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -423,15 +426,16 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 			TenantID: projectID, ResourceProjectID: projectID,
 			ProjectionProjectID: projectID, ActorID: actorID,
 		},
-		IdempotencyKey:  request.QuestionID,
-		CapabilityID:    executiondomain.AgentApplicationCapability,
-		ClientStreamID:  request.ConversationUUID,
-		ClientMessageID: responseMessageID,
-		SIOEvent:        "chat_predict",
-		Input:           input,
-		TriggerOrigin:   request.TriggerOrigin,
-		AssertedScope:   request.AssertedScope,
-		Release:         target.Release.Clone(),
+		IdempotencyKey:    request.QuestionID,
+		CapabilityID:      executiondomain.AgentApplicationCapability,
+		ClientStreamID:    request.ConversationUUID,
+		ClientMessageID:   responseMessageID,
+		SIOEvent:          "chat_predict",
+		Input:             input,
+		TriggerOrigin:     request.TriggerOrigin,
+		AssertedScope:     request.AssertedScope,
+		Release:           target.Release.Clone(),
+		HandoffCompletion: request.HandoffCompletion.Clone(),
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,

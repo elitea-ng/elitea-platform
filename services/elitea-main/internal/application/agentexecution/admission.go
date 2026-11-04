@@ -57,6 +57,11 @@ type SubmitRequest struct {
 	// a chain, or a continuation. nil for a run without a grant. Not part
 	// of the request digest by itself: the grant is in Input.
 	Unattended *UnattendedAdmission
+	// HandoffCompletion is the send this turn's admission completes
+	// (ADR-0045 decision 8, handoff_continue.go); nil for every other run.
+	// Not part of the request digest: the question id is derived from the
+	// send.
+	HandoffCompletion *HandoffCompletion
 }
 
 // AssertedScope is the toolkit scope of a verified delegation assertion.
@@ -132,6 +137,9 @@ type Admission struct {
 	// Unattended is the chain admission (ADR-0045); the transaction writes
 	// the chain row or the continuation's link.
 	Unattended *UnattendedAdmission
+	// HandoffCompletion: the transaction completes this send first and
+	// starts the cloud turn on the new execution (handoff_continue.go).
+	HandoffCompletion *HandoffCompletion
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -301,6 +309,7 @@ func (s *AdmissionService) Submit(
 		ReleaseID:             releaseID(request.Release),
 		BindingVersionID:      bindingVersionID(request.Release, 0),
 		Unattended:            request.Unattended.Clone(),
+		HandoffCompletion:     request.HandoffCompletion.Clone(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -315,6 +324,12 @@ func (s *AdmissionService) Submit(
 // validateAgentTurns checks the current turn against the request; generation
 // is the input's execution generation (the binding's client generation).
 func validateAgentTurns(request SubmitRequest, generation string) error {
+	// A send completes only with a new question of the conversation: a chat
+	// turn or a model turn (handoff_continue.go).
+	if request.HandoffCompletion != nil &&
+		(!request.HandoffCompletion.Valid() || (request.CurrentTurn == nil && request.CurrentAdhocTurn == nil)) {
+		return ErrInvalidAgentAdmission
+	}
 	if request.CurrentTurn != nil {
 		if request.CapabilityID != executiondomain.AgentApplicationCapability ||
 			request.CurrentRegenerateTurn != nil ||

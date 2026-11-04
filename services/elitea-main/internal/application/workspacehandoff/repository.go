@@ -65,7 +65,14 @@ type CompleteRecord struct {
 	Epoch       int64
 	HandoffRef  string
 	SHA         string
-	Message     EventMessage
+	// TakeBackWhenDone is stored on the row (shared 0224).
+	TakeBackWhenDone bool
+	// StoppedChainRootExecutionID: end this chain as `waiting` in the
+	// complete's transaction when the actor owns it on this thread and it is
+	// still open (Handoff.StoppedChainEnded answers whether it did). ""
+	// ends nothing.
+	StoppedChainRootExecutionID string
+	Message                     EventMessage
 }
 
 // ReleaseRecord moves RECLAIMING to LOCAL.

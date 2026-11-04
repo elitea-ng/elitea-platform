@@ -90,7 +90,7 @@ const handoffColumns = `project_id, conversation_uuid::text, handoff_id::text, s
        COALESCE(running_execution_id, ''), COALESCE(running_response_message_id::text, ''), expires_at,
        state_changed_at, updated_at, delete_after, deleted_at, note,
        included_excluded, env_names, COALESCE(env_secret_name, ''), released, rest_pending,
-       COALESCE(delete_after > clock_timestamp(), FALSE), forge_credential`
+       COALESCE(delete_after > clock_timestamp(), FALSE), forge_credential, take_back_when_done`
 
 type handoffRow struct {
 	workspacehandoff.Handoff
@@ -112,7 +112,7 @@ func scanHandoff(row pgx.Row) (handoffRow, error) {
 		&out.RunningExecutionID, &out.RunningResponseID, &out.ExpiresAt,
 		&out.StateChangedAt, &out.UpdatedAt, &out.DeleteAfter, &out.DeletedAt, &out.note,
 		&includes, &environment, &out.EnvSecretName, &out.Released, &out.RestPending, &out.ReturnGraceOpen,
-		&forgeCredential)
+		&forgeCredential, &out.TakeBackWhenDone)
 	if err != nil {
 		return handoffRow{}, err
 	}
@@ -201,6 +201,11 @@ func transition(
 	// Likewise the rest marker: only a release or a rest take back assigns it.
 	if !strings.Contains(set, "rest_pending =") {
 		released += ", rest_pending = FALSE"
+	}
+	// Take back when done (shared 0224) lasts while the cloud owns the
+	// thread: a take back, a release, an expiry or an erase clears it.
+	if to == workspacestore.StateReclaiming || to == workspacestore.StateLocal {
+		released += ", take_back_when_done = FALSE"
 	}
 	query := `UPDATE elitea_runtime.workspace_handoffs
 SET ` + stateChanged + `, state = $3, epoch = epoch + $4, updated_at = clock_timestamp()` + released + set + `
@@ -474,6 +479,29 @@ SELECT conversation_uuid::text FROM elitea_runtime.workspace_handoffs WHERE proj
 			return fmt.Errorf("workspace handoff: resolve handoff: %w", err)
 		}
 		thread := workspacehandoff.Thread{ProjectID: record.ProjectID, ConversationUUID: conversation}
+		row, err := completeHandoffTx(ctx, tx, thread, record, false)
+		if err != nil {
+			return err
+		}
+		out = row.Handoff
+		if record.StoppedChainRootExecutionID != "" {
+			out.StoppedChainEnded = endStoppedChain(ctx, tx, thread, record.ActorUserID, record.StoppedChainRootExecutionID)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// completeHandoffTx is the complete in the caller's transaction: the row
+// lock, the owner, state and epoch checks, the snapshot refs, the transition
+// and the event message. beforeTurn writes the event message at the
+// transaction's start time, so it comes before the person's message that
+// the same transaction writes (a turn's groups take the default now()).
+func completeHandoffTx(
+	ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread, record workspacehandoff.CompleteRecord, beforeTurn bool,
+) (handoffRow, error) {
+	var out handoffRow
+	err := func() error {
 		current, found, err := lockHandoff(ctx, tx, thread)
 		if err != nil {
 			return err
@@ -509,17 +537,18 @@ SELECT name, sha FROM elitea_runtime.workspace_refs WHERE project_id = $1 AND co
 			return workspacehandoff.ErrRefsMissing
 		}
 		row, err := transition(ctx, tx, thread, []workspacestore.State{workspacestore.StateHandingOff}, record.Epoch,
-			workspacestore.StateCloudIdle, 1, `, expires_at = NULL, cloud_sha = NULL`)
+			workspacestore.StateCloudIdle, 1, `, expires_at = NULL, cloud_sha = NULL, take_back_when_done = $7`,
+			record.TakeBackWhenDone)
 		if err != nil {
 			return err
 		}
 		text := workspacehandoff.CompleteMessage(current.Stats, current.note)
-		if err := appendHandoffEvent(ctx, tx, thread, record.Message.Event, text, row.Epoch); err != nil {
+		if err := appendHandoffEventAt(ctx, tx, thread, record.Message.Event, text, row.Epoch, beforeTurn); err != nil {
 			return err
 		}
-		out = row.Handoff
+		out = row
 		return nil
-	})
+	}()
 	return out, err
 }
 
@@ -753,6 +782,19 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 ) (workspacehandoff.TransitionResult, error) {
 	var out workspacehandoff.TransitionResult
 	err := r.inTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		out, err = startCloudTurnTx(ctx, tx, thread, epoch, executionID, responseMessageID)
+		return err
+	})
+	return out, err
+}
+
+// startCloudTurnTx is StartCloudTurn in the caller's transaction.
+func startCloudTurnTx(
+	ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread, epoch int64, executionID, responseMessageID string,
+) (workspacehandoff.TransitionResult, error) {
+	var out workspacehandoff.TransitionResult
+	err := func() error {
 		current, found, err := lockHandoff(ctx, tx, thread)
 		if err != nil {
 			return err
@@ -798,7 +840,7 @@ func (r *WorkspaceHandoffsRepository) StartCloudTurn(
 		out = workspacehandoff.TransitionResult{Handoff: row.Handoff, Changed: true}
 		out.Handoff.RewindTo = rewind
 		return nil
-	})
+	}()
 	return out, err
 }
 
@@ -1137,7 +1179,7 @@ func qualifiedHandoffColumns(alias string) string {
 		alias + `.state_changed_at, ` + alias + `.updated_at, ` + alias + `.delete_after, ` + alias + `.deleted_at, ` + alias + `.note, ` +
 		alias + `.included_excluded, ` + alias + `.env_names, COALESCE(` + alias + `.env_secret_name, ''), ` +
 		alias + `.released, ` + alias + `.rest_pending, COALESCE(` + alias + `.delete_after > clock_timestamp(), FALSE), ` +
-		alias + `.forge_credential`
+		alias + `.forge_credential, ` + alias + `.take_back_when_done`
 }
 
 // handoffEventParticipantKind marks the tenant schema's system participant
@@ -1148,6 +1190,15 @@ const handoffEventParticipantKind = "workspace_handoff"
 // conversation, in the caller's transaction. A conversation that is gone
 // takes no message.
 func appendHandoffEvent(ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread, event, text string, epoch int64) error {
+	return appendHandoffEventAt(ctx, tx, thread, event, text, epoch, false)
+}
+
+// appendHandoffEventAt is appendHandoffEvent; atTxStart stamps the message
+// one millisecond before the transaction's start (still after every earlier
+// message), so the turn the same transaction writes comes after it.
+func appendHandoffEventAt(
+	ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread, event, text string, epoch int64, atTxStart bool,
+) error {
 	if text == "" {
 		return nil
 	}
@@ -1186,15 +1237,20 @@ RETURNING id`, schema), handoffEventParticipantKind).Scan(&participantID)
 		return fmt.Errorf("workspace handoff: event participant: %w", err)
 	}
 	meta, _ := json.Marshal(map[string]any{"workspace_event": event, "workspace_epoch": epoch})
+	stamp := `clock_timestamp() AT TIME ZONE 'UTC'`
+	if atTxStart {
+		// The turn's groups take the transaction's start, now(), in UTC.
+		stamp = `(now() AT TIME ZONE 'UTC') - interval '1 millisecond'`
+	}
 	var groupID int64
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %[1]s.chat_message_group
     (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3::jsonb, FALSE, GREATEST(
-    clock_timestamp() AT TIME ZONE 'UTC',
+    %[2]s,
     (SELECT max(created_at) + interval '1 millisecond'
      FROM %[1]s.chat_message_group WHERE conversation_id = $2)))
-RETURNING id`, schema), participantID, conversationID, string(meta)).Scan(&groupID); err != nil {
+RETURNING id`, schema, stamp), participantID, conversationID, string(meta)).Scan(&groupID); err != nil {
 		return fmt.Errorf("workspace handoff: event message: %w", err)
 	}
 	return insertLocalTurnText(ctx, tx, schema, groupID, text)

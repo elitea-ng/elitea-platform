@@ -68,6 +68,11 @@
 //!         brief TEXT NULL, last_check TEXT NULL /* JSON */,
 //!         started_at, updated_at, deadline_at INTEGER /* Unix ms */,
 //!         transcript TEXT NULL /* the goal check's turns, ≤ 32 KiB */)
+//! take_back_threads (conversation_uuid TEXT PRIMARY KEY, origin TEXT,
+//!         user_id INTEGER, workspace_id TEXT, project_id INTEGER,
+//!         title TEXT NULL, created_at INTEGER /* Unix ms */,
+//!         noticed TEXT NULL /* the last notice shown for it */,
+//!         phase TEXT NULL /* reclaim_pending | reclaimed: the take-back began */)
 //! ```
 //!
 //! `resume_turns` (schema 4, ADR-0045 decision 7) holds one record per
@@ -75,6 +80,12 @@
 //! ([`ResumeRecord`]). A turn's start writes it, its commit updates it, and
 //! the turn's normal end deletes it. Its writes go through the writer
 //! thread like the events, so a turn never waits for them.
+//!
+//! `take_back_threads` (schema 5, ADR-0045 decision 8) holds one record per
+//! thread sent to the cloud with **Take back when done** ([`TakeBackRecord`]):
+//! the host takes it back when its cloud run completes, also after a
+//! restart. A send writes it; the take-back (or the thread coming back any
+//! other way) deletes it. Its writes are rare and synchronous.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -95,7 +106,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -185,6 +196,63 @@ CREATE TABLE IF NOT EXISTS resume_turns (
     transcript TEXT
 );
 ";
+
+/// The take-back records (schema 5): one per thread sent with "Take back
+/// when done", by the conversation's UUID.
+const TAKE_BACK_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS take_back_threads (
+    conversation_uuid TEXT PRIMARY KEY NOT NULL,
+    origin TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    workspace_id TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    title TEXT,
+    created_at INTEGER NOT NULL,
+    noticed TEXT,
+    phase TEXT
+);
+";
+
+const TAKE_BACK_SELECT: &str = "SELECT conversation_uuid, origin, user_id, workspace_id,
+    project_id, title, created_at, noticed, phase FROM take_back_threads";
+
+fn take_back_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TakeBackRecord> {
+    Ok(TakeBackRecord {
+        conversation_uuid: row.get(0)?,
+        owner: Owner {
+            origin: row.get(1)?,
+            user_id: row.get(2)?,
+        },
+        workspace_id: row.get(3)?,
+        project_id: row.get(4)?,
+        title: row.get(5)?,
+        created_at: row.get(6)?,
+        noticed: row.get(7)?,
+        phase: row.get(8)?,
+    })
+}
+
+/// A thread sent to the cloud with **Take back when done** (ADR-0045
+/// decision 8): the host takes it back by itself when its cloud run
+/// completes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TakeBackRecord {
+    pub conversation_uuid: String,
+    pub owner: Owner,
+    pub workspace_id: String,
+    pub project_id: i64,
+    /// The thread's name as the person saw it, for the notice.
+    pub title: Option<String>,
+    pub created_at: i64,
+    /// The last notice shown for it (an outcome and its run), so one run
+    /// is noticed once.
+    pub noticed: Option<String>,
+    /// How far the take-back got: `reclaim_pending` (asked while a cloud
+    /// turn ran) or `reclaimed` (the thread is `RECLAIMING` for this
+    /// desktop); `None` before. A later pass goes on from there, as the
+    /// state then has no `last_cloud_run`.
+    pub phase: Option<String>,
+}
 
 /// How a resume record's turn ran: the person's mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1474,6 +1542,126 @@ impl HistoryStore {
             .await
             .map_err(|e| HostError::Internal(format!("the resume read stopped: {e}")))?
     }
+
+    /// Keep `record`: its thread is taken back when its cloud run completes
+    /// (ADR-0045 decision 8). Replaces the thread's earlier record.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn take_back_put(&self, record: &TakeBackRecord) -> Result<(), HostError> {
+        self.with("could not keep the take-back record", |conn| {
+            conn.execute(
+                "INSERT INTO take_back_threads (conversation_uuid, origin, user_id,
+                     workspace_id, project_id, title, created_at, noticed, phase)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT (conversation_uuid) DO UPDATE SET
+                     origin = excluded.origin, user_id = excluded.user_id,
+                     workspace_id = excluded.workspace_id,
+                     project_id = excluded.project_id, title = excluded.title,
+                     created_at = excluded.created_at, noticed = excluded.noticed,
+                     phase = excluded.phase",
+                params![
+                    record.conversation_uuid,
+                    record.owner.origin,
+                    record.owner.user_id,
+                    record.workspace_id,
+                    record.project_id,
+                    record.title,
+                    record.created_at,
+                    record.noticed,
+                    record.phase,
+                ],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// `owner`'s take-back records, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn take_back_records(&self, owner: &Owner) -> Result<Vec<TakeBackRecord>, HostError> {
+        self.with("could not read the take-back records", |conn| {
+            let mut statement = conn.prepare(&format!(
+                "{TAKE_BACK_SELECT} WHERE origin = ?1 AND user_id = ?2 ORDER BY created_at"
+            ))?;
+            statement
+                .query_map(params![owner.origin, owner.user_id], take_back_row)?
+                .collect()
+        })
+    }
+
+    /// The thread's take-back record, whoever's it is.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn take_back_of(
+        &self,
+        conversation_uuid: &str,
+    ) -> Result<Option<TakeBackRecord>, HostError> {
+        self.with("could not read the take-back record", |conn| {
+            let mut statement =
+                conn.prepare(&format!("{TAKE_BACK_SELECT} WHERE conversation_uuid = ?1"))?;
+            statement
+                .query_map(params![conversation_uuid], take_back_row)?
+                .next()
+                .transpose()
+        })
+    }
+
+    /// The notice shown for the thread's record (`key`: an outcome and its
+    /// run), so the same run is not noticed again.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn take_back_noticed(&self, conversation_uuid: &str, key: &str) -> Result<(), HostError> {
+        self.with("could not update the take-back record", |conn| {
+            conn.execute(
+                "UPDATE take_back_threads SET noticed = ?2 WHERE conversation_uuid = ?1",
+                params![conversation_uuid, key],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// How far the thread's take-back got ([`TakeBackRecord::phase`]).
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn take_back_phase(
+        &self,
+        conversation_uuid: &str,
+        phase: Option<&str>,
+    ) -> Result<(), HostError> {
+        self.with("could not update the take-back record", |conn| {
+            conn.execute(
+                "UPDATE take_back_threads SET phase = ?2 WHERE conversation_uuid = ?1",
+                params![conversation_uuid, phase],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// The thread is back (or will not be taken back by itself): its record
+    /// goes.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn take_back_delete(&self, conversation_uuid: &str) -> Result<(), HostError> {
+        self.with("could not delete the take-back record", |conn| {
+            conn.execute(
+                "DELETE FROM take_back_threads WHERE conversation_uuid = ?1",
+                params![conversation_uuid],
+            )
+            .map(|_| ())
+        })
+    }
 }
 
 impl Drop for HistoryStore {
@@ -2118,28 +2306,35 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
     match version {
         0 => conn
             .execute_batch(&format!(
-                "BEGIN; {SCHEMA} {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {SCHEMA} {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
         // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
         // the images a turn carried. 4 (ADR-0045 decision 7): the resume
-        // records.
+        // records. 5 (ADR-0045 decision 8): the take-back records.
         1 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
                  ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         2 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
-                 {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         3 => conn
             .execute_batch(&format!(
-                "BEGIN; {RESUME_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        4 => conn
+            .execute_batch(&format!(
+                "BEGIN; {TAKE_BACK_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
@@ -3504,6 +3699,62 @@ mod tests {
         assert!(total <= MAX_CHANGES_BYTES);
         assert_eq!(stored[0]["added"], 1);
         assert_eq!(stored[39]["diff"], "", "past the budget: counts only");
+    }
+
+    #[test]
+    fn take_back_records_survive_a_reopen_and_are_per_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = TakeBackRecord {
+            conversation_uuid: "c0ffee00-0000-4000-8000-000000000001".into(),
+            owner: owner(1),
+            workspace_id: "w1".into(),
+            project_id: 1,
+            title: Some("Fix the login test".into()),
+            created_at: 10,
+            noticed: None,
+            phase: None,
+        };
+        {
+            let store = HistoryStore::open(dir.path()).unwrap();
+            store.take_back_put(&record).unwrap();
+            store
+                .take_back_noticed(&record.conversation_uuid, "failed:e1")
+                .unwrap();
+            store
+                .take_back_phase(&record.conversation_uuid, Some("reclaimed"))
+                .unwrap();
+        }
+        // The app started again: the record is still there.
+        let store = HistoryStore::open(dir.path()).unwrap();
+        let kept = store.take_back_records(&owner(1)).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].title.as_deref(), Some("Fix the login test"));
+        assert_eq!(kept[0].noticed.as_deref(), Some("failed:e1"));
+        assert_eq!(kept[0].phase.as_deref(), Some("reclaimed"));
+        assert!(store.take_back_records(&owner(2)).unwrap().is_empty());
+        store.take_back_delete(&record.conversation_uuid).unwrap();
+        assert!(store.take_back_records(&owner(1)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_version_4_history_gains_the_take_back_table() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let store = HistoryStore::open(dir.path()).unwrap();
+            store
+                .with("downgrade", |c| {
+                    c.execute_batch("DROP TABLE take_back_threads; PRAGMA user_version = 4;")
+                })
+                .unwrap();
+        }
+        let store = HistoryStore::open(dir.path()).unwrap();
+        let version: i64 = store
+            .with("v", |c| {
+                c.query_row("PRAGMA user_version", [], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(store.take_back_records(&owner(1)).unwrap().is_empty());
     }
 
     #[cfg(unix)]

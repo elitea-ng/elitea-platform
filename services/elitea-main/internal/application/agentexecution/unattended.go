@@ -77,8 +77,9 @@ func (service *CurrentApplicationStartService) WithUnattendedGrants(policy *Unat
 type UnattendedContinuation struct {
 	// Chain is the link of the run that this one continues.
 	Chain unattended.Chain
-	// Kind is unattended.LinkStepLimit, unattended.LinkOutputLimit or
-	// unattended.LinkGoalNotMet.
+	// Kind is unattended.LinkStepLimit, unattended.LinkOutputLimit,
+	// unattended.LinkGoalNotMet or unattended.LinkHandoff (the first cloud
+	// run of a chain a desktop turn started, handoff_continue.go).
 	Kind string
 }
 
@@ -148,6 +149,11 @@ func (a *UnattendedAdmission) Clone() *UnattendedAdmission {
 	}
 	if a.Continue != nil {
 		next := *a.Continue
+		if a.Continue.Start != nil {
+			start := *a.Continue.Start
+			start.LLMSettings = append([]byte(nil), a.Continue.Start.LLMSettings...)
+			next.Start = &start
+		}
 		clone.Continue = &next
 	}
 	clone.MarkMessageIDs = append([]string(nil), a.MarkMessageIDs...)
@@ -195,7 +201,11 @@ func (service *CurrentApplicationStartService) admitUnattended(
 	case target.request != nil && target.continuation != nil:
 		return nil, nil, ErrInvalidCurrentAgentStart
 	case target.continuation != nil:
-		if err := service.unattendedGrantsEnabled(ctx); err != nil {
+		if target.continuation.Kind == unattended.LinkHandoff {
+			if err := service.admitHandoffGrant(ctx, target); err != nil {
+				return nil, nil, err
+			}
+		} else if err := service.unattendedGrantsEnabled(ctx); err != nil {
 			return nil, nil, err
 		}
 		return unattendedContinuationGrant(target)
@@ -299,12 +309,48 @@ func (service *CurrentApplicationStartService) unattendedGrantsEnabled(ctx conte
 	return err
 }
 
+// admitHandoffGrant checks the grant of a desktop chain that a send
+// continues in the cloud (ADR-0045 decision 8) as a cloud start checks its
+// own: the platform switch, and each named sensitive tool against this
+// turn's toolkits, the withheld categories and the tier hitl rule. The
+// desktop-only parts of the stored grant (the tool call cap, hook asks,
+// remote confirmations) have nothing to answer in the cloud and stay as
+// they are.
+func (service *CurrentApplicationStartService) admitHandoffGrant(ctx context.Context, target unattendedTarget) error {
+	settings, err := service.unattendedSettings(ctx)
+	if err != nil {
+		return err
+	}
+	tools := target.continuation.Chain.Grant.SensitiveTools
+	if len(tools) == 0 {
+		return nil
+	}
+	tier := agentlifecycle.TierLow
+	if target.applicationID > 0 {
+		raw, err := service.unattended.Tiers.AgentRiskTier(ctx, target.projectID, target.applicationID)
+		if err != nil {
+			return fmt.Errorf("read the agent's risk tier: %w", err)
+		}
+		if parsed := agentlifecycle.Tier(raw); parsed.Valid() {
+			tier = parsed
+		}
+	}
+	policy, err := service.unattended.Approval.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("read the approval policy: %w", err)
+	}
+	return admitSensitiveTools(target, tools, settings, policy, tier)
+}
+
 // unattendedContinuationGrant is the grant of a continuation that Main
-// starts: the chain's own grant, owner and limits.
+// starts: the chain's own grant, owner and limits. A handoff link continues
+// a chain of either origin (a desktop chain, or a cloud chain the desktop
+// took back and continued); every other kind continues a cloud chain.
 func unattendedContinuationGrant(target unattendedTarget) (*runtimev1.UnattendedGrantV1, *UnattendedAdmission, error) {
 	chain := target.continuation.Chain
+	handoff := target.continuation.Kind == unattended.LinkHandoff
 	if chain.OwnerUserID != target.actorUserID || chain.ProjectID != target.projectID ||
-		chain.ConversationUUID != target.conversationUUID || chain.Origin != unattended.OriginCloud {
+		chain.ConversationUUID != target.conversationUUID || (chain.Origin != unattended.OriginCloud && !handoff) {
 		return nil, nil, unattended.Refused("chain_root_execution_id", "", unattended.RefusedNotOwner)
 	}
 	if chain.EndState != "" {
@@ -321,6 +367,10 @@ func unattendedContinuationGrant(target unattendedTarget) (*runtimev1.Unattended
 			ConversationUUID: chain.ConversationUUID, ResponseMessageID: target.responseMessageID,
 		},
 		MarkMessageIDs: marks,
+	}
+	if handoff {
+		// The chain's later cloud continuations start as this turn did.
+		admission.Continue.Start = target.start
 	}
 	// The index of the link this one follows plus one: stable on a replay.
 	index := uint32(chain.ContinuationIndex) + 1 //nolint:gosec // a chain index is bounded by max_continuations

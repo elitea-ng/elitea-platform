@@ -33,6 +33,7 @@ type fakeHandoff struct {
 	erased    handoffapp.EraseRequest
 	released  handoffapp.ReleaseRequest
 	reclaimed handoffapp.ReclaimRequest
+	completed handoffapp.CompleteRequest
 	policy    handoffapp.Policy
 }
 
@@ -47,7 +48,8 @@ func (f *fakeHandoff) Begin(_ context.Context, request handoffapp.BeginRequest) 
 		BytesLeft:   53687091200,
 	}, f.err
 }
-func (f *fakeHandoff) Complete(context.Context, handoffapp.CompleteRequest) (handoffapp.Handoff, error) {
+func (f *fakeHandoff) Complete(_ context.Context, request handoffapp.CompleteRequest) (handoffapp.Handoff, error) {
+	f.completed = request
 	return f.handoff, f.err
 }
 func (f *fakeHandoff) Reclaim(_ context.Context, request handoffapp.ReclaimRequest) (handoffapp.Handoff, error) {

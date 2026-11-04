@@ -41,11 +41,13 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { WorkspaceHandoffContinued } from "./workspaceHandoffContinued.zod";
 
 export const WorkspaceHandoffTransition = zod
   .object({
     state: zod.string(),
     epoch: zod.int(),
+    continued: WorkspaceHandoffContinued.optional(),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:363 (`complete`).",

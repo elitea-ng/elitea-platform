@@ -28,8 +28,23 @@
 //!   (`rest_pending`): `handoff_reclaim` with `rest` and the usual preflight
 //!   and apply then take back only those turns, and import only their
 //!   answers.
+//! * **Send while running** (ADR-0045 decision 8). A send of a thread whose
+//!   own local turn runs here stops that turn at its next step boundary
+//!   (not a cancel: the step in flight finishes and its tool results are
+//!   kept), waits for its normal commit, then sends; `complete` carries a
+//!   `continue` (the prompt, the mode, the grant with the local chain's
+//!   root) so the cloud goes on at once. A grant the server refuses (422
+//!   `unattended_grant_refused`) is retried without `continue`, and the
+//!   answer says so.
+//! * **Take back when done.** A send with `take_back_when_done` keeps a
+//!   record in `threads.sqlite` ([`TakeBackRecord`]). A cloud
+//!   `run_finished` for the thread (`handoff_run_finished`, forwarded by the
+//!   page) and a read of the state at start-up, at sign-in and every five
+//!   minutes take it back when its last cloud run completed:
+//!   [`take_back_mode`] picks apply or a worktree, and a native notice says
+//!   which.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,9 +72,9 @@ use serde_json::{Value, json};
 
 use crate::d0::api::{Answer, ApiError, Credentials, PlatformApi};
 use crate::d0::recorder::FileChange;
-use crate::d0::turn::{AgentHost, PolicySource, TurnError};
+use crate::d0::turn::{AfterSend, AgentHost, PolicySource, RunningTurn, TurnError};
 use crate::handoff_settings::{self as settings, EffectivePolicy, FolderSettings, SettingsStore};
-use crate::history::{HistoryStore, ImportedTurn};
+use crate::history::{HistoryStore, ImportedTurn, TakeBackRecord};
 use crate::workspaces::WorkspaceStore;
 
 /// How long a sidebar status is reused (`handoff_status_many`).
@@ -89,6 +104,36 @@ pub struct HandoffEvent {
 /// Where progress goes (the main window; a list in tests).
 pub trait HandoffEvents: Send + Sync {
     fn emit(&self, event: HandoffEvent);
+
+    /// A native notice of what the host did by itself (a take-back when a
+    /// cloud run completed, ADR-0045 decision 8).
+    fn notice(&self, _title: &str, _body: &str) {}
+}
+
+/// The text a send with a running turn continues it with when the thread
+/// has no run brief (ADR-0045 decision 8).
+pub const CONTINUE_PROMPT: &str = "Continue where you left off.";
+
+/// How often the host reads the state of the threads it takes back when
+/// done (ADR-0045 decision 8), and how long after start-up it first does.
+pub const TAKE_BACK_EVERY: Duration = Duration::from_mins(5);
+pub const TAKE_BACK_AFTER: Duration = Duration::from_secs(5);
+
+/// How long a send waits for the workspace once the stopped turn's commit
+/// settled (the commit releases it right after).
+const CLAIM_AFTER_STOP: Duration = Duration::from_secs(10);
+
+/// The longest thread name a take-back notice carries, in characters.
+const MAX_TITLE_CHARS: usize = 80;
+
+/// What a send does besides the folder (ADR-0045 decision 8).
+#[derive(Clone, Debug, Default)]
+pub struct SendOptions {
+    /// Take the thread back by itself when its cloud run completes. `None`:
+    /// on when the send continues a running turn, off otherwise.
+    pub take_back_when_done: Option<bool>,
+    /// The thread's name, for the take-back notice.
+    pub title: Option<String>,
 }
 
 /// A refused or failed handoff command.
@@ -338,6 +383,10 @@ pub struct HandoffHost {
     sends: Mutex<HashMap<String, Arc<CancelSwitch>>>,
     /// `handoff_status_many`: the last answer per conversation.
     status_cache: Mutex<HashMap<String, (Instant, Value)>>,
+    /// Threads a take-back when done is working on now.
+    taking_back: Mutex<HashSet<String>>,
+    /// Wakes the take-back loop (a sign-in).
+    take_back_wake: tokio::sync::Notify,
 }
 
 /// A running send's registration (removed when the send ends).
@@ -396,6 +445,10 @@ pub struct Preview {
     /// `null` unless the policy harvests env variables; names and value
     /// lengths only.
     pub env: Value,
+    /// The thread's own turn runs here now: a send stops it at its next
+    /// step boundary and continues it in the cloud (ADR-0045 decision 8).
+    /// This preview is the folder as the turn left it so far.
+    pub running_turn: bool,
 }
 
 /// `handoff_send`'s answer.
@@ -408,6 +461,26 @@ pub struct Sent {
     pub excluded: usize,
     pub included: usize,
     pub env_vars: usize,
+    /// The send stopped the thread's running turn first (ADR-0045
+    /// decision 8).
+    pub stopped_turn: bool,
+    /// `complete`'s `continued` (`execution_id`, `message_id`): the cloud
+    /// went on with the stopped turn at once. `None` otherwise.
+    pub continued: Option<Value>,
+    /// The server refused the turn's grant, so the thread waits in the
+    /// cloud for the next message: what to tell the person.
+    pub continue_refused: Option<String>,
+    /// This desktop takes the thread back when its cloud run completes.
+    pub take_back_when_done: bool,
+}
+
+/// What a completed send came to (after begin).
+struct Completed {
+    handoff_id: String,
+    state: String,
+    epoch: u64,
+    continued: Option<Value>,
+    continue_refused: Option<String>,
 }
 
 /// `handoff_preflight`'s answer.
@@ -527,7 +600,25 @@ fn answer_error(answer: &Answer) -> HandoffError {
             .and_then(|e| e.get("details"))
             .or_else(|| answer.body.get("details"))
             .cloned()
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|| flat_details(&answer.body)),
+    }
+}
+
+/// The flat envelope's `reason`, `field` and `limit` (a refused continue,
+/// grant or chain), as details; `null` when it has none.
+fn flat_details(body: &Value) -> Value {
+    let picked: serde_json::Map<String, Value> = ["reason", "field", "limit"]
+        .into_iter()
+        .filter_map(|key| {
+            body.get(key)
+                .filter(|value| value.is_string())
+                .map(|value| (key.to_owned(), value.clone()))
+        })
+        .collect();
+    if picked.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(picked)
     }
 }
 
@@ -620,6 +711,8 @@ impl HandoffHost {
             preflights: Mutex::new(HashMap::new()),
             sends: Mutex::new(HashMap::new()),
             status_cache: Mutex::new(HashMap::new()),
+            taking_back: Mutex::new(HashSet::new()),
+            take_back_wake: tokio::sync::Notify::new(),
             deps,
         })
     }
@@ -863,10 +956,23 @@ impl HandoffHost {
         let (root, project_id) = self.workspace(workspace_id)?;
         let effective = self.effective_policy(project_id).await?;
         let folder = self.settings.get(workspace_id)?;
-        let claim = self
+        // While the thread's own turn runs the preview reads the folder
+        // without the claim: the send stops the turn first and takes its
+        // own snapshot then (ADR-0045 decision 8).
+        let running_turn = self
             .deps
             .agents
-            .claim_workspace(workspace_id, "Wait for the running turn to end.")?;
+            .running_turn_of(workspace_id, &uuid)
+            .is_some();
+        let claim = if running_turn {
+            None
+        } else {
+            Some(
+                self.deps
+                    .agents
+                    .claim_workspace(workspace_id, "Wait for the running turn to end.")?,
+            )
+        };
         let config = self.send_config(&root, &uuid, &device, &effective, &folder, leave_on_laptop);
         let source = self.open(&config)?;
         let limits = config.caps;
@@ -930,6 +1036,7 @@ impl HandoffHost {
             shadow: snap.shadow,
             policy: effective.wire(&folder.exclude_patterns, &path_deny),
             env,
+            running_turn,
         })
     }
 
@@ -945,12 +1052,40 @@ impl HandoffHost {
     /// server's refusals (`cloud_handoff_disabled`,
     /// `local_turn_in_progress`, `handoff_in_progress`,
     /// `workspace_quota_exceeded`, …), store errors.
+    #[cfg(test)]
     pub async fn send(
         &self,
         workspace_id: &str,
         conversation_uuid: &str,
         leave_on_laptop: Vec<String>,
         confirm_includes: bool,
+    ) -> Result<Sent, HandoffError> {
+        self.send_with(
+            workspace_id,
+            conversation_uuid,
+            leave_on_laptop,
+            confirm_includes,
+            SendOptions::default(),
+        )
+        .await
+    }
+
+    /// [`Self::send`] with the options of ADR-0045 decision 8: a running
+    /// turn of the thread is stopped at its next step boundary, committed
+    /// and continued in the cloud; `take_back_when_done` keeps the record
+    /// the host takes the thread back by.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send`], and `local_turn_commit_failed` when the stopped
+    /// turn's commit did not land (the thread stays here).
+    pub async fn send_with(
+        &self,
+        workspace_id: &str,
+        conversation_uuid: &str,
+        leave_on_laptop: Vec<String>,
+        confirm_includes: bool,
+        options: SendOptions,
     ) -> Result<Sent, HandoffError> {
         let uuid = canonical_uuid(conversation_uuid)?;
         let switch = Arc::new(CancelSwitch::default());
@@ -979,6 +1114,7 @@ impl HandoffHost {
                 leave_on_laptop,
                 confirm_includes,
                 &switch,
+                options,
             )
             .await;
         match &result {
@@ -1048,6 +1184,46 @@ impl HandoffHost {
         }
     }
 
+    /// The send's checks that can refuse it, on a snapshot taken without
+    /// the claim (the running turn holds it), before the turn is stopped
+    /// (ADR-0045 decision 8): the secret scan, includes to confirm, the env
+    /// selection and the policy's caps, as the send itself checks them. A
+    /// send they refuse never stops the turn. What only the server answers
+    /// (begin, its caps, the upload) comes after the stop; a send that
+    /// fails there resumes the turn ([`Self::resume_stopped`]).
+    #[allow(clippy::too_many_arguments)]
+    async fn refusals_before_stop(
+        &self,
+        root: &Path,
+        uuid: &str,
+        device: &LocalWorkPolicy,
+        effective: &EffectivePolicy,
+        folder: &FolderSettings,
+        leave: Vec<String>,
+        confirm_includes: bool,
+    ) -> Result<(), HandoffError> {
+        let config = self.send_config(root, uuid, device, effective, folder, leave);
+        let source = self.open(&config)?;
+        let (snap, bytes) = joined(
+            tokio::task::spawn_blocking(move || {
+                let snap = snapshot::take(&source, &config)?;
+                let bytes = snapshot::bundle(&source, &snap, Limits::default())?
+                    .bytes
+                    .len() as u64;
+                Ok::<_, elitea_local_tools::error::ToolError>((snap, bytes))
+            })
+            .await,
+        )?
+        .map_err(|e| tool_error(&e))?;
+        refuse_before_begin(
+            &snap,
+            confirm_includes,
+            &self.harvest(effective, folder).await,
+            effective,
+        )?;
+        refuse_policy_caps(bytes, &snap, effective)
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn send_inner(
         &self,
@@ -1056,6 +1232,7 @@ impl HandoffHost {
         leave: Vec<String>,
         confirm_includes: bool,
         switch: &CancelSwitch,
+        options: SendOptions,
     ) -> Result<Sent, HandoffError> {
         let device = self.policy()?;
         let (root, project_id) = self.workspace(workspace_id)?;
@@ -1067,15 +1244,120 @@ impl HandoffHost {
         }
         let effective = self.effective_policy(project_id).await?;
         let folder = self.settings.get(workspace_id)?;
-        let _claim = self.deps.agents.claim_workspace(
+        // The thread's own running turn stops at its next step boundary
+        // and commits; the cloud continues it (ADR-0045 decision 8). Only
+        // after every check that can refuse the send passed: a refused send
+        // never stops it.
+        let running = self.deps.agents.running_turn_of(workspace_id, uuid);
+        if running.is_some() {
+            self.refusals_before_stop(
+                &root,
+                uuid,
+                &device,
+                &effective,
+                &folder,
+                leave.clone(),
+                confirm_includes,
+            )
+            .await?;
+            if switch.is_cancelled() {
+                return Err(cancelled());
+            }
+        }
+        let stopped = match &running {
+            Some(turn) => self.stop_running_turn(uuid, turn, switch).await?,
+            None => None,
+        };
+        let take_back = options.take_back_when_done.unwrap_or(running.is_some());
+        let sending = Sending {
             workspace_id,
-            "Wait for the running turn to end before sending this thread.",
-        )?;
+            uuid,
+            root: &root,
+            project_id,
+            device: &device,
+            effective: &effective,
+            folder: &folder,
+            switch,
+            title: options.title.as_deref(),
+            take_back,
+            running: running.is_some(),
+            stopped: stopped.as_ref(),
+        };
+        let result = self.send_now(&sending, leave, confirm_includes).await;
+        // The stopped turn goes on in the cloud, or here again: never
+        // silently ended.
+        match (&stopped, result) {
+            (Some(turn), Ok(sent)) => {
+                self.deps
+                    .agents
+                    .forget_handed_off(workspace_id, &turn.turn_id);
+                Ok(sent)
+            }
+            (Some(turn), Err(error)) => Err(self.resume_stopped(&turn.turn_id, error).await),
+            (None, result) => result,
+        }
+    }
+
+    /// A send that stopped `turn_id` failed (or was cancelled) after the
+    /// stop: the turn goes on here ([`AgentHost::resume_after_send`]). The
+    /// error, saying what became of the run; a notice when it could not go
+    /// on.
+    async fn resume_stopped(&self, turn_id: &str, mut error: HandoffError) -> HandoffError {
+        match self.deps.agents.resume_after_send(turn_id).await {
+            AfterSend::Resumed => {
+                error
+                    .message
+                    .push_str(" The running task goes on on this computer.");
+            }
+            AfterSend::Waiting(reason) => {
+                self.notice(
+                    "The running task waits on this computer",
+                    &format!(
+                        "Sending to the cloud failed, and the task could not go on yet ({reason}). It goes on by itself when it can, or press Continue on the turn."
+                    ),
+                );
+            }
+            AfterSend::Ended(reason) => {
+                self.notice(
+                    "The running task stopped",
+                    &format!(
+                        "Sending to the cloud failed, and the task could not go on on this computer: {reason}"
+                    ),
+                );
+            }
+            AfterSend::Nothing => {}
+        }
+        error
+    }
+
+    /// Everything a send does from the claim on: snapshot, scan, bundle,
+    /// begin, upload, publish, complete.
+    #[allow(clippy::too_many_lines)]
+    async fn send_now(
+        &self,
+        sending: &Sending<'_>,
+        leave: Vec<String>,
+        confirm_includes: bool,
+    ) -> Result<Sent, HandoffError> {
+        let Sending {
+            workspace_id,
+            uuid,
+            root,
+            project_id,
+            device,
+            effective,
+            folder,
+            switch,
+            ..
+        } = *sending;
+        let _claim = self
+            .claim_for_send(workspace_id, sending.running, switch)
+            .await?;
         // The thread leaves this device: nothing the agent started here
         // keeps running (or writing) while the snapshot is taken (#1223).
         self.deps.agents.kill_processes(workspace_id).await;
         self.emit(uuid, "snapshot", 0, 1, None);
-        let config = self.send_config(&root, uuid, &device, &effective, &folder, leave);
+        let config = self.send_config(root, uuid, device, effective, folder, leave);
         let source = self.open(&config)?;
         let (source, snap) = {
             let config = config.clone();
@@ -1101,27 +1383,9 @@ impl HandoffHost {
                 snap.findings.len()
             )),
         );
-        refuse_blocked(&snap)?;
-        if !snap.include_findings.is_empty() && !confirm_includes {
-            return Err(HandoffError {
-                code: "include_confirm_required".into(),
-                message: "Some files you included look like they hold credentials. Confirm sending them for this send.".into(),
-                details: json!({ "findings": snap.include_findings }),
-            });
-        }
         // The env selection, before begin (values only in the begin body).
-        let harvest = self.harvest(&effective, &folder).await;
-        if harvest.over_limit {
-            return Err(HandoffError {
-                code: "env_too_large".into(),
-                message: "The selected environment variables are more than a handoff may carry."
-                    .into(),
-                details: json!({
-                    "vars": harvest.env.len(), "bytes": harvest.bytes,
-                    "max_vars": effective.env_limits.max_vars, "max_bytes": effective.env_limits.max_bytes,
-                }),
-            });
-        }
+        let harvest = self.harvest(effective, folder).await;
+        refuse_before_begin(&snap, confirm_includes, &harvest, effective)?;
         self.emit(uuid, "bundle", 0, 1, None);
         let (source, snap, written) = joined(
             tokio::task::spawn_blocking(move || {
@@ -1139,12 +1403,7 @@ impl HandoffHost {
             Some(format!("{} bytes", written.bytes.len())),
         );
         // The policy's caps, before begin.
-        let mut before = caps::CapReport::default();
-        caps::check_segment(&mut before, written.bytes.len() as u64, &effective.limits);
-        if !before.ok() {
-            before.largest.clone_from(&snap.caps.largest);
-            return Err(quota_or_too_large(&before));
-        }
+        refuse_policy_caps(written.bytes.len() as u64, &snap, effective)?;
         if switch.is_cancelled() {
             return Err(cancelled());
         }
@@ -1207,6 +1466,13 @@ impl HandoffHost {
             }
         };
         self.emit(uuid, "begin", 1, 1, None);
+        // The take-back record before `complete` carries the flag: the
+        // server says "takes back when done" only when this desktop will.
+        let take_back = sending.take_back
+            && self
+                .keep_take_back(uuid, workspace_id, project_id, sending.title)
+                .await;
+        let finish = Finish::of(take_back, sending.stopped);
         let completing = AtomicBool::new(false);
         let mut after_begin = std::pin::pin!(self.after_begin(
             project_id,
@@ -1215,7 +1481,8 @@ impl HandoffHost {
             &begin,
             &snap,
             &written,
-            &completing
+            &completing,
+            &finish,
         ));
         let outcome = tokio::select! {
             outcome = &mut after_begin => outcome,
@@ -1229,13 +1496,17 @@ impl HandoffHost {
                 }
             }
         };
-        let (handoff_id, state, cloud_epoch) = match outcome {
+        let completed = match outcome {
             Ok(done) => done,
             Err(error) => {
                 self.abandon(project_id, uuid).await;
+                if finish.take_back {
+                    self.forget_take_back(uuid);
+                }
                 return Err(error);
             }
         };
+        let state = completed.state.clone();
         {
             let snap = snap.clone();
             let uuid = uuid.to_owned();
@@ -1252,19 +1523,94 @@ impl HandoffHost {
         }
         self.emit(uuid, "complete", 1, 1, Some(state.clone()));
         Ok(Sent {
-            handoff_id,
+            handoff_id: completed.handoff_id,
             state,
-            epoch: cloud_epoch,
+            epoch: completed.epoch,
             files: snap.files,
             excluded: snap.excluded.len(),
             included: snap.included.len(),
             env_vars,
+            stopped_turn: sending.running,
+            continued: completed.continued,
+            continue_refused: completed.continue_refused,
+            take_back_when_done: finish.take_back,
         })
     }
 
-    /// Everything a send does after begin, up to the stored record:
-    /// `(handoff id, state, epoch)`. Any failure is answered by cancelling
-    /// the handoff on the server.
+    /// Stop the thread's running turn at its next step boundary and wait
+    /// for its commit (ADR-0045 decision 8). The turn to continue in the
+    /// cloud, or `None` when it ended by itself first (the send then just
+    /// proceeds). A cancelled send takes the stop back while it can; once
+    /// the run claimed it, the turn goes on here again
+    /// ([`Self::resume_stopped`]).
+    ///
+    /// # Errors
+    ///
+    /// `handoff_cancelled`, `local_turn_commit_failed` (the thread stays
+    /// here), `turn_unknown`.
+    async fn stop_running_turn(
+        &self,
+        uuid: &str,
+        turn: &RunningTurn,
+        switch: &CancelSwitch,
+    ) -> Result<Option<RunningTurn>, HandoffError> {
+        self.emit(uuid, "stopping", 0, 1, None);
+        self.deps.agents.stop_at_boundary(&turn.turn_id)?;
+        let settled = tokio::select! {
+            settled = self.deps.agents.turn_settled(&turn.turn_id) => settled?,
+            () = switch.wait() => {
+                if self.deps.agents.withdraw_boundary_stop(&turn.turn_id) {
+                    return Err(cancelled());
+                }
+                // Claimed already: the turn ends for the send. Once its
+                // commit settled it goes on here again.
+                return Err(match self.deps.agents.turn_settled(&turn.turn_id).await {
+                    Ok(settled) if settled.handed_off => {
+                        self.resume_stopped(&turn.turn_id, cancelled()).await
+                    }
+                    _ => cancelled(),
+                });
+            }
+        };
+        self.emit(uuid, "stopping", 1, 1, None);
+        Ok(settled.handed_off.then(|| turn.clone()))
+    }
+
+    /// The workspace's claim for a send. After a stopped turn its commit
+    /// releases the workspace right after it settled: wait for that release
+    /// (at most [`CLAIM_AFTER_STOP`], or until the send is cancelled).
+    async fn claim_for_send(
+        &self,
+        workspace_id: &str,
+        after_stop: bool,
+        switch: &CancelSwitch,
+    ) -> Result<crate::d0::turn::WorkspaceClaim, HandoffError> {
+        const BUSY: &str = "Wait for the running turn to end before sending this thread.";
+        let deadline = tokio::time::Instant::now() + CLAIM_AFTER_STOP;
+        // Subscribed before each try: a release between the two still
+        // wakes the wait.
+        let mut released = self.deps.agents.workspace_released();
+        loop {
+            released.borrow_and_update();
+            let error = match self.deps.agents.claim_workspace(workspace_id, BUSY) {
+                Ok(claim) => return Ok(claim),
+                Err(error) if !after_stop => return Err(error.into()),
+                Err(error) => error,
+            };
+            tokio::select! {
+                changed = released.changed() => {
+                    if changed.is_err() {
+                        return Err(error.into());
+                    }
+                }
+                () = tokio::time::sleep_until(deadline) => return Err(error.into()),
+                () = switch.wait() => return Err(cancelled()),
+            }
+        }
+    }
+
+    /// Everything a send does after begin, up to the stored record. Any
+    /// failure is answered by cancelling the handoff on the server.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     async fn after_begin(
         &self,
@@ -1275,7 +1621,8 @@ impl HandoffHost {
         snap: &Snapshot,
         written: &elitea_workspace_store::bundle::Written,
         completing: &AtomicBool,
-    ) -> Result<(String, String, u64), HandoffError> {
+        finish: &Finish,
+    ) -> Result<Completed, HandoffError> {
         let handoff_id = str_of(begin, "handoff_id").ok_or_else(|| {
             HandoffError::new("invalid_response", "the begin answer has no handoff id")
         })?;
@@ -1366,13 +1713,54 @@ impl HandoffHost {
         // From here a cancel cannot take the handoff back.
         completing.store(true, Ordering::SeqCst);
         self.emit(uuid, "publish", 1, 1, None);
-        let complete = self
-            .call(
-                Method::POST,
-                &format!("/api/v2/elitea_core/workspace_handoff_complete/prompt_lib/{project_id}/{handoff_id}"),
-                Some(&json!({"epoch": epoch, "handoff_ref": store_refs::handoff(1), "sha": snap.handoff})),
-            )
-            .await?;
+        let complete_path = format!(
+            "/api/v2/elitea_core/workspace_handoff_complete/prompt_lib/{project_id}/{handoff_id}"
+        );
+        let mut body =
+            json!({"epoch": epoch, "handoff_ref": store_refs::handoff(1), "sha": snap.handoff});
+        if finish.take_back {
+            body["take_back_when_done"] = json!(true);
+        }
+        // Without `continue`: a send that stopped an unattended turn names
+        // its chain, which Main then ends `waiting` (the thread waits in
+        // the cloud).
+        let mut plain = body.clone();
+        if let Some(root) = &finish.stopped_chain_root {
+            plain["stopped_chain_root_execution_id"] = json!(root);
+        }
+        let mut continue_refused = finish.not_continued.clone();
+        let complete = match &finish.continue_body {
+            None => {
+                self.call(Method::POST, &complete_path, Some(&plain))
+                    .await?
+            }
+            Some(next) => {
+                let mut with_continue = body;
+                with_continue["continue"] = next.clone();
+                match self
+                    .call(Method::POST, &complete_path, Some(&with_continue))
+                    .await
+                {
+                    Ok(answer) => answer,
+                    // A refusal of the continue alone leaves the handoff
+                    // HANDING_OFF: complete it without the continue, and
+                    // tell the person why the cloud waits.
+                    Err(error) => match continue_refusal(&error) {
+                        Some(reason) => {
+                            log::warn!(
+                                "the cloud did not continue the running turn ({}); sent without continuing",
+                                error.code
+                            );
+                            continue_refused = Some(format!("{reason} {WAITS_IN_THE_CLOUD}"));
+                            self.call(Method::POST, &complete_path, Some(&plain))
+                                .await?
+                        }
+                        None => return Err(error),
+                    },
+                }
+            }
+        };
+        let continued = complete.get("continued").filter(|v| v.is_object()).cloned();
         let state = str_of(&complete, "state").unwrap_or_else(|| "CLOUD_IDLE".into());
         let cloud_epoch = u64_of(&complete, "epoch");
         let record = ThreadRecord {
@@ -1389,7 +1777,13 @@ impl HandoffHost {
             rest: None,
         };
         self.records.put(&record)?;
-        Ok((handoff_id, state, cloud_epoch))
+        Ok(Completed {
+            handoff_id,
+            state,
+            epoch: cloud_epoch,
+            continued,
+            continue_refused,
+        })
     }
 
     /// `handoff_settings_get`: the folder's settings, the effective policy
@@ -1489,6 +1883,12 @@ impl HandoffHost {
             object.insert("sent_from_here".into(), json!(record.is_some()));
             // "Take back the remaining turns" is offered while > 0.
             object.insert("rest_turns".into(), json!(rest_turns));
+            // The server's flag (`WorkspaceHandoffState`); this desktop's record
+            // where the server has none yet.
+            if !object.contains_key("take_back_when_done") {
+                let local = name != "LOCAL" && self.take_back_of(&uuid).is_some();
+                object.insert("take_back_when_done".into(), json!(local));
+            }
         }
         Ok(state)
     }
@@ -1926,6 +2326,8 @@ impl HandoffHost {
                 .agents
                 .mark_session_stale(&conversation_uuid)
                 .await;
+            // Back here: nothing is left to take back when done.
+            self.forget_take_back(&conversation_uuid);
         }
         Ok(ApplyAnswer {
             applied: applied.applied,
@@ -2208,11 +2610,503 @@ impl HandoffHost {
             )
             .await?;
         self.records.remove(&uuid);
+        self.forget_take_back(&uuid);
         self.preflights
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|_, held| held.conversation_uuid != uuid);
         Ok(answer)
+    }
+}
+
+/// What `complete` carries besides the send itself (ADR-0045 decision 8).
+struct Finish {
+    take_back: bool,
+    /// `continue`: the stopped turn's prompt, mode and grant.
+    continue_body: Option<Value>,
+    /// The stopped unattended turn's chain, for a complete without
+    /// `continue` (`stopped_chain_root_execution_id`).
+    stopped_chain_root: Option<String>,
+    /// Why the stopped turn is not continued in the cloud, known before
+    /// complete (plan mode).
+    not_continued: Option<String>,
+}
+
+/// A take-back asked while a cloud turn ran (202 `reclaim_pending`).
+const PHASE_RECLAIM_PENDING: &str = "reclaim_pending";
+/// A take-back whose reclaim landed: the thread is `RECLAIMING`.
+const PHASE_RECLAIMED: &str = "reclaimed";
+
+/// The end of every "not continued" text.
+const WAITS_IN_THE_CLOUD: &str = "The thread is in the cloud and waits for your next message.";
+
+impl Finish {
+    /// What complete carries for a send that stopped `stopped` (`None`: no
+    /// turn was handed off, nothing to continue). A plan-mode turn is never
+    /// continued: a cloud turn has no plan mode.
+    fn of(take_back: bool, stopped: Option<&RunningTurn>) -> Self {
+        let Some(turn) = stopped else {
+            return Self {
+                take_back,
+                continue_body: None,
+                stopped_chain_root: None,
+                not_continued: None,
+            };
+        };
+        let plan = turn.mode == "plan";
+        Self {
+            take_back,
+            continue_body: (!plan).then(|| continue_body(turn)),
+            stopped_chain_root: turn.chain_root(),
+            not_continued: plan.then(|| {
+                format!("Plan mode does not run in the cloud, so the turn did not continue there. {WAITS_IN_THE_CLOUD}")
+            }),
+        }
+    }
+}
+
+/// Why a complete with `continue` was refused for the continue alone, so
+/// the send completes again without it (ADR-0045 decision 8); `None` for
+/// any other failure.
+///
+/// | refusal | reason shown |
+/// |---|---|
+/// | 422 `unattended_grant_refused` | the platform's message |
+/// | 422 `continue_refused` (`reason` `mode`) | plan mode does not run in the cloud |
+/// | 409 `chain_limit_reached` | the platform's message (the limit) |
+/// | 409 `chain_ended` | the unattended run had ended |
+/// | 503 `handoff_unavailable` | the cloud has no room for the turn now |
+/// | 400/422 `invalid_handoff` | the cloud could not take the continuation |
+fn continue_refusal(error: &HandoffError) -> Option<String> {
+    use crate::d0::unattended::{CHAIN_LIMIT_REACHED, GRANT_REFUSED};
+    let code = error.code.as_str();
+    Some(match code {
+        GRANT_REFUSED | CHAIN_LIMIT_REACHED => {
+            let message = error.message.trim();
+            if message.is_empty() {
+                "The platform refused the unattended run in the cloud.".to_owned()
+            } else {
+                message.to_owned()
+            }
+        }
+        "continue_refused" if error.details["reason"] == "mode" => {
+            "Plan mode does not run in the cloud, so the turn did not continue there.".to_owned()
+        }
+        "continue_refused" => "The cloud cannot run this turn.".to_owned(),
+        "chain_ended" => "The unattended run had already ended.".to_owned(),
+        "handoff_unavailable" => "The cloud has no room to run the turn now.".to_owned(),
+        "invalid_handoff" => "The cloud could not take the turn's continuation.".to_owned(),
+        _ => return None,
+    })
+}
+
+/// What a send carries from its start to its complete.
+struct Sending<'a> {
+    workspace_id: &'a str,
+    uuid: &'a str,
+    root: &'a Path,
+    project_id: i64,
+    device: &'a LocalWorkPolicy,
+    effective: &'a EffectivePolicy,
+    folder: &'a FolderSettings,
+    switch: &'a CancelSwitch,
+    title: Option<&'a str>,
+    take_back: bool,
+    /// A turn of the thread was running when the send started.
+    running: bool,
+    /// The turn the send stopped for the cloud to continue.
+    stopped: Option<&'a RunningTurn>,
+}
+
+/// `complete.continue` for a stopped turn (ADR-0045 decision 8, `WorkspaceHandoffContinue` in v2.yaml): the run
+/// brief's continuation text when the chain has a brief, else
+/// [`CONTINUE_PROMPT`]; the turn's mode; and the turn's grant with the
+/// local chain's root (absent for a turn the person attends).
+fn continue_body(turn: &RunningTurn) -> Value {
+    let prompt = turn
+        .unattended
+        .as_ref()
+        .and_then(|unattended| unattended.goal())
+        .and_then(|goal| goal.brief_prompt())
+        .unwrap_or_else(|| CONTINUE_PROMPT.to_owned());
+    let mut body = json!({ "prompt": prompt, "mode": turn.mode });
+    if let Some(unattended) = &turn.unattended {
+        // The cloud turn's grant (`LocalTurnUnattendedRequest` in v2.yaml):
+        // the fields both executors share, and the chain the cloud turn
+        // continues. No `kind`: Main links the turn to the chain as `handoff`
+        // and checks that `grant_id` is the chain's.
+        let grant = &unattended.grant;
+        let mut wire = json!({
+            "grant_id": grant.id(),
+            "continue_step_limit": grant.continue_step_limit,
+            "goal_check": grant.goal_check(),
+        });
+        if let Some(chain) = &grant.chain {
+            wire["chain"] = json!(chain);
+        }
+        if let Some(root) = turn.chain_root() {
+            wire["chain_root_execution_id"] = json!(root);
+        }
+        body["grant"] = wire;
+    }
+    body
+}
+
+/// The take-back decision table (ADR-0045 decision 8): the fast path and a
+/// clean merge apply; conflicts open a worktree. `None` for a preflight
+/// that offers neither (an error): the thread is not taken back by itself.
+/// An apply that fails afterwards (the folder changed since the preflight,
+/// or any other error) opens a worktree instead ([`HandoffHost`]'s
+/// `take_back_now`).
+#[must_use]
+pub fn take_back_mode(outcome: take_back::Outcome) -> Option<Mode> {
+    match outcome {
+        take_back::Outcome::FastPath | take_back::Outcome::CleanMerge => Some(Mode::Apply),
+        take_back::Outcome::Conflicts => Some(Mode::Worktree),
+        take_back::Outcome::Error => None,
+    }
+}
+
+/// How a take-back when done ended.
+#[derive(Debug, PartialEq, Eq)]
+enum TookBack {
+    Applied,
+    Worktree {
+        reason: String,
+    },
+    /// A cloud turn runs again (the reclaim waits for it): later.
+    Later,
+}
+
+/// The thread's name for a notice, cut to [`MAX_TITLE_CHARS`].
+fn notice_title(record: &TakeBackRecord) -> String {
+    let title = record
+        .title
+        .as_deref()
+        .map(crate::notices::sanitize)
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| "your thread".to_owned());
+    if title.chars().count() <= MAX_TITLE_CHARS {
+        return title;
+    }
+    let mut cut: String = title.chars().take(MAX_TITLE_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// The notice of a cloud run that did not complete: the thread stays.
+fn not_taken_back(outcome: &str, title: &str) -> (String, String) {
+    let heading = match outcome {
+        "failed" => format!("The cloud run of {title} failed"),
+        "waiting" => format!("{title} waits for you in the cloud"),
+        "limit_reached" => format!("{title} stopped at its limit in the cloud"),
+        _ => format!("The cloud run of {title} was cancelled"),
+    };
+    (
+        heading,
+        "It stays in the cloud and is not taken back. Take it back when you are ready.".to_owned(),
+    )
+}
+
+impl HandoffHost {
+    /// Keep the take-back record of a send with **Take back when done**;
+    /// whether it was kept (no thread history, or no signed-in owner: the
+    /// send goes without the flag).
+    async fn keep_take_back(
+        &self,
+        uuid: &str,
+        workspace_id: &str,
+        project_id: i64,
+        title: Option<&str>,
+    ) -> bool {
+        let Some(history) = self.deps.history.clone() else {
+            return false;
+        };
+        let owner = match self.deps.agents.history_owner().await {
+            Ok(owner) => owner,
+            Err(error) => {
+                log::warn!("take back when done is off for this send: {}", error.code);
+                return false;
+            }
+        };
+        let record = TakeBackRecord {
+            conversation_uuid: uuid.to_owned(),
+            owner,
+            workspace_id: workspace_id.to_owned(),
+            project_id,
+            title: title
+                .map(|title| title.chars().take(MAX_TITLE_CHARS * 2).collect())
+                .filter(|title: &String| !title.trim().is_empty()),
+            created_at: chrono::Utc::now().timestamp_millis(),
+            noticed: None,
+            phase: None,
+        };
+        match history.take_back_put(&record) {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("take back when done is off for this send: {error}");
+                false
+            }
+        }
+    }
+
+    /// The thread is back (or erased): its take-back record goes.
+    fn forget_take_back(&self, uuid: &str) {
+        if let Some(history) = &self.deps.history
+            && let Err(error) = history.take_back_delete(uuid)
+        {
+            log::warn!("a take-back record was not removed: {error}");
+        }
+    }
+
+    fn take_back_of(&self, uuid: &str) -> Option<TakeBackRecord> {
+        self.deps
+            .history
+            .as_ref()
+            .and_then(|history| history.take_back_of(uuid).ok().flatten())
+    }
+
+    fn notice(&self, title: &str, body: &str) {
+        let body: String = body.chars().take(crate::notices::MAX_BODY).collect();
+        let title: String = title.chars().take(crate::notices::MAX_TITLE).collect();
+        if let Ok((title, body)) = crate::notices::notice_text(&title, &body) {
+            self.deps.events.notice(&title, &body);
+        }
+    }
+
+    /// A sign-in completed: the take-back loop reads the states now.
+    pub fn signed_in(&self) {
+        self.take_back_wake.notify_one();
+    }
+
+    /// The take-back loop (ADR-0045 decision 8): [`TAKE_BACK_AFTER`] after
+    /// start-up, then every [`TAKE_BACK_EVERY`] and after each sign-in, a
+    /// read of the state of each thread this desktop takes back when done,
+    /// so a desktop that was off catches up when it starts.
+    pub async fn take_back_loop(self: Arc<Self>) {
+        tokio::time::sleep(TAKE_BACK_AFTER).await;
+        loop {
+            self.catch_up().await;
+            tokio::select! {
+                () = tokio::time::sleep(TAKE_BACK_EVERY) => {}
+                () = self.take_back_wake.notified() => {}
+            }
+        }
+    }
+
+    /// One pass over the signed-in owner's take-back records.
+    pub async fn catch_up(&self) {
+        let Some(history) = self.deps.history.clone() else {
+            return;
+        };
+        let Ok(owner) = self.deps.agents.history_owner().await else {
+            return;
+        };
+        let records = match history.take_back_records(&owner) {
+            Ok(records) => records,
+            Err(error) => {
+                log::warn!("the take-back records were not read: {error}");
+                return;
+            }
+        };
+        for record in records {
+            self.check_take_back(record, None).await;
+        }
+    }
+
+    /// `handoff_run_finished`: the page saw a `run_finished` notification.
+    /// A cloud run of a thread this desktop takes back when done is looked
+    /// at now; any other is not this host's business.
+    pub async fn run_finished(
+        &self,
+        conversation_uuid: &str,
+        origin: Option<&str>,
+        outcome: Option<&str>,
+    ) {
+        if origin != Some("cloud") {
+            return;
+        }
+        let Ok(uuid) = canonical_uuid(conversation_uuid) else {
+            return;
+        };
+        let Some(record) = self.take_back_of(&uuid) else {
+            return;
+        };
+        match self.deps.agents.history_owner().await {
+            Ok(owner) if owner == record.owner => {}
+            _ => return,
+        }
+        self.check_take_back(record, outcome).await;
+    }
+
+    /// Read the thread's state and act on its last cloud run: take it back
+    /// when it completed, notice (once per run) when it did not. `hint`:
+    /// the notification's outcome, for a server whose state has no
+    /// `last_cloud_run`.
+    async fn check_take_back(&self, record: TakeBackRecord, hint: Option<&str>) {
+        let uuid = record.conversation_uuid.clone();
+        if !self
+            .taking_back
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(uuid.clone())
+        {
+            return;
+        }
+        self.check_take_back_inner(&record, hint).await;
+        self.taking_back
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&uuid);
+    }
+
+    async fn check_take_back_inner(&self, record: &TakeBackRecord, hint: Option<&str>) {
+        let uuid = record.conversation_uuid.as_str();
+        let state = match self.server_state(record.project_id, uuid).await {
+            Ok(state) => state,
+            Err(error) => {
+                log::info!("a take back when done waits: {}", error.code);
+                return;
+            }
+        };
+        let name = str_of(&state, "state").unwrap_or_else(|| "LOCAL".into());
+        if name == "LOCAL" {
+            // Back already (taken back by hand, erased or expired).
+            self.forget_take_back(uuid);
+            return;
+        }
+        // A take-back this desktop began (it reclaimed, or asked while a
+        // cloud turn ran and the server reclaimed when it ended): the state
+        // is RECLAIMING for this desktop's record and has no
+        // `last_cloud_run`. It goes on from the preflight.
+        let began = matches!(
+            record.phase.as_deref(),
+            Some(PHASE_RECLAIMED | PHASE_RECLAIM_PENDING)
+        );
+        if began && name == "RECLAIMING" && self.records.get(uuid).ok().flatten().is_some() {
+            self.take_back_and_notice(record, &notice_title(record))
+                .await;
+            return;
+        }
+        // `last_cloud_run` of the state view (`WorkspaceHandoffState`).
+        let last = state.get("last_cloud_run").filter(|last| last.is_object());
+        let outcome = last
+            .and_then(|last| str_of(last, "outcome"))
+            .or_else(|| hint.map(str::to_owned));
+        let run = last
+            .and_then(|last| str_of(last, "execution_id"))
+            .unwrap_or_default();
+        let title = notice_title(record);
+        match outcome.as_deref() {
+            // A newer cloud turn runs: its own end decides.
+            Some("completed") if name == "CLOUD_RUNNING" || name == "HANDING_OFF" => {}
+            Some("completed") => self.take_back_and_notice(record, &title).await,
+            Some(other @ ("failed" | "waiting" | "limit_reached" | "cancelled")) => {
+                let (heading, body) = not_taken_back(other, &title);
+                self.notice_once(record, &format!("{other}:{run}"), &heading, &body);
+            }
+            _ => {}
+        }
+    }
+
+    /// Take the thread back now and say how it went. A failure keeps the
+    /// record (and its phase) for the next pass.
+    async fn take_back_and_notice(&self, record: &TakeBackRecord, title: &str) {
+        let uuid = record.conversation_uuid.as_str();
+        match self.take_back_now(record).await {
+            Ok(TookBack::Later) => {}
+            Ok(TookBack::Applied) => {
+                self.forget_take_back(uuid);
+                self.notice(
+                    &format!("Took back {title}"),
+                    "The cloud run finished, and its changes are in your folder.",
+                );
+            }
+            Ok(TookBack::Worktree { reason }) => {
+                self.forget_take_back(uuid);
+                self.notice(&format!("Opened {title} as a worktree"), &reason);
+            }
+            // The folder is busy (a turn runs in it): the next pass.
+            Err(error) if error.code == "workspace_busy" => {}
+            Err(error) => {
+                let key = format!("error:{}", error.code);
+                self.notice_once(
+                    record,
+                    &key,
+                    &format!("Could not take back {title}"),
+                    &error.message,
+                );
+            }
+        }
+    }
+
+    /// The take-back's phase, so a later pass goes on from it.
+    fn take_back_phase(&self, uuid: &str, phase: &str) {
+        if let Some(history) = &self.deps.history
+            && let Err(error) = history.take_back_phase(uuid, Some(phase))
+        {
+            log::warn!("a take-back phase was not kept: {error}");
+        }
+    }
+
+    /// A notice for `record` unless the same `key` was noticed last.
+    fn notice_once(&self, record: &TakeBackRecord, key: &str, title: &str, body: &str) {
+        if record.noticed.as_deref() == Some(key) {
+            return;
+        }
+        if let Some(history) = &self.deps.history
+            && let Err(error) = history.take_back_noticed(&record.conversation_uuid, key)
+        {
+            log::warn!("a take-back notice was not remembered: {error}");
+        }
+        self.notice(title, body);
+    }
+
+    /// Reclaim, preflight and apply or open a worktree, by
+    /// [`take_back_mode`]; an apply that fails opens a worktree instead.
+    async fn take_back_now(&self, record: &TakeBackRecord) -> Result<TookBack, HandoffError> {
+        let uuid = record.conversation_uuid.as_str();
+        let reclaimed = self.reclaim(uuid, false).await?;
+        if reclaimed.get("reclaim_pending").and_then(Value::as_bool) == Some(true) {
+            self.take_back_phase(uuid, PHASE_RECLAIM_PENDING);
+            return Ok(TookBack::Later);
+        }
+        self.take_back_phase(uuid, PHASE_RECLAIMED);
+        let preflight = self.preflight(uuid, None).await?;
+        let mode = take_back_mode(preflight.report.outcome).ok_or_else(|| {
+            HandoffError::new(
+                "take_back_failed",
+                "The cloud's work could not be compared with your folder. Take it back from the thread.",
+            )
+        })?;
+        match self.apply(&preflight.preflight_id, mode, None).await {
+            Ok(_) if mode == Mode::Apply => Ok(TookBack::Applied),
+            Ok(_) => Ok(TookBack::Worktree {
+                reason: "The cloud and your folder changed the same lines.".to_owned(),
+            }),
+            Err(error) if error.code == "workspace_busy" || mode != Mode::Apply => Err(error),
+            Err(error) => {
+                let reason = if error.code == take_back::FOLDER_CHANGED {
+                    "Your folder changed while it was being taken back.".to_owned()
+                } else {
+                    error.message.clone()
+                };
+                // A refused apply keeps its preflight; any other needs a new one.
+                match self
+                    .apply(&preflight.preflight_id, Mode::Worktree, None)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(again) if again.code == "preflight_unknown" => {
+                        let fresh = self.preflight(uuid, None).await?;
+                        self.apply(&fresh.preflight_id, Mode::Worktree, None)
+                            .await?;
+                    }
+                    Err(again) => return Err(again),
+                }
+                Ok(TookBack::Worktree { reason })
+            }
+        }
     }
 }
 
@@ -2278,6 +3172,51 @@ fn quota_or_too_large(report: &caps::CapReport) -> HandoffError {
         message: "The folder is larger than this project allows to send.".into(),
         details: serde_json::to_value(report).unwrap_or(Value::Null),
     }
+}
+
+/// The send's own refusals before begin: a secret, includes that look
+/// like credentials without the person's confirmation, an env selection
+/// over the limits.
+fn refuse_before_begin(
+    snap: &Snapshot,
+    confirm_includes: bool,
+    harvest: &settings::Harvest,
+    effective: &EffectivePolicy,
+) -> Result<(), HandoffError> {
+    refuse_blocked(snap)?;
+    if !snap.include_findings.is_empty() && !confirm_includes {
+        return Err(HandoffError {
+            code: "include_confirm_required".into(),
+            message: "Some files you included look like they hold credentials. Confirm sending them for this send.".into(),
+            details: json!({ "findings": snap.include_findings }),
+        });
+    }
+    if harvest.over_limit {
+        return Err(HandoffError {
+            code: "env_too_large".into(),
+            message: "The selected environment variables are more than a handoff may carry.".into(),
+            details: json!({
+                "vars": harvest.env.len(), "bytes": harvest.bytes,
+                "max_vars": effective.env_limits.max_vars, "max_bytes": effective.env_limits.max_bytes,
+            }),
+        });
+    }
+    Ok(())
+}
+
+/// The policy's caps on a bundle of `bytes`, before begin.
+fn refuse_policy_caps(
+    bytes: u64,
+    snap: &Snapshot,
+    effective: &EffectivePolicy,
+) -> Result<(), HandoffError> {
+    let mut before = caps::CapReport::default();
+    caps::check_segment(&mut before, bytes, &effective.limits);
+    if before.ok() {
+        return Ok(());
+    }
+    before.largest.clone_from(&snap.caps.largest);
+    Err(quota_or_too_large(&before))
 }
 
 fn refuse_blocked(snap: &Snapshot) -> Result<(), HandoffError> {
@@ -2526,6 +3465,16 @@ impl HandoffEvents for MainWindowHandoffEvents {
             );
         }
     }
+
+    fn notice(&self, title: &str, body: &str) {
+        use tauri::Manager as _;
+        if let Some(attention) = self
+            .0
+            .try_state::<std::sync::Arc<crate::attention::Attention>>()
+        {
+            attention.show_now(title, body);
+        }
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -2552,16 +3501,39 @@ pub async fn handoff_send(
     conversation_uuid: String,
     leave_on_laptop: Option<Vec<String>>,
     confirm_includes: Option<bool>,
+    take_back_when_done: Option<bool>,
+    title: Option<String>,
 ) -> Result<Sent, HandoffError> {
     state
         .0
-        .send(
+        .send_with(
             &workspace_id,
             &conversation_uuid,
             leave_on_laptop.unwrap_or_default(),
             confirm_includes.unwrap_or(false),
+            SendOptions {
+                take_back_when_done,
+                title,
+            },
         )
         .await
+}
+
+/// The page saw a `run_finished` notification (ADR-0045 decisions 5 and
+/// 8): a cloud run of a thread this desktop takes back when done is looked
+/// at in the background. Answers at once.
+#[tauri::command(rename_all = "snake_case")]
+pub fn handoff_run_finished(
+    state: tauri::State<'_, HandoffState>,
+    conversation_uuid: String,
+    origin: Option<String>,
+    outcome: Option<String>,
+) {
+    let host = state.0.clone();
+    tauri::async_runtime::spawn(async move {
+        host.run_finished(&conversation_uuid, origin.as_deref(), outcome.as_deref())
+            .await;
+    });
 }
 
 #[tauri::command(rename_all = "snake_case")]

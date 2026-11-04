@@ -961,6 +961,13 @@ case "${1:-}" in
       else
         echo "ERROR: the stack did not come up. The containers above are not settled." >&2
         $COMPOSE_BIN $COMPOSE_F ps --all >&2 || true
+        # A one-shot job that failed is named above but its reason is only in
+        # its own log, which no caller's log dump includes.
+        for failed in $($COMPOSE_BIN $COMPOSE_F ps --all --format '{{.Service}} {{.State}} {{.ExitCode}}' 2>/dev/null \
+            | awk '$2 == "exited" && $3 != "0" {print $1}'); do
+          echo "→ Log of ${failed}, which exited non-zero:" >&2
+          $COMPOSE_BIN $COMPOSE_F logs --no-color --tail 100 "$failed" >&2 || true
+        done
         exit "$up_status"
       fi
     fi

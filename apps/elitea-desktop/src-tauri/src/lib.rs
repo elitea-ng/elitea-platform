@@ -411,6 +411,9 @@ pub fn run() {
             .map_err(|error| error.message)?;
             let handoff = Arc::new(handoff);
             app.manage(handoff::HandoffState(handoff.clone()));
+            // Threads sent with "Take back when done" whose cloud run
+            // completed while the app was off (ADR-0045 decision 8).
+            tauri::async_runtime::spawn(handoff.clone().take_back_loop());
             let doctor_files = SettingsFiles::new(config_dir.clone());
             let history_retention_days = match doctor_files.settings() {
                 Ok(settings) => crate::settings::history_retention_days(&settings),
@@ -574,6 +577,7 @@ pub fn run() {
             handoff::handoff_status_many,
             handoff::handoff_settings_get,
             handoff::handoff_settings_set,
+            handoff::handoff_run_finished,
         ])
         .build(tauri::generate_context!());
     let app = match built {

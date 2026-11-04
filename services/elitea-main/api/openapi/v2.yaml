@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.32"
+  x-elitea-client-contract: "1.33"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4118,6 +4118,27 @@ components:
         message: { type: string }
         details:
           $ref: '#/components/schemas/WorkspaceHandoffErrorDetails'
+        reason:
+          type: string
+          description: >-
+            Contract 1.33. With `unattended_grant_refused` (a complete with
+            `continue`): why the grant was refused, as on a local turn. With
+            `continue_refused`: why the cloud cannot run the continue
+            (`mode`: a cloud turn has no plan mode).
+        field:
+          type: string
+          description: >-
+            Contract 1.33. With `unattended_grant_refused`, the refused grant
+            field; with `continue_refused`, the refused `continue` field
+            (`mode`).
+        tool:
+          type: string
+          description: Contract 1.33. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`.
+        limit:
+          type: string
+          description: >-
+            Contract 1.33. With `chain_limit_reached`, the limit the chain
+            reached: `continuations`, `spend` or `deadline`.
     WorkspaceHandoffErrorDetails:
       type: object
       description: >-
@@ -4397,6 +4418,66 @@ components:
           description: >-
             Contract 1.29. The GitHub or GitLab configuration the owner chose for the
             cloud executor's pushes and pull requests; null when none.
+        take_back_when_done:
+          type: boolean
+          description: >-
+            Contract 1.33 (ADR-0045 decision 8). The owner asked, at send,
+            that the desktop take the thread back by itself when its cloud
+            run completes. Main never takes a thread back by itself: the
+            owner's desktop reads this flag and `last_cloud_run` and takes
+            the thread back. Cleared by a take back, a release, an expiry
+            or an erase.
+        last_cloud_run:
+          allOf:
+            - $ref: '#/components/schemas/WorkspaceHandoffCloudRun'
+          nullable: true
+          description: >-
+            Contract 1.33. The last finished cloud chain or cloud turn of the
+            current handoff; null while none finished, outside CLOUD_IDLE
+            and CLOUD_RUNNING, and whenever `take_back_when_done` is false
+            (only the take back reads it, so the polled banner does not pay
+            for it).
+      example:
+        state: CLOUD_IDLE
+        epoch: 4
+        reclaim_pending: false
+        rest_pending: false
+        handoff_id: 6f1c2a8e-3b4d-4e5f-8a9b-0c1d2e3f4a5b
+        device_name: Work laptop
+        history_mode: none
+        has_upstream: true
+        stats: { files: 412, bytes: 1830400, excluded_count: 0 }
+        cloud_sha: 8d2f1c0b9a8e7d6c5b4a39281706f5e4d3c2b1a0
+        updated_at: '2026-11-04T10:15:02.120Z'
+        delete_after: '2026-11-11T10:15:02.120Z'
+        workspace_bytes: 2097152
+        pull_request_credential: null
+        take_back_when_done: true
+        last_cloud_run:
+          outcome: completed
+          execution_id: 3e9a1b7c5d2f4e6a8b0c1d2e3f4a5b6c
+          finished_at: '2026-11-04T10:15:02Z'
+    WorkspaceHandoffCloudRun:
+      type: object
+      description: >-
+        Contract 1.33 (ADR-0045 decision 8). A finished cloud run of the
+        current handoff: an unattended chain that ended, or a cloud turn
+        that is not a chain link. NOTE(W2):
+        internal/api/v2/workspacehandoff/route.go (`cloudRunView`).
+      required: [outcome, execution_id, finished_at]
+      properties:
+        outcome:
+          type: string
+          description: >-
+            `completed`, `failed`, `waiting` (a pause waits for a person),
+            `limit_reached` or `cancelled`. A desktop with
+            `take_back_when_done` takes the thread back on `completed`.
+        execution_id:
+          type: string
+          description: The chain's last run, or the turn.
+        finished_at:
+          type: string
+          format: date-time
     WorkspaceHandoffChanges:
       type: object
       description: >-
@@ -4484,6 +4565,85 @@ components:
         epoch: { type: integer, format: int64 }
         handoff_ref: { type: string, description: '`refs/elitea/handoff/1`.' }
         sha: { type: string }
+        take_back_when_done:
+          type: boolean
+          description: >-
+            Contract 1.33 (ADR-0045 decision 8). The owner's desktop takes
+            the thread back by itself when its cloud run completes. Stored on
+            the handoff; the state answers it. Absent is false.
+        continue:
+          $ref: '#/components/schemas/WorkspaceHandoffContinue'
+        stopped_chain_root_execution_id:
+          type: string
+          maxLength: 64
+          description: >-
+            Contract 1.33 (ADR-0045 decision 8). The `chain_root_execution_id`
+            of the unattended local turn the desktop stopped for this send.
+            Without `continue`, Main ends that chain as `waiting` in the
+            transaction that completes the send: the thread now waits in the
+            cloud for the person's next message, and the chain's
+            `run_finished` names `outcome` `waiting` and `origin` `cloud`.
+            Only a chain of the caller on this thread that is still open
+            ends; any other id (unknown, ended, another person's, malformed)
+            is ignored and the send completes. With `continue` it is ignored:
+            the continue links the chain. Send it on a retry without
+            `continue` after a refused continue (`continue_refused`,
+            `unattended_grant_refused`, `chain_ended`, `invalid_handoff`,
+            `handoff_unavailable`); after `chain_limit_reached` the chain has
+            already ended and the field changes nothing.
+      example:
+        epoch: 3
+        handoff_ref: refs/elitea/handoff/1
+        sha: 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+        take_back_when_done: true
+        continue:
+          prompt: Finish the migration and run the tests.
+          mode: build
+          grant:
+            grant_id: 0b7e4c1a-2d3f-4a5b-9c6d-7e8f9a0b1c2d
+            chain_root_execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+            continue_step_limit: true
+    WorkspaceHandoffContinue:
+      type: object
+      description: >-
+        Contract 1.33 (ADR-0045 decision 8). Send a running task to the
+        cloud and continue: Main completes the send, writes the person's
+        message and starts the cloud turn in ONE transaction, so the
+        complete answers CLOUD_RUNNING. A refused grant or chain fails the
+        whole complete (422 `unattended_grant_refused`, 409
+        `chain_limit_reached` or `chain_ended`), as does a continue in
+        mode `plan` (422 `continue_refused`); the send stays HANDING_OFF:
+        complete it again, with or without `continue`. Without it, send
+        `stopped_chain_root_execution_id` so the stopped chain ends as
+        `waiting`.
+        NOTE(W2): internal/api/v2/workspacehandoff/route.go (`continueBody`).
+      required: [prompt, mode]
+      properties:
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: The cloud turn's message, as the person's message in the thread.
+        mode:
+          type: string
+          description: >-
+            The thread's mode: `build`, `plan` or `bypass`. Recorded in the
+            audit; the cloud turn runs as any cloud turn does. A cloud turn
+            has no plan mode: `plan` fails the whole complete with 422
+            `continue_refused` (`reason` `mode`, `field` `mode`) and the
+            send stays HANDING_OFF; complete it again without `continue`.
+        grant:
+          allOf:
+            - $ref: '#/components/schemas/LocalTurnUnattendedRequest'
+          description: >-
+            The thread's unattended grant, as on a local turn. With
+            `chain_root_execution_id`, the cloud turn continues that chain
+            (link kind `handoff`): the same `grant_id`, no `kind`, and the
+            chain's limits count across both executors; its
+            `run_finished` names `origin` `cloud`. Without it, the turn
+            starts a new cloud chain; the desktop-only parts
+            (`continue_tool_call_cap`, `hook_asks`, `remote_confirmations`)
+            are dropped. Absent: an attended cloud turn.
     WorkspaceHandoffTransition:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:363 (`complete`).'
@@ -4491,6 +4651,22 @@ components:
       properties:
         state: { type: string }
         epoch: { type: integer, format: int64 }
+        continued:
+          $ref: '#/components/schemas/WorkspaceHandoffContinued'
+    WorkspaceHandoffContinued:
+      type: object
+      description: >-
+        Contract 1.33. The cloud turn a complete with `continue` started.
+        NOTE(W2): internal/api/v2/workspacehandoff/route.go (`complete`).
+      required: [execution_id, message_id, question_id]
+      properties:
+        execution_id: { type: string, description: The cloud turn's execution. }
+        message_id: { type: string, format: uuid, description: The turn's answer in the thread. }
+        question_id: { type: string, format: uuid, description: The person's message (the prompt) in the thread. }
+      example:
+        execution_id: 3e9a1b7c5d2f4e6a8b0c1d2e3f4a5b6c
+        message_id: 2c4e6a8b-0d1f-4a3b-8c5d-7e9f1a2b3c4d
+        question_id: 7a9c1e3f-5b7d-4f9a-9b1c-3d5e7f9a1b2c
     WorkspaceHandoffReclaimRequest:
       type: object
       description: 'NOTE(W2): internal/api/v2/workspacehandoff/route.go:388 (`reclaimBody`).'
@@ -28332,6 +28508,11 @@ paths:
         Client contract 1.8 (ADR-0034 decision 7). Moves HANDING_OFF to
         CLOUD_IDLE (a new epoch) once the store holds the snapshot ref with
         this sha, and appends the system event message to the conversation.
+
+        From contract 1.33 (ADR-0045 decision 8), `take_back_when_done`
+        is stored on the handoff, and `continue` starts the cloud turn in
+        the same transaction: the answer is CLOUD_RUNNING with
+        `continued`. A refused grant or chain leaves the send HANDING_OFF.
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -28344,7 +28525,7 @@ paths:
       responses:
         '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '200':
-          description: CLOUD_IDLE.
+          description: CLOUD_IDLE, or CLOUD_RUNNING with `continued` (contract 1.33).
           content:
             application/json:
               schema:
@@ -28385,7 +28566,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '409':
-          description: '`stale_epoch`: the epoch or the state changed, or the send expired.'
+          description: >-
+            `stale_epoch`: the epoch or the state changed, or the send
+            expired. From contract 1.33, with `continue`:
+            `chain_limit_reached` (with `limit`; the chain ends) or
+            `chain_ended`.
           content:
             application/json:
               schema:
@@ -28397,11 +28582,23 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
         '422':
-          description: '`invalid_handoff`: the store does not hold the named snapshot.'
+          description: >-
+            `invalid_handoff`: the store does not hold the named snapshot, or
+            a malformed `continue`. From contract 1.33,
+            `unattended_grant_refused` (with `reason` and `field`), and
+            `continue_refused` (with `reason` and `field`): a `continue` in
+            mode `plan` (`reason` `mode`, `field` `mode`), which a cloud
+            turn cannot run. The send stays HANDING_OFF; complete it again
+            without `continue`.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkspaceHandoffError'
+              example:
+                error: continue_refused
+                message: A cloud turn has no plan mode. Complete the send without `continue`.
+                reason: mode
+                field: mode
 
   /elitea_core/workspace_handoff_reclaim/prompt_lib/{project_id}/{conversation_uuid}:
     parameters:

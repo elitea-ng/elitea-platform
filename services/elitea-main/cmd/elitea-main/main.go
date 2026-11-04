@@ -1650,6 +1650,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// dependencies. Its turn canceller is the runtime's own stop use case,
 	// bound once the runtime is composed (workspaceTurnCanceller.bind).
 	workspaceTurnCanceller := &deferredAgentCanceller{}
+	// The chat start use case of a send's continue turn, bound likewise.
+	workspaceTurnStarter := &deferredAgentStarter{}
 	var workspaceBus events.Bus
 	if liveNATSBus != nil {
 		workspaceBus = liveNATSBus
@@ -1666,7 +1668,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}
 	workspaceHandoff, err := composeWorkspaceHandoff(ctx, pool, objectStore, workspaceInputs, nativePolicy,
-		workspaceTurnCanceller, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), workspaceForgeExpander, logger)
+		workspaceTurnCanceller, workspaceTurnStarter, auditRecorder, apiGroupAuth, newHandoffLiveEvents(workspaceBus), workspaceForgeExpander, logger)
 	if err != nil {
 		return fmt.Errorf("compose workspace handoff routes: %w", err)
 	}
@@ -2339,6 +2341,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 		}
 		if publicRoutes.AgentStart != nil {
+			workspaceTurnStarter.bind(publicRoutes.AgentStart)
 			supportAssistantStart = publicRoutes.AgentStart
 			mcpAgentStart = publicRoutes.AgentStart
 			childAgentStart = publicRoutes.AgentStart

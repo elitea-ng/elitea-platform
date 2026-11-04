@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.32",
+  "client_contract": "1.33",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -1516,7 +1516,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -1575,7 +1587,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -1617,7 +1641,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -1659,7 +1695,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -1743,7 +1791,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -10327,6 +10387,27 @@
                 "history_mode": {
                   "type": "string"
                 },
+                "last_cloud_run": {
+                  "type": "object",
+                  "nullable": true,
+                  "required": [
+                    "execution_id",
+                    "finished_at",
+                    "outcome"
+                  ],
+                  "properties": {
+                    "execution_id": {
+                      "type": "string"
+                    },
+                    "finished_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    }
+                  }
+                },
                 "pull_request_credential": {
                   "type": "object",
                   "nullable": true,
@@ -10398,6 +10479,9 @@
                     }
                   }
                 },
+                "take_back_when_done": {
+                  "type": "boolean"
+                },
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
@@ -10462,7 +10546,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -10521,7 +10617,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -10563,7 +10671,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -10647,7 +10767,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -10946,7 +11078,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -11005,7 +11149,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11047,7 +11203,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11131,7 +11299,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11268,7 +11448,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -11327,7 +11519,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11369,7 +11573,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11453,7 +11669,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11682,7 +11910,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -11741,7 +11981,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11825,7 +12077,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -11992,7 +12256,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -12051,7 +12327,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -12093,7 +12381,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -12177,7 +12477,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -12281,7 +12593,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -12340,7 +12664,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -12382,7 +12718,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -12466,7 +12814,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22585,7 +22945,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -22644,7 +23016,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22686,7 +23070,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22728,7 +23124,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22770,7 +23178,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22812,7 +23232,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22854,7 +23286,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22938,7 +23382,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -22985,6 +23441,77 @@
               "sha"
             ],
             "properties": {
+              "continue": {
+                "type": "object",
+                "required": [
+                  "mode",
+                  "prompt"
+                ],
+                "properties": {
+                  "grant": {
+                    "type": "object",
+                    "required": [
+                      "grant_id"
+                    ],
+                    "properties": {
+                      "chain": {
+                        "type": "object",
+                        "properties": {
+                          "deadline_seconds": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "max_continuations": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                          },
+                          "max_spend": {
+                            "type": "number",
+                            "format": "double",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "chain_root_execution_id": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{32}$"
+                      },
+                      "continue_step_limit": {
+                        "type": "boolean"
+                      },
+                      "continue_tool_call_cap": {
+                        "type": "boolean"
+                      },
+                      "goal_check": {
+                        "type": "boolean"
+                      },
+                      "grant_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "hook_asks": {
+                        "type": "boolean"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "remote_confirmations": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "mode": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "min_length": 1,
+                    "max_length": 32768
+                  }
+                }
+              },
               "epoch": {
                 "type": "integer",
                 "format": "int64"
@@ -22994,6 +23521,13 @@
               },
               "sha": {
                 "type": "string"
+              },
+              "stopped_chain_root_execution_id": {
+                "type": "string",
+                "max_length": 64
+              },
+              "take_back_when_done": {
+                "type": "boolean"
               }
             }
           }
@@ -23009,6 +23543,27 @@
                 "state"
               ],
               "properties": {
+                "continued": {
+                  "type": "object",
+                  "required": [
+                    "execution_id",
+                    "message_id",
+                    "question_id"
+                  ],
+                  "properties": {
+                    "execution_id": {
+                      "type": "string"
+                    },
+                    "message_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "question_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
                 "epoch": {
                   "type": "integer",
                   "format": "int64"
@@ -23072,7 +23627,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -23131,7 +23698,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23173,7 +23752,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23215,7 +23806,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23257,7 +23860,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23299,7 +23914,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23383,7 +24010,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23548,7 +24187,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -23607,7 +24258,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23649,7 +24312,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23691,7 +24366,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23733,7 +24420,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23775,7 +24474,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23859,7 +24570,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -23955,7 +24678,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -24014,7 +24749,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24056,7 +24803,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24098,7 +24857,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24182,7 +24953,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24327,7 +25110,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -24386,7 +25181,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24428,7 +25235,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24470,7 +25289,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24512,7 +25343,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24554,7 +25397,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24638,7 +25493,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24819,7 +25686,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -24878,7 +25757,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24920,7 +25811,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -24962,7 +25865,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25009,7 +25924,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25051,7 +25978,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25093,7 +26032,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25177,7 +26128,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25359,7 +26322,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -25418,7 +26393,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25460,7 +26447,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25502,7 +26501,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25544,7 +26555,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25586,7 +26609,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25628,7 +26663,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25712,7 +26759,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25838,7 +26897,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -25897,7 +26968,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25939,7 +27022,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -25981,7 +27076,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -26023,7 +27130,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -26065,7 +27184,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -26149,7 +27280,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27275,7 +28418,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -27334,7 +28489,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27376,7 +28543,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27418,7 +28597,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27460,7 +28651,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27544,7 +28747,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27650,7 +28865,19 @@
                     "error": {
                       "type": "string"
                     },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string"
+                    },
                     "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
                       "type": "string"
                     }
                   }
@@ -27709,7 +28936,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27751,7 +28990,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27793,7 +29044,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27835,7 +29098,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27877,7 +29152,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
@@ -27961,7 +29248,19 @@
                 "error": {
                   "type": "string"
                 },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string"
+                },
                 "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }

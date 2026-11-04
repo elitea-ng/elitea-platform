@@ -109,6 +109,8 @@ type CurrentAdhocStartRequest struct {
 	// CurrentApplicationStartRequest (ADR-0045).
 	Unattended             *unattended.Request
 	UnattendedContinuation *UnattendedContinuation
+	// HandoffCompletion is as on CurrentApplicationStartRequest.
+	HandoffCompletion *HandoffCompletion
 }
 
 // mentionRequest is the part of an ad-hoc start the mention notifier reads,
@@ -240,7 +242,8 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		IdempotencyKey: request.QuestionID, CapabilityID: executiondomain.AgentAdhocCapability,
 		ClientStreamID: request.ConversationUUID, ClientMessageID: responseMessageID,
 		SIOEvent: "chat_predict", Input: input,
-		TriggerOrigin: request.TriggerOrigin,
+		TriggerOrigin:     request.TriggerOrigin,
+		HandoffCompletion: request.HandoffCompletion.Clone(),
 		CurrentAdhocTurn: &CurrentAdhocTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID: request.ConversationUUID, TargetParticipantID: target.TargetParticipantID,

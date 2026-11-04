@@ -24,7 +24,16 @@
 //! The queue and its events change under one lock, so the UI receives
 //! `steer_queued`, `steer_injected` and `steer_dropped` of one message in
 //! the order the queue saw them.
+//!
+//! The same safe point is where a send to the cloud stops a running turn
+//! (ADR-0045 decision 8): [`TurnSteering::request_stop`] asks for it, and
+//! at the next safe point the source takes nothing, says the boundary is
+//! reached and never returns. The run (`turn.rs`, `run_once`) waits for
+//! that, so the step in flight finished and its tool results are in the
+//! session; it drops the run there and the turn commits as usual. It is not
+//! a cancel: nothing of the turn is lost.
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use adk_agent::SteeringSource;
@@ -118,10 +127,28 @@ struct Queue {
     injected: Vec<String>,
 }
 
+/// A stop at the next step boundary (ADR-0045 decision 8): one state
+/// machine, so a send that withdraws its stop and the run that reaches the
+/// boundary never both win.
+///
+/// `NONE` → `REQUESTED` ([`TurnSteering::request_stop`]) → `REACHED` (the
+/// run claimed it: [`TurnSteering::claim_stop`]); `REQUESTED` → `NONE`
+/// ([`TurnSteering::withdraw_stop`]). `REACHED` is final.
+#[derive(Default)]
+struct BoundaryStop {
+    state: AtomicU8,
+    notify: tokio::sync::Notify,
+}
+
+const STOP_NONE: u8 = 0;
+const STOP_REQUESTED: u8 = 1;
+const STOP_REACHED: u8 = 2;
+
 /// One turn's steering queue, with the turn's event stream.
 pub struct TurnSteering {
     events: Arc<TurnEvents>,
     queue: Mutex<Queue>,
+    stop: BoundaryStop,
 }
 
 impl TurnSteering {
@@ -130,6 +157,71 @@ impl TurnSteering {
         Self {
             events,
             queue: Mutex::new(Queue::default()),
+            stop: BoundaryStop::default(),
+        }
+    }
+
+    /// Stop the run at its next step boundary: the step in flight finishes
+    /// and its tool results are kept; the model is not asked again.
+    pub fn request_stop(&self) {
+        let _ = self.stop.state.compare_exchange(
+            STOP_NONE,
+            STOP_REQUESTED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    /// Take a stop back before the run claimed it; `false` once it did
+    /// (the run ends there for the send either way). Atomic against
+    /// [`Self::claim_stop`]: exactly one of the two wins.
+    pub fn withdraw_stop(&self) -> bool {
+        match self.stop.state.compare_exchange(
+            STOP_REQUESTED,
+            STOP_NONE,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(now) => now != STOP_REACHED,
+        }
+    }
+
+    /// The run ends here for a requested stop: `true` when a stop was
+    /// requested and is not withdrawn (it is then final, and a withdraw
+    /// fails), or was claimed already. Every end that would start a local
+    /// continuation asks this first.
+    pub fn claim_stop(&self) -> bool {
+        let claimed = match self.stop.state.compare_exchange(
+            STOP_REQUESTED,
+            STOP_REACHED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => true,
+            Err(now) => now == STOP_REACHED,
+        };
+        if claimed {
+            self.stop.notify.notify_waiters();
+        }
+        claimed
+    }
+
+    /// A stop was requested and not withdrawn (or was claimed).
+    #[cfg(test)]
+    #[must_use]
+    pub fn stop_requested(&self) -> bool {
+        self.stop.state.load(Ordering::SeqCst) != STOP_NONE
+    }
+
+    /// Resolves once the run claimed a stop at a step boundary.
+    pub async fn stop_reached(&self) {
+        loop {
+            let notified = self.stop.notify.notified();
+            if self.stop.state.load(Ordering::SeqCst) == STOP_REACHED {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -313,6 +405,12 @@ impl SteeringInjector {
 #[async_trait]
 impl SteeringSource for SteeringInjector {
     async fn take(&self, ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+        // A stop for a send to the cloud: the step's tool results are in
+        // the session, the next model request is not built. The run is
+        // parked here and dropped by `run_once`, which waits for this.
+        if self.steering.claim_stop() {
+            std::future::pending::<()>().await;
+        }
         self.inject(ctx.invocation_id()).await
     }
 }
@@ -336,6 +434,67 @@ mod tests {
             .into_iter()
             .map(|event| (event.kind, event.payload))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_boundary_stop_is_reached_once_and_cannot_be_withdrawn_after() {
+        let (_, steering) = steering();
+        assert!(!steering.stop_requested());
+        steering.request_stop();
+        assert!(steering.withdraw_stop(), "withdrawn before the boundary");
+        assert!(!steering.stop_requested());
+        steering.request_stop();
+        let steering = Arc::new(steering);
+        let waiter = tokio::spawn({
+            let steering = steering.clone();
+            async move { steering.stop_reached().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(steering.claim_stop());
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("reached")
+            .unwrap();
+        // Already reached: resolves at once, and is not withdrawn.
+        steering.stop_reached().await;
+        assert!(!steering.withdraw_stop());
+    }
+
+    // The send's withdraw and the run's claim race: exactly one wins, every
+    // time, and a claimed stop is never withdrawn after.
+    #[test]
+    fn a_withdraw_and_a_claim_never_both_win() {
+        for _ in 0..2000 {
+            let (_, steering) = steering();
+            let steering = Arc::new(steering);
+            steering.request_stop();
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let claim = std::thread::spawn({
+                let (steering, barrier) = (steering.clone(), barrier.clone());
+                move || {
+                    barrier.wait();
+                    steering.claim_stop()
+                }
+            });
+            barrier.wait();
+            let withdrawn = steering.withdraw_stop();
+            let claimed = claim.join().unwrap();
+            assert_ne!(withdrawn, claimed, "exactly one wins");
+            assert_eq!(steering.stop_requested(), claimed);
+            assert_eq!(steering.withdraw_stop(), !claimed);
+        }
+    }
+
+    #[test]
+    fn a_claim_without_a_request_is_nothing() {
+        let (_, steering) = steering();
+        assert!(!steering.claim_stop());
+        assert!(steering.withdraw_stop(), "nothing to take back");
+        steering.request_stop();
+        assert!(steering.claim_stop());
+        assert!(steering.claim_stop(), "claimed stays claimed");
+        steering.request_stop();
+        assert!(!steering.withdraw_stop());
     }
 
     #[test]
