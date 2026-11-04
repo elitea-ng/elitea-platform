@@ -1,0 +1,11 @@
+{
+  "id": "code-word-freq",
+  "group": "coding",
+  "title": "Make word frequency counting Unicode-aware with stable tie order",
+  "prompt": "topWords() in src/wordfreq.mjs only understands ASCII and its ordering is wrong for our multilingual support tickets. Rework it to this spec:\n\n- topWords(text, n, { stopWords }) returns [word, count] pairs. n omitted/undefined means all words.\n- A word is a maximal run of Unicode letters, combining marks and digits. A single apostrophe (' or ’) or hyphen BETWEEN two such characters joins them into one word (\"don't\", \"e-mail\", \"rock'n'roll\"); apostrophes/hyphens at the edges or doubled (\"--\") are separators.\n- Words are normalised before counting: Unicode NFC, then lower-case, and ’ becomes '. So \"École\", \"école\" and the decomposed \"e\\u0301cole\" are the same word, and \"Don’t\" equals \"don't\".\n- stopWords are normalised the same way and excluded.\n- Order: higher count first; ties keep the order in which the words first appeared in the text.\n\nRun `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/wordfreq.test.mjs"]
+  }
+}

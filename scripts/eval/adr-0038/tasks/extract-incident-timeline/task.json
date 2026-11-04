@@ -1,0 +1,7 @@
+{
+  "id": "extract-incident-timeline",
+  "group": "extraction",
+  "title": "Merge an incident timeline written in several time zones into UTC",
+  "prompt": "User request: read input/postmortem.md and write output.json in the workspace root that conforms to schema.json. Rules: every time converted to UTC (take daylight saving time into account for the incident date) in the exact form YYYY-MM-DDTHH:MM:00Z, truncating seconds; timeline has exactly one entry for each of the seven event types in the schema enum (detected, paged, acknowledged, escalated, root_cause_identified, mitigation_deployed, resolved), sorted chronologically by UTC time; severity is the final severity; affected_services lists only services that were actually affected; time_to_resolve_minutes is from detection to resolution; customer_impact_minutes is from the first customer-facing error (impact_start_utc) to resolution; root_cause_category uses 'dependency' for failures in a third-party or upstream provider (including its certificates), 'deploy' for our own code releases, 'config' for our own configuration mistakes.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

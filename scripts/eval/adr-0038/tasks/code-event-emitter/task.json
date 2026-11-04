@@ -1,0 +1,11 @@
+{
+  "id": "code-event-emitter",
+  "group": "coding",
+  "title": "Fix once/off-during-emit semantics in the event emitter",
+  "prompt": "Our hand-rolled Emitter (src/emitter.mjs) misbehaves when listeners modify the listener list while an event is being dispatched. Required semantics (the same as Node's EventEmitter):\n\n- emit(event, ...args) calls the listeners registered at the moment emit starts, in registration order; listeners added or removed during that dispatch only affect later emits. It returns true if there were listeners, false otherwise.\n- once(event, fn) listeners run at most once, even if the listener itself (or an earlier listener) re-emits the same event synchronously.\n- off(event, fn) accepts the original function for both on() and once() registrations; if the same fn is registered several times it removes only the most recently added registration.\n- on() and once() return an unsubscribe function that removes exactly that registration (calling it twice is harmless).\n- emitting 'error' with no 'error' listener throws: the argument itself if it is an Error, otherwise an Error whose message mentions it.\n- listenerCount(event) reports the current number of registrations.\n\nRun `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/emitter.test.mjs"]
+  }
+}

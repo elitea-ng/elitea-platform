@@ -1,0 +1,20 @@
+{
+  "incident_id": "INC-2026-1028-A",
+  "severity": "sev1",
+  "impact_start_utc": "2026-10-28T15:52:00Z",
+  "detected_utc": "2026-10-28T16:05:00Z",
+  "resolved_utc": "2026-10-28T17:21:00Z",
+  "time_to_resolve_minutes": 76,
+  "customer_impact_minutes": 89,
+  "affected_services": ["checkout-api", "payments-gateway"],
+  "root_cause_category": "dependency",
+  "timeline": [
+    { "time_utc": "2026-10-28T16:05:00Z", "event": "detected" },
+    { "time_utc": "2026-10-28T16:07:00Z", "event": "paged" },
+    { "time_utc": "2026-10-28T16:14:00Z", "event": "acknowledged" },
+    { "time_utc": "2026-10-28T16:30:00Z", "event": "escalated" },
+    { "time_utc": "2026-10-28T16:40:00Z", "event": "root_cause_identified" },
+    { "time_utc": "2026-10-28T16:58:00Z", "event": "mitigation_deployed" },
+    { "time_utc": "2026-10-28T17:21:00Z", "event": "resolved" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "code-money-cents",
+  "group": "coding",
+  "title": "Switch the checkout modules from float dollars to integer cents",
+  "prompt": "Our checkout code (src/cart.mjs, src/discount.mjs, src/tax.mjs, src/format.mjs, src/checkout.mjs) passes money around as floating-point dollars and we keep getting off-by-a-cent totals. Move every module to integer cents end to end, using the names the updated tests import:\n\n- cart: addItem(cart, { sku, name, priceCents, qty = 1 }) — priceCents must be a non-negative integer and qty a positive integer, otherwise RangeError (and nothing is added); lineTotalCents(item); subtotalCents(cart).\n- discount: discountCents(amountCents, discount) returns the discount in cents. { type: 'percent', value } rounds half up to the cent; { type: 'fixed', amountCents } is capped at the amount; no discount -> 0; unknown types throw.\n- tax: taxCents(amountCents, ratePercent) rounds half up to the cent. Rates have at most 3 decimals (e.g. 8.875) and the rounding must be exact — 2.3% of 1500 cents is exactly 34.5 and must round to 35.\n- format: formatCents(cents) -> '$1,234.50', '-$0.05'; non-integer input throws RangeError.\n- checkout: summarize(cart, { discount, taxRatePercent }) applies the discount to the subtotal, tax on the discounted amount, and returns { subtotalCents, discountCents, taxCents, totalCents, display: { subtotal, discount, tax, total } }.\n\nRun `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/money.test.mjs"]
+  }
+}

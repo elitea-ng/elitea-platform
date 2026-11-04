@@ -1,0 +1,12 @@
+{
+  "id": "code-go-roman",
+  "group": "coding",
+  "title": "Fix Roman numeral conversion and strict validation (Go)",
+  "prompt": "The roman package (roman.go) is used to validate chapter numbers in imported documents, and it is both wrong and too permissive. ToRoman must produce the canonical (shortest standard subtractive) form for 1..3999 and return an error outside that range; it currently produces wrong output for some numbers and accepts out-of-range input. FromRoman must accept only canonical upper-case numerals in 1..3999 and return an error for everything else — e.g. \"IIII\", \"VV\", \"IC\", \"IL\", \"XM\", \"VX\", \"IIX\", \"MMMM\", \"XCX\", lower-case input and the empty string are all invalid — instead of happily computing a number. Run `go test ./...`.",
+  "verifier": {
+    "kind": "command",
+    "command": "go test ./...",
+    "check_files": ["roman_test.go", "go.mod"]
+  },
+  "final": { "hidden_command": "go test -run Hidden ./..." }
+}

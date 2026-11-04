@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project", "versions"],
+  "properties": {
+    "project": { "type": "string", "minLength": 1 },
+    "versions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["version", "release_date", "yanked", "breaking", "counts"],
+        "properties": {
+          "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+          "release_date": { "type": "string", "format": "date" },
+          "yanked": { "type": "boolean" },
+          "breaking": { "type": "boolean" },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["added", "changed", "deprecated", "removed", "fixed", "security"],
+            "properties": {
+              "added": { "type": "integer", "minimum": 0 },
+              "changed": { "type": "integer", "minimum": 0 },
+              "deprecated": { "type": "integer", "minimum": 0 },
+              "removed": { "type": "integer", "minimum": 0 },
+              "fixed": { "type": "integer", "minimum": 0 },
+              "security": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

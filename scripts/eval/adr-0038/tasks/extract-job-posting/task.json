@@ -1,0 +1,7 @@
+{
+  "id": "extract-job-posting",
+  "group": "extraction",
+  "title": "Extract salary, hours and remote policy from a job posting",
+  "prompt": "User request: read input/posting.md and write output.json in the workspace root that conforms to schema.json. Rules: country as an ISO 3166-1 alpha-2 code; salary is the actual pay for this role's hours (pro-rated), not the full-time equivalent and not survey figures, with min and max as plain numbers (no currency symbols or 'k') and currency as an ISO 4217 code; remote_policy is hybrid if some days are in the office and some at home; office_days_per_week is the number of in-office days per week; skills exactly as written in the 'Required skills' and 'Nice to have' bullet lists only; dates as YYYY-MM-DD, and if the posting was updated later use the updated value; reports_to is the job title of the manager, or null if not stated.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

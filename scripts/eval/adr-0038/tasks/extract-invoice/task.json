@@ -1,0 +1,7 @@
+{
+  "id": "extract-invoice",
+  "group": "extraction",
+  "title": "Extract a two-page German-format invoice into structured JSON",
+  "prompt": "User request: read input/invoice.txt and write output.json in the workspace root that conforms to schema.json. Rules: dates as YYYY-MM-DD; all money values as JSON numbers in the invoice currency (the document uses German number format, so 1.249,00 means 1249.00); currency as an ISO 4217 code; VAT IDs in upper case with all spaces and punctuation removed; line_items in document order, one entry per invoice position, with the full description (join text that continues on following lines or on the next page); quantity as a number (1,5 h means 1.5); vat_rate as a fraction (19 % means 0.19); if a later note in the document changes a value, use the changed value; amount_due is what the customer owes now; use null for a customer field that is not in the document.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

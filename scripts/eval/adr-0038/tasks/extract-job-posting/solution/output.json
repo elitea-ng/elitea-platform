@@ -1,0 +1,16 @@
+{
+  "title": "Senior Data Engineer (part-time)",
+  "company": "Fernhill Energy",
+  "location": { "city": "Manchester", "country": "GB" },
+  "remote_policy": "hybrid",
+  "office_days_per_week": 2,
+  "employment_type": "part_time",
+  "hours_per_week": 30,
+  "salary": { "currency": "GBP", "min": 52000, "max": 64000, "period": "year" },
+  "min_years_experience": 4,
+  "required_skills": ["Python", "PostgreSQL", "Airflow", "dbt"],
+  "nice_to_have_skills": ["Kubernetes", "Terraform"],
+  "visa_sponsorship": false,
+  "application_deadline": "2027-02-14",
+  "reports_to": "Head of Data Platform"
+}

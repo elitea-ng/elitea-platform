@@ -1,0 +1,69 @@
+Architecture sync — transcript (auto-generated, lightly cleaned)
+Date: Wednesday 14 October 2026, 16:00-16:55 CET
+Participants: Ines Moreau (chair), Tomasz Wilk, Aiko Tanaka, Ravi Iyer
+
+[00:00] Ines: Okay, let's start. One topic today: the event bus for the new
+audit pipeline. Every service emits audit events; we need to store them
+durably and be able to re-process them. Compliance asked for the ability to
+replay the last 30 days of events when we change the enrichment logic.
+
+[01:10] Ravi: Before that — quick thing, the holiday party venue. Is it the
+boat again? People complained about the seasickness last year.
+[01:25] Ines: Let's do that after. Audit bus first.
+
+[02:00] Tomasz: Volume-wise we're at about 8k events per second at peak today,
+projections say 20k by the end of next year.
+
+[03:15] Aiko: The obvious candidates: Kafka, RabbitMQ, NATS JetStream, and
+someone put SQS plus SNS on the list.
+
+[04:00] Ravi: SQS is out for me. Half of our enterprise customers run the
+platform on-prem, several of them fully air-gapped. We can't depend on an AWS
+managed service.
+[04:20] Ines: Agreed, SQS is out. Nobody disagrees? ... Okay.
+
+[05:30] Tomasz: RabbitMQ: we know it a bit from the old billing system. But
+classic queues delete messages once consumed — no replay. There's the streams
+feature, but nobody here has run it and we'd be back to learning a new system
+anyway.
+[06:45] Aiko: And replay is the core requirement. If we can't replay 30 days,
+it doesn't fit.
+[07:00] Ines: So RabbitMQ is out because of replay.
+
+[08:10] Ravi: Kafka fits the replay requirement perfectly, it's what it's made
+for. Throughput is a non-issue.
+[08:40] Tomasz: The problem is operating it. We'd need a dedicated cluster —
+three brokers on KRaft at minimum — and nobody on the team has run Kafka in
+production. JVM tuning, partition rebalancing, upgrades... My estimate is half
+an engineer, permanently, just to keep it healthy. For on-prem customers we'd
+also have to ship and support Kafka in their environments.
+[09:30] Ines: That's the deal-breaker for me. Operational cost and on-prem
+footprint.
+
+[10:15] Aiko: JetStream. We already run NATS for request/reply and the command
+bus, so it's in every install already, including air-gapped ones. Streams
+support retention by age, so a 30-day max age gives us replay. Single binary,
+we know how to operate it.
+[11:40] Tomasz: My only worry is throughput at the high end. Our NATS cluster
+is three nodes; I'm fairly confident at 20k/s but I'd want numbers.
+[12:30] Ravi: Then let's benchmark before we commit the schema.
+[13:05] Ines: Proposal: we go with NATS JetStream, file storage, three replicas,
+30-day max age on the audit stream. If sustained throughput ever goes above
+50k events per second, we revisit Kafka. Objections? ... None. Decided.
+
+[14:20] Aiko: I'll run the benchmark at 20k events/s sustained with three
+replicas and post results by 28 October.
+[14:45] Tomasz: I'll write the stream config and the retention policy, and
+document the storage sizing — 30 days at 20k/s is a lot of disk, roughly
+1.2 TB per replica at our average event size.
+[15:30] Ines: And I'll write this up as an ADR. Status accepted.
+
+[16:00] Ravi: One more consequence: consumers must be idempotent, because
+replay will redeliver events they've already seen.
+[16:20] Ines: Good point, put that in.
+
+[17:00] Ravi: Okay, party venue now?
+[17:05] Ines: Quickly. Not the boat. Aiko will send a poll.
+[18:30] Tomasz: Last thing — HR approved the contractor for the frontend team,
+Jeremy starts on the 2nd. Not related to this, just FYI.
+[18:50] Ines: Thanks. We're done.

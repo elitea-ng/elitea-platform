@@ -1,0 +1,7 @@
+{
+  "id": "doc-runbook",
+  "group": "doc",
+  "title": "Write an on-call runbook from a service config and incident notes",
+  "prompt": "User request: write RUNBOOK.md in the workspace root, an on-call runbook for the ledger-sync service, using only the files in input/. Use Markdown headings for these sections, in this order: Overview, Health checks, Alerts, Rollback, Escalation. Requirements: Health checks must give the health and metrics ports and endpoints; Alerts must cover every alert defined in input/service.yaml by name, each with what to check and what to do (use the commands from the incident notes); Rollback must give the exact helm commands; state the maximum replica count and why; Escalation must name the Slack channel and the PagerDuty service. Do not include any credentials from the config. Keep it under 700 words.",
+  "verifier": { "kind": "review", "output": "RUNBOOK.md" }
+}

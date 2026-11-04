@@ -1,0 +1,50 @@
+service:
+  name: ledger-sync
+  team: payments-platform
+  description: >
+    Consumes posted journal entries from NATS JetStream (stream LEDGER) and
+    writes them to the reporting database. Writes are idempotent per entry id,
+    so redelivered messages are safe.
+  image: registry.example.com/payments/ledger-sync:4.12.3
+  namespace: ledger
+  replicas: 3
+  helm_release: ledger-sync
+
+ports:
+  http: 8080      # internal API, cluster-only
+  health: 8443    # TLS; /healthz (liveness) and /readyz (readiness)
+  metrics: 9102   # Prometheus /metrics, plain HTTP
+
+dependencies:
+  postgres:
+    host: pg-reporting.ledger.svc
+    port: 5432
+    database: reporting
+    user: ledger_sync
+    password: "s3cr3t-Ledg3r-2026!"   # TODO: move to vault before Q1
+    pool_size_per_pod: 20
+    server_max_connections_for_role: 60
+  nats:
+    url: nats://nats.messaging.svc:4222
+    stream: LEDGER
+    consumer: ledger-sync-durable
+    ack_wait: 30s
+
+alerts:
+  - name: LedgerSyncConsumerLag
+    expr: nats_consumer_num_pending{consumer="ledger-sync-durable"} > 50000
+    for: 10m
+    severity: page
+  - name: LedgerSyncDBWriteErrors
+    expr: rate(ledger_sync_db_errors_total[5m]) > 1
+    for: 5m
+    severity: page
+  - name: LedgerSyncPodRestarts
+    expr: increase(kube_pod_container_status_restarts_total{container="ledger-sync"}[30m]) > 3
+    severity: ticket
+
+oncall:
+  slack: "#ledger-oncall"
+  pagerduty_service: ledger-primary
+  secondary: Ines Moreau (payments-platform lead)
+  dba_team_slack: "#dba-oncall"

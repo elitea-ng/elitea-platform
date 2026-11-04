@@ -1,0 +1,7 @@
+{
+  "id": "extract-changelog",
+  "group": "extraction",
+  "title": "Count changelog entries per released version and category",
+  "prompt": "User request: read input/CHANGELOG.md and write output.json in the workspace root that conforms to schema.json. Rules: versions has one entry per released version (exclude Unreleased), in the order they appear in the file (newest first); release_date as YYYY-MM-DD (mind the note about older date formats); yanked is true if the version is marked YANKED; breaking is true only if at least one entry of that version is explicitly marked BREAKING; counts gives, for each Keep a Changelog category, the number of top-level bullet entries in that version (a wrapped continuation line is part of its entry, nested sub-bullets are not separate entries, a category heading that appears more than once in a version is counted in total, and categories with no entries are 0).",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

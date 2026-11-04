@@ -1,0 +1,20 @@
+{
+  "invoice_number": "NW-2026-10417",
+  "vendor": { "name": "Northwind Office Supply GmbH", "vat_id": "DE812345678" },
+  "customer": { "name": "Brightline Analytics B.V.", "vat_id": "NL864213579B01", "purchase_order": "PO-88213" },
+  "issue_date": "2026-10-14",
+  "due_date": "2026-11-30",
+  "currency": "EUR",
+  "line_items": [
+    { "sku": "PAP-A4-80", "description": "Copy paper A4 80 g/m², box of 5 reams", "quantity": 12, "unit_price": 24.90, "amount": 298.80 },
+    { "sku": "TON-HP-410X", "description": "Toner cartridge HP 410X black", "quantity": 3, "unit_price": 139.50, "amount": 418.50 },
+    { "sku": "CHR-ERG-200", "description": "Ergonomic office chair \"Aero\", graphite, 5-year warranty", "quantity": 2, "unit_price": 1249.00, "amount": 2498.00 },
+    { "sku": "DSK-LMP-LED", "description": "LED desk lamp, dimmable, with USB-C charging port", "quantity": 4, "unit_price": 45.75, "amount": 183.00 },
+    { "sku": "SRV-INST", "description": "Installation & assembly on site, billed per hour", "quantity": 1.5, "unit_price": 68.00, "amount": 102.00 }
+  ],
+  "net_total": 3500.30,
+  "vat_rate": 0.19,
+  "vat_amount": 665.06,
+  "total": 4165.36,
+  "amount_due": 4165.36
+}

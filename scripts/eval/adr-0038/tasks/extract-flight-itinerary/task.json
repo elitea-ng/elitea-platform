@@ -1,0 +1,7 @@
+{
+  "id": "extract-flight-itinerary",
+  "group": "extraction",
+  "title": "Extract a multi-segment flight itinerary with UTC times and a schedule change",
+  "prompt": "User request: read input/itinerary.eml and write output.json in the workspace root that conforms to schema.json. Rules: booking_reference is the current booking's PNR; passengers as 'First Last' without titles; segments in travel order, one per flight; flight_number without spaces (e.g. LH901); origin and destination as IATA airport codes; the email shows local airport times, so convert each departure and arrival to UTC using the airport's time zone on that date, in the exact form YYYY-MM-DDTHH:MM:00Z; apply any schedule change notice; duration_minutes is the elapsed flight time computed from the UTC times; cabin mapped to the schema enum (e.g. 'Economy Classic' is economy); total_fare is the total charged for this booking, as a number with an ISO 4217 currency code.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

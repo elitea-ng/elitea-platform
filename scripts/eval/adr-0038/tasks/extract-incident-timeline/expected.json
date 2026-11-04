@@ -1,0 +1,22 @@
+{
+  "checks": [
+    { "path": "severity", "op": "eq", "value": "sev1" },
+    { "path": "impact_start_utc", "op": "eq", "value": "2026-10-28T15:52:00Z" },
+    { "path": "detected_utc", "op": "eq", "value": "2026-10-28T16:05:00Z" },
+    { "path": "resolved_utc", "op": "eq", "value": "2026-10-28T17:21:00Z" },
+    { "path": "time_to_resolve_minutes", "op": "eq", "value": 76 },
+    { "path": "customer_impact_minutes", "op": "eq", "value": 89 },
+    { "path": "affected_services", "op": "set", "value": ["checkout-api", "payments-gateway"] },
+    { "path": "root_cause_category", "op": "eq", "value": "dependency" },
+    { "path": "timeline", "op": "len", "value": 7 },
+    { "path": "timeline.1.time_utc", "op": "eq", "value": "2026-10-28T16:07:00Z" },
+    { "path": "timeline.2.event", "op": "eq", "value": "acknowledged" },
+    { "path": "timeline.2.time_utc", "op": "eq", "value": "2026-10-28T16:14:00Z" },
+    { "path": "timeline.3.event", "op": "eq", "value": "escalated" },
+    { "path": "timeline.3.time_utc", "op": "eq", "value": "2026-10-28T16:30:00Z" },
+    { "path": "timeline.4.event", "op": "eq", "value": "root_cause_identified" },
+    { "path": "timeline.4.time_utc", "op": "eq", "value": "2026-10-28T16:40:00Z" },
+    { "path": "timeline.5.time_utc", "op": "eq", "value": "2026-10-28T16:58:00Z" },
+    { "path": "timeline.6.event", "op": "eq", "value": "resolved" }
+  ]
+}

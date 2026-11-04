@@ -1,0 +1,19 @@
+{
+  "checks": [
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Status\\b", "desc": "Status section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Decision\\b", "desc": "Decision section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Alternatives\\b", "desc": "Alternatives considered section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Follow[- ]?ups?\\b", "desc": "Follow-ups section" },
+    { "kind": "regex", "pattern": "\\bAccepted\\b", "flags": "i", "desc": "status Accepted" },
+    { "kind": "regex", "pattern": "2026-10-14", "desc": "meeting date in ISO form" },
+    { "kind": "regex", "pattern": "JetStream", "flags": "i", "desc": "chosen option" },
+    { "kind": "regex", "pattern": "50[,.\\s]?000|50\\s?k", "flags": "i", "desc": "revisit threshold 50k events/s" },
+    { "kind": "regex", "pattern": "Kafka", "desc": "Kafka alternative" },
+    { "kind": "regex", "pattern": "RabbitMQ", "desc": "RabbitMQ alternative" },
+    { "kind": "regex", "pattern": "SQS", "desc": "SQS alternative" },
+    { "kind": "regex", "pattern": "air[- ]?gap|on[- ]?prem", "flags": "i", "desc": "reason SQS was rejected" },
+    { "kind": "regex", "pattern": "2026-10-28", "desc": "benchmark follow-up date" },
+    { "kind": "absent", "pattern": "holiday|Jeremy|contractor|\\bboat\\b", "flags": "i", "desc": "no off-topic discussion" },
+    { "kind": "max_words", "value": 600 }
+  ]
+}
