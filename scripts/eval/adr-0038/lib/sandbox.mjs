@@ -83,11 +83,34 @@ export function safePath(ws, p) {
   return full;
 }
 
-function cap(text, max) {
-  if (text.length <= max) return text;
-  const head = Math.floor(max * 0.4);
-  const tail = max - head;
-  return `${text.slice(0, head)}\n... [${text.length - max} chars cut] ...\n${text.slice(-tail)}`;
+// Bounded capture of a whole stream: the first 40 % of `max` characters and
+// a rolling window of the last 60 %. The end of the stream (for example a
+// test summary) therefore always survives, however long the output is.
+export function makeCapture(max) {
+  const headMax = Math.floor(max * 0.4);
+  const tailMax = max - headMax;
+  let head = '';
+  let tail = '';
+  let total = 0;
+  return {
+    add(chunk) {
+      let s = String(chunk);
+      total += s.length;
+      if (head.length < headMax) {
+        const take = Math.min(headMax - head.length, s.length);
+        head += s.slice(0, take);
+        s = s.slice(take);
+      }
+      if (!s) return;
+      tail += s;
+      if (tail.length > tailMax * 2) tail = tail.slice(-tailMax);
+    },
+    text() {
+      const t = tail.length > tailMax ? tail.slice(-tailMax) : tail;
+      const cut = total - head.length - t.length;
+      return cut > 0 ? `${head}\n... [${cut} chars cut] ...\n${t}` : head + t;
+    },
+  };
 }
 
 function profile(root) {
@@ -131,10 +154,8 @@ export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 
   }
   return new Promise((done) => {
     const child = spawn(file, args, { cwd: run.ws, env, detached: true });
-    let out = '';
-    const add = (b) => {
-      if (out.length < maxOutput * 20) out += b.toString();
-    };
+    const out = makeCapture(maxOutput);
+    const add = (b) => out.add(b.toString());
     child.stdout.on('data', add);
     child.stderr.on('data', add);
     let timedOut = false;
@@ -144,7 +165,7 @@ export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      done({ code: timedOut ? 124 : (code ?? 1), output: cap(out, maxOutput), timedOut });
+      done({ code: timedOut ? 124 : (code ?? 1), output: out.text(), timedOut });
     });
     child.on('error', (err) => {
       clearTimeout(timer);

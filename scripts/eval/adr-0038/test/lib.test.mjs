@@ -7,7 +7,7 @@ import { validate, scoreChecks, scoreRubric } from '../lib/schema.mjs';
 import { thinkingParams, buildBody, parseUsage } from '../lib/provider.mjs';
 import { parseJsonReply } from '../lib/json.mjs';
 import { testScore } from '../lib/tasks.mjs';
-import { createRun, destroyRun, execTool, runCommand, safePath, sandboxKindAvailable } from '../lib/sandbox.mjs';
+import { createRun, destroyRun, execTool, runCommand, safePath, sandboxKindAvailable, makeCapture } from '../lib/sandbox.mjs';
 
 test('schema subset: types, required, additionalProperties, enum, formats', () => {
   const schema = {
@@ -79,6 +79,33 @@ test('test score from runner output', () => {
   assert.equal(testScore('# pass 2\n# fail 1', 1), 1);
   assert.equal(testScore('--- FAIL: TestA\n--- FAIL: TestB\nFAIL', 1), -2);
   assert.equal(testScore('', 0), 1e6);
+});
+
+test('output capture keeps a bounded head and the real end of the stream', async () => {
+  const c = makeCapture(100);
+  c.add('H'.repeat(30));
+  for (let i = 0; i < 1000; i++) c.add('x'.repeat(97) + '\n\n\n');
+  c.add('SUMMARY pass 7 fail 3');
+  const t = c.text();
+  assert.ok(t.startsWith('H'.repeat(30) + 'x'.repeat(10)));
+  assert.ok(t.endsWith('SUMMARY pass 7 fail 3'));
+  const cut = Number(t.match(/\[(\d+) chars cut\]/)[1]);
+  assert.equal(cut, 30 + 100_000 + 21 - 100);
+  const short = makeCapture(100);
+  short.add('a'.repeat(60));
+  short.add('b'.repeat(40));
+  assert.equal(short.text(), 'a'.repeat(60) + 'b'.repeat(40));
+  // A real command with output far beyond the old 20x collection limit.
+  const seed = mkdtempSync(join(tmpdir(), 'adr0038-seed-'));
+  const run = createRun(seed);
+  try {
+    const r = await runCommand(run, 'yes | head -c 400000; echo; echo "ℹ pass 5"', { maxOutput: 1000 });
+    assert.match(r.output, /ℹ pass 5\s*$/);
+    assert.match(r.output, /\[399\d+ chars cut\]/);
+  } finally {
+    destroyRun(run);
+    rmSync(seed, { recursive: true, force: true });
+  }
 });
 
 test('symlinks cannot lead read_file or write_file out of the workspace', async () => {
