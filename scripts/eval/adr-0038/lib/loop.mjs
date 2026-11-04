@@ -120,7 +120,9 @@ export async function runVerifiedLoop({
       verifierChanged = true;
       note = 'verifier changed';
     }
-    if (verdict.pass && verifier.strong && confirm) {
+    // The confirm re-run is for command verifiers only: a schema check on the
+    // same file cannot change, and a second review call is a new verdict.
+    if (verdict.pass && verifier.kind === 'command' && confirm) {
       const again = await verifier.run(run, { criteria: ledger.criteria });
       if (!again.pass) {
         verdict.pass = false;

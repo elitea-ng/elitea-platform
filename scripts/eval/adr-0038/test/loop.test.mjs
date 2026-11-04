@@ -151,6 +151,20 @@ test('a pass that does not repeat on the confirm re-run is not verified', async 
   });
 });
 
+test('the confirm re-run is for command verifiers only', async () => {
+  for (const [kind, expectedCalls] of [['command', 3], ['schema', 2]]) {
+    await withRun(async (run) => {
+      const { chat } = fakeChat({ values: [1], review: () => ({ decision: 'done' }) });
+      let calls = 0;
+      // Baseline (1) + round 1 (2) + the confirm re-run for command (3).
+      const verifier = { kind, strong: true, describe: () => 'x', async run() { calls++; return { pass: true, score: 1e6, detail: 'ok' }; } };
+      const r = await runVerifiedLoop({ chat, run, task, verifier, maxRounds: 3 });
+      assert.equal(r.outcome, 'verified');
+      assert.equal(calls, expectedCalls, kind);
+    });
+  }
+});
+
 test('manager calls think; finish and summary do not', async () => {
   await withRun(async (run) => {
     const { chat, log } = fakeChat({ values: [1], review: () => ({ decision: 'done' }) });
