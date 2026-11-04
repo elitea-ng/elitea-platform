@@ -363,7 +363,10 @@ func (h *Handler) checkThreadTarget(
 	switch {
 	case errors.As(err, &refused) && (refused.Status == http.StatusNotFound || refused.Status == http.StatusForbidden):
 		// A conversation the caller may not write answers as a missing one.
-		writeError(w, http.StatusNotFound, "no such conversation in this project")
+		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error": "no such conversation in this project",
+			"code":  "thread_not_found",
+		})
 		return threadTarget{}, false
 	case err != nil:
 		h.log().Error("pipelinetriggers: check the thread", "err", err)

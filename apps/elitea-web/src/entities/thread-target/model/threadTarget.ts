@@ -115,16 +115,13 @@ export function threadTargetBody(draft: ThreadTargetDraft): ThreadTargetBodyResu
   };
 }
 
-/** The 404 body of the thread check (`workspacethread.go`, checkThreadTarget). */
-const THREAD_NOT_FOUND = /^no such conversation\b/u;
-
 /**
- * A 404 is about the thread only when the thread check sent it: "no such
- * conversation in this project" (with no code), for a thread that is not
- * there or not the caller's. Any other 404 (the version is gone) is not.
+ * A 404 is about the thread only when the thread check sent it, with the code
+ * `thread_not_found` (a thread that is not there or not the caller's). Any
+ * other 404 (the version is gone) is not.
  */
-function notFoundRefusal(message: string | undefined): ThreadTargetErrors | undefined {
-  if (message === undefined || !THREAD_NOT_FOUND.test(message)) return undefined;
+function notFoundRefusal(code: string | undefined): ThreadTargetErrors | undefined {
+  if (code !== 'thread_not_found') return undefined;
   return { thread: t('threadTarget.refused.notFound', 'This thread is not in this project, or you are not a participant of it.') };
 }
 
@@ -159,7 +156,7 @@ export function threadTargetRefusal(error: unknown): ThreadTargetErrors | undefi
   if (message === 'unattended_grant_refused') return { grant: body };
   switch (status) {
     case 404:
-      return notFoundRefusal(message);
+      return notFoundRefusal(nonBlankText(record['code']));
     case 409:
     case 422:
       return codedRefusal(nonBlankText(record['code']), message);

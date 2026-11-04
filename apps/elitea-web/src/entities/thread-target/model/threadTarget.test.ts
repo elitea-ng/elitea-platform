@@ -59,7 +59,7 @@ describe('threadTarget', () => {
       'This thread was never sent to the cloud. Send it to the cloud from the desktop app first.',
     );
     expect(threadTargetRefusal(refused(422, { error: 'governed', code: 'thread_not_governable' }))?.thread).toContain('a governed schedule or webhook needs a thread whose agent is this version');
-    expect(threadTargetRefusal(refused(404, { error: 'no such conversation in this project' }))?.thread).toBe('This thread is not in this project, or you are not a participant of it.');
+    expect(threadTargetRefusal(refused(404, { error: 'no such conversation in this project', code: 'thread_not_found' }))?.thread).toBe('This thread is not in this project, or you are not a participant of it.');
     const grantBody = { error: 'unattended_grant_refused', reason: 'origin_not_allowed', field: 'sensitive_tools', message: 'The unattended grant was refused: origin_not_allowed.' };
     expect(threadTargetRefusal(refused(422, grantBody))).toEqual({ grant: grantBody });
     expect(threadTargetRefusal(refused(409, { error: 'busy', code: 'thread_busy' }))?.form).toBe('The thread is busy in the cloud. Try again when the current turn ends.');
@@ -73,6 +73,8 @@ describe('threadTarget', () => {
     expect(threadTargetRefusal(refused(404, { error: 'no such pipeline or agent version in this project' }))).toBeUndefined();
     expect(threadTargetRefusal(refused(404, { error: 'no such pipeline version in this project' }))).toBeUndefined();
     expect(threadTargetRefusal(refused(404, {}))).toBeUndefined();
+    // The code decides, not the message text.
+    expect(threadTargetRefusal(refused(404, { error: 'no such conversation in this project' }))).toBeUndefined();
   });
 
   it('is not a refusal of the target for a server error or no error', () => {

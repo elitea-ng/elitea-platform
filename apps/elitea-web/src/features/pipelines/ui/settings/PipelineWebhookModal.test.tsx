@@ -389,7 +389,7 @@ describe('PipelineWebhookModal — Runs on a handed-off workspace thread (ADR-00
 
   it('shows a refusal of the thread on its field', async () => {
     const { onRotate, user } = renderTargeted(getGetPipelineInboundTriggerResponseMock());
-    onRotate.mockResolvedValue(new EliteaApiError({ kind: 'http', status: 404, url: '/api/v2/pipeline_triggers/prompt_lib/1/7', body: { error: 'no such conversation in this project' } }));
+    onRotate.mockResolvedValue(new EliteaApiError({ kind: 'http', status: 404, url: '/api/v2/pipeline_triggers/prompt_lib/1/7', body: { error: 'no such conversation in this project', code: 'thread_not_found' } }));
     await user.type(await screen.findByTestId('thread-target-prompt'), '!');
     await user.click(screen.getByTestId('pipeline-webhook-apply-target'));
     await waitFor(() => expect(screen.getByText('This thread is not in this project, or you are not a participant of it.')).toBeInTheDocument());
