@@ -2,7 +2,8 @@
 //! run.
 //!
 //! The policy itself is ONE copy, in `elitea_llm_wire::thinking`
-//! ([`classify`] of tool results, [`step`] of a request), pinned by
+//! ([`classify`](elitea_llm_wire::thinking::classify) of tool results,
+//! [`step`](elitea_llm_wire::thinking::step) of a request), pinned by
 //! `conformance/llm-caller/contract.json`. This module only reads an adk
 //! request for it: the tool results of the last conversation turn (system
 //! contents, instructions and context notes, do not change what that turn
