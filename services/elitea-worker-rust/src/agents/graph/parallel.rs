@@ -774,19 +774,26 @@ impl AdkParallelBranchRuntime {
         // Validate before business-state cloning or any mapping/child admission.
         validate_input_state(parent)?;
         if let Some(inputs) = source.frozen_inputs(branches, parent) {
+            // The digest is the source's own (a Map item's is main's
+            // `map.item-input.v1` over the item); the child runs on its
+            // worker's projection of that input, as a Parallel member does.
             let frozen = inputs?
                 .into_iter()
                 .zip(branches)
                 .enumerate()
-                .map(|(ordinal, (input, branch))| FrozenBranchInput {
-                    branch_id: branch.id().to_owned(),
-                    node: branch.node().to_owned(),
-                    ordinal,
-                    owned_definition_digest: input.owned_definition_digest,
-                    input_digest: input.input_digest,
-                    input: input.input,
+                .map(|(ordinal, (input, branch))| {
+                    let projected = self.graphs.project_input(branch, &input.input)?;
+                    validate_state(&projected)?;
+                    Ok(FrozenBranchInput {
+                        branch_id: branch.id().to_owned(),
+                        node: branch.node().to_owned(),
+                        ordinal,
+                        owned_definition_digest: input.owned_definition_digest,
+                        input_digest: input.input_digest,
+                        input: projected,
+                    })
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, GraphError>>()?;
             let serialized_inputs = serde_json::to_value(&frozen).map_err(|_| {
                 parallel_error(
                     "graph.parallel.invalid_mapping",

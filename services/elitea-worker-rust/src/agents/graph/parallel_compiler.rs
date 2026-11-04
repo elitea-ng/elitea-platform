@@ -26,6 +26,7 @@ use crate::agents::graph::parallel::{
     ParallelCheckpointAuthority, ParallelDecision, ParallelOccurrenceCheckpointer,
     ParallelPauseCard,
 };
+use crate::agents::graph::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
 use crate::agents::graph::yaml::ParallelNodeDefinition;
 use adk_rust::graph::{
     Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphError, Node, NodeContext,
@@ -402,6 +403,7 @@ impl PipelineDefinition {
             .map(|branch| match owned.get(branch.id()) {
                 Some(OwnedBranch::Agent(node)) => node.selection().alias().to_owned(),
                 Some(OwnedBranch::Llm(node)) => node.id().to_owned(),
+                Some(OwnedBranch::StateModifier(node)) => node.id().to_owned(),
                 None => branch.node().to_owned(),
             })
             .collect();
@@ -445,7 +447,7 @@ fn reject_nested_parallel(
         .iter()
         .filter_map(|(key, branch)| match branch {
             OwnedBranch::Agent(node) => Some((key.clone(), node)),
-            OwnedBranch::Llm(_) => None,
+            OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) => None,
         })
         .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
@@ -559,6 +561,8 @@ pub(super) fn validate_parallel_ownership(
 enum OwnedBranch {
     Agent(ApplicationNodeDefinition),
     Llm(LlmNodeDefinition),
+    /// A Map's State Modifier worker (T-2A3); a fixed Parallel never owns one.
+    StateModifier(StateModifierNodeDefinition),
 }
 
 impl OwnedBranch {
@@ -566,6 +570,7 @@ impl OwnedBranch {
         match self {
             Self::Agent(node) => node.id(),
             Self::Llm(node) => node.id(),
+            Self::StateModifier(node) => node.id(),
         }
     }
 
@@ -573,6 +578,7 @@ impl OwnedBranch {
         match self {
             Self::Agent(node) => node.output_keys(),
             Self::Llm(node) => node.output_keys(),
+            Self::StateModifier(node) => node.output_keys(),
         }
     }
 }
@@ -755,6 +761,43 @@ impl CompilerParallelBranches {
             })
     }
 
+    /// A Map item's State Modifier worker: one node over its declared inputs
+    /// and outputs, with typed defaults for outputs it has not written yet.
+    fn compile_item(
+        &self,
+        definition: &StateModifierNodeDefinition,
+        execution: &ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        let mut channels = BTreeSet::from([
+            "messages".to_owned(),
+            "_pipeline_blocked".to_owned(),
+            PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+        ]);
+        channels.extend(definition.input_keys().iter().cloned());
+        channels.extend(definition.output_keys().iter().cloned());
+        let mut schema = StateSchema::new();
+        for key in channels {
+            let default = self
+                .state_types
+                .get(&key)
+                .map_or(serde_json::Value::Null, |kind| typed_default(kind));
+            schema
+                .channels
+                .insert(key.clone(), Channel::new(&key).with_default(default));
+        }
+        StateGraph::new(schema)
+            .add_node(execution.wrap_node(StateModifierNode::new(definition.clone())))
+            .add_edge(START, definition.id())
+            .add_edge(definition.id(), END)
+            .compile()
+            .map(|graph| {
+                graph
+                    .with_checkpointer_arc(execution.checkpointer())
+                    .with_max_concurrency(1)
+                    .with_strict_channels()
+            })
+    }
+
     fn definition(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
@@ -793,6 +836,8 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 result.copy_from_slice(digest.finish().as_ref());
                 return Ok(result);
             }
+            // The Map worker digest main binds into every item id.
+            OwnedBranch::StateModifier(node) => return Ok(node.config_digest()),
         };
         let participant = self
             .resolver()?
@@ -824,6 +869,21 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         match self.definition(branch)? {
             OwnedBranch::Agent(node) => node.freeze_parallel_input(parent),
             OwnedBranch::Llm(node) => node.freeze_parallel_input(parent),
+            // A State Modifier reads its declared inputs directly.
+            OwnedBranch::StateModifier(node) => node
+                .input_keys()
+                .iter()
+                .map(|key| {
+                    parent
+                        .get(key)
+                        .map(|value| (key.clone(), value.clone()))
+                        .ok_or_else(|| {
+                            GraphError::InvalidGraph(
+                                "a Map State Modifier input is missing from its item".to_owned(),
+                            )
+                        })
+                })
+                .collect(),
         }
     }
 
@@ -835,6 +895,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         let definition = match self.definition(branch)? {
             OwnedBranch::Agent(node) => node.clone(),
             OwnedBranch::Llm(node) => return self.compile_llm_branch(node, &execution),
+            OwnedBranch::StateModifier(node) => return self.compile_item(node, &execution),
         };
         let mut failure_events = None;
         let resolver = match self.events.as_ref() {
@@ -1020,6 +1081,18 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
     }
 }
 
+/// The empty value of a declared state type, as the Map worker schema seeds it.
+fn typed_default(kind: &str) -> serde_json::Value {
+    match kind {
+        "str" => serde_json::Value::String(String::new()),
+        "list" => serde_json::json!([]),
+        "dict" => serde_json::json!({}),
+        "int" | "float" => serde_json::json!(0),
+        "bool" => serde_json::Value::Bool(false),
+        _ => serde_json::Value::Null,
+    }
+}
+
 /// FU-248: an Agent member's child threads belong to its branch's family, so
 /// the saved pipeline it runs journals its effectful direct nodes through it.
 fn branch_journal_resolver(
@@ -1085,3 +1158,7 @@ mod tests;
 #[cfg(test)]
 #[path = "parallel_cards_tests.rs"]
 mod card_tests;
+
+#[cfg(test)]
+#[path = "parallel_compiler_map_tests.rs"]
+mod map_tests;
