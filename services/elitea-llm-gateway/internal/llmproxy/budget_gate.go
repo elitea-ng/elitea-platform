@@ -690,6 +690,9 @@ func recordLoggedCacheTokens(ctx context.Context, usage *schemas.BifrostLLMUsage
 	if read, write, ok := cacheTokensFromLLMUsage(usage); ok {
 		requestlog.FromContext(ctx).SetCacheTokens(read, write)
 	}
+	if reasoning, ok := reasoningTokensFromLLMUsage(usage); ok {
+		requestlog.FromContext(ctx).SetReasoningTokens(reasoning)
+	}
 }
 
 // recordLoggedResponsesCacheTokens is recordLoggedCacheTokens for the
@@ -698,6 +701,35 @@ func recordLoggedResponsesCacheTokens(ctx context.Context, usage *schemas.Respon
 	if read, write, ok := cacheTokensFromResponsesUsage(usage); ok {
 		requestlog.FromContext(ctx).SetCacheTokens(read, write)
 	}
+	if reasoning, ok := reasoningTokensFromResponsesUsage(usage); ok {
+		requestlog.FromContext(ctx).SetReasoningTokens(reasoning)
+	}
+}
+
+// reasoningTokensFromLLMUsage reads the reasoning count of a chat usage block
+// (ADR-0038 decision 5): completion_tokens_details.reasoning_tokens, or the
+// top-level reasoning_tokens SGLang sends. ok is false when the block reports
+// none, so a provider that does not report the count records 0.
+func reasoningTokensFromLLMUsage(usage *schemas.BifrostLLMUsage) (int64, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if details := usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+		return int64(details.ReasoningTokens), true
+	}
+	if usage.ReasoningTokens > 0 {
+		return int64(usage.ReasoningTokens), true
+	}
+	return 0, false
+}
+
+// reasoningTokensFromResponsesUsage is reasoningTokensFromLLMUsage for the
+// Responses-API usage block: output_tokens_details.reasoning_tokens.
+func reasoningTokensFromResponsesUsage(usage *schemas.ResponsesResponseUsage) (int64, bool) {
+	if usage == nil || usage.OutputTokensDetails == nil || usage.OutputTokensDetails.ReasoningTokens <= 0 {
+		return 0, false
+	}
+	return int64(usage.OutputTokensDetails.ReasoningTokens), true
 }
 
 // cacheTokensFromLLMUsage reads the cache-read and cache-write counts from a

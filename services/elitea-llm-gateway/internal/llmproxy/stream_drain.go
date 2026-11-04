@@ -389,8 +389,12 @@ type streamSettler struct {
 	// that set in/out. They feed the request log only, never the bill.
 	cacheRead, cacheWrite int64
 	gotCache              bool
-	observedOutBytes      int64
-	settled               bool
+	// reasoning is the reasoning count of the same usage block (ADR-0038
+	// decision 5). It feeds the request log only, never the bill.
+	reasoning        int64
+	gotReasoning     bool
+	observedOutBytes int64
+	settled          bool
 	// promptEstimate, seenPrompt, relayedChunks and relayedBytes feed the
 	// estimate billed when the CALLER disconnects (stream_disconnect.go,
 	// issue #1201). They reach the money path only there.
@@ -479,6 +483,7 @@ func (s *streamSettler) observe(c *schemas.BifrostStreamChunk) {
 		// same chunk the extractor accepted — for the Responses dialect that is
 		// the terminal event, never message_start.
 		s.cacheRead, s.cacheWrite, s.gotCache = cacheTokensFromChunk(c)
+		s.reasoning, s.gotReasoning = reasoningTokensFromChunk(c)
 	}
 	if p := chunkPromptTokens(c); p > s.seenPrompt {
 		s.seenPrompt = p
@@ -543,16 +548,21 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 func (s *streamSettler) recordLogTokens() {
 	in, out, ok := s.in, s.out, s.gotUsage
 	cacheRead, cacheWrite, gotCache := s.cacheRead, s.cacheWrite, s.gotCache
+	reasoning, gotReasoning := s.reasoning, s.gotReasoning
 	if !ok {
 		in, out, ok = s.accumulatedUsage()
 		if ok {
 			cacheRead, cacheWrite, gotCache = s.accumulatedCacheTokens()
+			reasoning, gotReasoning = s.accumulatedReasoningTokens()
 		}
 	}
 	if ok {
 		s.logUsage.SetTokens(in, out)
 		if gotCache {
 			s.logUsage.SetCacheTokens(cacheRead, cacheWrite)
+		}
+		if gotReasoning {
+			s.logUsage.SetReasoningTokens(reasoning)
 		}
 	}
 	// The key bifrost selected is on the request's own BifrostContext, which
@@ -571,6 +581,31 @@ func (s *streamSettler) accumulatedCacheTokens() (read, write int64, ok bool) {
 	}
 	u, _ := s.ctx.Value(schemas.BifrostContextKeyStreamAccumulatedUsage).(*schemas.BifrostLLMUsage)
 	return cacheTokensFromLLMUsage(u)
+}
+
+// accumulatedReasoningTokens is accumulatedCacheTokens for the reasoning
+// count, under the same rule.
+func (s *streamSettler) accumulatedReasoningTokens() (int64, bool) {
+	if !s.chanClosed || s.ctx == nil {
+		return 0, false
+	}
+	u, _ := s.ctx.Value(schemas.BifrostContextKeyStreamAccumulatedUsage).(*schemas.BifrostLLMUsage)
+	return reasoningTokensFromLLMUsage(u)
+}
+
+// reasoningTokensFromChunk reads the reasoning count from a usage-carrying
+// stream chunk of either dialect.
+func reasoningTokensFromChunk(c *schemas.BifrostStreamChunk) (int64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	if chat := c.BifrostChatResponse; chat != nil {
+		return reasoningTokensFromLLMUsage(chat.Usage)
+	}
+	if sr := c.BifrostResponsesStreamResponse; sr != nil && sr.Response != nil {
+		return reasoningTokensFromResponsesUsage(sr.Response.Usage)
+	}
+	return 0, false
 }
 
 // cacheTokensFromChunk reads the prompt-cache counts from a usage-carrying

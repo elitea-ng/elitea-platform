@@ -87,6 +87,7 @@ type Enrichment struct {
 	outputToks int64
 	cacheRead  int64
 	cacheWrite int64
+	reasoning  int64
 	owner      string
 	metered    *MeteredFields
 	guardrails []guardrail.Verdict
@@ -185,6 +186,21 @@ func (e *Enrichment) SetCacheTokens(read, write int64) {
 	e.cacheRead, e.cacheWrite = read, write
 }
 
+// SetReasoningTokens records the reasoning tokens the response reported
+// (ADR-0038 decision 5). They are a SUBSET of the completion count, never an
+// addition to it.
+func (e *Enrichment) SetReasoningTokens(reasoning int64) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.sealed {
+		return
+	}
+	e.reasoning = reasoning
+}
+
 // SetGuardrailVerdicts records the request's guardrail verdicts (ADR-0043
 // decision 1). The handler sets them once, after the last stage ran.
 func (e *Enrichment) SetGuardrailVerdicts(verdicts []guardrail.Verdict) {
@@ -225,6 +241,7 @@ type snapshot struct {
 	outputToks int64
 	cacheRead  int64
 	cacheWrite int64
+	reasoning  int64
 	owner      string
 	metered    *MeteredFields
 	guardrails []guardrail.Verdict
@@ -247,6 +264,7 @@ func (e *Enrichment) seal() snapshot {
 		outputToks: e.outputToks,
 		cacheRead:  e.cacheRead,
 		cacheWrite: e.cacheWrite,
+		reasoning:  e.reasoning,
 		owner:      e.owner,
 		metered:    e.metered,
 		guardrails: e.guardrails,
@@ -387,6 +405,7 @@ func Middleware(recorder *Recorder) func(http.Handler) http.Handler {
 					CredentialOwner: final.owner,
 					CacheReadToks:   final.cacheRead,
 					CacheWriteToks:  final.cacheWrite,
+					ReasoningToks:   final.reasoning,
 					Metered:         final.metered,
 					Guardrails:      final.guardrails,
 				})

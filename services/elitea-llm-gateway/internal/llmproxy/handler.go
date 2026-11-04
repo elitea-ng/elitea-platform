@@ -682,6 +682,8 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	// from inside the router call.
 	meter := overhead.Attach(ctx, t0)
 	bifReq := req.ToBifrostChatRequest(ctx)
+	// The thinking switch of a toggle model (chat_template_kwargs.go).
+	forwardEnableThinking(raw, bifReq)
 	markDispatchKind(ctx, account.DispatchChat)
 
 	// Map the caller's model id onto the provider's own model name (issue #317)
