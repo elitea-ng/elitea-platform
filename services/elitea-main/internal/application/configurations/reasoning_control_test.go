@@ -57,6 +57,9 @@ func TestValidateLLMModelReasoning(t *testing.T) {
 		{"reasoning_control": "toggle", "supports_reasoning": true},
 		{"reasoning_control": "budget", "reasoning_tool_steps": true},
 		{"reasoning_control": "fixed_off", "supports_reasoning": false},
+		{"reasoning_control": "effort", "reasoning_off_with_tools": true},
+		{"reasoning_control": "toggle", "reasoning_tool_steps": false},
+		{"reasoning_tool_steps": false},
 	}
 	for _, data := range valid {
 		if err := ValidateLLMModelReasoning(data); err != nil {
@@ -64,10 +67,14 @@ func TestValidateLLMModelReasoning(t *testing.T) {
 		}
 	}
 	invalid := map[string]map[string]any{
-		"one of":                  {"reasoning_control": "adaptive"},
-		"one of ":                 {"reasoning_control": 3},
-		"boolean":                 {"reasoning_tool_steps": "yes"},
-		"supports_reasoning true": {"reasoning_control": "toggle", "supports_reasoning": false},
+		"one of":                           {"reasoning_control": "adaptive"},
+		"one of ":                          {"reasoning_control": 3},
+		"boolean":                          {"reasoning_tool_steps": "yes"},
+		"off_with_tools must be a boolean": {"reasoning_off_with_tools": "yes"},
+		// A budget model keeps one thinking state for the whole tool loop
+		// (#1574 review): it cannot be told to drop thinking on tool steps.
+		"refused on a budget model": {"reasoning_control": "budget", "reasoning_tool_steps": false},
+		"supports_reasoning true":   {"reasoning_control": "toggle", "supports_reasoning": false},
 	}
 	for want, data := range invalid {
 		err := ValidateLLMModelReasoning(data)
@@ -81,14 +88,15 @@ func mustDefaults(t *testing.T) []ModelReasoningDefault {
 	t.Helper()
 	var defaults []ModelReasoningDefault
 	for _, row := range []struct {
-		pattern, control string
-		toolSteps        bool
+		pattern, control        string
+		toolSteps, offWithTools bool
 	}{
-		{"qwen[^/]*-thinking", "fixed_on", false},
-		{"(^|/)qwen", "toggle", false},
-		{"claude", "budget", true},
+		{"qwen[^/]*-thinking", "fixed_on", false, false},
+		{"(^|[/.])gpt-5\\.6", "effort", false, true},
+		{"(^|/)qwen", "toggle", false, false},
+		{"claude", "budget", true, false},
 	} {
-		rule, err := CompileModelReasoningDefault(row.pattern, row.control, row.toolSteps)
+		rule, err := CompileModelReasoningDefault(row.pattern, row.control, row.toolSteps, row.offWithTools)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,6 +138,26 @@ func TestApplyModelReasoningDefaults(t *testing.T) {
 		}
 	}
 
+	// The GPT-5.6 family turns auto off beside tools; a row's own key wins.
+	item = CurrentModelCatalogItem{Name: "global.openai.gpt-5.6-luna", SupportsReasoning: &yes}
+	ApplyModelReasoningDefaults(&item, defaults)
+	if item.ReasoningOffWithTools == nil || !*item.ReasoningOffWithTools || *item.ReasoningControl != effort {
+		t.Fatalf("gpt-5.6 takes effort with off_with_tools: %+v", item)
+	}
+	if info := ModelItemReasoningInfo(&item); !info.OffWithTools {
+		t.Fatalf("the reasoning info carries off_with_tools: %+v", info)
+	}
+	item = CurrentModelCatalogItem{Name: "gpt-5.6", SupportsReasoning: &yes, ReasoningOffWithTools: &no}
+	ApplyModelReasoningDefaults(&item, defaults)
+	if *item.ReasoningOffWithTools {
+		t.Fatalf("the row's own off_with_tools wins: %+v", item)
+	}
+	item = CurrentModelCatalogItem{Name: "Qwen/Qwen3-8B", SupportsReasoning: &yes}
+	ApplyModelReasoningDefaults(&item, defaults)
+	if item.ReasoningOffWithTools == nil || *item.ReasoningOffWithTools {
+		t.Fatalf("a Qwen model does not turn auto off beside tools: %+v", item)
+	}
+
 	// No match: nothing, so the caller keeps its previous form.
 	item = CurrentModelCatalogItem{Name: "mistral-large", SupportsReasoning: &yes}
 	ApplyModelReasoningDefaults(&item, defaults)
@@ -139,10 +167,10 @@ func TestApplyModelReasoningDefaults(t *testing.T) {
 }
 
 func TestCompileModelReasoningDefaultRefusesBadRows(t *testing.T) {
-	if _, err := CompileModelReasoningDefault("(?<=x)y", "toggle", false); err == nil {
+	if _, err := CompileModelReasoningDefault("(?<=x)y", "toggle", false, false); err == nil {
 		t.Fatal("a pattern RE2 does not take must be refused")
 	}
-	if _, err := CompileModelReasoningDefault("x", "adaptive", false); err == nil {
+	if _, err := CompileModelReasoningDefault("x", "adaptive", false, false); err == nil {
 		t.Fatal("an unknown control must be refused")
 	}
 }

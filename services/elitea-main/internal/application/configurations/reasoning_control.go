@@ -21,8 +21,9 @@ import (
 
 // The llm_model `data` keys.
 const (
-	ReasoningControlField   = "reasoning_control"
-	ReasoningToolStepsField = "reasoning_tool_steps"
+	ReasoningControlField      = "reasoning_control"
+	ReasoningToolStepsField    = "reasoning_tool_steps"
+	ReasoningOffWithToolsField = "reasoning_off_with_tools"
 )
 
 // The five control forms.
@@ -127,15 +128,21 @@ func ReasoningControlRefusesTemperature(control string) bool {
 	}
 }
 
-// ErrInvalidReasoningControl and ErrInvalidReasoningToolSteps refuse a
-// malformed key on an llm_model write.
+// ErrInvalidReasoningControl, ErrInvalidReasoningToolSteps and
+// ErrInvalidReasoningOffWithTools refuse a malformed key on an llm_model
+// write. ErrBudgetToolStepsOff refuses a budget model that would switch
+// thinking off on routine tool steps: a budget model carries one thinking
+// state across a tool loop, so auto keeps it on for every step.
 var (
 	ErrInvalidReasoningControl = errors.New(
 		"data.reasoning_control must be one of: " + strings.Join(ReasoningControls(), ", "))
-	ErrInvalidReasoningToolSteps = errors.New("data.reasoning_tool_steps must be a boolean")
+	ErrInvalidReasoningToolSteps    = errors.New("data.reasoning_tool_steps must be a boolean")
+	ErrInvalidReasoningOffWithTools = errors.New("data.reasoning_off_with_tools must be a boolean")
+	ErrBudgetToolStepsOff           = errors.New(
+		"data.reasoning_tool_steps false is refused on a budget model: a budget model keeps one thinking state for the whole tool loop")
 )
 
-// ValidateLLMModelReasoning checks the two reasoning keys of an llm_model
+// ValidateLLMModelReasoning checks the three reasoning keys of an llm_model
 // `data` object. An absent or null key is valid: the row then takes the
 // family default, or its caller's previous form.
 //
@@ -153,8 +160,17 @@ func ValidateLLMModelReasoning(data map[string]any) error {
 		}
 	}
 	if raw, present := data[ReasoningToolStepsField]; present && raw != nil {
-		if _, isBool := raw.(bool); !isBool {
+		toolSteps, isBool := raw.(bool)
+		if !isBool {
 			return ErrInvalidReasoningToolSteps
+		}
+		if control, _ := data[ReasoningControlField].(string); control == ReasoningControlBudget && !toolSteps {
+			return ErrBudgetToolStepsOff
+		}
+	}
+	if raw, present := data[ReasoningOffWithToolsField]; present && raw != nil {
+		if _, isBool := raw.(bool); !isBool {
+			return ErrInvalidReasoningOffWithTools
 		}
 	}
 	return nil
@@ -166,11 +182,14 @@ type ModelReasoningDefault struct {
 	Pattern   *regexp.Regexp
 	Control   string
 	ToolSteps bool
+	// OffWithTools: auto (or no setting) sends thinking off on every step
+	// of a request that carries tools (the gpt-5.6 family).
+	OffWithTools bool
 }
 
 // CompileModelReasoningDefault builds a default from a stored row. The
 // pattern is matched case-insensitively.
-func CompileModelReasoningDefault(pattern, control string, toolSteps bool) (ModelReasoningDefault, error) {
+func CompileModelReasoningDefault(pattern, control string, toolSteps, offWithTools bool) (ModelReasoningDefault, error) {
 	if !IsReasoningControl(control) {
 		return ModelReasoningDefault{}, ErrInvalidReasoningControl
 	}
@@ -178,15 +197,15 @@ func CompileModelReasoningDefault(pattern, control string, toolSteps bool) (Mode
 	if err != nil {
 		return ModelReasoningDefault{}, fmt.Errorf("model reasoning default %q: %w", pattern, err)
 	}
-	return ModelReasoningDefault{Pattern: compiled, Control: control, ToolSteps: toolSteps}, nil
+	return ModelReasoningDefault{Pattern: compiled, Control: control, ToolSteps: toolSteps, OffWithTools: offWithTools}, nil
 }
 
-// ApplyModelReasoningDefaults resolves an llm_model item's control form and
-// tool-step rule. The item's own keys win. A family default applies only to
+// ApplyModelReasoningDefaults resolves an llm_model item's control form,
+// tool-step rule and off-with-tools rule. The item's own keys win. A family default applies only to
 // an item that says supports_reasoning true, and only to a key the item does
 // not declare. defaults are in priority order: the first match wins.
 func ApplyModelReasoningDefaults(item *CurrentModelCatalogItem, defaults []ModelReasoningDefault) {
-	if item == nil || (item.ReasoningControl != nil && item.ReasoningToolSteps != nil) {
+	if item == nil || (item.ReasoningControl != nil && item.ReasoningToolSteps != nil && item.ReasoningOffWithTools != nil) {
 		return
 	}
 	if item.SupportsReasoning == nil || !*item.SupportsReasoning {
@@ -203,6 +222,10 @@ func ApplyModelReasoningDefaults(item *CurrentModelCatalogItem, defaults []Model
 		if item.ReasoningToolSteps == nil {
 			toolSteps := rule.ToolSteps
 			item.ReasoningToolSteps = &toolSteps
+		}
+		if item.ReasoningOffWithTools == nil {
+			offWithTools := rule.OffWithTools
+			item.ReasoningOffWithTools = &offWithTools
 		}
 		return
 	}
@@ -306,6 +329,8 @@ type ModelReasoningInfo struct {
 	Control string
 	// ToolSteps is reasoning_tool_steps, resolved.
 	ToolSteps bool
+	// OffWithTools is reasoning_off_with_tools, resolved.
+	OffWithTools bool
 }
 
 // ModelItemReasoningInfo reads an item's reasoning data. A nil item is not
@@ -319,6 +344,7 @@ func ModelItemReasoningInfo(item *CurrentModelCatalogItem) ModelReasoningInfo {
 		SupportsReasoning: item.SupportsReasoning != nil && *item.SupportsReasoning,
 		Control:           ModelItemReasoningControl(item),
 		ToolSteps:         item.ReasoningToolSteps != nil && *item.ReasoningToolSteps,
+		OffWithTools:      item.ReasoningOffWithTools != nil && *item.ReasoningOffWithTools,
 	}
 }
 

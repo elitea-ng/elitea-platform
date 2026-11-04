@@ -31,7 +31,17 @@
 -- form changes inside one tool loop: Claude and Gemini carry the thinking
 -- block or signature from step to step. Every other family starts with false,
 -- the conservative choice of ADR-0038 decision 4: `auto` then does not think
--- on a routine step after a tool result.
+-- on a routine step after a tool result. On a budget model `auto` keeps one
+-- thinking state for the whole tool loop whatever tool_steps says, and an
+-- llm_model save that declares budget with reasoning_tool_steps false is
+-- refused.
+--
+-- off_with_tools is true where a model refuses thinking beside tools on its
+-- chat-completions wire (OpenAI GPT-5.6). On a request that carries tools,
+-- `auto`, or no setting at all, then sends the off form on every step,
+-- planning included; a request without tools still thinks. An explicit level
+-- the user chose is sent as chosen. A row overrides it with
+-- `data.reasoning_off_with_tools`.
 --
 -- A family is seeded only where its off form works. `auto` sends the off
 -- form on a routine step and on a summary, and a model that refuses it (an
@@ -75,6 +85,7 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.model_reasoning_defaults (
         CONSTRAINT model_reasoning_defaults_control_check
         CHECK (reasoning_control IN ('effort', 'budget', 'toggle', 'fixed_on', 'fixed_off')),
     tool_steps        boolean NOT NULL DEFAULT FALSE,
+    off_with_tools    boolean NOT NULL DEFAULT FALSE,
     -- The lower number is tried first. Two patterns that match one name are
     -- ordered by priority, then by name_pattern.
     priority          integer NOT NULL DEFAULT 100,
@@ -90,25 +101,31 @@ COMMENT ON COLUMN elitea_runtime.model_reasoning_defaults.reasoning_control IS
     'effort | budget | toggle | fixed_on | fixed_off.';
 COMMENT ON COLUMN elitea_runtime.model_reasoning_defaults.tool_steps IS
     'True: reasoning_effort auto keeps thinking on routine tool steps for this family.';
+COMMENT ON COLUMN elitea_runtime.model_reasoning_defaults.off_with_tools IS
+    'True: reasoning_effort auto (or none set) sends thinking off on every step of a request that carries tools.';
 COMMENT ON COLUMN elitea_runtime.model_reasoning_defaults.priority IS
     'Lower is tried first; ties are ordered by name_pattern.';
 
-INSERT INTO elitea_runtime.model_reasoning_defaults (name_pattern, reasoning_control, tool_steps, priority) VALUES
+INSERT INTO elitea_runtime.model_reasoning_defaults (name_pattern, reasoning_control, tool_steps, off_with_tools, priority) VALUES
     -- Models that always think, before the family rows that would match them.
-    ('qwen[^/]*-thinking',            'fixed_on', FALSE, 10),
-    ('(^|/)qwq',                      'fixed_on', FALSE, 10),
-    ('deepseek-(r1|reasoner)',        'fixed_on', FALSE, 10),
-    ('(^|/)gemini-[0-9.]+-pro',       'fixed_on', TRUE,  10),
+    ('qwen[^/]*-thinking',            'fixed_on', FALSE, FALSE, 10),
+    ('(^|/)qwq',                      'fixed_on', FALSE, FALSE, 10),
+    ('deepseek-(r1|reasoner)',        'fixed_on', FALSE, FALSE, 10),
+    ('(^|/)gemini-[0-9.]+-pro',       'fixed_on', TRUE,  FALSE, 10),
     -- Qwen3 and later on vLLM or SGLang switch thinking per request.
-    ('(^|/)qwen',                     'toggle',   FALSE, 50),
+    ('(^|/)qwen',                     'toggle',   FALSE, FALSE, 50),
+    -- GPT-5.6 refuses thinking beside tools on chat completions. It comes
+    -- before the gpt-5 row and also matches a dotted provider prefix
+    -- (global.openai.gpt-5.6-luna).
+    ('(^|[/.])gpt-5\.6',            'effort',   FALSE, TRUE,  40),
     -- OpenAI models that take reasoning_effort none (gpt-5.1 and later).
     -- gpt-5, gpt-5-mini and the o-series refuse none, so they have no row:
     -- the worker then never sends the off form for auto.
-    ('(^|/)gpt-5\.[1-9]',            'effort',   FALSE, 50),
+    ('(^|/)gpt-5\.[1-9]',            'effort',   FALSE, FALSE, 50),
     -- Claude and Gemini 2.5 Flash carry the thinking state across a tool
     -- loop, and both take thinking off.
-    ('claude',                        'budget',   TRUE,  50),
-    ('(^|/)gemini-2\.5-flash',       'budget',   TRUE,  60)
+    ('claude',                        'budget',   TRUE,  FALSE, 50),
+    ('(^|/)gemini-2\.5-flash',       'budget',   TRUE,  FALSE, 60)
 ON CONFLICT (name_pattern) DO NOTHING;
 
 ALTER TABLE gateway.llm_request_logs

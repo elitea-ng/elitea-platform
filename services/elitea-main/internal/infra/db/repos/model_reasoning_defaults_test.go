@@ -19,13 +19,13 @@ func TestEveryModelReasoningSeedCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seeds := regexp.MustCompile(`\('([^']+)',\s*'([a-z_]+)',\s*(TRUE|FALSE),`).FindAllStringSubmatch(string(raw), -1)
+	seeds := regexp.MustCompile(`\('([^']+)',\s*'([a-z_]+)',\s*(TRUE|FALSE),\s*(TRUE|FALSE),`).FindAllStringSubmatch(string(raw), -1)
 	if len(seeds) < 5 {
 		t.Fatalf("found %d seeds, want the family rows", len(seeds))
 	}
 	var rules []configurationapp.ModelReasoningDefault
 	for _, seed := range seeds {
-		rule, err := configurationapp.CompileModelReasoningDefault(seed[1], seed[2], seed[3] == "TRUE")
+		rule, err := configurationapp.CompileModelReasoningDefault(seed[1], seed[2], seed[3] == "TRUE", seed[4] == "TRUE")
 		if err != nil {
 			t.Fatalf("seed %q: %v", seed[1], err)
 		}
@@ -63,7 +63,30 @@ func TestEveryModelReasoningSeedCompiles(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", name, got, want)
 		}
 	}
+
+	// Only the GPT-5.6 family turns auto off beside tools (#1574 review).
+	for name, want := range map[string]bool{
+		"gpt-5.6":                    true,
+		"openai/gpt-5.6-mini":        true,
+		"global.openai.gpt-5.6-luna": true,
+		"gpt-5.1":                    false,
+		"claude-sonnet-4-5":          false,
+		"Qwen/Qwen3-8B":              false,
+	} {
+		item := configurationapp.CurrentModelCatalogItem{Name: name, SupportsReasoning: &yes}
+		configurationapp.ApplyModelReasoningDefaults(&item, rules)
+		got := item.ReasoningOffWithTools != nil && *item.ReasoningOffWithTools
+		if got != want {
+			t.Errorf("%s: off_with_tools %v, want %v", name, got, want)
+		}
+		if want && (item.ReasoningControl == nil || *item.ReasoningControl != "effort") {
+			t.Errorf("%s: control %v, want effort", name, item.ReasoningControl)
+		}
+	}
 }
+
+// offWithToolsFakePattern is the one fake row read with off_with_tools true.
+const offWithToolsFakePattern = "(^|/)gpt-5\\.6"
 
 type fakeReasoningRows struct {
 	rows  [][3]any
@@ -78,6 +101,7 @@ func (r *fakeReasoningRows) Scan(dest ...any) error {
 	*dest[0].(*string) = row[0].(string)
 	*dest[1].(*string) = row[1].(string)
 	*dest[2].(*bool) = row[2].(bool)
+	*dest[3].(*bool) = row[0].(string) == offWithToolsFakePattern
 	return nil
 }
 
@@ -98,14 +122,18 @@ func (q *fakeReasoningQuerier) Query(context.Context, string, ...any) (sqlRows, 
 func TestModelReasoningDefaultsReaderCachesAndNeverFails(t *testing.T) {
 	db := &fakeReasoningQuerier{rows: [][3]any{
 		{"(?<=bad)", "toggle", false}, // RE2 refuses it: skipped, not fatal
+		{offWithToolsFakePattern, "effort", false},
 		{"(^|/)qwen", "toggle", false},
 	}}
 	clock := time.Unix(1_700_000_000, 0)
 	reader := &modelReasoningDefaultsReader{db: db, now: func() time.Time { return clock }}
 
 	rules := reader.Load(context.Background())
-	if len(rules) != 1 || db.calls != 1 {
-		t.Fatalf("rules=%d calls=%d, want the one valid row from one read", len(rules), db.calls)
+	if len(rules) != 2 || db.calls != 1 {
+		t.Fatalf("rules=%d calls=%d, want the two valid rows from one read", len(rules), db.calls)
+	}
+	if !rules[0].OffWithTools || rules[1].OffWithTools {
+		t.Fatalf("off_with_tools must be read from its column: %+v", rules)
 	}
 	reader.Load(context.Background())
 	if db.calls != 1 {
@@ -115,7 +143,7 @@ func TestModelReasoningDefaultsReaderCachesAndNeverFails(t *testing.T) {
 	// A failed refresh keeps the last rows, and is not cached.
 	clock = clock.Add(modelReasoningDefaultsTTL + time.Second)
 	db.err = errors.New("connection reset")
-	if got := reader.Load(context.Background()); len(got) != 1 {
+	if got := reader.Load(context.Background()); len(got) != 2 {
 		t.Fatalf("a failed refresh must keep the last rows, got %d", len(got))
 	}
 	waitForFlight(t, reader)

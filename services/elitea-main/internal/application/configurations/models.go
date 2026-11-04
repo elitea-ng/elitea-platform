@@ -46,14 +46,17 @@ type CurrentModelCatalogItem struct {
 	// routine tool steps (ADR-0038 decision 3, reasoning_control.go). The
 	// row's own keys win; otherwise a family default of shared migration 0225
 	// fills them for a reasoning model. Both are absent when neither applies,
-	// and the caller then keeps its previous form.
-	ReasoningControl   *string `json:"reasoning_control,omitempty"`
-	ReasoningToolSteps *bool   `json:"reasoning_tool_steps,omitempty"`
-	SupportsVision     *bool   `json:"supports_vision,omitempty"`
-	LowTier            *bool   `json:"low_tier,omitempty"`
-	HighTier           *bool   `json:"high_tier,omitempty"`
-	OpenAICompatible   *bool   `json:"openai_compatible,omitempty"`
-	Default            bool    `json:"default"`
+	// and the caller then keeps its previous form. ReasoningOffWithTools
+	// says auto sends thinking off on every step of a request that carries
+	// tools (the gpt-5.6 family); it is filled the same way.
+	ReasoningControl      *string `json:"reasoning_control,omitempty"`
+	ReasoningToolSteps    *bool   `json:"reasoning_tool_steps,omitempty"`
+	ReasoningOffWithTools *bool   `json:"reasoning_off_with_tools,omitempty"`
+	SupportsVision        *bool   `json:"supports_vision,omitempty"`
+	LowTier               *bool   `json:"low_tier,omitempty"`
+	HighTier              *bool   `json:"high_tier,omitempty"`
+	OpenAICompatible      *bool   `json:"openai_compatible,omitempty"`
+	Default               bool    `json:"default"`
 
 	// The price fields are the gateway's own catalogue price for this model
 	// (model_prices.go), served on section=llm items only and only to a caller
@@ -263,6 +266,7 @@ func normalizeCurrentModelItem(section CurrentModelSection, item CurrentModelCat
 	item.SupportsReasoning = nil
 	item.ReasoningControl = nil
 	item.ReasoningToolSteps = nil
+	item.ReasoningOffWithTools = nil
 	item.SupportsVision = nil
 	item.LowTier = nil
 	item.HighTier = nil

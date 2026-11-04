@@ -4,8 +4,8 @@ package material
 // decisions 3 and 4, #1452).
 //
 // The engines (DeepWiki, Inventory) read llm_settings through
-// libs/rust/model-client: with reasoning_control (and reasoning_tool_steps)
-// there, `auto` is the per-step policy and every setting takes the model's
+// libs/rust/model-client: with reasoning_control (and reasoning_tool_steps,
+// reasoning_off_with_tools) there, `auto` is the per-step policy and every setting takes the model's
 // own form; without it, the client keeps the reasoning_effort form and
 // thinks at the default level on every call. The block carries the model's
 // catalogue resolution, the same one admission freezes for an agent run.
@@ -19,10 +19,18 @@ import (
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
-// ModelReasoning reads one model's control form and tool-step rule from the
-// project's catalogue. control "" means the catalogue declares none.
+// Reasoning is one model's catalogue reasoning data. Control "" means the
+// catalogue declares none; a nil rule is not declared.
+type Reasoning struct {
+	Control      string
+	ToolSteps    *bool
+	OffWithTools *bool
+}
+
+// ModelReasoning reads one model's control form, tool-step rule and
+// off-with-tools rule from the project's catalogue, in one read.
 type ModelReasoning interface {
-	ModelReasoning(ctx context.Context, projectID int64, model string) (control string, toolSteps *bool, err error)
+	ModelReasoning(ctx context.Context, projectID int64, model string) (Reasoning, error)
 }
 
 // ModelCatalog is the project model catalogue (the configurations runtime's).
@@ -38,27 +46,31 @@ type CatalogueReasoning struct {
 }
 
 // ModelReasoning implements ModelReasoning.
-func (c CatalogueReasoning) ModelReasoning(ctx context.Context, projectID int64, model string) (string, *bool, error) {
+func (c CatalogueReasoning) ModelReasoning(ctx context.Context, projectID int64, model string) (Reasoning, error) {
 	project, ok := NarrowRowID(projectID)
 	if !ok {
-		return "", nil, fmt.Errorf("project %s is out of range", strconv.FormatInt(projectID, 10))
+		return Reasoning{}, fmt.Errorf("project %s is out of range", strconv.FormatInt(projectID, 10))
 	}
 	catalog, err := c.Models.Get(ctx, configurationapp.CurrentModelCatalogQuery{
 		Section: configurationapp.CurrentModelSectionLLM, ProjectID: project,
 		PublicProjectID: c.PublicProjectID, IncludeShared: true,
 	})
 	if err != nil {
-		return "", nil, err
+		return Reasoning{}, err
 	}
 	item := configurationapp.FindModelCatalogItem(catalog.Items, model, project)
 	if item == nil {
-		return "", nil, nil
+		return Reasoning{}, nil
 	}
-	return configurationapp.ModelItemReasoningControl(item), item.ReasoningToolSteps, nil
+	return Reasoning{
+		Control:      configurationapp.ModelItemReasoningControl(item),
+		ToolSteps:    item.ReasoningToolSteps,
+		OffWithTools: item.ReasoningOffWithTools,
+	}, nil
 }
 
-// SettleReasoning writes the model's control form and tool-step rule into
-// the callback block. A stored setting the model cannot honour (the toolkit's
+// SettleReasoning writes the model's control form, tool-step rule and
+// off-with-tools rule into the callback block. A stored setting the model cannot honour (the toolkit's
 // saved default, or a value a client lifted into the block) runs as auto and
 // is logged at warn: the one run-time rule of every surface
 // (configurations.RunReasoningEffort). It never refuses the call. A block
@@ -70,12 +82,13 @@ func SettleReasoning(ctx context.Context, reasoning ModelReasoning, block map[st
 	if reasoning == nil || model == "" {
 		return nil
 	}
-	control, toolSteps, err := reasoning.ModelReasoning(ctx, projectID, model)
+	declared, err := reasoning.ModelReasoning(ctx, projectID, model)
 	if err != nil {
 		slog.WarnContext(ctx, "provider callback: model catalogue unavailable; the engine keeps the reasoning_effort form",
 			"project_id", projectID, "model", model, "err", err)
 		return nil
 	}
+	control := declared.Control
 	if control == "" {
 		return nil
 	}
@@ -83,8 +96,11 @@ func SettleReasoning(ctx context.Context, reasoning ModelReasoning, block map[st
 		block["reasoning_effort"] = configurationapp.RunReasoningEffort(ctx, control, effort, model, "engine")
 	}
 	block["reasoning_control"] = control
-	if toolSteps != nil {
-		block["reasoning_tool_steps"] = *toolSteps
+	if declared.ToolSteps != nil {
+		block["reasoning_tool_steps"] = *declared.ToolSteps
+	}
+	if declared.OffWithTools != nil {
+		block["reasoning_off_with_tools"] = *declared.OffWithTools
 	}
 	return nil
 }

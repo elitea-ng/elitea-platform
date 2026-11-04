@@ -12,15 +12,16 @@ import (
 )
 
 type reasoningStub struct {
-	control   string
-	toolSteps *bool
-	err       error
-	model     string
+	control      string
+	toolSteps    *bool
+	offWithTools *bool
+	err          error
+	model        string
 }
 
-func (s *reasoningStub) ModelReasoning(_ context.Context, _ int64, model string) (string, *bool, error) {
+func (s *reasoningStub) ModelReasoning(_ context.Context, _ int64, model string) (Reasoning, error) {
 	s.model = model
-	return s.control, s.toolSteps, s.err
+	return Reasoning{Control: s.control, ToolSteps: s.toolSteps, OffWithTools: s.offWithTools}, s.err
 }
 
 func TestSettleReasoningCarriesTheCatalogueControl(t *testing.T) {
@@ -31,6 +32,18 @@ func TestSettleReasoningCarriesTheCatalogueControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	if stub.model != "qwen3" || block["reasoning_control"] != "toggle" || block["reasoning_tool_steps"] != true {
+		t.Fatalf("block = %v", block)
+	}
+	if _, present := block["reasoning_off_with_tools"]; present {
+		t.Fatalf("an undeclared off_with_tools must stay absent: %v", block)
+	}
+
+	// The GPT-5.6 family: the engine's client turns auto off beside tools.
+	block = map[string]any{"model_name": "gpt-5.6", "reasoning_effort": "auto"}
+	if err := SettleReasoning(context.Background(), &reasoningStub{control: "effort", offWithTools: &yes}, block, 7); err != nil {
+		t.Fatal(err)
+	}
+	if block["reasoning_off_with_tools"] != true || block["reasoning_control"] != "effort" {
 		t.Fatalf("block = %v", block)
 	}
 }
@@ -92,18 +105,18 @@ func TestCatalogueReasoningPrefersTheProjectsOwnRow(t *testing.T) {
 		{Name: "qwen3", ProjectID: 7, ReasoningControl: &fixed, ReasoningToolSteps: &no},
 		{Name: "gpt-4o", ProjectID: 7, SupportsReasoning: &no},
 	}}}
-	control, steps, err := reader.ModelReasoning(context.Background(), 7, "qwen3")
-	if err != nil || control != "fixed_on" || steps == nil || *steps {
-		t.Fatalf("own row: (%q, %v, %v)", control, steps, err)
+	own, err := reader.ModelReasoning(context.Background(), 7, "qwen3")
+	if err != nil || own.Control != "fixed_on" || own.ToolSteps == nil || *own.ToolSteps {
+		t.Fatalf("own row: (%+v, %v)", own, err)
 	}
-	if control, _, _ := reader.ModelReasoning(context.Background(), 9, "qwen3"); control != "toggle" {
-		t.Errorf("shared row: %q", control)
+	if got, _ := reader.ModelReasoning(context.Background(), 9, "qwen3"); got.Control != "toggle" {
+		t.Errorf("shared row: %q", got.Control)
 	}
-	if control, _, _ := reader.ModelReasoning(context.Background(), 7, "gpt-4o"); control != "fixed_off" {
-		t.Errorf("supports_reasoning false: %q, want fixed_off", control)
+	if got, _ := reader.ModelReasoning(context.Background(), 7, "gpt-4o"); got.Control != "fixed_off" {
+		t.Errorf("supports_reasoning false: %q, want fixed_off", got.Control)
 	}
-	if control, _, _ := reader.ModelReasoning(context.Background(), 7, "unknown"); control != "" {
-		t.Errorf("unknown model: %q", control)
+	if got, _ := reader.ModelReasoning(context.Background(), 7, "unknown"); got.Control != "" {
+		t.Errorf("unknown model: %q", got.Control)
 	}
 }
 

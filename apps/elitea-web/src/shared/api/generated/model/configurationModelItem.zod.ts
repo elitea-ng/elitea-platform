@@ -111,6 +111,12 @@ export const ConfigurationModelItem = zod
       .describe(
         "`reviewed` only, and section=llm only. True: reasoning_effort auto keeps thinking on routine tool steps. Resolved like reasoning_control. ABSENT when undeclared.\n",
       ),
+    reasoning_off_with_tools: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`reviewed` only, and section=llm only. True: on a request that carries tools, reasoning_effort auto (or no setting) sends thinking off on every step, planning included; a request without tools still thinks, and an explicit level is sent as chosen (the GPT-5.6 family default). Resolved like reasoning_control. ABSENT when undeclared.\n",
+      ),
     supports_vision: zod.boolean().nullish().describe("`reviewed` only."),
     low_tier: zod.boolean().nullish().describe("`reviewed` only."),
     high_tier: zod.boolean().nullish().describe("`reviewed` only."),

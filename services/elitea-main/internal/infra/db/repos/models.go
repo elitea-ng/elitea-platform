@@ -305,7 +305,7 @@ func mapCurrentModelCandidate(
 	if err != nil {
 		return currentModelCandidate{}, err
 	}
-	item.ReasoningControl, item.ReasoningToolSteps = currentModelReasoning(data)
+	item.ReasoningControl, item.ReasoningToolSteps, item.ReasoningOffWithTools = currentModelReasoning(data)
 	return currentModelCandidate{id: row.ID, item: item}, nil
 }
 
@@ -314,7 +314,7 @@ func mapCurrentModelCandidate(
 // path validates them (configurations.ValidateLLMModelReasoning), and a row
 // stored before that with a malformed value keeps its place in the picker and
 // takes the family default instead.
-func currentModelReasoning(data map[string]json.RawMessage) (*string, *bool) {
+func currentModelReasoning(data map[string]json.RawMessage) (*string, *bool, *bool) {
 	var control *string
 	if raw, ok := data[configurationapp.ReasoningControlField]; ok && !currentModelJSONNull(raw) {
 		var value string
@@ -322,14 +322,22 @@ func currentModelReasoning(data map[string]json.RawMessage) (*string, *bool) {
 			control = &value
 		}
 	}
-	var toolSteps *bool
-	if raw, ok := data[configurationapp.ReasoningToolStepsField]; ok && !currentModelJSONNull(raw) {
-		var value bool
-		if json.Unmarshal(raw, &value) == nil {
-			toolSteps = &value
-		}
+	return control, currentModelOptionalReasoningBool(data, configurationapp.ReasoningToolStepsField),
+		currentModelOptionalReasoningBool(data, configurationapp.ReasoningOffWithToolsField)
+}
+
+// currentModelOptionalReasoningBool reads one boolean reasoning key
+// tolerantly: absent, null or malformed yields nil.
+func currentModelOptionalReasoningBool(data map[string]json.RawMessage, key string) *bool {
+	raw, ok := data[key]
+	if !ok || currentModelJSONNull(raw) {
+		return nil
 	}
-	return control, toolSteps
+	var value bool
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return &value
 }
 
 // currentModelDescription reads the optional llm_model description. A value

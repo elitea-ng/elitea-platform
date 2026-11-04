@@ -149,7 +149,7 @@ func normalizeCurrentLocalAIModel(typeName string, data map[string]any) (map[str
 		if err := ValidateLLMModelReasoning(data); err != nil {
 			return nil, currentLocalReasoningFieldError(data)
 		}
-		for _, field := range [...]string{ReasoningControlField, ReasoningToolStepsField} {
+		for _, field := range [...]string{ReasoningControlField, ReasoningToolStepsField, ReasoningOffWithToolsField} {
 			if raw, sent := data[field]; sent && raw != nil {
 				normalized[field] = raw
 			}
@@ -560,6 +560,11 @@ func currentLocalReasoningFieldError(data map[string]any) error {
 		}
 		if supports, declared := data["supports_reasoning"].(bool); declared && !supports && value != ReasoningControlFixedOff {
 			return currentLocalConfigurationFieldError("data." + ReasoningControlField)
+		}
+	}
+	if raw, sent := data[ReasoningOffWithToolsField]; sent && raw != nil {
+		if _, isBool := raw.(bool); !isBool {
+			return currentLocalConfigurationFieldError("data." + ReasoningOffWithToolsField)
 		}
 	}
 	return currentLocalConfigurationFieldError("data." + ReasoningToolStepsField)

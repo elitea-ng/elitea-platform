@@ -109,3 +109,18 @@ func TestAToggleModelKeepsItsTemperature(t *testing.T) {
 		t.Fatal("off thinks on no step and takes a temperature")
 	}
 }
+
+// #1574 review: the GPT-5.6 family's off_with_tools reaches the worker.
+func TestFreezeModelReasoningCarriesOffWithTools(t *testing.T) {
+	model := reasoningModel("effort", false)
+	yes := true
+	model.ReasoningOffWithTools = &yes
+	version := map[string]any{}
+	if err := freezeCurrentModelReasoning(context.Background(), version, map[string]any{"reasoning_effort": "auto"}, model); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(version["model_reasoning"])
+	if string(encoded) != `{"control":"effort","off_with_tools":true}` {
+		t.Fatalf("nested JSON = %s", encoded)
+	}
+}

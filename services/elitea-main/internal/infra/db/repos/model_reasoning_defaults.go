@@ -39,7 +39,7 @@ const modelReasoningDefaultsTTL = time.Minute
 // modelReasoningDefaultsReadTimeout bounds the detached read.
 const modelReasoningDefaultsReadTimeout = 5 * time.Second
 
-const listModelReasoningDefaultsSQL = `SELECT name_pattern, reasoning_control, tool_steps
+const listModelReasoningDefaultsSQL = `SELECT name_pattern, reasoning_control, tool_steps, off_with_tools
 FROM elitea_runtime.model_reasoning_defaults
 ORDER BY priority, name_pattern
 LIMIT 256`
@@ -132,11 +132,11 @@ func (r *modelReasoningDefaultsReader) read(ctx context.Context) ([]configuratio
 	rules := []configurationapp.ModelReasoningDefault{}
 	for rows.Next() {
 		var pattern, control string
-		var toolSteps bool
-		if err := rows.Scan(&pattern, &control, &toolSteps); err != nil {
+		var toolSteps, offWithTools bool
+		if err := rows.Scan(&pattern, &control, &toolSteps, &offWithTools); err != nil {
 			return nil, err
 		}
-		rule, err := configurationapp.CompileModelReasoningDefault(pattern, control, toolSteps)
+		rule, err := configurationapp.CompileModelReasoningDefault(pattern, control, toolSteps, offWithTools)
 		if err != nil {
 			// One row an operator wrote in a syntax RE2 does not take must
 			// not remove every other default.

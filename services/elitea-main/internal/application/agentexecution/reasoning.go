@@ -64,8 +64,9 @@ func currentModelReasoningSnapshot(model configurationapp.CurrentModelCatalogIte
 		return nil
 	}
 	return &runtimev1.ModelReasoningV1{
-		Control:   control,
-		ToolSteps: model.ReasoningToolSteps != nil && *model.ReasoningToolSteps,
+		Control:      control,
+		ToolSteps:    model.ReasoningToolSteps != nil && *model.ReasoningToolSteps,
+		OffWithTools: model.ReasoningOffWithTools != nil && *model.ReasoningOffWithTools,
 	}
 }
 

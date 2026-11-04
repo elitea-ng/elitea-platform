@@ -3347,6 +3347,9 @@
                           "toggle"
                         ]
                       },
+                      "reasoning_off_with_tools": {
+                        "type": "boolean"
+                      },
                       "reasoning_tool_steps": {
                         "type": "boolean"
                       },
