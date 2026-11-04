@@ -115,3 +115,13 @@ export function updateObjectByPath<T extends Record<string, PlainData>>(
 export function isNullOrUndefined(value: unknown): value is null | undefined {
   return value === null || value === undefined;
 }
+
+/** `true` for any non-null object (arrays included): a value whose fields can be read. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** The trimmed string, or `undefined` for a non-string or a blank one. */
+export function nonBlankText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+}

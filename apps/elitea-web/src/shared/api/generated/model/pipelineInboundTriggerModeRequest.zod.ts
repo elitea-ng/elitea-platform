@@ -63,7 +63,7 @@ export const PipelineInboundTriggerModeRequest = zod
       .uuid()
       .optional()
       .describe(
-        "Client contract 1.34. Required with `workspace_thread`. The conversation must be in this project, the caller must be its user participant (else 404), and it must have been handed off to the cloud at least once (else 422 `not_handed_off`).\n",
+        "Client contract 1.34. Required with `workspace_thread`. The conversation must be in this project, the caller must be its user participant (else 404 `thread_not_found`), and it must have been handed off to the cloud at least once (else 422 `not_handed_off`).\n",
       ),
     prompt: zod
       .string()

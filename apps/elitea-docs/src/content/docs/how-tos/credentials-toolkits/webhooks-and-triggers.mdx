@@ -37,7 +37,23 @@ The same section also configures the cron schedule, and an agent's info panel sh
 
 ### Run on a handed-off workspace
 
-A schedule or a webhook trigger can start a turn on a desktop thread that you sent to the cloud, in place of a run of the pipeline. Use it for recurring work in a real repository: a nightly check, or a fix that an alert starts. The settings form does not show this target yet. Set it through the API (`savePipelineSchedule` or `rotatePipelineInboundTrigger`).
+A schedule or a webhook trigger can start a turn on a desktop thread that you sent to the cloud, in place of a run of the pipeline. Use it for recurring work in a real repository: a nightly check, or a fix that an alert starts. Set it up in the app or through the API (`savePipelineSchedule` or `rotatePipelineInboundTrigger`).
+
+#### Set it up in the app
+
+<Steps>
+1. On the desktop, send the thread to the cloud.
+2. Open the pipeline. On the **Entrypoint** node, open the **Schedule** or the **Webhook** settings. For an agent, open **Triggers** in the agent's configuration.
+3. Under **Runs**, select **A handed-off workspace thread**. The other choice, **This pipeline** or **This agent**, runs the version.
+4. In **Thread**, select the thread. The list shows only your threads that are in the cloud now.
+5. In **Message**, type the message that each run starts with (1 to 32768 characters).
+6. Optional: open the **Run to completion** settings. Change the chain limits, or turn off the goal check. If you change nothing, the app sends no grant, and the platform default applies.
+7. For a schedule, select **Apply**. For a webhook, select **Apply and rotate**. This replaces the secret: give the new secret to the sender.
+</Steps>
+
+If the save is refused, the app shows the reason on the field. A thread that you never sent to the cloud, or a thread that is not yours, is refused on **Thread**. When credential governance is on, the thread's agent must be this version. The schedule and the trigger then show **Runs on** and the thread's name. Select the name to open the conversation. A schedule that found the thread busy shows **Skipped: the thread was busy**.
+
+#### Set it up through the API
 
 <Steps>
 1. On the desktop, send the thread to the cloud (see [Send a thread to the cloud](/menus/settings/desktop-account-menu#send-a-thread-to-the-cloud)).
@@ -45,7 +61,7 @@ A schedule or a webhook trigger can start a turn on a desktop thread that you se
 3. Optional: add a `grant` with the `continue` and `chain` parts. Without a grant, each turn runs to completion: it continues at the step and output limits, inside the platform's chain limits, with the goal check.
 </Steps>
 
-The save checks three things. The conversation must be in this project, you must be a participant of it (else `404`), and it must have been sent to the cloud at least once (else `422 not_handed_off`). When credential governance is on, a governed run is bound to the version, so the thread's next turn must address an agent at that version. A model thread, or an agent at another version, is refused with `422 thread_not_governable`. If the thread's participant changes after the save, the occurrence records `skipped_mandate_scope`, and the security audit records `MANDATE_SCOPE_MISMATCH`. A mandate's `schedule.input` scope covers the `prompt` of a thread schedule, not its `input`, both when an administrator attaches the mandate and at each occurrence.
+The save checks three things. The conversation must be in this project, you must be a participant of it (else `404 thread_not_found`), and it must have been sent to the cloud at least once (else `422 not_handed_off`). When credential governance is on, a governed run is bound to the version, so the thread's next turn must address an agent at that version. A model thread, or an agent at another version, is refused with `422 thread_not_governable`. If the thread's participant changes after the save, the occurrence records `skipped_mandate_scope`, and the security audit records `MANDATE_SCOPE_MISMATCH`. A mandate's `schedule.input` scope covers the `prompt` of a thread schedule, not its `input`, both when an administrator attaches the mandate and at each occurrence.
 
 A `target_kind` that the row cannot hold is refused with `400`. A schedule takes `pipeline` or `workspace_thread`. A trigger takes `workspace_thread` or the version's own kind (`pipeline` or `agent`). A GitHub or GitLab trigger with a thread target admits only push and pull or merge request events, as an agent trigger does, unless you set `events`.
 

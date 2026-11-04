@@ -46,6 +46,12 @@ export interface RunToCompletionControlProps {
   disabled?: boolean;
   /** Why the choice does not apply to the next send (for example, Plan mode); shown in the tooltip. */
   notApplied?: string | undefined;
+  /**
+   * False hides "Also answer for me": a schedule or a webhook on a thread
+   * (ADR-0045 decision 9) starts with no person there, and Main refuses the
+   * parts that answer for one.
+   */
+  optIns?: boolean | undefined;
   testId: string;
 }
 
@@ -154,7 +160,7 @@ function GoalCheck({ value, onChange }: Pick<RunToCompletionControlProps, 'value
 }
 
 function Details(props: Omit<RunToCompletionControlProps, 'disabled' | 'notApplied' | 'testId'> & { titleId: string }): React.JSX.Element {
-  const { value, onChange, titleId } = props;
+  const { value, onChange, titleId, optIns = true } = props;
   const [editing, setEditing] = useState(false);
   const invalid = chainErrors(value.grant.chain).length > 0;
   return (
@@ -176,17 +182,21 @@ function Details(props: Omit<RunToCompletionControlProps, 'disabled' | 'notAppli
       </Box>
       {(editing || invalid) && <ChainLimits value={value.grant} onChange={(grant) => onChange({ ...value, grant })} disabled={!value.on} />}
       <GoalCheck value={value} onChange={onChange} />
-      <Divider textAlign="left" sx={{ marginY: 0.5 }}>
-        <Typography variant="labelSmall" sx={muted}>
-          {t('unattended.control.alsoAnswer', 'Also answer for me (off by default)')}
-        </Typography>
-      </Divider>
-      <OptIns {...props} />
+      {optIns && (
+        <>
+          <Divider textAlign="left" sx={{ marginY: 0.5 }}>
+            <Typography variant="labelSmall" sx={muted}>
+              {t('unattended.control.alsoAnswer', 'Also answer for me (off by default)')}
+            </Typography>
+          </Divider>
+          <OptIns {...props} />
+        </>
+      )}
     </Box>
   );
 }
 
-export function RunToCompletionControl({ value, onChange, scope, sensitiveTools, disabled = false, notApplied, testId }: RunToCompletionControlProps): React.JSX.Element {
+export function RunToCompletionControl({ value, onChange, scope, sensitiveTools, disabled = false, notApplied, optIns = true, testId }: RunToCompletionControlProps): React.JSX.Element {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const titleId = useId();
   const applied = notApplied === undefined;
@@ -226,7 +236,7 @@ export function RunToCompletionControl({ value, onChange, scope, sensitiveTools,
         transformOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         slotProps={{ paper: { role: 'dialog', 'aria-labelledby': titleId, sx: { marginTop: -0.5 } } }}
       >
-        <Details value={value} onChange={onChange} scope={scope} sensitiveTools={sensitiveTools} titleId={titleId} />
+        <Details value={value} onChange={onChange} scope={scope} sensitiveTools={sensitiveTools} optIns={optIns} titleId={titleId} />
       </Popover>
     </>
   );

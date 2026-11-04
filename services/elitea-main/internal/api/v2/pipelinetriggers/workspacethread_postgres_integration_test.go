@@ -170,9 +170,10 @@ func TestAThreadScheduleSaveChecksTheTarget(t *testing.T) {
 		{"bad uuid", with(map[string]any{"conversation_uuid": "nope"}), http.StatusBadRequest, ""},
 		{"thread fields without the kind", map[string]any{"cron": "0 7 * * *", "prompt": "x"}, http.StatusBadRequest, ""},
 		{"unknown kind", with(map[string]any{"target_kind": "laptop"}), http.StatusBadRequest, ""},
-		{"not the caller's thread", with(map[string]any{"conversation_uuid": stranger}), http.StatusNotFound, ""},
+		{"not the caller's thread", with(map[string]any{"conversation_uuid": stranger}), http.StatusNotFound,
+			"thread_not_found"},
 		{"no such thread", with(map[string]any{"conversation_uuid": "0b7e4c1a-2d3f-4a5b-9c6d-7e8f9a0b1c2d"}),
-			http.StatusNotFound, ""},
+			http.StatusNotFound, "thread_not_found"},
 		{"sensitive tools", with(map[string]any{"grant": map[string]any{
 			"sensitive_tools": []map[string]any{{"toolkit_name": "github", "tool_name": "merge"}}}}),
 			http.StatusUnprocessableEntity, "unattended_grant_refused"},
@@ -190,7 +191,9 @@ func TestAThreadScheduleSaveChecksTheTarget(t *testing.T) {
 			if response.Code != tc.status {
 				t.Fatalf("status = %d, want %d, body = %s", response.Code, tc.status, response.Body.String())
 			}
-			if tc.code != "" && decode(t, response)["error"] != tc.code {
+			// The grant refusal names itself in `error`; the thread refusals
+			// carry a `code`.
+			if body := decode(t, response); tc.code != "" && body["error"] != tc.code && body["code"] != tc.code {
 				t.Fatalf("body = %s, want code %s", response.Body.String(), tc.code)
 			}
 		})

@@ -6,6 +6,7 @@ import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { ThreadTargetLine } from '@/entities/thread-target';
 import { t } from '@/shared/i18n';
 import type { PipelineInboundTrigger } from '@/shared/api/generated/model';
 import { handleCopy } from '@/shared/lib/clipboard';
@@ -42,6 +43,8 @@ function triggerState(props: EditPipelineTriggerCardProps): TriggerState {
 }
 
 export interface EditPipelineTriggerCardProps {
+  /** The project: a `workspace_thread` target links to its thread's conversation. */
+  readonly projectId?: string | undefined;
   readonly trigger: PipelineInboundTrigger | undefined;
   readonly secretUrl: string | undefined;
   readonly isBusy: boolean;
@@ -135,6 +138,8 @@ export function EditPipelineTriggerCard(props: EditPipelineTriggerCardProps): Re
           {secretUrl ?? trigger?.url ?? ''}
         </Typography>
       )}
+
+      <ThreadTargetLine projectId={props.projectId} target={trigger} testId="pipeline-trigger-thread" />
 
       {state.revoked && (
         <Typography variant="bodySmall" color="error" data-testid="pipeline-trigger-revoked">

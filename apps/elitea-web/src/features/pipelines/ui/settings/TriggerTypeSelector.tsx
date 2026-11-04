@@ -8,6 +8,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { isThreadTarget, ThreadTargetLine } from '@/entities/thread-target';
 import { t } from '@/shared/i18n';
 import { InfoLabelWithTooltip } from '@/shared/ui/InfoLabelWithTooltip';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
@@ -34,6 +35,9 @@ const selectSx: SxProps<Theme> = { flex: 1, marginBottom: '0' };
 const iconStyle: SxProps<Theme> = { width: '1rem', height: '1rem' };
 const listSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '0.25rem' };
 const rowSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem' };
+/** A row with a "Runs on <thread>" line wraps it under the row's own line. */
+const threadRowSx: SxProps<Theme> = { ...rowSx, flexWrap: 'wrap' };
+const threadLineSx: SxProps<Theme> = { flexBasis: '100%' };
 const rowTextSx: SxProps<Theme> = { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'text.secondary' };
 function triggerButtonSx(theme: Theme) {
   return { padding: '0.25rem', color: theme.vars.palette.icon.fill.secondary, '&:hover': { color: theme.vars.palette.primary.main } };
@@ -67,6 +71,7 @@ function TriggerActionButton({ tooltip, onClick, disabled, icon, testId }: Trigg
 }
 
 interface TriggerRowListProps {
+  readonly projectId: string | undefined;
   readonly entries: readonly TriggerListEntry[];
   readonly disabled: boolean;
   readonly onEdit: (kind: TriggerListEntry['kind']) => void;
@@ -79,7 +84,7 @@ interface TriggerRowListProps {
  * (see {@link TriggerTypeSelector}'s own doc comment). Split out of that
  * component to keep it under the §3.5 complexity budget (12).
  */
-function TriggerRowList({ entries, disabled, onEdit, onDelete }: TriggerRowListProps): ReactNode {
+function TriggerRowList({ projectId, entries, disabled, onEdit, onDelete }: TriggerRowListProps): ReactNode {
   if (entries.length === 0) return null;
   return (
     <Box
@@ -89,7 +94,7 @@ function TriggerRowList({ entries, disabled, onEdit, onDelete }: TriggerRowListP
       {entries.map(entry => (
         <Box
           key={entry.kind}
-          sx={rowSx}
+          sx={isThreadTarget(entry.target) ? threadRowSx : rowSx}
           data-testid={`pipeline-trigger-row-${entry.kind}`}
         >
           <Typography
@@ -114,6 +119,15 @@ function TriggerRowList({ entries, disabled, onEdit, onDelete }: TriggerRowListP
             testId={`pipeline-trigger-delete-${entry.kind}`}
             icon={<DeleteOutlineIcon sx={iconStyle} />}
           />
+          {isThreadTarget(entry.target) && (
+            <Box sx={threadLineSx}>
+              <ThreadTargetLine
+                projectId={projectId}
+                target={entry.target}
+                testId={`pipeline-trigger-thread-${entry.kind}`}
+              />
+            </Box>
+          )}
         </Box>
       ))}
     </Box>
@@ -201,6 +215,7 @@ export function TriggerTypeSelector(props: TriggerTypeSelectorProps): ReactNode 
       </Box>
 
       <TriggerRowList
+        projectId={surface.projectId}
         entries={surface.entries}
         disabled={controlsDisabled}
         onEdit={kind => (kind === 'schedule' ? surface.openScheduleModal() : surface.openWebhookModal())}
@@ -212,11 +227,11 @@ export function TriggerTypeSelector(props: TriggerTypeSelectorProps): ReactNode 
       <PipelineScheduleModal
         open={surface.isScheduleModalOpen}
         onClose={surface.closeScheduleModal}
-        onSubmit={cronExpression => {
-          void surface.actions.handleScheduleSubmit(cronExpression);
-        }}
+        onSubmit={(cronExpression, target) => surface.actions.handleScheduleSubmit(cronExpression, target)}
         cron={surface.cron}
         isLoading={surface.isUpdating}
+        projectId={surface.projectId}
+        target={surface.schedule}
       />
 
       <PipelineWebhookModal
@@ -231,9 +246,9 @@ export function TriggerTypeSelector(props: TriggerTypeSelectorProps): ReactNode 
         onReveal={() => {
           void surface.actions.handleRevealWebhook();
         }}
-        onRotate={mode => {
-          void surface.actions.handleRotateWebhook(mode);
-        }}
+        onRotate={(mode, target) => surface.actions.handleRotateWebhook(mode, target)}
+        projectId={surface.projectId}
+        target={surface.webhook}
         onRevoke={() => {
           void surface.actions.handleDeleteKind('webhook');
         }}

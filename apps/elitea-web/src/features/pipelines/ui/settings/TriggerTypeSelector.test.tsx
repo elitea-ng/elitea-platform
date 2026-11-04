@@ -4,6 +4,8 @@ import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
+import { getGetPipelineScheduleResponseMock } from '@/shared/api/generated/applications/applications.msw';
+import { getGetConversationMockHandler, getGetConversationResponseMock, getListConversationsMockHandler } from '@/shared/api/generated/chat/chat.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
@@ -254,5 +256,66 @@ describe('TriggerTypeSelector', () => {
   it('does not throw when projectId/versionId are undefined', async () => {
     const { findByText } = renderWithRouterAndProject(<TriggerTypeSelector />, undefined);
     expect(await findByText('Trigger')).toBeInTheDocument();
+  });
+
+  /** ADR-0045 decision 9: a schedule on a handed-off thread (the v2.yaml example) names its thread under the row. */
+  it('lists a thread schedule as "Runs on <thread>"', async () => {
+    const thread = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json(getGetPipelineScheduleResponseMock())),
+      http.get(TRIGGER_URL, () => HttpResponse.json({ configured: false })),
+      getGetConversationMockHandler(getGetConversationResponseMock({ uuid: thread, name: 'Nightly checks' })),
+    );
+    const { findByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+    const line = await findByTestId('pipeline-trigger-thread-schedule');
+    await waitFor(() => expect(line).toHaveTextContent('Runs on Nightly checks'));
+  });
+  /**
+   * Applying a thread target names no mode: a body with no type, provider,
+   * auth_mode or signature_header keeps the stored mode, so a custom-header
+   * HMAC trigger or a custom Standard Webhooks trigger keeps its mode too.
+   */
+  it.each([
+    ['a custom-header HMAC trigger', { auth_mode: 'hmac_sha256', provider: 'custom', signature_header: 'X-My-Sig' }],
+    ['a custom Standard Webhooks trigger', { auth_mode: 'standard_webhooks_hmac', provider: 'custom' }],
+  ])('applies a thread target to %s and sends no mode', async (_name, mode) => {
+    const thread = '6f1c2d3e-4a5b-4c6d-8e7f-901234567890';
+    const bodies: unknown[] = [];
+    const stored = { configured: true, token_id: 'tok', url: '/api/v2/pipeline_trigger/1/tok', target_kind: 'pipeline', ...mode };
+    server.use(
+      http.get(SCHEDULE_URL, () => HttpResponse.json({ configured: false, active: false })),
+      http.get(TRIGGER_URL, () => HttpResponse.json(stored)),
+      http.post(TRIGGER_URL, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ ...stored, secret: 'minted' });
+      }),
+      getListConversationsMockHandler({
+        total: 1,
+        rows: [{ id: 11, uuid: thread, name: 'Alert triage', source: 'local_work', workspace_executor: 'cloud', created_at: '2026-11-04T09:00:00Z', updated_at: '2026-11-04T09:00:00Z', duration: -1, message_groups_count: 2, is_pinned: false, is_archived: false }],
+      }),
+    );
+    const user = userEvent.setup();
+    const { findByTestId, findByLabelText, findByRole, getByTestId } = renderWithRouterAndProject(
+      <TriggerTypeSelector
+        projectId={PROJECT_ID}
+        versionId={VERSION_ID}
+      />,
+      PROJECT_ID,
+    );
+    await user.click(await findByTestId('pipeline-trigger-edit-webhook'));
+    await user.click(await findByLabelText('A handed-off workspace thread'));
+    await user.click(await findByRole('combobox', { name: 'Thread' }));
+    await user.click(await findByRole('option', { name: 'Alert triage' }));
+    await user.type(getByTestId('thread-target-prompt'), 'Triage the alert.');
+    await user.click(getByTestId('pipeline-webhook-apply-target'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toEqual({ target_kind: 'workspace_thread', conversation_uuid: thread, prompt: 'Triage the alert.' });
+    for (const part of ['type', 'provider', 'auth_mode', 'signature_header']) expect(Object.keys(bodies[0] as object)).not.toContain(part);
   });
 });

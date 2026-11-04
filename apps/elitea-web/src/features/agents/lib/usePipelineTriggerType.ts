@@ -28,6 +28,8 @@ export interface PipelineTriggerParams {
 export interface PipelineTriggerTypeResult {
   readonly type: string | null | undefined;
   readonly schedule: unknown;
+  /** The row of `type`: a `workspace_thread` target (ADR-0045 decision 9) shows as "Runs on <thread>". */
+  readonly target?: PipelineSchedule | PipelineInboundTrigger | undefined;
 }
 
 /**
@@ -50,12 +52,12 @@ export function usePipelineTriggerType({ isPipeline, projectId, versionId }: Pip
   const webhook = okBody<PipelineInboundTrigger>(triggerQuery.data);
 
   if (schedule?.configured === true) {
-    return { type: 'schedule', schedule: { cron: schedule.cron, last_run: schedule.last_run } };
+    return { type: 'schedule', schedule: { cron: schedule.cron, last_run: schedule.last_run }, target: schedule };
   }
   // A REVOKED trigger is kept as evidence and refused by the inbound path, so
   // it must not read as a live webhook here either.
   if (webhook?.configured === true && webhook.revoked_at === undefined) {
-    return { type: 'webhook', schedule: {} };
+    return { type: 'webhook', schedule: {}, target: webhook };
   }
   return { type: undefined, schedule: undefined };
 }

@@ -61,7 +61,7 @@ export const PipelineThreadTargetRefusal = zod
     tool: zod.string().optional(),
   })
   .describe(
-    "Client contract 1.34. A refused `workspace_thread` save or call. `error` is the message, or `unattended_grant_refused` with `reason`, `field` and `message`. `code` is `thread_busy` (409: the thread is not idle in the cloud, so no turn started), `not_handed_off` (422: the conversation was never handed off) or `thread_not_governable` (422: credential governance is on, and the thread's next turn does not address an agent at the row's version, so every occurrence would skip). NOTE(W2): internal/api/v2/pipelinetriggers/workspacethread.go (checkThreadTarget) and inbound.go (Trigger).\n",
+    "Client contract 1.34. A refused `workspace_thread` save or call. `error` is the message, or `unattended_grant_refused` with `reason`, `field` and `message`. `code` is `thread_not_found` (404: the conversation is not in this project, or the caller is not its user participant), `thread_busy` (409: the thread is not idle in the cloud, so no turn started), `not_handed_off` (422: the conversation was never handed off) or `thread_not_governable` (422: credential governance is on, and the thread's next turn does not address an agent at the row's version, so every occurrence would skip). NOTE(W2): internal/api/v2/pipelinetriggers/workspacethread.go (checkThreadTarget) and inbound.go (Trigger).\n",
   );
 
 export type PipelineThreadTargetRefusal = zod.input<

@@ -5,6 +5,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { ThreadTargetSection, useThreadTargetForm, type StoredThreadTarget, type ThreadTargetFieldsBody, type ThreadTargetForm } from '@/entities/thread-target';
 import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 import { InputBase } from '@/shared/ui/InputBase';
@@ -17,15 +18,49 @@ const PIPELINE_CRON_DEFAULT = '0 0 * * 6';
 export interface PipelineScheduleModalProps {
   readonly open: boolean;
   readonly onClose: () => void;
-  readonly onSubmit: (cronExpression: string) => void;
+  /**
+   * Saves the schedule. `target` is sent only when the "Runs" choice changes
+   * what the schedule starts (ADR-0045 decision 9). With a target, the dialog
+   * waits for the save: it resolves to the error the save caught, and a
+   * refusal of the target stays in the dialog, on its field.
+   */
+  readonly onSubmit: (cronExpression: string, target?: ThreadTargetFieldsBody) => unknown;
   readonly cron?: string;
   readonly isLoading?: boolean;
+  /** Shows the "Runs" choice (this pipeline, or a handed-off workspace thread); its thread picker lists this project's threads. */
+  readonly projectId?: string | undefined;
+  /** The stored schedule: its target seeds the "Runs" choice. */
+  readonly target?: StoredThreadTarget | undefined;
 }
 
 const contentWrapperSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap: '1.75rem', minWidth: '25rem' };
 const cronWrapperSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '0.5rem' };
 const descriptionContainerSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: '0.25rem', gap: '0.25rem' };
 const cronDescriptionSx: SxProps<Theme> = { color: 'text.secondary', textAlign: 'center' };
+
+/**
+ * Apply: with no change of target, the save the dialog always made (and it
+ * closes at once); with one, it waits and stays open on a refusal.
+ */
+function applySchedule(args: {
+  readonly form: ThreadTargetForm;
+  readonly showsTarget: boolean;
+  readonly cronExpression: string;
+  readonly onSubmit: PipelineScheduleModalProps['onSubmit'];
+  readonly onClose: () => void;
+}): void {
+  const { form, showsTarget, cronExpression, onSubmit, onClose } = args;
+  const pending = showsTarget ? form.pending() : { kind: 'unchanged' as const };
+  if (pending.kind === 'invalid') return;
+  if (pending.kind === 'unchanged') {
+    onSubmit(cronExpression);
+    onClose();
+    return;
+  }
+  void form.submit(() => onSubmit(cronExpression, pending.body)).then(saved => {
+    if (saved) onClose();
+  });
+}
 
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/
@@ -48,7 +83,8 @@ const cronDescriptionSx: SxProps<Theme> = { color: 'text.secondary', textAlign: 
  * validates against").
  */
 export function PipelineScheduleModal(props: PipelineScheduleModalProps): ReactNode {
-  const { open, onClose, onSubmit, cron, isLoading = false } = props;
+  const { open, onClose, onSubmit, cron, isLoading = false, projectId, target } = props;
+  const form = useThreadTargetForm(open, target, 'pipeline');
 
   const [cronExpression, setCronExpression] = useState(PIPELINE_CRON_DEFAULT);
   const [cronType, setCronType] = useState<'default' | 'advanced'>('default');
@@ -71,10 +107,7 @@ export function PipelineScheduleModal(props: PipelineScheduleModalProps): ReactN
   // disabling it.
   const applyIsDisabled = !parsed.ok || Boolean(isLoading);
 
-  const applyChanges = (): void => {
-    onSubmit(cronExpression);
-    onClose();
-  };
+  const applyChanges = (): void => applySchedule({ form, showsTarget: projectId !== undefined, cronExpression, onSubmit, onClose });
 
   return (
     <BaseModal
@@ -136,6 +169,13 @@ export function PipelineScheduleModal(props: PipelineScheduleModalProps): ReactN
               />
             </Box>
           </Box>
+          {projectId !== undefined && (
+            <ThreadTargetSection
+              projectId={projectId}
+              {...form.section}
+              disabled={isLoading}
+            />
+          )}
         </Box>
       }
       actions={{

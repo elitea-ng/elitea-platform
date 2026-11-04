@@ -8,6 +8,7 @@ import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { ThreadTargetLine } from '@/entities/thread-target';
 import { t } from '@/shared/i18n';
 import type { PipelineSchedule } from '@/shared/api/generated/model';
 import { CronField, parseCronExpression } from '@/shared/ui/cron';
@@ -38,6 +39,8 @@ function lastResultText(result: string | undefined, detail: string | undefined):
         'pages.pipelines.editPipeline.triggers.schedule.resultUnauthorized',
         'Skipped: the schedule author can no longer run agents in this project.',
       );
+    case 'skipped_thread_busy':
+      return t('pages.pipelines.editPipeline.triggers.schedule.resultThreadBusy', 'Skipped: the thread was busy');
     case 'skipped_missing_version':
       return t(
         'pages.pipelines.editPipeline.triggers.schedule.resultMissing',
@@ -81,6 +84,8 @@ function ScheduleStatus(props: {
 }
 
 export interface EditPipelineScheduleCardProps {
+  /** The project: a `workspace_thread` target links to its thread's conversation. */
+  readonly projectId?: string | undefined;
   readonly schedule: PipelineSchedule | undefined;
   readonly isBusy: boolean;
   readonly isReadOnly: boolean;
@@ -150,6 +155,8 @@ export function EditPipelineScheduleCard(props: EditPipelineScheduleCardProps): 
         }
         label={t('pages.pipelines.editPipeline.triggers.schedule.enable', 'Enabled')}
       />
+
+      <ThreadTargetLine projectId={props.projectId} target={schedule} testId="pipeline-schedule-thread" />
 
       <ScheduleStatus schedule={schedule} outcome={outcome} />
 
