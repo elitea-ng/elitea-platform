@@ -87,6 +87,16 @@ function postJson(url, body, key, timeoutMs) {
   });
 }
 
+// The endpoint: `base_url`, or the environment variable `base_url_env` names
+// (a private endpoint stays out of the repository).
+export function resolveBaseUrl(provider) {
+  const url = provider.base_url_env ? process.env[provider.base_url_env] : provider.base_url;
+  if (!url) {
+    throw new Error(provider.base_url_env ? `provider needs env ${provider.base_url_env}` : 'provider has no base_url');
+  }
+  return url;
+}
+
 // Returns a chat(messages, opts) function bound to one provider.
 // The result: { message, finish, usage: {prompt, completion, reasoning}, ms }.
 export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3 } = {}) {
@@ -94,7 +104,8 @@ export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3 } = {}
   if (provider.key_env && !key) {
     throw new Error(`provider needs env ${provider.key_env}`);
   }
-  const url = provider.base_url.replace(/\/$/, '') + '/chat/completions';
+  const baseUrl = resolveBaseUrl(provider);
+  const url = baseUrl.replace(/\/$/, '') + '/chat/completions';
   return async function chat(messages, opts = {}) {
     const body = buildBody(provider, { messages, ...opts });
     let lastErr;

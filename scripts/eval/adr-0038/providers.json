@@ -1,7 +1,7 @@
 {
   "qwen": {
     "label": "Qwen3.8-27B-NVFP4 on the Spark vLLM",
-    "base_url": "http://192.168.29.60:8000/v1",
+    "base_url_env": "ELITEA_EVAL_QWEN_BASE_URL",
     "key_env": null,
     "model": "RadixArk/Qwen3.8-27B-NVFP4",
     "thinking": { "kind": "toggle" },

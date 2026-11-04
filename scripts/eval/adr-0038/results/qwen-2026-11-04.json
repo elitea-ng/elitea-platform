@@ -2,7 +2,7 @@
  "meta": {
   "provider": "qwen",
   "model": "RadixArk/Qwen3.8-27B-NVFP4",
-  "base_url": "http://192.168.29.60:8000/v1",
+  "base_url": "$ELITEA_EVAL_QWEN_BASE_URL",
   "thinking": {
    "kind": "toggle"
   },

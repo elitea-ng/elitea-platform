@@ -178,7 +178,7 @@ async function main() {
 
   const records = readFileSync(jsonl, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   const meta = {
-    provider: args.provider, model: provider.model, base_url: provider.base_url,
+    provider: args.provider, model: provider.model, base_url: provider.base_url_env ? `$${provider.base_url_env}` : provider.base_url,
     thinking: provider.thinking, temperature: provider.temperature, date,
     variants: Object.fromEntries([...new Set(records.map((r) => r.variant))].sort().map((k) => [k, VARIANTS[k].name])),
     max_steps: Number(args['max-steps']), worker_steps: Number(args['worker-steps']),

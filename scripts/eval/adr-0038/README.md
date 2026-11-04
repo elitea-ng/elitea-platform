@@ -37,7 +37,8 @@ node --test "test/*.test.mjs"
 # check, and the reference solution passes it (and the held-out tests).
 node run.mjs --selftest
 
-# Full run: 4 variants, 2 repeats, against the local Qwen.
+# Full run: 5 variants, 2 repeats, against the local Qwen. Set its endpoint first.
+export ELITEA_EVAL_QWEN_BASE_URL=http://<vllm-host>:8000/v1
 node run.mjs --provider qwen --repeat 2
 
 # A subset: only the extraction tasks, variants b and c.
@@ -101,6 +102,7 @@ Add one entry to `providers.json`. Nothing else changes.
 | Field | Meaning |
 |---|---|
 | `base_url` | An OpenAI-compatible endpoint. The harness posts to `<base_url>/chat/completions`. |
+| `base_url_env` | In place of `base_url`: the environment variable that holds the endpoint. Use it for a private endpoint, so that its address stays out of the repository. The `qwen` entry reads `ELITEA_EVAL_QWEN_BASE_URL`. |
 | `key_env` | The environment variable that holds the API key, or `null` for no key. |
 | `model` | The model id. |
 | `thinking.kind` | The control kind of ADR-0038 decision 2. See the table below. |
