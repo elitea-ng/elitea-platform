@@ -6,8 +6,8 @@ use std::sync::Arc;
 use adk_rust::graph::GraphError;
 use async_trait::async_trait;
 
-use super::PostgresCheckpointer;
 use super::fanout_children::{FanoutChildKey, FanoutFamily, current_origin};
+use super::{CheckpointWriterAuthority, PostgresCheckpointer};
 use crate::agents::graph::{
     FrozenMapItem, MapActivation, MapCheckpointAuthority, MapChildCheckpoint,
     MapChildCheckpointerFactory, MapExecutionIdentity, MapWorkerKind,
@@ -31,7 +31,7 @@ impl MapChildCheckpointerFactory for PostgresCheckpointer {
         origin: &MapExecutionIdentity,
     ) -> Result<String, GraphError> {
         self.check_map_item(activation, item, worker)?;
-        map_child_thread_id(self, activation, item, worker, origin)
+        map_child_thread_id(&self.scope.authority, activation, item, worker, origin)
     }
     async fn for_item(
         &self,
@@ -90,13 +90,14 @@ impl PostgresCheckpointer {
         origin: &MapExecutionIdentity,
     ) -> Result<Self, GraphError> {
         self.check_map_item(activation, item, worker)?;
-        let thread_id = map_child_thread_id(self, activation, item, worker, origin)?;
+        let thread_id =
+            map_child_thread_id(&self.scope.authority, activation, item, worker, origin)?;
         self.activate_fanout_child(thread_id).await
     }
 }
 
-fn map_child_thread_id(
-    parent: &PostgresCheckpointer,
+pub(crate) fn map_child_thread_id(
+    authority: &CheckpointWriterAuthority,
     activation: &MapActivation,
     item: &FrozenMapItem,
     worker: &str,
@@ -110,7 +111,7 @@ fn map_child_thread_id(
     let step = activation.step.to_be_bytes();
     let ordinal = ordinal.to_be_bytes();
     super::fanout_children::child_thread_id(
-        &parent.scope.authority,
+        authority,
         &FanoutChildKey {
             family: FanoutFamily::Map,
             root_thread_id: &activation.root_thread_id,

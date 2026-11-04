@@ -54,6 +54,9 @@ pub(crate) fn holds_parallel_occurrence(checkpoint: &Checkpoint) -> bool {
 use elitea_agent_runtime::graph::parallel_control as control;
 #[path = "parallel_frames.rs"]
 mod frames;
+#[cfg(test)]
+#[path = "parallel_map_identity_tests.rs"]
+mod map_identity_tests;
 #[path = "parallel_structure.rs"]
 mod structure;
 #[cfg(test)]
@@ -141,7 +144,7 @@ impl ParallelActivation {
             node_id: source.id().to_owned(),
             step,
             config_digest: source.config_digest(),
-            map: None,
+            map: source.map_identity(context)?,
         })
     }
 }
@@ -501,6 +504,13 @@ impl PreparedParallelBranch {
     }
 }
 
+fn map_source_unsupported() -> GraphError {
+    parallel_error(
+        "graph.parallel.invalid_configuration",
+        "this fan-out runtime does not run a Map source",
+    )
+}
+
 #[async_trait]
 pub(crate) trait ParallelBranchRuntime: Send + Sync {
     fn validate(&self, definition: &ParallelNodeDefinition) -> Result<(), GraphError>;
@@ -510,6 +520,7 @@ pub(crate) trait ParallelBranchRuntime: Send + Sync {
     fn validate_source(&self, source: &FanoutSource) -> Result<(), GraphError> {
         match source {
             FanoutSource::Parallel(definition) => self.validate(definition),
+            FanoutSource::Map(_) => Err(map_source_unsupported()),
         }
     }
 
@@ -534,6 +545,7 @@ pub(crate) trait ParallelBranchRuntime: Send + Sync {
             FanoutSource::Parallel(definition) => {
                 self.prepare(activation, definition, context).await
             }
+            FanoutSource::Map(_) => Err(map_source_unsupported()),
         }
     }
 
@@ -639,7 +651,7 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
                 self.graphs.validate_branch(branch)?;
             }
         }
-        let inputs = self.project_inputs(activation, &branches, &context.state)?;
+        let inputs = self.project_inputs(activation, source, &branches, &context.state)?;
         let (origin, threads) = self.mint_lineage(activation, &branches, &inputs)?;
         let occurrence = self
             .parent
@@ -755,11 +767,35 @@ impl AdkParallelBranchRuntime {
     fn project_inputs(
         &self,
         activation: &mut ParallelActivation,
+        source: &FanoutSource,
         branches: &[ParallelBranchDefinition],
         parent: &State,
     ) -> Result<Vec<FrozenBranchInput>, GraphError> {
         // Validate before business-state cloning or any mapping/child admission.
         validate_input_state(parent)?;
+        if let Some(inputs) = source.frozen_inputs(branches, parent) {
+            let frozen = inputs?
+                .into_iter()
+                .zip(branches)
+                .enumerate()
+                .map(|(ordinal, (input, branch))| FrozenBranchInput {
+                    branch_id: branch.id().to_owned(),
+                    node: branch.node().to_owned(),
+                    ordinal,
+                    owned_definition_digest: input.owned_definition_digest,
+                    input_digest: input.input_digest,
+                    input: input.input,
+                })
+                .collect::<Vec<_>>();
+            let serialized_inputs = serde_json::to_value(&frozen).map_err(|_| {
+                parallel_error(
+                    "graph.parallel.invalid_mapping",
+                    "the branch inputs cannot be encoded",
+                )
+            })?;
+            ensure_bounded_json(&serialized_inputs, MAX_BRANCH_INPUT_BYTES, "input")?;
+            return Ok(frozen);
+        }
         // Evaluate every mapping before any branch runs.
         let business = business_state(parent);
         let mut frozen = Vec::with_capacity(branches.len());

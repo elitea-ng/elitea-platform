@@ -164,23 +164,14 @@ impl MapDefinition {
         Ok(())
     }
 
-    pub(super) fn freeze(
-        &self,
-        context: &NodeContext,
-        worker_digest: [u8; 32],
-        origin: MapExecutionIdentity,
-    ) -> Result<FrozenMap, GraphError> {
-        self.validate()?;
-        validate_state_structure(&context.state)?;
-        if context.config.thread_id.is_empty()
-            || context.config.thread_id.len() > 512
-            || context.config.thread_id.chars().any(char::is_control)
-            || worker_digest == [0; 32]
-        {
-            return Err(map_error("invalid_activation"));
-        }
-        let items = context
-            .state
+    /// The Map's own configuration digest, bound into every item identity.
+    pub(crate) fn config_digest(&self) -> Result<[u8; 32], GraphError> {
+        hash_json(b"elitea.graph.map.config.v1\0", self, MAX_PLAN_BYTES)
+    }
+
+    /// The activation's source items, bounded and validated.
+    pub(super) fn source_items<'a>(&self, state: &'a State) -> Result<&'a [Value], GraphError> {
+        let items = state
             .get(&self.source)
             .and_then(Value::as_array)
             .ok_or_else(|| map_error("invalid_source"))?;
@@ -189,22 +180,19 @@ impl MapDefinition {
         }
         validate_values(items.iter())?;
         bounded(items, MAX_PLAN_BYTES)?;
-        let source_digest = hash_json(b"elitea.graph.map.source.v1\0", items, MAX_PLAN_BYTES)?;
-        let config_digest = hash_json(b"elitea.graph.map.config.v1\0", self, MAX_PLAN_BYTES)?;
-        let activation = MapActivation {
-            root_thread_id: context.config.thread_id.clone(),
-            node_id: self.id.clone(),
-            step: u64::try_from(context.step).map_err(|_| map_error("resource_exhausted"))?,
-            config_digest,
-            worker_digest,
-            source_digest,
-        };
+        Ok(items)
+    }
+
+    /// Every item's frozen input (the broadcast plus `{item, index}`) and its
+    /// digest, in source order.
+    pub(super) fn item_inputs(
+        &self,
+        state: &State,
+        items: &[Value],
+    ) -> Result<Vec<FrozenMapItem>, GraphError> {
         let mut broadcast = State::new();
         for key in &self.broadcast {
-            let value = context
-                .state
-                .get(key)
-                .ok_or_else(|| map_error("invalid_mapping"))?;
+            let value = state.get(key).ok_or_else(|| map_error("invalid_mapping"))?;
             validate_value(value)?;
             bounded(value, MAX_ITEM_BYTES)?;
             broadcast.insert(key.clone(), value.clone());
@@ -226,6 +214,36 @@ impl MapDefinition {
             });
             bounded(&frozen, MAX_PLAN_BYTES)?;
         }
+        Ok(frozen)
+    }
+
+    pub(super) fn freeze(
+        &self,
+        context: &NodeContext,
+        worker_digest: [u8; 32],
+        origin: MapExecutionIdentity,
+    ) -> Result<FrozenMap, GraphError> {
+        self.validate()?;
+        validate_state_structure(&context.state)?;
+        if context.config.thread_id.is_empty()
+            || context.config.thread_id.len() > 512
+            || context.config.thread_id.chars().any(char::is_control)
+            || worker_digest == [0; 32]
+        {
+            return Err(map_error("invalid_activation"));
+        }
+        let items = self.source_items(&context.state)?;
+        let source_digest = source_digest(items)?;
+        let config_digest = self.config_digest()?;
+        let activation = MapActivation {
+            root_thread_id: context.config.thread_id.clone(),
+            node_id: self.id.clone(),
+            step: u64::try_from(context.step).map_err(|_| map_error("resource_exhausted"))?,
+            config_digest,
+            worker_digest,
+            source_digest,
+        };
+        let frozen = self.item_inputs(&context.state, items)?;
         let plan = FrozenMap {
             activation,
             items: frozen,
@@ -917,6 +935,11 @@ impl Write for CappedWriter {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// The digest of a Map's frozen source items.
+pub(super) fn source_digest(items: &[Value]) -> Result<[u8; 32], GraphError> {
+    hash_json(b"elitea.graph.map.source.v1\0", items, MAX_PLAN_BYTES)
 }
 
 fn hash_json<T: Serialize + ?Sized>(

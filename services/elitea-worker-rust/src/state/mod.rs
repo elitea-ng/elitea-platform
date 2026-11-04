@@ -14,6 +14,8 @@ mod writer_lease;
 
 pub(crate) use postgres_checkpointer::CheckpointWriterAuthority;
 pub use postgres_checkpointer::{CheckpointLimits, PostgresCheckpointError, PostgresCheckpointer};
+#[cfg(test)]
+pub(crate) use postgres_checkpointer::{derive_child_thread_id, map_child_thread_id};
 pub(crate) use postgres_session::SessionWriterAuthority;
 pub use postgres_session::{PostgresSessionError, PostgresSessionService, SessionLimits};
 #[cfg(test)]
