@@ -385,41 +385,8 @@ impl OrdinaryNoToolProfile {
         } else {
             instructions.to_owned()
         };
-        let instructions = rendered.as_str();
-        let model = match version.get("llm_settings") {
-            None | Some(Value::Null) => ValidatedModel {
-                instructions: instructions.to_owned(),
-                model_name: fallback.model_name.clone(),
-                model_provider: fallback.model_provider,
-                model_project_id: fallback.model_project_id,
-                max_tokens: fallback.max_tokens,
-                reasoning_effort: fallback.reasoning_effort,
-                temperature: fallback.temperature,
-            },
-            Some(Value::Object(settings)) if settings.is_empty() => ValidatedModel {
-                instructions: instructions.to_owned(),
-                model_name: fallback.model_name.clone(),
-                model_provider: fallback.model_provider,
-                model_project_id: fallback.model_project_id,
-                max_tokens: fallback.max_tokens,
-                reasoning_effort: fallback.reasoning_effort,
-                temperature: fallback.temperature,
-            },
-            Some(Value::Object(settings)) => {
-                validate_model(settings, ModelFieldNames::APPLICATION, None, instructions)?
-            }
-            Some(_) => return Err(invalid_profile()),
-        };
-        // The nested version's own thinking control when Main froze one;
-        // else the parent's, when the child runs on the parent's model.
-        let same_model = model.model_name == fallback.model_name
-            && model.model_project_id == fallback.model_project_id;
-        let model_reasoning = match version.get("model_reasoning") {
-            None | Some(Value::Null) => fallback.model_reasoning.filter(|_| same_model),
-            Some(value) => {
-                Some(super::request::ModelReasoning::from_json(value).ok_or_else(invalid_profile)?)
-            }
-        };
+        let model = nested_model(version, fallback, rendered.as_str())?;
+        let model_reasoning = nested_model_reasoning(version, fallback, &model)?;
         check_temperature(&model, model_reasoning)?;
         Ok(Self {
             summary_model: fallback.summary_model.clone(),
@@ -1229,6 +1196,49 @@ struct ValidatedModel {
     max_tokens: Option<u32>,
     reasoning_effort: Option<ReasoningEffort>,
     temperature: Option<f32>,
+}
+
+/// A nested version's model: its own `llm_settings`, or the parent's model
+/// when it declares none (absent, null or an empty object).
+fn nested_model(
+    version: &Map<String, Value>,
+    fallback: &OrdinaryNoToolProfile,
+    instructions: &str,
+) -> Result<ValidatedModel, NativeAgentAssemblyError> {
+    match version.get("llm_settings") {
+        Some(Value::Object(settings)) if !settings.is_empty() => {
+            validate_model(settings, ModelFieldNames::APPLICATION, None, instructions)
+        }
+        None | Some(Value::Null | Value::Object(_)) => Ok(ValidatedModel {
+            instructions: instructions.to_owned(),
+            model_name: fallback.model_name.clone(),
+            model_provider: fallback.model_provider,
+            model_project_id: fallback.model_project_id,
+            max_tokens: fallback.max_tokens,
+            reasoning_effort: fallback.reasoning_effort,
+            temperature: fallback.temperature,
+        }),
+        Some(_) => Err(invalid_profile()),
+    }
+}
+
+/// The nested version's own thinking control when Main froze one; else the
+/// parent's, when the child runs on the parent's model.
+fn nested_model_reasoning(
+    version: &Map<String, Value>,
+    fallback: &OrdinaryNoToolProfile,
+    model: &ValidatedModel,
+) -> Result<Option<super::request::ModelReasoning>, NativeAgentAssemblyError> {
+    match version.get("model_reasoning") {
+        None | Some(Value::Null) => {
+            let same_model = model.model_name == fallback.model_name
+                && model.model_project_id == fallback.model_project_id;
+            Ok(fallback.model_reasoning.filter(|_| same_model))
+        }
+        Some(value) => super::request::ModelReasoning::from_json(value)
+            .map(Some)
+            .ok_or_else(invalid_profile),
+    }
 }
 
 fn validate_model(

@@ -257,12 +257,17 @@ pub fn request_from(
                         ),
                         model_reasoning: summary
                             .model_reasoning
+                            .as_ref()
                             .map(model_reasoning)
                             .transpose()?,
                     })
                 })
                 .transpose()?,
-            model_reasoning: message.model_reasoning.map(model_reasoning).transpose()?,
+            model_reasoning: message
+                .model_reasoning
+                .as_ref()
+                .map(model_reasoning)
+                .transpose()?,
             platform_preamble: message
                 .platform_preamble
                 .map(platform_preamble_snapshot)
@@ -296,7 +301,7 @@ fn model_context_limits(
 /// newer catalogue value this worker cannot translate is never sent as
 /// another form.
 fn model_reasoning(
-    reasoning: crate::protocol::elitea::runtime::v1::ModelReasoningV1,
+    reasoning: &crate::protocol::elitea::runtime::v1::ModelReasoningV1,
 ) -> Result<super::request::ModelReasoning, AgentProtocolError> {
     super::request::ModelReasoning::parse(&reasoning.control, reasoning.tool_steps)
         .map(|parsed| parsed.with_off_with_tools(reasoning.off_with_tools))
