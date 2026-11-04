@@ -37,7 +37,23 @@ The same section also configures the cron schedule, and an agent's info panel sh
 
 ### Run on a handed-off workspace
 
-A schedule or a webhook trigger can start a turn on a desktop thread that you sent to the cloud, in place of a run of the pipeline. Use it for recurring work in a real repository: a nightly check, or a fix that an alert starts. The settings form does not show this target yet. Set it through the API (`savePipelineSchedule` or `rotatePipelineInboundTrigger`).
+A schedule or a webhook trigger can start a turn on a desktop thread that you sent to the cloud, in place of a run of the pipeline. Use it for recurring work in a real repository: a nightly check, or a fix that an alert starts. Set it up in the app or through the API (`savePipelineSchedule` or `rotatePipelineInboundTrigger`).
+
+#### Set it up in the app
+
+<Steps>
+1. On the desktop, send the thread to the cloud.
+2. Open the pipeline. On the **Entrypoint** node, open the **Schedule** or the **Webhook** settings. For an agent, open **Triggers** in the agent's configuration.
+3. Under **Runs**, select **A handed-off workspace thread**. The other choice, **This pipeline** or **This agent**, runs the version.
+4. In **Thread**, select the thread. The list shows only your threads that are in the cloud now.
+5. In **Message**, type the message that each run starts with (1 to 32768 characters).
+6. Optional: open the **Run to completion** settings. Change the chain limits, or turn off the goal check. If you change nothing, the app sends no grant, and the platform default applies.
+7. For a schedule, select **Apply**. For a webhook, select **Apply and rotate**. This replaces the secret: give the new secret to the sender.
+</Steps>
+
+If the save is refused, the app shows the reason on the field. A thread that you never sent to the cloud, or a thread that is not yours, is refused on **Thread**. When credential governance is on, the thread's agent must be this version. The schedule and the trigger then show **Runs on** and the thread's name. Select the name to open the conversation. A schedule that found the thread busy shows **Skipped: the thread was busy**.
+
+#### Set it up through the API
 
 <Steps>
 1. On the desktop, send the thread to the cloud (see [Send a thread to the cloud](/menus/settings/desktop-account-menu#send-a-thread-to-the-cloud)).
