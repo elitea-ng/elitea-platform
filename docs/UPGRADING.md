@@ -25,6 +25,10 @@ New shared migration `0225_model_reasoning_control`:
 - It adds `reasoning_tokens` (default 0) to `gateway.llm_request_logs`.
   There is no backfill. The gateway writes the column when it exists. A
   gateway that rolls out before the migration writes rows without it.
+- It adds `reasoning_tokens` (default 0) to `gateway.llm_usage_events`.
+  The scheduler's write-back consumer and the gateway's outage path write
+  it only after they find the column in `information_schema`. A scheduler
+  or gateway that runs before the migration loses the count, not the row.
 
 A model's own `data.reasoning_control` and `data.reasoning_tool_steps` in
 the catalogue win over the family defaults. A default applies only to a
@@ -40,14 +44,22 @@ HTTP 400. An llm_model save refuses a `reasoning_control` that is not
 `effort`, `budget`, `toggle`, `fixed_on` or `fixed_off`, and a form other
 than `fixed_off` on a model with `supports_reasoning: false`.
 
+`predict_llm` and the AI drafts translate `reasoning_effort` with the
+model's control, as agents do. They refuse a value that is not `auto`,
+`off`, `low`, `medium` or `high` (`none` reads as `off`), and a value the
+model cannot honour, with HTTP 400. They no longer pass the value through
+raw. The DeepWiki and Inventory engines get the model's control, so `auto`
+there turns thinking off on routine tool steps.
+
 Client contract 1.35:
 
 - `reasoning_effort` takes `auto` and `off`.
 - The model catalogue item returns `reasoning_control` and
   `reasoning_tool_steps`.
 - The run analytics figures and the local child turn usage return
-  `reasoning_tokens`. These tokens are a part of `completion_tokens`, not
-  an addition to it.
+  `reasoning_tokens`. So do the budget usage totals, per day and per
+  model. These tokens are a part of `completion_tokens`, not an addition
+  to it.
 
 ## Schedules and webhooks on a handed-off workspace (#1440, ADR-0045 decision 9)
 
