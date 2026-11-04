@@ -119,13 +119,19 @@ When a thread cannot move (your deployment or project has the cloud executor off
 
 #### Send a running task and continue in the cloud
 
-You can send a thread while a task runs, and the cloud continues the task with a message you give. The platform sends the thread and starts the cloud's first turn together: either both happen, or neither does.
+You can send a thread while its turn is still running, for example before you close your laptop:
 
+- The dialog says that a turn is running. When you select **Send to cloud**, the turn stops at its next step, so nothing it has done is lost. The turn is then saved, and the platform sends the thread and starts the cloud's first turn together: either both happen, or neither does. The cloud continues with the same mode.
 - When the thread runs with **To completion**, the cloud continues the same run. The chain limits (continuations, spend and hours) count across your computer and the cloud. When the run ends, the notification says it ended in the cloud.
-- When the platform refuses the run (for example, a chain limit is reached, or your administrator turned unattended grants off), the thread is not sent and stays on your computer. The app shows why.
-- The cloud runs the turn as any cloud turn. Plan mode, hook asks and remote confirmations are desktop parts and do not apply in the cloud.
+- If the platform does not allow the run to continue in the cloud (for example, a chain limit is reached, or your administrator turned unattended grants off), the thread is still sent. The dialog says why, and the thread waits in the cloud for your next message. Select **OK** to close the dialog.
+- A turn that is waiting for your answer (an approval, or **Continue?** at its step limit) stops only after you answer it, or when the question times out.
+- The cloud runs the turn as any cloud turn. Plan mode, hook asks and remote confirmations are parts of the desktop app and do not apply in the cloud.
 
-You can also ask the app to **take the thread back when done**. The platform keeps your choice and the result of the last cloud run. The platform never takes a thread back by itself: your desktop app takes it back when the cloud run completes.
+**Take back when done** brings the thread back to this computer by itself when its cloud run completes. It is on by default when a turn is running, and you can turn it on or off in the dialog before you send. A thread sent this way shows **Takes back when done** above the text box. The platform keeps your choice and the result of the last cloud run, but only your desktop app takes the thread back. When the run completes, the app takes the thread back even after a restart. It also checks when you sign in, and every few minutes. You do not need to keep the thread open:
+
+- If your folder did not change, or the changes do not overlap, the cloud's changes are applied to your folder. A notice says **Took back** and the thread's name.
+- If your folder and the cloud changed the same lines, the cloud's version opens as a separate worktree, and your folder is not changed. A notice says **Opened … as a worktree**.
+- If the run failed, waits for you, or stopped at its limit, the thread stays in the cloud. A notice tells you once, so that you can look at it and take it back yourself.
 
 ### The Changes tab
 

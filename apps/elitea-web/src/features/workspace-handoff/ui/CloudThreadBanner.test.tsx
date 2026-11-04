@@ -41,6 +41,15 @@ describe('CloudThreadBanner', () => {
     expect(onErase).toHaveBeenCalledTimes(1);
   });
 
+  it('says "Takes back when done" only when the state says so (read-only)', () => {
+    const { unmount } = renderWithTheme(<CloudThreadBanner status={CLOUD} onTakeBack={vi.fn()} onErase={vi.fn()} />);
+    expect(screen.queryByTestId('banner-take-back-when-done')).toBeNull();
+    unmount();
+    renderWithTheme(<CloudThreadBanner status={{ ...CLOUD, take_back_when_done: true }} onTakeBack={vi.fn()} onErase={vi.fn()} />);
+    expect(screen.getByTestId('banner-take-back-when-done')).toHaveTextContent('Takes back when done');
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Take back', 'Erase cloud copy']);
+  });
+
   it('shows a take back that is waiting for the running cloud turn', () => {
     renderWithTheme(<CloudThreadBanner status={{ ...CLOUD, state: 'CLOUD_RUNNING', reclaim_pending: true }} onTakeBack={vi.fn()} onErase={vi.fn()} />);
     expect(screen.getByTestId('banner-reclaim-pending')).toHaveTextContent('starts when the running cloud turn ends');

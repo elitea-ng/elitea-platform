@@ -32,7 +32,18 @@ export function HandoffBanner({ handoff, projectId }: { handoff: ThreadHandoff; 
   return <CloudThreadBanner status={handoff.status} onTakeBack={() => handoff.open('takeBack')} onErase={() => handoff.open('erase')} pullRequests={pullRequests} />;
 }
 
-export function HandoffDialogs({ handoff, workspaceId, projectId }: { handoff: ThreadHandoff; workspaceId: string; projectId: number }): React.JSX.Element | null {
+export function HandoffDialogs({
+  handoff,
+  workspaceId,
+  projectId,
+  title,
+}: {
+  handoff: ThreadHandoff;
+  workspaceId: string;
+  projectId: number;
+  /** The thread's title, for the host's notice when it is taken back by itself. */
+  title?: string | undefined;
+}): React.JSX.Element | null {
   const { ipc, uuid, dialog } = handoff;
   const workspaceIpc = useWorkspaceIpc();
   if (ipc === undefined || uuid === undefined || dialog === null) return null;
@@ -44,6 +55,7 @@ export function HandoffDialogs({ handoff, workspaceId, projectId }: { handoff: T
           ipc={ipc}
           workspaceId={workspaceId}
           conversationUuid={uuid}
+          {...(title === undefined ? {} : { title })}
           onClose={handoff.close}
           onSent={() => {
             handoff.moved();

@@ -182,7 +182,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         planMode={commands.planMode}
         context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
       />
-      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} />
+      <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
         open={createAgentOpen}
         onClose={() => setCreateAgentOpen(false)}

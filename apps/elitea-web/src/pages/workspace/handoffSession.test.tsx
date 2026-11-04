@@ -153,7 +153,7 @@ describe('a thread running here', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Send to cloud' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [], confirmIncludes: false }]);
+    expect(handoff.calls.sends).toEqual([{ workspaceId: 'w1', conversationUuid: UUID, leave: [], confirmIncludes: false, title: 'app' }]); // the thread's title (here its folder's), for the take-back notice
     expect(await screen.findByTestId('cloud-thread-banner')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('run-location-action')).toHaveTextContent('Take back'));
   });
