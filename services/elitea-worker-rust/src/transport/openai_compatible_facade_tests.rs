@@ -1002,24 +1002,44 @@ async fn skipped_internal_tools_notice_reaches_a_valid_openai_tool_message() {
     assert_eq!(body["messages"][2]["role"], "user");
 }
 
-/// The request bodies one bound model sends for `requests`, in order.
+/// The request bodies one bound model sends for `requests`, in order. Each
+/// request takes the generation config the facade admits for `invocation`
+/// (as the agent runtime builds it from the bound model), so it passes the
+/// real admission.
 async fn thinking_bodies(
     invocation: super::openai_compatible_facade::ModelFacadeInvocation,
-    requests: Vec<LlmRequest>,
+    mut requests: Vec<LlmRequest>,
 ) -> Vec<serde_json::Value> {
-    // A tool-call answer: it completes no turn, so the binding takes the
-    // next request.
+    // A tool-call answer to a request that declares `double`: it completes
+    // no turn, so the binding takes the next request. A request without
+    // tools gets a text answer: a tool call there is outside the admitted
+    // toolset.
     let tool_sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"double\",\"arguments\":\"{\\\"value\\\":21}\"}}]},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
         "data: [DONE]\n\n",
     );
-    let count = requests.len();
+    let text_sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    for request in &mut requests {
+        request.config = Some(super::openai_compatible_facade::admitted_generation_config(
+            &invocation,
+        ));
+    }
     let (client, captured) = test_model_gateway_client(
-        (0..count)
-            .map(|_| {
+        requests
+            .iter()
+            .map(|request| {
+                let answer = if request.tools.is_empty() {
+                    text_sse
+                } else {
+                    tool_sse
+                };
                 TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(
-                    Full::new(Bytes::from(tool_sse)),
+                    Full::new(Bytes::from(answer)),
                 )))
             })
             .collect(),
