@@ -144,7 +144,7 @@ RETURNING execution_id, response_message_id::text, target_participant_id, expire
 			var limit *unattended.ChainLimitError
 			if errors.As(err, &limit) {
 				_ = tx.Rollback(ctx)
-				if _, endErr := endRunChain(context.WithoutCancel(ctx), r.pool,
+				if _, endErr := endRunChainTx(context.WithoutCancel(ctx), r.pool,
 					record.Grant.ChainRootExecutionID, unattended.EndLimitReached, limit.Limit); endErr != nil {
 					return localturn.StartedTurn{}, errors.Join(err, endErr)
 				}

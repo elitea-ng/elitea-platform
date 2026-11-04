@@ -248,6 +248,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// never serves a request, so an inert handler is enough.
 		CurrentAgentStart:         http.NotFoundHandler(),
 		CurrentNotificationEvents: http.NotFoundHandler(),
+		// ADR-0045 decision 6: push_config and push_subscriptions, mounted
+		// only when web push is composed.
+		CurrentNotificationPush: http.NotFoundHandler(),
 		// ADR-0039 (#1112): the agent identity binding and mandate admin
 		// operations, mounted only with credential governance on. The walk
 		// never serves a request, so the zero handler is enough.

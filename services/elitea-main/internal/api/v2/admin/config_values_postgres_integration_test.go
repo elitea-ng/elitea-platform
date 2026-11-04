@@ -827,6 +827,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0043 decision 3 (#1500): every agent execution command's
 		// preparation, which freezes the preamble revision and its digest.
 		"platform_preamble": true,
+		// ADR-0045 decision 6 (#1437): push_config, the subscribe route and
+		// every web push dispatcher pass (platformconfig.LoadNotificationSettings).
+		"notifications": true,
 	}
 	for id := range want {
 		if !available[id] {

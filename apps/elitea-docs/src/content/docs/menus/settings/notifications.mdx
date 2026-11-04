@@ -17,6 +17,24 @@ While the desktop app's window is in the background, a new notification also sho
 
 To stop system notifications, turn off **Show system notifications** at the top of Settings › Notifications (desktop app only). The bell and Notifications Center are not affected. Your operating system's own notification settings for Elitea also apply.
 
+## Web push
+
+Web push shows a browser notification when a long run ends or when a run waits for your approval. You get it also when no Elitea tab is open.
+
+To turn on web push:
+
+1. In the browser that you want to use, open Settings › Notifications. The desktop app does not show this switch, because it has system notifications.
+2. Turn on **Web push in this browser**.
+3. Allow notifications when the browser asks.
+
+Do these steps in each browser that you use. You can turn on web push in at most 10 browsers. When you turn it on in an 11th browser, Elitea removes the browser that received a notification least recently. To stop web push in a browser, turn off the switch in that browser.
+
+The notification does not contain the message text. It shows the outcome only. Select the notification to open the conversation.
+
+When the switch is not available, your administrator turned off web push, or the install cannot send it. Administrators: see [Features and configuration](/admin/features-and-configuration).
+
+The install sends to the push service of each browser. Your network must allow these hosts: `fcm.googleapis.com` (Chrome, Edge on Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari), and `*.notify.windows.com` (Edge on Windows).
+
 ## Notifications Center
 
 Settings › Notifications shows every notification, read and unread, with search by message text, sortable **Type** and **Date & Time** columns, and bulk **Mark as read**, **Mark as unread**, and **Delete** actions.
@@ -31,6 +49,7 @@ Settings › Notifications shows every notification, read and unread, with searc
 | Bucket expiration warning | Files in an artifact bucket will be deleted within 24 hours under its retention policy. |
 | Personal access token expiring | A token will stop working within 24 hours. |
 | Project or member budget threshold / limit reached | Shared-model spend is near or at its monthly limit. |
+| Run finished | A run that you did not watch ended: it completed, failed, waits for you, or stopped at its limit. You get it when the run continued at least once, ran 2 minutes or more, did not complete, or came from a schedule, a webhook or a handed-off thread. You do not get it for a run that you cancelled. |
 
 Several of these link straight to the relevant page — for example, an expiring-token notification opens Settings › Personal Tokens, and a budget notification opens Settings › Usage.
 

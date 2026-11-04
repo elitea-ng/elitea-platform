@@ -5,10 +5,7 @@ package repos
 
 import (
 	"context"
-	"errors"
 	"fmt"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 )
@@ -42,28 +39,11 @@ SELECT last_execution_id FROM elitea_runtime.run_chains WHERE root_execution_id 
 		return ChainSettleView{}, false, fmt.Errorf("unattended chain: read the latest run: %w", err)
 	}
 	view.Latest = last == nil || *last == executionID
-	if chain.ResponseMessageID == "" {
-		return view, true, nil
-	}
-	schema, err := tenantSchema(fmt.Sprint(chain.ProjectID))
+	facts, err := readResponseFacts(ctx, r.pool, chain.ProjectID, chain.ResponseMessageID)
 	if err != nil {
-		return ChainSettleView{}, false, err
+		return ChainSettleView{}, false, fmt.Errorf("unattended chain: %w", err)
 	}
-	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT COALESCE(meta -> 'output_limit_reached' = 'true'::jsonb, FALSE),
-       CASE WHEN COALESCE(meta ->> 'output_limit_sequence', '') ~ '^[0-9]{1,18}$'
-            THEN (meta ->> 'output_limit_sequence')::bigint ELSE 0 END,
-       COALESCE(meta -> 'step_limit_reached' = 'true'::jsonb, FALSE),
-       (meta ? 'hitl_interrupt' OR meta ? 'hitl_interrupts' OR meta ? 'authorization_requests'),
-       COALESCE(meta -> 'is_error' = 'true'::jsonb, FALSE)
-FROM %s.chat_message_group
-WHERE uuid = $1::uuid`, schema), chain.ResponseMessageID).Scan(
-		&view.OutputLimitReached, &view.OutputLimitSequence, &view.StepLimitReached, &view.Paused, &view.IsError)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return view, true, nil
-	}
-	if err != nil {
-		return ChainSettleView{}, false, fmt.Errorf("unattended chain: read the response: %w", err)
-	}
+	view.OutputLimitReached, view.OutputLimitSequence = facts.OutputLimitReached, facts.OutputLimitSequence
+	view.StepLimitReached, view.Paused, view.IsError = facts.StepLimitReached, facts.Paused, facts.IsError
 	return view, true, nil
 }

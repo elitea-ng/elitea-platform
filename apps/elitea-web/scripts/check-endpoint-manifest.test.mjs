@@ -887,7 +887,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 464 -> 466 (issue 1564, ADR-0045 decision 11): getRunBrief and
 // checkRunGoal, the run brief and the goal check of a desktop chain. The
 // desktop host calls them, so the web manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 466;
+// 466 -> 469 (issue 1437, ADR-0045 decision 6): getPushConfig,
+// createPushSubscription and deletePushSubscription, web push opt-in.
+const GENERATED_OPERATION_COUNT = 469;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

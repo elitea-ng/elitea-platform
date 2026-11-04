@@ -3293,6 +3293,17 @@ main:
     PUBLIC_BASE_URL: ""
     ELITEA_EMAIL_SUPPRESS: ""
 
+    # --- Web push (ADR-0045 decision 6, #1437) ---------------------------------
+    # The contact the push services see in the VAPID token: a mailto: or an
+    # https: URL. Empty uses PUBLIC_BASE_URL when it is https; with neither,
+    # web push is off (the bell still works). The VAPID key itself is made
+    # once per install in the global vault (hidden secret
+    # web_push_vapid_private_key); without a vault, push is off. Sends go
+    # through HTTPS_PROXY when it is set (allow the browsers' push services:
+    # fcm.googleapis.com, updates.push.services.mozilla.com,
+    # web.push.apple.com, *.notify.windows.com).
+    ELITEA_WEB_PUSH_SUBJECT: ""
+
     # --- Object storage (S17; ADR-0016) -----------------------------------------
     # STORAGE_BACKEND has no code default — ConfigFromEnv fails closed with no
     # object store configured until this is explicitly one of "s3"/"azure"/"gcs".

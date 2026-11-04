@@ -253,28 +253,43 @@ WHERE k.execution_id = $1`, executionID).Scan(
 	return chain, true, nil
 }
 
-// endRunChain writes a chain's end state once. It answers false when the
-// chain already ended or does not exist.
-func endRunChain(ctx context.Context, queryer rowQueryer, root, state, limit string) (bool, error) {
+// endRunChain writes a chain's end state once and, in the same
+// transaction, its run_finished notification when the noise rule asks for
+// one (ADR-0045 decision 5). It answers false when the chain already ended
+// or does not exist; then it writes nothing. tx must be a transaction: the
+// end state and the notification commit together.
+func endRunChain(ctx context.Context, tx chainExecutor, root, state, limit string) (bool, error) {
 	if !unattended.ValidEndState(state) {
 		return false, errors.New("unattended chain: unknown end state")
 	}
 	if state != unattended.EndLimitReached {
 		limit = ""
 	}
-	var ended string
-	err := queryer.QueryRow(ctx, `
-UPDATE elitea_runtime.run_chains
+	end, err := scanChainEnd(tx.QueryRow(ctx, `
+UPDATE elitea_runtime.run_chains AS c
 SET end_state = $2, end_limit = NULLIF($3, ''), ended_at = clock_timestamp(), updated_at = clock_timestamp()
-WHERE root_execution_id = $1 AND end_state IS NULL
-RETURNING root_execution_id`, root, state, limit).Scan(&ended)
+WHERE c.root_execution_id = $1 AND c.end_state IS NULL`+chainEndReturning, root, state, limit))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("unattended chain: end: %w", err)
 	}
+	if err := notifyChainEnd(ctx, tx, end); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+// endRunChainTx ends a chain in its own transaction.
+func endRunChainTx(ctx context.Context, pool *pgxpool.Pool, root, state, limit string) (bool, error) {
+	var ended bool
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		var err error
+		ended, err = endRunChain(ctx, tx, root, state, limit)
+		return err
+	})
+	return ended, err
 }
 
 // RunChainsRepository reads and ends chains outside an admission.
@@ -295,7 +310,7 @@ func (r *RunChainsRepository) ChainOfExecution(ctx context.Context, executionID 
 // EndChain writes a chain's end state once (idempotent: a second call
 // answers false and changes nothing).
 func (r *RunChainsRepository) EndChain(ctx context.Context, root, state, limit string) (bool, error) {
-	return endRunChain(ctx, r.pool, root, state, limit)
+	return endRunChainTx(ctx, r.pool, root, state, limit)
 }
 
 // EndRefusedChain ends a chain whose continuation a limit refused. The
@@ -304,6 +319,6 @@ func (r *RunChainsRepository) EndRefusedChain(ctx context.Context, root string, 
 	if refusal == nil {
 		return nil
 	}
-	_, err := endRunChain(ctx, r.pool, root, unattended.EndLimitReached, refusal.Limit)
+	_, err := endRunChainTx(ctx, r.pool, root, unattended.EndLimitReached, refusal.Limit)
 	return err
 }

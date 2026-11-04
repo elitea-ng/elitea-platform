@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.31
+ * client contract:    1.32
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -3717,7 +3717,7 @@ export interface components {
             event_type: string;
             id: number;
             is_seen: boolean;
-            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. */
+            /** @description Per `event_type`. For `chat_user_mentioned` (client contract 1.1) the server writes `conversation_id` (the conversation UUID), `message_id` (the mentioning message's `question_id`), `project_id`, `sender_user_id` and `sender` (internal/infra/db/repos/chat_mention_notification.go). A row a pre-Go deployment wrote carries the NUMERIC conversation id, `initiator_name` and no `sender`; getConversation resolves either id form, so open the conversation with whatever `conversation_id` holds. For `run_finished` (client contract 1.32, ADR-0045 decision 5) the server writes ids and the outcome only, never content: `outcome` (`completed`, `failed`, `waiting` or `limit_reached`), `limit` (`continuations`, `spend` or `deadline`, only for `limit_reached`), `project_id`, `conversation_uuid`, `thread_id` (a desktop chain, when known), `chain_root_execution_id`, `execution_id` (the chain's last run), `origin` (`cloud` or `desktop`) and `continuations` (internal/infra/db/repos/run_finished.go). One row per chain end. */
             meta: {
                 /** @description `chat_user_mentioned`: who mentioned the recipient. `name` is empty when it could not be resolved. */
                 sender?: {
