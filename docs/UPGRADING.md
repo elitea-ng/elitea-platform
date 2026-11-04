@@ -19,8 +19,8 @@ New shared migration `0225_model_reasoning_control`:
 - It creates `elitea_runtime.model_reasoning_defaults`, the family
   defaults of the reasoning control form. It seeds Qwen (`toggle`),
   Qwen thinking models, QwQ, DeepSeek R1 and Gemini Pro (`fixed_on`),
-  gpt-5.1 and later (`effort`), and Claude and Gemini 2.5 Flash
-  (`budget`). The seeds are `ON CONFLICT DO NOTHING`: a later run keeps a
+  gpt-5.1 and later (`effort`), GPT-5.6 (`effort` with
+  `off_with_tools`), and Claude and Gemini 2.5 Flash (`budget`). The seeds are `ON CONFLICT DO NOTHING`: a later run keeps a
   row you changed. No API writes this table. Change it with SQL.
 - It adds `reasoning_tokens` (default 0) to `gateway.llm_request_logs`.
   There is no backfill. The gateway writes the column when it exists. A
@@ -41,6 +41,22 @@ A Claude model without adaptive thinking, on the native Anthropic wire,
 now gets a `high` thinking budget of 8 192 tokens. The earlier release
 sent 9 092, a typo with no recorded reason. Low (2 048) and medium
 (4 096) are unchanged.
+
+A model's `data.reasoning_off_with_tools` (or the family column
+`off_with_tools`) says the model refuses thinking beside tools. On a
+request that carries tools, `auto`, or no setting, then sends the off form
+on every step, planning included. A request without tools still thinks,
+and an explicit level is sent as chosen. This replaces the worker's
+built-in GPT-5.6 name rule. The worker reads it from
+`ModelReasoningV1.off_with_tools` (field 3), and the engines from
+`llm_settings.reasoning_off_with_tools`.
+
+On a `budget` model, `auto` keeps one thinking state, medium, for every
+step of a tool loop: the loop never turns thinking off and then on again.
+An llm_model save refuses `reasoning_control: budget` with
+`reasoning_tool_steps: false`. An output continuation under `auto` sends
+off on a `toggle` model, keeps the loop's state on a `budget` model, and
+sends `low` on an `effort` model.
 
 Existing agents keep their stored `reasoning_effort`. No migration rewrites
 them, and a stored `none` reads as `off`. A save now refuses `off` on a
@@ -70,8 +86,8 @@ there turns thinking off on routine tool steps.
 Client contract 1.35:
 
 - `reasoning_effort` takes `auto` and `off`.
-- The model catalogue item returns `reasoning_control` and
-  `reasoning_tool_steps`.
+- The model catalogue item returns `reasoning_control`,
+  `reasoning_tool_steps` and `reasoning_off_with_tools`.
 - The run analytics figures and the local child turn usage return
   `reasoning_tokens`. So do the budget usage totals, per day and per
   model. These tokens are a part of `completion_tokens`, not an addition

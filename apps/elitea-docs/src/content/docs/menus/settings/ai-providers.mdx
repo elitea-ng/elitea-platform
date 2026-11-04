@@ -50,16 +50,18 @@ A reasoning model has one of five control forms. The form tells the runtime how 
 The platform has family defaults for these forms. A default applies only to a model with **Supports Reasoning** on. To set the form of one model, add these keys to the model's `data` with the configurations API. The form on this page has no fields for them yet.
 
 - `reasoning_control`: one of the five forms.
-- `reasoning_tool_steps`: `true` to keep thinking on routine tool steps when the setting is Auto. Set it for a model that fails or degrades when thinking changes inside one tool loop. Claude and Gemini have it by default.
+- `reasoning_tool_steps`: `true` to keep thinking on routine tool steps when the setting is Auto. Set it for a model that fails or degrades when thinking changes inside one tool loop. Claude and Gemini have it by default. A `budget` model keeps one thinking state for the whole tool loop in any case, so a save refuses `false` together with `budget`.
+- `reasoning_off_with_tools`: `true` for a model that refuses thinking beside tools. On a request that carries tools, Auto (or no setting) then sends the off form on every step. A request without tools still thinks, and a level that the user chose is sent as chosen. OpenAI GPT-5.6 has it by default.
 
-The keys of the model win over the family default. The model catalogue returns the result as `reasoning_control` and `reasoning_tool_steps`.
+The keys of the model win over the family default. The model catalogue returns the result as `reasoning_control`, `reasoning_tool_steps` and `reasoning_off_with_tools`.
 
 A model with no form keeps the form of earlier releases: a thinking budget on the native Anthropic API, `reasoning_effort` on every other API. For such a model, Auto thinks at the medium level on every step. The runtime does not send the off form, because some models (the OpenAI o-series) refuse it.
 
 <Warning title="Rules on save">
 - A save refuses a `reasoning_control` that is not one of the five forms.
 - A save refuses a form other than `fixed_off` on a model with **Supports Reasoning** off.
-- After you change the form, an agent or chat that has **Off** on a `fixed_on` model, or a level on a `fixed_off` model, cannot start. Change the agent's reasoning setting to a value the model accepts.
+- A save refuses `reasoning_tool_steps: false` on a `budget` model.
+- After you change the form, an agent, toolkit or chat that has **Off** on a `fixed_on` model, or a level on a `fixed_off` model, runs as **Auto**, and the platform logs a warning. Change the stored reasoning setting to a value the model accepts.
 </Warning>
 
 An operator changes the family defaults with SQL in the `elitea_runtime.model_reasoning_defaults` table. An upgrade does not overwrite a row that you changed.
