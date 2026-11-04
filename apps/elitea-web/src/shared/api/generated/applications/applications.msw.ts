@@ -7755,517 +7755,167 @@ export const getUploadProjectIconResponseMock = (
   ...overrideResponse,
 });
 
-export const getGetPipelineInboundTriggerResponseMock = (
-  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
-): PipelineInboundTrigger => ({
-  configured: faker.datatype.boolean(),
-  token_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret_url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  rotated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  revoked_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_used_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "token",
-      "hmac_sha256",
-      "standard_webhooks_hmac",
-    ] as const),
-    undefined,
-  ]),
-  signature_header: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
-    undefined,
-  ]),
-  target_kind: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  events: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    undefined,
-  ]),
-  allow_variable_overrides: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
+export const getGetPipelineInboundTriggerResponseMock =
+  (): PipelineInboundTrigger => ({
+    configured: true,
+    token_id: "trg_6Jw2kQm9",
+    url: "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9",
+    auth_mode: "token",
+    provider: "custom",
+    target_kind: "workspace_thread",
+    conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    prompt: "Triage the alert in the payload and open a fix branch.",
+    grant: {
+      continue_step_limit: true,
+      continue_output_limit: true,
+      goal_check: true,
+    },
+    last_execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    created_by: 41,
+    created_at: "2026-11-04T09:00:00Z",
+    last_used_at: "2026-11-04T09:30:00Z",
+    on_approval_required: "fail",
+  });
+
+export const getRotatePipelineInboundTriggerResponseMock =
+  (): PipelineInboundTrigger => ({
+    configured: true,
+    token_id: "trg_6Jw2kQm9",
+    url: "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9",
+    secret: "trs_4fQ9xV2mLr8sT1wZ",
+    secret_url:
+      "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9?token=trs_4fQ9xV2mLr8sT1wZ",
+    auth_mode: "token",
+    provider: "custom",
+    target_kind: "workspace_thread",
+    conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    prompt: "Triage the alert in the payload and open a fix branch.",
+    grant: {
+      continue_step_limit: true,
+      continue_output_limit: true,
+      goal_check: true,
+    },
+    last_execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    created_by: 41,
+    created_at: "2026-11-04T09:00:00Z",
+    last_used_at: "2026-11-04T09:30:00Z",
+    on_approval_required: "fail",
+  });
+
+export const getRevokePipelineInboundTriggerResponseMock =
+  (): PipelineInboundTrigger => ({
+    configured: true,
+    token_id: "trg_6Jw2kQm9",
+    url: "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9",
+    auth_mode: "token",
+    provider: "custom",
+    target_kind: "workspace_thread",
+    conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    prompt: "Triage the alert in the payload and open a fix branch.",
+    grant: {
+      continue_step_limit: true,
+      continue_output_limit: true,
+      goal_check: true,
+    },
+    last_execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    created_by: 41,
+    created_at: "2026-11-04T09:00:00Z",
+    last_used_at: "2026-11-04T09:30:00Z",
+    revoked_at: "2026-11-04T10:00:00Z",
+    on_approval_required: "fail",
+  });
+
+export const getRevealPipelineInboundTriggerResponseMock =
+  (): PipelineInboundTrigger => ({
+    configured: true,
+    token_id: "trg_6Jw2kQm9",
+    url: "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9",
+    secret: "trs_4fQ9xV2mLr8sT1wZ",
+    secret_url:
+      "/api/v2/pipeline_trigger/1/trg_6Jw2kQm9?token=trs_4fQ9xV2mLr8sT1wZ",
+    auth_mode: "token",
+    provider: "custom",
+    target_kind: "workspace_thread",
+    conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    prompt: "Triage the alert in the payload and open a fix branch.",
+    grant: {
+      continue_step_limit: true,
+      continue_output_limit: true,
+      goal_check: true,
+    },
+    last_execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    created_by: 41,
+    created_at: "2026-11-04T09:00:00Z",
+    last_used_at: "2026-11-04T09:30:00Z",
+    on_approval_required: "fail",
+  });
+
+export const getGetPipelineScheduleResponseMock = (): PipelineSchedule => ({
+  configured: true,
+  cron: "0 7 * * 1-5",
+  active: true,
+  author_id: 41,
+  target_kind: "workspace_thread",
+  conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+  prompt: "Run the nightly checks and fix what fails.",
+  grant: {
+    continue_step_limit: true,
+    continue_output_limit: true,
+    goal_check: true,
+    chain: { max_continuations: 5 },
+  },
+  created_at: "2026-11-03T18:00:00Z",
+  updated_at: "2026-11-03T18:00:00Z",
+  last_result: "skipped_thread_busy",
+  last_result_detail:
+    "the workspace thread was not idle in the cloud; no turn started",
+  last_result_at: "2026-11-04T07:00:00Z",
+  next_run: "2026-11-05T07:00:00Z",
+  on_approval_required: "fail",
 });
 
-export const getRotatePipelineInboundTriggerResponseMock = (
-  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
-): PipelineInboundTrigger => ({
-  configured: faker.datatype.boolean(),
-  token_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret_url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  rotated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  revoked_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_used_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "token",
-      "hmac_sha256",
-      "standard_webhooks_hmac",
-    ] as const),
-    undefined,
-  ]),
-  signature_header: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
-    undefined,
-  ]),
-  target_kind: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  events: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    undefined,
-  ]),
-  allow_variable_overrides: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
+export const getSavePipelineScheduleResponseMock = (): PipelineSchedule => ({
+  configured: true,
+  cron: "0 7 * * 1-5",
+  active: true,
+  author_id: 41,
+  target_kind: "workspace_thread",
+  conversation_uuid: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+  prompt: "Run the nightly checks and fix what fails.",
+  grant: {
+    continue_step_limit: true,
+    continue_output_limit: true,
+    goal_check: true,
+    chain: { max_continuations: 5 },
+  },
+  created_at: "2026-11-03T18:00:00Z",
+  updated_at: "2026-11-03T18:00:00Z",
+  next_run: "2026-11-05T07:00:00Z",
+  on_approval_required: "fail",
 });
 
-export const getRevokePipelineInboundTriggerResponseMock = (
-  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
-): PipelineInboundTrigger => ({
-  configured: faker.datatype.boolean(),
-  token_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret_url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  rotated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  revoked_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_used_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "token",
-      "hmac_sha256",
-      "standard_webhooks_hmac",
-    ] as const),
-    undefined,
-  ]),
-  signature_header: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
-    undefined,
-  ]),
-  target_kind: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  events: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    undefined,
-  ]),
-  allow_variable_overrides: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
+export const getDeletePipelineScheduleResponseMock = (): PipelineSchedule => ({
+  configured: false,
+  active: false,
 });
 
-export const getRevealPipelineInboundTriggerResponseMock = (
-  overrideResponse: Partial<Extract<PipelineInboundTrigger, object>> = {},
-): PipelineInboundTrigger => ({
-  configured: faker.datatype.boolean(),
-  token_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  secret_url: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  created_by: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  rotated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  revoked_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_used_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  auth_mode: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "token",
-      "hmac_sha256",
-      "standard_webhooks_hmac",
-    ] as const),
-    undefined,
-  ]),
-  signature_header: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  provider: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["custom", "github", "gitlab"] as const),
-    undefined,
-  ]),
-  target_kind: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  events: faker.helpers.arrayElement([
-    Array.from(
-      { length: faker.number.int({ min: 1, max: 10 }) },
-      (_, i) => i + 1,
-    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    undefined,
-  ]),
-  allow_variable_overrides: faker.helpers.arrayElement([
-    faker.datatype.boolean(),
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
+export const getRunPipelineInboundTriggerResponseMock =
+  (): PipelineInboundTriggerRunAccepted => ({
+    execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    conversation_id: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    project_id: 1,
+    version_id: 12,
+    events_url: "/api/v2/executions/1/9f8e7d6c5b4a39281706f5e4d3c2b1a0/events",
+  });
 
-export const getGetPipelineScheduleResponseMock = (
-  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
-): PipelineSchedule => ({
-  configured: faker.datatype.boolean(),
-  cron: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  active: faker.datatype.boolean(),
-  input: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  updated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_result: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "dispatched",
-      "skipped_overlap",
-      "skipped_unauthorized",
-      "skipped_missing_version",
-      "skipped_mandate_required",
-      "skipped_mandate_not_usable",
-      "skipped_mandate_scope",
-      "failed",
-    ] as const),
-    undefined,
-  ]),
-  last_result_detail: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  last_result_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_execution_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  next_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
-
-export const getSavePipelineScheduleResponseMock = (
-  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
-): PipelineSchedule => ({
-  configured: faker.datatype.boolean(),
-  cron: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  active: faker.datatype.boolean(),
-  input: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  updated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_result: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "dispatched",
-      "skipped_overlap",
-      "skipped_unauthorized",
-      "skipped_missing_version",
-      "skipped_mandate_required",
-      "skipped_mandate_not_usable",
-      "skipped_mandate_scope",
-      "failed",
-    ] as const),
-    undefined,
-  ]),
-  last_result_detail: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  last_result_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_execution_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  next_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
-
-export const getDeletePipelineScheduleResponseMock = (
-  overrideResponse: Partial<Extract<PipelineSchedule, object>> = {},
-): PipelineSchedule => ({
-  configured: faker.datatype.boolean(),
-  cron: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  active: faker.datatype.boolean(),
-  input: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  author_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
-  created_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  updated_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_result: faker.helpers.arrayElement([
-    faker.helpers.arrayElement([
-      "dispatched",
-      "skipped_overlap",
-      "skipped_unauthorized",
-      "skipped_missing_version",
-      "skipped_mandate_required",
-      "skipped_mandate_not_usable",
-      "skipped_mandate_scope",
-      "failed",
-    ] as const),
-    undefined,
-  ]),
-  last_result_detail: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  last_result_at: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  last_execution_id: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  next_run: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    undefined,
-  ]),
-  on_approval_required: faker.helpers.arrayElement([
-    faker.helpers.arrayElement(["fail", "skip", "notify_and_wait"] as const),
-    undefined,
-  ]),
-  ...overrideResponse,
-});
-
-export const getRunPipelineInboundTriggerResponseMock = (
-  overrideResponse: Partial<
-    Extract<PipelineInboundTriggerRunAccepted, object>
-  > = {},
-): PipelineInboundTriggerRunAccepted => ({
-  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  conversation_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  project_id: faker.number.int(),
-  version_id: faker.number.int(),
-  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  ...overrideResponse,
-});
-
-export const getRunPipelineInboundTriggerForProviderResponseMock = (
-  overrideResponse: Partial<
-    Extract<PipelineInboundTriggerRunAccepted, object>
-  > = {},
-): PipelineInboundTriggerRunAccepted => ({
-  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  conversation_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  project_id: faker.number.int(),
-  version_id: faker.number.int(),
-  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  ...overrideResponse,
-});
+export const getRunPipelineInboundTriggerForProviderResponseMock =
+  (): PipelineInboundTriggerRunAccepted => ({
+    execution_id: "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+    conversation_id: "6f1c2d3e-4a5b-4c6d-8e7f-901234567890",
+    project_id: 1,
+    version_id: 12,
+    events_url: "/api/v2/executions/1/9f8e7d6c5b4a39281706f5e4d3c2b1a0/events",
+  });
 
 export const getListEvalDatasetsMockHandler = (
   overrideResponse?:

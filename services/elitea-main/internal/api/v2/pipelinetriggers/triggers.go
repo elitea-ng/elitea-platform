@@ -82,6 +82,10 @@ type triggerView struct {
 	// needs an approval (#1491): the trigger's own value, else the platform
 	// default.
 	OnApprovalRequired string `json:"on_approval_required,omitempty"`
+	// The thread target of a `workspace_thread` trigger (0159), and the
+	// execution its last admitted call started.
+	threadView
+	LastExecutionID string `json:"last_execution_id,omitempty"`
 }
 
 // triggerURL is the inbound path, plus the provider SUFFIX for a preset that
@@ -116,6 +120,10 @@ func viewOf(projectID int64, trigger triggerRow) triggerView {
 		RotatedAt:              trigger.RotatedAt,
 		RevokedAt:              trigger.RevokedAt,
 		LastUsedAt:             trigger.LastUsedAt,
+		threadView:             threadViewOf(trigger.TargetKind, trigger.Target),
+	}
+	if trigger.LastExecutionID != nil {
+		view.LastExecutionID = *trigger.LastExecutionID
 	}
 	return view
 }
@@ -255,6 +263,11 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, onApprovalRequiredMessage)
 		return
 	}
+	requestedThread, err := parseThreadTarget(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	target, err := h.resolveRunTarget(r.Context(), schema, versionID, pipelinesAndAgents)
 	switch {
 	case errors.Is(err, ErrVersionNotRunnable):
@@ -263,6 +276,10 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	case err != nil:
 		h.log().Error("pipelinetriggers: resolve version", "err", err)
 		writeError(w, http.StatusInternalServerError, "the pipeline version could not be read")
+		return
+	}
+	if err := requestedThread.triggerKindError(targetKindOf(target)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -283,7 +300,22 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	if !modeNamed && previousErr == nil {
 		mode = storedAuthMode(previous)
 	}
-	controls, err := resolveControls(requested, mode, modeNamed, previous, previousErr == nil, target)
+	// THE TARGET (0159). A body with no `target_kind` keeps the stored
+	// target, so the rotate button keeps a thread target. A thread target,
+	// new or kept, is checked again: the rotation makes the caller the
+	// trigger's creator, so the caller must be able to write to the thread.
+	if !requestedThread.named && previousErr == nil && previous.TargetKind == TargetKindWorkspaceThread {
+		requestedThread = requestedTarget{named: true, thread: true, target: previous.Target}
+	}
+	kind := targetKindOf(target)
+	var thread threadTarget
+	if requestedThread.thread {
+		if thread, ok = h.checkThreadTarget(w, r, projectID, versionID, requestedThread); !ok {
+			return
+		}
+		kind = TargetKindWorkspaceThread
+	}
+	controls, err := resolveControlsForKind(requested, mode, modeNamed, previous, previousErr == nil, kind)
 	if err != nil {
 		writeError(w, http.StatusBadRequest,
 			"`events` filters a GitHub or GitLab trigger only: a custom sender names no provider event")
@@ -309,7 +341,7 @@ func (h *Handler) CreateOrRotateTrigger(w http.ResponseWriter, r *http.Request) 
 	err = pgx.BeginFunc(r.Context(), h.pool, func(tx pgx.Tx) error {
 		var writeErr error
 		trigger, writeErr = upsertTrigger(r.Context(), tx, schema,
-			target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls)
+			target.ApplicationID, versionID, actorID, tokenID, hash, secretName, mode, controls, thread)
 		if writeErr != nil {
 			return writeErr
 		}
@@ -439,7 +471,8 @@ func (h *Handler) annotate(r *http.Request, kind string, versionID int64, name s
 
 // auditEntityType is the audit entity type for a trigger kind. An unknown or
 // empty kind is a pipeline, which is what every row before 0142 was issued
-// for.
+// for. A `workspace_thread` trigger (0159) is recorded as a pipeline too:
+// the audit entity is the version that anchors the trigger.
 func auditEntityType(kind string) string {
 	if kind == TargetKindAgent {
 		return TargetKindAgent

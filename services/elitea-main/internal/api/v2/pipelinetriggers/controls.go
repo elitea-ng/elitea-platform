@@ -203,7 +203,18 @@ func resolveControls(
 	requested requestedControls, mode triggerAuthMode, modeNamed bool,
 	previous triggerRow, hasPrevious bool, target runTarget,
 ) (triggerControls, error) {
-	controls := triggerControls{TargetKind: targetKindOf(target)}
+	return resolveControlsForKind(requested, mode, modeNamed, previous, hasPrevious, targetKindOf(target))
+}
+
+// resolveControlsForKind is resolveControls for a stated kind: the version's
+// kind, or `workspace_thread` (0159). A `workspace_thread` trigger starts an
+// agent's turn as an agent trigger does, so it takes the same default event
+// list.
+func resolveControlsForKind(
+	requested requestedControls, mode triggerAuthMode, modeNamed bool,
+	previous triggerRow, hasPrevious bool, kind string,
+) (triggerControls, error) {
+	controls := triggerControls{TargetKind: kind}
 
 	keepStored := hasPrevious && !modeNamed && previous.TargetKind == controls.TargetKind
 	switch {
@@ -211,7 +222,7 @@ func resolveControls(
 		controls.EventFilter = requested.events
 	case keepStored:
 		controls.EventFilter = previous.EventFilter
-	case controls.TargetKind == TargetKindAgent:
+	case controls.TargetKind == TargetKindAgent, controls.TargetKind == TargetKindWorkspaceThread:
 		controls.EventFilter = defaultAgentEvents[mode.Provider]
 	}
 	if len(controls.EventFilter) > 0 && providerEventHeader(mode.Provider) == "" {

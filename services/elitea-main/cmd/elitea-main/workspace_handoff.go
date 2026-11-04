@@ -16,6 +16,7 @@ import (
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	v2pipelinetriggers "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/pipelinetriggers"
 	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	workspacehandoffapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/workspacehandoff"
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -48,6 +49,10 @@ type workspaceHandoffComposition struct {
 	// Encryption is the startup answer for storage encryption at rest
 	// (workspaceEncryption*), which the admin form shows.
 	Encryption string
+	// Continuer starts cloud turns on handed-off threads: a send's continue
+	// (ADR-0045 decision 8), and the schedules and webhook triggers that
+	// target a thread (decision 9). Nil when nothing composed it.
+	Continuer *handoffcontinue.Service
 }
 
 // The startup answers for the storage encryption at rest of the buckets the
@@ -215,7 +220,11 @@ func composeWorkspaceHandoff(
 	// Send and continue, take back when done (ADR-0045 decision 8): the
 	// complete starts the cloud turn through the chat start use case, bound
 	// once the runtime is composed; the state answers the last cloud run.
-	if continuer := handoffcontinue.New(handoffRepo, dbrepos.NewRunChainsRepository(pool), starter, logger); continuer != nil {
+	// Schedules and webhook triggers start their turns on a thread through
+	// the same service (decision 9).
+	continuer := handoffcontinue.New(handoffRepo, dbrepos.NewRunChainsRepository(pool), starter, logger).
+		WithThreads(handoffRepo)
+	if continuer != nil {
 		handoff.WithContinueStarter(continuer)
 	}
 	handoff.WithCloudRuns(handoffRepo)
@@ -234,7 +243,9 @@ func composeWorkspaceHandoff(
 	if err != nil {
 		return workspaceHandoffComposition{}, err
 	}
-	return workspaceHandoffComposition{Route: route, Handoff: handoff, Store: store, Changes: changes, Encryption: encryption}, nil
+	return workspaceHandoffComposition{
+		Route: route, Handoff: handoff, Store: store, Changes: changes, Encryption: encryption, Continuer: continuer,
+	}, nil
 }
 
 // checkWorkspaceEncryption asks the backend first. Only a backend that cannot
@@ -646,4 +657,14 @@ func parseQuantityBytes(raw string) (uint64, error) {
 		return 0, fmt.Errorf("%q is not a byte quantity", raw)
 	}
 	return value * factor, nil
+}
+
+// pipelineThreadRuns lets schedules and webhook triggers target a handed-off
+// thread (ADR-0045 decision 9). A nil continuer adds nothing: the option is
+// never given a typed nil, and a `workspace_thread` save answers 503.
+func pipelineThreadRuns(continuer *handoffcontinue.Service) v2pipelinetriggers.Option {
+	if continuer == nil {
+		return func(*v2pipelinetriggers.Handler) {}
+	}
+	return v2pipelinetriggers.WithThreadRuns(continuer)
 }

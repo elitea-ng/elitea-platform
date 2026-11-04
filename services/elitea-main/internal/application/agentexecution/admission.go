@@ -62,6 +62,17 @@ type SubmitRequest struct {
 	// Not part of the request digest: the question id is derived from the
 	// send.
 	HandoffCompletion *HandoffCompletion
+	// CloudThread: the turn is a new question of a thread handed off to the
+	// cloud executor, which the resolve found CLOUD_IDLE (ADR-0034 decision
+	// 7). The admission transaction checks CLOUD_IDLE again under the
+	// handoff row's share lock, so the check and the start are one step
+	// (ADR-0045 decision 9). Not part of the request digest.
+	CloudThread bool
+	// RunPolicy is the on_approval_required snapshot of a schedule's or a
+	// trigger's turn on a handed-off thread (thread_run.go). The admission
+	// transaction writes it after the CLOUD_IDLE fence. Only with
+	// CloudThread; not part of the request digest.
+	RunPolicy *UnattendedRunPolicy
 }
 
 // AssertedScope is the toolkit scope of a verified delegation assertion.
@@ -140,6 +151,12 @@ type Admission struct {
 	// HandoffCompletion: the transaction completes this send first and
 	// starts the cloud turn on the new execution (handoff_continue.go).
 	HandoffCompletion *HandoffCompletion
+	// CloudThread: the transaction checks that the handed-off thread is
+	// still CLOUD_IDLE before it writes the turn (SubmitRequest.CloudThread).
+	CloudThread bool
+	// RunPolicy: the transaction writes the thread's snapshot after the
+	// fence (SubmitRequest.RunPolicy).
+	RunPolicy *UnattendedRunPolicy
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -310,6 +327,8 @@ func (s *AdmissionService) Submit(
 		BindingVersionID:      bindingVersionID(request.Release, 0),
 		Unattended:            request.Unattended.Clone(),
 		HandoffCompletion:     request.HandoffCompletion.Clone(),
+		CloudThread:           request.CloudThread && request.HandoffCompletion == nil,
+		RunPolicy:             request.RunPolicy.Clone(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -328,6 +347,12 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 	// turn or a model turn (handoff_continue.go).
 	if request.HandoffCompletion != nil &&
 		(!request.HandoffCompletion.Valid() || (request.CurrentTurn == nil && request.CurrentAdhocTurn == nil)) {
+		return ErrInvalidAgentAdmission
+	}
+	// A thread run's snapshot is written after the CLOUD_IDLE fence, so it
+	// comes only with a new question of a handed-off thread.
+	if request.RunPolicy != nil && (!request.CloudThread || request.HandoffCompletion != nil ||
+		(request.CurrentTurn == nil && request.CurrentAdhocTurn == nil)) {
 		return ErrInvalidAgentAdmission
 	}
 	if request.CurrentTurn != nil {

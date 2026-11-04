@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.33"
+  x-elitea-client-contract: "1.34"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -18649,16 +18649,37 @@ components:
             issued for. An inbound call is refused with the one 401 when the
             version is now of the other kind, because a version update can
             change `agent_type`. A create or a rotation records the current
-            kind.
+            kind. Client contract 1.34: `workspace_thread` when each call
+            starts a cloud turn on a handed-off Local work thread
+            (`conversation_uuid`) in place of a run of the version. The
+            version stays the anchor of the setting and of its mandate.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.34. `workspace_thread` only: the handed-off
+            Local work thread each occurrence starts a cloud turn on.
+        prompt:
+          type: string
+          description: >
+            Client contract 1.34. `workspace_thread` only: the message each
+            occurrence starts the turn with.
+        grant:
+          $ref: '#/components/schemas/ChatUnattendedRequest'
+        last_execution_id:
+          type: string
+          description: >
+            Client contract 1.34. The execution the last admitted call
+            started. Its outcome comes as the `run_finished` notification.
         events:
           type: array
           items: { type: string }
           description: >
             The provider events this trigger admits, read from
             `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event.
-            A new GitHub or GitLab trigger on an AGENT version admits only
-            push and pull or merge request events unless its writer sets a
-            list. A delivery of another event is answered 204 and starts no
+            A new GitHub or GitLab trigger on an AGENT version, or with
+            `target_kind: workspace_thread`, admits only push and pull or
+            merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no
             run. The event header is not signed, so this is a cost control,
             not an authentication step.
         allow_variable_overrides:
@@ -18687,9 +18708,40 @@ components:
       description: >
         What a create/rotate may ask for. Every field is optional, and a call
         with no body at all mints the bearer trigger this route has always
-        minted.
+        minted. Client contract 1.34: `target_kind: workspace_thread` with
+        `conversation_uuid`, `prompt` and an optional `grant` makes each
+        inbound call start a cloud turn on a handed-off thread. A body with
+        no `target_kind` keeps the stored target, so a rotation keeps the
+        thread. `target_kind: pipeline` or `agent` clears it. The grant
+        rules are those of `PipelineScheduleUpdate`, with the trigger origin
+        `webhook`.
       additionalProperties: false
       properties:
+        target_kind:
+          type: string
+          description: >
+            Client contract 1.34. `workspace_thread`, or the version's own
+            kind (`pipeline` or `agent`: the version runs). The other kind
+            contradicts the version and is refused with 400, as is another
+            value.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.34. Required with `workspace_thread`. The
+            conversation must be in this project, the caller must be its user
+            participant (else 404), and it must have been handed off to the
+            cloud at least once (else 422 `not_handed_off`).
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: >
+            Client contract 1.34. Required with `workspace_thread`. The
+            message each call starts the turn with. The call's `input`, or
+            its payload in the untrusted-data envelope, follows it.
+        grant:
+          $ref: '#/components/schemas/ChatUnattendedRequest'
         type:
           type: string
           enum: [custom, github, gitlab]
@@ -18751,6 +18803,8 @@ components:
       description: >
         One pipeline version's cron schedule (schedules.go scheduleView).
         `configured: false` is the answer for a pipeline with no schedule.
+        `grant` is the stored grant of a `workspace_thread` schedule, with
+        the default filled in when none was saved.
       required: [configured, active]
       additionalProperties: false
       properties:
@@ -18782,7 +18836,9 @@ components:
           description: >
             Stamped ONLY on a real dispatch. A maintenance window or a skipped
             overlap leaves it alone, so the row is due exactly once when the
-            reason clears rather than once per missed minute.
+            reason clears rather than once per missed minute. The one
+            exception is `skipped_thread_busy`: it stamps `last_run` and uses
+            up the occurrence, so the next attempt is the next cron time.
         last_result:
           type: string
           description: The outcome of the most recent fire attempt.
@@ -18794,6 +18850,7 @@ components:
             - skipped_mandate_required
             - skipped_mandate_not_usable
             - skipped_mandate_scope
+            - skipped_thread_busy
             - failed
         last_result_detail:
           type: string
@@ -18801,7 +18858,35 @@ components:
         last_result_at: { type: string, format: date-time }
         last_execution_id:
           type: string
-          description: The execution the last dispatch admitted.
+          description: >
+            The execution the last dispatch admitted. For a
+            `workspace_thread` schedule the overlap check reads it: while
+            that run, or the chain it started, still goes, an occurrence
+            records `skipped_overlap`.
+        target_kind:
+          type: string
+          description: >
+            Client contract 1.34. `pipeline` (the version runs) or
+            `workspace_thread` (each occurrence starts a cloud turn on a
+            handed-off Local work thread, ADR-0045 decision 9). An occurrence
+            on a thread that is not idle in the cloud records
+            `skipped_thread_busy`, starts nothing and uses up the occurrence
+            (the next attempt is the next cron time). A thread that is gone
+            records `skipped_missing_version`. An author who is no longer a
+            user participant of the thread records `skipped_unauthorized`.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.34. `workspace_thread` only: the handed-off
+            Local work thread each occurrence starts a cloud turn on.
+        prompt:
+          type: string
+          description: >
+            Client contract 1.34. `workspace_thread` only: the message each
+            occurrence starts the turn with.
+        grant:
+          $ref: '#/components/schemas/ChatUnattendedRequest'
         next_run:
           type: string
           format: date-time
@@ -18830,12 +18915,57 @@ components:
         There is deliberately no `author_id` and no `last_*` field: the author
         is the authenticated caller, and the outcome columns belong to the
         runner.
+
+        Client contract 1.34 (ADR-0045 decision 9): the `workspace_thread`
+        target. Its `grant` holds only the `continue` and `chain` parts and
+        `goal_check`. No person is there at the start, so `sensitive_tools`,
+        `hook_asks` and `remote_confirmations` are refused with 422
+        `unattended_grant_refused` (reason `origin_not_allowed`), and
+        `continue_tool_call_cap`, `chain_root_execution_id` and `kind` with
+        reason `invalid`. A chain limit over the platform maximum is refused
+        with reason `over_maximum`. An absent grant is the default: continue
+        at the step and output limits, with the platform's chain limits and
+        the goal check. Each occurrence starts a new chain with the trigger
+        origin `schedule`; its end reaches the author as `run_finished`.
+        When an administrator turns unattended grants off, an occurrence
+        runs with no grant and is not refused. Under credential governance
+        the thread's next turn must address an agent at this version, else
+        the save answers 422 `thread_not_governable`; an occurrence on a
+        thread whose participant changed later records
+        `skipped_mandate_scope`.
       required: [cron]
       additionalProperties: false
       properties:
         cron: { type: string }
         active: { type: boolean }
-        input: { type: string }
+        input:
+          type: string
+          description: The text a pipeline run starts with. A `workspace_thread` schedule does not read it.
+        target_kind:
+          type: string
+          description: >
+            Client contract 1.34. `pipeline` or `workspace_thread`; another
+            value, `agent` included, is refused with 400. Absent keeps the
+            stored target, and the save checks a kept thread again only when
+            it sets `active` to true, so a schedule whose thread was erased
+            can still be paused. A `workspace_thread` schedule may be saved
+            on a pipeline or an agent version: the version is the anchor,
+            and it does not run.
+        conversation_uuid:
+          type: string
+          format: uuid
+          description: >
+            Client contract 1.34. Required with `workspace_thread`. The
+            conversation must be in this project, the caller must be its user
+            participant (else 404), and it must have been handed off to the
+            cloud at least once (else 422 `not_handed_off`).
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+          description: Client contract 1.34. Required with `workspace_thread`. The message each occurrence starts the turn with.
+        grant:
+          $ref: '#/components/schemas/ChatUnattendedRequest'
         on_approval_required:
           type: string
           enum: [fail, skip, notify_and_wait]
@@ -18843,6 +18973,34 @@ components:
             What a run does at a step that needs a person's approval, when no
             person is there. Any other value is refused with 400. Without
             this field the stored value stays.
+
+    PipelineThreadTargetRefusal:
+      type: object
+      description: >
+        Client contract 1.34. A refused `workspace_thread` save or call.
+        `error` is the message, or `unattended_grant_refused` with `reason`,
+        `field` and `message`. `code` is `thread_busy` (409: the thread is
+        not idle in the cloud, so no turn started), `not_handed_off` (422:
+        the conversation was never handed off) or `thread_not_governable`
+        (422: credential governance is on, and the thread's next turn does
+        not address an agent at the row's version, so every occurrence
+        would skip). NOTE(W2):
+        internal/api/v2/pipelinetriggers/workspacethread.go (checkThreadTarget)
+        and inbound.go (Trigger).
+      required: [error]
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: The machine-readable reason, when `error` is a message.
+        message: { type: string }
+        reason:
+          type: string
+          description: With `unattended_grant_refused`, why the grant was refused.
+        field:
+          type: string
+          description: With `unattended_grant_refused`, the refused grant field.
+        tool: { type: string }
 
     PipelineInboundTriggerRunRequest:
       type: object
@@ -21735,7 +21893,9 @@ paths:
         lists in `unattended_mandate_kinds`, bound to the version the target
         starts, not revoked or expired, and its `schedule.cron:` and
         `schedule.input:sha256:` resource scopes, if any, must cover the
-        target. A proposed or suspended mandate may be attached; it runs
+        target. For a `workspace_thread` schedule the input is the `prompt`
+        (the text each occurrence starts with), not `input`, as at fire
+        time. A proposed or suspended mandate may be attached; it runs
         nothing until it is active. Replaces any attached mandate. Gated on
         `models.agent_identity.mandates.manage` in administration mode, and
         mounted only when the flag is on. Appends a security audit decision.
@@ -41581,6 +41741,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+              example:
+                configured: true
+                token_id: trg_6Jw2kQm9
+                url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9
+                auth_mode: token
+                provider: custom
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Triage the alert in the payload and open a fix branch.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true }
+                last_execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                created_by: 41
+                created_at: '2026-11-04T09:00:00Z'
+                last_used_at: '2026-11-04T09:30:00Z'
+                on_approval_required: fail
         '403':
           description: Caller lacks models.applications.version.details in this project
           content:
@@ -41622,29 +41797,75 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PipelineInboundTriggerModeRequest' }
+            example:
+              target_kind: workspace_thread
+              conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+              prompt: Triage the alert in the payload and open a fix branch.
+              grant: { continue_step_limit: true, continue_output_limit: true }
       responses:
         '200':
           description: The trigger, WITH the new credential
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+              example:
+                configured: true
+                token_id: trg_6Jw2kQm9
+                url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9
+                secret: trs_4fQ9xV2mLr8sT1wZ
+                secret_url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9?token=trs_4fQ9xV2mLr8sT1wZ
+                auth_mode: token
+                provider: custom
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Triage the alert in the payload and open a fix branch.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true }
+                last_execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                created_by: 41
+                created_at: '2026-11-04T09:00:00Z'
+                last_used_at: '2026-11-04T09:30:00Z'
+                on_approval_required: fail
         '400':
-          description: The requested authentication mode is not one this service implements
+          description: >
+            The requested authentication mode is not one this service
+            implements, or (client contract 1.34) the `target_kind` is not
+            valid: a value that is not `workspace_thread`, `pipeline` or
+            `agent`, the kind that the version is not, or `workspace_thread`
+            fields that are missing or not valid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: '`target_kind` must be `pipeline` (this version''s kind) or `workspace_thread`'
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
-          description: No such pipeline or agent version in this project
+          description: >
+            No such pipeline or agent version in this project, or (client
+            contract 1.34) a `workspace_thread` conversation that is not in
+            this project or that the caller is not a participant of
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: >
+            Client contract 1.34. The `workspace_thread` conversation was
+            never handed off (`not_handed_off`), the grant was refused
+            (`unattended_grant_refused`), or credential governance is on and
+            the thread's next turn does not address an agent at this
+            version (`thread_not_governable`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineThreadTargetRefusal' }
+              example: { error: unattended_grant_refused, reason: origin_not_allowed, field: sensitive_tools, message: 'The unattended grant was refused: origin_not_allowed.' }
         '503':
-          description: The credential store is not available on this deployment
+          description: >
+            The credential store is not available on this deployment, or
+            (client contract 1.34) this deployment cannot start a turn on a
+            handed-off thread
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -41676,6 +41897,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+              example:
+                configured: true
+                token_id: trg_6Jw2kQm9
+                url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9
+                auth_mode: token
+                provider: custom
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Triage the alert in the payload and open a fix branch.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true }
+                last_execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                created_by: 41
+                created_at: '2026-11-04T09:00:00Z'
+                last_used_at: '2026-11-04T09:30:00Z'
+                revoked_at: '2026-11-04T10:00:00Z'
+                on_approval_required: fail
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
@@ -41720,6 +41957,23 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTrigger' }
+              example:
+                configured: true
+                token_id: trg_6Jw2kQm9
+                url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9
+                secret: trs_4fQ9xV2mLr8sT1wZ
+                secret_url: /api/v2/pipeline_trigger/1/trg_6Jw2kQm9?token=trs_4fQ9xV2mLr8sT1wZ
+                auth_mode: token
+                provider: custom
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Triage the alert in the payload and open a fix branch.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true }
+                last_execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                created_by: 41
+                created_at: '2026-11-04T09:00:00Z'
+                last_used_at: '2026-11-04T09:30:00Z'
+                on_approval_required: fail
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
@@ -41764,6 +42018,22 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineSchedule' }
+              example:
+                configured: true
+                cron: '0 7 * * 1-5'
+                active: true
+                author_id: 41
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Run the nightly checks and fix what fails.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } }
+                created_at: '2026-11-03T18:00:00Z'
+                updated_at: '2026-11-03T18:00:00Z'
+                last_result: skipped_thread_busy
+                last_result_detail: the workspace thread was not idle in the cloud; no turn started
+                last_result_at: '2026-11-04T07:00:00Z'
+                next_run: '2026-11-05T07:00:00Z'
+                on_approval_required: fail
         '403':
           description: Caller lacks models.applications.version.details in this project
           content:
@@ -41803,24 +42073,69 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/PipelineScheduleUpdate' }
+            example:
+              cron: '0 7 * * 1-5'
+              active: true
+              target_kind: workspace_thread
+              conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+              prompt: Run the nightly checks and fix what fails.
+              grant: { continue_step_limit: true, continue_output_limit: true, chain: { max_continuations: 5 } }
       responses:
         '200':
           description: The saved schedule
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineSchedule' }
+              example:
+                configured: true
+                cron: '0 7 * * 1-5'
+                active: true
+                author_id: 41
+                target_kind: workspace_thread
+                conversation_uuid: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                prompt: Run the nightly checks and fix what fails.
+                grant: { continue_step_limit: true, continue_output_limit: true, goal_check: true, chain: { max_continuations: 5 } }
+                created_at: '2026-11-03T18:00:00Z'
+                updated_at: '2026-11-03T18:00:00Z'
+                next_run: '2026-11-05T07:00:00Z'
+                on_approval_required: fail
         '400':
-          description: The cron expression cannot be parsed, or the input is too long
+          description: >
+            The cron expression cannot be parsed, the input is too long, or
+            (client contract 1.34) the `target_kind` is not `pipeline` or
+            `workspace_thread`, or the `workspace_thread` fields are missing
+            or not valid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: '`target_kind` of a schedule must be `pipeline` or `workspace_thread`'
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '404':
-          description: No such pipeline version in this project
+          description: >
+            No such pipeline version in this project, or (client contract
+            1.34) a `workspace_thread` conversation that is not in this
+            project or that the caller is not a participant of
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: >
+            Client contract 1.34. The `workspace_thread` conversation was
+            never handed off (`not_handed_off`), the grant was refused
+            (`unattended_grant_refused`), or credential governance is on and
+            the thread's next turn does not address an agent at this
+            version (`thread_not_governable`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineThreadTargetRefusal' }
+              example: { error: 'this conversation was never handed off to the cloud; hand it off from the desktop first', code: not_handed_off }
+        '503':
+          description: Client contract 1.34. This deployment cannot start a turn on a handed-off thread
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -41858,6 +42173,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineSchedule' }
+              example: { configured: false, active: false }
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
@@ -41922,9 +42238,24 @@ paths:
         A trigger issued for a pipeline is refused with the one 401 after its
         version becomes an agent, and the reverse. A rotation re-issues it.
 
+        ## Handed-off workspace threads
+
+        Client contract 1.34 (ADR-0045 decision 9). A trigger with
+        `target_kind: workspace_thread` does not run its version. Each call
+        starts a cloud turn on the handed-off Local work thread, as a message
+        posted on that thread does, as the trigger's creator. The message is
+        the trigger's `prompt`, then the call's `input`, or its payload in
+        the untrusted-data envelope. Each call starts a new chain with the
+        trigger origin `webhook`, and the chain's end reaches the creator as
+        `run_finished`. The turn's `on_approval_required` snapshot is written
+        in the same transaction that starts it. A thread that is not idle in
+        the cloud is answered 409 `thread_busy`; a thread that is gone gets
+        the one 401.
+
         An agent trigger may have at most 4 runs streaming and 30 runs
         started in 10 minutes. Over that, the call is answered 429 with
-        `Retry-After`.
+        `Retry-After`. A `workspace_thread` trigger has the same limit, over
+        the thread's turns it started and the thread's answers that stream.
 
         ## Events that start no run
 
@@ -41987,6 +42318,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+              example:
+                execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                conversation_id: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                project_id: 1
+                version_id: 12
+                events_url: /api/v2/executions/1/9f8e7d6c5b4a39281706f5e4d3c2b1a0/events
         '204':
           description: >
             The delivery was accepted and starts no run: a GitHub `ping`, or
@@ -42011,6 +42348,16 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MandateRefusal' }
               example: { error: this trigger has no usable mandate, code: MANDATE_REQUIRED }
+        '409':
+          description: >
+            Client contract 1.34. A `workspace_thread` trigger whose thread is
+            not idle in the cloud (a turn runs, a take back is pending, or
+            the thread is local again): no turn started. Retry when the
+            current turn ends.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineThreadTargetRefusal' }
+              example: { error: 'the workspace thread is busy: it is not idle in the cloud; retry when the current turn ends', code: thread_busy }
         '413':
           description: The request body is too large
           content:
@@ -42019,14 +42366,17 @@ paths:
         '422':
           description: >
             The `input` is not UTF-8 text, or holds a NUL character, or the
-            trigger starts an agent and the call carries no input
+            trigger starts an agent and the call carries no input, or
+            (client contract 1.34) a `workspace_thread` trigger's stored
+            grant is now over a platform maximum (`unattended_grant_refused`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '429':
           description: >
-            The trigger starts an agent and already has too many runs
-            streaming, or started too many recently (sent with `Retry-After`)
+            The trigger starts an agent or a `workspace_thread` turn and
+            already has too many runs streaming, or started too many
+            recently (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -42123,6 +42473,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PipelineInboundTriggerRunAccepted' }
+              example:
+                execution_id: 9f8e7d6c5b4a39281706f5e4d3c2b1a0
+                conversation_id: 6f1c2d3e-4a5b-4c6d-8e7f-901234567890
+                project_id: 1
+                version_id: 12
+                events_url: /api/v2/executions/1/9f8e7d6c5b4a39281706f5e4d3c2b1a0/events
         '204':
           description: >
             The delivery was accepted and starts no run: a GitHub `ping`, or
@@ -42147,6 +42503,16 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MandateRefusal' }
               example: { error: this trigger has no usable mandate, code: MANDATE_REQUIRED }
+        '409':
+          description: >
+            Client contract 1.34. A `workspace_thread` trigger whose thread is
+            not idle in the cloud (a turn runs, a take back is pending, or
+            the thread is local again): no turn started. Retry when the
+            current turn ends.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PipelineThreadTargetRefusal' }
+              example: { error: 'the workspace thread is busy: it is not idle in the cloud; retry when the current turn ends', code: thread_busy }
         '413':
           description: The request body is too large
           content:
@@ -42155,14 +42521,17 @@ paths:
         '422':
           description: >
             The `input` is not UTF-8 text, or holds a NUL character, or the
-            trigger starts an agent and the call carries no input
+            trigger starts an agent and the call carries no input, or
+            (client contract 1.34) a `workspace_thread` trigger's stored
+            grant is now over a platform maximum (`unattended_grant_refused`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '429':
           description: >
-            The trigger starts an agent and already has too many runs
-            streaming, or started too many recently (sent with `Retry-After`)
+            The trigger starts an agent or a `workspace_thread` turn and
+            already has too many runs streaming, or started too many
+            recently (sent with `Retry-After`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

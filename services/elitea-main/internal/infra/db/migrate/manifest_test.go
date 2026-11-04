@@ -1262,7 +1262,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// schedule (index_schedule_mandates), and the three governed schedule
 	// skips in last_result (#1122). NULL and empty with the flag off. No
 	// data, no permission.
-	require.EqualValues(t, 158, Head(tenant))
+	// 159: tenant/0159_workspace_thread_targets.sql, the workspace_thread
+	// target of a pipeline schedule and an inbound trigger (ADR-0045
+	// decision 9, #1440): target_kind on the schedule, the thread, prompt
+	// and grant columns on both tables, the trigger's last_execution_id and
+	// the skip skipped_thread_busy. No data, no permission.
+	require.EqualValues(t, 159, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

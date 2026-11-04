@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
 
 export const PipelineSchedule = zod
   .object({
@@ -70,7 +71,7 @@ export const PipelineSchedule = zod
       .datetime({ offset: true })
       .optional()
       .describe(
-        "Stamped ONLY on a real dispatch. A maintenance window or a skipped overlap leaves it alone, so the row is due exactly once when the reason clears rather than once per missed minute.\n",
+        "Stamped ONLY on a real dispatch. A maintenance window or a skipped overlap leaves it alone, so the row is due exactly once when the reason clears rather than once per missed minute. The one exception is `skipped_thread_busy`: it stamps `last_run` and uses up the occurrence, so the next attempt is the next cron time.\n",
       ),
     last_result: zod
       .enum([
@@ -81,6 +82,7 @@ export const PipelineSchedule = zod
         "skipped_mandate_required",
         "skipped_mandate_not_usable",
         "skipped_mandate_scope",
+        "skipped_thread_busy",
         "failed",
       ])
       .optional()
@@ -93,7 +95,28 @@ export const PipelineSchedule = zod
     last_execution_id: zod
       .string()
       .optional()
-      .describe("The execution the last dispatch admitted."),
+      .describe(
+        "The execution the last dispatch admitted. For a `workspace_thread` schedule the overlap check reads it: while that run, or the chain it started, still goes, an occurrence records `skipped_overlap`.\n",
+      ),
+    target_kind: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. `pipeline` (the version runs) or `workspace_thread` (each occurrence starts a cloud turn on a handed-off Local work thread, ADR-0045 decision 9). An occurrence on a thread that is not idle in the cloud records `skipped_thread_busy`, starts nothing and uses up the occurrence (the next attempt is the next cron time). A thread that is gone records `skipped_missing_version`. An author who is no longer a user participant of the thread records `skipped_unauthorized`.\n",
+      ),
+    conversation_uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.34. `workspace_thread` only: the handed-off Local work thread each occurrence starts a cloud turn on.\n",
+      ),
+    prompt: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. `workspace_thread` only: the message each occurrence starts the turn with.\n",
+      ),
+    grant: ChatUnattendedRequest.optional(),
     next_run: zod.iso
       .datetime({ offset: true })
       .optional()
@@ -108,7 +131,7 @@ export const PipelineSchedule = zod
       ),
   })
   .describe(
-    "One pipeline version's cron schedule (schedules.go scheduleView). `configured: false` is the answer for a pipeline with no schedule.\n",
+    "One pipeline version's cron schedule (schedules.go scheduleView). `configured: false` is the answer for a pipeline with no schedule. `grant` is the stored grant of a `workspace_thread` schedule, with the default filled in when none was saved.\n",
   );
 
 export type PipelineSchedule = zod.input<typeof PipelineSchedule>;

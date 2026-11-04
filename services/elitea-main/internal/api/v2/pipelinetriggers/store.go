@@ -62,11 +62,17 @@ type triggerRow struct {
 	TargetKind             string
 	EventFilter            []string
 	AllowVariableOverrides bool
-	CreatedBy              int64
-	CreatedAt              time.Time
-	RotatedAt              *time.Time
-	RevokedAt              *time.Time
-	LastUsedAt             *time.Time
+	// Target is 0159's: the handed-off thread, the prompt and the grant of
+	// a `workspace_thread` trigger; zero for every other kind.
+	Target threadTarget
+	// LastExecutionID is the execution the last admitted call started
+	// (0159).
+	LastExecutionID *string
+	CreatedBy       int64
+	CreatedAt       time.Time
+	RotatedAt       *time.Time
+	RevokedAt       *time.Time
+	LastUsedAt      *time.Time
 }
 
 // scheduleRow is one `pipeline_schedules` row.
@@ -85,6 +91,10 @@ type scheduleRow struct {
 	LastResultAt    *time.Time
 	LastResultText  *string
 	LastExecutionID *string
+	// TargetKind and Target are 0159's: `pipeline` runs the version, and
+	// `workspace_thread` starts a cloud turn on a handed-off thread.
+	TargetKind string
+	Target     threadTarget
 }
 
 // The last_result vocabulary. The column CHECK constraint holds the same set,
@@ -96,6 +106,10 @@ const (
 	resultSkippedAuth    = "skipped_unauthorized"
 	resultSkippedMissing = "skipped_missing_version"
 	resultFailed         = "failed"
+	// resultSkippedThreadBusy: the workspace thread was not CLOUD_IDLE, so
+	// the occurrence started no turn (0159, ADR-0045 decision 9). It uses up
+	// the occurrence: it stamps last_run (recordScheduleOutcome).
+	resultSkippedThreadBusy = "skipped_thread_busy"
 )
 
 // newCredential mints one trigger credential.
@@ -156,6 +170,7 @@ func vaultSecretName(tokenID string) string {
 const triggerColumns = `id, application_id, version_id, token_id, token_hash, secret_name,
 	auth_mode, signature_header, provider,
 	target_kind, event_filter, allow_variable_overrides,
+	target_conversation_uuid::text, target_prompt, target_grant, last_execution_id,
 	created_by, created_at, rotated_at, revoked_at, last_used_at`
 
 func scanTrigger(row pgx.Row) (triggerRow, error) {
@@ -165,6 +180,7 @@ func scanTrigger(row pgx.Row) (triggerRow, error) {
 		&trigger.TokenHash, &trigger.SecretName,
 		&trigger.AuthMode, &trigger.SignatureHeader, &trigger.Provider,
 		&trigger.TargetKind, &trigger.EventFilter, &trigger.AllowVariableOverrides,
+		&trigger.Target.ConversationUUID, &trigger.Target.Prompt, &trigger.Target.Grant, &trigger.LastExecutionID,
 		&trigger.CreatedBy, &trigger.CreatedAt,
 		&trigger.RotatedAt, &trigger.RevokedAt, &trigger.LastUsedAt,
 	); err != nil {
@@ -207,16 +223,22 @@ func (h *Handler) triggerByTokenID(ctx context.Context, schema, tokenID string) 
 // an explicit re-issue by a writer, so it records the kind the version has
 // NOW. That is how a trigger refused because its version changed kind is
 // brought back into use.
+//
+// So are 0159's thread target columns. The caller passes the stored target
+// when the body names none (triggers.go), so a rotation keeps the thread,
+// the prompt and the grant, and a kind change clears them.
 func upsertTrigger(
 	ctx context.Context, db pgx.Tx, schema string, applicationID, versionID, actorID int64,
 	tokenID string, hash []byte, secretName string, mode triggerAuthMode, controls triggerControls,
+	target threadTarget,
 ) (triggerRow, error) {
 	return scanTrigger(db.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_triggers
 	(application_id, version_id, token_id, token_hash, secret_name, created_by,
 	 auth_mode, signature_header, provider,
-	 target_kind, event_filter, allow_variable_overrides)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	 target_kind, event_filter, allow_variable_overrides,
+	 target_conversation_uuid, target_prompt, target_grant)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::uuid, $14, $15::jsonb)
 ON CONFLICT (version_id) DO UPDATE SET
 	token_id = EXCLUDED.token_id,
 	token_hash = EXCLUDED.token_hash,
@@ -228,13 +250,17 @@ ON CONFLICT (version_id) DO UPDATE SET
 	target_kind = EXCLUDED.target_kind,
 	event_filter = EXCLUDED.event_filter,
 	allow_variable_overrides = EXCLUDED.allow_variable_overrides,
+	target_conversation_uuid = EXCLUDED.target_conversation_uuid,
+	target_prompt = EXCLUDED.target_prompt,
+	target_grant = EXCLUDED.target_grant,
 	rotated_at = now(),
 	revoked_at = NULL,
 	revoked_by = NULL
 RETURNING %s`, schema, triggerColumns),
 		applicationID, versionID, tokenID, hash, secretName, actorID,
 		mode.AuthMode, mode.SignatureHeader, mode.Provider,
-		controls.TargetKind, controls.EventFilter, controls.AllowVariableOverrides))
+		controls.TargetKind, controls.EventFilter, controls.AllowVariableOverrides,
+		target.ConversationUUID, target.Prompt, target.grantArg()))
 }
 
 // revokeTrigger stamps the row rather than deleting it. It is idempotent: a
@@ -249,19 +275,26 @@ UPDATE %s.pipeline_triggers
 RETURNING %s`, schema, triggerColumns), versionID, actorID))
 }
 
-func (h *Handler) stampTriggerUse(ctx context.Context, schema string, triggerID int64) {
+func (h *Handler) stampTriggerUse(ctx context.Context, schema string, triggerID int64, executionID string) {
 	// The stamp belongs to the row, not to the request: a caller that hangs up
 	// the moment the run is admitted must still leave the evidence that the
-	// trigger was used.
+	// trigger was used. last_execution_id (0159) links the call to the run
+	// it started; its outcome comes as run_finished.
 	ctx = context.WithoutCancel(ctx)
+	var execution *string
+	if executionID != "" {
+		execution = &executionID
+	}
 	if _, err := h.pool.Exec(ctx, fmt.Sprintf(
-		`UPDATE %s.pipeline_triggers SET last_used_at = now() WHERE id = $1`, schema), triggerID); err != nil {
+		`UPDATE %s.pipeline_triggers SET last_used_at = now(), last_execution_id = COALESCE($2, last_execution_id)
+		 WHERE id = $1`, schema), triggerID, execution); err != nil {
 		h.log().Warn("pipelinetriggers: could not stamp trigger use", "err", err)
 	}
 }
 
 const scheduleColumns = `id, application_id, version_id, cron, active, user_input, author_id,
-	created_at, updated_at, last_run, last_result, last_result_at, last_result_detail, last_execution_id`
+	created_at, updated_at, last_run, last_result, last_result_at, last_result_detail, last_execution_id,
+	target_kind, target_conversation_uuid::text, target_prompt, target_grant`
 
 func scanSchedule(row pgx.Row) (scheduleRow, error) {
 	var schedule scheduleRow
@@ -271,6 +304,7 @@ func scanSchedule(row pgx.Row) (scheduleRow, error) {
 		&schedule.CreatedAt, &schedule.UpdatedAt, &schedule.LastRun,
 		&schedule.LastResult, &schedule.LastResultAt, &schedule.LastResultText,
 		&schedule.LastExecutionID,
+		&schedule.TargetKind, &schedule.Target.ConversationUUID, &schedule.Target.Prompt, &schedule.Target.Grant,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return scheduleRow{}, ErrNotFound
@@ -292,23 +326,33 @@ func (h *Handler) scheduleByVersion(ctx context.Context, schema string, versionI
 // while someone else edits the cron would let a caller retarget somebody
 // else's identity onto a new time. The person who last saved the schedule owns
 // what it does, and they had to hold the write permission to save it.
+//
+// The target (0159) is written on both arms: the kind, and for
+// `workspace_thread` the thread, the prompt and the grant. A pipeline
+// target writes NULL into all three.
 func upsertSchedule(
 	ctx context.Context, db pgx.Tx, schema string, applicationID, versionID, authorID int64,
-	cron string, active bool, userInput string,
+	cron string, active bool, userInput string, kind string, target threadTarget,
 ) (scheduleRow, error) {
 	return scanSchedule(db.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.pipeline_schedules
-	(application_id, version_id, cron, active, user_input, author_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+	(application_id, version_id, cron, active, user_input, author_id,
+	 target_kind, target_conversation_uuid, target_prompt, target_grant)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid, $9, $10::jsonb)
 ON CONFLICT (version_id) DO UPDATE SET
 	cron = EXCLUDED.cron,
 	active = EXCLUDED.active,
 	user_input = EXCLUDED.user_input,
 	author_id = EXCLUDED.author_id,
 	application_id = EXCLUDED.application_id,
+	target_kind = EXCLUDED.target_kind,
+	target_conversation_uuid = EXCLUDED.target_conversation_uuid,
+	target_prompt = EXCLUDED.target_prompt,
+	target_grant = EXCLUDED.target_grant,
 	updated_at = now()
 RETURNING %s`, schema, scheduleColumns),
-		applicationID, versionID, cron, active, userInput, authorID))
+		applicationID, versionID, cron, active, userInput, authorID,
+		kind, target.ConversationUUID, target.Prompt, target.grantArg()))
 }
 
 func (h *Handler) deleteSchedule(ctx context.Context, schema string, versionID int64) error {
@@ -350,6 +394,13 @@ func (h *Handler) activeSchedules(ctx context.Context, schema string) ([]schedul
 // elitea-scheduler's rule for a suppressed tick, applied to every non-dispatch
 // outcome for the same reason: `last_run` is the record that a run HAPPENED,
 // and writing it for one that did not is issue 305 reached by another route.
+//
+// ONE EXCEPTION: `skipped_thread_busy` (0159) stamps `last_run` and uses up
+// the occurrence. A busy thread is a person's (or another run's) work on
+// that thread, not a fault that clears, so the next attempt is the next cron
+// time: the schedule does not fire every minute until the thread is idle,
+// and a thread that becomes idle again does not get a turn off the
+// schedule's cadence. `last_execution_id` keeps the last turn that started.
 func (h *Handler) recordScheduleOutcome(
 	ctx context.Context, schema string, scheduleID int64,
 	result, detail, executionID string, ranAt time.Time,
@@ -368,6 +419,13 @@ UPDATE %s.pipeline_schedules
    SET last_run = $2, last_result = $3, last_result_detail = $4,
        last_result_at = $2, last_execution_id = $5
  WHERE id = $1`, schema), scheduleID, ranAt, result, detailValue, executionValue)
+		return err
+	}
+	if result == resultSkippedThreadBusy {
+		_, err := h.pool.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.pipeline_schedules
+   SET last_run = $2, last_result = $3, last_result_detail = $4, last_result_at = $2
+ WHERE id = $1`, schema), scheduleID, ranAt, result, detailValue)
 		return err
 	}
 	_, err := h.pool.Exec(ctx, fmt.Sprintf(`

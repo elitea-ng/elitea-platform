@@ -70,6 +70,9 @@ type Service struct {
 	targets Targets
 	chains  Chains
 	starter Starter
+	// threads serves schedule and webhook turns (thread.go); nil without
+	// WithThreads.
+	threads Threads
 	logger  *slog.Logger
 }
 

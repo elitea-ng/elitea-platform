@@ -109,8 +109,10 @@ type CurrentAdhocStartRequest struct {
 	// CurrentApplicationStartRequest (ADR-0045).
 	Unattended             *unattended.Request
 	UnattendedContinuation *UnattendedContinuation
-	// HandoffCompletion is as on CurrentApplicationStartRequest.
+	// HandoffCompletion and ThreadRun are as on
+	// CurrentApplicationStartRequest.
 	HandoffCompletion *HandoffCompletion
+	ThreadRun         *ThreadRun
 }
 
 // mentionRequest is the part of an ad-hoc start the mention notifier reads,
@@ -129,7 +131,8 @@ func (request CurrentAdhocStartRequest) Validate() error {
 		!validUUID(request.ConversationUUID) || !validUUID(request.QuestionID) ||
 		!validCurrentAgentText(request.UserInput, maxCurrentAgentUserInputBytes) ||
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
-		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) {
+		!validJSONObject(request.LLMSettings) || !validCurrentMCPTokens(request.MCPTokens) ||
+		!request.ThreadRun.valid(request.TriggerOrigin) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -211,7 +214,8 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	input.ContextSettings = contextSettings
 	questionItemID := currentTurnUUID(request.QuestionID, "question-item")
 	responseMessageID := currentTurnUUID(request.QuestionID, "response-message")
-	questionMeta := currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone)
+	questionMeta := request.ThreadRun.questionMeta(
+		currentQuestionMeta(request.InteractionUUID, request.MentionedUserIDs, request.MentionsEveryone))
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentAdhocCapability, input: input,
@@ -244,6 +248,8 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		SIOEvent: "chat_predict", Input: input,
 		TriggerOrigin:     request.TriggerOrigin,
 		HandoffCompletion: request.HandoffCompletion.Clone(),
+		CloudThread:       target.CloudWorkspace,
+		RunPolicy:         request.ThreadRun.snapshot(int64(request.ProjectID), request.ConversationUUID, request.TriggerOrigin),
 		CurrentAdhocTurn: &CurrentAdhocTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID: request.ConversationUUID, TargetParticipantID: target.TargetParticipantID,

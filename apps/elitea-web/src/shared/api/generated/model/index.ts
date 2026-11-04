@@ -654,6 +654,7 @@ export * from "./pipelineInboundTriggerRunRequest.zod";
 export * from "./pipelineSchedule.zod";
 export * from "./pipelineScheduleUpdate.zod";
 export * from "./pipelineSettings.zod";
+export * from "./pipelineThreadTargetRefusal.zod";
 export * from "./pipelineTrigger.zod";
 export * from "./pipelineTriggerUpdateRequest.zod";
 export * from "./platformRoutine.zod";

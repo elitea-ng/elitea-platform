@@ -81,10 +81,14 @@ func (s *UnattendedRunMandates) Target(ctx context.Context, a MandateAttachment)
 	var id int64
 	switch a.Origin {
 	case runmandate.OriginPipelineSchedule:
-		var input string
+		// The input the fire-time check reads (runmandate.ScheduleInput):
+		// the prompt of a `workspace_thread` target (0159).
+		var input, kind, prompt string
 		err = s.pool.QueryRow(ctx, fmt.Sprintf(
-			`SELECT id, cron, user_input FROM %s.pipeline_schedules WHERE version_id = $1`, schema), a.VersionID).
-			Scan(&id, &target.Cron, &input)
+			`SELECT id, cron, user_input, target_kind, COALESCE(target_prompt, '')
+			   FROM %s.pipeline_schedules WHERE version_id = $1`, schema), a.VersionID).
+			Scan(&id, &target.Cron, &input, &kind, &prompt)
+		input = runmandate.ScheduleInput(kind, input, prompt)
 		target.Input = &input
 	case runmandate.OriginPipelineTrigger:
 		err = s.pool.QueryRow(ctx, fmt.Sprintf(
