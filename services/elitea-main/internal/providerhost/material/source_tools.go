@@ -66,7 +66,7 @@ var (
 // the invoking toolkit's source toolkits, so its bearer may call their
 // read-only tools (SourceToolGate). sourceTool must be one of tools.
 func (rw SourceRewriter) GrantRewriteFor(sourceTool string, tools ...string) func(toolkitName, toolName string) Rewriter {
-	plain := CallbackOnly(rw.Provider, rw.Minter, rw.CallbackBase, rw.Lifetime)
+	plain := CallbackOnly(rw.Provider, rw.Minter, rw.Reasoning, rw.CallbackBase, rw.Lifetime)
 	recorded := rw.recordedGrant(sourceTool)
 	return func(_, toolName string) Rewriter {
 		switch {
@@ -96,7 +96,7 @@ func (rw SourceRewriter) recordedGrant(tool string) Rewriter {
 		}
 		// The token after the reads, as everywhere: a refused read leaves no
 		// bearer behind.
-		rewritten, grant, err := Settle(ctx, envelope, rw.Minter,
+		rewritten, grant, err := Settle(ctx, envelope, rw.Minter, rw.Reasoning,
 			rw.Provider, rw.CallbackBase, rw.Lifetime, projectID, userID)
 		if err != nil || owner == 0 {
 			// No invoking toolkit named: the bearer reaches the model and

@@ -108,20 +108,5 @@ func (c *defaultModelCompleter) resolveModel(ctx context.Context, req Completion
 		}
 		return req, nil, ErrDefaultModelUnavailable
 	}
-	// The project's own model of that name first, then a shared one: the
-	// gateway resolves the name the same way.
-	var shared *configurationapp.CurrentModelCatalogItem
-	for i := range catalog.Items {
-		item := &catalog.Items[i]
-		if item.Name != req.Model {
-			continue
-		}
-		if item.ProjectID == int32(projectID) {
-			return req, item, nil
-		}
-		if shared == nil {
-			shared = item
-		}
-	}
-	return req, shared, nil
+	return req, configurationapp.FindModelCatalogItem(catalog.Items, req.Model, int32(projectID)), nil
 }

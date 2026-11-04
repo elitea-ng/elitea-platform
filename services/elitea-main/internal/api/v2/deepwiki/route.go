@@ -98,6 +98,7 @@ func NewRoute(
 	if err != nil {
 		return nil, err
 	}
+	rewriter.WithModelReasoning(settings.reasoning)
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -164,8 +165,17 @@ func NewRoute(
 type Option func(*routeOptions)
 
 type routeOptions struct {
-	history *History
-	hop     *providerproxy.Proxy
+	history   *History
+	hop       *providerproxy.Proxy
+	reasoning material.ModelReasoning
+}
+
+// WithModelReasoning adds each invocation's model reasoning control from the
+// project catalogue to the engine's llm_settings (ADR-0038), so `auto` is
+// the per-step policy in the engine. Without it the engine keeps the
+// reasoning_effort form.
+func WithModelReasoning(reasoning material.ModelReasoning) Option {
+	return func(o *routeOptions) { o.reasoning = reasoning }
 }
 
 // WithHop is providerproxy.WithHop for this facade's options.

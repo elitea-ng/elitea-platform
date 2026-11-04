@@ -89,6 +89,9 @@ type ReferenceRewriter struct {
 	Minter       Minter
 	CallbackBase string
 	Lifetime     time.Duration
+	// Reasoning, when set, adds the model's catalogue reasoning control to
+	// the callback block (SettleReasoning). Nil keeps the block as before.
+	Reasoning ModelReasoning
 }
 
 // Rewrite is the Rewriter this configuration describes.
@@ -118,7 +121,7 @@ func (rw ReferenceRewriter) Rewrite(
 			}
 		}
 	}
-	return Settle(ctx, envelope, rw.Minter, rw.Provider, rw.CallbackBase, rw.Lifetime, projectID, userID)
+	return Settle(ctx, envelope, rw.Minter, rw.Reasoning, rw.Provider, rw.CallbackBase, rw.Lifetime, projectID, userID)
 }
 
 // folderInto handles a body that names an artifact folder rather than a
@@ -230,7 +233,7 @@ func (o Owner) reference(
 // beside the facade's block, and that block is what a provider calls back
 // with.
 func Settle(
-	ctx context.Context, envelope *Envelope, minter Minter,
+	ctx context.Context, envelope *Envelope, minter Minter, reasoning ModelReasoning,
 	provider, callbackBase string, lifetime time.Duration, projectID, userID int64,
 ) ([]byte, Grant, error) {
 	grant, err := minter.Mint(ctx, userID, projectID,
@@ -241,6 +244,9 @@ func Settle(
 	block := CallbackSettings(callbackBase, grant, projectID,
 		String(envelope.Parameters(), "llm_model"))
 	if err := envelope.LiftToolLLMSettings(block); err != nil {
+		return nil, grant, err
+	}
+	if err := SettleReasoning(ctx, reasoning, block, projectID); err != nil {
 		return nil, grant, err
 	}
 	if err := envelope.Set("llm_settings", block); err != nil {
@@ -268,8 +274,9 @@ func FirstText(settings map[string]any, keys ...string) string {
 // the platform back: the callback block (a minted bearer, the gateway, the
 // model) and nothing else — DeepWiki's `wiki_query`, Inventory's
 // `investigate`. A refusal is ErrRejected, an outage ErrSourceUnavailable.
-func CallbackOnly(provider string, minter Minter, callbackBase string, lifetime time.Duration) Rewriter {
+func CallbackOnly(provider string, minter Minter, reasoning ModelReasoning, callbackBase string, lifetime time.Duration) Rewriter {
 	return ReferenceRewriter{
+		Reasoning:    reasoning,
 		Provider:     provider,
 		Refused:      ErrRejected,
 		Unavailable:  ErrSourceUnavailable,

@@ -110,6 +110,14 @@ func NewInvokeRewriter(
 	return rewriter, nil
 }
 
+// WithModelReasoning sets the catalogue reader every rewrite of this facade
+// settles the model's reasoning control with. Nil keeps the block as before.
+func (rw *InvokeRewriter) WithModelReasoning(reasoning material.ModelReasoning) {
+	rw.main.Reasoning = reasoning
+	rw.wikisQuery.Reasoning = reasoning
+	rw.bucketQuery.Reasoning = reasoning
+}
+
 // Rewrite is the `Wikis` family's rewrite, and the fallback For returns for
 // a toolkit name this facade does not know.
 func (rw *InvokeRewriter) Rewrite(

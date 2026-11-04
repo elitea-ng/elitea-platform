@@ -252,3 +252,41 @@ func SingleCallOpenAIThinking(control, setting string) OpenAIThinking {
 		return OpenAIThinking{ReasoningEffort: level, RefusesTemperature: true}
 	}
 }
+
+// FindModelCatalogItem returns the catalogue item a model name resolves to
+// for a project: the project's own row of that name first, then a shared
+// one, as the gateway resolves the name. Nil when the catalogue has none.
+func FindModelCatalogItem(items []CurrentModelCatalogItem, name string, projectID int32) *CurrentModelCatalogItem {
+	var shared *CurrentModelCatalogItem
+	for i := range items {
+		item := &items[i]
+		if item.Name != name {
+			continue
+		}
+		if item.ProjectID == projectID {
+			return item
+		}
+		if shared == nil {
+			shared = item
+		}
+	}
+	return shared
+}
+
+// ModelItemReasoningControl is the control form a catalogue item declares,
+// or resolves from the family defaults. A model that says
+// supports_reasoning false and declares nothing cannot think: fixed_off. A
+// missing item, or one that declares nothing, returns "": the caller keeps
+// the form from before ADR-0038.
+func ModelItemReasoningControl(item *CurrentModelCatalogItem) string {
+	if item == nil {
+		return ""
+	}
+	if item.ReasoningControl != nil {
+		return *item.ReasoningControl
+	}
+	if item.SupportsReasoning != nil && !*item.SupportsReasoning {
+		return ReasoningControlFixedOff
+	}
+	return ""
+}

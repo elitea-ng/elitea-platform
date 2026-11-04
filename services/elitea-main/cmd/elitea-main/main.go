@@ -1741,6 +1741,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if sourcesErr != nil {
 			return fmt.Errorf("read Inventory source configuration: %w", sourcesErr)
 		}
+		// ADR-0038: the engine's model client takes the model's reasoning
+		// control from the catalogue, so `auto` is a per-step policy there.
+		inventorySourcesConfig.Reasoning = engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)
 		if inventorySourceSettings == nil {
 			logger.Warn("Inventory mounts without source expansion",
 				"settings_resolver", false)
@@ -1927,6 +1930,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			v2deepwiki.WithHistory(
 				v2deepwiki.NewHistory(deepwikiHistoryStore, slog.Default())),
 			v2deepwiki.WithHop(deepwikiHop),
+			v2deepwiki.WithModelReasoning(
+				engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)),
 		)
 		if err != nil {
 			return fmt.Errorf("compose DeepWiki facade: %w", err)
@@ -3753,4 +3758,15 @@ func introspectionTokenValidator(formGraph *authcomposition.FormGraph, sessionTo
 		return sessionTokens
 	}
 	return nil
+}
+
+// engineModelReasoning is the catalogue reader the DeepWiki and Inventory
+// rewrites settle the model's reasoning control with (ADR-0038). It is a nil
+// INTERFACE when the configurations runtime is not composed, so the rewrites
+// keep the block as before rather than calling a nil catalogue.
+func engineModelReasoning(root *runtimecomposition.CurrentConfigurationsRuntime, publicProjectID int32) material.ModelReasoning {
+	if root == nil {
+		return nil
+	}
+	return material.CatalogueReasoning{Models: root.ModelCatalog(), PublicProjectID: publicProjectID}
 }

@@ -53,27 +53,10 @@ func PrepareReasoning(ctx context.Context, completer Completer, req CompletionRe
 	return req, nil
 }
 
-// itemReasoningControl is the control form a catalogue item declares, or
-// resolves from the family defaults. A model that says supports_reasoning
-// false and declares nothing cannot think: fixed_off. A missing item, or one
-// that declares nothing, keeps the form from before ADR-0038 ("").
-func itemReasoningControl(item *configurationapp.CurrentModelCatalogItem) string {
-	if item == nil {
-		return ""
-	}
-	if item.ReasoningControl != nil {
-		return *item.ReasoningControl
-	}
-	if item.SupportsReasoning != nil && !*item.SupportsReasoning {
-		return configurationapp.ReasoningControlFixedOff
-	}
-	return ""
-}
-
 // applyItemReasoning sets req's control form from item and refuses a
 // conflict with the table's own text.
 func applyItemReasoning(req CompletionRequest, item *configurationapp.CurrentModelCatalogItem) (CompletionRequest, error) {
-	req.ReasoningControl = itemReasoningControl(item)
+	req.ReasoningControl = configurationapp.ModelItemReasoningControl(item)
 	req.reasoningResolved = true
 	if conflict := configurationapp.ReasoningEffortConflict(req.ReasoningControl, req.ReasoningEffort); conflict != nil {
 		return req, &ReasoningError{Message: conflict.Error()}
