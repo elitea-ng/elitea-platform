@@ -1,0 +1,260 @@
+// Throwaway workspaces and the four worker tools.
+// Commands run with a time limit, an output cap and no network.
+// On macOS the harness uses sandbox-exec: no network, and writes only in the
+// run directory and the shared Go build cache.
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync,
+  readdirSync, statSync, realpathSync, existsSync,
+} from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
+import { join, resolve, relative, dirname, sep } from 'node:path';
+
+const GO_CACHE = process.env.EVAL_GOCACHE ?? join(homedir(), 'Library', 'Caches', 'go-build');
+
+let sandboxKind;
+export function sandboxKindAvailable() {
+  if (sandboxKind !== undefined) return sandboxKind;
+  if (process.platform === 'darwin' && spawnSync('which', ['sandbox-exec']).status === 0) {
+    sandboxKind = 'sandbox-exec';
+  } else if (spawnSync('which', ['unshare']).status === 0
+    && spawnSync('unshare', ['-rn', 'true']).status === 0) {
+    sandboxKind = 'unshare';
+  } else {
+    sandboxKind = 'none';
+  }
+  return sandboxKind;
+}
+
+// A run directory holds the workspace (ws), a temp dir and candidates.
+export function createRun(filesDir) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'adr0038-')));
+  const ws = join(root, 'ws');
+  mkdirSync(join(root, 'tmp'), { recursive: true });
+  mkdirSync(join(root, 'home'), { recursive: true });
+  cpSync(filesDir, ws, { recursive: true });
+  return { root, ws, cand: 0 };
+}
+
+export function destroyRun(run) {
+  rmSync(run.root, { recursive: true, force: true });
+}
+
+export function overlay(srcDir, ws) {
+  if (existsSync(srcDir)) cpSync(srcDir, ws, { recursive: true });
+}
+
+export function snapshot(run) {
+  const dir = join(run.root, `cand-${run.cand++}`);
+  cpSync(run.ws, dir, { recursive: true });
+  return dir;
+}
+
+export function restore(run, dir) {
+  rmSync(run.ws, { recursive: true, force: true });
+  cpSync(dir, run.ws, { recursive: true });
+}
+
+// Resolve a model-given path. Refuses paths outside the workspace.
+export function safePath(ws, p) {
+  const full = resolve(ws, String(p ?? '.'));
+  if (full !== ws && !full.startsWith(ws + sep)) {
+    throw new Error(`path is outside the workspace: ${p}`);
+  }
+  return full;
+}
+
+function cap(text, max) {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * 0.4);
+  const tail = max - head;
+  return `${text.slice(0, head)}\n... [${text.length - max} chars cut] ...\n${text.slice(-tail)}`;
+}
+
+function profile(root) {
+  return [
+    '(version 1)',
+    '(allow default)',
+    '(deny network*)',
+    '(allow network* (remote unix-socket))',
+    '(deny file-write* (require-not (require-any',
+    `  (subpath "${root}")`,
+    `  (subpath "${GO_CACHE}")`,
+    '  (literal "/dev/null") (literal "/dev/tty") (subpath "/dev/fd"))))',
+  ].join('\n');
+}
+
+// Run a shell command in the workspace. Returns {code, output, timedOut}.
+export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 } = {}) {
+  const env = {
+    PATH: process.env.PATH,
+    HOME: join(run.root, 'home'),
+    TMPDIR: join(run.root, 'tmp'),
+    GOTMPDIR: join(run.root, 'tmp'),
+    GOCACHE: GO_CACHE,
+    GOPATH: join(run.root, 'home', 'go'),
+    GOFLAGS: '-mod=mod',
+    GOPROXY: 'off',
+    GOTOOLCHAIN: 'local',
+    GOTELEMETRY: 'off',
+    NO_COLOR: '1',
+    LANG: 'C.UTF-8',
+  };
+  const kind = sandboxKindAvailable();
+  let file = 'sh';
+  let args = ['-c', command];
+  if (kind === 'sandbox-exec') {
+    file = 'sandbox-exec';
+    args = ['-p', profile(run.root), 'sh', '-c', command];
+  } else if (kind === 'unshare') {
+    file = 'unshare';
+    args = ['-rn', 'sh', '-c', command];
+  }
+  return new Promise((done) => {
+    const child = spawn(file, args, { cwd: run.ws, env, detached: true });
+    let out = '';
+    const add = (b) => {
+      if (out.length < maxOutput * 20) out += b.toString();
+    };
+    child.stdout.on('data', add);
+    child.stderr.on('data', add);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+    }, timeoutMs);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      done({ code: timedOut ? 124 : (code ?? 1), output: cap(out, maxOutput), timedOut });
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      done({ code: 127, output: String(err), timedOut: false });
+    });
+  });
+}
+
+const SKIP = new Set(['node_modules', '.git']);
+
+export function listFiles(dir, base = dir, out = [], limit = 300) {
+  for (const name of readdirSync(dir).sort()) {
+    if (out.length >= limit) break;
+    if (SKIP.has(name)) continue;
+    const full = join(dir, name);
+    const st = statSync(full);
+    if (st.isDirectory()) listFiles(full, base, out, limit);
+    else out.push(`${relative(base, full)} (${st.size} B)`);
+  }
+  return out;
+}
+
+export const TOOL_SPECS = [
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read a text file in the workspace. Long files are cut; use offset (line number, 1-based) and limit (lines) to page.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path relative to the workspace root.' },
+          offset: { type: 'integer' },
+          limit: { type: 'integer' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Create or overwrite a file in the workspace with the full content given.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: 'List files under a directory of the workspace, recursively.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Directory, default the root.' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Run a shell command in the workspace root. No network. Time limit 60 s. Output is cut to 8000 characters. Returns the exit code and the output.',
+      parameters: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+      },
+    },
+  },
+];
+
+const MAX_READ = 20_000;
+
+// Execute one tool call. Returns {ok, text}. ok=false is a tool error or a
+// command that exited non-zero (a failed check for the auto policy).
+export async function execTool(run, name, rawArgs) {
+  let args;
+  try {
+    args = typeof rawArgs === 'string' ? JSON.parse(rawArgs || '{}') : (rawArgs ?? {});
+  } catch (err) {
+    return { ok: false, text: `error: arguments are not valid JSON: ${err.message}` };
+  }
+  try {
+    switch (name) {
+      case 'read_file': {
+        const p = safePath(run.ws, args.path);
+        let text = readFileSync(p, 'utf8');
+        if (args.offset || args.limit) {
+          const lines = text.split('\n');
+          const start = Math.max(0, (args.offset ?? 1) - 1);
+          text = lines.slice(start, start + (args.limit ?? lines.length)).join('\n');
+        }
+        if (text.length > MAX_READ) {
+          text = `${text.slice(0, MAX_READ)}\n... [cut: ${text.length - MAX_READ} more chars; use offset/limit]`;
+        }
+        return { ok: true, text };
+      }
+      case 'write_file': {
+        const p = safePath(run.ws, args.path);
+        if (typeof args.content !== 'string') throw new Error('content must be a string');
+        mkdirSync(dirname(p), { recursive: true });
+        writeFileSync(p, args.content);
+        return { ok: true, text: `wrote ${args.content.length} chars to ${args.path}` };
+      }
+      case 'list_files': {
+        const p = safePath(run.ws, args.path ?? '.');
+        const files = listFiles(p);
+        return { ok: true, text: files.join('\n') || '(empty)' };
+      }
+      case 'run_command': {
+        if (typeof args.command !== 'string' || !args.command.trim()) {
+          throw new Error('command must be a non-empty string');
+        }
+        const r = await runCommand(run, args.command);
+        const head = r.timedOut ? 'timed out after 60 s (exit 124)' : `exit code ${r.code}`;
+        return { ok: r.code === 0, text: `${head}\n${r.output}` };
+      }
+      default:
+        return { ok: false, text: `error: unknown tool ${name}` };
+    }
+  } catch (err) {
+    return { ok: false, text: `error: ${err.message}` };
+  }
+}
