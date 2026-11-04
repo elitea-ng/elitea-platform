@@ -1283,3 +1283,7 @@ mod card_tests;
 #[cfg(test)]
 #[path = "parallel_compiler_map_tests.rs"]
 mod map_tests;
+
+#[cfg(test)]
+#[path = "parallel_compiler_map_agent_tests.rs"]
+mod map_agent_tests;
