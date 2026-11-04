@@ -37,6 +37,11 @@ of the earlier release: a thinking budget on the native Anthropic wire, a
 reasoning effort on every other wire. For such a model, `auto` thinks at
 the medium level on every step and never sends the off form.
 
+A Claude model without adaptive thinking, on the native Anthropic wire,
+now gets a `high` thinking budget of 8 192 tokens. The earlier release
+sent 9 092, a typo with no recorded reason. Low (2 048) and medium
+(4 096) are unchanged.
+
 Existing agents keep their stored `reasoning_effort`. No migration rewrites
 them, and a stored `none` reads as `off`. A save now refuses `off` on a
 model that always thinks and a level on a model that cannot think, with

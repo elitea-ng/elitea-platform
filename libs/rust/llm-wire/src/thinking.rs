@@ -363,13 +363,14 @@ pub enum AnthropicThinking {
 }
 
 /// The thinking budget of a level, for a model without adaptive thinking.
-/// The values are the ones the native facade used before this table.
+/// Low and medium are the values the native facade used before this table.
+/// High was 9 092 there, a typo for 8 192 with no recorded reason.
 #[must_use]
 pub const fn budget_tokens(level: Level) -> u32 {
     match level {
         Level::Low => 2_048,
         Level::Medium => 4_096,
-        Level::High => 9_092,
+        Level::High => 8_192,
     }
 }
 
@@ -527,6 +528,10 @@ mod tests {
         assert_eq!(
             anthropic_form(Budget, medium, false),
             AnthropicThinking::Budget(4_096)
+        );
+        assert_eq!(
+            anthropic_form(Budget, StepThinking::On(Level::High), false),
+            AnthropicThinking::Budget(8_192)
         );
         assert_eq!(
             anthropic_form(FixedOn, medium, false),
