@@ -59,6 +59,8 @@ type fakeBudgetChecker struct {
 	// that required updateChan() as an initialisation trampoline (Fix round-3 #13).
 	once    sync.Once
 	updated chan struct{}
+	// lastDims is the usage dimensions of the last UpdateUsage call.
+	lastDims *failmode.UsageDimensions
 }
 
 // waitForUpdate blocks until the first UpdateUsage call completes (or 2 s
@@ -82,6 +84,7 @@ func (f *fakeBudgetChecker) UpdateUsage(_ context.Context, projectID int, scope,
 	f.mu.Lock()
 	f.lastUpdateProjectID = projectID
 	f.lastUpdateCostNano = costNano
+	f.lastDims = dims
 	f.mu.Unlock()
 	// Close updated exactly once so waitForUpdate unblocks regardless of how
 	// many concurrent billing goroutines fire (Fix round-3 #13).

@@ -393,8 +393,9 @@ type streamSettler struct {
 	// decision 5). It feeds the request log only, never the bill.
 	reasoning    int64
 	gotReasoning bool
-	// billedReasoning is the reasoning count recordLogTokens settled on; the
-	// detached billing context carries it to the usage ledger row.
+	// billedReasoning is the reasoning count report settled on
+	// (settleBilledReasoning); the detached billing context carries it to the
+	// usage ledger row.
 	billedReasoning  int64
 	observedOutBytes int64
 	settled          bool
@@ -566,13 +567,29 @@ func (s *streamSettler) recordLogTokens() {
 		}
 		if gotReasoning {
 			s.logUsage.SetReasoningTokens(reasoning)
-			s.billedReasoning = reasoning
 		}
 	}
 	// The key bifrost selected is on the request's own BifrostContext, which
 	// this settler holds; billingContext() is detached and carries none.
 	if s.ctx != nil {
 		s.logUsage.SetCredentialOwner(account.SelectedCredentialOwner(s.ctx))
+	}
+}
+
+// settleBilledReasoning takes the reasoning count the ledger row carries
+// (ADR-0038 decision 5) from the same evidence report bills: the trailer,
+// which may have arrived during the grace drain, after recordLogTokens ran;
+// else, on the accumulated-usage path, the provider's handle. It runs in
+// report, after the drain, so a trailer the drain recovered is never lost to
+// the ledger. An estimate (caller disconnect) carries none.
+func (s *streamSettler) settleBilledReasoning(partial bool) {
+	switch {
+	case partial:
+		if reasoning, ok := s.accumulatedReasoningTokens(); ok {
+			s.billedReasoning = reasoning
+		}
+	case s.gotReasoning && !s.estimated:
+		s.billedReasoning = s.reasoning
 	}
 }
 
@@ -867,6 +884,7 @@ func (s *streamSettler) report(reason, outcome string) {
 				"input_tokens", s.in, "output_tokens", s.out)
 		}
 	}
+	s.settleBilledReasoning(partial)
 	if s.gotUsage {
 		// We recovered the authoritative numbers — but the increment can still
 		// be refused (graceful shutdown already set billingClosing). If that
