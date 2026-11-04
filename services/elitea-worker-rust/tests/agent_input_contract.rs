@@ -84,6 +84,7 @@ fn summary_model_requires_its_own_limits_and_preserves_its_selection() {
             context_window_tokens: 32_000, max_output_tokens: 4_000,
             context_window_fallback: false, max_output_fallback: false, max_input_tokens: Some(24_000),
         }),
+        model_reasoning: None,
     });
     let decoded = parse_agent_execution_input(&message.encode_to_vec()).unwrap();
     let request = request_from(decoded, AgentExecutionKind::Application, binding()).unwrap();

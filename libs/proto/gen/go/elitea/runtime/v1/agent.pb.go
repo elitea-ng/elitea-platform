@@ -1013,8 +1013,9 @@ type SummaryModelSnapshotV1 struct {
 	LlmSettings        []byte                 `protobuf:"bytes,1,opt,name=llm_settings,json=llmSettings,proto3" json:"llm_settings,omitempty"`
 	ModelContextLimits *ModelContextLimitsV1  `protobuf:"bytes,2,opt,name=model_context_limits,json=modelContextLimits,proto3" json:"model_context_limits,omitempty"`
 	// The summary model's thinking control. A summary call sends thinking
-	// off where the model can be switched. Absent: nothing is sent.
-	ModelReasoning *ModelReasoningV1 `protobuf:"bytes,3,opt,name=model_reasoning,json=modelReasoning,proto3" json:"model_reasoning,omitempty"`
+	// off where the model can be switched. Absent: nothing is sent. Field 16:
+	// 3 to 15 stay reserved as released.
+	ModelReasoning *ModelReasoningV1 `protobuf:"bytes,16,opt,name=model_reasoning,json=modelReasoning,proto3" json:"model_reasoning,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1630,7 +1631,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x16SummaryModelSnapshotV1\x12!\n" +
 	"\fllm_settings\x18\x01 \x01(\fR\vllmSettings\x12Y\n" +
 	"\x14model_context_limits\x18\x02 \x01(\v2'.elitea.runtime.v1.ModelContextLimitsV1R\x12modelContextLimits\x12L\n" +
-	"\x0fmodel_reasoning\x18\x03 \x01(\v2#.elitea.runtime.v1.ModelReasoningV1R\x0emodelReasoningJ\x04\b\x04\x10\x10\"\xa8\x02\n" +
+	"\x0fmodel_reasoning\x18\x10 \x01(\v2#.elitea.runtime.v1.ModelReasoningV1R\x0emodelReasoningJ\x04\b\x03\x10\x10\"\xa8\x02\n" +
 	"\x14ModelContextLimitsV1\x122\n" +
 	"\x15context_window_tokens\x18\x01 \x01(\rR\x13contextWindowTokens\x12*\n" +
 	"\x11max_output_tokens\x18\x02 \x01(\rR\x0fmaxOutputTokens\x126\n" +

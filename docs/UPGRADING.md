@@ -11,7 +11,7 @@ worker of an earlier release refuses `reasoning_effort` `auto` and `off`
 with `invalid_profile`, and Main now writes `auto` on a new agent and on a
 chat with no agent. Main also sends the model's reasoning control in a new
 proto field (`AgentExecutionInputV1.model_reasoning`, field 69, and
-`SummaryModelSnapshotV1.model_reasoning`, field 3). An earlier worker
+`SummaryModelSnapshotV1.model_reasoning`, field 16). An earlier worker
 ignores these fields.
 
 New shared migration `0225_model_reasoning_control`:

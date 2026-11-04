@@ -227,10 +227,11 @@ message PlatformPreambleSnapshotV1 {
 message SummaryModelSnapshotV1 {
   bytes llm_settings = 1;
   ModelContextLimitsV1 model_context_limits = 2;
+  reserved 3 to 15;
   // The summary model's thinking control. A summary call sends thinking
-  // off where the model can be switched. Absent: nothing is sent.
-  ModelReasoningV1 model_reasoning = 3;
-  reserved 4 to 15;
+  // off where the model can be switched. Absent: nothing is sent. Field 16:
+  // 3 to 15 stay reserved as released.
+  ModelReasoningV1 model_reasoning = 16;
 }
 
 // Limits describe one model, not cumulative execution usage.
