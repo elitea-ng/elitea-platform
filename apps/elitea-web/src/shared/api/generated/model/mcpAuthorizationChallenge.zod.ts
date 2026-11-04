@@ -53,9 +53,22 @@ export const McpAuthorizationChallenge = zod
       authorization_servers: zod.array(zod.string()),
       scopes_supported: zod.array(zod.string()).optional(),
       oauth_authorization_server: zod
-        .record(zod.string(), zod.unknown())
+        .object({
+          issuer: zod.string(),
+          authorization_endpoint: zod.string(),
+          token_endpoint: zod.string(),
+          registration_endpoint: zod.string().optional(),
+          revocation_endpoint: zod.string().optional(),
+          scopes_supported: zod.array(zod.string()).optional(),
+          grant_types_supported: zod.array(zod.string()).optional(),
+          response_types_supported: zod.array(zod.string()).optional(),
+          code_challenge_methods_supported: zod.array(zod.string()).optional(),
+          token_endpoint_auth_methods_supported: zod
+            .array(zod.string())
+            .optional(),
+        })
         .describe(
-          "The first authorization server's metadata, projected to the RFC 8414 fields the consent flow uses.",
+          "The first authorization server's metadata, projected to the RFC 8414 fields the consent flow uses\n(mcpoauth.Fetcher.project). No other field crosses back to the browser.\n",
         ),
     }),
   })

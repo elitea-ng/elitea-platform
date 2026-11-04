@@ -4868,7 +4868,7 @@
   "pipelines.parallel.onError": "On Error",
   "pipelines.parallel.onErrorHelp": "Continue keeps the other branches and returns partial results. Stop fails the node after running branches finish.",
   "pipelines.parallel.resultEntry": "Each result contains branch_id, node and status, with outputs from that Agent or a readable error.",
-  "widgets.chatBox.ledger.authorizeUnavailable": "Sign-in cannot be completed from this card yet. Skip it to let the run continue without it.",
+  "widgets.chatBox.ledger.authorizeUnavailable": "Sign-in could not be completed for this card. Sign in again, or skip it to let the run continue without it.",
   "widgets.chatBox.ledger.forbidden": "You cannot answer this request.",
   "widgets.chatBox.ledger.invalid": "This answer could not be accepted. Check it and try again.",
   "widgets.chatBox.ledger.notFound": "This request is no longer waiting for an answer. Reload the conversation to see its current state.",
@@ -5718,5 +5718,13 @@
   "threadTarget.thread": "Thread",
   "threadTarget.threadPlaceholder": "Select a thread",
   "threadTarget.unnamedThread": "a handed-off thread",
-  "threadTarget.capped": "You have more than 1000 Local work threads. The list shows the first 1000."
+  "threadTarget.capped": "You have more than 1000 Local work threads. The list shows the first 1000.",
+  "features.chatMessages.authorization.ownerOnly": "Only the person who started this run can sign in for it.",
+  "mcps.authorizationChallenge.discoveryFailed": "The MCP server's sign-in details could not be read. Try again, or Skip.",
+  "mcps.authorizationChallenge.invalidResource": "This toolkit's server address cannot be used for sign-in.",
+  "mcps.authorizationChallenge.notFound": "This toolkit is not available to you, so it cannot be signed in to here.",
+  "mcps.authorizationChallenge.timeout": "The MCP server did not answer in time. Try again, or Skip.",
+  "mcps.authorizationChallenge.unavailable": "Sign-in is not available right now. Try again, or Skip.",
+  "mcps.authorizationChallenge.unsupported": "This toolkit does not support sign-in from a run.",
+  "widgets.chatBox.ledger.credentialRefused": "The sign-in could not be used for this run. Only the person who started the run can sign in for it."
 }

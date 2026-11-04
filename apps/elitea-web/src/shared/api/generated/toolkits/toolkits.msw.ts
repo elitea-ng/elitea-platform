@@ -185,7 +185,56 @@ export const getGetMcpAuthorizationChallengeResponseMock = (
       ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
       undefined,
     ]),
-    oauth_authorization_server: {},
+    oauth_authorization_server: {
+      issuer: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      authorization_endpoint: faker.string.alpha({
+        length: { min: 10, max: 20 },
+      }),
+      token_endpoint: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      registration_endpoint: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      revocation_endpoint: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      scopes_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      grant_types_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      response_types_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      code_challenge_methods_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      token_endpoint_auth_methods_supported: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+    },
   },
   ...overrideResponse,
 });
