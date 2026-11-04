@@ -4188,6 +4188,12 @@ export interface components {
             /** Format: int64 */
             prompt_tokens: number;
             /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
+            /**
              * @description USD for the day. REMOVED for a caller who may not see amounts, like
              *     every other money field.
              */
@@ -4226,6 +4232,12 @@ export interface components {
              * @description Provider-reported prompt tokens for the period. Never estimated.
              */
             prompt_tokens?: number;
+            /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
             /** Format: int64 */
             total_tokens?: number;
             /**
@@ -4253,6 +4265,12 @@ export interface components {
             prompt_tokens: number;
             /** @description The model provider, or for a tool row the vendor (`tavily`). */
             provider: string;
+            /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
             /** @description USD for the model. REMOVED for a caller who may not see amounts. */
             spend?: number | null;
             /** Format: int64 */

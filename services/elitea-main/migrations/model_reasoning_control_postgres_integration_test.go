@@ -72,19 +72,22 @@ func TestReasoningControlMigrationIsIdempotentAndKeepsAnOperatorChange(t *testin
 	}
 }
 
-func TestRequestLogHasReasoningTokens(t *testing.T) {
+func TestRequestLogAndUsageLedgerHaveReasoningTokens(t *testing.T) {
 	pool := newMigratedPool(t)
 	ctx, cancel := testContext()
 	defer cancel()
-	var dataType, defaultValue string
-	var nullable string
-	if err := pool.QueryRow(ctx, `
+	for _, table := range []string{"llm_request_logs", "llm_usage_events"} {
+		var dataType, defaultValue string
+		var nullable string
+		if err := pool.QueryRow(ctx, `
 SELECT data_type, column_default, is_nullable FROM information_schema.columns
-WHERE table_schema = 'gateway' AND table_name = 'llm_request_logs' AND column_name = 'reasoning_tokens'`).
-		Scan(&dataType, &defaultValue, &nullable); err != nil {
-		t.Fatalf("reasoning_tokens: %v", err)
-	}
-	if dataType != "bigint" || defaultValue != "0" || nullable != "NO" {
-		t.Fatalf("reasoning_tokens is %s default %s nullable %s, want bigint default 0 not null", dataType, defaultValue, nullable)
+WHERE table_schema = 'gateway' AND table_name = $1 AND column_name = 'reasoning_tokens'`, table).
+			Scan(&dataType, &defaultValue, &nullable); err != nil {
+			t.Fatalf("%s.reasoning_tokens: %v", table, err)
+		}
+		if dataType != "bigint" || defaultValue != "0" || nullable != "NO" {
+			t.Fatalf("%s.reasoning_tokens is %s default %s nullable %s, want bigint default 0 not null",
+				table, dataType, defaultValue, nullable)
+		}
 	}
 }

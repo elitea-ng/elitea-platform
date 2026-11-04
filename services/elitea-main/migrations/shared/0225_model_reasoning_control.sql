@@ -43,7 +43,8 @@
 -- later release may add rows; it never rewrites a row an operator changed,
 -- because every seed below is ON CONFLICT DO NOTHING.
 --
--- ## gateway.llm_request_logs.reasoning_tokens
+-- ## gateway.llm_request_logs.reasoning_tokens and
+-- ## gateway.llm_usage_events.reasoning_tokens
 --
 -- The completion tokens the provider reported as reasoning
 -- (completion_tokens_details.reasoning_tokens, the top-level reasoning_tokens
@@ -52,12 +53,21 @@
 -- honest value for a provider that reports no count and for a row written
 -- before this file. No backfill.
 --
--- The gateway writes the column while the database has it and falls back to
--- the list without it on 42703, so a gateway that rolls out before this file
--- loses the count and no row.
+-- The usage ledger (gateway.llm_usage_events) carries the same count for each
+-- billed request, so the usage API reports it apart from the other tokens.
+--
+-- The gateway writes the request-log column while the database has it and
+-- falls back to the list without it on 42703, so a gateway that rolls out
+-- before this file loses the count and no row. The ledger's writers (the
+-- scheduler's write-back consumer and the gateway's outage path) ask
+-- information_schema for the column before they write a row that has a
+-- count, because that row shares a transaction with the money.
 --
 -- No permission. Idempotent. No BEGIN/COMMIT: the ledgered runner wraps the
--- file.
+-- file. The schema guard is for a gateway-only database (the test schema that
+-- db.GatewayMigrationSQL builds), which reads the two ledger columns below.
+
+CREATE SCHEMA IF NOT EXISTS elitea_runtime;
 
 CREATE TABLE IF NOT EXISTS elitea_runtime.model_reasoning_defaults (
     name_pattern      text PRIMARY KEY,
@@ -106,3 +116,9 @@ ALTER TABLE gateway.llm_request_logs
 
 COMMENT ON COLUMN gateway.llm_request_logs.reasoning_tokens IS
     'Completion tokens the provider reported as reasoning (ADR-0038 decision 5). A subset of completion_tokens; 0 when the provider reports none.';
+
+ALTER TABLE gateway.llm_usage_events
+    ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN gateway.llm_usage_events.reasoning_tokens IS
+    'Completion tokens the provider reported as reasoning for this billed request (ADR-0038 decision 5). A subset of completion_tokens; 0 when none was reported or the row predates shared migration 0225.';

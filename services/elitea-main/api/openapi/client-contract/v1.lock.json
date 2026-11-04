@@ -9898,6 +9898,10 @@
                         "type": "integer",
                         "format": "int64"
                       },
+                      "reasoning_tokens": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
                       "spend": {
                         "type": "number",
                         "nullable": true
@@ -9964,6 +9968,10 @@
                       "provider": {
                         "type": "string"
                       },
+                      "reasoning_tokens": {
+                        "type": "integer",
+                        "format": "int64"
+                      },
                       "spend": {
                         "type": "number",
                         "nullable": true
@@ -10008,6 +10016,10 @@
                   "type": "integer"
                 },
                 "prompt_tokens": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "reasoning_tokens": {
                   "type": "integer",
                   "format": "int64"
                 },

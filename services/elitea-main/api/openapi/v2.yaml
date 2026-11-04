@@ -1189,6 +1189,15 @@ components:
         completion_tokens:
           type: integer
           format: int64
+        reasoning_tokens:
+          type: integer
+          format: int64
+          example: 600
+          description: >
+            The part of completion_tokens the providers reported as reasoning
+            (ADR-0038 decision 5). A subset, not an addition. 0 for a request
+            whose provider reports none, and for a request billed before
+            shared migration 0225.
         total_tokens:
           type: integer
           format: int64
@@ -1231,6 +1240,15 @@ components:
         completion_tokens:
           type: integer
           format: int64
+        reasoning_tokens:
+          type: integer
+          format: int64
+          example: 600
+          description: >
+            The part of completion_tokens the providers reported as reasoning
+            (ADR-0038 decision 5). A subset, not an addition. 0 for a request
+            whose provider reports none, and for a request billed before
+            shared migration 0225.
         total_tokens:
           type: integer
           format: int64
@@ -1273,6 +1291,15 @@ components:
         completion_tokens:
           type: integer
           format: int64
+        reasoning_tokens:
+          type: integer
+          format: int64
+          example: 600
+          description: >
+            The part of completion_tokens the providers reported as reasoning
+            (ADR-0038 decision 5). A subset, not an addition. 0 for a request
+            whose provider reports none, and for a request billed before
+            shared migration 0225.
         total_tokens:
           type: integer
           format: int64

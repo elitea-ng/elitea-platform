@@ -46,8 +46,11 @@ type usageDimensions struct {
 
 	PromptTokens     *int64 `json:"prompt_tokens,omitempty"`
 	CompletionTokens *int64 `json:"completion_tokens,omitempty"`
-	TotalTokens      *int64 `json:"total_tokens,omitempty"`
-	APIRequests      *int64 `json:"api_requests,omitempty"`
+	// ReasoningTokens is the part of CompletionTokens the providers reported
+	// as reasoning (ADR-0038 decision 5), a subset and not an addition.
+	ReasoningTokens *int64 `json:"reasoning_tokens,omitempty"`
+	TotalTokens     *int64 `json:"total_tokens,omitempty"`
+	APIRequests     *int64 `json:"api_requests,omitempty"`
 
 	// Daily is the per-day series, one entry per day that had at least one
 	// call. Days with no calls are NOT filled with zeros: the series covers a
@@ -66,6 +69,7 @@ type usageDailyRow struct {
 	APIRequests  int64        `json:"api_requests"`
 	PromptTokens int64        `json:"prompt_tokens"`
 	Completion   int64        `json:"completion_tokens"`
+	Reasoning    int64        `json:"reasoning_tokens"`
 }
 
 // usageModelRow is one model's total for the period.
@@ -82,6 +86,7 @@ type usageModelRow struct {
 	APIRequests  int64        `json:"api_requests"`
 	PromptTokens int64        `json:"prompt_tokens"`
 	Completion   int64        `json:"completion_tokens"`
+	Reasoning    int64        `json:"reasoning_tokens"`
 	Units        *int64       `json:"units,omitempty"`
 	Unit         string       `json:"unit,omitempty"`
 }
@@ -132,7 +137,8 @@ const usageTotalsHead = `SELECT
 	COALESCE(SUM(completion_tokens), 0),
 	COALESCE(SUM(total_tokens), 0),
 	COALESCE(SUM(api_requests), 0),
-	COUNT(*)
+	COUNT(*),
+	COALESCE(SUM(reasoning_tokens), 0)
 FROM gateway.llm_usage_events`
 
 // usageDailyHead buckets on occurred_at in UTC — the zone billing periods are
@@ -143,7 +149,8 @@ const usageDailyHead = `SELECT
 	COALESCE(SUM(prompt_tokens), 0),
 	COALESCE(SUM(completion_tokens), 0),
 	COALESCE(SUM(total_tokens), 0),
-	COALESCE(SUM(api_requests), 0)
+	COALESCE(SUM(api_requests), 0),
+	COALESCE(SUM(reasoning_tokens), 0)
 FROM gateway.llm_usage_events`
 
 const usageDailyTail = `
@@ -165,7 +172,8 @@ const usageModelsHead = `SELECT
 	COALESCE(SUM(total_tokens), 0),
 	COALESCE(SUM(api_requests), 0),
 	SUM(units),
-	COALESCE(unit, '')
+	COALESCE(unit, ''),
+	COALESCE(SUM(reasoning_tokens), 0)
 FROM gateway.llm_usage_events`
 
 const usageModelsTail = `
@@ -194,9 +202,9 @@ func (h *Handler) readUsageDimensions(
 	}
 
 	var dims usageDimensions
-	var prompt, completion, total, requests, rowCount int64
+	var prompt, completion, total, requests, rowCount, reasoning int64
 	if err := h.pool.QueryRow(ctx, usageQuery(usageTotalsHead, filter, ""), args...).Scan(
-		&prompt, &completion, &total, &requests, &rowCount,
+		&prompt, &completion, &total, &requests, &rowCount, &reasoning,
 	); err != nil {
 		return usageDimensions{}, fmt.Errorf("budgets: read usage totals: %w", err)
 	}
@@ -206,6 +214,7 @@ func (h *Handler) readUsageDimensions(
 	dims.Available = true
 	dims.PromptTokens = &prompt
 	dims.CompletionTokens = &completion
+	dims.ReasoningTokens = &reasoning
 	dims.TotalTokens = &total
 	dims.APIRequests = &requests
 
@@ -237,7 +246,7 @@ func (h *Handler) readUsageDaily(ctx context.Context, query string, args []any) 
 			spend *string
 		)
 		if err := rows.Scan(&row.Date, &spend, &row.PromptTokens, &row.Completion,
-			&row.TotalTokens, &row.APIRequests); err != nil {
+			&row.TotalTokens, &row.APIRequests, &row.Reasoning); err != nil {
 			return nil, fmt.Errorf("budgets: scan usage daily row: %w", err)
 		}
 		row.Spend = numeric(spend)
@@ -263,7 +272,7 @@ func (h *Handler) readUsageModels(ctx context.Context, query string, args []any)
 			spend *string
 		)
 		if err := rows.Scan(&row.Provider, &row.Model, &row.Operation, &spend, &row.PromptTokens,
-			&row.Completion, &row.TotalTokens, &row.APIRequests, &row.Units, &row.Unit); err != nil {
+			&row.Completion, &row.TotalTokens, &row.APIRequests, &row.Units, &row.Unit, &row.Reasoning); err != nil {
 			return nil, fmt.Errorf("budgets: scan usage model row: %w", err)
 		}
 		row.Spend = numeric(spend)

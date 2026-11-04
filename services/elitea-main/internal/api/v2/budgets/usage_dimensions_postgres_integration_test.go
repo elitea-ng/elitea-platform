@@ -389,3 +389,41 @@ VALUES ($1, $2, $3, 'tavily', 'web_search', 0.008, 1, 'tool', 1, 'credit', $4, $
 	wantNumber(t, models[1], "spend", "0.00800000")
 	wantNumber(t, body, "api_requests", "2")
 }
+
+// TestUsageReportsReasoningTokensApart is ADR-0038 decision 5: the reasoning
+// count is its own figure, a part of completion_tokens, never added to it.
+func TestUsageReportsReasoningTokensApart(t *testing.T) {
+	pool, router := newBudgetsEnvironment(t)
+	admin := budgetAdminUser
+	plantUsageEvent(t, pool, "44444444-4444-4444-4444-444444444444", budgetProjectID, &admin,
+		"vllm", "qwen3", 100, 900, "0.10", usageDay(3))
+	plantUsageEvent(t, pool, "55555555-5555-5555-5555-555555555555", budgetProjectID, &admin,
+		"openai", "gpt-4o", 10, 20, "0.05", usageDay(3))
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE gateway.llm_usage_events SET reasoning_tokens = 600 WHERE event_id = '44444444-4444-4444-4444-444444444444'`); err != nil {
+		t.Fatalf("set reasoning tokens: %v", err)
+	}
+	plantAccumulator(t, pool, "project", fmt.Sprint(budgetProjectID), budgetProjectID,
+		periodStart(), periodEnd(), "0.15")
+
+	recorder := budgetsDo(t, router, http.MethodGet,
+		fmt.Sprintf("/usage/prompt_lib/%d/usage", budgetProjectID), budgetAdminUser, nil)
+	requireStatus(t, recorder, http.StatusOK)
+	body := decodeMap(t, recorder)
+
+	wantNumber(t, body, "completion_tokens", "920")
+	wantNumber(t, body, "reasoning_tokens", "600")
+	wantNumber(t, body, "total_tokens", "1030")
+	daily := rowsOf(t, body, "daily")
+	if len(daily) != 1 {
+		t.Fatalf("daily = %v, want one day", daily)
+	}
+	wantNumber(t, daily[0], "reasoning_tokens", "600")
+	for _, model := range rowsOf(t, body, "models") {
+		want := "0"
+		if model["model"] == "qwen3" {
+			want = "600"
+		}
+		wantNumber(t, model, "reasoning_tokens", want)
+	}
+}
