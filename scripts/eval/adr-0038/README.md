@@ -78,8 +78,11 @@ Results so far: `results/qwen-2026-11-04.md`.
 | d | verified loop | manager on; workers `auto`; summary and finish calls off; reviewer on |
 | e | control: single run told the check | `auto`, as (c). The prompt also gets the check description that a loop worker sees. It separates the gain of the loop from the gain of telling the agent the check. Not in the default set: run it with `--variants e`. |
 
-The `auto` policy treats a `run_command` that exits non-zero as a failed
-check. The ADR rule "on for the final answer with an output schema" does not
+For the `auto` policy, a tool result is a failure only when the tool itself
+failed: bad arguments, a refused path, an unknown tool, or a `run_command`
+that timed out, that the sandbox refused, or that could not start. The exit
+code of a command goes to the model as data. A non-zero exit, such as a
+failing test run or a `grep` with no match, does not turn thinking on. The ADR rule "on for the final answer with an output schema" does not
 apply here: the extraction tasks write a file through a tool, and the policy
 cannot know which step is the last one.
 

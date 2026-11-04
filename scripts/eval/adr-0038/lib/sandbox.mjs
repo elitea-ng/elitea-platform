@@ -126,7 +126,11 @@ function profile(root) {
   ].join('\n');
 }
 
-// Run a shell command in the workspace. Returns {code, output, timedOut}.
+// Run a shell command in the workspace.
+// Returns {code, output, timedOut, toolFailed}. toolFailed is true only when
+// the tool itself failed: a timeout, a sandbox refusal (the sandbox wrapper
+// could not run the command) or a spawn error. A non-zero exit code of the
+// command is not a tool failure; it is data for the model.
 export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 } = {}) {
   const env = {
     PATH: process.env.PATH,
@@ -165,11 +169,15 @@ export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 
     }, timeoutMs);
     child.on('close', (code) => {
       clearTimeout(timer);
-      done({ code: timedOut ? 124 : (code ?? 1), output: out.text(), timedOut });
+      const output = out.text();
+      // sandbox-exec reports its own failures (for example a profile it
+      // cannot apply) with a "sandbox-exec:" prefix.
+      const refused = kind === 'sandbox-exec' && code !== 0 && /^sandbox-exec: /m.test(output);
+      done({ code: timedOut ? 124 : (code ?? 1), output, timedOut, toolFailed: timedOut || refused });
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      done({ code: 127, output: String(err), timedOut: false });
+      done({ code: 127, output: String(err), timedOut: false, toolFailed: true });
     });
   });
 }
@@ -248,8 +256,10 @@ export const TOOL_SPECS = [
 
 const MAX_READ = 20_000;
 
-// Execute one tool call. Returns {ok, text}. ok=false is a tool error or a
-// command that exited non-zero (a failed check for the auto policy).
+// Execute one tool call. Returns {ok, text}. ok=false means the tool failed
+// (bad arguments, a refused path, a command timeout, a sandbox refusal, a
+// spawn error). For run_command the exit code is data in the text: a
+// non-zero exit of a routine probe is not a tool failure.
 export async function execTool(run, name, rawArgs) {
   let args;
   try {
@@ -290,7 +300,7 @@ export async function execTool(run, name, rawArgs) {
         }
         const r = await runCommand(run, args.command);
         const head = r.timedOut ? 'timed out after 60 s (exit 124)' : `exit code ${r.code}`;
-        return { ok: r.code === 0, text: `${head}\n${r.output}` };
+        return { ok: !r.toolFailed, text: `${head}\n${r.output}` };
       }
       default:
         return { ok: false, text: `error: unknown tool ${name}` };

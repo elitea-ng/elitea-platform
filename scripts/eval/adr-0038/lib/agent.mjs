@@ -1,7 +1,8 @@
 // One agent run: a tool loop with a per-step thinking policy.
 // Policy `auto` follows ADR-0038 decision 4: thinking on for the first step
-// and for a step after a tool error or a failed check (a command that exited
-// non-zero); off for routine follow-up steps.
+// and for a step after a tool failure (bad arguments, a refused path, a
+// command timeout, a sandbox refusal, a spawn error); off for routine
+// follow-up steps. A command's non-zero exit code is data, not a failure.
 import { TOOL_SPECS, execTool } from './sandbox.mjs';
 
 export function thinkingFor(policy, { step, prevFailed }) {

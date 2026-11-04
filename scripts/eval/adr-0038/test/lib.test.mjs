@@ -159,6 +159,12 @@ test('tools stay inside the workspace and commands are bounded', async () => {
     assert.equal((await execTool(run, 'read_file', '{bad')).ok, false);
     const r = await runCommand(run, 'sleep 5', { timeoutMs: 300 });
     assert.equal(r.timedOut, true);
+    assert.equal(r.toolFailed, true);
+    // A non-zero exit is data for the model, not a tool failure.
+    const exit3 = await execTool(run, 'run_command', '{"command":"echo boom; exit 3"}');
+    assert.equal(exit3.ok, true);
+    assert.match(exit3.text, /^exit code 3\nboom/);
+    assert.equal((await runCommand(run, 'exit 3')).toolFailed, false);
     const big = await runCommand(run, 'yes | head -c 50000', { maxOutput: 1000 });
     assert.ok(big.output.length < 1200);
     if (sandboxKindAvailable() !== 'none') {

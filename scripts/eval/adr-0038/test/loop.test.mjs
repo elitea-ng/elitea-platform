@@ -172,6 +172,39 @@ test('auto policy: on for the first step and after a failure, off otherwise', ()
   assert.equal(thinkingFor('off', { step: 0, prevFailed: true }), false);
 });
 
+test('auto: a non-zero exit is data, a command timeout is a failure', async () => {
+  await withRun(async (run) => {
+    const script = [
+      { name: 'run_command', args: { command: 'grep -q nothing out.txt' } }, // step 0 (on): exit 1, data
+      { name: 'run_command', args: { command: 'exit 3' } }, // step 1 (off): exit 3, data
+      { name: 'list_files', args: {} }, // step 2 (off)
+      null,
+    ];
+    const seen = [];
+    let i = 0;
+    const chat = async (_m, opts) => {
+      seen.push(opts.thinking);
+      const s = script[i++];
+      if (!s) return { message: { content: 'done' }, finish: 'stop', usage, ms: 1 };
+      return { message: { content: '', tool_calls: [{ id: `x${i}`, type: 'function', function: { name: s.name, arguments: JSON.stringify(s.args) } }] }, finish: 'tool_calls', usage, ms: 1 };
+    };
+    const r = await runAgent({ chat, run, user: 'go', policy: 'auto' });
+    assert.deepEqual(seen, [true, false, false, false]);
+    assert.equal(r.toolErrors, 0);
+    // A timeout is a tool failure: the next step thinks.
+    const seen2 = [];
+    let j = 0;
+    const timeoutExec = async () => ({ ok: false, text: 'timed out after 60 s (exit 124)' });
+    const chat2 = async (_m, opts) => {
+      seen2.push(opts.thinking);
+      if (j++ < 2) return { message: { content: '', tool_calls: [{ id: `t${j}`, type: 'function', function: { name: 'run_command', arguments: '{"command":"sleep 100"}' } }] }, finish: 'tool_calls', usage, ms: 1 };
+      return { message: { content: 'done' }, finish: 'stop', usage, ms: 1 };
+    };
+    await runAgent({ chat: chat2, run, user: 'go', policy: 'auto', exec: timeoutExec });
+    assert.deepEqual(seen2, [true, true, true]);
+  });
+});
+
 test('runAgent switches thinking per step under auto', async () => {
   await withRun(async (run) => {
     const script = [
