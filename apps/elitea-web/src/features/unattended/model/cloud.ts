@@ -9,6 +9,7 @@
  */
 import type { ChatUnattendedRequest } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
+import { isRecord, nonBlankText } from '@/shared/lib/object';
 
 import { chainErrors, defaultGrant, type ChainField, type SensitiveToolRef, type UnattendedGrantValue } from './grant';
 
@@ -61,10 +62,6 @@ export function fromCloudGrant(grant: ChatUnattendedRequest): UnattendedGrantVal
   };
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
-
-const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
-
 /** The tool names a version tool entry selects: top-level `selected_tools`, else in its settings or config. */
 function selectedTools(entry: Record<string, unknown>): string[] {
   const settings = isRecord(entry['settings']) ? entry['settings'] : {};
@@ -79,7 +76,7 @@ function selectedTools(entry: Record<string, unknown>): string[] {
 function toolkitNameOf(entry: Record<string, unknown>): string | undefined {
   if (entry['type'] === 'application' || entry['entity_type'] === 'application') return undefined;
   const config = isRecord(entry['config']) ? entry['config'] : {};
-  return text(entry['toolkit_name']) ?? text(entry['name']) ?? text(config['toolkit_name']) ?? text(config['name']);
+  return nonBlankText(entry['toolkit_name']) ?? nonBlankText(entry['name']) ?? nonBlankText(config['toolkit_name']) ?? nonBlankText(config['name']);
 }
 
 /**
@@ -149,7 +146,7 @@ function reasonText(reason: string, field: string, tool: string): string {
  */
 export function unattendedRefusalText(body: unknown): string | undefined {
   if (!isRecord(body) || body['error'] !== 'unattended_grant_refused') return undefined;
-  const reason = text(body['reason']) ?? 'invalid';
-  const detail = reasonText(reason, text(body['field']) ?? '', text(body['tool']) ?? '');
+  const reason = nonBlankText(body['reason']) ?? 'invalid';
+  const detail = reasonText(reason, nonBlankText(body['field']) ?? '', nonBlankText(body['tool']) ?? '');
   return t('unattended.refused.message', 'The unattended grant was refused. {{detail}} Change the grant and send again.', { detail });
 }

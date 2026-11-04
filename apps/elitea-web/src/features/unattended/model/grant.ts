@@ -8,6 +8,7 @@
  * only) or `sensitive_tools` (named cloud tools).
  */
 import type { UnattendedChain, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
+import { isRecord } from '@/shared/lib/object';
 
 /** A sensitive cloud tool, as a `toolkit/tool` pair. */
 export interface SensitiveToolRef {
@@ -124,8 +125,6 @@ export function toWireGrant(value: UnattendedGrantValue, grantId?: string): Wire
 
 const SWITCHES = ['continue_step_limit', 'continue_tool_call_cap', 'continue_output_limit', 'hook_asks', 'remote_confirmations'] as const;
 const CHAIN_FIELDS: readonly ChainField[] = ['max_continuations', 'max_spend', 'deadline_hours'];
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 function readChain(raw: unknown): ChainDraft | null {
   if (!isRecord(raw) || !CHAIN_FIELDS.every((field) => typeof raw[field] === 'string')) return null;

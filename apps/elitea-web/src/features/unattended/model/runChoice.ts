@@ -9,6 +9,8 @@
  * The choice does not make a turn bypass the approval rules: on the desktop,
  * only the Bypass mode does that.
  */
+import { isRecord } from '@/shared/lib/object';
+
 import { defaultGrant, readGrant, type UnattendedGrantValue } from './grant';
 
 /** The control's state: `on` sends the grant; `grant` keeps the person's settings while it is off too. */
@@ -49,8 +51,6 @@ export function grantToSend(choice: RunChoice, scope: RunScope): UnattendedGrant
     sensitive_tools: desktop ? [] : choice.grant.sensitive_tools,
   };
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 /** A kept choice read back (stored JSON), or null when it is not valid. */
 export function readChoice(raw: unknown): RunChoice | null {
