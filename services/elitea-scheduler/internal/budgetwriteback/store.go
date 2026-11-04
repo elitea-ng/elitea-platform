@@ -182,10 +182,30 @@ type Store struct {
 	// reasoning remembers whether the ledger has shared migration 0225's
 	// reasoning_tokens column.
 	reasoning reasoningColumn
+	// columns asks the pool about the column, outside the money transaction;
+	// nil when the DB cannot (the count is then never written).
+	columns ColumnQuerier
 }
 
 // NewStore builds a Store over the given DB seam.
-func NewStore(db DB) *Store { return &Store{db: db} }
+func NewStore(db DB) *Store {
+	store := &Store{db: db}
+	if columns, ok := db.(ColumnQuerier); ok {
+		store.columns = columns
+	}
+	return store
+}
+
+// groupHasReasoning reports whether any delta of the group carries a
+// reasoning count, so a group without one never asks about the column.
+func groupHasReasoning(group []BudgetDelta) bool {
+	for _, d := range group {
+		if d.Usage != nil && d.Usage.ReasoningTokens > 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // PruneUsageEvents deletes up to pruneBatchSize usage-ledger rows older than
 // RetentionWindow and reports how many it removed. A non-zero return means
@@ -230,6 +250,10 @@ func (s *Store) PruneUsageEvents(ctx context.Context) (int64, error) {
 // All deltas in group MUST share the same (scope, scope_id, period_start) key
 // (the caller coalesces by key). group must be non-empty and pre-validated.
 func (s *Store) Apply(ctx context.Context, group []BudgetDelta) (applyOutcome, error) {
+	// Whether the ledger has the reasoning column, asked on the pool BEFORE
+	// the money transaction opens (ADR-0038 decision 5): a probe that fails
+	// inside it would abort the budget write.
+	withReasoning := groupHasReasoning(group) && s.reasoning.present(ctx, s.columns)
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return outcomeApplied, err
@@ -283,7 +307,7 @@ func (s *Store) Apply(ctx context.Context, group []BudgetDelta) (applyOutcome, e
 		// The reasoning count (ADR-0038 decision 5) only for a row that has
 		// one, and only while the column exists: the report never fails the
 		// money in this transaction.
-		if d.Usage.ReasoningTokens > 0 && s.reasoning.present(ctx, tx) {
+		if d.Usage.ReasoningTokens > 0 && withReasoning {
 			statement = withReasoningTokens(statement)
 			args = append(args, d.Usage.ReasoningTokens)
 		}

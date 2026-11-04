@@ -52,6 +52,14 @@ func (p *PoolDB) Begin(ctx context.Context) (Tx, error) {
 	return &pgxTx{tx: tx}, nil
 }
 
+// QueryRow runs one statement on the pool, outside any transaction (the
+// reasoning column probe).
+func (p *PoolDB) QueryRow(ctx context.Context, sql string, args ...any) Row {
+	return p.Pool.QueryRow(ctx, sql, args...)
+}
+
+var _ ColumnQuerier = (*PoolDB)(nil)
+
 // pgxTx adapts pgx.Tx (whose Exec returns pgconn.CommandTag and whose QueryRow
 // returns pgx.Row) to the consumer's Tx interface.
 type pgxTx struct {
