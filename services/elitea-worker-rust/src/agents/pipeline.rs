@@ -895,6 +895,7 @@ impl PipelineNativeAgentAssembler {
         });
         let mut nodes =
             PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application_resolver)
+                .with_delegated_servers(mcp_tokens)
                 .with_events(node_event_sender)
                 .with_composition_definitions(composition::composition_definitions_for(
                     profile.definition(),
@@ -2729,6 +2730,7 @@ async fn bind_saved_pipeline_runtimes(
         }) as Arc<dyn PipelineLlmAgentFactory>
     });
     let mut runtimes = PipelineNodeRuntimes::new(llm_factory, direct_tool_resolver, application)
+        .with_delegated_servers(runtime.mcp_tokens)
         .with_events(runtime.node_events.clone());
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());

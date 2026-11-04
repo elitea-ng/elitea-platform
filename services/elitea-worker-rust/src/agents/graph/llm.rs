@@ -1401,7 +1401,7 @@ impl LlmNode {
         )?;
         let replay = serde_json::to_value(confirmation.replay)
             .map_err(|_| LlmExecutionError::InvalidInputMapping)?;
-        let data = json!({
+        let mut data = json!({
             "schema_revision": "elitea.graph.mcp-authorization.v1",
             "type": "hitl",
             "guardrail_type": "mcp_auth",
@@ -1422,6 +1422,7 @@ impl LlmNode {
             "resource_metadata": requirement.resource_metadata(),
             "llm_replay": replay,
         });
+        super::direct_tool::with_pause_toolkit_id(&mut data, requirement);
         Ok(NodeOutput::interrupt_with_data(&message, data))
     }
 

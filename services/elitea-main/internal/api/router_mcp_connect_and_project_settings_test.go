@@ -56,6 +56,8 @@ func TestViewerCanReachTheMCPAuthorizationProxies(t *testing.T) {
 	for _, path := range []string{
 		"/api/v2/elitea_core/mcp_oauth_proxy/7",
 		"/api/v2/elitea_core/mcp_dcr_proxy/7",
+		// FU-250: the fan-out card's challenge, the step before the proxies.
+		"/api/v2/elitea_core/mcp_authorization_challenge/prompt_lib/7/19",
 	} {
 		t.Run(path, func(t *testing.T) {
 			code := serveAsRole(t, viewerPermissions, http.MethodPost, path)

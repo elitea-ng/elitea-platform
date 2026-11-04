@@ -23,15 +23,19 @@ type ClaimRequest struct {
 	// FanoutInterruptDecisions is the worker's opt-in to the per-interrupt
 	// decision contract; a fanout_wake job is granted only with it.
 	FanoutInterruptDecisions bool
-	CommandID                string
-	OutboxID                 string
-	ExecutionID              string
-	Generation               uint64
-	CapabilityID             string
-	SignedEnvelopeDigest     runtimedomain.Digest
-	WorkloadIdentity         string
-	WorkloadSessionID        string
-	ProducerID               string
+	// FanoutDelegatedCredentials is the worker's opt-in to applying a fan-out
+	// `authorize` with its credential (FU-250); a wake whose response carries
+	// an authorize decision is granted only with it, under every disposition.
+	FanoutDelegatedCredentials bool
+	CommandID                  string
+	OutboxID                   string
+	ExecutionID                string
+	Generation                 uint64
+	CapabilityID               string
+	SignedEnvelopeDigest       runtimedomain.Digest
+	WorkloadIdentity           string
+	WorkloadSessionID          string
+	ProducerID                 string
 }
 
 // ClaimAbortDisposition records why a live, fully fenced claim was released

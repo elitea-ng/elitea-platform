@@ -106,6 +106,10 @@ pub(crate) struct CardDisplay {
     pub(crate) tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tool_name: Option<String>,
+    /// FU-250: the frozen toolkit of a `delegated_auth` card whose pause
+    /// stored it; Main accepts `authorize` only on a card that carries it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) toolkit_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) toolkit_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

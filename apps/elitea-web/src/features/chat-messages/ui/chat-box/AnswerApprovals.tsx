@@ -18,6 +18,7 @@ import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 
 import type { AuthorizationBuckets, HitlBuckets } from '../../lib/approvalBuckets';
 import { getInterruptIdentity } from '../../lib/hitlInterrupts';
@@ -28,6 +29,7 @@ import type { SubAgentTool } from '../sub-agent-section/subAgentIcon.helpers';
 import { ChatContinue, type ChatContinueProps } from '../chat-continue/ChatContinue';
 import { t } from '@/shared/i18n';
 import { StaticPauseCard } from './StaticPauseCard';
+import type { ApplicationAnswerContinuation } from './ApplicationAnswer.types';
 
 /** One extra card owned by a bucket instance (static pause) — rendered after that instance's HITL cards. */
 interface ApprovalExtraCard {
@@ -49,6 +51,8 @@ export interface AnswerApprovalsProps {
    */
   readonly ledgerAuthorizationBuckets?: HitlBuckets<HitlInterrupt> | undefined;
   readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
+  /** FU-250: the run's own user signs a fan-out card in through this slot. */
+  readonly renderLedgerSignIn?: ApplicationAnswerContinuation['renderLedgerSignIn'];
   readonly onHitlResume?: ((payload: HitlResumePayload) => void) | undefined;
   readonly tools?: readonly SubAgentTool[] | undefined;
   /** Static-pause cards with their owning bucket (or extra buckets they open). */
@@ -66,6 +70,7 @@ export function AnswerApprovals({
   hitlBuckets,
   ledgerAuthorizationBuckets,
   renderAuthModal,
+  renderLedgerSignIn,
   onHitlResume,
   tools,
   extraCards = [],
@@ -87,9 +92,29 @@ export function AnswerApprovals({
       );
     }
     if (interrupt.ledger_kind === 'delegated_auth') {
+      // FU-250: only the run's own user is offered `authorize`, and only on a
+      // card that names its frozen toolkit; anyone else keeps Skip, with a
+      // short reason. The sign-in posts the grant's reference, never a token.
+      const canSignIn = interrupt.available_actions?.includes('authorize') === true && interrupt.toolkit_id !== undefined && Boolean(interrupt.server_url);
+      if (canSignIn && renderLedgerSignIn && interrupt.toolkit_id !== undefined && interrupt.server_url) {
+        return (
+          <Fragment key={interruptId || `hitl-${index}`}>
+            {renderLedgerSignIn({
+              toolkitId: interrupt.toolkit_id,
+              toolkitType: interrupt.toolkit_type || undefined,
+              serverUrl: interrupt.server_url,
+              message: interrupt.message ?? '',
+              disabled,
+              onAuthorized: (credentialRef) => onHitlResume?.({ action: 'authorize', interruptId, credentialRef }),
+              onSkip: () => onHitlResume?.({ action: 'skip', interruptId }),
+            })}
+          </Fragment>
+        );
+      }
+      const ownerOnly = interrupt.available_actions?.includes('authorize') !== true && interrupt.toolkit_id !== undefined;
       return (
+        <Fragment key={interruptId || `hitl-${index}`}>
         <ChatContinue
-          key={interruptId || `hitl-${index}`}
           authRequired
           disabled={disabled}
           onContinueWithoutAuth={() => onHitlResume?.({ action: 'skip', interruptId })}
@@ -99,6 +124,12 @@ export function AnswerApprovals({
           message={interrupt.message}
           continueLabel={t('features.chatMessages.authorization.skip', 'Skip')}
         />
+        {ownerOnly && (
+          <Typography variant="bodySmall" sx={{ marginTop: '0.25rem' }}>
+            {t('features.chatMessages.authorization.ownerOnly', 'Only the person who started this run can sign in for it.')}
+          </Typography>
+        )}
+        </Fragment>
       );
     }
     return (

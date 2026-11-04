@@ -38,7 +38,7 @@ class AgentExecutionCommandV1(_message.Message):
     def __init__(self, request_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ...) -> None: ...
 
 class AgentExecutionInputV1(_message.Message):
-    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model", "platform_preamble", "unattended_grant")
+    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model", "platform_preamble", "unattended_grant", "mcp_token_references")
     SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
     LLM_FIELD_NUMBER: _ClassVar[int]
     CHAT_HISTORY_FIELD_NUMBER: _ClassVar[int]
@@ -83,6 +83,7 @@ class AgentExecutionInputV1(_message.Message):
     SUMMARY_MODEL_FIELD_NUMBER: _ClassVar[int]
     PLATFORM_PREAMBLE_FIELD_NUMBER: _ClassVar[int]
     UNATTENDED_GRANT_FIELD_NUMBER: _ClassVar[int]
+    MCP_TOKEN_REFERENCES_FIELD_NUMBER: _ClassVar[int]
     schema_revision: str
     llm: bytes
     chat_history: bytes
@@ -127,7 +128,8 @@ class AgentExecutionInputV1(_message.Message):
     summary_model: SummaryModelSnapshotV1
     platform_preamble: PlatformPreambleSnapshotV1
     unattended_grant: UnattendedGrantV1
-    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ..., unattended_grant: _Optional[_Union[UnattendedGrantV1, _Mapping]] = ...) -> None: ...
+    mcp_token_references: _containers.RepeatedCompositeFieldContainer[McpTokenReferenceV1]
+    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ..., unattended_grant: _Optional[_Union[UnattendedGrantV1, _Mapping]] = ..., mcp_token_references: _Optional[_Iterable[_Union[McpTokenReferenceV1, _Mapping]]] = ...) -> None: ...
 
 class UnattendedGrantV1(_message.Message):
     __slots__ = ("grant_id", "chain_root_execution_id", "owner_user_id", "sensitive_tools", "continue_step_limit", "continue_output_limit", "chain", "continuation_index")
@@ -166,6 +168,18 @@ class UnattendedChainLimitsV1(_message.Message):
     max_spend_usd: float
     deadline_unix_seconds: int
     def __init__(self, max_continuations: _Optional[int] = ..., max_spend_usd: _Optional[float] = ..., deadline_unix_seconds: _Optional[int] = ...) -> None: ...
+
+class McpTokenReferenceV1(_message.Message):
+    __slots__ = ("resource", "reference", "revision", "toolkit_id")
+    RESOURCE_FIELD_NUMBER: _ClassVar[int]
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    TOOLKIT_ID_FIELD_NUMBER: _ClassVar[int]
+    resource: str
+    reference: str
+    revision: int
+    toolkit_id: int
+    def __init__(self, resource: _Optional[str] = ..., reference: _Optional[str] = ..., revision: _Optional[int] = ..., toolkit_id: _Optional[int] = ...) -> None: ...
 
 class PlatformPreambleSnapshotV1(_message.Message):
     __slots__ = ("revision", "sha256", "text")

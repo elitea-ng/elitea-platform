@@ -217,9 +217,9 @@ func TestExecutionInterruptDecisionUsesContractFixtures(t *testing.T) {
 		useCase := &interruptUseCaseStub{result: domain.DecideResult{InterruptKey: interruptTestKey, State: domain.StateDecided, Revision: 2, RequestID: strings.Repeat("ab", 32)}}
 		w := httptest.NewRecorder()
 		newInterruptTestRoute(t, useCase, domain.PermissionDecide).ServeHTTP(w, interruptRequest(http.MethodPost, decisionPath("7", interruptTestResponse, interruptTestKey), raw))
-		// A schema-valid authorize is refused until it carries its credential
-		// reference end to end (FU-250).
-		invalid := strings.Contains(filepath.Base(path), ".invalid.") || strings.Contains(filepath.Base(path), ".authorize.")
+		// A schema-valid authorize reaches the ledger, which checks its
+		// credential reference for the run's actor (FU-250).
+		invalid := strings.Contains(filepath.Base(path), ".invalid.")
 		if invalid && (w.Code != 400 || useCase.calls != 0) {
 			t.Errorf("%s: status=%d calls=%d", filepath.Base(path), w.Code, useCase.calls)
 		}
@@ -313,6 +313,53 @@ func TestInterruptLogsCarryNoValues(t *testing.T) {
 	for _, forbidden := range []string{secretValue, credentialRef, strings.Repeat("ab", 32), strings.Repeat("cd", 32), interruptTestKey, "Approve creating"} {
 		if strings.Contains(logs, forbidden) {
 			t.Errorf("log carries %q:\n%s", forbidden, logs)
+		}
+	}
+}
+
+// FU-250: a refused credential is one 409 that never says which check
+// failed; authorize on a card that cannot take one keeps the typed Skip
+// hint. Neither body carries the reference.
+func TestAuthorizeRefusalsAreTypedAndNonEnumerating(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(interruptContractDir, "fixtures", "fanout-interrupt-decision-request-v1.authorize.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		CredentialRef string `json:"credential_ref"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil || body.CredentialRef == "" {
+		t.Fatalf("authorize fixture: %v", err)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	accepted := &interruptUseCaseStub{result: domain.DecideResult{InterruptKey: interruptTestKey, State: domain.StateDecided, Revision: 2, RequestID: strings.Repeat("ab", 32)}}
+	w := httptest.NewRecorder()
+	newInterruptTestRoute(t, accepted, domain.PermissionDecide).ServeHTTP(w, interruptRequest(http.MethodPost, decisionPath("7", interruptTestResponse, interruptTestKey), raw))
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), body.CredentialRef) {
+		t.Fatalf("accepted authorize: status=%d body=%s", w.Code, w.Body.String())
+	}
+	defer func() {
+		// Log capture (brief item 2): no decision path logs the reference.
+		if strings.Contains(logs.String(), body.CredentialRef) {
+			t.Fatalf("a log line carries the credential reference: %s", logs.String())
+		}
+	}()
+	for _, test := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{domain.ErrCredentialRefused, http.StatusConflict, "agent_interrupt_credential_refused"},
+		{domain.ErrAuthorizeUnavailable, http.StatusBadRequest, "agent_interrupt_invalid_decision"},
+	} {
+		useCase := &interruptUseCaseStub{err: test.err}
+		w := httptest.NewRecorder()
+		newInterruptTestRoute(t, useCase, domain.PermissionDecide).ServeHTTP(w, interruptRequest(http.MethodPost, decisionPath("7", interruptTestResponse, interruptTestKey), raw))
+		if w.Code != test.status || !strings.Contains(w.Body.String(), test.code) || strings.Contains(w.Body.String(), body.CredentialRef) {
+			t.Fatalf("%v: status=%d body=%s", test.err, w.Code, w.Body.String())
 		}
 	}
 }

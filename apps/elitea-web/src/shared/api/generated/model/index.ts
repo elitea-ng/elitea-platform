@@ -570,6 +570,7 @@ export * from "./markConversationReadRequest.zod";
 export * from "./markNotificationSeenHeaders.zod";
 export * from "./markNotificationsSeen200.zod";
 export * from "./markNotificationsSeenHeaders.zod";
+export * from "./mcpAuthorizationChallenge.zod";
 export * from "./mcpDcrProxyRequest.zod";
 export * from "./mcpDcrProxyResponse.zod";
 export * from "./mcpOAuthError.zod";

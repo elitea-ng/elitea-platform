@@ -36,6 +36,7 @@ fn factory(items: usize) -> CompilerParallelBranches {
         llm: None,
         events: None,
         root_session: None,
+        delegated_servers: Arc::default(),
     }
 }
 

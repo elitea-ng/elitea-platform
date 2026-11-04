@@ -147,6 +147,11 @@ type FanoutWakeTarget struct {
 	TriggerOrigin       executiondomain.TriggerOrigin
 	FrozenInput         []byte
 	FrozenInputDigest   []byte
+	// DelegatedCredentials are the references of the response's DECIDED,
+	// not yet consumed, `authorize` cards (FU-250), sorted by resource. They
+	// travel into the wake input by reference only; the claim-checked
+	// materializer resolves them for the claim's actor.
+	DelegatedCredentials []*runtimev1.McpTokenReferenceV1
 }
 
 // fanoutWakeResumeMarkers are the continuation discriminators of other kinds
@@ -203,5 +208,6 @@ func FanoutWakeInput(target FanoutWakeTarget) (*runtimev1.AgentExecutionInputV1,
 	input.CheckpointId = nil
 	input.TruncatedContent = nil
 	input.IsRegenerate = false
+	input.McpTokenReferences = target.DelegatedCredentials
 	return &input, nil
 }

@@ -551,6 +551,34 @@ async fn prebuilt_authorization_preserves_dynamic_toolkit_type() {
     assert_eq!(requirement.toolkit_name(), "release intelligence");
 }
 
+/// FU-250: an MCP toolkit with no configured OAuth client (dynamic client
+/// registration) still names its frozen toolkit on the requirement, so the
+/// fan-out card can offer a sign-in.
+#[tokio::test]
+async fn an_authorization_requirement_without_an_oauth_client_names_its_toolkit() {
+    let version = frozen("mcp", &settings(&["lookup_release"]));
+    let snapshot = FrozenToolSnapshot::from_version_details(&version)
+        .expect("MCP snapshot")
+        .apply_policy(policy(&[]).as_ref());
+    let guarded = materialize_mcp_toolsets(&snapshot, &AuthorizationConnector, &policy(&[]))
+        .await
+        .expect("authorization placeholder");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tool = guarded[0]
+        .tools(readonly)
+        .await
+        .expect("guarded tools")
+        .pop()
+        .expect("selected placeholder");
+    let error = tool
+        .execute(context(), json!({}))
+        .await
+        .expect_err("authorization required");
+    let requirement =
+        delegated_authorization_requirement(&error).expect("typed authorization metadata");
+    assert_eq!(requirement.toolkit_id(), Some(41));
+}
+
 #[tokio::test]
 async fn mcp_auth_challenge_materializes_selected_placeholder_and_exact_token_rebuild() {
     let mut configured = settings(&["lookup_release"]);
@@ -2194,4 +2222,102 @@ fn an_internal_category_carries_no_assertion() {
             mint, true,
         )));
     assert!(!config.carries_delegation_for_test());
+}
+
+/// FU-250 (A2): a token Main projected for resource R reaches only the
+/// toolset whose frozen server is R. Another frozen toolset of the same run
+/// on another server never receives it: the recording server logs which
+/// requests carried which bearer.
+#[tokio::test]
+async fn a_projected_token_reaches_only_the_toolset_of_its_resource() {
+    if std::env::var_os(TRACE_CHILD_ENV).is_some() {
+        // Run by the log-capture test in its own process: every event and
+        // span, at TRACE, to stdout.
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+                .with_ansi(false)
+                .finish(),
+        )
+        .expect("the child process's subscriber");
+        tracing::trace!(target: "elitea_agent_runtime::fu250", "trace capture installed");
+    }
+    let resource = "https://mcp.example.invalid/v1/mcp";
+    let other = "https://other.example.invalid/v1/mcp";
+    let tokens = Map::from_iter([(
+        resource.to_owned(),
+        json!({"access_token": "test-only-fu250-marker"}),
+    )]);
+    let config_for = |url: &str| {
+        let mut configured = settings(&["lookup_release"]);
+        configured["url"] = json!(url);
+        let version = frozen("mcp", &configured);
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let reference = snapshot
+            .iter()
+            .find(|reference| reference.tool_type() == "mcp")
+            .expect("MCP reference");
+        RemoteMcpConfig::parse_for_test(reference, &tokens).expect("MCP config")
+    };
+    let (base, seen) = recording_redirect_server(String::new()).await;
+    for (url, path) in [(resource, "/r"), (other, "/s")] {
+        let config = config_for(url).with_endpoint_for_test(&format!("{base}{path}"));
+        let client = session_client_builder(&config)
+            .expect("builder")
+            .https_only(false)
+            .build()
+            .expect("client");
+        client
+            .post(format!("{base}{path}"))
+            .body("{}")
+            .send()
+            .await
+            .expect("response");
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.contains(&(
+            "/r".to_owned(),
+            Some("Bearer test-only-fu250-marker".to_owned())
+        )),
+        "{seen:?}"
+    );
+    assert!(seen.contains(&("/s".to_owned(), None)), "{seen:?}");
+    assert!(
+        !seen
+            .iter()
+            .any(|(path, bearer)| path == "/s" && bearer.is_some()),
+        "another server received a bearer: {seen:?}"
+    );
+}
+
+/// Set when the log-capture test runs the token test in a child process.
+const TRACE_CHILD_ENV: &str = "ELITEA_TEST_FU250_TRACE_CHILD";
+
+/// FU-250 (E2): presenting a projected token, run in its own process under a
+/// global TRACE subscriber with span events, logs no token bytes. The child
+/// process keeps other tests' events out of the capture.
+#[test]
+fn a_projected_token_is_never_logged_at_trace() {
+    let module = module_path!().split_once("::").expect("crate path").1;
+    let test = format!("{module}::a_projected_token_reaches_only_the_toolset_of_its_resource");
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", test.as_str(), "--nocapture", "--test-threads=1"])
+        .env(TRACE_CHILD_ENV, "1")
+        .output()
+        .expect("the child test runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout} {stderr}");
+    assert!(
+        stdout.contains("1 passed") && stdout.contains("trace capture installed"),
+        "the child presented the token under the capture: {stdout}"
+    );
+    assert!(
+        !stdout.contains("test-only-fu250-marker") && !stderr.contains("test-only-fu250-marker"),
+        "a log line carries the token"
+    );
 }

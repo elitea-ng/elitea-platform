@@ -88,7 +88,7 @@ DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED: DelegationAssertionDispositionV1
 DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED: DelegationAssertionDispositionV1
 
 class ClaimCommandRequestV1(_message.Message):
-    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions")
+    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials")
     WORKLOAD_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PRODUCER_ID_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
@@ -96,6 +96,7 @@ class ClaimCommandRequestV1(_message.Message):
     NODE_RECOVERY_FIELD_NUMBER: _ClassVar[int]
     GOVERNED_SECURITY_CONTEXT_V1_FIELD_NUMBER: _ClassVar[int]
     FANOUT_INTERRUPT_DECISIONS_FIELD_NUMBER: _ClassVar[int]
+    FANOUT_DELEGATED_CREDENTIALS_FIELD_NUMBER: _ClassVar[int]
     workload_session_id: str
     producer_id: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
@@ -103,7 +104,8 @@ class ClaimCommandRequestV1(_message.Message):
     node_recovery: bool
     governed_security_context_v1: bool
     fanout_interrupt_decisions: bool
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ...) -> None: ...
+    fanout_delegated_credentials: bool
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ..., fanout_delegated_credentials: _Optional[bool] = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")

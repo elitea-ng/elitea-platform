@@ -83,6 +83,10 @@ const BRANCH_AGENT_PAUSE_CODE: &str = crate::agents::application_tools::FANOUT_A
 /// A branch whose saved pipeline holds a tool with external effects, which a
 /// branch cannot run yet (FU-248): typed and readable, never "failed".
 const BRANCH_TOOL_UNAVAILABLE_CODE: &str = "graph.fanout.child_tool_unavailable";
+/// FU-250: an `authorize` decision whose credential Main could not resolve for
+/// this run (none, expired or revoked before the wake): the branch never
+/// resumes "authorized" without it; it ends typed and readable, nothing ran.
+const BRANCH_CREDENTIAL_UNAVAILABLE_CODE: &str = "graph.fanout.credential_unavailable";
 /// Earlier checkpoints of one child examined for an already answered pause.
 const MAX_ANSWERED_PAUSE_SCAN: usize = 64;
 
@@ -415,6 +419,12 @@ pub(crate) trait ParallelBranchGraphFactory: Send + Sync {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError>;
+
+    /// FU-250: whether the run holds a Main-resolved token for this MCP
+    /// server (the run's `mcp_tokens`, materialized from its references).
+    fn delegated_credential(&self, _server_url: &str) -> bool {
+        false
+    }
 }
 
 pub(crate) enum ParallelBranchTerminal {
@@ -451,6 +461,10 @@ pub(crate) struct ParallelDecision {
     pub(crate) tool_call_id: String,
     pub(crate) action: String,
     pub(crate) value: String,
+    /// FU-250: the decision named a credential reference (`authorize` only).
+    /// Never the reference itself: the credential reaches the run only as a
+    /// token Main resolved for the run's own actor.
+    pub(crate) credential: bool,
 }
 
 /// What one branch invocation, or one branch restored from its own
@@ -576,6 +590,11 @@ pub(crate) trait ParallelBranchRuntime: Send + Sync {
         pause: &ParallelBranchPause,
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError>;
+
+    /// FU-250: see [`ParallelBranchGraphFactory::delegated_credential`].
+    fn delegated_credential(&self, _server_url: &str) -> bool {
+        false
+    }
 }
 
 /// ADK-native branch runner with one terminal checkpoint lineage per branch.
@@ -732,6 +751,10 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         decisions: &[ParallelDecision],
     ) -> Result<State, GraphError> {
         self.graphs.resume_input(branch, pause, decisions).await
+    }
+
+    fn delegated_credential(&self, server_url: &str) -> bool {
+        self.graphs.delegated_credential(server_url)
     }
 }
 
@@ -1676,6 +1699,19 @@ async fn run_child(
             .ok_or_else(stale_decision)?;
         selected.push(parallel_decision(card, decision)?);
     }
+    if credential_unavailable(runtime, &pause, &selected) {
+        fanout_trace::child_admitted(span, ChildStart::Resumed);
+        return to_child_run(
+            activation,
+            branch,
+            ParallelBranchOutcome::Failed {
+                failure: branch_failure(BRANCH_CREDENTIAL_UNAVAILABLE_CODE),
+                checkpoint_id: Some(pause.checkpoint_id.clone()),
+            },
+            &pause.checkpoint_id,
+            board,
+        );
+    }
     let controls = runtime
         .resume_input(&branch.branch, &pause, &selected)
         .await?;
@@ -1690,6 +1726,22 @@ async fn run_child(
     resumed.input.extend(controls);
     let outcome = runtime.invoke(activation, resumed, context).await;
     to_child_run(activation, branch, outcome, &pause.checkpoint_id, board)
+}
+
+/// FU-250: an `authorize` resumes only with its credential: the decision
+/// named one and Main resolved the card's server's token for this run.
+/// Otherwise the branch ends typed before anything resumes or runs.
+fn credential_unavailable(
+    runtime: &dyn ParallelBranchRuntime,
+    pause: &ParallelBranchPause,
+    decisions: &[ParallelDecision],
+) -> bool {
+    super::parallel_cards::delegated_auth_server(pause).is_some_and(|server_url| {
+        decisions.iter().any(|decision| {
+            decision.action == "authorize"
+                && (!decision.credential || !runtime.delegated_credential(&server_url))
+        })
+    })
 }
 
 /// `fallback` names the checkpoint the child stood at when its run left no
@@ -1772,6 +1824,7 @@ fn parallel_decision(
         tool_call_id: card.tool_call_id.clone(),
         action: decision.action.clone(),
         value,
+        credential: decision.credential_ref.is_some(),
     })
 }
 
@@ -2288,6 +2341,10 @@ fn branch_failure(code: &str) -> ChildFailure {
                 "The branch was interrupted while it may have been changing data. \
                  It was not run again; check the target system."
             }
+            BRANCH_CREDENTIAL_UNAVAILABLE_CODE => {
+                "The sign-in for this branch could not be used: it expired or was \
+                 revoked before the run continued. Sign in again and run it once more."
+            }
             BRANCH_TOOL_UNAVAILABLE_CODE => {
                 "The branch's pipeline uses a tool that changes data directly, which a \
                  parallel branch cannot run yet. It did not run."
@@ -2583,6 +2640,7 @@ fn valid_failure_code(code: &str) -> bool {
             | "graph.json"
             | "graph.other"
             | BRANCH_MAY_HAVE_STARTED_CODE
+            | BRANCH_CREDENTIAL_UNAVAILABLE_CODE
             | BRANCH_AGENT_PAUSE_CODE
             | BRANCH_TOOL_UNAVAILABLE_CODE
     )
