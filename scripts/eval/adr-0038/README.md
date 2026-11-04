@@ -72,7 +72,7 @@ it writes `<out>.json` (all records and the run settings) and `<out>.md`
 again. The analysis at the end of a committed `.md` is written by hand. A
 new run to the same `--out` overwrites it, so copy it first.
 
-Results so far: `results/qwen-2026-11-04.md`.
+Current results: `results/qwen-2026-11-04-r2.md`. The first run, `results/qwen-2026-11-04.md`, is kept for the comparison.
 
 ## Variants
 
