@@ -510,3 +510,33 @@ func TestPostgres_HealthyWrite(t *testing.T) {
 		}
 	})
 }
+
+// TestPostgres_LedgerRowCarriesReasoningTokens runs the reasoning insert of
+// shared migration 0225 (ADR-0038 decision 5) against the real table: with the
+// column present, a row with a count writes it, on both paths.
+func TestPostgres_LedgerRowCarriesReasoningTokens(t *testing.T) {
+	f := newPGFixture(t)
+	if _, err := f.pool.Exec(t.Context(),
+		`ALTER TABLE gateway.llm_usage_events ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0`); err != nil {
+		t.Fatalf("add the 0225 column: %v", err)
+	}
+	for name, persist := range map[string]func(*Store, context.Context, OutageDelta) error{
+		"outage":  (*Store).PersistOutageDelta,
+		"healthy": (*Store).PersistHealthyDelta,
+	} {
+		evt := newUUID(t)
+		d := f.healthyDelta(evt, 1_000)
+		d.Usage.ReasoningTokens = 412
+		if err := persist(NewStore(f.db), t.Context(), d); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var reasoning int64
+		if err := f.pool.QueryRow(t.Context(),
+			`SELECT reasoning_tokens FROM gateway.llm_usage_events WHERE event_id = $1`, evt).Scan(&reasoning); err != nil {
+			t.Fatalf("%s: read the ledger row: %v", name, err)
+		}
+		if reasoning != 412 {
+			t.Fatalf("%s: reasoning_tokens = %d, want 412", name, reasoning)
+		}
+	}
+}

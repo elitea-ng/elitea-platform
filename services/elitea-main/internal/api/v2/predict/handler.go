@@ -129,6 +129,23 @@ func (h *Handler) PredictLLM(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), resolveRequestTimeout(body.AwaitTaskTimeout))
 	defer cancel()
 
+	// The thinking setting is checked against the model before the call: a
+	// setting the model cannot honour is a 400 with the reason, never a
+	// value the gateway drops (ADR-0038).
+	completion, err := PrepareReasoning(ctx, h.completer, completion)
+	if err != nil {
+		if message, refused := IsReasoningError(err); refused {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": message})
+			return
+		}
+		slog.ErrorContext(r.Context(), "predict_llm: model resolution failed",
+			"project_id", projectID, "model", completion.Model, "err", err)
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": "the LLM gateway could not complete this request",
+		})
+		return
+	}
+
 	content, err := h.completer.Complete(ctx, completion)
 	if err != nil {
 		// The real cause is logged server-side only; the browser gets a fixed,

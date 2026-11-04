@@ -188,3 +188,167 @@ fn the_reasoning_stream_reads_alike_in_both_profiles() {
     );
     assert_eq!(usage.cached_tokens, expected["cached_tokens"].as_u64());
 }
+
+#[test]
+fn the_thinking_table() {
+    use elitea_llm_wire::thinking::{
+        Level, ReasoningControl, StepThinking, Thinking, apply_openai, openai_form,
+    };
+    let contract = contract();
+    let table = &contract["thinking"];
+    for (stored, canonical) in table["settings"].as_object().into_iter().flatten() {
+        assert_eq!(
+            Thinking::parse(stored).map(Thinking::as_str),
+            canonical.as_str(),
+            "{stored}"
+        );
+    }
+    for refused in table["refused_settings"].as_array().into_iter().flatten() {
+        assert_eq!(Thinking::parse(refused.as_str().unwrap_or("?")), None);
+    }
+    let step = |name: &str| match name {
+        "off" => StepThinking::Off,
+        "low" => StepThinking::On(Level::Low),
+        "medium" => StepThinking::On(Level::Medium),
+        "high" => StepThinking::On(Level::High),
+        other => panic!("step {other}"),
+    };
+    let rows = table["openai_compatible"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 8);
+    for row in rows {
+        let control = ReasoningControl::parse(row["control"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("control {row}"));
+        let mut body = serde_json::Map::new();
+        apply_openai(
+            &mut body,
+            openai_form(control, step(row["step"].as_str().unwrap_or_default())),
+        );
+        assert_eq!(
+            body.get("reasoning_effort").cloned().unwrap_or(Value::Null),
+            row["reasoning_effort"],
+            "{row}"
+        );
+        assert_eq!(
+            body.get("chat_template_kwargs")
+                .and_then(|kwargs| kwargs.get("enable_thinking"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            row["enable_thinking"],
+            "{row}"
+        );
+    }
+    for row in table["conflicts"].as_array().into_iter().flatten() {
+        let control = ReasoningControl::parse(row["control"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("control {row}"));
+        let setting = Thinking::parse(row["setting"].as_str().unwrap_or_default())
+            .unwrap_or_else(|| panic!("setting {row}"));
+        assert!(control.conflict(setting).is_some(), "{row}");
+    }
+}
+
+fn thinking_setting(value: &Value) -> Option<elitea_llm_wire::thinking::Thinking> {
+    value.as_str().map(|name| {
+        elitea_llm_wire::thinking::Thinking::parse(name).unwrap_or_else(|| panic!("setting {name}"))
+    })
+}
+
+fn thinking_control(value: &Value) -> Option<elitea_llm_wire::thinking::ReasoningControl> {
+    value.as_str().map(|name| {
+        elitea_llm_wire::thinking::ReasoningControl::parse(name)
+            .unwrap_or_else(|| panic!("control {name}"))
+    })
+}
+
+fn step_kind(name: &str) -> elitea_llm_wire::thinking::StepKind {
+    use elitea_llm_wire::thinking::StepKind;
+    match name {
+        "planning" => StepKind::Planning,
+        "recovery" => StepKind::Recovery,
+        "tool_follow_up" => StepKind::ToolFollowUp,
+        "structured_answer" => StepKind::StructuredAnswer,
+        "auxiliary" => StepKind::Auxiliary,
+        other => panic!("kind {other}"),
+    }
+}
+
+/// The one copy of the `auto` policy (ADR-0038 decision 4): every caller
+/// resolves a step through `thinking::step`, so these rows pin all of them.
+#[test]
+fn the_auto_policy() {
+    use elitea_llm_wire::thinking::{AutoPolicy, Level, StepRequest, StepThinking, step};
+    let contract = contract();
+    let cases = contract["thinking"]["auto_policy"]["cases"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(cases.len() >= 16);
+    for row in cases {
+        let declared = thinking_control(&row["control"]).map(|control| {
+            (
+                control,
+                AutoPolicy {
+                    tool_steps: row["tool_steps"].as_bool().unwrap_or(false),
+                    off_with_tools: row["off_with_tools"].as_bool().unwrap_or(false),
+                },
+            )
+        });
+        let got = step(
+            thinking_setting(&row["setting"]),
+            declared,
+            StepRequest {
+                kind: step_kind(row["kind"].as_str().unwrap_or_default()),
+                has_tools: row["has_tools"].as_bool().unwrap_or(false),
+            },
+        );
+        let want = row["expect"].as_str().map(|name| match name {
+            "off" => StepThinking::Off,
+            "low" => StepThinking::On(Level::Low),
+            "medium" => StepThinking::On(Level::Medium),
+            "high" => StepThinking::On(Level::High),
+            other => panic!("expect {other}"),
+        });
+        assert_eq!(got, want, "{}", row["note"]);
+    }
+}
+
+#[test]
+fn the_step_classification() {
+    use elitea_llm_wire::thinking::classify;
+    let contract = contract();
+    for row in contract["thinking"]["classify"]["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let results = row["results"].as_array().cloned().unwrap_or_default();
+        assert_eq!(
+            classify(row["structured"].as_bool().unwrap_or(false), results.iter()),
+            step_kind(row["kind"].as_str().unwrap_or_default()),
+            "{row}"
+        );
+    }
+}
+
+#[test]
+fn the_continuation_setting() {
+    use elitea_llm_wire::thinking::continuation_setting;
+    let contract = contract();
+    for row in contract["thinking"]["continuation"]["cases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let setting = thinking_setting(&row["setting"]).unwrap_or_else(|| panic!("{row}"));
+        assert_eq!(
+            Some(continuation_setting(
+                setting,
+                thinking_control(&row["control"])
+            )),
+            thinking_setting(&row["expect"]),
+            "{row}"
+        );
+    }
+}

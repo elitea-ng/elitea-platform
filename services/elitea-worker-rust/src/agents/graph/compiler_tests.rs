@@ -744,6 +744,7 @@ fn resume_payload(interrupt_id: &str, action: &str, value: &str) -> AgentExecuti
         model_context_limits: None,
         summary_model: None,
         platform_preamble: None,
+        model_reasoning: None,
     }
 }
 

@@ -1773,6 +1773,7 @@ dependencies = [
  "chrono",
  "elitea-connectors",
  "elitea-egress-guard",
+ "elitea-llm-wire",
  "elitea-office-core",
  "elitea-platform-rpc",
  "fancy-regex 0.20.0",

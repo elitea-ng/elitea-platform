@@ -57,7 +57,7 @@ export const LlmSettings = zod.object({
     .string()
     .optional()
     .describe(
-      "One of none, low, medium or high. Mutually exclusive with temperature on the runtime profile: the native worker refuses a profile carrying both (services/elitea-worker-rust/src/agents/ assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps/elitea-web/src/shared/api/ agentLlmSettings.ts, selectEffortAndTemperature).\n",
+      "One of auto, off, low, medium or high (ADR-0038 decision 1). A stored none reads as off. auto lets the runtime choose per step from the model's reasoning_control. A save refuses off on a fixed_on model and a level on a fixed_off model. A model whose reasoning_control is effort, budget or undeclared takes no temperature beside a thinking setting (anything other than off): the native worker refuses a profile carrying both (services/ elitea-worker-rust/src/agents/assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps/elitea-web/src/ shared/api/agentLlmSettings.ts, selectEffortAndTemperature). A toggle or fixed model takes both.\n",
     ),
 });
 

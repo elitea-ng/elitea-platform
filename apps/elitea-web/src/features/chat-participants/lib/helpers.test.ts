@@ -93,6 +93,13 @@ describe('transformParticipant', () => {
     expect(result.entity_settings?.temperature).toBe(0.7);
   });
 
+  it('keeps a model participant’s stored auto and off (ADR-0038)', () => {
+    for (const effort of ['auto', 'off']) {
+      const result = transformParticipant(ChatParticipantType.Models, { model_name: 'qwen3.5', reasoning_effort: effort });
+      expect(result.entity_settings?.reasoning_effort).toBe(effort);
+    }
+  });
+
   it('builds application participant', () => {
     const result = transformParticipant(ChatParticipantType.Applications, { id: 'a1', name: 'Agent', project_id: 'p1' });
     expect(result.entity_name).toBe('application');

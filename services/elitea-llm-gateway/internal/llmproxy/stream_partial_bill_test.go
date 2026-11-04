@@ -56,6 +56,8 @@ type accumulatingRouter struct {
 	// accIn / accOut are the counts the provider has accumulated by the time
 	// it goes quiet — the state of the handle when the gateway cuts it.
 	accIn, accOut int
+	// accReasoning is the reasoning count the handle holds at the cut.
+	accReasoning int
 	// trailer, when set, is delivered after trailerDelay, so a test can check
 	// that a recovered trailer still outranks the accumulated count.
 	trailer      *schemas.BifrostStreamChunk
@@ -109,6 +111,9 @@ func (r *accumulatingRouter) stream(ctx *schemas.BifrostContext) chan *schemas.B
 		// provider keeps counting into the handle.
 		usage.PromptTokens, usage.CompletionTokens = r.accIn, r.accOut
 		usage.TotalTokens = r.accIn + r.accOut
+		if r.accReasoning > 0 {
+			usage.CompletionTokensDetails = &schemas.ChatCompletionTokensDetails{ReasoningTokens: r.accReasoning}
+		}
 
 		if r.trailer != nil {
 			select {

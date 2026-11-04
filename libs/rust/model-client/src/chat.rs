@@ -210,6 +210,24 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
 }
 
+/// The kind of one engine request for the `auto` policy: the one
+/// classification of `elitea_llm_wire::thinking::classify` over the trailing
+/// tool results (a result that is not JSON is a string result, which reports
+/// no error).
+fn step_kind(messages: &[ChatMessage]) -> elitea_llm_wire::thinking::StepKind {
+    let results: Vec<Value> = messages
+        .iter()
+        .rev()
+        .take_while(|message| matches!(message, ChatMessage::Tool { .. }))
+        .map(|message| match message {
+            ChatMessage::Tool { content, .. } => serde_json::from_str::<Value>(content)
+                .unwrap_or_else(|_| Value::String(content.clone())),
+            _ => Value::Null,
+        })
+        .collect();
+    elitea_llm_wire::thinking::classify(false, results.iter())
+}
+
 impl ChatRequest {
     /// A request with no tools, default sampling and the settings' budget.
     #[must_use]
@@ -310,6 +328,56 @@ impl ChatClient {
         }
     }
 
+    /// Writes the thinking form of one request into its body.
+    fn apply_thinking(&self, fields: &mut serde_json::Map<String, Value>, request: &ChatRequest) {
+        // Only when configured, so a body without it is the parity body.
+        // The form is the model's (ADR-0038: the table in
+        // `elitea_llm_wire::thinking`). With a declared control, `auto` is
+        // the one per-step policy (`thinking::step`, pinned by the caller
+        // contract): on for a first step and after a tool error, off on a
+        // routine step after tool results unless `reasoning_tool_steps`, one
+        // state through a `budget` model's loop, and off on a tool request
+        // of a `reasoning_off_with_tools` model. An undeclared
+        // control never sends the off form for `auto` (an o-series model
+        // refuses `none`), so `auto` there thinks at the default level. A
+        // model that thinks by effort or by budget refuses a sampling
+        // temperature while it thinks, so the temperature is dropped then.
+        let Some(setting) = self.settings.reasoning_effort else {
+            return;
+        };
+        {
+            let control = self
+                .settings
+                .reasoning_control
+                .unwrap_or(crate::settings::ReasoningControl::Effort);
+            let declared = self.settings.reasoning_control.map(|control| {
+                (
+                    control,
+                    elitea_llm_wire::thinking::AutoPolicy {
+                        tool_steps: self.settings.reasoning_tool_steps,
+                        off_with_tools: self.settings.reasoning_off_with_tools,
+                    },
+                )
+            });
+            let step = elitea_llm_wire::thinking::step(
+                Some(setting),
+                declared,
+                elitea_llm_wire::thinking::StepRequest {
+                    kind: step_kind(&request.messages),
+                    has_tools: !request.tools.is_empty(),
+                },
+            )
+            .unwrap_or_else(|| setting.single_call());
+            if control.refuses_temperature(step) {
+                fields.remove("temperature");
+            }
+            elitea_llm_wire::thinking::apply_openai(
+                fields,
+                elitea_llm_wire::thinking::openai_form(control, step),
+            );
+        }
+    }
+
     /// The request body.
     ///
     /// # Errors
@@ -357,16 +425,8 @@ impl ChatClient {
         if stream {
             body["stream_options"] = json!({"include_usage": true});
         }
-        // Only when configured, so a body without it is the parity body. A
-        // reasoning model refuses a sampling temperature (the worker refuses
-        // the pair at configuration), so an effort other than `none` drops it.
-        if let Some(effort) = self.settings.reasoning_effort {
-            body["reasoning_effort"] = json!(effort.as_str());
-            if effort != crate::settings::ReasoningEffort::None
-                && let Some(fields) = body.as_object_mut()
-            {
-                fields.remove("temperature");
-            }
+        if let Some(fields) = body.as_object_mut() {
+            self.apply_thinking(fields, request);
         }
         if !request.tools.is_empty() {
             let mut tools = Vec::with_capacity(request.tools.len());
@@ -847,6 +907,15 @@ mod tests {
         ChatClient::new(transport, settings)
     }
 
+    fn client_with_settings(extra: &Value) -> Result<ModelSettings, EngineError> {
+        let mut block =
+            json!({"api_base": "http://gw/llm/v1", "api_key": "k", "model_name": "qwen3"});
+        if let (Some(block), Some(extra)) = (block.as_object_mut(), extra.as_object()) {
+            block.extend(extra.clone());
+        }
+        ModelSettings::from_llm_settings(&block)
+    }
+
     #[test]
     fn reasoning_effort_is_sent_only_when_configured() {
         let request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
@@ -871,6 +940,130 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(off["reasoning_effort"], "none");
         assert!(off.get("temperature").is_some());
+        // A toggle model (Qwen on vLLM): enable_thinking, never an effort,
+        // and the temperature stays.
+        let toggle_off =
+            client_with(json!({"reasoning_effort": "off", "reasoning_control": "toggle"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert_eq!(toggle_off["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(toggle_off.get("reasoning_effort").is_none());
+        assert!(toggle_off.get("temperature").is_some());
+        let toggle_auto =
+            client_with(json!({"reasoning_effort": "auto", "reasoning_control": "toggle"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert_eq!(toggle_auto["chat_template_kwargs"]["enable_thinking"], true);
+        let fixed =
+            client_with(json!({"reasoning_effort": "high", "reasoning_control": "fixed_on"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert!(fixed.get("reasoning_effort").is_none());
+        assert!(fixed.get("chat_template_kwargs").is_none());
+        assert!(
+            client_with_settings(
+                &json!({"reasoning_effort": "off", "reasoning_control": "fixed_on"})
+            )
+            .is_err(),
+            "a conflicting setting is refused, never dropped"
+        );
+    }
+
+    #[test]
+    fn auto_with_a_declared_control_is_the_per_step_policy() {
+        let first = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        let call = ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCall {
+                id: "c1".to_owned(),
+                name: "get_code".to_owned(),
+                arguments: "{}".to_owned(),
+            }],
+        };
+        let after_tool = ChatRequest::new(vec![
+            ChatMessage::User("q".to_owned()),
+            call.clone(),
+            ChatMessage::Tool {
+                tool_call_id: "c1".to_owned(),
+                content: "fn main() {}".to_owned(),
+            },
+        ]);
+        let after_error = ChatRequest::new(vec![
+            ChatMessage::User("q".to_owned()),
+            call,
+            ChatMessage::Tool {
+                tool_call_id: "c1".to_owned(),
+                content: r#"{"error": "not found"}"#.to_owned(),
+            },
+        ]);
+        let toggle =
+            client_with(json!({"reasoning_effort": "auto", "reasoning_control": "toggle"}));
+        let thinks = |client: &ChatClient, request: &ChatRequest| {
+            client.body(request, false).unwrap_or_default()["chat_template_kwargs"]["enable_thinking"].clone()
+        };
+        assert_eq!(thinks(&toggle, &first), json!(true), "a first step thinks");
+        assert_eq!(
+            thinks(&toggle, &after_tool),
+            json!(false),
+            "a routine tool step does not"
+        );
+        assert_eq!(
+            thinks(&toggle, &after_error),
+            json!(true),
+            "a recovery step thinks"
+        );
+
+        let interleaved = client_with(json!({
+            "reasoning_effort": "auto", "reasoning_control": "toggle", "reasoning_tool_steps": true
+        }));
+        assert_eq!(
+            thinks(&interleaved, &after_tool),
+            json!(true),
+            "tool_steps keeps thinking on"
+        );
+
+        let explicit =
+            client_with(json!({"reasoning_effort": "low", "reasoning_control": "toggle"}));
+        assert_eq!(
+            thinks(&explicit, &after_tool),
+            json!(true),
+            "an explicit level wins"
+        );
+
+        // Undeclared: never the off form for auto, even after a tool result.
+        let undeclared = client_with(json!({"reasoning_effort": "auto"}))
+            .body(&after_tool, false)
+            .unwrap_or_default();
+        assert_eq!(undeclared["reasoning_effort"], "medium");
+        assert!(
+            client_with_settings(&json!({"reasoning_tool_steps": "yes"})).is_err(),
+            "reasoning_tool_steps is a boolean"
+        );
+    }
+
+    /// ADR-0038 (#1574 review): a `reasoning_off_with_tools` model (GPT-5.6
+    /// on chat completions) does not think under auto on a request with
+    /// tools, from its first step; a request without tools still thinks.
+    #[test]
+    fn off_with_tools_turns_auto_off_on_a_tool_request() {
+        let client = client_with(json!({
+            "reasoning_effort": "auto", "reasoning_control": "effort", "reasoning_off_with_tools": true
+        }));
+        let mut with_tools = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        with_tools.tools.push(ToolDefinition {
+            name: "lookup".to_owned(),
+            description: "Looks up.".to_owned(),
+            parameters: json!({"type": "object", "properties": {}}),
+        });
+        let body = client.body(&with_tools, false).unwrap_or_default();
+        assert_eq!(body["reasoning_effort"], "none");
+        let plain = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        let body = client.body(&plain, false).unwrap_or_default();
+        assert_eq!(body["reasoning_effort"], "medium");
+        assert!(
+            client_with_settings(&json!({"reasoning_off_with_tools": 1})).is_err(),
+            "reasoning_off_with_tools is a boolean"
+        );
     }
 
     #[test]

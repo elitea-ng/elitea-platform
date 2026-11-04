@@ -225,6 +225,9 @@ func UserIDFromScopeID(scopeID string) (int, bool) {
 // durable accumulator tier. It is the FSM's Postgres side.
 type Store struct {
 	db DB
+	// reasoning reports whether the ledger has shared migration 0225's
+	// reasoning_tokens column.
+	reasoning ReasoningColumn
 }
 
 // NewStore builds a Store over the given DB seam.
@@ -359,9 +362,8 @@ func (s *Store) PersistOutageDelta(ctx context.Context, d OutageDelta) error {
 	// account for, and the gap would be invisible: the daily chart would simply
 	// be short, with no field saying so.
 	if d.Usage != nil {
-		if _, err := tx.ExecAffected(ctx, usageEventStatement(d),
-			usageEventArgs(d)...,
-		); err != nil {
+		statement, args := usageEventInsert(d, s.reasoningColumn(ctx, d))
+		if _, err := tx.ExecAffected(ctx, statement, args...); err != nil {
 			return fmt.Errorf("failmode: persist outage usage event: %w", err)
 		}
 	}
@@ -439,9 +441,8 @@ func (s *Store) PersistHealthyDelta(ctx context.Context, d OutageDelta) error {
 		}
 	}
 	if d.Usage != nil {
-		if _, err := tx.ExecAffected(ctx, usageEventStatement(d),
-			usageEventArgs(d)...,
-		); err != nil {
+		statement, args := usageEventInsert(d, s.reasoningColumn(ctx, d))
+		if _, err := tx.ExecAffected(ctx, statement, args...); err != nil {
 			return fmt.Errorf("failmode: persist healthy usage event: %w", err)
 		}
 	}
@@ -484,6 +485,43 @@ var meteredUsageEventInsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_even
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric / %d,
 		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12, $13, $14, $15)
 	ON CONFLICT (event_id) DO NOTHING`, NanoUSD)
+
+// usageEventReasoningInsertSQL and meteredUsageEventReasoningInsertSQL are
+// the two ledger inserts with shared migration 0225's reasoning_tokens
+// (ADR-0038 decision 5). They are used only for a row that HAS a reasoning
+// count and only while the column exists (ReasoningColumn), so a gateway that
+// runs ahead of the migration keeps writing every row, and the money in the
+// same transaction never fails on the report.
+var usageEventReasoningInsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
+		(event_id, project_id, user_id, provider, model,
+		 prompt_tokens, completion_tokens, cost_usd, period_start, period_end,
+		 occurred_at, execution_id, reasoning_tokens)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric / %d,
+		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12, $13)
+	ON CONFLICT (event_id) DO NOTHING`, NanoUSD)
+
+var meteredUsageEventReasoningInsertSQL = fmt.Sprintf(`INSERT INTO gateway.llm_usage_events
+		(event_id, project_id, user_id, provider, model,
+		 prompt_tokens, completion_tokens, cost_usd, period_start, period_end,
+		 occurred_at, execution_id, operation, units, unit, reasoning_tokens)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric / %d,
+		to_timestamp($9), to_timestamp($10), to_timestamp($11), $12, $13, $14, $15, $16)
+	ON CONFLICT (event_id) DO NOTHING`, NanoUSD)
+
+// usageEventInsert is the ledger insert for d and its arguments: with the
+// reasoning count when d has one and the column exists, else as before.
+func usageEventInsert(d OutageDelta, reasoningColumn bool) (string, []any) {
+	statement, args := usageEventStatement(d), usageEventArgs(d)
+	if !reasoningColumn || d.Usage.ReasoningTokens <= 0 {
+		return statement, args
+	}
+	if statement == meteredUsageEventInsertSQL {
+		statement = meteredUsageEventReasoningInsertSQL
+	} else {
+		statement = usageEventReasoningInsertSQL
+	}
+	return statement, append(args, d.Usage.ReasoningTokens)
+}
 
 // UsageOperationTool marks a metered tool row (#1238). A model call carries no
 // operation, and the ledger's column default records it as "llm".
@@ -593,6 +631,10 @@ type UsageDimensions struct {
 	Operation string
 	Units     int64
 	Unit      string
+	// ReasoningTokens is the part of CompletionTokens the provider reported
+	// as reasoning (ADR-0038 decision 5): a subset, never an addition. 0 when
+	// none was reported.
+	ReasoningTokens int64
 }
 
 // OutageDelta is a billed increment persisted to the durable tier while NATS is

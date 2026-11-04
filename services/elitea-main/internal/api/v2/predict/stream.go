@@ -61,16 +61,9 @@ type streamChunk struct {
 
 // CompleteStream performs one streamed chat completion through the gateway.
 func (c *GatewayCompleter) CompleteStream(ctx context.Context, req CompletionRequest, onDelta func(string) error) (string, error) {
-	raw, err := json.Marshal(chatCompletionsRequest{
-		Model:           req.Model,
-		Messages:        req.Messages,
-		Temperature:     req.Temperature,
-		MaxTokens:       req.MaxTokens,
-		ReasoningEffort: req.ReasoningEffort,
-		Stream:          true,
-	})
+	raw, err := encodeChatCompletions(req, true)
 	if err != nil {
-		return "", fmt.Errorf("predict: encode request: %w", err)
+		return "", err
 	}
 	attributionID := ""
 	if ValidAttributionID(req.AttributionID) {

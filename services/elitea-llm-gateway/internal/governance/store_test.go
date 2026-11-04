@@ -1202,3 +1202,23 @@ func TestUpdateUsage_PublishesMeteredDimensionsOnlyForToolRows(t *testing.T) {
 		}
 	}
 }
+
+// ADR-0038 decision 5: the reasoning count travels under the scheduler's key
+// name, and is absent when zero so an older consumer reads what it read.
+func TestUsageDimsForCarriesReasoningTokens(t *testing.T) {
+	encoded, err := json.Marshal(usageDimsFor(&failmode.UsageDimensions{CompletionTokens: 900, ReasoningTokens: 412}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw["reasoning_tokens"]) != "412" {
+		t.Fatalf("payload %s, want reasoning_tokens 412", encoded)
+	}
+	encoded, _ = json.Marshal(usageDimsFor(&failmode.UsageDimensions{CompletionTokens: 900}))
+	if strings.Contains(string(encoded), "reasoning_tokens") {
+		t.Fatalf("a zero count must be absent: %s", encoded)
+	}
+}

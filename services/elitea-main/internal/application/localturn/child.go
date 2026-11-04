@@ -66,6 +66,9 @@ type ChildUsage struct {
 	LLMCalls         int64
 	PromptTokens     int64
 	CompletionTokens int64
+	// ReasoningTokens is the part of CompletionTokens the providers reported
+	// as reasoning (ADR-0038 decision 5).
+	ReasoningTokens int64
 }
 
 // ChildTurnState is what one read of a child turn sees: the response message

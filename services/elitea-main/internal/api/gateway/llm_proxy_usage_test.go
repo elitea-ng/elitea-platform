@@ -49,7 +49,7 @@ func scanning(values ...any) func(...any) error {
 // totals beside it, with no explanation on the screen.
 func TestAProjectWithNoNameRendersAsItsID(t *testing.T) {
 	slice, err := scanUsageProject(scanning(
-		int64(42), "", int64(3), int64(10), int64(5), int64(15), 1.25,
+		int64(42), "", int64(3), int64(10), int64(5), int64(15), 1.25, int64(0),
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -59,7 +59,7 @@ func TestAProjectWithNoNameRendersAsItsID(t *testing.T) {
 	}
 
 	named, err := scanUsageProject(scanning(
-		int64(42), "Acme", int64(3), int64(10), int64(5), int64(15), 1.25,
+		int64(42), "Acme", int64(3), int64(10), int64(5), int64(15), 1.25, int64(0),
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -76,7 +76,7 @@ func TestAProjectWithNoNameRendersAsItsID(t *testing.T) {
 // where neither resolved.
 func TestAMemberWithNoNameRendersAsItsID(t *testing.T) {
 	slice, err := scanUsageMember(scanning(
-		int64(7), "", int64(1), int64(2), int64(3), int64(5), 0.5,
+		int64(7), "", int64(1), int64(2), int64(3), int64(5), 0.5, int64(0),
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -92,7 +92,7 @@ func TestAMemberWithNoNameRendersAsItsID(t *testing.T) {
 // it.
 func TestAModelSliceKeepsItsProviderSeparate(t *testing.T) {
 	slice, err := scanUsageModel(scanning(
-		"openai", "gpt-4o", int64(9), int64(100), int64(50), int64(150), 2.5, "llm", int64(0), "",
+		"openai", "gpt-4o", int64(9), int64(100), int64(50), int64(150), 2.5, "llm", int64(0), "", int64(0),
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -110,7 +110,7 @@ func TestAModelSliceKeepsItsProviderSeparate(t *testing.T) {
 // and whose model is the operation, labelled as a tool and carrying units.
 func TestUsageModelsIncludeToolRowsWithOperation(t *testing.T) {
 	slice, err := scanUsageModel(scanning(
-		"tavily", "web_search", int64(1), int64(0), int64(0), int64(0), 0.008, "tool", int64(1), "credit",
+		"tavily", "web_search", int64(1), int64(0), int64(0), int64(0), 0.008, "tool", int64(1), "credit", int64(0),
 	))
 	if err != nil {
 		t.Fatalf("scan: %v", err)
@@ -121,6 +121,51 @@ func TestUsageModelsIncludeToolRowsWithOperation(t *testing.T) {
 	}
 	if !strings.Contains(usageModelsSQL, "GROUP BY provider, model, operation, unit") {
 		t.Error("the model table does not group on the operation, so a tool row could merge into a model row")
+	}
+}
+
+// TestUsageSlicesCarryReasoningTokensApart pins ADR-0038 decision 5 on the
+// platform report: every breakdown row reads the reasoning count into its own
+// field, and every statement sums the ledger column. The count is a part of
+// completion_tokens, so it never changes the total.
+func TestUsageSlicesCarryReasoningTokensApart(t *testing.T) {
+	model, err := scanUsageModel(scanning(
+		"openai", "gpt-5.1", int64(2), int64(100), int64(80), int64(180), 1.5, "llm", int64(0), "", int64(60),
+	))
+	if err != nil {
+		t.Fatalf("scan model: %v", err)
+	}
+	project, err := scanUsageProject(scanning(
+		int64(42), "Acme", int64(2), int64(100), int64(80), int64(180), 1.5, int64(60),
+	))
+	if err != nil {
+		t.Fatalf("scan project: %v", err)
+	}
+	member, err := scanUsageMember(scanning(
+		int64(7), "Ann", int64(2), int64(100), int64(80), int64(180), 1.5, int64(60),
+	))
+	if err != nil {
+		t.Fatalf("scan member: %v", err)
+	}
+	for name, slice := range map[string]UsageSlice{"model": model, "project": project, "member": member} {
+		if slice.ReasoningTokens != 60 || slice.CompletionTokens != 80 || slice.TotalTokens != 180 {
+			t.Errorf("%s slice = %+v, want reasoning 60 apart from completion 80 and total 180", name, slice)
+		}
+	}
+	encoded, err := json.Marshal(model)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"reasoning_tokens":60`) {
+		t.Errorf("encoded slice %s has no reasoning_tokens", encoded)
+	}
+	for name, statement := range map[string]string{
+		"totals": usageTotalsSQL, "daily": usageDailySQL, "models": usageModelsSQL,
+		"projects": usageProjectsSQL, "members": usageMembersSQL,
+	} {
+		if !strings.Contains(statement, "reasoning_tokens), 0)") {
+			t.Errorf("the %s statement does not sum reasoning_tokens", name)
+		}
 	}
 }
 

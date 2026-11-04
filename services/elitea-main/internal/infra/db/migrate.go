@@ -76,6 +76,12 @@ const requestLogMigrationPath = "shared/0099_gateway_request_logs.sql"
 // skipped when elitea_runtime is absent (a gateway-only schema).
 const meteredOperationsMigrationPath = "shared/0174_gateway_metered_operations.sql"
 
+// reasoningTokensMigrationPath is the SIXTH file of the gateway schema
+// (ADR-0038 decision 5): the reasoning_tokens columns of the usage ledger and
+// the request log, which the budget Usage read selects. It also creates the
+// model reasoning defaults table, under a guarded CREATE SCHEMA.
+const reasoningTokensMigrationPath = "shared/0225_model_reasoning_control.sql"
+
 // tokenBindingMigrationPath is the access-token project binding (ADR-0018,
 // spec-llm-project-scope §3), inside the LEDGERED corpus.
 //
@@ -191,7 +197,7 @@ func ledgeredMigrationSQL(path string) (string, error) {
 // a hand-copied DDL and then fail against production. Runtime code must call
 // RunMigrations instead — this returns SQL, it does not run it.
 //
-// It returns ALL FOUR files that make up that schema, in ledger order. Every
+// It returns ALL the files that make up that schema, in ledger order. Every
 // caller wants "the gateway tables", not "one particular migration", so a
 // caller that had to know the other files existed would be a caller that
 // eventually forgets: the usage-ledger table added by 0084 is written on the
@@ -220,11 +226,15 @@ func GatewayMigrationSQL() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	reasoning, err := ledgeredMigrationSQL(reasoningTokensMigrationPath)
+	if err != nil {
+		return "", err
+	}
 	// A newline between them: the ledgered runner executes each file separately,
 	// and concatenating without a separator would splice the last statement of
 	// one onto the first of the next. 0086 comes last because it ALTERs the
 	// table 0067 creates.
-	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog + "\n" + metered, nil
+	return base + "\n" + dimensions + "\n" + audio + "\n" + requestLog + "\n" + metered + "\n" + reasoning, nil
 }
 
 // TokenBindingMigrationSQL returns the token project binding migration as SQL,

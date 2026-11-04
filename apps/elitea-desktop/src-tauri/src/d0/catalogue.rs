@@ -111,6 +111,30 @@ impl Catalogue {
     }
 }
 
+/// The catalogue's thinking data for `model` (ADR-0038 decision 3): its
+/// `reasoning_control`, `reasoning_tool_steps` and
+/// `reasoning_off_with_tools`. `None` when the row
+/// declares no control form, or one this build does not know: the request
+/// then keeps the `reasoning_effort` form and `auto` never switches thinking
+/// off by itself (`elitea_agent_runtime::thinking::step`).
+#[must_use]
+pub fn model_reasoning(
+    model: Option<&CatalogueModel>,
+) -> Option<elitea_agent_runtime::request::ModelReasoning> {
+    let row = &model?.row;
+    let control = row.get("reasoning_control")?.as_str()?;
+    let tool_steps = row
+        .get("reasoning_tool_steps")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let off_with_tools = row
+        .get("reasoning_off_with_tools")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    elitea_agent_runtime::request::ModelReasoning::parse(control, tool_steps)
+        .map(|reasoning| reasoning.with_off_with_tools(off_with_tools))
+}
+
 /// How a model's reasoning is replayed in a later request's history.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ReasoningReplay {
@@ -275,6 +299,30 @@ pub async fn read(api: &PlatformApi, kept: &Catalogues, project_id: i64) -> Opti
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_reasoning_control_is_read_from_the_row() {
+        let catalogue = Catalogue::from_body(
+            &json!({"items": [
+                {"name": "qwen", "project_id": 1, "reasoning_control": "toggle"},
+                {"name": "claude", "project_id": 1, "reasoning_control": "budget", "reasoning_tool_steps": true},
+                {"name": "newer", "project_id": 1, "reasoning_control": "adaptive"},
+                {"name": "plain", "project_id": 1}
+            ]}),
+            1,
+        );
+        let qwen = model_reasoning(catalogue.find("qwen")).expect("toggle");
+        assert_eq!(qwen.control.as_str(), "toggle");
+        assert!(!qwen.tool_steps);
+        assert!(
+            model_reasoning(catalogue.find("claude"))
+                .expect("budget")
+                .tool_steps
+        );
+        assert_eq!(model_reasoning(catalogue.find("newer")), None);
+        assert_eq!(model_reasoning(catalogue.find("plain")), None);
+        assert_eq!(model_reasoning(None), None);
+    }
 
     #[test]
     fn the_projects_own_model_comes_first_and_only_chat_models_count() {

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
@@ -296,6 +297,12 @@ func currentAdhocSnapshot(
 	if model, _ := base["model_name"].(string); model == "" {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
+	// A chat with no agent thinks by the auto policy unless the chat chose a
+	// setting (ADR-0038 decision 1). Model resolution removes the value for a
+	// model that does not reason, as it removes any other setting there.
+	if _, chosen := base["reasoning_effort"]; !chosen {
+		base["reasoning_effort"] = configurationapp.ReasoningEffortAuto
+	}
 	var tools []any
 	if err := decodeCurrentJSON(target.Tools, &tools); err != nil {
 		return nil, err
@@ -356,10 +363,16 @@ func currentAdhocLLMSettings(source json.RawMessage) (map[string]any, error) {
 			result[key] = number
 		case "reasoning_effort":
 			effort, ok := value.(string)
-			if !ok || (effort != "low" && effort != "medium" && effort != "high" && effort != "none") {
+			if !ok {
 				return nil, ErrUnsupportedCurrentAgentStart
 			}
-			result[key] = effort
+			// ADR-0038 decision 1: auto, off, low, medium or high; the
+			// stored none reads as off.
+			canonical, known := configurationapp.CanonicalReasoningEffort(effort)
+			if !known {
+				return nil, ErrUnsupportedCurrentAgentStart
+			}
+			result[key] = canonical
 		}
 	}
 	return result, nil
@@ -435,6 +448,10 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	modelReasoning, err := currentFrozenModelReasoning(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	summaryModel, err := currentFrozenSummaryModel(snapshot)
 	if err != nil {
 		return nil, err
@@ -446,6 +463,7 @@ func currentAdhocInput(
 		SchemaRevision:     "elitea.runtime.agent-execution-input.v1",
 		ProjectContext:     projectContext,
 		ModelContextLimits: modelContextLimits,
+		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
 		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
 		ThreadId: &threadID, Tools: toolsJSON, Application: application,

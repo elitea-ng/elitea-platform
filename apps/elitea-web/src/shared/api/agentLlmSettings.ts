@@ -74,20 +74,24 @@ export interface AgentLlmSettings {
    */
   readonly temperature?: number | undefined;
   /**
-   * The reasoning budget, for a model that reasons. Only the four strings
+   * The reasoning setting, for a model that reasons. Only the strings
    * `assembly.rs`'s `parse_reasoning_effort` accepts are modelled — anything
    * else is `invalid_profile` at the worker, so an unrecognised stored value
    * is dropped on read rather than carried into the next save.
    *
-   * `'none'` is the one value that may coexist with `temperature`: the
-   * worker refuses the pair only when the effort is a real one
-   * (`temperature.is_some() && reasoning_effort.is_some_and(|e| e != None)`).
+   * `'auto'` and `'off'` are the canonical values of ADR-0038 decision 1
+   * (`'none'` is the older spelling of `'off'`). The server gives a new agent
+   * `'auto'`, so dropping it here would erase it on the next save. The slider
+   * still offers only the three levels (#1452).
+   *
+   * `'off'` and `'none'` are the values that may coexist with `temperature`:
+   * the worker refuses the pair only when the setting thinks.
    */
   readonly reasoning_effort?: AgentReasoningEffort | undefined;
 }
 
 /** Exactly the strings `parse_reasoning_effort` accepts (`assembly.rs`); anything else is `invalid_profile`. */
-const AGENT_REASONING_EFFORTS = ['none', 'low', 'medium', 'high'] as const;
+const AGENT_REASONING_EFFORTS = ['auto', 'off', 'none', 'low', 'medium', 'high'] as const;
 
 export type AgentReasoningEffort = (typeof AGENT_REASONING_EFFORTS)[number];
 
@@ -114,7 +118,7 @@ export function selectEffortAndTemperature(
   temperature: number | undefined,
   effort: AgentReasoningEffort | undefined,
 ): { temperature?: number; reasoning_effort?: AgentReasoningEffort } {
-  if (effort !== undefined && effort !== 'none') return { reasoning_effort: effort };
+  if (effort !== undefined && effort !== 'none' && effort !== 'off') return { reasoning_effort: effort };
   return {
     ...(effort === undefined ? {} : { reasoning_effort: effort }),
     ...(temperature === undefined ? {} : { temperature }),

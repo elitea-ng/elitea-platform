@@ -1773,7 +1773,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			inventorySources, err = v2inventory.NewSources(
 				inventoryToolkits, inventorySourceSettings,
-				inventoryMinter,
+				// ADR-0038: the engine's model client takes the model's
+				// reasoning control from the catalogue, so `auto` is a
+				// per-step policy there.
+				material.WithModelReasoning(inventoryMinter,
+					engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID)),
 				// What investigate's bearer was minted for: the record the
 				// test_tool source-tool gate reads (shared/0159).
 				inventoryGrants, inventorySourcesConfig)
@@ -1861,6 +1865,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if minterErr != nil {
 			return fmt.Errorf("compose DeepWiki callback token minter: %w", minterErr)
 		}
+		// ADR-0038: every DeepWiki rewrite settles the model's reasoning
+		// control from the catalogue, so `auto` is a per-step policy there.
+		deepwikiMinter = material.WithModelReasoning(deepwikiMinter,
+			engineModelReasoning(currentConfigurationsRoot, currentConfigurationsConfig.PublicProjectID))
 
 		// Registered before the route is built, for the reason the Inventory
 		// facade gives above: the gate needs the provider's own name, and
@@ -3753,4 +3761,15 @@ func introspectionTokenValidator(formGraph *authcomposition.FormGraph, sessionTo
 		return sessionTokens
 	}
 	return nil
+}
+
+// engineModelReasoning is the catalogue reader the DeepWiki and Inventory
+// rewrites settle the model's reasoning control with (ADR-0038). It is a nil
+// INTERFACE when the configurations runtime is not composed, so the rewrites
+// keep the block as before rather than calling a nil catalogue.
+func engineModelReasoning(root *runtimecomposition.CurrentConfigurationsRuntime, publicProjectID int32) material.ModelReasoning {
+	if root == nil {
+		return nil
+	}
+	return material.CatalogueReasoning{Models: root.ModelCatalog(), PublicProjectID: publicProjectID}
 }

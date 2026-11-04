@@ -150,6 +150,7 @@ impl ChatModelBinder for ModelFacade {
             system_instruction: request.system_instruction.to_owned(),
             max_tokens: request.max_tokens,
             reasoning_effort: None,
+            reasoning: None,
             temperature: request.temperature,
             max_model_turns: 1,
             run_caps: None,

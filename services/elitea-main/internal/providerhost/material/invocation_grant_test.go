@@ -115,7 +115,7 @@ func TestServeNamesTheInvokedToolForTheGrant(t *testing.T) {
 	}
 	invocation := material.Invocation{
 		Provider: "DeepWiki",
-		Rewrite:  material.CallbackOnly("deepwiki", minter, material.PlatformRouteBase, time.Hour),
+		Rewrite:  material.CallbackOnly("deepwiki", minter, nil, material.PlatformRouteBase, time.Hour),
 		Forward: func(w http.ResponseWriter, _ *http.Request, _, _, _ string) {
 			w.WriteHeader(http.StatusAccepted)
 		},

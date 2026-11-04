@@ -32,7 +32,10 @@ pub(crate) enum ReasoningEffort {
     Low,
     Medium,
     High,
+    /// `off` (`none` on the wire before ADR-0038).
     None,
+    /// The runtime decides per step (ADR-0038 decision 4).
+    Auto,
 }
 
 /// Provider dialect selected by the authoritative frozen Main input.
@@ -52,6 +55,8 @@ pub(crate) struct OrdinaryNoToolProfile {
     model_project_id: u32,
     max_tokens: Option<u32>,
     reasoning_effort: Option<ReasoningEffort>,
+    /// The model's thinking control from the catalogue (ADR-0038).
+    model_reasoning: Option<super::request::ModelReasoning>,
     temperature: Option<f32>,
     step_limit: u32,
     chat_history: Vec<Content>,
@@ -89,6 +94,9 @@ pub(crate) struct SummaryModelProfile {
     pub(crate) max_tokens: u32,
     pub(crate) temperature: Option<f32>,
     pub(crate) context_budget: super::context_budget::RequestContextBudget,
+    /// The summary model's thinking control: a summary call thinks off
+    /// where the model can be switched.
+    pub(crate) model_reasoning: Option<super::request::ModelReasoning>,
 }
 
 impl SummaryModelProfile {
@@ -116,6 +124,7 @@ impl SummaryModelProfile {
             None,
             "",
         )?;
+        check_temperature(&model, snapshot.model_reasoning)?;
         let max_tokens = model.max_tokens.ok_or_else(invalid_profile)?;
         if max_tokens > snapshot.model_context_limits.max_output_tokens {
             return Err(invalid_profile());
@@ -133,6 +142,7 @@ impl SummaryModelProfile {
             max_tokens,
             temperature: model.temperature,
             context_budget,
+            model_reasoning: snapshot.model_reasoning,
         })
     }
 }
@@ -232,6 +242,7 @@ impl OrdinaryNoToolProfile {
             return Err(unsupported_profile());
         }
         let model = application_model_for_agent_type(request, "pipeline")?;
+        check_temperature(&model, request.payload.model_reasoning)?;
         let internal_tools = application_internal_tools(request)?;
         Ok(Self {
             summary_model: request
@@ -255,6 +266,7 @@ impl OrdinaryNoToolProfile {
             model_project_id: model.model_project_id,
             max_tokens: model.max_tokens,
             reasoning_effort: model.reasoning_effort,
+            model_reasoning: request.payload.model_reasoning,
             temperature: model.temperature,
             step_limit: validate_step_limit(request.payload.steps_limit)?,
             chat_history: common.chat_history,
@@ -278,6 +290,7 @@ impl OrdinaryNoToolProfile {
             AgentExecutionKind::Application => application_model(request)?,
             AgentExecutionKind::Adhoc => adhoc_model(request)?,
         };
+        check_temperature(&model, request.payload.model_reasoning)?;
         let internal_tools = match request.kind {
             AgentExecutionKind::Application => application_internal_tools(request)?,
             AgentExecutionKind::Adhoc => {
@@ -307,6 +320,7 @@ impl OrdinaryNoToolProfile {
             model_project_id: model.model_project_id,
             max_tokens: model.max_tokens,
             reasoning_effort: model.reasoning_effort,
+            model_reasoning: request.payload.model_reasoning,
             temperature: model.temperature,
             step_limit: validate_step_limit(request.payload.steps_limit)?,
             chat_history: common.chat_history,
@@ -371,31 +385,9 @@ impl OrdinaryNoToolProfile {
         } else {
             instructions.to_owned()
         };
-        let instructions = rendered.as_str();
-        let model = match version.get("llm_settings") {
-            None | Some(Value::Null) => ValidatedModel {
-                instructions: instructions.to_owned(),
-                model_name: fallback.model_name.clone(),
-                model_provider: fallback.model_provider,
-                model_project_id: fallback.model_project_id,
-                max_tokens: fallback.max_tokens,
-                reasoning_effort: fallback.reasoning_effort,
-                temperature: fallback.temperature,
-            },
-            Some(Value::Object(settings)) if settings.is_empty() => ValidatedModel {
-                instructions: instructions.to_owned(),
-                model_name: fallback.model_name.clone(),
-                model_provider: fallback.model_provider,
-                model_project_id: fallback.model_project_id,
-                max_tokens: fallback.max_tokens,
-                reasoning_effort: fallback.reasoning_effort,
-                temperature: fallback.temperature,
-            },
-            Some(Value::Object(settings)) => {
-                validate_model(settings, ModelFieldNames::APPLICATION, None, instructions)?
-            }
-            Some(_) => return Err(invalid_profile()),
-        };
+        let model = nested_model(version, fallback, rendered.as_str())?;
+        let model_reasoning = nested_model_reasoning(version, fallback, &model)?;
+        check_temperature(&model, model_reasoning)?;
         Ok(Self {
             summary_model: fallback.summary_model.clone(),
             context_budget: {
@@ -428,6 +420,7 @@ impl OrdinaryNoToolProfile {
             model_project_id: model.model_project_id,
             max_tokens: model.max_tokens,
             reasoning_effort: model.reasoning_effort,
+            model_reasoning,
             temperature: model.temperature,
             step_limit: fallback.step_limit,
             chat_history: Vec::new(),
@@ -537,6 +530,11 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) const fn reasoning_effort(&self) -> Option<ReasoningEffort> {
         self.reasoning_effort
+    }
+
+    #[must_use]
+    pub(crate) const fn model_reasoning(&self) -> Option<super::request::ModelReasoning> {
+        self.model_reasoning
     }
 
     #[must_use]
@@ -1200,6 +1198,49 @@ struct ValidatedModel {
     temperature: Option<f32>,
 }
 
+/// A nested version's model: its own `llm_settings`, or the parent's model
+/// when it declares none (absent, null or an empty object).
+fn nested_model(
+    version: &Map<String, Value>,
+    fallback: &OrdinaryNoToolProfile,
+    instructions: &str,
+) -> Result<ValidatedModel, NativeAgentAssemblyError> {
+    match version.get("llm_settings") {
+        Some(Value::Object(settings)) if !settings.is_empty() => {
+            validate_model(settings, ModelFieldNames::APPLICATION, None, instructions)
+        }
+        None | Some(Value::Null | Value::Object(_)) => Ok(ValidatedModel {
+            instructions: instructions.to_owned(),
+            model_name: fallback.model_name.clone(),
+            model_provider: fallback.model_provider,
+            model_project_id: fallback.model_project_id,
+            max_tokens: fallback.max_tokens,
+            reasoning_effort: fallback.reasoning_effort,
+            temperature: fallback.temperature,
+        }),
+        Some(_) => Err(invalid_profile()),
+    }
+}
+
+/// The nested version's own thinking control when Main froze one; else the
+/// parent's, when the child runs on the parent's model.
+fn nested_model_reasoning(
+    version: &Map<String, Value>,
+    fallback: &OrdinaryNoToolProfile,
+    model: &ValidatedModel,
+) -> Result<Option<super::request::ModelReasoning>, NativeAgentAssemblyError> {
+    match version.get("model_reasoning") {
+        None | Some(Value::Null) => {
+            let same_model = model.model_name == fallback.model_name
+                && model.model_project_id == fallback.model_project_id;
+            Ok(fallback.model_reasoning.filter(|_| same_model))
+        }
+        Some(value) => super::request::ModelReasoning::from_json(value)
+            .map(Some)
+            .ok_or_else(invalid_profile),
+    }
+}
+
 fn validate_model(
     settings: &Map<String, Value>,
     names: ModelFieldNames,
@@ -1245,11 +1286,6 @@ fn validate_model(
         .filter(|value| !value.is_null())
         .map(parse_temperature)
         .transpose()?;
-    if temperature.is_some()
-        && reasoning_effort.is_some_and(|effort| effort != ReasoningEffort::None)
-    {
-        return Err(invalid_profile());
-    }
     let model_provider = if compatible || !anthropic_model_name(&model_name) {
         OrdinaryModelProvider::OpenAiChat
     } else {
@@ -1264,6 +1300,31 @@ fn validate_model(
         reasoning_effort,
         temperature,
     })
+}
+
+/// A temperature beside a setting that can think is refused on a model that
+/// thinks by effort or by budget (an undeclared control is one of these):
+/// the provider refuses the pair. A `toggle` model takes both, and a fixed
+/// kind sends no thinking form (ADR-0038).
+fn check_temperature(
+    model: &ValidatedModel,
+    reasoning: Option<super::request::ModelReasoning>,
+) -> Result<(), NativeAgentAssemblyError> {
+    let conflicts = model.temperature.is_some()
+        && model
+            .reasoning_effort
+            .is_some_and(|effort| effort != ReasoningEffort::None)
+        && reasoning.is_none_or(|reasoning| {
+            matches!(
+                reasoning.control,
+                elitea_agent_runtime::thinking::ReasoningControl::Effort
+                    | elitea_agent_runtime::thinking::ReasoningControl::Budget
+            )
+        });
+    if conflicts {
+        return Err(invalid_profile());
+    }
+    Ok(())
 }
 
 fn anthropic_model_name(model_name: &str) -> bool {
@@ -1287,13 +1348,16 @@ fn normalized_max_tokens(value: Option<&Value>) -> Result<Option<u32>, NativeAge
     }
 }
 
+/// The canonical setting (ADR-0038 decision 1); `none` is `off`.
 fn parse_reasoning_effort(value: &Value) -> Result<ReasoningEffort, NativeAgentAssemblyError> {
-    match value.as_str() {
-        Some("low") => Ok(ReasoningEffort::Low),
-        Some("medium") => Ok(ReasoningEffort::Medium),
-        Some("high") => Ok(ReasoningEffort::High),
-        Some("none") => Ok(ReasoningEffort::None),
-        _ => Err(invalid_profile()),
+    use elitea_agent_runtime::thinking::Thinking;
+    match value.as_str().and_then(Thinking::parse) {
+        Some(Thinking::Low) => Ok(ReasoningEffort::Low),
+        Some(Thinking::Medium) => Ok(ReasoningEffort::Medium),
+        Some(Thinking::High) => Ok(ReasoningEffort::High),
+        Some(Thinking::Off) => Ok(ReasoningEffort::None),
+        Some(Thinking::Auto) => Ok(ReasoningEffort::Auto),
+        None => Err(invalid_profile()),
     }
 }
 

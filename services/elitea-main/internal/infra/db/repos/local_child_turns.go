@@ -368,10 +368,11 @@ SELECT step.tool_name, step.is_error
 func (r *LocalChildTurnsRepo) childUsage(ctx context.Context, projectID int64, executionIDs ...string) *localturn.ChildUsage {
 	var usage localturn.ChildUsage
 	if err := r.pool.QueryRow(ctx, `
-SELECT count(*)::bigint, COALESCE(sum(prompt_tokens), 0)::bigint, COALESCE(sum(completion_tokens), 0)::bigint
+SELECT count(*)::bigint, COALESCE(sum(prompt_tokens), 0)::bigint, COALESCE(sum(completion_tokens), 0)::bigint,
+       COALESCE(sum(reasoning_tokens), 0)::bigint
   FROM gateway.llm_request_logs
  WHERE project_id = $1 AND execution_id = ANY($2::text[])`, projectID, executionIDs,
-	).Scan(&usage.LLMCalls, &usage.PromptTokens, &usage.CompletionTokens); err != nil {
+	).Scan(&usage.LLMCalls, &usage.PromptTokens, &usage.CompletionTokens, &usage.ReasoningTokens); err != nil {
 		if ctx.Err() == nil {
 			slog.DebugContext(ctx, "local child turn: usage not readable", "err", err)
 		}

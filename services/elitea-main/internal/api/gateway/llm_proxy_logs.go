@@ -78,6 +78,10 @@ type RequestLogRow struct {
 	ErrorCode        string `json:"error_code"`
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
+	// ReasoningTokens is the part of CompletionTokens the provider reported
+	// as reasoning (ADR-0038 decision 5, shared migration 0225); 0 when it
+	// reported none.
+	ReasoningTokens int64 `json:"reasoning_tokens"`
 }
 
 // logFilters is one request's narrowing, already validated.
@@ -99,7 +103,7 @@ type logFilters struct {
 const listLogsSQL = `
 	SELECT id::text, occurred_at, project_id, user_id, route, method, status,
 	       duration_ms, provider, model, streaming, error_code,
-	       prompt_tokens, completion_tokens
+	       prompt_tokens, completion_tokens, reasoning_tokens
 	  FROM gateway.llm_request_logs
 	 WHERE occurred_at >= now() - $1::interval
 	   AND ($2::bigint IS NULL OR project_id = $2::bigint)
@@ -256,7 +260,7 @@ func (h *LLMProxyHandler) queryLogs(ctx context.Context, filters logFilters) ([]
 		if scanErr := rows.Scan(&row.ID, &occurredAt, &row.ProjectID, &row.UserID,
 			&row.Route, &row.Method, &row.Status, &row.DurationMS, &row.Provider,
 			&row.Model, &row.Streaming, &row.ErrorCode,
-			&row.PromptTokens, &row.CompletionTokens); scanErr != nil {
+			&row.PromptTokens, &row.CompletionTokens, &row.ReasoningTokens); scanErr != nil {
 			return nil, fmt.Errorf("read the request log: %w", scanErr)
 		}
 		row.OccurredAt = occurredAt.UTC().Format(time.RFC3339)

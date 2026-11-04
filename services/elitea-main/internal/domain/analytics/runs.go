@@ -44,8 +44,14 @@ type UsageFigures struct {
 	LLMCalls         int64 `json:"llm_calls"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
-	Errors           int64 `json:"errors"`
+	// ReasoningTokens are the completion tokens the providers reported as
+	// reasoning (ADR-0038 decision 5, shared migration 0225). They are a
+	// PART of CompletionTokens, reported apart so the effect of the thinking
+	// setting can be seen; they are not added to TotalTokens again. A call
+	// whose provider reports no count adds 0.
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	TotalTokens     int64 `json:"total_tokens"`
+	Errors          int64 `json:"errors"`
 	// AvgDurationMS is the mean gateway latency of the calls.
 	AvgDurationMS float64 `json:"avg_duration_ms"`
 	// UnpricedCalls is how many calls the catalogue does not price. A large

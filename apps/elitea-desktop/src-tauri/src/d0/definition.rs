@@ -72,25 +72,31 @@ pub struct ModelChoice {
 /// The state key of a thread's model choice in its session (#1212 store).
 pub const MODEL_CHOICE_KEY: &str = "elitea.model.v1";
 
-/// A reasoning effort's wire name.
+/// A reasoning effort's wire name: the canonical setting of ADR-0038
+/// decision 1, so no thinking is `off` (an older build wrote `none`, which
+/// [`parse_effort`] still reads as `off`).
 #[must_use]
 pub const fn effort_name(effort: ReasoningEffort) -> &'static str {
     match effort {
         ReasoningEffort::Low => "low",
         ReasoningEffort::Medium => "medium",
         ReasoningEffort::High => "high",
-        ReasoningEffort::None => "none",
+        ReasoningEffort::None => "off",
+        ReasoningEffort::Auto => "auto",
     }
 }
 
-/// A reasoning effort from its wire name.
+/// A reasoning effort from its wire name: the canonical setting of ADR-0038
+/// decision 1 (`auto`, `off`, `low`, `medium`, `high`) or the `none` an older
+/// agent stores, which is `off`.
 #[must_use]
 pub fn parse_effort(name: &str) -> Option<ReasoningEffort> {
     match name {
+        "auto" => Some(ReasoningEffort::Auto),
         "low" => Some(ReasoningEffort::Low),
         "medium" => Some(ReasoningEffort::Medium),
         "high" => Some(ReasoningEffort::High),
-        "none" => Some(ReasoningEffort::None),
+        "off" | "none" => Some(ReasoningEffort::None),
         _ => None,
     }
 }
@@ -101,7 +107,7 @@ impl ModelChoice {
     /// # Errors
     ///
     /// `invalid_request`: a name no gateway header could carry, or an
-    /// effort other than `none`, `low`, `medium`, `high`.
+    /// effort other than `auto`, `off` (or `none`), `low`, `medium`, `high`.
     pub fn parse(name: &str, reasoning_effort: Option<&str>) -> Result<Self, Refusal> {
         if !elitea_llm_wire::headers::bounded_header_text(name, 256) {
             return Err(Refusal::new(
@@ -114,7 +120,7 @@ impl ModelChoice {
             Some(effort) => Some(parse_effort(effort).ok_or_else(|| {
                 Refusal::new(
                     "invalid_request",
-                    "The reasoning effort must be none, low, medium or high.",
+                    "The reasoning effort must be auto, off, low, medium or high.",
                 )
             })?),
         };
@@ -682,6 +688,38 @@ mod tests {
             "all_tools": all, "selected_tools": selected,
             "toolkit_ref": {"toolkit_id": 3, "project_id": 1, "ref": "tkr1_0123456789abcdef0123456789abcdef"}
         })
+    }
+
+    /// ADR-0038 decision 1: auto and off are read, never dropped in
+    /// silence; the stored none is off.
+    #[test]
+    fn the_canonical_thinking_values_are_read() {
+        assert_eq!(parse_effort("auto"), Some(ReasoningEffort::Auto));
+        assert_eq!(parse_effort("off"), Some(ReasoningEffort::None));
+        assert_eq!(parse_effort("none"), Some(ReasoningEffort::None));
+        assert_eq!(parse_effort("minimal"), None);
+        let choice = ModelChoice::parse("gpt-x", Some("auto")).expect("auto is a choice");
+        assert_eq!(choice.reasoning_effort, Some(ReasoningEffort::Auto));
+        assert_eq!(
+            ModelChoice::from_state(&choice.to_state()),
+            Some(choice),
+            "a kept auto choice reads back"
+        );
+        assert!(ModelChoice::parse("gpt-x", Some("off")).is_ok());
+    }
+
+    /// The host names no thinking `off`, the canonical value, in a running
+    /// event and in the kept choice; a choice an older build kept as `none`
+    /// reads back as `off`.
+    #[test]
+    fn no_thinking_is_named_off_and_a_kept_none_reads_as_off() {
+        assert_eq!(effort_name(ReasoningEffort::None), "off");
+        let off = ModelChoice::parse("gpt-x", Some("off")).expect("off is a choice");
+        assert_eq!(off.to_state()["reasoning_effort"], "off");
+        let kept = json!({"name": "gpt-x", "reasoning_effort": "none"});
+        let read = ModelChoice::from_state(&kept).expect("a kept none reads");
+        assert_eq!(read.reasoning_effort, Some(ReasoningEffort::None));
+        assert_eq!(read.to_state()["reasoning_effort"], "off");
     }
 
     #[test]

@@ -188,6 +188,9 @@ type SourceRewriter struct {
 	// (GrantRewriteFor); nil refuses the recorded tool rather than minting
 	// a bearer the source-tool gate cannot recognise.
 	Grants GrantRecorder
+	// Reasoning, when set, adds the model's catalogue reasoning control to
+	// the callback block (SettleReasoning). Nil keeps the block as before.
+	Reasoning ModelReasoning
 }
 
 // Rewrite reads the body and returns the one to forward, plus the grant it
@@ -245,6 +248,9 @@ func (rw SourceRewriter) Rewrite(
 	block := CallbackSettings(rw.CallbackBase, grant, projectID,
 		String(envelope.Parameters(), "llm_model"))
 	if err := envelope.LiftToolLLMSettings(block); err != nil {
+		return nil, grant, err
+	}
+	if err := SettleReasoning(ctx, reasoningFor(rw.Reasoning, rw.Minter), block, projectID); err != nil {
 		return nil, grant, err
 	}
 	if err := envelope.Set("llm_settings", block); err != nil {

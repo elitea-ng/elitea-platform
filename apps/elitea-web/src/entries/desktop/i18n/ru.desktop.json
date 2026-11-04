@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "Модель агента",
   "workspace.model.choose": "Модель: {{label}}",
   "workspace.model.effort": "Глубина рассуждений",
+  "workspace.model.effort.auto": "Авто",
   "workspace.model.effort.high": "Высокая",
   "workspace.model.effort.low": "Низкая",
   "workspace.model.effort.medium": "Средняя",

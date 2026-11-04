@@ -111,6 +111,7 @@ fn invocation(model: &str, effort: Option<ModelReasoningEffort>) -> ModelFacadeI
         system_instruction: "review carefully\nbe concise".to_owned(),
         max_tokens: Some(4_000),
         reasoning_effort: effort,
+        reasoning: None,
         temperature: effort.is_none().then_some(0.7),
         max_model_turns: 25,
         run_caps: None,
@@ -971,7 +972,7 @@ async fn context_reservation_matches_native_reasoning_output_on_the_wire() {
         (MODEL, Some(ModelReasoningEffort::None), 4_000, 4_000),
         (MODEL, Some(ModelReasoningEffort::Low), 4_000, 6_048),
         (MODEL, Some(ModelReasoningEffort::Medium), 4_000, 8_096),
-        (MODEL, Some(ModelReasoningEffort::High), 4_000, 13_092),
+        (MODEL, Some(ModelReasoningEffort::High), 4_000, 12_192),
         (MODEL, Some(ModelReasoningEffort::High), 16_000, 16_000),
         (
             "claude-sonnet-4-6",
@@ -1026,8 +1027,10 @@ async fn reasoning_output_cannot_exceed_model_or_combined_capacity() {
     for (window, maximum_output, text_bytes) in [
         (32_000, 4_000, 0), // The model maximum cannot contain the requested reasoning budget.
         (32_000, 8_000, 0), // Text plus reasoning exceeds the model output maximum.
-        (14_000, 13_500, 0), // No input room remains after reasoning and margin.
-        (20_000, 16_000, 26_000), // Input fits only if reasoning is incorrectly omitted.
+        // The high budget is 8 192 (ADR-0038 review, not the old 9 092 typo):
+        // 4 000 text + 8 192 reasoning = a 12 192 reservation.
+        (13_000, 12_500, 0), // No input room remains after reasoning and margin.
+        (20_000, 16_000, 30_000), // Input fits only if reasoning is incorrectly omitted.
     ] {
         let (client, captured) =
             test_model_gateway_client(Vec::new(), test_model_gateway_config()).unwrap();
@@ -1164,7 +1167,7 @@ async fn summary_reserves_its_own_output_without_changing_chat_controls() {
             Some(ModelReasoningEffort::High),
             75_000,
             8_192,
-            13_092,
+            12_192,
         ),
         (128, 2_048, None, 1_000, 2_048, 128),
     ] {

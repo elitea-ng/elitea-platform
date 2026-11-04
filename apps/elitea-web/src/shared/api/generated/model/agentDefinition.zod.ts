@@ -94,7 +94,12 @@ export const AgentDefinition = zod
           .max(agentDefinitionLlmSettingsTemperatureMax)
           .optional(),
         max_tokens: zod.int().min(1).optional(),
-        reasoning_effort: zod.enum(["low", "medium", "high"]).optional(),
+        reasoning_effort: zod
+          .enum(["auto", "off", "low", "medium", "high"])
+          .optional()
+          .describe(
+            "ADR-0038 decision 1. auto lets the runtime choose per step; off asks for no thinking. Absent means auto on a model whose catalogue row declares a reasoning_control.\n",
+          ),
       })
       .optional()
       .describe(

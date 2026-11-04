@@ -40,8 +40,8 @@ use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
-    ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, ModelReasoningEffort,
-    budget_refusal, gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
+    ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, budget_refusal,
+    gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
     rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
     validate_invocation, validate_llm_request, validate_response_head,
 };
@@ -51,6 +51,9 @@ use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorC
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
 use elitea_llm_wire::sse::SseEvent;
+use elitea_llm_wire::thinking::{
+    AnthropicThinking, Level, StepThinking, anthropic_adaptive, anthropic_form,
+};
 
 const ANTHROPIC_ROUTE: &str = elitea_llm_wire::route::MESSAGES_ROUTE;
 const MAX_COMPLETION_BYTES: usize = 4 * 1024 * 1024;
@@ -444,7 +447,7 @@ fn encode_anthropic_body(
     invocation: &ModelFacadeInvocation,
 ) -> Result<Vec<u8>, AdkError> {
     let contents = validate_llm_request(request, stream, invocation)?;
-    let generation = native_generation(invocation)?;
+    let generation = native_generation(invocation, invocation.step_thinking(request))?;
     let messages = contents
         .iter()
         .filter(|content| content.role != "system")
@@ -661,7 +664,9 @@ fn native_context_budget(
     invocation
         .context_budget
         .map(|budget| {
-            let generation = native_generation(invocation)?;
+            // The reservation is for the most a request of this
+            // invocation can think: an `auto` step that thinks.
+            let generation = native_generation(invocation, reserved_step(invocation))?;
             let output = if invocation.max_tokens.is_none() {
                 match generation.thinking {
                     Some(ThinkingConfig::Enabled { budget_tokens, .. }) => budget
@@ -690,7 +695,20 @@ fn invalid_output_budget() -> AdkError {
     )
 }
 
-fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGeneration, AdkError> {
+/// The thinking the context reservation is made for: the explicit
+/// setting, or `auto` on a step that thinks.
+fn reserved_step(invocation: &ModelFacadeInvocation) -> Option<StepThinking> {
+    invocation
+        .reasoning_effort
+        .map(|effort| effort.thinking().single_call())
+}
+
+/// The generation controls of one request whose thinking is `step` (the
+/// native form of the ADR-0038 table in `elitea_llm_wire::thinking`).
+fn native_generation(
+    invocation: &ModelFacadeInvocation,
+    step: Option<StepThinking>,
+) -> Result<NativeGeneration, AdkError> {
     let max_tokens = invocation
         .max_tokens
         .or_else(|| {
@@ -706,37 +724,33 @@ fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGenerat
             "the native Anthropic model does not accept explicit sampling controls",
         ));
     }
-    let Some(effort) = invocation.reasoning_effort else {
-        return Ok(NativeGeneration {
-            max_tokens,
-            temperature: invocation.temperature,
-            thinking: None,
-            output_config: None,
-        });
-    };
-    if effort == ModelReasoningEffort::None {
-        return Ok(NativeGeneration {
-            max_tokens,
-            temperature: invocation.temperature,
-            thinking: None,
-            output_config: None,
-        });
-    }
-    if adaptive_thinking_model(&invocation.model_name) {
-        return Ok(NativeGeneration {
-            max_tokens,
-            temperature: None,
-            thinking: Some(ThinkingConfig::Adaptive {
-                display: Some(ThinkingDisplay::Summarized),
-            }),
-            output_config: Some(OutputConfig::with_effort(anthropic_effort(effort)?)),
-        });
-    }
-    let budget = match effort {
-        ModelReasoningEffort::Low => 2_048,
-        ModelReasoningEffort::Medium => 4_096,
-        ModelReasoningEffort::High => 9_092,
-        ModelReasoningEffort::None => return Err(invalid_anthropic_request()),
+    let form = step.map_or(AnthropicThinking::Omitted, |step| {
+        anthropic_form(
+            invocation.reasoning_control(true),
+            step,
+            anthropic_adaptive(&invocation.model_name),
+        )
+    });
+    let budget = match form {
+        AnthropicThinking::Omitted => {
+            return Ok(NativeGeneration {
+                max_tokens,
+                temperature: invocation.temperature,
+                thinking: None,
+                output_config: None,
+            });
+        }
+        AnthropicThinking::Adaptive(level) => {
+            return Ok(NativeGeneration {
+                max_tokens,
+                temperature: None,
+                thinking: Some(ThinkingConfig::Adaptive {
+                    display: Some(ThinkingDisplay::Summarized),
+                }),
+                output_config: Some(OutputConfig::with_effort(anthropic_effort(level))),
+            });
+        }
+        AnthropicThinking::Budget(budget) => budget,
     };
     // The authoritative model maximum already includes all output. Main also
     // resolves Auto to that value, so adding reasoning would exceed the maximum.
@@ -765,36 +779,12 @@ fn native_generation(invocation: &ModelFacadeInvocation) -> Result<NativeGenerat
     })
 }
 
-fn anthropic_effort(effort: ModelReasoningEffort) -> Result<EffortLevel, AdkError> {
-    match effort {
-        ModelReasoningEffort::Low => Ok(EffortLevel::Low),
-        ModelReasoningEffort::Medium => Ok(EffortLevel::Medium),
-        ModelReasoningEffort::High => Ok(EffortLevel::High),
-        ModelReasoningEffort::None => Err(invalid_anthropic_request()),
+const fn anthropic_effort(level: Level) -> EffortLevel {
+    match level {
+        Level::Low => EffortLevel::Low,
+        Level::Medium => EffortLevel::Medium,
+        Level::High => EffortLevel::High,
     }
-}
-
-fn adaptive_thinking_model(model_name: &str) -> bool {
-    let name = model_name.to_ascii_lowercase();
-    [
-        "fable-5",
-        "fable_5",
-        "opus-4-7",
-        "opus_4_7",
-        "opus-4.7",
-        "opus-4-8",
-        "opus_4_8",
-        "opus-4.8",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "sonnet-4.6",
-        "sonnet-5",
-        "sonnet_5",
-        "opus-5",
-        "opus_5",
-    ]
-    .iter()
-    .any(|pattern| name.contains(pattern))
 }
 
 fn rejects_explicit_sampling(model_name: &str) -> bool {

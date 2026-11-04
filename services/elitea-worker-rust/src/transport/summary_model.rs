@@ -170,7 +170,13 @@ fn summary_invocation(
     invocation.max_model_turns = 1;
     // A summary is not one of the run's model turns (ADR-0041 decision 3).
     invocation.run_caps = None;
-    invocation.reasoning_effort = None;
+    // Thinking off where the task model can be switched (ADR-0038
+    // decision 4: summarisation and compaction never think); else nothing
+    // is sent, as before the catalogue declared a control kind.
+    invocation.reasoning_effort = source
+        .reasoning
+        .filter(|reasoning| reasoning.control.is_switchable())
+        .map(|_| super::openai_compatible_facade::ModelReasoningEffort::None);
     invocation.max_tokens = match source.context_budget {
         Some(budget) => {
             let output = match output_cap {

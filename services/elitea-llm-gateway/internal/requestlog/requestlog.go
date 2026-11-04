@@ -98,6 +98,10 @@ type Record struct {
 	// SUBSETS of PromptToks, not additions to it.
 	CacheReadToks  int64
 	CacheWriteToks int64
+	// ReasoningToks are the completion tokens the provider reported as
+	// reasoning (ADR-0038 decision 5). They are a SUBSET of OutputToks, not
+	// an addition to it. Shared migration 0225.
+	ReasoningToks int64
 	// Metered is set for a metered tool settlement (#1238): the operation's
 	// units, their unit and the billed cost. Nil for every other request, whose
 	// row the table records as operation "llm". Shared migration 0174.

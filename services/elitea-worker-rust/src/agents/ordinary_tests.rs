@@ -1407,6 +1407,62 @@ async fn reasoning_only_continue_sends_only_the_reasoning_knob_the_profile_suppo
     }
 }
 
+/// ADR-0038 (#1574 review): under `auto`, an output continuation follows the
+/// model's control (`elitea_llm_wire::thinking::continuation_setting`): off
+/// on a `toggle` model (`low` would be `enable_thinking: true`), the loop's
+/// one state on a `budget` model (on, at the default level), and `low` on an
+/// `effort` model.
+#[tokio::test(flavor = "current_thread")]
+async fn an_auto_continuation_follows_the_models_control() {
+    let answer = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    for (control, reasoning_effort, enable_thinking) in [
+        ("toggle", serde_json::Value::Null, serde_json::json!(false)),
+        (
+            "budget",
+            serde_json::json!("medium"),
+            serde_json::Value::Null,
+        ),
+        ("effort", serde_json::json!("low"), serde_json::Value::Null),
+    ] {
+        let mut continuation = output_continuation("");
+        continuation.payload.model_reasoning =
+            crate::agents::request::ModelReasoning::parse(control, false);
+        let settings = continuation
+            .payload
+            .application
+            .get_mut("version_details")
+            .and_then(|details| details.get_mut("llm_settings"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("application llm_settings");
+        settings.insert("reasoning_effort".to_owned(), serde_json::json!("auto"));
+        settings.insert("temperature".to_owned(), serde_json::Value::Null);
+        let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
+        let (_, finish, bodies) = run_one_output_turn(&sessions, &continuation, answer).await;
+        finish.unwrap_or_else(|code| panic!("{control}: the Continue failed: {code:?}"));
+        let body = &bodies[0];
+        assert_eq!(
+            body.get("reasoning_effort")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            reasoning_effort,
+            "{control}: {body}"
+        );
+        assert_eq!(
+            body.get("chat_template_kwargs")
+                .and_then(|kwargs| kwargs.get("enable_thinking"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            enable_thinking,
+            "{control}: {body}"
+        );
+    }
+}
+
 /// Live 4.45.1, F1 cap: a reasoning-only Continue that is cut reasoning-only
 /// AGAIN offers no further Continue. The turn ends as
 /// `OUTPUT_CONTINUATION_EXHAUSTED`, which the chat renders as the continuation
