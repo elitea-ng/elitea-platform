@@ -60,6 +60,12 @@ const (
 	// inline LLM node until FU-247). The Worker compiler refuses the same
 	// (parallel_compiler.rs validate_parallel_ownership).
 	CodeParallelBranchUnsupported = "PIPELINE_PARALLEL_BRANCH_UNSUPPORTED"
+	// CodeMapFormUnsupported is a Map node whose form the runtime cannot run:
+	// a worker that is not a State Modifier, Agent or LLM node (Code and a
+	// direct Router wait for Wave 3), or `reduction` together with `join`.
+	// The Worker compiler refuses the same (map_compiler.rs
+	// validate_map_ownership, map_yaml.rs MAP_REDUCTION_AND_JOIN).
+	CodeMapFormUnsupported = "PIPELINE_MAP_FORM_UNSUPPORTED"
 	// maxNamedBytes bounds a node id, type or toolkit name echoed in a refusal.
 	maxNamedBytes = 128
 )
@@ -72,7 +78,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, outputcontract.Code:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, CodeMapFormUnsupported, outputcontract.Code:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -156,6 +162,9 @@ func check(instructions string, attached *[]string) error {
 		if err := checkParallelBranches(declared); err != nil {
 			return err
 		}
+		if err := checkMapForms(declared); err != nil {
+			return err
+		}
 	}
 	// ADR-0043 decision 2: the output contract of every LLM node. The
 	// version save answers a typed 422 before this (applications
@@ -205,6 +214,56 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 	return nil
 }
 
+// mapWorkerTypes are the node types a Map item can run: the Worker's
+// shared fan-out branch families (State Modifier, saved Agent, LLM).
+var mapWorkerTypes = map[string]struct{}{"state_modifier": {}, "agent": {}, "llm": {}}
+
+// checkMapForms refuses a Map node whose `worker` names a declared node of a
+// type a Map item cannot run, or that sets both `reduction` and `join`. As
+// the compiler, the worker is the first node with that id; a missing worker,
+// a non-string type or a malformed node is left to the compiler.
+func checkMapForms(declared []map[string]*yaml.Node) error {
+	var typeOf map[string]*yaml.Node
+	for _, owner := range declared {
+		if nodeType, _ := stringScalar(owner["type"]); nodeType != "map" {
+			continue
+		}
+		if owner["reduction"] != nil && owner["join"] != nil {
+			return &apierr.APIError{
+				Status: http.StatusBadRequest,
+				Code:   CodeMapFormUnsupported,
+				Message: fmt.Sprintf("%s sets both `reduction` and `join`. Remove `reduction`: `join: append` replaces it.",
+					nodeLabel(owner["id"])),
+			}
+		}
+		worker, ok := stringScalar(owner["worker"])
+		if !ok {
+			continue
+		}
+		if typeOf == nil {
+			typeOf = make(map[string]*yaml.Node, len(declared))
+			for _, fields := range declared {
+				if id := fields["id"]; id != nil && id.Kind == yaml.ScalarNode {
+					if _, seen := typeOf[id.Value]; !seen {
+						typeOf[id.Value] = fields["type"]
+					}
+				}
+			}
+		}
+		if workerType, ok := stringScalar(typeOf[worker]); ok {
+			if _, admitted := mapWorkerTypes[workerType]; !admitted {
+				return &apierr.APIError{
+					Status: http.StatusBadRequest,
+					Code:   CodeMapFormUnsupported,
+					Message: fmt.Sprintf("%s runs node %s as its worker, but a Map worker can only be a State Modifier, an Agent node (a saved agent or pipeline) or an LLM node, not a %s node. Choose another worker before saving.",
+						nodeLabel(owner["id"]), quoted(worker), quoted(workerType)),
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // branchNode is a Parallel branch's scalar `node`, or "".
 func branchNode(branch *yaml.Node) string {
 	if branch.Kind != yaml.MappingNode {
@@ -228,7 +287,7 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	fields := make(map[string]*yaml.Node, 4)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
-		case "id", "type", "toolkit_name", "branches":
+		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}
