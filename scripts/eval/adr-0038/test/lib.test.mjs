@@ -72,6 +72,11 @@ test('lenient JSON reply parsing', () => {
   assert.deepEqual(parseJsonReply('Sure:\n```json\n{"a": 1}\n```'), { a: 1 });
   assert.deepEqual(parseJsonReply('x {"a": "}{", "b": {"c": 2}} y'), { a: '}{', b: { c: 2 } });
   assert.equal(parseJsonReply('no json'), null);
+  // The first `{` does not start valid JSON; a later one does.
+  assert.deepEqual(parseJsonReply('Use {curly} sets. Answer: {"decision": "done"}'), { decision: 'done' });
+  assert.deepEqual(parseJsonReply('{ not json } then {"a": [1, {"b": 2}]}'), { a: [1, { b: 2 }] });
+  // An unbalanced first `{`.
+  assert.deepEqual(parseJsonReply('x { y {"ok": true}'), { ok: true });
 });
 
 test('test score from runner output', () => {
