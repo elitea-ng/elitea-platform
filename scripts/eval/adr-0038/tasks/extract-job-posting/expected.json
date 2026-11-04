@@ -1,0 +1,20 @@
+{
+  "checks": [
+    { "path": "location.city", "op": "str_ci", "value": "Manchester" },
+    { "path": "location.country", "op": "eq", "value": "GB" },
+    { "path": "remote_policy", "op": "eq", "value": "hybrid" },
+    { "path": "office_days_per_week", "op": "eq", "value": 2 },
+    { "path": "employment_type", "op": "eq", "value": "part_time" },
+    { "path": "hours_per_week", "op": "num", "value": 30 },
+    { "path": "salary.currency", "op": "eq", "value": "GBP" },
+    { "path": "salary.min", "op": "num", "value": 52000 },
+    { "path": "salary.max", "op": "num", "value": 64000 },
+    { "path": "salary.period", "op": "eq", "value": "year" },
+    { "path": "min_years_experience", "op": "eq", "value": 4 },
+    { "path": "required_skills", "op": "set", "value": ["Python", "PostgreSQL", "Airflow", "dbt"] },
+    { "path": "nice_to_have_skills", "op": "set", "value": ["Kubernetes", "Terraform"] },
+    { "path": "visa_sponsorship", "op": "eq", "value": false },
+    { "path": "application_deadline", "op": "eq", "value": "2027-02-14" },
+    { "path": "reports_to", "op": "str_ci", "value": "Head of Data Platform" }
+  ]
+}

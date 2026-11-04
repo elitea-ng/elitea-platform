@@ -1,0 +1,15 @@
+{
+  "project": "tallyctl",
+  "versions": [
+    { "version": "3.2.0", "release_date": "2026-09-30", "yanked": false, "breaking": false,
+      "counts": { "added": 3, "changed": 2, "deprecated": 1, "removed": 0, "fixed": 2, "security": 1 } },
+    { "version": "3.1.1", "release_date": "2026-09-02", "yanked": false, "breaking": false,
+      "counts": { "added": 0, "changed": 0, "deprecated": 0, "removed": 0, "fixed": 3, "security": 0 } },
+    { "version": "3.1.0", "release_date": "2026-08-14", "yanked": true, "breaking": false,
+      "counts": { "added": 2, "changed": 0, "deprecated": 0, "removed": 0, "fixed": 1, "security": 0 } },
+    { "version": "3.0.0", "release_date": "2026-07-03", "yanked": false, "breaking": true,
+      "counts": { "added": 0, "changed": 2, "deprecated": 0, "removed": 2, "fixed": 3, "security": 0 } },
+    { "version": "2.9.4", "release_date": "2026-06-11", "yanked": false, "breaking": false,
+      "counts": { "added": 0, "changed": 0, "deprecated": 0, "removed": 0, "fixed": 1, "security": 1 } }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "checks": [
+    { "path": "meeting_date", "op": "eq", "value": "2026-03-10" },
+    { "path": "attendees", "op": "set", "value": ["Priya Natarajan", "Tom Becker", "Marta Kowalska", "Daniel Osei"] },
+    { "path": "apologies", "op": "set", "value": ["Hannah Lee"] },
+    { "path": "action_items", "op": "len", "value": 5 },
+    { "path": "action_items.0.owner", "op": "str_ci", "value": "Priya Natarajan" },
+    { "path": "action_items.0.due_date", "op": "eq", "value": "2026-03-13" },
+    { "path": "action_items.0.status", "op": "eq", "value": "open" },
+    { "path": "action_items.1.owner", "op": "str_ci", "value": "Marta Kowalska" },
+    { "path": "action_items.1.due_date", "op": "eq", "value": "2026-03-20" },
+    { "path": "action_items.2.owner", "op": "eq", "value": null },
+    { "path": "action_items.2.due_date", "op": "eq", "value": null },
+    { "path": "action_items.3.owner", "op": "str_ci", "value": "Daniel Osei" },
+    { "path": "action_items.3.due_date", "op": "eq", "value": "2026-03-24" },
+    { "path": "action_items.4.due_date", "op": "eq", "value": "2026-04-02" },
+    { "path": "action_items.4.status", "op": "eq", "value": "cancelled" },
+    { "path": "decisions", "op": "len", "value": 2 },
+    { "path": "next_meeting_utc", "op": "eq", "value": "2026-03-17T14:00:00Z" }
+  ]
+}

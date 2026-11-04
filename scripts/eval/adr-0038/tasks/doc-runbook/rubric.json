@@ -1,0 +1,19 @@
+{
+  "checks": [
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Health", "desc": "Health checks section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Alerts?\\b", "desc": "Alerts section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Rollback\\b", "desc": "Rollback section" },
+    { "kind": "heading", "pattern": "^#{1,3}\\s*Escalation\\b", "desc": "Escalation section" },
+    { "kind": "regex", "pattern": "8443", "desc": "health port" },
+    { "kind": "regex", "pattern": "9102", "desc": "metrics port" },
+    { "kind": "regex", "pattern": "LedgerSyncConsumerLag", "desc": "consumer lag alert covered" },
+    { "kind": "regex", "pattern": "LedgerSyncDBWriteErrors", "desc": "DB write errors alert covered" },
+    { "kind": "regex", "pattern": "LedgerSyncPodRestarts", "desc": "pod restarts alert covered" },
+    { "kind": "regex", "pattern": "ledgerctl consumer reset", "desc": "consumer reset command from INC-3312" },
+    { "kind": "regex", "pattern": "helm rollback ledger-sync", "desc": "exact rollback command" },
+    { "kind": "regex", "pattern": "(\\b3\\b[^\\n]*replica|replica[^\\n]*\\b3\\b)", "flags": "i", "desc": "max replica count of 3" },
+    { "kind": "regex", "pattern": "#ledger-oncall", "desc": "Slack escalation channel" },
+    { "kind": "absent", "pattern": "s3cr3t", "flags": "i", "desc": "no database password" },
+    { "kind": "max_words", "value": 700 }
+  ]
+}

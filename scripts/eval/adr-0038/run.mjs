@@ -2,7 +2,8 @@
 // ADR-0038 phase 0 evaluation runner.
 //
 //   node run.mjs --provider qwen [--variants a,b,c,d] [--repeat 2]
-//                [--tasks <regex>] [--concurrency 6] [--out results/qwen-2026-11-04]
+//                [--tasks <regex>] [--tasks-dir dir] [--concurrency 6]
+//                [--out results/qwen-2026-11-04]
 //   node run.mjs --selftest [--tasks <regex>]
 //
 // Variants: a = single run, thinking on; b = single run, thinking off;
@@ -31,6 +32,7 @@ const { values: args } = parseArgs({
   options: {
     provider: { type: 'string', default: 'qwen' },
     providers: { type: 'string', default: join(HERE, 'providers.json') },
+    'tasks-dir': { type: 'string', default: join(HERE, 'tasks') },
     variants: { type: 'string', default: 'a,b,c,d' },
     repeat: { type: 'string', default: '1' },
     tasks: { type: 'string' },
@@ -43,7 +45,7 @@ const { values: args } = parseArgs({
   },
 });
 
-const tasks = loadTasks(join(HERE, 'tasks'), args.tasks);
+const tasks = loadTasks(args['tasks-dir'], args.tasks);
 
 function sumCalls(calls) {
   const t = { calls: calls.length, thinking_calls: 0, prompt: 0, completion: 0, reasoning: 0, model_ms: 0 };

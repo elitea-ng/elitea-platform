@@ -1,0 +1,7 @@
+{
+  "id": "doc-release-notes",
+  "group": "doc",
+  "title": "Write user-facing release notes from a git log",
+  "prompt": "User request: write RELEASE_NOTES.md in the workspace root, the user-facing release notes for quill v2.8.0, from input/git-log.txt (commits since v2.7.0, Conventional Commits style). Start with a top-level heading that contains the version. Use these sections as Markdown headings, in this order: Breaking changes, Features, Fixes. Rules: every breaking change must be listed under Breaking changes, whatever its commit type, including those marked only with '!' or a 'BREAKING CHANGE:' footer in the commit body, with what users must do; feat and perf commits go under Features, fix commits under Fixes; leave out chore, ci, docs, test, refactor, release and merge commits entirely, and leave out any change that was reverted within this range (do not mention it at all); end each entry with its pull request number in the form (#123). At most 400 words.",
+  "verifier": { "kind": "review", "output": "RELEASE_NOTES.md" }
+}
