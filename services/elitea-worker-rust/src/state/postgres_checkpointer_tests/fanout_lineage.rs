@@ -8,16 +8,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::agents::graph::fanout_test_ledger::TestLedger;
-use crate::agents::graph::map_reduce::{
-    DurableMapNode, MapDefinition, MapItemExecution, MapNodeOutcome, MapOccurrenceCheckpointer,
-    MapReduction, MapWorkerGraphFactory, MapWorkerKind, MapWorkerTerminal,
-};
+use crate::agents::graph::map_reduce::{MapDefinition, MapReduction};
 use crate::agents::graph::{
     AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, ParallelBranchDefinition,
     ParallelBranchExecution, ParallelBranchGraphFactory, ParallelBranchPause,
     ParallelBranchRuntime, ParallelBranchTerminal, ParallelCheckpointAppender, ParallelDecision,
     ParallelOccurrenceCheckpointer, ParallelPauseCard,
 };
+use crate::agents::graph::{FanoutSource, MapSource};
 use adk_rust::graph::{
     CompiledGraph, FunctionNode, GraphError, Node, NodeContext, StateSchema, interrupt::Interrupt,
 };
@@ -429,7 +427,7 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
     );
 }
 
-/// A non-pausing Map worker that records each item it runs. While `hold` is
+/// A Map worker on the shared fan-out adapter that records each item it runs. While `hold` is
 /// set, the last item parks forever after announcing that it started.
 struct LineageWorkers {
     calls: Arc<std::sync::Mutex<Vec<usize>>>,
@@ -471,23 +469,24 @@ impl Node for LineageWorker {
     }
 }
 
-impl MapWorkerGraphFactory for LineageWorkers {
-    fn validate_nonpausing(&self, _definition: &MapDefinition) -> Result<(), GraphError> {
+/// A Map item on the shared fan-out adapter runs the counting worker.
+#[async_trait]
+impl ParallelBranchGraphFactory for LineageWorkers {
+    fn validate_branch(&self, _branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
         Ok(())
     }
 
-    fn owned_definition_digest(&self) -> [u8; 32] {
-        [0x19; 32]
-    }
-
-    fn worker_kind(&self) -> MapWorkerKind {
-        MapWorkerKind::StateModifier
-    }
-
-    fn compile_item(
+    fn owned_definition_digest(
         &self,
-        _definition: &MapDefinition,
-        execution: &MapItemExecution,
+        _branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        Ok([0x19; 32])
+    }
+
+    fn compile_branch(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
         let worker = LineageWorker {
             calls: Arc::clone(&self.calls),
@@ -507,30 +506,42 @@ impl MapWorkerGraphFactory for LineageWorkers {
         .with_max_concurrency(1))
     }
 
-    fn runtime_input(
+    fn project_input(
         &self,
-        input: &State,
-        _context: &NodeContext,
-        _thread: &str,
+        _branch: &ParallelBranchDefinition,
+        parent: &State,
     ) -> Result<State, GraphError> {
-        Ok(input.clone())
+        Ok(parent.clone())
     }
 
     fn project_result(
         &self,
-        _definition: &MapDefinition,
+        _branch: &ParallelBranchDefinition,
         state: &State,
-    ) -> Result<MapWorkerTerminal, GraphError> {
+    ) -> Result<ParallelBranchTerminal, GraphError> {
         let mut outputs = serde_json::Map::new();
         outputs.insert(
             "item_result".to_owned(),
             state.get("item_result").cloned().unwrap_or(Value::Null),
         );
-        Ok(MapWorkerTerminal::Completed(outputs))
+        Ok(ParallelBranchTerminal::Completed(outputs))
     }
 
-    fn validate_candidate(&self, _candidate: &State) -> Result<(), GraphError> {
-        Ok(())
+    fn pause_cards(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        Err(GraphError::Other("the Map worker never pauses".to_owned()))
+    }
+
+    async fn resume_input(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+        _decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        Err(GraphError::Other("the Map worker never pauses".to_owned()))
     }
 }
 
@@ -562,15 +573,20 @@ fn map_context() -> NodeContext {
     context
 }
 
-fn map_node(checkpointer: &Arc<PostgresCheckpointer>, workers: LineageWorkers) -> DurableMapNode {
+fn map_node(
+    checkpointer: &Arc<PostgresCheckpointer>,
+    workers: LineageWorkers,
+) -> DurableParallelNode {
     let parent: Arc<dyn ParallelCheckpointAppender> = checkpointer.clone();
-    DurableMapNode::new(
-        map_definition(),
-        Arc::new(MapOccurrenceCheckpointer::new(parent)),
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
         checkpointer.clone(),
         Arc::new(workers),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ));
+    DurableParallelNode::from_source(
+        FanoutSource::Map(MapSource::new(map_definition(), [0x19; 32]).expect("valid Map fixture")),
+        runtime,
     )
-    .expect("valid Map fixture")
 }
 
 /// C1a (Map). Items 0 and 1 complete under execution 1 and the process dies
@@ -605,7 +621,7 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
     tokio::select! {
         biased;
         () = started.notified() => {}
-        outcome = crashed.execute_outcome(&context) => {
+        outcome = crashed.execute(&context) => {
             panic!("the held item cannot finish: {:?}", outcome.is_ok());
         }
     }
@@ -628,12 +644,10 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
             hook: None,
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .expect("restore the Map occurrence under execution 2");
-    let MapNodeOutcome::Completed(output) = outcome else {
-        panic!("the restored Map stopped");
-    };
+    let output = outcome;
     assert_eq!(
         output.updates["mapped"].as_array().map(|entries| entries
             .iter()
@@ -782,22 +796,15 @@ async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
             hook: Some(hook),
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .err()
     .expect("lease loss is a control error");
     assert_lease_lost(&error);
     assert_eq!(*calls.lock().expect("call log"), vec![0]);
     assert_eq!(failed_receipts(&database).await, 0);
-    let recorded_stops: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-         WHERE jsonb_typeof(metadata::jsonb -> 'elitea.graph.map.occurrence.v2' -> 'stop') \
-               IN ('object', 'string')",
-    )
-    .fetch_one(&database.pool)
-    .await
-    .expect("count recorded Map stops");
-    assert_eq!(recorded_stops, 0, "lease loss was recorded as a Map stop");
+    // The shared adapter keeps no stop record: no failed receipt is the
+    // whole proof that lease loss was not recorded as an item failure.
 
     let second = claim(
         &database,
@@ -814,12 +821,10 @@ async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
             hook: None,
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .expect("a later claim restores the Map occurrence");
-    let MapNodeOutcome::Completed(output) = outcome else {
-        panic!("the restored Map stopped");
-    };
+    let output = outcome;
     assert_eq!(output.updates["mapped"].as_array().map(Vec::len), Some(3));
     let calls = calls.lock().expect("call log").clone();
     for index in [1, 2] {

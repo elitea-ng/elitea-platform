@@ -1656,32 +1656,6 @@ impl NativePipelineApplicationResolver {
     }
 }
 impl PipelineApplicationResolver for NativePipelineApplicationResolver {
-    fn map_worker_definition_digest(
-        &self,
-        node: &str,
-    ) -> Result<[u8; 32], ApplicationExecutionError> {
-        let (_, participant) = self
-            .nodes
-            .get(node)
-            .ok_or(ApplicationExecutionError::Unavailable)?;
-        match participant {
-            NativePipelineApplicationParticipant::Pipeline { definition, .. }
-                if definition.map_nonpausing_effectfree() =>
-            {
-                self.parallel_participant_digest(node)
-            }
-            _ => Err(ApplicationExecutionError::Unavailable),
-        }
-    }
-    fn for_map_events(
-        &self,
-        events: PipelineNodeEventSender,
-    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
-        // The existing rebinder retains saved identity, call owners and exact scope.
-        self.rebind_parallel_events(&events)
-            .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
-    }
-
     fn for_branch_journals(
         &self,
         journals: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>,

@@ -14,7 +14,10 @@
 use std::borrow::Cow;
 
 use adk_rust::graph::{GraphError, NodeContext, State};
-use elitea_agent_runtime::graph::fanout::plan::{FanoutKind as JoinKind, JoinMode, OnError};
+use elitea_agent_runtime::graph::fanout::plan::{
+    ChildTerminal, FanoutKind as JoinKind, JoinMode, OnError, SettledChild,
+};
+use serde_json::{Value, json};
 
 use super::fanout_trace::FanoutKind;
 use super::map_reduce::{MapDefinition, map_error, source_digest, validate_state_structure};
@@ -24,13 +27,6 @@ use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 #[derive(Clone)]
 pub(crate) enum FanoutSource {
     Parallel(ParallelNodeDefinition),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the Map node runs on the shared adapter in T-2A3 commit B2"
-        )
-    )]
     Map(MapSource),
 }
 
@@ -52,13 +48,6 @@ pub(crate) struct MapSource {
 }
 
 impl MapSource {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the Map node runs on the shared adapter in T-2A3 commit B2"
-        )
-    )]
     pub(crate) fn new(
         definition: MapDefinition,
         worker_digest: [u8; 32],
@@ -222,6 +211,43 @@ impl FanoutSource {
             }
             Self::Map(map) => map.definition.validate(),
         }
+    }
+}
+
+impl FanoutSource {
+    /// A child's outputs as its node lands them: a Parallel branch lands every
+    /// declared output of its node, a Map item only the Map's own `outputs`.
+    pub(crate) fn project_settled(&self, settled: Vec<SettledChild>) -> Vec<SettledChild> {
+        let Self::Map(map) = self else {
+            return settled;
+        };
+        settled
+            .into_iter()
+            .map(|mut child| {
+                if let ChildTerminal::Succeeded(outputs) = &mut child.terminal {
+                    outputs.retain(|key, _| map.definition.outputs.contains(key));
+                }
+                child
+            })
+            .collect()
+    }
+
+    /// The update a v1 Map document writes (M2): its ordered `{index,
+    /// outputs}` collection, applied by the destination key's own reducer,
+    /// as main's Map wrote it. `None` for every other source, which lands
+    /// through the typed join.
+    pub(crate) fn legacy_update(&self, entries: &[Value]) -> Option<Value> {
+        let Self::Map(map) = self else {
+            return None;
+        };
+        map.definition.policy.is_none().then(|| {
+            Value::Array(
+                entries
+                    .iter()
+                    .map(|entry| json!({"index": entry["index"], "outputs": entry["outputs"]}))
+                    .collect(),
+            )
+        })
     }
 }
 

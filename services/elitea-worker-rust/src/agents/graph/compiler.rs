@@ -74,7 +74,6 @@ mod map_compiler;
 mod parallel_compiler;
 use super::map_yaml::{MAP_REDUCTION_AND_JOIN, MapNodeDefinition, MapYamlError};
 use super::{pipeline_completed_event, pipeline_result_event};
-pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
 pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
@@ -304,8 +303,6 @@ pub(crate) struct PipelineNodeRuntimes {
     composition_definitions: Option<Arc<BTreeMap<String, PipelineDefinition>>>,
     parallel: Option<Arc<ParallelCompilerBinding>>,
     parallel_authority_bound: bool,
-    map: Option<Arc<MapCompilerBinding>>,
-    map_authority_bound: bool,
     application_scope_path: String,
     application_scopes:
         Option<Arc<crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>>,
@@ -337,7 +334,7 @@ impl PipelineNodeRuntimes {
         &self,
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<Arc<dyn Checkpointer>, PipelineConfigurationError> {
-        if self.parallel_authority_bound || self.map_authority_bound {
+        if self.parallel_authority_bound {
             return Ok(checkpointer);
         }
         match self.application_scopes() {
@@ -470,8 +467,6 @@ impl PipelineNodeRuntimes {
             application_scopes: None,
             parallel: None,
             parallel_authority_bound: false,
-            map: None,
-            map_authority_bound: false,
             application_scope_path: String::new(),
         }
     }
@@ -1465,8 +1460,6 @@ impl PipelineDefinition {
         }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
-        let (checkpointer, bound_runtimes) =
-            self.bind_map_authority(checkpointer, &bound_runtimes)?;
         let runtimes = &bound_runtimes;
         let checkpointer: Arc<dyn Checkpointer> = Arc::new(StaticResumeCheckpointer::new(
             runtimes.scoped_checkpointer(checkpointer)?,
@@ -1564,8 +1557,6 @@ impl PipelineDefinition {
         }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
-        let (checkpointer, bound_runtimes) =
-            self.bind_map_authority(checkpointer, &bound_runtimes)?;
         let runtimes = &bound_runtimes;
         let checkpointer = runtimes.scoped_checkpointer(checkpointer)?;
         let state_schema = self.state_schema(self.runtime_channels());

@@ -12,11 +12,13 @@ use crate::agents::graph::application::{
 };
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::fanout_control::FanoutCancellation;
+use crate::agents::graph::fanout_source::{FanoutSource, MapSource};
 use crate::agents::graph::hitl::HITL_RESUME_STATE_KEY;
 use crate::agents::graph::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, PARALLEL_LLM_INPUTS_STATE_KEY,
     PipelineLlmAgentFactory,
 };
+use crate::agents::graph::map_yaml::MapNodeDefinition;
 use crate::agents::graph::node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender,
 };
@@ -298,14 +300,19 @@ impl PipelineDefinition {
         runtimes: &PipelineNodeRuntimes,
     ) -> Result<(Arc<dyn Checkpointer>, PipelineNodeRuntimes), PipelineConfigurationError> {
         let mut runtimes = runtimes.clone();
-        if !self.has_parallel_nodes() {
+        // A Map runs on the same fan-out adapter and binds the same authority.
+        if !self.has_parallel_nodes() && !self.has_map_nodes() {
             return Ok((checkpointer, runtimes));
         }
         let binding = runtimes
             .parallel
             .as_ref()
             .ok_or(PipelineConfigurationError::Unsupported(
-                "the fixed Parallel atomic checkpoint authority is not bound",
+                if self.has_parallel_nodes() {
+                    "the fixed Parallel atomic checkpoint authority is not bound"
+                } else {
+                    "the Map fan-out checkpoint authority is not bound"
+                },
             ))?;
         if !Arc::ptr_eq(&checkpointer, &binding.parent_checkpointer()) {
             return Err(PipelineConfigurationError::Invalid(
@@ -430,6 +437,110 @@ impl PipelineDefinition {
                 .with_node_events(runtimes.events.clone())
                 .with_member_names(member_names)
                 .with_output_reducer(self.state_reducers.get(definition.output_key()).copied()),
+        );
+        if let Some(target) = definition.transition() {
+            builder = builder.edge(definition.id(), if target == "END" { END } else { target });
+        }
+        Ok(builder)
+    }
+}
+
+impl PipelineDefinition {
+    /// T-2A3: a Map runs on the shared fan-out adapter: one child per source
+    /// item, keyed by its index, every child running the Map's one owned
+    /// worker (a State Modifier, a saved Agent or an LLM node).
+    pub(super) fn bind_map_node(
+        &self,
+        mut builder: PipelineGraphBuilder,
+        definition: &MapNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
+        let binding = runtimes
+            .parallel
+            .as_ref()
+            .filter(|_| runtimes.parallel_authority_bound)
+            .ok_or(PipelineConfigurationError::Unsupported(
+                "the Map fan-out authority was not composed",
+            ))?;
+        let map = definition.runtime();
+        let worker = match self.nodes.iter().find(|node| node.id() == map.worker) {
+            Some(PipelineNodeDefinition::Application(node)) => OwnedBranch::Agent(node.clone()),
+            Some(PipelineNodeDefinition::Llm(node)) => OwnedBranch::Llm(node.clone()),
+            Some(PipelineNodeDefinition::StateModifier(node)) => {
+                OwnedBranch::StateModifier(node.clone())
+            }
+            Some(other) => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: other.id().to_owned(),
+                    refusal: FanoutChildRefusal::Kind,
+                });
+            }
+            None => {
+                return Err(PipelineConfigurationError::Invalid(
+                    "the Map owned worker is missing",
+                ));
+            }
+        };
+        // C1: a saved worker pipeline holding Code is refused by the worker's
+        // name, as a Parallel branch is.
+        reject_nested_parallel(
+            &BTreeMap::from([(map.worker.clone(), worker.clone())]),
+            runtimes,
+        )?;
+        if matches!(worker, OwnedBranch::Agent(_)) && runtimes.application.is_none() {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the Map Agent worker resolver is unavailable",
+            ));
+        }
+        if matches!(worker, OwnedBranch::Llm(_))
+            && runtimes
+                .llm
+                .as_ref()
+                .is_none_or(|factory| factory.for_fanout_branch().is_none())
+        {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the Map LLM worker runtime is not bound to this compiler",
+            ));
+        }
+        let member_name = match &worker {
+            OwnedBranch::Agent(node) => node.selection().alias().to_owned(),
+            other => other.id().to_owned(),
+        };
+        let factory = Arc::new(CompilerParallelBranches {
+            owned: (0..map.max_items)
+                .map(|index| (index.to_string(), worker.clone()))
+                .collect(),
+            state_types: self.state.clone(),
+            resolver: runtimes.application.clone(),
+            llm: runtimes.llm.clone(),
+            events: runtimes.events.clone(),
+            root_session: binding.root_session.clone(),
+        });
+        let worker_digest = factory
+            .owned_definition_digest(&crate::agents::graph::ParallelBranchDefinition::map_item(
+                0,
+                &map.worker,
+            ))
+            .map_err(|_| {
+                PipelineConfigurationError::Unsupported("the Map worker identity is unproved")
+            })?;
+        let source = MapSource::new(map.clone(), worker_digest)
+            .map_err(PipelineConfigurationError::Graph)?;
+        let runtime = Arc::new(AdkParallelBranchRuntime::new(
+            binding.authority.clone(),
+            factory,
+            Arc::clone(&binding.occurrence),
+        ));
+        let mut node = DurableParallelNode::from_source(FanoutSource::Map(source), runtime);
+        if let Some(decisions) = &binding.decisions {
+            node = node.with_decisions(Arc::clone(decisions));
+        }
+        builder = builder.node(
+            node.with_deadline(binding.deadline)
+                .with_cancellation(Arc::clone(&binding.cancellation))
+                .with_node_events(runtimes.events.clone())
+                .with_member_names(vec![member_name; map.max_items])
+                .with_output_reducer(self.state_reducers.get(&map.destination).copied()),
         );
         if let Some(target) = definition.transition() {
             builder = builder.edge(definition.id(), if target == "END" { END } else { target });

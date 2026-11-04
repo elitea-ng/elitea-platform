@@ -1806,8 +1806,16 @@ impl DurableParallelNode {
         definition: ParallelNodeDefinition,
         runtime: Arc<dyn ParallelBranchRuntime>,
     ) -> Self {
+        Self::from_source(FanoutSource::Parallel(definition), runtime)
+    }
+
+    /// A fan-out node over any closed source (a Parallel or a Map).
+    pub(crate) fn from_source(
+        source: FanoutSource,
+        runtime: Arc<dyn ParallelBranchRuntime>,
+    ) -> Self {
         Self {
-            source: FanoutSource::Parallel(definition),
+            source,
             runtime,
             deadline: None,
             cancellation: None,
@@ -2081,6 +2089,7 @@ impl DurableParallelNode {
         settled: Vec<plan::SettledChild>,
         context: &NodeContext,
     ) -> Result<ParallelNodeOutcome, GraphError> {
+        let settled = self.source.project_settled(settled);
         let entries = match plan::join(self.source.join_kind(), self.source.on_error(), settled)
             .map_err(join_error)?
         {
@@ -2107,6 +2116,11 @@ impl DurableParallelNode {
             }
         };
         let output_key = self.source.output_key();
+        if let Some(update) = self.source.legacy_update(&entries) {
+            return Ok(ParallelNodeOutcome::Completed(
+                NodeOutput::new().with_update(output_key, update),
+            ));
+        }
         let update = plan::land(
             self.source.join(),
             self.output_reducer,

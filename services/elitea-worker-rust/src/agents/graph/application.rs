@@ -358,20 +358,6 @@ pub(super) use parallel_application::PARALLEL_AGENT_INPUTS_STATE_KEY;
 
 /// Invocation-owned lookup of an already resolved saved Application tool.
 pub(crate) trait PipelineApplicationResolver: Send + Sync {
-    /// Admit only the original saved identity and an effect-free, nonpausing cohort.
-    fn map_worker_definition_digest(
-        &self,
-        _node: &str,
-    ) -> Result<[u8; 32], ApplicationExecutionError> {
-        Err(ApplicationExecutionError::Unavailable)
-    }
-    fn for_map_events(
-        &self,
-        _events: PipelineNodeEventSender,
-    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
-        Err(ApplicationExecutionError::Unavailable)
-    }
-
     /// One frozen saved participant fingerprint retained by admitted assembly.
     /// Aliases, tool names, and containing graph digests are not substitutes.
     fn fixed_parallel_definition_digest(

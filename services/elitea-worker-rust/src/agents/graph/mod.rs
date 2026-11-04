@@ -69,9 +69,9 @@ mod llm;
 #[cfg(test)]
 mod llm_tests;
 pub(crate) mod map_authority;
-pub(crate) mod map_reduce;
 #[cfg(test)]
-mod map_reduce_tests;
+mod map_fanout_tests;
+pub(crate) mod map_reduce;
 pub(crate) mod map_turn;
 mod map_yaml;
 mod node_events;
@@ -92,6 +92,8 @@ pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
     with_decision,
 };
 mod fanout_source;
+#[cfg(test)]
+pub(crate) use fanout_source::{FanoutSource, MapSource};
 mod parallel;
 mod parallel_cards;
 mod parallel_child_authority;
