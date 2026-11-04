@@ -241,7 +241,7 @@ WITH answers AS MATERIALIZED (
 SELECT outcome, execution_id, finished_at
 FROM (SELECT * FROM chained UNION ALL SELECT * FROM standalone) AS finished
 ORDER BY finished_at DESC, execution_id DESC
-LIMIT 1`, schema), handoff.ConversationUUID, handoff.Epoch, handoff.ProjectID).
+LIMIT 1`, schema), handoff.ConversationUUID, strconv.FormatInt(handoff.Epoch, 10), handoff.ProjectID).
 		Scan(&run.Outcome, &run.ExecutionID, &finished)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

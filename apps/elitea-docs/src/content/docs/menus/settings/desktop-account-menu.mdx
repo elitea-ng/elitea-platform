@@ -117,6 +117,16 @@ While the thread runs in the cloud, the same place shows **Take back**: select i
 
 When a thread cannot move (your deployment or project has the cloud executor off, or the thread has no messages yet), nothing is shown: the thread runs on your computer.
 
+#### Send a running task and continue in the cloud
+
+You can send a thread while a task runs, and the cloud continues the task with a message you give. The platform sends the thread and starts the cloud's first turn together: either both happen, or neither does.
+
+- When the thread runs with **To completion**, the cloud continues the same run. The chain limits (continuations, spend and hours) count across your computer and the cloud. When the run ends, the notification says it ended in the cloud.
+- When the platform refuses the run (for example, a chain limit is reached, or your administrator turned unattended grants off), the thread is not sent and stays on your computer. The app shows why.
+- The cloud runs the turn as any cloud turn. Plan mode, hook asks and remote confirmations are desktop parts and do not apply in the cloud.
+
+You can also ask the app to **take the thread back when done**. The platform keeps your choice and the result of the last cloud run. The platform never takes a thread back by itself: your desktop app takes it back when the cloud run completes.
+
 ### The Changes tab
 
 The **Changes** tab on the right lists what each turn changed, newest first. Each turn is one line: the start of your message, the number of files and the lines added and removed. Select it to fold or unfold the turn; the newest turn starts unfolded. Point at a turn for **Undo** (or **Restore folder** after an undo).

@@ -4,6 +4,29 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Send and continue, take back when done (#1439, ADR-0045 decision 8)
+
+New shared migration `0224_handoff_take_back_when_done`. It adds the column
+`take_back_when_done` (boolean, default false) to
+`elitea_runtime.workspace_handoffs`, and the link kind `handoff` to
+`elitea_runtime.run_chain_links`. The migration only adds objects. An
+existing handoff keeps false.
+
+Client contract 1.33: the complete of a send (`completeWorkspaceHandoff`)
+takes `take_back_when_done` and `continue` (`prompt`, `mode`, `grant`).
+With `continue`, Main completes the send, writes the person's message and
+starts the cloud turn in one transaction, and answers `continued`. A
+refused grant or chain answers 422 `unattended_grant_refused`, 409
+`chain_limit_reached` or 409 `chain_ended`, and the send stays
+HANDING_OFF. The state (`getWorkspaceHandoff`) adds `take_back_when_done`
+and `last_cloud_run`.
+
+A grant that names the chain of the running desktop turn continues that
+chain in the cloud. Its limits count across the desktop and the cloud, and
+its `run_finished` notification names `origin` `cloud`. Main never takes a
+thread back by itself: the owner's desktop takes it back. No setting and no
+operator action.
+
 ## Run finished notifications and web push (#1437, ADR-0045 decisions 5 and 6)
 
 New shared migration `0223_web_push`. It adds the table

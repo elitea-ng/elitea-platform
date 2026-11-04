@@ -1236,8 +1236,8 @@ RETURNING id`, schema), handoffEventParticipantKind).Scan(&participantID)
 	meta, _ := json.Marshal(map[string]any{"workspace_event": event, "workspace_epoch": epoch})
 	stamp := `clock_timestamp() AT TIME ZONE 'UTC'`
 	if atTxStart {
-		// The turn's groups take the column default, now().
-		stamp = `now()::timestamp - interval '1 millisecond'`
+		// The turn's groups take the transaction's start, now(), in UTC.
+		stamp = `(now() AT TIME ZONE 'UTC') - interval '1 millisecond'`
 	}
 	var groupID int64
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`
