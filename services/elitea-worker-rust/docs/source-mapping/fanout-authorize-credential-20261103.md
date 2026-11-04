@@ -381,6 +381,8 @@ response mocks. Evidence notes (redacted, mode 600) are in the handoff folder, `
   refusal text (the earlier one neither); the Worker binary holds `metadata_toolkit_id` (the earlier one not).
 - **Fixture.** Project 118, MCP toolkit "fu250 mcp auth" (id 1) on the mock's `/mcp-auth`, pipeline
   "FU250 parallel sign-in": a Parallel `gather` with two LLM members, each told to call `echo`. Created in the UI.
+  For the R1 pass the toolkit was created through the UI's own REST endpoint (`POST /elitea_core/tools/prompt_lib/118`)
+  from the signed-in admin page, and the pipeline and the toolkit attachment in the UI editor.
 - **Chat 3, older Worker.** Both cards Skip-only: the requirement gap fixed in `ced100a47`.
 - **Chat 4, fixed Worker, earlier Main and Web.** Authorize enabled, but the click did nothing: the Web slip above.
   Roman skipped both cards; both members finished, so Skip worked end to end.
@@ -402,6 +404,20 @@ response mocks. Evidence notes (redacted, mode 600) are in the handoff folder, `
   7. After a reload the chat shows the same stored result, with no Authorize or Skip left.
 - **No token in logs.** Over the run's 30 minutes no Main, Worker, Web or gateway log line holds a mock bearer
   (`test-only-` prefix). The mock's own log shows only the public `client_id` in the authorize URL.
+- **R1, a viewer signs in (2026-11-04, REVIEW-1566).** On a recreated throwaway stack with Main `fu250-87f45c41c`
+  (the challenge route on `predict.post`), Worker `fu250-ced100a47` and Web `fu250-000780f8e`; verify-profile 50/0:
+  - a viewer-role user (mock-OIDC subject `fu250-viewer@centry.user`, invited to project 118 as viewer in the UI; the
+    viewer role holds `predict.post` and not `tool.patch`) started the run; both cards offered Authorize;
+  - Authorize opened the sign-in dialog (the challenge answered the viewer; under `tool.patch` it was a 403), and
+    registration through Main succeeded;
+  - Roman accepted the local fixture certificate warning himself (a new leaf; OS trust unchanged) and signed in on
+    both cards. Both are `CONSUMED`, decided by the viewer with an opaque 43-character reference, no bearer;
+  - the three executions ran as the viewer and succeeded; the mock answered 6 authenticated MCP calls; after a reload
+    the chat shows "FU250-ONE" and "FU250-TWO" echoed and no controls;
+  - no bearer in the Main, Worker, Web or gateway logs.
+  The first viewer run (chat 3) was refused "a pipeline LLM node references a tool outside its frozen scope" because
+  the fixture's toolkit was not yet attached to the pipeline version; attaching it through the editor's TOOLS section
+  fixed the fixture, not the code.
 
 ## Fixtures
 
