@@ -205,6 +205,11 @@ test('auto: a non-zero exit is data, a command timeout is a failure', async () =
     const r = await runAgent({ chat, run, user: 'go', policy: 'auto' });
     assert.deepEqual(seen, [true, false, false, false]);
     assert.equal(r.toolErrors, 0);
+    // auto-exit thinks after each non-zero exit.
+    seen.length = 0;
+    i = 0;
+    await runAgent({ chat, run, user: 'go', policy: 'auto-exit' });
+    assert.deepEqual(seen, [true, true, true, false]);
     // A timeout is a tool failure: the next step thinks.
     const seen2 = [];
     let j = 0;

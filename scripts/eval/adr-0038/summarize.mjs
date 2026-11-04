@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const NAMES = { a: '(a) single, thinking on', b: '(b) single, thinking off', c: '(c) single, auto', d: '(d) verified loop, auto', e: '(e) single, auto, told the check' };
+const NAMES = { a: '(a) single, thinking on', b: '(b) single, thinking off', c: '(c) single, auto', d: '(d) verified loop, auto', e: '(e) single, auto, told the check', f: '(f) single, auto + think after a non-zero exit' };
 const GROUPS = ['coding', 'extraction', 'doc'];
 
 const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);

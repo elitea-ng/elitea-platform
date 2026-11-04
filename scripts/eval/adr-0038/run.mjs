@@ -8,7 +8,8 @@
 //
 // Variants: a = single run, thinking on; b = single run, thinking off;
 // c = single run, auto policy; d = verified loop (auto workers, manager on);
-// e = control: c plus the check description that a loop worker sees.
+// e = control: c plus the check description that a loop worker sees;
+// f = auto that also thinks after a command's non-zero exit.
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +30,9 @@ const VARIANTS = {
   d: { name: 'loop-auto', loop: true },
   // Control: a single auto run told the same check that a loop worker sees.
   e: { name: 'single-auto-check', policy: 'auto', withCheck: true },
+  // auto that also thinks after a command's non-zero exit (the policy of
+  // the first run, before a non-zero exit became data).
+  f: { name: 'single-auto-exit', policy: 'auto-exit' },
 };
 
 const { values: args } = parseArgs({

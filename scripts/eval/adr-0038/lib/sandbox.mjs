@@ -310,7 +310,7 @@ export async function execTool(run, name, rawArgs) {
         }
         const r = await runCommand(run, args.command);
         const head = r.timedOut ? 'timed out after 60 s (exit 124)' : `exit code ${r.code}`;
-        return { ok: !r.toolFailed, text: `${head}\n${r.output}` };
+        return { ok: !r.toolFailed, nonZeroExit: r.code !== 0, text: `${head}\n${r.output}` };
       }
       default:
         return { ok: false, text: `error: unknown tool ${name}` };

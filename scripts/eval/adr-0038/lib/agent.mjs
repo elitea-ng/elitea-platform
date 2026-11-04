@@ -5,10 +5,13 @@
 // follow-up steps. A command's non-zero exit code is data, not a failure.
 import { TOOL_SPECS, execTool } from './sandbox.mjs';
 
-export function thinkingFor(policy, { step, prevFailed }) {
+// `auto-exit` is `auto` that also counts a command's non-zero exit (a
+// failing test run, but also a grep with no match) as a failed check.
+export function thinkingFor(policy, { step, prevFailed, prevExit = false }) {
   if (policy === 'on') return true;
   if (policy === 'off') return false;
   if (policy === 'auto') return step === 0 || prevFailed;
+  if (policy === 'auto-exit') return step === 0 || prevFailed || prevExit;
   throw new Error(`unknown policy ${policy}`);
 }
 
@@ -28,9 +31,10 @@ export async function runAgent({ chat, run, system = WORKER_SYSTEM, user, policy
   ];
   const calls = [];
   let prevFailed = false;
+  let prevExit = false;
   let toolErrors = 0;
   for (let step = 0; step < maxSteps; step++) {
-    const thinking = thinkingFor(policy, { step, prevFailed });
+    const thinking = thinkingFor(policy, { step, prevFailed, prevExit });
     const res = await chat(messages, { tools: TOOL_SPECS, thinking });
     calls.push({ role, step, thinking, ...res.usage, ms: res.ms });
     const msg = res.message ?? {};
@@ -43,8 +47,10 @@ export async function runAgent({ chat, run, system = WORKER_SYSTEM, user, policy
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: toolCalls });
     prevFailed = false;
+    prevExit = false;
     for (const tc of toolCalls) {
       const r = await exec(run, tc.function?.name, tc.function?.arguments);
+      if (r.nonZeroExit) prevExit = true;
       if (!r.ok) {
         prevFailed = true;
         toolErrors++;
