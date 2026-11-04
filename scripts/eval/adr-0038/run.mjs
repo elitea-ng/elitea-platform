@@ -7,7 +7,8 @@
 //   node run.mjs --selftest [--tasks <regex>]
 //
 // Variants: a = single run, thinking on; b = single run, thinking off;
-// c = single run, auto policy; d = verified loop (auto workers, manager on).
+// c = single run, auto policy; d = verified loop (auto workers, manager on);
+// e = control: c plus the check description that a loop worker sees.
 import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,8 @@ const VARIANTS = {
   b: { name: 'single-off', policy: 'off' },
   c: { name: 'single-auto', policy: 'auto' },
   d: { name: 'loop-auto', loop: true },
+  // Control: a single auto run told the same check that a loop worker sees.
+  e: { name: 'single-auto-check', policy: 'auto', withCheck: true },
 };
 
 const { values: args } = parseArgs({
@@ -108,7 +111,10 @@ async function runJob(chat, task, vkey, rep) {
         criteria: r.criteria, tokens: sumCalls(r.calls), by_role: byRole(r.calls),
       });
     } else {
-      const r = await runAgent({ chat, run, user: task.prompt, policy: v.policy, maxSteps: Number(args['max-steps']) });
+      const user = v.withCheck
+        ? `${task.prompt}\n\nThe check: ${makeVerifier(task, { chat }).describe()}`
+        : task.prompt;
+      const r = await runAgent({ chat, run, user, policy: v.policy, maxSteps: Number(args['max-steps']) });
       Object.assign(rec, {
         steps: r.steps, cut_off: r.cutOff, cut_reason: r.cutReason ?? null,
         tool_errors: r.toolErrors, tokens: sumCalls(r.calls),
@@ -174,7 +180,7 @@ async function main() {
   const meta = {
     provider: args.provider, model: provider.model, base_url: provider.base_url,
     thinking: provider.thinking, temperature: provider.temperature, date,
-    variants: Object.fromEntries(variants.map((k) => [k, VARIANTS[k].name])),
+    variants: Object.fromEntries([...new Set(records.map((r) => r.variant))].sort().map((k) => [k, VARIANTS[k].name])),
     max_steps: Number(args['max-steps']), worker_steps: Number(args['worker-steps']),
     max_rounds: Number(args['max-rounds']), sandbox: sandboxKindAvailable(),
     // Every task with a record, also those from earlier filtered runs.

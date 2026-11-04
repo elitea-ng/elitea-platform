@@ -72,6 +72,7 @@ again.
 | b | single run | off for every step |
 | c | single run | `auto`: on for the first step and after a tool error or a failed command; off for routine follow-up steps |
 | d | verified loop | manager on; workers `auto`; summary and finish calls off; reviewer on |
+| e | control: single run told the check | `auto`, as (c). The prompt also gets the check description that a loop worker sees. It separates the gain of the loop from the gain of telling the agent the check. Not in the default set: run it with `--variants e`. |
 
 The `auto` policy treats a `run_command` that exits non-zero as a failed
 check. The ADR rule "on for the final answer with an output schema" does not
