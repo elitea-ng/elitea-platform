@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate, scoreChecks, scoreRubric } from '../lib/schema.mjs';
-import { thinkingParams, buildBody, parseUsage } from '../lib/provider.mjs';
+import { thinkingParams, buildBody, parseUsage, makeClient } from '../lib/provider.mjs';
+import { createServer } from 'node:http';
 import { parseJsonReply } from '../lib/json.mjs';
 import { testScore } from '../lib/tasks.mjs';
 import { createRun, destroyRun, execTool, runCommand, safePath, sandboxKindAvailable, makeCapture } from '../lib/sandbox.mjs';
@@ -66,6 +67,35 @@ test('thinking params per control kind', () => {
   assert.equal(body.max_completion_tokens, 5);
   assert.equal('temperature' in body, false);
   assert.deepEqual(parseUsage({ prompt_tokens: 3, completion_tokens: 4, completion_tokens_details: { reasoning_tokens: 2 } }), { prompt: 3, completion: 4, reasoning: 2 });
+});
+
+test('client: no sleep after the last attempt, and a timeout is final', async () => {
+  let hits = 0;
+  let mode = '500';
+  const server = createServer((req, res) => {
+    hits++;
+    if (mode === '500') { res.statusCode = 500; res.end('boom'); }
+    // mode 'hang': never answer.
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}/v1`;
+  try {
+    const chat = makeClient({ base_url: base, model: 'm', thinking: { kind: 'toggle' } }, { retries: 2, backoffMs: 200 });
+    const t0 = Date.now();
+    await assert.rejects(chat([]), /HTTP 500/);
+    const ms = Date.now() - t0;
+    assert.equal(hits, 3);
+    // Sleeps 200 + 400 between attempts; no 600 after the last one.
+    assert.ok(ms >= 600 && ms < 1100, `took ${ms} ms`);
+    hits = 0;
+    mode = 'hang';
+    const slow = makeClient({ base_url: base, model: 'm', thinking: { kind: 'toggle' } }, { retries: 3, backoffMs: 10, timeoutMs: 200 });
+    await assert.rejects(slow([]), /timed out/);
+    assert.equal(hits, 1);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 test('lenient JSON reply parsing', () => {

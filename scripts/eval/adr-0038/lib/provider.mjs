@@ -81,7 +81,11 @@ function postJson(url, body, key, timeoutMs) {
       res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
       res.on('error', reject);
     });
-    req.setTimeout(timeoutMs, () => req.destroy(new Error(`request timed out after ${timeoutMs} ms`)));
+    req.setTimeout(timeoutMs, () => {
+      const err = new Error(`request timed out after ${timeoutMs} ms`);
+      err.timeout = true;
+      req.destroy(err);
+    });
     req.on('error', reject);
     req.end(payload);
   });
@@ -99,7 +103,7 @@ export function resolveBaseUrl(provider) {
 
 // Returns a chat(messages, opts) function bound to one provider.
 // The result: { message, finish, usage: {prompt, completion, reasoning}, ms }.
-export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3 } = {}) {
+export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3, backoffMs = 2000 } = {}) {
   const key = provider.key_env ? process.env[provider.key_env] : null;
   if (provider.key_env && !key) {
     throw new Error(`provider needs env ${provider.key_env}`);
@@ -129,9 +133,11 @@ export function makeClient(provider, { timeoutMs = 1_800_000, retries = 3 } = {}
         };
       } catch (err) {
         lastErr = err;
-        // A 4xx other than 429 does not get better on retry.
+        // A timeout is final: a retry would wait as long again. A 4xx other
+        // than 429 does not get better on retry.
+        if (err.timeout) throw err;
         if (err.status && err.status < 500 && err.status !== 429) throw err;
-        await sleep(2000 * (attempt + 1));
+        if (attempt < retries) await sleep(backoffMs * (attempt + 1));
       }
     }
     throw lastErr;
