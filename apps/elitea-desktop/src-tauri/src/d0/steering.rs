@@ -24,7 +24,16 @@
 //! The queue and its events change under one lock, so the UI receives
 //! `steer_queued`, `steer_injected` and `steer_dropped` of one message in
 //! the order the queue saw them.
+//!
+//! The same safe point is where a send to the cloud stops a running turn
+//! (ADR-0045 decision 8): [`TurnSteering::request_stop`] asks for it, and
+//! at the next safe point the source takes nothing, says the boundary is
+//! reached and never returns. The run (`turn.rs`, `run_once`) waits for
+//! that, so the step in flight finished and its tool results are in the
+//! session; it drops the run there and the turn commits as usual. It is not
+//! a cancel: nothing of the turn is lost.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use adk_agent::SteeringSource;
@@ -118,10 +127,19 @@ struct Queue {
     injected: Vec<String>,
 }
 
+/// A stop at the next step boundary (ADR-0045 decision 8).
+#[derive(Default)]
+struct BoundaryStop {
+    requested: AtomicBool,
+    reached: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
 /// One turn's steering queue, with the turn's event stream.
 pub struct TurnSteering {
     events: Arc<TurnEvents>,
     queue: Mutex<Queue>,
+    stop: BoundaryStop,
 }
 
 impl TurnSteering {
@@ -130,6 +148,42 @@ impl TurnSteering {
         Self {
             events,
             queue: Mutex::new(Queue::default()),
+            stop: BoundaryStop::default(),
+        }
+    }
+
+    /// Stop the run at its next step boundary: the step in flight finishes
+    /// and its tool results are kept; the model is not asked again.
+    pub fn request_stop(&self) {
+        self.stop.requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Take a stop back before the run reached the boundary; `false` once
+    /// it did (the run ends there either way).
+    pub fn withdraw_stop(&self) -> bool {
+        self.stop.requested.store(false, Ordering::SeqCst);
+        !self.stop.reached.load(Ordering::SeqCst)
+    }
+
+    #[must_use]
+    pub fn stop_requested(&self) -> bool {
+        self.stop.requested.load(Ordering::SeqCst)
+    }
+
+    /// The run is parked at the boundary of a requested stop.
+    fn reach_stop(&self) {
+        self.stop.reached.store(true, Ordering::SeqCst);
+        self.stop.notify.notify_waiters();
+    }
+
+    /// Resolves once the run is parked at a step boundary for a stop.
+    pub async fn stop_reached(&self) {
+        loop {
+            let notified = self.stop.notify.notified();
+            if self.stop.reached.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -313,6 +367,13 @@ impl SteeringInjector {
 #[async_trait]
 impl SteeringSource for SteeringInjector {
     async fn take(&self, ctx: Arc<dyn InvocationContext>) -> Vec<Content> {
+        // A stop for a send to the cloud: the step's tool results are in
+        // the session, the next model request is not built. The run is
+        // parked here and dropped by `run_once`, which waits for this.
+        if self.steering.stop_requested() {
+            self.steering.reach_stop();
+            std::future::pending::<()>().await;
+        }
         self.inject(ctx.invocation_id()).await
     }
 }
@@ -336,6 +397,30 @@ mod tests {
             .into_iter()
             .map(|event| (event.kind, event.payload))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn a_boundary_stop_is_reached_once_and_cannot_be_withdrawn_after() {
+        let (_, steering) = steering();
+        assert!(!steering.stop_requested());
+        steering.request_stop();
+        assert!(steering.withdraw_stop(), "withdrawn before the boundary");
+        assert!(!steering.stop_requested());
+        steering.request_stop();
+        let steering = Arc::new(steering);
+        let waiter = tokio::spawn({
+            let steering = steering.clone();
+            async move { steering.stop_reached().await }
+        });
+        tokio::task::yield_now().await;
+        steering.reach_stop();
+        tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("reached")
+            .unwrap();
+        // Already reached: resolves at once, and is not withdrawn.
+        steering.stop_reached().await;
+        assert!(!steering.withdraw_stop());
     }
 
     #[test]

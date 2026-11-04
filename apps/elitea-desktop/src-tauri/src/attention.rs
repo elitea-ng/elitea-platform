@@ -320,6 +320,16 @@ impl Attention {
         self.show(title, body);
     }
 
+    /// Show a notification with already checked text, also while the
+    /// window is in front: something the host did by itself (a take-back
+    /// when a cloud run completed, ADR-0045 decision 8) that nothing in the
+    /// window announces.
+    pub(crate) fn show_now(&self, title: &str, body: &str) {
+        if self.allowed() {
+            self.show(title, body);
+        }
+    }
+
     fn show(&self, title: &str, body: &str) {
         use tauri_plugin_notification::NotificationExt as _;
         if let Err(error) = self

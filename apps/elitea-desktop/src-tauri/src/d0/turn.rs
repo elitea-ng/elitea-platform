@@ -479,6 +479,9 @@ impl Drop for WorkspaceClaim {
 }
 
 const TURN_RUNNING: &str = "A turn is already running in this workspace.";
+/// The `done` status note of a turn stopped for a send to the cloud
+/// (ADR-0045 decision 8).
+pub const HANDOFF_STOPPED: &str = "handoff_stopped";
 const CONTEXT_WITHHELD: &str =
     "You cannot view this project's context, so this turn runs without it.";
 
@@ -704,6 +707,53 @@ struct TurnEntry {
     undone: std::sync::atomic::AtomicBool,
     /// The messages the person sent while the turn runs (`steering.rs`).
     steering: Arc<TurnSteering>,
+    /// What a send to the cloud continues the turn with (ADR-0045
+    /// decision 8).
+    origin: TurnOrigin,
+}
+
+/// A running turn's thread, mode and chain, for a send to the cloud that
+/// continues it (ADR-0045 decision 8).
+#[derive(Clone)]
+struct TurnOrigin {
+    conversation_uuid: String,
+    plan_mode: bool,
+    bypass: bool,
+    unattended: Option<UnattendedTurn>,
+    execution_id: String,
+}
+
+/// The thread's running turn, as `handoff.rs` stops and continues it.
+#[derive(Clone)]
+pub struct RunningTurn {
+    pub turn_id: String,
+    /// `build`, `plan` or `bypass`: the person's mode for the turn.
+    pub mode: &'static str,
+    /// The unattended turn (its grant, chain and brief); `None` for a turn
+    /// the person attends.
+    pub unattended: Option<UnattendedTurn>,
+    /// The turn's execution: the chain's root on its first turn.
+    pub execution_id: String,
+}
+
+impl RunningTurn {
+    /// The chain the cloud turn continues: the root the chain names, or
+    /// this turn when it is the chain's first.
+    #[must_use]
+    pub fn chain_root(&self) -> Option<String> {
+        self.unattended.as_ref().map(|turn| {
+            turn.chain_root_execution_id
+                .clone()
+                .unwrap_or_else(|| self.execution_id.clone())
+        })
+    }
+}
+
+/// How a stopped turn settled: `handed_off` when it stopped at a step
+/// boundary for the send (it may have ended by itself first).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TurnSettled {
+    pub handed_off: bool,
 }
 
 impl TurnEntry {
@@ -1289,7 +1339,7 @@ impl AgentHost {
 
     /// Offer `toolset` in every later turn, as a local toolset (tests).
     #[cfg(test)]
-    pub(super) fn add_test_toolset(&self, toolset: Arc<dyn Toolset>) {
+    pub(crate) fn add_test_toolset(&self, toolset: Arc<dyn Toolset>) {
         self.test_toolsets.lock().expect("lock").push(toolset);
     }
 
@@ -1922,6 +1972,13 @@ impl AgentHost {
                     done: Mutex::new(None),
                     undone: std::sync::atomic::AtomicBool::new(false),
                     steering: Arc::new(TurnSteering::new(events.clone())),
+                    origin: TurnOrigin {
+                        conversation_uuid: prepared.conversation_uuid.clone(),
+                        plan_mode: request.plan_mode,
+                        bypass: request.bypass,
+                        unattended: request.unattended.clone(),
+                        execution_id: prepared.started.execution_id.clone(),
+                    },
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -2794,25 +2851,31 @@ impl AgentHost {
             drop(awake);
             return;
         };
-        let (answer, stopped_at_limit, stopped_at_calls, exhausted, failure) = match result {
-            Ok(AgentAnswer {
-                text,
-                step_limit_reached,
-                tool_call_limit_reached,
-                continues_exhausted,
-            }) => (
-                text,
-                step_limit_reached,
-                tool_call_limit_reached,
-                continues_exhausted,
-                None,
-            ),
-            Err(error) => (sink.last_text(), false, false, false, Some(error)),
-        };
+        let (answer, stopped_at_limit, stopped_at_calls, exhausted, handed_off, failure) =
+            match result {
+                Ok(AgentAnswer {
+                    text,
+                    step_limit_reached,
+                    tool_call_limit_reached,
+                    continues_exhausted,
+                    handed_off,
+                }) => (
+                    text,
+                    step_limit_reached,
+                    tool_call_limit_reached,
+                    continues_exhausted,
+                    handed_off,
+                    None,
+                ),
+                Err(error) => (sink.last_text(), false, false, false, false, Some(error)),
+            };
         // An unattended turn's chain: the next turn starts once the commit
-        // landed, or the chain ends and the commit says how.
+        // landed, or the chain ends and the commit says how. A turn stopped
+        // for a send goes on in the cloud: neither (ADR-0045 decision 8).
         let turn_end = if failure.is_some() {
             TurnEnd::Failed
+        } else if handed_off {
+            TurnEnd::Handoff
         } else if stopped_at_calls {
             TurnEnd::ToolCallCap
         } else if stopped_at_limit {
@@ -2875,6 +2938,8 @@ impl AgentHost {
                 "The agent stopped after using its {} steps.",
                 admitted.step_limit
             )
+        } else if handed_off && answer.trim().is_empty() {
+            "The agent stopped here to continue in the cloud.".to_owned()
         } else {
             answer
         };
@@ -2932,6 +2997,12 @@ impl AgentHost {
         tap.changes(&changes);
         if failure.is_some() {
             events.status(Phase::Error, failure.as_ref().map(|e| e.message.as_str()));
+        } else if handed_off {
+            events.noted(
+                Phase::Done,
+                "Stopped to continue in the cloud.",
+                HANDOFF_STOPPED,
+            );
         } else if stopped_at_calls {
             events.noted(
                 Phase::Done,
@@ -2992,6 +3063,9 @@ impl AgentHost {
         let mut done = done;
         if continuing {
             done["continuing"] = json!(true);
+        }
+        if handed_off {
+            done["handed_off"] = json!(true);
         }
         let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // The resume record (ADR-0045 decision 7): updated when the chain
@@ -3117,6 +3191,8 @@ impl AgentHost {
                     (Some(ChainStep::End(outcome)), _) if landed => {
                         unattended::chain_ended(&events, outcome, None, None, goal);
                     }
+                    // The chain goes on in the cloud (ADR-0045 decision 8).
+                    (Some(ChainStep::Handoff), _) if landed => {}
                     (Some(_), _) if !gate.swap(true, std::sync::atomic::Ordering::SeqCst) => {
                         unattended::chain_ended(
                             &events,
@@ -4268,15 +4344,31 @@ impl AgentHost {
             content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
         }
         loop {
-            match run_once(&runner, &session_id, content, sink, recorder).await? {
+            match run_once(&runner, &session_id, content, sink, recorder, steering).await? {
                 RunEnd::Answered => {
                     return Ok(AgentAnswer {
                         text: bound
                             .take_completed_text()
                             .unwrap_or_else(|_| sink.last_text()),
-                        step_limit_reached: false,
-                        tool_call_limit_reached: false,
-                        continues_exhausted: false,
+                        ..AgentAnswer::default()
+                    });
+                }
+                // Stopped at a step boundary for a send to the cloud, which
+                // continues the turn there (ADR-0045 decision 8).
+                RunEnd::Handoff => {
+                    return Ok(AgentAnswer {
+                        text: sink.last_text(),
+                        handed_off: true,
+                        ..AgentAnswer::default()
+                    });
+                }
+                // At the step limit with a send waiting: the send continues
+                // the turn, nobody is asked "Continue?".
+                RunEnd::StepLimit if steering.stop_requested() => {
+                    return Ok(AgentAnswer {
+                        text: sink.last_text(),
+                        handed_off: true,
+                        ..AgentAnswer::default()
                     });
                 }
                 // The server keeps at most so many tool calls of a turn: no
@@ -4284,17 +4376,15 @@ impl AgentHost {
                 RunEnd::ToolCallLimit => {
                     return Ok(AgentAnswer {
                         text: sink.last_text(),
-                        step_limit_reached: false,
                         tool_call_limit_reached: true,
-                        continues_exhausted: false,
+                        ..AgentAnswer::default()
                     });
                 }
                 RunEnd::StepLimit if recorder.tool_call_limit_reached() => {
                     return Ok(AgentAnswer {
                         text: sink.last_text(),
-                        step_limit_reached: false,
                         tool_call_limit_reached: true,
-                        continues_exhausted: false,
+                        ..AgentAnswer::default()
                     });
                 }
                 RunEnd::StepLimit => {
@@ -4330,8 +4420,8 @@ impl AgentHost {
                             return Ok(AgentAnswer {
                                 text: sink.last_text(),
                                 step_limit_reached: true,
-                                tool_call_limit_reached: false,
                                 continues_exhausted: answer == StepLimitAnswer::Exhausted,
+                                ..AgentAnswer::default()
                             });
                         }
                     }
@@ -4363,6 +4453,95 @@ impl AgentHost {
                 "turn_not_cancellable",
                 "The agent has already finished this turn; it can no longer be stopped.",
             )),
+        }
+    }
+
+    /// The turn of `conversation_uuid` that runs in `workspace_id` now
+    /// (its agent's run has not ended), for a send to the cloud that
+    /// stops it and continues it there (ADR-0045 decision 8).
+    #[must_use]
+    pub fn running_turn_of(
+        &self,
+        workspace_id: &str,
+        conversation_uuid: &str,
+    ) -> Option<RunningTurn> {
+        let turns = self
+            .turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        turns.entries.iter().find_map(|(turn_id, entry)| {
+            let running = *entry.state() == RunState::Running;
+            (running
+                && entry.workspace_id == workspace_id
+                && entry
+                    .origin
+                    .conversation_uuid
+                    .eq_ignore_ascii_case(conversation_uuid))
+            .then(|| RunningTurn {
+                turn_id: turn_id.clone(),
+                mode: if entry.origin.plan_mode {
+                    "plan"
+                } else if entry.origin.bypass {
+                    "bypass"
+                } else {
+                    "build"
+                },
+                unattended: entry.origin.unattended.clone(),
+                execution_id: entry.origin.execution_id.clone(),
+            })
+        })
+    }
+
+    /// Stop `turn_id` at its next step boundary (ADR-0045 decision 8): the
+    /// step in flight finishes, its tool results are kept, and the turn
+    /// commits as usual. Not a cancel.
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired`.
+    pub fn stop_at_boundary(&self, turn_id: &str) -> Result<(), TurnError> {
+        self.entry(turn_id)?.steering.request_stop();
+        Ok(())
+    }
+
+    /// Take a boundary stop back (the send was cancelled before the run
+    /// reached the boundary); `false` once it stopped there.
+    pub fn withdraw_boundary_stop(&self, turn_id: &str) -> bool {
+        self.entry(turn_id)
+            .is_ok_and(|entry| entry.steering.withdraw_stop())
+    }
+
+    /// Wait until `turn_id` ended and its commit settled.
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired`, or `local_turn_commit_failed` when
+    /// the turn's commit did not land (the thread then stays here).
+    pub async fn turn_settled(&self, turn_id: &str) -> Result<TurnSettled, TurnError> {
+        let entry = self.entry(turn_id)?;
+        loop {
+            let done = entry
+                .done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(done) = done {
+                let handed_off = done["handed_off"] == json!(true);
+                match done["commit"].as_str() {
+                    Some("committed") => return Ok(TurnSettled { handed_off }),
+                    // A cancelled turn committed nothing: there is nothing
+                    // to continue.
+                    Some("none") => return Ok(TurnSettled { handed_off: false }),
+                    Some("failed") => {
+                        return Err(TurnError::new(
+                            "local_turn_commit_failed",
+                            "The running turn could not be saved, so the thread stays on this computer. Retry saving it, then send again.",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 
@@ -5465,6 +5644,7 @@ impl CommitBody {
 }
 
 /// What the agent's runs ended with.
+#[derive(Default)]
 struct AgentAnswer {
     text: String,
     /// The last run stopped at the step limit and the turn did not go on
@@ -5476,6 +5656,9 @@ struct AgentAnswer {
     /// The turn stopped at the step limit after its last continue
     /// ([`step_limit::MAX_CONTINUES`]).
     continues_exhausted: bool,
+    /// The turn stopped at a step boundary for a send to the cloud
+    /// (ADR-0045 decision 8): the cloud continues it.
+    handed_off: bool,
 }
 
 /// How one run of the agent ended.
@@ -5487,6 +5670,10 @@ enum RunEnd {
     /// The turn's tool calls reached [`recorder::MAX_TOOL_CALLS`]: the run
     /// is stopped after the step that reached it.
     ToolCallLimit,
+    /// A send to the cloud asked for a stop and the run reached a step
+    /// boundary: the step's tool results are in the session
+    /// ([`TurnSteering::request_stop`]).
+    Handoff,
 }
 
 /// One run of `runner` on the session from `content`, its events to `sink`.
@@ -5499,12 +5686,23 @@ async fn run_once(
     content: Content,
     sink: &TurnSink,
     recorder: &Recorder,
+    steering: &TurnSteering,
 ) -> Result<RunEnd, TurnError> {
     let mut stream = runner
         .run_str(USER_ID, session_id, content)
         .await
         .map_err(|e| TurnError::new("agent_failed", e.to_string()))?;
-    while let Some(event) = stream.next().await {
+    loop {
+        // The steering source parks the run at the boundary of a requested
+        // stop; the run is dropped there, before the next model request.
+        let next = tokio::select! {
+            biased;
+            () = steering.stop_reached() => return Ok(RunEnd::Handoff),
+            next = stream.next() => next,
+        };
+        let Some(event) = next else {
+            break;
+        };
         let event = match event {
             Ok(event) => event,
             Err(error) if recorder.tool_call_limit_reached() => {

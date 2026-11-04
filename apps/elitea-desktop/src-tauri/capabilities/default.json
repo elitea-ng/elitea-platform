@@ -116,6 +116,7 @@
     "allow-handoff-status-many",
     "allow-handoff-settings-get",
     "allow-handoff-settings-set",
+    "allow-handoff-run-finished",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",

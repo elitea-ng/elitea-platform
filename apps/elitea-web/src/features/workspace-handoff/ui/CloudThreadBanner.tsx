@@ -4,7 +4,8 @@
  * says where the thread runs, that changes made here are not seen by the
  * cloud, and offers Take back and Erase cloud copy. A take back that is
  * already asked for (a cloud turn is finishing) and a hand-back in progress
- * say so.
+ * say so, and so does a thread sent with "Take back when done" (read-only:
+ * ADR-0045 decision 8).
  */
 import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import Box from '@mui/material/Box';
@@ -28,6 +29,11 @@ const quiet = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });
 function Details({ status }: { status: HandoffStatus }): React.JSX.Element {
   return (
     <>
+      {status.take_back_when_done === true && (
+        <Typography variant="bodySmall" data-testid="banner-take-back-when-done" sx={quiet}>
+          {t('workspace.handoff.takesBackWhenDone', 'Takes back when done: this computer takes it back by itself when its cloud run completes.')}
+        </Typography>
+      )}
       {status.reclaim_pending === true && (
         <Typography variant="bodySmall" data-testid="banner-reclaim-pending" sx={quiet}>
           {t('workspace.handoff.reclaimPending', 'Take back requested: it starts when the running cloud turn ends.')}

@@ -65,7 +65,12 @@ impl PolicySource for Policy {
 type Hook = Box<dyn Fn(&HandoffEvent) + Send + Sync>;
 
 #[derive(Default)]
-struct Events(Mutex<Vec<HandoffEvent>>, Mutex<Option<Hook>>);
+struct Events(
+    Mutex<Vec<HandoffEvent>>,
+    Mutex<Option<Hook>>,
+    /// The native notices (title, body).
+    Mutex<Vec<(String, String)>>,
+);
 
 impl HandoffEvents for Events {
     fn emit(&self, event: HandoffEvent) {
@@ -73,6 +78,13 @@ impl HandoffEvents for Events {
             hook(&event);
         }
         self.0.lock().unwrap().push(event);
+    }
+
+    fn notice(&self, title: &str, body: &str) {
+        self.2
+            .lock()
+            .unwrap()
+            .push((title.to_owned(), body.to_owned()));
     }
 }
 
@@ -121,6 +133,13 @@ struct Platform {
     rest_pending: bool,
     /// The cloud copy's grace is over: the remaining turns are gone.
     rest_expired: bool,
+    /// Every `complete` body, in order (U5).
+    completes: Vec<Value>,
+    /// A `complete` with `continue` answers 422 `unattended_grant_refused`.
+    refuse_grant: bool,
+    /// The state's `take_back_when_done` and `last_cloud_run` (U5 contract §2).
+    take_back_when_done: bool,
+    last_cloud_run: Option<Value>,
 }
 
 /// The base64 of the SHA-256 of `bytes` (`x-amz-checksum-sha256`).
@@ -151,7 +170,8 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                "device_name": "Test laptop", "history_mode": "none", "has_upstream": false, "stats": stats,
                "cloud_sha": p.refs.get("refs/elitea/cloud"), "updated_at": "2026-10-16T04:24:12.789394Z",
                "rest_pending": p.rest_pending && !p.rest_expired,
-               "delete_after": null, "workspace_bytes": p.objects.values().map(Vec::len).sum::<usize>()})
+               "delete_after": null, "workspace_bytes": p.objects.values().map(Vec::len).sum::<usize>(),
+               "take_back_when_done": p.take_back_when_done, "last_cloud_run": p.last_cloud_run})
     };
     match (req.method.as_str(), path.as_str()) {
         ("POST", x) if x == format!("{PREFIX}/workspace_handoff/{conv}") => {
@@ -278,8 +298,25 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                 body["sha"].as_str(),
                 p.refs.get("refs/elitea/handoff/1").map(String::as_str)
             );
-            p.state = "CLOUD_IDLE".into();
+            p.completes.push(body.clone());
+            if p.refuse_grant && body.get("continue").is_some() {
+                return Res::json(
+                    422,
+                    &json!({"error": "unattended_grant_refused", "message": "The platform refused the unattended grant (over_maximum).",
+                            "details": {"reason": "over_maximum", "field": "chain.max_continuations"}}),
+                );
+            }
+            p.take_back_when_done = body["take_back_when_done"] == json!(true);
             p.epoch += 1;
+            if body.get("continue").is_some() {
+                p.state = "CLOUD_RUNNING".into();
+                return Res::json(
+                    200,
+                    &json!({"state": "CLOUD_RUNNING", "epoch": p.epoch,
+                    "continued": {"execution_id": "e-cloud-1", "message_id": "m-cloud-1"}}),
+                );
+            }
+            p.state = "CLOUD_IDLE".into();
             Res::json(200, &json!({"state": "CLOUD_IDLE", "epoch": p.epoch}))
         }
         ("GET", x) if x == format!("{PREFIX}/workspace_handoff/{conv}") => {
@@ -519,6 +556,16 @@ async fn harness_full(
     drop_first: Option<(&'static str, usize)>,
     convo: Option<Arc<Mutex<crate::d0::tests::Convo>>>,
 ) -> Harness {
+    harness_scripted(env_source, drop_first, convo, None).await
+}
+
+/// [`harness_full`] whose model is `script` (the memory script when `None`).
+async fn harness_scripted(
+    env_source: Arc<dyn crate::handoff_settings::EnvSource>,
+    drop_first: Option<(&'static str, usize)>,
+    convo: Option<Arc<Mutex<crate::d0::tests::Convo>>>,
+    script: Option<crate::d0::tests::Script>,
+) -> Harness {
     let platform = Arc::new(Mutex::new(Platform {
         state: "LOCAL".into(),
         ..Platform::default()
@@ -527,7 +574,7 @@ async fn harness_full(
         crate::d0::tests::memory_platform_for(
             CONVERSATION,
             convo.clone(),
-            crate::d0::tests::memory_script(),
+            script.unwrap_or_else(crate::d0::tests::memory_script),
         )
     });
     let server = serve_dropping(drop_first, {
@@ -2527,4 +2574,428 @@ fn the_handoff_note_names_hooks_and_diagnostics() {
     let without = super::handoff_note(&snap, false, false);
     assert!(!without.contains("hooks"), "{without}");
     assert!(without.contains("diagnostics tool"), "{without}");
+}
+
+// ---------------------------------------------------------------------------
+// U5 (ADR-0045 decision 8): send while a local turn runs, take back when done
+// ---------------------------------------------------------------------------
+
+/// A tool that waits until the test opens its gate: the step in flight.
+struct GateTool {
+    entered: Arc<tokio::sync::Notify>,
+    open: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait]
+impl adk_core::Tool for GateTool {
+    fn name(&self) -> &str {
+        "gate"
+    }
+
+    fn description(&self) -> &str {
+        "Waits for the test."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({"type": "object", "properties": {}}))
+    }
+
+    fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self) -> bool {
+        true
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<dyn adk_core::ToolContext>,
+        _args: Value,
+    ) -> adk_core::Result<Value> {
+        self.entered.notify_one();
+        self.open.acquire().await.expect("gate").forget();
+        Ok(json!({"gated": true}))
+    }
+}
+
+struct GateToolset(Arc<dyn adk_core::Tool>);
+
+#[async_trait]
+impl adk_core::Toolset for GateToolset {
+    fn name(&self) -> &str {
+        "gates"
+    }
+
+    async fn tools(
+        &self,
+        _ctx: Arc<dyn adk_core::ReadonlyContext>,
+    ) -> adk_core::Result<Vec<Arc<dyn adk_core::Tool>>> {
+        Ok(vec![self.0.clone()])
+    }
+}
+
+/// A model that never stops working: every answer asks for the gate again.
+fn endless_gate_script() -> crate::d0::tests::Script {
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    Box::new(move |_body: &Value| {
+        let n = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::d0::tests::tool_call(&format!("call-gate-{n}"), "gate", &json!({}))
+    })
+}
+
+struct Running {
+    h: Harness,
+    entered: Arc<tokio::sync::Notify>,
+    open: Arc<tokio::sync::Semaphore>,
+    turn_id: String,
+    execution_id: String,
+}
+
+/// A harness whose thread runs a local turn that is inside its first step
+/// (the gate); `unattended` gives the turn a grant.
+async fn running_turn(unattended: Option<crate::d0::unattended::UnattendedTurn>) -> Running {
+    use crate::d0::turn::TurnRequest;
+    let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
+    let h = harness_scripted(
+        Arc::new(crate::handoff_settings::FixedEnv(Vec::new())),
+        None,
+        Some(convo),
+        Some(endless_gate_script()),
+    )
+    .await;
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let open = Arc::new(tokio::sync::Semaphore::new(0));
+    h.agents
+        .add_test_toolset(Arc::new(GateToolset(Arc::new(GateTool {
+            entered: entered.clone(),
+            open: open.clone(),
+        }))));
+    let started = h
+        .agents
+        .start(TurnRequest {
+            workspace_id: h.workspace_id.clone(),
+            project_id: 1,
+            conversation_id: json!(CONVERSATION),
+            application_id: 5,
+            version_id: 9,
+            prompt: "keep going until it is done".into(),
+            plan_mode: false,
+            bypass: false,
+            mentions: Vec::new(),
+            skills: Vec::new(),
+            compact: false,
+            model: None,
+            project_skills: Vec::new(),
+            command: None,
+            images: Vec::new(),
+            unattended,
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(20), entered.notified())
+        .await
+        .expect("the turn reached its first step");
+    Running {
+        h,
+        entered,
+        open,
+        turn_id: started.turn_id,
+        execution_id: started.execution_id,
+    }
+}
+
+/// Send while the turn is in its step; open the gate once the send asked
+/// for the stop.
+async fn send_while_running(run: &Running, options: super::SendOptions) -> super::Sent {
+    let host = run.h.host.clone();
+    let workspace_id = run.h.workspace_id.clone();
+    let send = tokio::spawn(async move {
+        host.send_with(&workspace_id, CONVERSATION, Vec::new(), false, options)
+            .await
+    });
+    for _ in 0..500 {
+        if run
+            .h
+            .events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.phase == "stopping")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The step in flight finishes after the stop was asked for.
+    run.open.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(30), send)
+        .await
+        .expect("the send finished")
+        .unwrap()
+        .expect("sent")
+}
+
+fn llm_requests(h: &Harness) -> usize {
+    h._server
+        .seen()
+        .iter()
+        .filter(|r| r.path == "/llm/v1/chat/completions")
+        .count()
+}
+
+#[tokio::test]
+async fn a_send_stops_the_running_turn_at_a_step_boundary_commits_it_and_continues_in_the_cloud() {
+    let run = running_turn(None).await;
+    let h = &run.h;
+    // The preview reads the folder while the thread's own turn runs.
+    let preview = h
+        .host
+        .preview(&h.workspace_id, CONVERSATION, Vec::new())
+        .await
+        .unwrap();
+    assert!(preview.running_turn);
+
+    let sent = send_while_running(
+        &run,
+        super::SendOptions {
+            take_back_when_done: None,
+            title: Some("Fix the login test".into()),
+        },
+    )
+    .await;
+    assert!(sent.stopped_turn);
+    assert!(sent.take_back_when_done, "on by default for a running turn");
+    assert_eq!(sent.state, "CLOUD_RUNNING");
+    assert_eq!(
+        sent.continued.as_ref().unwrap()["execution_id"],
+        "e-cloud-1"
+    );
+    assert!(sent.continue_refused.is_none());
+
+    // Not a cancel: the step in flight finished, its result is in the
+    // commit, and the model was not asked again.
+    assert_eq!(llm_requests(h), 1, "parked before the next model request");
+    let commit = h
+        ._server
+        .seen()
+        .into_iter()
+        .find(|r| {
+            r.path.contains(&format!(
+                "/local_turn_commit/prompt_lib/1/{}",
+                run.execution_id
+            ))
+        })
+        .expect("the turn was committed");
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    let calls = body["tool_calls"].as_object().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls.values().next().unwrap()["tool_output"]
+            .as_str()
+            .unwrap()
+            .contains("gated")
+    );
+    assert!(body.get("chain_outcome").is_none_or(Value::is_null));
+    let done = h
+        .emitter
+        .all()
+        .into_iter()
+        .find(|e| e.kind == "done" && e.turn_id == run.turn_id)
+        .unwrap();
+    assert_eq!(done.payload["handed_off"], true);
+    assert_eq!(done.payload["commit"], "pending");
+
+    // The commit landed before the send's snapshot; complete carried the
+    // continue and the flag.
+    let complete = h.platform.lock().unwrap().completes.clone();
+    assert_eq!(complete.len(), 1);
+    assert_eq!(complete[0]["take_back_when_done"], true);
+    assert_eq!(complete[0]["continue"]["prompt"], super::CONTINUE_PROMPT);
+    assert_eq!(complete[0]["continue"]["mode"], "build");
+    assert!(
+        complete[0]["continue"].get("grant").is_none(),
+        "an attended turn"
+    );
+    let record = h.history.take_back_of(CONVERSATION).unwrap().unwrap();
+    assert_eq!(record.title.as_deref(), Some("Fix the login test"));
+    assert_eq!(record.workspace_id, h.workspace_id);
+    drop(run.entered);
+}
+
+#[tokio::test]
+async fn a_refused_grant_completes_without_continue_and_says_why() {
+    use crate::d0::unattended::{UnattendedGrant, UnattendedTurn};
+    let grant = UnattendedGrant {
+        continue_step_limit: true,
+        goal_check: Some(false),
+        ..UnattendedGrant::default()
+    };
+    let run = running_turn(Some(UnattendedTurn::root(grant))).await;
+    run.h.platform.lock().unwrap().refuse_grant = true;
+    let sent = send_while_running(
+        &run,
+        super::SendOptions {
+            take_back_when_done: Some(false),
+            title: None,
+        },
+    )
+    .await;
+    let h = &run.h;
+    let complete = h.platform.lock().unwrap().completes.clone();
+    assert_eq!(complete.len(), 2, "retried without continue");
+    let grant = &complete[0]["continue"]["grant"];
+    assert_eq!(grant["continue_step_limit"], true);
+    assert_eq!(grant["chain_root_execution_id"], run.execution_id.as_str());
+    assert!(complete[1].get("continue").is_none());
+    assert!(complete[1].get("take_back_when_done").is_none());
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    assert!(sent.continued.is_none());
+    assert!(!sent.take_back_when_done);
+    assert!(
+        sent.continue_refused
+            .as_deref()
+            .unwrap()
+            .contains("waits for your next message")
+    );
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
+}
+
+#[test]
+fn the_take_back_decision_table() {
+    use super::take_back_mode;
+    assert_eq!(take_back_mode(Outcome::FastPath), Some(Mode::Apply));
+    assert_eq!(take_back_mode(Outcome::CleanMerge), Some(Mode::Apply));
+    assert_eq!(take_back_mode(Outcome::Conflicts), Some(Mode::Worktree));
+    assert_eq!(take_back_mode(Outcome::Error), None);
+}
+
+/// A send with "Take back when done", one cloud turn, and its run's outcome.
+async fn sent_with_take_back(outcome: &str) -> Harness {
+    let h = harness().await;
+    h.host
+        .send_with(
+            &h.workspace_id,
+            CONVERSATION,
+            Vec::new(),
+            false,
+            super::SendOptions {
+                take_back_when_done: Some(true),
+                title: Some("Greet the cloud".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(h.platform.lock().unwrap().take_back_when_done);
+    cloud_turn(&h);
+    h.platform.lock().unwrap().last_cloud_run = Some(json!({
+        "outcome": outcome, "execution_id": "e-cloud-1", "finished_at": "2026-11-03T10:00:00Z"
+    }));
+    h
+}
+
+fn notices(h: &Harness) -> Vec<(String, String)> {
+    h.events.2.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_completed_cloud_run_is_taken_back_at_catch_up_on_the_fast_path() {
+    let h = sent_with_take_back("completed").await;
+    // The record is in threads.sqlite (it survives a restart); the status
+    // says so.
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_some());
+    assert_eq!(
+        h.host.status(CONVERSATION, None).await.unwrap()["take_back_when_done"],
+        true
+    );
+    // The catch-up a start, a sign-in or the five-minute timer runs.
+    h.host.catch_up().await;
+    assert_eq!(
+        std::fs::read_to_string(h.folder.join("README.md")).unwrap(),
+        "hello from the cloud\n",
+        "applied into the folder"
+    );
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
+    assert_eq!(
+        notices(&h),
+        vec![(
+            "Took back Greet the cloud".to_owned(),
+            "The cloud run finished, and its changes are in your folder.".to_owned()
+        )]
+    );
+    // Nothing is left to do.
+    h.host.catch_up().await;
+    assert_eq!(notices(&h).len(), 1);
+}
+
+#[tokio::test]
+async fn conflicts_open_the_result_as_a_worktree() {
+    let h = sent_with_take_back("completed").await;
+    std::fs::write(h.folder.join("README.md"), "hello from the laptop\n").unwrap();
+    // The cloud's notification, as the page forwards it.
+    h.host
+        .run_finished(CONVERSATION, Some("cloud"), Some("completed"))
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(h.folder.join("README.md")).unwrap(),
+        "hello from the laptop\n",
+        "the folder is untouched"
+    );
+    assert_eq!(
+        h.platform.lock().unwrap().release.as_ref().unwrap()["outcome"],
+        "worktree"
+    );
+    let notices = notices(&h);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].0, "Opened Greet the cloud as a worktree");
+    assert!(notices[0].1.contains("same lines"));
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_run_that_did_not_complete_is_noticed_once_and_not_taken_back() {
+    let h = sent_with_take_back("failed").await;
+    // Not the cloud, or not this host's thread: nothing.
+    h.host
+        .run_finished(CONVERSATION, Some("desktop"), Some("failed"))
+        .await;
+    assert!(notices(&h).is_empty());
+    h.host
+        .run_finished(CONVERSATION, Some("cloud"), Some("failed"))
+        .await;
+    h.host.catch_up().await;
+    assert_eq!(
+        notices(&h),
+        vec![(
+            "The cloud run of Greet the cloud failed".to_owned(),
+            "It stays in the cloud and is not taken back. Take it back when you are ready."
+                .to_owned()
+        )]
+    );
+    assert_eq!(h.platform.lock().unwrap().state, "CLOUD_IDLE");
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_some());
+    // The person takes it back by hand: the record goes.
+    h.host.reclaim(CONVERSATION, false).await.unwrap();
+    let preflight = h.host.preflight(CONVERSATION, None).await.unwrap();
+    h.host
+        .apply(&preflight.preflight_id, Mode::Apply, None)
+        .await
+        .unwrap();
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
+}
+
+#[tokio::test]
+async fn an_older_server_without_last_cloud_run_follows_the_notification() {
+    let h = sent_with_take_back("completed").await;
+    h.platform.lock().unwrap().last_cloud_run = None;
+    // The timer alone knows nothing.
+    h.host.catch_up().await;
+    assert_eq!(h.platform.lock().unwrap().state, "CLOUD_IDLE");
+    h.host
+        .run_finished(CONVERSATION, Some("cloud"), Some("completed"))
+        .await;
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+    assert_eq!(notices(&h)[0].0, "Took back Greet the cloud");
 }

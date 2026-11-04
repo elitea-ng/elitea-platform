@@ -117,6 +117,18 @@ While the thread runs in the cloud, the same place shows **Take back**: select i
 
 When a thread cannot move (your deployment or project has the cloud executor off, or the thread has no messages yet), nothing is shown: the thread runs on your computer.
 
+You can send a thread while its turn is still running, for example before you close your laptop:
+
+- The dialog says that a turn is running. When you select **Send to cloud**, the turn stops at its next step, so nothing it has done is lost. The turn is then saved, and the cloud continues it from there with the same mode and, for a **To completion** run, the same limits.
+- If the platform does not allow the run to continue in the cloud (for example, its limits are lower than this run's), the thread is still sent. The dialog says why, and the thread waits in the cloud for your next message. Select **OK** to close the dialog.
+- A turn that is waiting for your answer (an approval, or **Continue?** at its step limit) stops only after you answer it, or when the question times out.
+
+**Take back when done** brings the thread back to this computer by itself when its cloud run completes. It is on by default when a turn is running, and you can turn it on or off in the dialog before you send. A thread sent this way shows **Takes back when done** above the text box. When the run completes, the app takes the thread back even after a restart. It also checks when you sign in, and every few minutes. You do not need to keep the thread open:
+
+- If your folder did not change, or the changes do not overlap, the cloud's changes are applied to your folder. A notice says **Took back** and the thread's name.
+- If your folder and the cloud changed the same lines, the cloud's version opens as a separate worktree, and your folder is not changed. A notice says **Opened … as a worktree**.
+- If the run failed, waits for you, or stopped at its limit, the thread stays in the cloud. A notice tells you once, so that you can look at it and take it back yourself.
+
 ### The Changes tab
 
 The **Changes** tab on the right lists what each turn changed, newest first. Each turn is one line: the start of your message, the number of files and the lines added and removed. Select it to fold or unfold the turn; the newest turn starts unfolded. Point at a turn for **Undo** (or **Restore folder** after an undo).

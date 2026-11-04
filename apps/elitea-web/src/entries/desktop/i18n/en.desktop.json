@@ -1066,5 +1066,10 @@
   "workspace.runToCompletion.planMode": "Run to completion is not used in Plan mode: the plan waits for you. It applies in Act and Bypass mode.",
   "workspace.chain.resumed": "Resumed after restart ({{n}})",
   "workspace.chain.resumedAfterRestart": "Resumed after restart",
-  "workspace.history.continue": "Continue"
+  "workspace.history.continue": "Continue",
+  "workspace.handoff.ok": "OK",
+  "workspace.handoff.phase.stopping": "Stopping the running turn at its next step",
+  "workspace.handoff.runningTurn": "A turn is running in this thread. Sending stops it at its next step, saves it, and the cloud continues it.",
+  "workspace.handoff.takeBackWhenDoneLabel": "Take back when done: bring the thread back to this computer by itself when the cloud run completes",
+  "workspace.handoff.takesBackWhenDone": "Takes back when done: this computer takes it back by itself when its cloud run completes."
 }
