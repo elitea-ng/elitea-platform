@@ -19,7 +19,7 @@ export type ReasoningEffort = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['auto', 'off', 'low', 'medium', 'high'];
 
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
