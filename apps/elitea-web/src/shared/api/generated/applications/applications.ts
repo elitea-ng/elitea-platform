@@ -28042,12 +28042,15 @@ export const getRunPipelineInboundTriggerUrl = (
  * the trigger's `prompt`, then the call's `input`, or its payload in
  * the untrusted-data envelope. Each call starts a new chain with the
  * trigger origin `webhook`, and the chain's end reaches the creator as
- * `run_finished`. A thread that is not idle in the cloud is answered
- * 409 `thread_busy`; a thread that is gone gets the one 401.
+ * `run_finished`. The turn's `on_approval_required` snapshot is written
+ * in the same transaction that starts it. A thread that is not idle in
+ * the cloud is answered 409 `thread_busy`; a thread that is gone gets
+ * the one 401.
  *
  * An agent trigger may have at most 4 runs streaming and 30 runs
  * started in 10 minutes. Over that, the call is answered 429 with
- * `Retry-After`.
+ * `Retry-After`. A `workspace_thread` trigger has the same limit, over
+ * the thread's turns it started and the thread's answers that stream.
  *
  * ## Events that start no run
  *
