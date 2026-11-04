@@ -212,6 +212,7 @@ func TestRetiredPreparedDeliveryReturnsTypedFenceFreeACK(t *testing.T) {
 				true,
 				false,
 				int64(1),
+				false,
 			}}}}}
 			generated := false
 			repository, err := newClaimsRepository(
@@ -242,7 +243,7 @@ func TestPublishedBeforeDeadlineClaimedAfterDeadlineRetiresWithoutAuthority(t *t
 		rowResults: []scriptedRow{
 			{values: []any{
 				"command-1", "RUNNING", "DISPATCHED", "NOT_STARTED", "", "outbox-1", true,
-				digest[:], digest[:], false, "", true, false, int64(1),
+				digest[:], digest[:], false, "", true, false, int64(1), false,
 			}},
 			{values: []any{int64(1), "", ""}},
 		},
@@ -1243,6 +1244,7 @@ func claimExecutionRow(desiredState, jobState string, published bool, preparedDi
 		false,
 		authorityGranted,
 		int64(1),
+		false,
 	}}
 }
 
@@ -1399,5 +1401,39 @@ func TestExpiredClaimRecoversTerminalOutputAcrossProducerReplacement(t *testing.
 	}
 	if !strings.Contains(settlementStore.rowCalls[3].sql, "source_claim.release_reason = 'LEASE_EXPIRED'") || !strings.Contains(settlementStore.rowCalls[3].sql, "o.claim_attempt < $12") {
 		t.Fatal("settlement query lacks bounded predecessor handoff predicates")
+	}
+}
+
+// FU-250 (M1): a wake whose response holds an authorize decision is granted
+// only to a worker that opts in to applying it with its credential. Any
+// other claim is retry-later with no authority allocated; an opted-in claim
+// goes on to the ordinary claim path.
+func TestAWakeWithAnAuthorizeIsGrantedOnlyToAnOptedInWorker(t *testing.T) {
+	digest := runtimedomain.SHA256([]byte("published-signed-envelope"))
+	for _, optedIn := range []bool{false, true} {
+		row := claimExecutionRow("RUNNING", "DISPATCHED", true, digest[:], digest[:], true)
+		row.values[len(row.values)-1] = true
+		store := &scriptedStore{scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{row, {err: pgx.ErrNoRows}}}}
+		generated := false
+		repository, err := newClaimsRepository(
+			store,
+			func() (string, error) { generated = true; return "claim", nil },
+			func() (runtimedomain.FenceToken, error) { generated = true; return runtimedomain.FenceToken{}, nil },
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := testClaimRequest(digest)
+		request.FanoutDelegatedCredentials = optedIn
+		decision, _ := repository.ClaimValidation(context.Background(), request, executionapp.MaxClaimLeaseTTLMillis)
+		if !optedIn {
+			if decision.Disposition != executionapp.ClaimRetryLaterNoACK || generated || len(store.rowCalls) != 1 {
+				t.Fatalf("an older worker reached the wake: %+v generated=%t rows=%d", decision, generated, len(store.rowCalls))
+			}
+			continue
+		}
+		if len(store.rowCalls) < 2 {
+			t.Fatalf("an opted-in worker was stopped at the gate: %+v rows=%d", decision, len(store.rowCalls))
+		}
 	}
 }

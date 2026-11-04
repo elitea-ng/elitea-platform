@@ -85,8 +85,9 @@ impl FanoutStop {
 
 /// One decision as the private fetch returned it (contract §7). The runner
 /// never inspects `action`, `value` or `credential_ref`; the child adapter
-/// turns them into resume controls.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// turns them into resume controls. Its `Debug` never prints the value or
+/// the credential reference (FU-250): only whether they are present.
+#[derive(Clone, Eq, PartialEq)]
 pub struct FetchedDecision {
     pub interrupt_key: String,
     pub request_id: String,
@@ -95,6 +96,24 @@ pub struct FetchedDecision {
     pub action: String,
     pub value: Option<String>,
     pub credential_ref: Option<String>,
+}
+
+impl std::fmt::Debug for FetchedDecision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FetchedDecision")
+            .field("interrupt_key", &self.interrupt_key)
+            .field("request_id", &self.request_id)
+            .field("revision", &self.revision)
+            .field("decision_sha256", &self.decision_sha256)
+            .field("action", &self.action)
+            .field("value", &self.value.as_ref().map(|_| "<redacted>"))
+            .field(
+                "credential_ref",
+                &self.credential_ref.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// One fetch result.

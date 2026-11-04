@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 import type { AnswerCanvasSelection } from './AnswerContent';
 import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
@@ -81,6 +83,24 @@ export interface ApplicationAnswerContinuation {
    * features, by `widgets/chat-box`.
    */
   readonly renderAuthModal?: ChatContinueProps['renderAuthModal'];
+  /**
+   * FU-250: renders a fan-out sign-in card the run's own user can authorize.
+   * Filled by `widgets/chat-box` for the same reason as `renderAuthModal`: the
+   * sign-in itself lives in `features/mcps`.
+   */
+  readonly renderLedgerSignIn?: ((props: LedgerSignInSlotProps) => ReactNode) | undefined;
+}
+
+/** What a fan-out sign-in card's slot needs (FU-250). */
+export interface LedgerSignInSlotProps {
+  readonly toolkitId: number;
+  readonly toolkitType: string | undefined;
+  readonly serverUrl: string;
+  readonly message: string;
+  readonly disabled: boolean;
+  /** The sign-in finished: decide the card with the grant's opaque reference. */
+  readonly onAuthorized: (credentialRef: string) => void;
+  readonly onSkip: () => void;
 }
 
 /** Message feedback (#880) props, grouped to stay under the component-props budget. */

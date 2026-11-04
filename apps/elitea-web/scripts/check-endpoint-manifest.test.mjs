@@ -889,7 +889,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // desktop host calls them, so the web manifest count is unchanged.
 // 466 -> 469 (issue 1437, ADR-0045 decision 6): getPushConfig,
 // createPushSubscription and deletePushSubscription, web push opt-in.
-const GENERATED_OPERATION_COUNT = 469;
+// 469 -> 470 (FU-250): getMcpAuthorizationChallenge, the consent metadata a
+// fan-out sign-in card reads before it opens the sign-in dialog. Like the
+// other MCP sign-in calls, it is not in the manifest.
+const GENERATED_OPERATION_COUNT = 470;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -72,3 +72,4 @@ export { getExecutionTokens } from './lib/executionTokens';
 export { startMcpAuthFlow } from './lib/oauthFlow';
 
 export { getAuthorizationReference } from './lib/authorizationReference';
+export { readMcpAuthorizationChallenge, type McpAuthorizationChallengeOutcome } from './api/mcpAuthorizationChallenge';

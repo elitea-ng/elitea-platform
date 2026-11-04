@@ -218,6 +218,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/mcp_oauth_proxy/7", "/api/v2/elitea_core/mcp_oauth_proxy/8", "models.applications.predict.post"},
 	{http.MethodPost, "/api/v2/elitea_core/mcp_dcr_proxy/7", "/api/v2/elitea_core/mcp_dcr_proxy/8", "models.applications.predict.post"},
 	{http.MethodPost, "/api/v2/elitea_core/mcp_sync_tools/prompt_lib/7", "/api/v2/elitea_core/mcp_sync_tools/prompt_lib/8", "models.applications.tool.patch"},
+	// FU-250: the sign-in card's challenge is part of the same connection
+	// action as the two proxies, so it takes the run permission too.
+	{http.MethodPost, "/api/v2/elitea_core/mcp_authorization_challenge/prompt_lib/7/19", "/api/v2/elitea_core/mcp_authorization_challenge/prompt_lib/8/19", "models.applications.predict.post"},
 	{http.MethodGet, "/api/v2/elitea_core/analytics/prompt_lib/7", "/api/v2/elitea_core/analytics/prompt_lib/8", v2analytics.ViewPermission},
 	{http.MethodGet, "/api/v2/elitea_core/users/prompt_lib/7", "/api/v2/elitea_core/users/prompt_lib/8", "configuration.users.users.view"},
 	{http.MethodGet, "/api/v2/elitea_core/roles/prompt_lib/7", "/api/v2/elitea_core/roles/prompt_lib/8", "configuration.roles.roles.view"},

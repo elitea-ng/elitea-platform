@@ -248,6 +248,13 @@ pub struct DelegatedAuthorizationRequirement {
     /// their encoding is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     authorization_reference: Option<String>,
+    /// The frozen toolkit this requirement belongs to (FU-250), kept apart
+    /// from `resource_metadata` so a toolkit without configured OAuth
+    /// metadata still names it, while the model namespace
+    /// (`authorization_tool_name`) and the frozen authority stay unchanged.
+    /// Absent when unknown, so earlier encodings are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    toolkit_id: Option<u64>,
 }
 
 /// The encoded requirement is persisted (interrupt state) and compared, so
@@ -342,6 +349,7 @@ impl DelegatedAuthorizationRequirement {
             www_authenticate,
             resource_metadata: None,
             authorization_reference: None,
+            toolkit_id: None,
         };
         valid_requirement(&requirement).then_some(requirement)
     }
@@ -365,6 +373,7 @@ impl DelegatedAuthorizationRequirement {
             www_authenticate: None,
             resource_metadata: None,
             authorization_reference: Some(authorization_reference),
+            toolkit_id: None,
         };
         valid_requirement(&requirement).then_some(requirement)
     }
@@ -404,6 +413,8 @@ impl DelegatedAuthorizationRequirement {
     }
 
     pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+        let id = id.filter(|id| *id > 0 && i64::try_from(*id).is_ok());
+        self.toolkit_id = id;
         if let Some(id) = id
             && let Some(metadata) = self
                 .resource_metadata
@@ -417,6 +428,21 @@ impl DelegatedAuthorizationRequirement {
 
     pub fn toolkit_name(&self) -> &str {
         &self.toolkit_name
+    }
+
+    /// The frozen toolkit this requirement names (`with_toolkit_id`), when
+    /// the toolkit was materialized from a saved reference.
+    pub fn toolkit_id(&self) -> Option<u64> {
+        self.toolkit_id.or_else(|| self.metadata_toolkit_id())
+    }
+
+    fn metadata_toolkit_id(&self) -> Option<u64> {
+        self.resource_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("toolkit_id"))
+            .and_then(Value::as_str)
+            .and_then(|id| id.parse::<u64>().ok())
+            .filter(|id| *id > 0)
     }
 
     pub fn toolkit_type(&self) -> &str {
@@ -594,8 +620,11 @@ fn valid_requirement(requirement: &DelegatedAuthorizationRequirement) -> bool {
         return false;
     }
     requirement
-        .resource_metadata_url()
-        .is_none_or(|url| valid_https_url(url).is_some())
+        .toolkit_id
+        .is_none_or(|id| id > 0 && i64::try_from(id).is_ok())
+        && requirement
+            .resource_metadata_url()
+            .is_none_or(|url| valid_https_url(url).is_some())
         && requirement
             .resource_metadata()
             .is_none_or(valid_resource_metadata)
@@ -809,6 +838,50 @@ mod tests {
     /// The persisted encoding sorts the nested metadata whatever
     /// `preserve_order` this build unifies (`test-preserve-order` runs it
     /// with it on); the expected text is the worker's pre-move output.
+    /// FU-250: an MCP toolkit with no configured OAuth metadata (a
+    /// dynamically registered client) still names its frozen toolkit, so its
+    /// fan-out card can offer a sign-in. The model namespace and the frozen
+    /// authority are unchanged, and a requirement without an id encodes as
+    /// before.
+    #[test]
+    fn a_toolkit_without_configured_metadata_still_names_its_toolkit() {
+        let base = DelegatedAuthorizationRequirement::new(
+            "Records".to_owned(),
+            "mcp".to_owned(),
+            "https://records.example.invalid/mcp".to_owned(),
+            None,
+            None,
+        )
+        .unwrap();
+        let named = base.clone().with_toolkit_id(Some(5));
+        assert_eq!(named.toolkit_id(), Some(5));
+        assert!(named.resource_metadata().is_none());
+        assert_eq!(
+            named.authorization_tool_name(),
+            base.authorization_tool_name()
+        );
+        assert!(named.same_authority(&base));
+        let encoded = encode_delegated_authorization_requirement(&named).unwrap();
+        assert_eq!(
+            decode_delegated_authorization_requirement(&encoded)
+                .unwrap()
+                .toolkit_id(),
+            Some(5)
+        );
+        assert!(
+            !encode_delegated_authorization_requirement(&base)
+                .unwrap()
+                .contains("toolkit_id")
+        );
+        assert_eq!(base.clone().with_toolkit_id(Some(0)).toolkit_id(), None);
+        assert!(
+            decode_delegated_authorization_requirement(
+                &encoded.replace(r#""toolkit_id":5"#, r#""toolkit_id":0"#)
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn encoded_requirement_metadata_is_order_explicit() {
         let metadata: Value = serde_json::from_str(

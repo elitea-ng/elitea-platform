@@ -412,6 +412,7 @@ impl PipelineDefinition {
             llm: runtimes.llm.clone(),
             events: runtimes.events.clone(),
             root_session: binding.root_session.clone(),
+            delegated_servers: runtimes.delegated_servers(),
         });
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
             binding.authority.clone(),
@@ -585,6 +586,8 @@ struct CompilerParallelBranches {
     llm: Option<Arc<dyn PipelineLlmAgentFactory>>,
     events: Option<PipelineNodeEventSender>,
     root_session: Option<Arc<dyn RootSessionSource>>,
+    /// FU-250: the servers the run holds a resolved token for.
+    delegated_servers: Arc<BTreeSet<String>>,
 }
 
 impl CompilerParallelBranches {
@@ -772,6 +775,10 @@ impl CompilerParallelBranches {
 
 #[async_trait]
 impl ParallelBranchGraphFactory for CompilerParallelBranches {
+    fn delegated_credential(&self, server_url: &str) -> bool {
+        self.delegated_servers.contains(server_url)
+    }
+
     fn validate_branch(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,

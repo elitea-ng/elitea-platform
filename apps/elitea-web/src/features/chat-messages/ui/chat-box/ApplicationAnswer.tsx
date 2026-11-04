@@ -112,7 +112,7 @@ export function ApplicationAnswer({
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
-  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, hideContinueButton = false } = {},
+  continuation: { onContinueMcpExecution, onContinueTokenLimitExecution, renderAuthModal, renderLedgerSignIn, hideContinueButton = false } = {},
   hitl: { hitlInterrupt, hitlInterrupts, onHitlResume, staticPause } = {},
   feedback: { projectId: feedbackProjectId, enabled: feedbackEnabled = true } = {},
 }: ApplicationAnswerProps): ReactNode {
@@ -327,7 +327,7 @@ export function ApplicationAnswer({
             messageId={messageId}
             onHitlResume={onHitlResume}
             staticPause={staticPause}
-            authorization={{ onContinueMcpExecution, renderAuthModal }}
+            authorization={{ onContinueMcpExecution, renderAuthModal, renderLedgerSignIn }}
             confirmation={!hideContinueButton && !!requiresConfirmationSignal ? (
               <ChatContinue
                 requiresConfirmation

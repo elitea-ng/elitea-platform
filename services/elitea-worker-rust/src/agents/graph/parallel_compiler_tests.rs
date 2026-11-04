@@ -240,6 +240,7 @@ fn factory() -> (CompilerParallelBranches, ParallelNodeDefinition) {
         .collect();
     (
         CompilerParallelBranches {
+            delegated_servers: Arc::default(),
             owned,
             state_types: pipeline.state,
             resolver: Some(Arc::new(UnavailableResolver)),

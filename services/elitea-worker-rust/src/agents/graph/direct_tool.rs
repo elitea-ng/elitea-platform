@@ -717,9 +717,7 @@ impl DirectToolNode {
         argument_digest: &str,
     ) -> NodeOutput {
         let message = requirement.user_message();
-        NodeOutput::interrupt_with_data(
-            &message,
-            json!({
+        let mut data = json!({
                 "schema_revision": MCP_AUTHORIZATION_SCHEMA,
                 "type": "hitl",
                 "guardrail_type": "mcp_auth",
@@ -738,8 +736,9 @@ impl DirectToolNode {
                 "resource_metadata_url": requirement.resource_metadata_url(),
                 "www_authenticate": requirement.www_authenticate(),
                 "resource_metadata": requirement.resource_metadata(),
-            }),
-        )
+        });
+        with_pause_toolkit_id(&mut data, requirement);
+        NodeOutput::interrupt_with_data(&message, data)
     }
 
     fn mcp_authorization_stopped(&self, remaining: Value, refresh_failed: bool) -> NodeOutput {
@@ -1830,4 +1829,18 @@ pub(crate) enum DirectToolExecutionError {
     ResourceExhausted,
     #[error("the direct-tool node runtime is unavailable")]
     Unavailable,
+}
+
+/// FU-250: a delegated sign-in pause names its frozen toolkit, so its fan-out
+/// card can carry `display.toolkit_id` and be authorized with a credential
+/// bound to that toolkit. Written only when the toolkit is known, and only by
+/// this Worker: a pause stored earlier has no `toolkit_id`, so its card
+/// re-raises byte-identical and stays skip-only.
+pub(crate) fn with_pause_toolkit_id(
+    data: &mut Value,
+    requirement: &DelegatedAuthorizationRequirement,
+) {
+    if let (Some(id), Some(object)) = (requirement.toolkit_id(), data.as_object_mut()) {
+        object.insert("toolkit_id".to_owned(), Value::from(id));
+    }
 }

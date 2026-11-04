@@ -47,6 +47,7 @@ export const executionInterruptErrorMessageMax = 512;
 export const ExecutionInterruptError = zod.object({
   error: zod.enum([
     "agent_interrupt_already_resolved",
+    "agent_interrupt_credential_refused",
     "agent_interrupt_invalid_decision",
     "agent_interrupt_not_found",
   ]),

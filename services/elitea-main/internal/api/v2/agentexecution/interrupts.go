@@ -123,17 +123,9 @@ func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authCo
 			writeInterruptError(w, r, domain.ErrInvalidDecision, fields)
 			return
 		}
-		decision, canonical, err := domain.ParseDecisionRequest(raw)
+		_, canonical, err := domain.ParseDecisionRequest(raw)
 		if err != nil {
 			writeInterruptError(w, r, err, fields)
-			return
-		}
-		// A delegated sign-in decided from a card is not wired to its
-		// credential reference yet (FU-250): refused typed, never resumed
-		// "authorized" without the credential. Skip stays.
-		if decision.Action == domain.ActionAuthorize {
-			writeInterruptCode(w, http.StatusBadRequest, "agent_interrupt_invalid_decision",
-				"Signing in from a parallel branch card is not available yet; choose Skip.")
 			return
 		}
 		result, err := useCase.Decide(r.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Canonical: canonical})
@@ -208,6 +200,12 @@ func writeInterruptError(w http.ResponseWriter, r *http.Request, err error, fiel
 		writeInterruptCode(w, http.StatusNotFound, "agent_interrupt_not_found", "This interrupt does not exist.")
 	case errors.Is(err, domain.ErrAlreadyResolved):
 		writeInterruptCode(w, http.StatusConflict, "agent_interrupt_already_resolved", "This request was already answered.")
+	case errors.Is(err, domain.ErrAuthorizeUnavailable):
+		writeInterruptCode(w, http.StatusBadRequest, "agent_interrupt_invalid_decision",
+			"Signing in from this card is not available; choose Skip.")
+	case errors.Is(err, domain.ErrCredentialRefused):
+		writeInterruptCode(w, http.StatusConflict, "agent_interrupt_credential_refused",
+			"The sign-in could not be used for this run. Only the person who started the run can sign in for it.")
 	case errors.Is(err, domain.ErrNotAllowed):
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):

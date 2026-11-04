@@ -41,15 +41,40 @@ to the worker never goes stale mid-run.
 
 The tool catalogue is deliberately tiny and deterministic: one `echo` tool that
 returns its own argument. A test asserts on a string it supplied.
+
+A TEST-ONLY OAUTH AUTHORIZATION SERVER FOR `/mcp-auth` (FU-250). The
+authorization-demanding twin can also be signed into, so a browser run proves
+Main's real delegated sign-in: discovery (RFC 9728 and RFC 8414 documents),
+dynamic client registration (RFC 7591, public clients), the authorization code
+with S256 PKCE (RFC 7636), and the code exchange. The mock holds Main to the
+real checks: `/authorize` refuses an unknown client, a `redirect_uri` that was
+not registered, a missing `state` or a missing S256 challenge; `/token` refuses
+a reused or expired code, another client's code, another `redirect_uri` and a
+verifier that does not match the challenge. A `resource` indicator, when sent,
+must name `/mcp-auth`. Each exchange issues its own random bearer with a
+`test-only-` prefix, minted at run time and never written anywhere; `/mcp-auth`
+answers like `/mcp` only for a bearer this process issued.
+
+The browser opens `/authorize` itself, so that one endpoint may be served on a
+second, browser-facing listener (MOCK_MCP_PUBLIC_PORT, with its own certificate
+and key) that answers nothing else. Without that listener `/authorize` is
+served on the main port. Discovery, registration and the exchange always stay
+on the main port, which only Main and the worker reach.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
 import ssl
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 PORT = int(os.environ.get("MOCK_MCP_PORT", "8443"))
 CERT_FILE = os.environ.get("MOCK_MCP_CERT", "/opt/mock-mcp/tls/server-chain.crt")
@@ -85,6 +110,106 @@ RESOURCE_METADATA_URL = os.environ.get(
     "MOCK_MCP_RESOURCE_METADATA_URL",
     "https://mcp-mock:8443/.well-known/oauth-protected-resource",
 )
+
+# The test-only authorization server (see the module docstring). The issuer is
+# this server's own origin; the protected resource is `/mcp-auth` on it.
+ISSUER = os.environ.get("MOCK_MCP_ISSUER", "https://mcp-mock:8443")
+PROTECTED_RESOURCE = ISSUER + AUTH_PATH
+PUBLIC_PORT = int(os.environ.get("MOCK_MCP_PUBLIC_PORT") or 0)
+PUBLIC_CERT_FILE = os.environ.get("MOCK_MCP_PUBLIC_CERT", "")
+PUBLIC_KEY_FILE = os.environ.get("MOCK_MCP_PUBLIC_KEY", "")
+AUTHORIZE_URL = os.environ.get("MOCK_MCP_PUBLIC_AUTHORIZE_URL") or ISSUER + "/authorize"
+
+# Every table is bounded: a fixture must not grow without limit.
+MAX_ENTRIES = 64
+CODE_SECONDS = 120
+TOKEN_SECONDS = 3600
+MAX_FORM_BYTES = 16 * 1024
+
+
+class OAuthState:
+    """Registered clients, outstanding codes and issued bearers, in memory."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._clients: dict[str, list[str]] = {}
+        self._codes: dict[str, dict] = {}
+        self._tokens: dict[str, float] = {}
+
+    @staticmethod
+    def _bounded(table: dict) -> None:
+        while len(table) >= MAX_ENTRIES:
+            table.pop(next(iter(table)))
+
+    def register(self, redirect_uris: list[str]) -> str:
+        client_id = "test-only-client-" + secrets.token_urlsafe(12)
+        with self._lock:
+            self._bounded(self._clients)
+            self._clients[client_id] = list(redirect_uris)
+        return client_id
+
+    def redirect_uris(self, client_id: str) -> list[str] | None:
+        with self._lock:
+            return self._clients.get(client_id)
+
+    def issue_code(self, grant: dict) -> str:
+        code = secrets.token_urlsafe(32)
+        with self._lock:
+            self._bounded(self._codes)
+            self._codes[code] = dict(grant, expires=time.monotonic() + CODE_SECONDS)
+        return code
+
+    def take_code(self, code: str) -> dict | None:
+        """A code is single-use: it is removed whether or not the exchange succeeds."""
+        with self._lock:
+            grant = self._codes.pop(code, None)
+        if grant is None or grant["expires"] < time.monotonic():
+            return None
+        return grant
+
+    def issue_token(self) -> str:
+        token = "test-only-" + secrets.token_urlsafe(24)
+        with self._lock:
+            self._bounded(self._tokens)
+            self._tokens[token] = time.monotonic() + TOKEN_SECONDS
+        return token
+
+    def token_valid(self, token: str) -> bool:
+        with self._lock:
+            expires = self._tokens.get(token)
+        return expires is not None and expires >= time.monotonic()
+
+
+OAUTH = OAuthState()
+
+
+def _pkce_matches(verifier: str, challenge: str) -> bool:
+    if not 43 <= len(verifier) <= 128:
+        return False
+    digest = hashlib.sha256(verifier.encode("ascii", "replace")).digest()
+    expected = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return secrets.compare_digest(expected, challenge)
+
+
+def _protected_resource_metadata() -> dict:
+    return {
+        "resource": PROTECTED_RESOURCE,
+        "authorization_servers": [ISSUER],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+def _authorization_server_metadata() -> dict:
+    return {
+        "issuer": ISSUER,
+        "authorization_endpoint": AUTHORIZE_URL,
+        "token_endpoint": ISSUER + "/token",
+        "registration_endpoint": ISSUER + "/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+    }
 
 ECHO_TOOL = {
     "name": "echo",
@@ -262,9 +387,141 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.log_message("%s", "401 authorization required on " + AUTH_PATH)
 
+    def _authorized(self) -> bool:
+        """Does the request carry a bearer this process issued?"""
+        header = self.headers.get("Authorization") or ""
+        scheme, _, token = header.partition(" ")
+        return scheme.lower() == "bearer" and OAUTH.token_valid(token.strip())
+
+    def _send_oauth_error(self, code: int, error: str) -> None:
+        body = json.dumps({"error": error}).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        self.log_message("%s", "oauth refused: " + error)
+
+    def _read_body(self) -> bytes | None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length < 0 or length > MAX_FORM_BYTES:
+            return None
+        return self.rfile.read(length) if length > 0 else b""
+
+    def _authorize(self) -> None:
+        """Issue a code for a registered client and redirect URI, with state and S256 PKCE.
+
+        An unknown client or redirect URI is answered here, never redirected
+        (RFC 6749 §4.1.2.1). Consent is implicit: this is a fixture.
+        """
+        query = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
+        client_id = query.get("client_id", "")
+        redirect_uri = query.get("redirect_uri", "")
+        registered = OAUTH.redirect_uris(client_id)
+        if registered is None:
+            self._send_oauth_error(400, "invalid_client")
+            return
+        if redirect_uri not in registered:
+            self._send_oauth_error(400, "invalid_redirect_uri")
+            return
+        state = query.get("state", "")
+        challenge = query.get("code_challenge", "")
+        resource = query.get("resource")
+        if (
+            query.get("response_type") != "code"
+            or not state
+            or query.get("code_challenge_method") != "S256"
+            or not 43 <= len(challenge) <= 128
+            or (resource is not None and resource != PROTECTED_RESOURCE)
+        ):
+            self._send_oauth_error(400, "invalid_request")
+            return
+        code = OAUTH.issue_code(
+            {"client_id": client_id, "redirect_uri": redirect_uri, "challenge": challenge, "resource": resource}
+        )
+        separator = "&" if "?" in redirect_uri else "?"
+        self.send_response(302)
+        self.send_header("Location", redirect_uri + separator + urlencode({"code": code, "state": state}))
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.log_message("%s", "authorize: code issued")
+
+    def _token(self) -> None:
+        raw = self._read_body()
+        if raw is None:
+            self._send_oauth_error(400, "invalid_request")
+            return
+        form = {key: values[0] for key, values in parse_qs(raw.decode("utf-8", "replace")).items()}
+        if form.get("grant_type") != "authorization_code":
+            self._send_oauth_error(400, "unsupported_grant_type")
+            return
+        grant = OAUTH.take_code(form.get("code", ""))
+        resource = form.get("resource")
+        if (
+            grant is None
+            or grant["client_id"] != form.get("client_id")
+            or grant["redirect_uri"] != form.get("redirect_uri")
+            or not _pkce_matches(form.get("code_verifier", ""), grant["challenge"])
+            or (resource is not None and resource != PROTECTED_RESOURCE)
+        ):
+            self._send_oauth_error(400, "invalid_grant")
+            return
+        body = json.dumps(
+            {"access_token": OAUTH.issue_token(), "token_type": "Bearer", "expires_in": TOKEN_SECONDS}
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        self.log_message("%s", "token: bearer issued")
+
+    def _register(self) -> None:
+        raw = self._read_body()
+        try:
+            metadata = json.loads(raw.decode("utf-8")) if raw else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            metadata = None
+        uris = metadata.get("redirect_uris") if isinstance(metadata, dict) else None
+        if (
+            not isinstance(uris, list)
+            or not 1 <= len(uris) <= 4
+            or not all(isinstance(uri, str) and urlsplit(uri).scheme in ("http", "https") for uri in uris)
+        ):
+            self._send_oauth_error(400, "invalid_redirect_uri")
+            return
+        client_id = OAUTH.register(uris)
+        self._send_json(
+            201,
+            {
+                "client_id": client_id,
+                "client_id_issued_at": int(time.time()),
+                "redirect_uris": uris,
+                "token_endpoint_auth_method": "none",
+                "grant_types": ["authorization_code"],
+                "response_types": ["code"],
+            },
+        )
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
-        if self.path.split("?", 1)[0] == AUTH_PATH:
+        path = self.path.split("?", 1)[0]
+        if path == AUTH_PATH:
+            if self._authorized():
+                self._send_empty(405)
+                return
             self._send_auth_challenge()
+            return
+        if path in ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource" + AUTH_PATH):
+            self._send_json(200, _protected_resource_metadata())
+            return
+        if path == "/.well-known/oauth-authorization-server":
+            self._send_json(200, _authorization_server_metadata())
+            return
+        if path == "/authorize" and not PUBLIC_PORT:
+            self._authorize()
             return
         if self.path.split("?", 1)[0] == "/healthz":
             self._send_json(200, {"ok": True})
@@ -281,14 +538,21 @@ class Handler(BaseHTTPRequestHandler):
         self._send_empty(405)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib name
-        if self.path.split("?", 1)[0] == AUTH_PATH:
+        path = self.path.split("?", 1)[0]
+        if path == "/token":
+            self._token()
+            return
+        if path == "/register":
+            self._register()
+            return
+        if path == AUTH_PATH and not self._authorized():
             # Refused BEFORE the body is read: an OAuth-protected server does
             # not need to see the request to know the caller has no token, and
             # answering at the same point for `initialize` and for a later call
             # keeps the challenge independent of how far the session got.
             self._send_auth_challenge()
             return
-        if self.path.split("?", 1)[0] != "/mcp":
+        if path not in ("/mcp", AUTH_PATH):
             self._send_empty(404)
             return
         length = int(self.headers.get("Content-Length") or 0)
@@ -339,11 +603,27 @@ class LoggingTLSServer(ThreadingHTTPServer):
             raise
 
 
-def main() -> int:
-    for path in (CERT_FILE, KEY_FILE):
-        if not os.path.exists(path):
-            sys.stderr.write("mock-mcp: missing TLS material at %s\n" % path)
-            return 1
+class PublicHandler(Handler):
+    """The browser-facing listener: `/authorize` and nothing else."""
+
+    # One request per connection: a refused request's unread body can never be
+    # parsed as the next request.
+    protocol_version = "HTTP/1.0"
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib name
+        if self.path.split("?", 1)[0] == "/authorize":
+            self._authorize()
+            return
+        self._send_empty(404)
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib name
+        self._send_empty(404)
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib name
+        self._send_empty(404)
+
+
+def _tls_server(port: int, handler, cert_file: str, key_file: str) -> LoggingTLSServer:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     # PROTOCOL_TLS_SERVER negotiates DOWN to TLSv1/TLSv1.1 on builds whose
     # OpenSSL still enables them, which CodeQL flags as py/insecure-protocol
@@ -352,9 +632,23 @@ def main() -> int:
     # gateway, and pinning the floor keeps the mock from being the one place
     # that would still accept a protocol production refuses.
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(certfile=CERT_FILE, keyfile=KEY_FILE)
-    server = LoggingTLSServer(("0.0.0.0", PORT), Handler)
+    context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+    server = LoggingTLSServer(("0.0.0.0", port), handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    return server
+
+
+def main() -> int:
+    material = [CERT_FILE, KEY_FILE] + ([PUBLIC_CERT_FILE, PUBLIC_KEY_FILE] if PUBLIC_PORT else [])
+    for path in material:
+        if not path or not os.path.exists(path):
+            sys.stderr.write("mock-mcp: missing TLS material at %s\n" % path)
+            return 1
+    server = _tls_server(PORT, Handler, CERT_FILE, KEY_FILE)
+    if PUBLIC_PORT:
+        public = _tls_server(PUBLIC_PORT, PublicHandler, PUBLIC_CERT_FILE, PUBLIC_KEY_FILE)
+        threading.Thread(target=public.serve_forever, name="mock-mcp-public", daemon=True).start()
+        sys.stderr.write("mock-mcp: serving /authorize on https :%d\n" % PUBLIC_PORT)
     sys.stderr.write("mock-mcp: serving https on :%d\n" % PORT)
     server.serve_forever()
     return 0
