@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.31"
+  x-elitea-client-contract: "1.32"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6046,7 +6046,15 @@ components:
             pre-Go deployment wrote carries the NUMERIC conversation id,
             `initiator_name` and no `sender`; getConversation resolves either
             id form, so open the conversation with whatever `conversation_id`
-            holds.
+            holds. For `run_finished` (client contract 1.32, ADR-0045
+            decision 5) the server writes ids and the outcome only, never
+            content: `outcome` (`completed`, `failed`, `waiting` or
+            `limit_reached`), `limit` (`continuations`, `spend` or
+            `deadline`, only for `limit_reached`), `project_id`,
+            `conversation_uuid`, `thread_id` (a desktop chain, when known),
+            `chain_root_execution_id`, `execution_id` (the chain's last run),
+            `origin` (`cloud` or `desktop`) and `continuations`
+            (internal/infra/db/repos/run_finished.go). One row per chain end.
           properties:
             sender:
               type: object
@@ -6107,6 +6115,58 @@ components:
         ids:
           type: array
           items: { type: integer }
+
+    PushConfig:
+      type: object
+      description: >
+        Client contract 1.32. NOTE(W2): internal/api/v2/notifications/push.go
+        (`pushConfig`).
+      required: [enabled, public_key]
+      properties:
+        enabled:
+          type: boolean
+          description: True when a browser can opt in to web push on this install.
+        public_key:
+          type: string
+          description: The VAPID public key, base64url without padding (an uncompressed P-256 point). Empty without a key.
+
+    PushSubscriptionRequest:
+      type: object
+      description: >
+        Client contract 1.32. A browser's `PushSubscription.toJSON()`.
+        NOTE(W2): internal/api/v2/notifications/push.go (`subscribe`).
+      required: [endpoint, keys]
+      properties:
+        endpoint:
+          type: string
+          maxLength: 2048
+          description: The push service URL. https only.
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh:
+              type: string
+              description: The browser's P-256 public key, base64url.
+            auth:
+              type: string
+              description: The browser's 16-byte authentication secret, base64url.
+
+    PushSubscriptionSaved:
+      type: object
+      description: "Client contract 1.32. NOTE(W2): internal/api/v2/notifications/push.go (`subscribe`)."
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+
+    PushSubscriptionDeleteRequest:
+      type: object
+      description: "Client contract 1.32. NOTE(W2): internal/api/v2/notifications/push.go (`unsubscribe`)."
+      required: [endpoint]
+      properties:
+        endpoint:
+          type: string
+          maxLength: 2048
 
     NotificationErrorResponse:
       type: object
@@ -31525,6 +31585,155 @@ paths:
           content:
             text/plain:
               schema: { type: string }
+
+  /notifications/push_config/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getPushConfig
+      summary: Whether this browser can opt in to web push, and the key to subscribe with
+      description: |
+        Client contract 1.32 (ADR-0045 decision 6). `enabled` is false when
+        the administrator switch `notifications.web_push` is off, when the
+        install has no VAPID key (no vault) or when no contact for the push
+        services is set. `public_key` is the install's VAPID public key (the
+        `applicationServerKey`), base64url without padding, an uncompressed
+        P-256 point; it is empty when there is no key. The project in the path
+        is the permission scope only: subscriptions belong to the caller.
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The push configuration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushConfig' }
+              example:
+                enabled: true
+                public_key: BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8
+        '400':
+          description: An invalid client version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /notifications/push_subscriptions/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: createPushSubscription
+      summary: Save this browser's web push subscription
+      description: |
+        Client contract 1.32 (ADR-0045 decision 6). The body is the browser's
+        `PushSubscription.toJSON()`. Idempotent on the endpoint: the same
+        endpoint keeps its row and gets the new keys (200 with the same id).
+        A new endpoint is 201; an endpoint that another user saved moves to
+        the caller (one browser, one subscription). A person keeps at most 10
+        subscriptions: the 11th replaces the one with the oldest last
+        success. The endpoint must be an https URL of at most 2 KiB that is
+        not a private or reserved address (400 `push_endpoint_refused`). 409
+        `web_push_disabled` while push_config answers enabled false.
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushSubscriptionRequest' }
+            example:
+              endpoint: https://fcm.googleapis.com/fcm/send/dXJsLXNhZmUtYmFzZTY0
+              keys:
+                p256dh: BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4
+                auth: BTBZMqHH6r4Tts7J_aSIgg
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '201':
+          description: A new subscription.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushSubscriptionSaved' }
+              example: { id: 9b2f4a5e-3d7c-4c55-9f0e-6f2c8a1d4e71 }
+        '200':
+          description: The endpoint was already saved; its keys are updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushSubscriptionSaved' }
+              example: { id: 9b2f4a5e-3d7c-4c55-9f0e-6f2c8a1d4e71 }
+        '400':
+          description: >
+            `invalid_push_subscription` (a body that is not a subscription, an
+            endpoint that is not https or is too long, keys that are not a
+            P-256 point and a 16-byte secret) or `push_endpoint_refused`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: '`web_push_disabled`: push is off on this install.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
+        '500':
+          description: The write failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
+    delete:
+      operationId: deletePushSubscription
+      summary: Remove this browser's web push subscription
+      description: |
+        Client contract 1.32 (ADR-0045 decision 6). Removes the caller's
+        subscription of the endpoint. 204 also when there is none.
+      tags: [notifications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushSubscriptionDeleteRequest' }
+            example:
+              endpoint: https://fcm.googleapis.com/fcm/send/dXJsLXNhZmUtYmFzZTY0
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '204':
+          description: The subscription is gone (or was never there).
+        '400':
+          description: '`invalid_push_subscription`: no endpoint, or one longer than 2 KiB.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The delete failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationErrorResponse' }
 
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:
     parameters:

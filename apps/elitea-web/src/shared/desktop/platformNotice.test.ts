@@ -13,6 +13,19 @@ describe('createPlatformNotice', () => {
     expect(args.body.endsWith('…')).toBe(true);
   });
 
+  it('names the notification when the page knows it, and only then', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const notice = createPlatformNotice(invoke);
+    await notice.show('Run finished', 'A run is done.', { id: '12', eventType: 'run_finished', origin: 'cloud' });
+    await notice.show('Mentioned', 'b', { id: '13', eventType: 'chat_user_mentioned' });
+    await notice.show('Old', 'c');
+    expect(invoke.mock.calls).toEqual([
+      ['platform_notice_show', { title: 'Run finished', body: 'A run is done.', notification_id: '12', event_type: 'run_finished', origin: 'cloud' }],
+      ['platform_notice_show', { title: 'Mentioned', body: 'b', notification_id: '13', event_type: 'chat_user_mentioned' }],
+      ['platform_notice_show', { title: 'Old', body: 'c' }],
+    ]);
+  });
+
   it('sends the unread count as a whole, non-negative number', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined);
     const notice = createPlatformNotice(invoke);

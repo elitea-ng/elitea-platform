@@ -50,6 +50,8 @@ import type {
   MarkNotificationsSeen200,
   Notification,
   NotificationListing,
+  PushConfig,
+  PushSubscriptionSaved,
 } from "../model";
 
 export const getListNotificationsResponseMock = (
@@ -149,6 +151,19 @@ export const getMarkNotificationSeenResponseMock = (
 
 export const getStreamNotificationEventsResponseMock = (): string =>
   faker.word.sample();
+
+export const getGetPushConfigResponseMock = (): PushConfig => ({
+  enabled: true,
+  public_key:
+    "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+});
+
+export const getCreatePushSubscriptionResponseMock =
+  (): PushSubscriptionSaved =>
+    faker.helpers.arrayElement([
+      { id: "9b2f4a5e-3d7c-4c55-9f0e-6f2c8a1d4e71" },
+      { id: "9b2f4a5e-3d7c-4c55-9f0e-6f2c8a1d4e71" },
+    ]);
 
 export const getListNotificationsMockHandler = (
   overrideResponse?:
@@ -307,6 +322,80 @@ export const getStreamNotificationEventsMockHandler = (
     options,
   );
 };
+
+export const getGetPushConfigMockHandler = (
+  overrideResponse?:
+    | PushConfig
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<PushConfig> | PushConfig),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/notifications/push_config/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPushConfigResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreatePushSubscriptionMockHandler = (
+  overrideResponse?:
+    | PushSubscriptionSaved
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<PushSubscriptionSaved> | PushSubscriptionSaved),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/notifications/push_subscriptions/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreatePushSubscriptionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeletePushSubscriptionMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/notifications/push_subscriptions/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
 export const getNotificationsMock = () => [
   getListNotificationsMockHandler(),
   getMarkNotificationsSeenMockHandler(),
@@ -314,4 +403,7 @@ export const getNotificationsMock = () => [
   getMarkNotificationSeenMockHandler(),
   getDeleteNotificationMockHandler(),
   getStreamNotificationEventsMockHandler(),
+  getGetPushConfigMockHandler(),
+  getCreatePushSubscriptionMockHandler(),
+  getDeletePushSubscriptionMockHandler(),
 ];

@@ -714,10 +714,13 @@ type RouterConfig struct {
 	// three notification operations cannot drift from the REST/UI projection.
 	CurrentNotificationStore  notificationapp.Store
 	CurrentNotificationEvents http.Handler
-	CurrentModelCatalog       http.Handler
-	CurrentModelDefault       http.Handler
-	LLMProxy                  http.Handler
-	LLMProjectResolver        apimw.PersonalProjectResolver
+	// CurrentNotificationPush serves web push: push_config and the caller's
+	// push_subscriptions (ADR-0045 decision 6).
+	CurrentNotificationPush http.Handler
+	CurrentModelCatalog     http.Handler
+	CurrentModelDefault     http.Handler
+	LLMProxy                http.Handler
+	LLMProjectResolver      apimw.PersonalProjectResolver
 	// GatewayProxy is the /llm surface over elitea-llm-gateway (llmproxy.Proxy,
 	// gRPC over mutual TLS; BF0.9c, #1359). When non-nil, it is mounted at /llm with Auth+Project middleware
 	// in the production router.

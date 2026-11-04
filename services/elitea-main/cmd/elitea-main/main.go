@@ -580,6 +580,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotifications *notificationsapi.CurrentNotificationAPIRoute
 	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
+	// Web push (ADR-0045 decision 6): the routes join the notification
+	// routes below; the dispatcher runs whenever a pool exists.
+	var currentNotificationPush http.Handler
+	webPush := composeWebPush(ctx, pool, os.Getenv, logger)
+	webPush.startDispatcher(ctx, logger)
 	var formGraph *authcomposition.FormGraph
 	var principalValidator apimw.PrincipalValidator
 	// formSessions reads the Form plane's session cookie for every route's
@@ -1086,6 +1091,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		)
 		if err != nil {
 			return fmt.Errorf("compose current notification events route: %w", err)
+		}
+		if webPush != nil {
+			pushRoute, pushErr := webPush.route(apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if pushErr != nil {
+				return fmt.Errorf("compose web push routes: %w", pushErr)
+			}
+			currentNotificationPush = pushRoute
 		}
 		logger.Info("browser project-list and notification routes enabled")
 	}
@@ -3075,6 +3087,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentNotifications:           currentNotifications,
 		CurrentNotificationStore:       currentNotificationStore,
 		CurrentNotificationEvents:      currentNotificationEvents,
+		CurrentNotificationPush:        currentNotificationPush,
 		CurrentModelCatalog:            currentModelCatalog,
 		CurrentModelDefault:            currentModelDefault,
 		GatewayProxy:                   gatewayProxy,

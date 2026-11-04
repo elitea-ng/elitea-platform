@@ -34,6 +34,12 @@ const (
 	OriginDesktop = "desktop"
 )
 
+// IsSystemTrigger reports a trigger origin (execution_jobs.trigger_origin)
+// with no person behind it: a schedule or a webhook run.
+func IsSystemTrigger(triggerOrigin string) bool {
+	return triggerOrigin == "schedule" || triggerOrigin == "webhook"
+}
+
 // Link kinds (run_chain_links.kind).
 const (
 	LinkRoot        = "root"

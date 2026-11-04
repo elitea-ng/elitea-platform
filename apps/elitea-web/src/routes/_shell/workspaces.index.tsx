@@ -12,14 +12,19 @@
  * (`app/router.tsx`) are the same `RoutePending`/`RouteError`, and every
  * per-route copy costs the web build's initial chunk a split-chunk import for
  * a screen the web never renders.
+ *
+ * `?conversation=<thread id>` opens that thread in the folder on this
+ * computer that holds it (a `run_finished` bell row, ADR-0045).
  */
 import { createFileRoute } from '@tanstack/react-router';
 
 import { WorkspacesEntry } from '@/pages/workspace/desktopEntry';
 
 import { requireDesktopBuild } from '../-guards/desktopGuard';
+import { pickParams } from '../-search/params';
 
 export const Route = createFileRoute('/_shell/workspaces/')({
+  validateSearch: pickParams('conversation'),
   beforeLoad: requireDesktopBuild,
   component: WorkspacesEntry,
 });

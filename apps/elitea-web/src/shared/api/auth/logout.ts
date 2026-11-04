@@ -10,6 +10,7 @@
  */
 import { clearNamespace } from '../../lib/storage';
 import { getNativeTransport } from '../nativeTransport';
+import { startWebPushTeardown } from '../webPushTeardown';
 
 import { FORM_LOGIN_PATH, LOGOUT_PATH, TARGET_TO_PARAM } from './constants';
 
@@ -35,6 +36,10 @@ export interface LogoutDeps {
   redirect?: (url: string) => void;
   /** Origin the edge-auth logout URL is built on; default page origin. */
   origin?: string;
+  /** The browser's service worker container (tests); default `navigator.serviceWorker`. */
+  serviceWorker?: ServiceWorkerContainer;
+  /** The longest wait for the web push teardown, in ms; default 2000. */
+  pushTeardownWaitMs?: number;
 }
 
 /**
@@ -105,7 +110,16 @@ export function isLoggingOut(): boolean {
  * `e2e/auth.setup.ts` works around it by rewriting the hostname. That is a
  * property of the test stack, not of this function.)
  */
-export function performLogout(deps: LogoutDeps = {}): void {
+/*
+ * Web push (ADR-0045 decision 6): this browser's push subscription is
+ * removed BEFORE the hand-off — unsubscribed, deleted on the server while the
+ * session still authorizes it, and its worker unregistered
+ * (`../webPushTeardown.ts`). Best effort and bounded: the hand-off waits at
+ * most `pushTeardownWaitMs` and happens whether the teardown worked or not.
+ * A browser without the service worker API hands off at once, synchronously.
+ * The returned promise settles once the hand-off was made.
+ */
+export function performLogout(deps: LogoutDeps = {}): Promise<void> {
   // Set BEFORE the sweep, not after. A flight that starts between the two
   // lines would write its keys after `clearNamespace()` has passed them.
   loggingOut = true;
@@ -116,8 +130,22 @@ export function performLogout(deps: LogoutDeps = {}): void {
   const native = getNativeTransport();
   if (native?.logout !== undefined) {
     void native.logout();
-    return;
+    return Promise.resolve();
   }
+  const handOff = (): void => handOffToServerLogout(deps);
+  const teardown = startWebPushTeardown(deps.serviceWorker, deps.pushTeardownWaitMs);
+  if (teardown === null) {
+    handOff();
+    return Promise.resolve();
+  }
+  return teardown.then(handOff);
+}
+
+function handOffToServerLogout(deps: LogoutDeps): void {
+  // The app stayed live through the push teardown (up to `pushTeardownWaitMs`),
+  // so a query or a store may have written `el.*` keys again since the first
+  // sweep: sweep once more, right before the page goes.
+  clearNamespace();
   const origin = deps.origin ?? window.location.origin;
   const redirect =
     deps.redirect ??

@@ -3652,6 +3652,36 @@
       "responseSchema": "ConnectorRequest",
       "fixture": null,
       "usedBy": ["features/connector-requests"]
+    },
+    {
+      "id": "notifications.pushConfig",
+      "method": "GET",
+      "path": "/notifications/push_config/prompt_lib/{projectId}",
+      "operationId": "getPushConfig",
+      "source": "generated",
+      "responseSchema": "PushConfig",
+      "fixture": null,
+      "usedBy": ["features/notifications"]
+    },
+    {
+      "id": "notifications.pushSubscribe",
+      "method": "POST",
+      "path": "/notifications/push_subscriptions/prompt_lib/{projectId}",
+      "operationId": "createPushSubscription",
+      "source": "generated",
+      "responseSchema": "PushSubscriptionSaved",
+      "fixture": null,
+      "usedBy": ["features/notifications"]
+    },
+    {
+      "id": "notifications.pushUnsubscribe",
+      "method": "DELETE",
+      "path": "/notifications/push_subscriptions/prompt_lib/{projectId}",
+      "operationId": "deletePushSubscription",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": ["features/notifications"]
     }
   ]
 }

@@ -1018,7 +1018,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// check (ADR-0045 decision 11, #1564): run_chains.brief, brief_state,
 	// brief_sha256 and goal_check_failures, run_chain_links.done_check, and
 	// the link kind goal_not_met. No data, no permission.
-	require.EqualValues(t, 222, Head(shared))
+	//
+	// 223: shared/0223_web_push.sql, web push (ADR-0045 decision 6, #1437):
+	// centry.push_subscriptions, the outbox elitea_runtime.web_push_queue
+	// (an AFTER INSERT trigger on centry.notifications writes it, so nothing
+	// old is sent) and elitea_runtime.web_push_deliveries. No permission.
+	require.EqualValues(t, 223, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

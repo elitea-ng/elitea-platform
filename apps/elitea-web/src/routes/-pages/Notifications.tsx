@@ -72,6 +72,7 @@ import { NotificationsListBody } from '@/features/notifications/ui/Notifications
 import { NotificationsTable } from '@/features/notifications/ui/NotificationsTable';
 import { NotificationsToast, type NotificationToastKind } from '@/features/notifications/ui/NotificationsToast';
 import { SystemNoticesToggle } from '@/features/notifications/ui/SystemNoticesToggle';
+import { WebPushToggle } from '@/features/notifications/ui/WebPushToggle';
 import {
   NOTIFICATION_DEFAULT_PAGE_SIZE,
   NOTIFICATION_DEFAULT_SORT,
@@ -302,6 +303,12 @@ export function NotificationsPage() {
       {import.meta.env.MODE === 'desktop' && (
         <Box sx={{ paddingInline: '1.5rem', paddingBlock: '0.75rem' }}>
           <SystemNoticesToggle />
+        </Box>
+      )}
+      {/* Web push (ADR-0045): the browser only — the desktop app has native notices. */}
+      {import.meta.env.MODE !== 'desktop' && (
+        <Box sx={{ paddingInline: '1.5rem', paddingBlock: '0.75rem', '&:empty': { display: 'none' } }}>
+          <WebPushToggle projectId={personalProjectId} />
         </Box>
       )}
       <Box sx={styles.content}>

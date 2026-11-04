@@ -183,7 +183,7 @@ export function AccountMenu({ items, go, platform, collapsed = false, selected =
       selected={selected}
       version={version}
       onOpen={() => setOpened(true)}
-      onSignOut={performLogout}
+      onSignOut={() => void performLogout()}
       trailing={trailing}
     >
       {(close) => {

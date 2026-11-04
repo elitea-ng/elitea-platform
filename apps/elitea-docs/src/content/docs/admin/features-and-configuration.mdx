@@ -50,6 +50,20 @@ Turns on maintenance mode: every caller without administration access gets a 503
 The outbound mail relay: SMTP host, port, TLS mode, credentials, from/reply-to addresses, and the public base URL used in links the platform sends. Environment variables (`SMTP_HOST` and its siblings) provide a second layer underneath these rows; a row set here wins over the environment field by field.
 </Accordion>
 
+<Accordion title="Notifications (editable here)">
+**Web push** (default on) lets a person get a browser notification when a long run ends or when a run waits for an approval. The browser shows it also when no Elitea tab is open. Turn it off to stop all web push sends for the platform. The bell and Notifications Center do not change.
+
+When you turn web push off, browsers cannot opt in, and Main sends nothing. Main keeps the stored subscriptions. When you turn it on again, Main sends only notifications that come after that time.
+
+Web push also needs these items. When one is missing, web push is off and the switch has no effect:
+
+- A vault. Main makes one VAPID key for the install and keeps it in the global vault as the hidden secret `web_push_vapid_private_key`. Do not delete this secret. A new key stops every stored subscription.
+- A contact for the push services: `ELITEA_WEB_PUSH_SUBJECT` (a `mailto:` address or an `https:` URL). When it is empty, Main uses `PUBLIC_BASE_URL` if it is `https`.
+- Egress to the browsers' push services (see [Notifications](/menus/settings/notifications#web-push)). Main uses `HTTPS_PROXY` when you set it. Without a proxy, Main connects directly and refuses private and reserved addresses.
+
+Main sends the notification ids and the outcome only, never a message text. Each send is encrypted for one browser (RFC 8291) and signed with the install's key (RFC 8292). A push service that answers 404 or 410 removes that subscription. A push service that refuses the key (401 or 403) drops that send; three refusals in a row remove the subscription. Main tries other failures again with a longer wait each time, for at most 24 hours. A person keeps at most 10 browsers.
+</Accordion>
+
 <Accordion title="Authentication, LLM Proxy, MCP Servers, Branding (dedicated pages)">
 These sections carry credentials or need a row-editor shape a flat form cannot express, so each is a page of its own: see [Authentication](/admin/authentication), [LLM proxy](/admin/llm-proxy), and [Branding](/admin/branding). MCP Servers configures the pre-built MCP server catalogue; see the MCP integration guides for what that catalogue offers.
 </Accordion>

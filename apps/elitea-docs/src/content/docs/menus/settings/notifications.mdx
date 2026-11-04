@@ -1,6 +1,6 @@
 ---
 title: "Notifications"
-description: "Review recent alerts from the bell, get system notifications in the desktop app, or browse your full history in Notifications Center."
+description: "Review recent alerts from the bell, get system notifications in the desktop app or web push in a browser, or browse your full history in Notifications Center."
 ---
 
 Elitea delivers real-time notifications over a live connection for events like publish decisions, mentions, budget thresholds, and expiring tokens.
@@ -17,6 +17,32 @@ While the desktop app's window is in the background, a new notification also sho
 
 To stop system notifications, turn off **Show system notifications** at the top of Settings › Notifications (desktop app only). The bell and Notifications Center are not affected. Your operating system's own notification settings for Elitea also apply.
 
+## Web push
+
+Web push shows a notice from your browser when a run finishes or waits for you. The notice also shows when no Elitea tab is open.
+
+To turn on web push:
+
+1. Go to Settings › Notifications.
+2. Turn on **Web push in this browser**.
+3. When the browser asks, allow notifications.
+
+The setting applies to this browser only. Turn it on in each browser where you want notices. To stop the notices, turn off the switch.
+
+You can turn on web push in at most 10 browsers. When you turn it on in an 11th browser, Elitea removes the browser that received a notice least recently.
+
+A notice contains no content from the run. It tells you only how the run ended. Select the notice to open the conversation.
+
+Elitea does not show the switch in these cases:
+
+- Your administrator turned off web push.
+- Your browser cannot receive push notices. For example, Safari on iPhone and iPad can receive them only for an Elitea web app on the Home Screen.
+- You use the desktop app. The desktop app shows system notifications instead.
+
+If your browser blocks notifications from Elitea, the switch is off and you cannot change it. Allow notifications for this site in the site settings of your browser, then come back to the page.
+
+Administrators: see [Features and configuration](/admin/features-and-configuration). The install sends to the push service of each browser. Your network must allow these hosts: `fcm.googleapis.com` (Chrome, Edge on Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari), and `*.notify.windows.com` (Edge on Windows).
+
 ## Notifications Center
 
 Settings › Notifications shows every notification, read and unread, with search by message text, sortable **Type** and **Date & Time** columns, and bulk **Mark as read**, **Mark as unread**, and **Delete** actions.
@@ -31,14 +57,18 @@ Settings › Notifications shows every notification, read and unread, with searc
 | Bucket expiration warning | Files in an artifact bucket will be deleted within 24 hours under its retention policy. |
 | Personal access token expiring | A token will stop working within 24 hours. |
 | Project or member budget threshold / limit reached | Shared-model spend is near or at its monthly limit. |
+| Run finished | A run that you did not watch ended: it completed, failed, waits for you, or stopped at its limit. You get it when the run continued at least once, ran 2 minutes or more, did not complete, or came from a schedule, a webhook or a handed-off thread. You do not get it for a run that you cancelled. |
 
 Several of these link straight to the relevant page — for example, an expiring-token notification opens Settings › Personal Tokens, and a budget notification opens Settings › Usage.
+
+A run notification contains only the result of the run, not its content. **Open the conversation** opens the conversation of the run. In the desktop app, **Open the thread** opens a thread that ran on your computer. The desktop app shows a system notification for a run in the cloud. For a run on your computer, it shows its own system notification when the run ends, so it does not show a second one.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="The bell still shows unread after I opened everything">Opening the popover does not mark items read automatically — use **Mark as read** or **Mark all as read** explicitly.</Accordion>
   <Accordion title="No system notifications in the desktop app">Check that **Show system notifications** is on in Settings › Notifications and that your operating system allows notifications from Elitea. System notifications show only while the app's window is in the background.</Accordion>
+  <Accordion title="No web push notices in the browser">Make sure that **Web push in this browser** is on in Settings › Notifications and that your browser allows notifications from Elitea. A notice does not show while you look at the conversation of that run. Some browsers show notices only while the browser is open.</Accordion>
   <Accordion title="A notification's link goes somewhere unexpected">Some links (for example, a mention) open the exact conversation and message; others open a settings page scoped to the relevant project.</Accordion>
 </AccordionGroup>
 

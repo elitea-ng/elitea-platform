@@ -57,7 +57,7 @@ describe('performLogout', () => {
     expect(writes.size).toBe(10);
 
     const redirect = vi.fn();
-    performLogout({ redirect });
+    void performLogout({ redirect });
 
     const leaked = [...writes].filter((entry) => {
       const [area, underlyingKey] = entry.split(/:(.+)/, 2) as ['local' | 'session', string];
@@ -70,7 +70,7 @@ describe('performLogout', () => {
     createStorage('local').set('project.id', '42');
     window.localStorage.setItem('other_app.pref', 'keep');
     window.sessionStorage.setItem('other_app.session', 'keep');
-    performLogout({ redirect: vi.fn() });
+    void performLogout({ redirect: vi.fn() });
     expect(window.localStorage.getItem('other_app.pref')).toBe('keep');
     expect(window.sessionStorage.getItem('other_app.session')).toBe('keep');
   });
@@ -93,13 +93,13 @@ describe('performLogout', () => {
 
   it('hands the browser to the backend logout, targeted at the login screen', () => {
     const redirect = vi.fn();
-    performLogout({ redirect, origin: 'https://app.example' });
+    void performLogout({ redirect, origin: 'https://app.example' });
     expect(redirect).toHaveBeenCalledExactlyOnceWith('https://app.example' + LOGOUT_URL);
   });
 
   it('percent-encodes the target so its leading slash cannot be read as a path segment', () => {
     const redirect = vi.fn();
-    performLogout({ redirect, origin: 'https://app.example' });
+    void performLogout({ redirect, origin: 'https://app.example' });
     const url = new URL(String(redirect.mock.calls[0]?.[0]));
     expect(url.pathname).toBe('/auth/logout');
     expect(url.searchParams.get('target_to')).toBe('/auth/login');
@@ -116,14 +116,14 @@ describe('performLogout', () => {
     // The existing E2E stack is OIDC-only, so it cannot see this. The check
     // is the assertion below, not a live request.
     const redirect = vi.fn();
-    performLogout({ redirect, origin: 'https://app.example' });
+    void performLogout({ redirect, origin: 'https://app.example' });
     const target = new URL(String(redirect.mock.calls[0]?.[0])).searchParams.get('target_to');
     expect(target).not.toContain('/auth_oidc/');
   });
 
   it('defaults the origin to the page origin', () => {
     const redirect = vi.fn();
-    performLogout({ redirect });
+    void performLogout({ redirect });
     expect(redirect).toHaveBeenCalledExactlyOnceWith('http://localhost:3000' + LOGOUT_URL);
   });
 
@@ -145,7 +145,7 @@ describe('performLogout under a native transport', () => {
     });
     const redirect = vi.fn();
 
-    performLogout({ redirect, origin: 'tauri://localhost' });
+    void performLogout({ redirect, origin: 'tauri://localhost' });
 
     expect(logout).toHaveBeenCalledTimes(1);
     expect(redirect).not.toHaveBeenCalled();
