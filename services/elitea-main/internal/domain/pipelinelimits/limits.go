@@ -285,7 +285,7 @@ func checkMapForms(declared []map[string]*yaml.Node) error {
 
 // present reports a declared, non-null value.
 func present(node *yaml.Node) bool {
-	return node != nil && !(node.Kind == yaml.ScalarNode && node.ShortTag() == "!!null")
+	return node != nil && (node.Kind != yaml.ScalarNode || node.ShortTag() != "!!null")
 }
 
 // branchNode is a Parallel branch's scalar `node`, or "".
