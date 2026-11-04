@@ -1,0 +1,11 @@
+{
+  "id": "code-token-bucket",
+  "group": "coding",
+  "title": "Fix token-bucket refill and wait-time math",
+  "prompt": "The rate limiter in src/bucket.mjs throttles far more than configured. With capacity 10 and 2 tokens/second, callers polling every 250 ms never get a token back, and msUntil() returns nonsense. Expected behaviour: tokens refill continuously (fractional tokens accumulate, nothing is lost between frequent calls) and never exceed capacity; the bucket starts full; tryRemove(n) either takes all n tokens and returns true or takes nothing and returns false; available() is the whole number of tokens available now; msUntil(n) is the whole number of milliseconds (rounded up) until n tokens will be available, 0 if they already are, and Infinity if n exceeds capacity. If the injected clock ever goes backwards, treat it as no time passing (never remove tokens because of it). The constructor validates its options (positive finite capacity and refill rate) and throws RangeError otherwise. The clock is injected via `now` so tests are deterministic. Run `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/bucket.test.mjs"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "code-go-cron",
+  "group": "coding",
+  "title": "Implement a 5-field cron expression parser and Next() (Go)",
+  "prompt": "Implement the stubs in cron.go for our job scheduler.\n\nParseField(expr, min, max) returns the sorted, de-duplicated values a single cron field selects. A field is a comma-separated list of items; each item is `*`, `N` or `A-B` (A <= B, no wrap-around), optionally followed by `/S` with S >= 1. `*/S` and `A-B/S` step through the range starting at its low end; `N/S` means N through max in steps of S. Values must be plain decimal digits within [min, max]. Anything else (empty field or item, out of range, step 0, reversed range, signs, extra slashes) is an error.\n\nParse(spec) parses five whitespace-separated fields: minute (0-59), hour (0-23), day of month (1-31), month (1-12, or JAN-DEC) and day of week (0-7 where both 0 and 7 are Sunday, or SUN-SAT); names are case-insensitive and also work in ranges (MON-FRI). Wrong field count or any bad field is an error.\n\n(*Schedule).Matches(t) checks t's minute, hour, day, month and weekday (in t's location). Day matching follows classic Vixie cron: if both the day-of-month and day-of-week fields are restricted (a field is unrestricted iff it starts with `*`), a time matches when EITHER matches; otherwise both must match.\n\n(*Schedule).Next(after) returns the earliest matching time strictly after `after`, with zero seconds, and true; if nothing matches within 5 years it returns the zero time and false. Run `go test ./...`.",
+  "verifier": {
+    "kind": "command",
+    "command": "go test ./...",
+    "check_files": ["cron_test.go", "go.mod"]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "code-json-pointer",
+  "group": "coding",
+  "title": "Implement RFC 6901 JSON Pointer get/set/remove",
+  "prompt": "src/pointer.mjs is a stub. Implement RFC 6901 JSON Pointer support with these exports:\n\n- parse(pointer) -> array of reference tokens. \"\" is the whole document (no tokens). Any other pointer must start with '/'. Unescape ~1 to '/' and ~0 to '~' (so \"~01\" means the literal \"~1\"). A '~' not followed by 0 or 1 is an error.\n- compile(tokens) -> pointer string (inverse of parse).\n- get(doc, pointer) -> the referenced value, or undefined if the path does not exist (missing key, index out of range, or '-'). Only own properties count: get({}, '/constructor') is undefined.\n- set(doc, pointer, value) -> mutates doc and returns it; set(doc, '', v) returns v. On arrays, an index equal to the length or '-' appends; a larger index is an error. A missing parent container is an error (no auto-creation).\n- remove(doc, pointer) -> deletes the target and returns the removed value; array elements are spliced out. Removing a path that does not exist is an error, as is removing the root.\n\nArray indices must be '0' or a decimal number without leading zeros; anything else ('01', '1e0', '-1', ' 1') used against an array is an error for set/remove and yields undefined for get. Malformed pointers throw in every function. Errors are thrown as Error instances. Run `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/pointer.test.mjs"]
+  },
+  "final": { "hidden_command": "node --test \"test_hidden/*.test.mjs\"" }
+}
