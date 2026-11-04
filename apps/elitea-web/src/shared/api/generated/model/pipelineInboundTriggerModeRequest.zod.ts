@@ -57,7 +57,7 @@ export const PipelineInboundTriggerModeRequest = zod
       .string()
       .optional()
       .describe(
-        "Client contract 1.34. `workspace_thread`, or `pipeline` or `agent` (the version's own kind: the version runs). Another value is refused with 400.\n",
+        "Client contract 1.34. `workspace_thread`, or the version's own kind (`pipeline` or `agent`: the version runs). The other kind contradicts the version and is refused with 400, as is another value.\n",
       ),
     conversation_uuid: zod
       .uuid()

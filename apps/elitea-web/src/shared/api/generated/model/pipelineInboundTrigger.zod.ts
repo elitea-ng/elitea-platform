@@ -138,7 +138,7 @@ export const PipelineInboundTrigger = zod
       .array(zod.string())
       .optional()
       .describe(
-        "The provider events this trigger admits, read from `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event. A new GitHub or GitLab trigger on an AGENT version admits only push and pull or merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no run. The event header is not signed, so this is a cost control, not an authentication step.\n",
+        "The provider events this trigger admits, read from `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event. A new GitHub or GitLab trigger on an AGENT version, or with `target_kind: workspace_thread`, admits only push and pull or merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no run. The event header is not signed, so this is a cost control, not an authentication step.\n",
       ),
     allow_variable_overrides: zod
       .boolean()

@@ -18677,9 +18677,9 @@ components:
           description: >
             The provider events this trigger admits, read from
             `X-GitHub-Event` or `X-Gitlab-Event`. Absent means every event.
-            A new GitHub or GitLab trigger on an AGENT version admits only
-            push and pull or merge request events unless its writer sets a
-            list. A delivery of another event is answered 204 and starts no
+            A new GitHub or GitLab trigger on an AGENT version, or with
+            `target_kind: workspace_thread`, admits only push and pull or
+            merge request events unless its writer sets a list. A delivery of another event is answered 204 and starts no
             run. The event header is not signed, so this is a cost control,
             not an authentication step.
         allow_variable_overrides:
@@ -18720,9 +18720,10 @@ components:
         target_kind:
           type: string
           description: >
-            Client contract 1.34. `workspace_thread`, or `pipeline` or `agent`
-            (the version's own kind: the version runs). Another value is
-            refused with 400.
+            Client contract 1.34. `workspace_thread`, or the version's own
+            kind (`pipeline` or `agent`: the version runs). The other kind
+            contradicts the version and is refused with 400, as is another
+            value.
         conversation_uuid:
           type: string
           format: uuid
@@ -18835,7 +18836,9 @@ components:
           description: >
             Stamped ONLY on a real dispatch. A maintenance window or a skipped
             overlap leaves it alone, so the row is due exactly once when the
-            reason clears rather than once per missed minute.
+            reason clears rather than once per missed minute. The one
+            exception is `skipped_thread_busy`: it stamps `last_run` and uses
+            up the occurrence, so the next attempt is the next cron time.
         last_result:
           type: string
           description: The outcome of the most recent fire attempt.
@@ -18867,8 +18870,10 @@ components:
             `workspace_thread` (each occurrence starts a cloud turn on a
             handed-off Local work thread, ADR-0045 decision 9). An occurrence
             on a thread that is not idle in the cloud records
-            `skipped_thread_busy` and starts nothing; a thread that is gone
-            records `skipped_missing_version`.
+            `skipped_thread_busy`, starts nothing and uses up the occurrence
+            (the next attempt is the next cron time). A thread that is gone
+            records `skipped_missing_version`. An author who is no longer a
+            user participant of the thread records `skipped_unauthorized`.
         conversation_uuid:
           type: string
           format: uuid
@@ -18939,10 +18944,13 @@ components:
         target_kind:
           type: string
           description: >
-            Client contract 1.34. `pipeline` or `workspace_thread`. Absent
-            keeps the stored target. A `workspace_thread` schedule may be
-            saved on a pipeline or an agent version: the version is the
-            anchor, and it does not run.
+            Client contract 1.34. `pipeline` or `workspace_thread`; another
+            value, `agent` included, is refused with 400. Absent keeps the
+            stored target, and the save checks a kept thread again only when
+            it sets `active` to true, so a schedule whose thread was erased
+            can still be paused. A `workspace_thread` schedule may be saved
+            on a pipeline or an agent version: the version is the anchor,
+            and it does not run.
         conversation_uuid:
           type: string
           format: uuid
@@ -21885,7 +21893,9 @@ paths:
         lists in `unattended_mandate_kinds`, bound to the version the target
         starts, not revoked or expired, and its `schedule.cron:` and
         `schedule.input:sha256:` resource scopes, if any, must cover the
-        target. A proposed or suspended mandate may be attached; it runs
+        target. For a `workspace_thread` schedule the input is the `prompt`
+        (the text each occurrence starts with), not `input`, as at fire
+        time. A proposed or suspended mandate may be attached; it runs
         nothing until it is active. Replaces any attached mandate. Gated on
         `models.agent_identity.mandates.manage` in administration mode, and
         mounted only when the flag is on. Appends a security audit decision.
@@ -41816,10 +41826,17 @@ paths:
                 last_used_at: '2026-11-04T09:30:00Z'
                 on_approval_required: fail
         '400':
-          description: The requested authentication mode is not one this service implements
+          description: >
+            The requested authentication mode is not one this service
+            implements, or (client contract 1.34) the `target_kind` is not
+            valid: a value that is not `workspace_thread`, `pipeline` or
+            `agent`, the kind that the version is not, or `workspace_thread`
+            fields that are missing or not valid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: '`target_kind` must be `pipeline` (this version''s kind) or `workspace_thread`'
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:
@@ -42085,11 +42102,14 @@ paths:
         '400':
           description: >
             The cron expression cannot be parsed, the input is too long, or
-            (client contract 1.34) the `workspace_thread` fields are missing
+            (client contract 1.34) the `target_kind` is not `pipeline` or
+            `workspace_thread`, or the `workspace_thread` fields are missing
             or not valid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: '`target_kind` of a schedule must be `pipeline` or `workspace_thread`'
         '403':
           description: Caller lacks models.applications.version.update in this project
           content:

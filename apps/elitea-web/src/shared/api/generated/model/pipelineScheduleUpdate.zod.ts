@@ -59,7 +59,7 @@ export const PipelineScheduleUpdate = zod
       .string()
       .optional()
       .describe(
-        "Client contract 1.34. `pipeline` or `workspace_thread`. Absent keeps the stored target. A `workspace_thread` schedule may be saved on a pipeline or an agent version: the version is the anchor, and it does not run.\n",
+        "Client contract 1.34. `pipeline` or `workspace_thread`; another value, `agent` included, is refused with 400. Absent keeps the stored target, and the save checks a kept thread again only when it sets `active` to true, so a schedule whose thread was erased can still be paused. A `workspace_thread` schedule may be saved on a pipeline or an agent version: the version is the anchor, and it does not run.\n",
       ),
     conversation_uuid: zod
       .uuid()

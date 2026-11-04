@@ -71,7 +71,7 @@ export const PipelineSchedule = zod
       .datetime({ offset: true })
       .optional()
       .describe(
-        "Stamped ONLY on a real dispatch. A maintenance window or a skipped overlap leaves it alone, so the row is due exactly once when the reason clears rather than once per missed minute.\n",
+        "Stamped ONLY on a real dispatch. A maintenance window or a skipped overlap leaves it alone, so the row is due exactly once when the reason clears rather than once per missed minute. The one exception is `skipped_thread_busy`: it stamps `last_run` and uses up the occurrence, so the next attempt is the next cron time.\n",
       ),
     last_result: zod
       .enum([
@@ -102,7 +102,7 @@ export const PipelineSchedule = zod
       .string()
       .optional()
       .describe(
-        "Client contract 1.34. `pipeline` (the version runs) or `workspace_thread` (each occurrence starts a cloud turn on a handed-off Local work thread, ADR-0045 decision 9). An occurrence on a thread that is not idle in the cloud records `skipped_thread_busy` and starts nothing; a thread that is gone records `skipped_missing_version`.\n",
+        "Client contract 1.34. `pipeline` (the version runs) or `workspace_thread` (each occurrence starts a cloud turn on a handed-off Local work thread, ADR-0045 decision 9). An occurrence on a thread that is not idle in the cloud records `skipped_thread_busy`, starts nothing and uses up the occurrence (the next attempt is the next cron time). A thread that is gone records `skipped_missing_version`. An author who is no longer a user participant of the thread records `skipped_unauthorized`.\n",
       ),
     conversation_uuid: zod
       .uuid()
