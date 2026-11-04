@@ -69,6 +69,10 @@ func TestCompleteWithContinueRefusals(t *testing.T) {
 			"unattended_grant_refused", "reason", unattended.RefusedTierRequiresHITL},
 		{&unattended.ChainLimitError{Limit: unattended.LimitDeadline}, http.StatusConflict, "chain_limit_reached", "limit", "deadline"},
 		{unattended.ErrChainEnded, http.StatusConflict, "chain_ended", "", nil},
+		{&handoffapp.ContinueRefusedError{Reason: handoffapp.ContinueRefusedReasonMode, Field: "mode"},
+			http.StatusUnprocessableEntity, "continue_refused", "reason", "mode"},
+		{&handoffapp.ContinueRefusedError{Reason: handoffapp.ContinueRefusedReasonMode, Field: "mode"},
+			http.StatusUnprocessableEntity, "continue_refused", "field", "mode"},
 		{handoffapp.ErrStaleEpoch, http.StatusConflict, "stale_epoch", "", nil},
 		{handoffapp.ErrInvalid, http.StatusUnprocessableEntity, "invalid_handoff", "", nil},
 		{handoffapp.ErrUnavailable, http.StatusServiceUnavailable, "handoff_unavailable", "", nil},
@@ -79,6 +83,18 @@ func TestCompleteWithContinueRefusals(t *testing.T) {
 		if response.Code != test.status || answer["error"] != test.code || (test.field != "" && answer[test.field] != test.value) {
 			t.Errorf("%v = %d %v, want %d %s", test.err, response.Code, answer, test.status, test.code)
 		}
+	}
+}
+
+// The stopped chain of a send that does not continue reaches the service.
+func TestCompletePassesTheStoppedChain(t *testing.T) {
+	handoff := &fakeHandoff{handoff: handoffapp.Handoff{State: workspacestore.StateCloudIdle, Epoch: 4}}
+	h := &handler{handoff: handoff, store: &fakeStore{}, conversations: fakeConversations{}}
+	response := serve(t, h.complete, nativeUser(), []string{SendPermission}, http.MethodPost, CompletePath, completeURL,
+		`{"epoch":3,"handoff_ref":"refs/elitea/handoff/1","sha":"`+sha1Value+
+			`","stopped_chain_root_execution_id":"9f8e7d6c5b4a39281706f5e4d3c2b1a0"}`)
+	if response.Code != http.StatusOK || handoff.completed.StoppedChainRootExecutionID != "9f8e7d6c5b4a39281706f5e4d3c2b1a0" {
+		t.Fatalf("complete = %d (%+v)", response.Code, handoff.completed)
 	}
 }
 

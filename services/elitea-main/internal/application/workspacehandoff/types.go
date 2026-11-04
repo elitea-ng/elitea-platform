@@ -154,6 +154,9 @@ type Handoff struct {
 	// Continued is set only on the answer of a complete with `continue`:
 	// the cloud turn the send started.
 	Continued *ContinuedTurn
+	// StoppedChainEnded is set only on the answer of a complete without
+	// `continue` that ended the stopped local chain as `waiting`.
+	StoppedChainEnded bool
 }
 
 // EnvSecret reports whether the thread has harvested variables (the runtime

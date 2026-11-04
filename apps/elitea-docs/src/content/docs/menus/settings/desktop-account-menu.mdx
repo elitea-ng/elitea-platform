@@ -124,6 +124,9 @@ You can send a thread while its turn is still running, for example before you cl
 - The dialog says that a turn is running. When you select **Send to cloud**, the turn stops at its next step, so nothing it has done is lost. The turn is then saved, and the platform sends the thread and starts the cloud's first turn together: either both happen, or neither does. The cloud continues with the same mode.
 - When the thread runs with **To completion**, the cloud continues the same run. The chain limits (continuations, spend and hours) count across your computer and the cloud. When the run ends, the notification says it ended in the cloud.
 - If the platform does not allow the run to continue in the cloud (for example, a chain limit is reached, or your administrator turned unattended grants off), the thread is still sent. The dialog says why, and the thread waits in the cloud for your next message. Select **OK** to close the dialog.
+- A thread in **Plan** mode is sent without continuing: the cloud has no plan mode, so the turn stops, the thread is sent, and it waits in the cloud for your next message.
+- The send checks for secrets, files to confirm, environment variables and size limits before it stops the turn. If one of these checks fails, the turn keeps running.
+- If the send fails or you cancel it after the turn stopped, the run goes on on your computer at once. If it cannot go on, a notice tells you why.
 - A turn that is waiting for your answer (an approval, or **Continue?** at its step limit) stops only after you answer it, or when the question times out.
 - The cloud runs the turn as any cloud turn. Plan mode, hook asks and remote confirmations are parts of the desktop app and do not apply in the cloud.
 

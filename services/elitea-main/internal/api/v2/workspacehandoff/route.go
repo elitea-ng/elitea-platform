@@ -415,6 +415,10 @@ type completeBody struct {
 	// TakeBackWhenDone and Continue are contract 1.33 (ADR-0045 decision 8).
 	TakeBackWhenDone bool          `json:"take_back_when_done"`
 	Continue         *continueBody `json:"continue"`
+	// StoppedChainRootExecutionID: the chain of the unattended local turn
+	// the desktop stopped for the send; without `continue` the complete
+	// ends it as `waiting` (contract 1.33).
+	StoppedChainRootExecutionID string `json:"stopped_chain_root_execution_id"`
 }
 
 // continueBody is the complete's `continue`: the cloud turn's prompt, the
@@ -463,6 +467,7 @@ func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
 		ProjectID: projectID, HandoffID: chi.URLParam(request, "handoffID"), ActorUserID: actor,
 		Epoch: body.Epoch, HandoffRef: body.HandoffRef, SHA: body.SHA, AuditRoute: CompletePath,
 		TakeBackWhenDone: body.TakeBackWhenDone, Continue: body.Continue.request(),
+		StoppedChainRootExecutionID: body.StoppedChainRootExecutionID,
 	})
 	if err != nil {
 		if writeUnattendedError(writer, err) {
@@ -483,11 +488,22 @@ func (h *handler) complete(writer http.ResponseWriter, request *http.Request) {
 }
 
 // writeUnattendedError answers a complete whose continue turn was refused:
-// its grant (422 unattended_grant_refused) or its chain (409
+// a continue the cloud cannot run (422 continue_refused with `reason` and
+// `field`), its grant (422 unattended_grant_refused) or its chain (409
 // chain_limit_reached with `limit`, 409 chain_ended), as a local turn's.
 func writeUnattendedError(writer http.ResponseWriter, err error) bool {
-	var limit *unattended.ChainLimitError
+	var (
+		limit   *unattended.ChainLimitError
+		refused *handoffapp.ContinueRefusedError
+	)
 	switch {
+	case errors.As(err, &refused):
+		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "continue_refused",
+			"message": "A cloud turn has no plan mode. Complete the send without `continue`.",
+			"reason":  refused.Reason,
+			"field":   refused.Field,
+		})
 	case unattendedwire.WriteRefusal(writer, err):
 	case errors.As(err, &limit):
 		desktopwire.WriteJSON(writer, http.StatusConflict, map[string]any{

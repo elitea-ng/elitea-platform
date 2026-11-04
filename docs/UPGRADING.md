@@ -18,8 +18,14 @@ With `continue`, Main completes the send, writes the person's message and
 starts the cloud turn in one transaction, and answers `continued`. A
 refused grant or chain answers 422 `unattended_grant_refused`, 409
 `chain_limit_reached` or 409 `chain_ended`, and the send stays
-HANDING_OFF. The state (`getWorkspaceHandoff`) adds `take_back_when_done`
-and `last_cloud_run`.
+HANDING_OFF. A `continue` in mode `plan` answers 422 `continue_refused`
+(`reason` `mode`, `field` `mode`): a cloud turn has no plan mode. A
+complete without `continue` may name `stopped_chain_root_execution_id`, the
+chain of the local turn the desktop stopped for the send: Main ends that
+chain as `waiting` (origin `cloud`) in the same transaction, instead of the
+chain sweep ending it later as `failed`. The state (`getWorkspaceHandoff`)
+adds `take_back_when_done` and `last_cloud_run`; `last_cloud_run` is read
+only for a handoff with `take_back_when_done` (null otherwise).
 
 A grant that names the chain of the running desktop turn continues that
 chain in the cloud. Its limits count across the desktop and the cloud, and

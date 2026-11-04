@@ -1941,7 +1941,7 @@ noted). `conversation_uuid` is the server conversation's UUID.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `handoff_preview` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[]}` | `Preview` — what a send would transfer under the effective policy and the folder's settings; sends nothing |
-| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean, take_back_when_done?: boolean, title?: string}` | `{handoff_id, state, epoch, files, excluded, included, env_vars, stopped_turn, continued, continue_refused, take_back_when_done}` — progress on `handoff://event`. While the thread's own turn runs here the send stops it at its next step first (**Send while running**); `take_back_when_done` defaults to whether it did; `title` (the thread's name) is only for the take-back notice. `stopped_turn: boolean`; `continued: {execution_id, message_id} \| null` (the cloud went on with the stopped turn); `continue_refused: string \| null` (the server refused the turn's grant: what to tell the person; the thread is in the cloud, waiting) |
+| `handoff_send` | `{workspace_id, conversation_uuid, leave_on_laptop?: string[], confirm_includes?: boolean, take_back_when_done?: boolean, title?: string}` | `{handoff_id, state, epoch, files, excluded, included, env_vars, stopped_turn, continued, continue_refused, take_back_when_done}` — progress on `handoff://event`. While the thread's own turn runs here the send stops it at its next step first (**Send while running**); `take_back_when_done` defaults to whether it did; `title` (the thread's name) is only for the take-back notice. `stopped_turn: boolean`; `continued: {execution_id, message_id} \| null` (the cloud went on with the stopped turn); `continue_refused: string \| null` (the turn was not continued in the cloud, because the server refused the continue or the turn ran in plan mode: what to tell the person; the thread is in the cloud, waiting) |
 | `handoff_cancel` | `{conversation_uuid}` | `{cancelled: boolean}` — stops a running send; after begin the host cancels the handoff on the server (`DELETE workspace_handoff`), so the thread is `LOCAL` again; the send rejects `handoff_cancelled` |
 | `handoff_status` | `{conversation_uuid, project_id?}` | `HandoffStatus`: the server's state (contract §2.9, `rest_pending` and `delete_after` included) plus `executor: "local" \| "cloud" \| "returning"`, `read_only: boolean`, `sent_from_here: boolean`, `rest_turns: number` (the cloud turns after a take-back up to turn k that can still be taken back; 0 when none or the grace is over); the server's `take_back_when_done` and `last_cloud_run: {outcome, execution_id, finished_at} \| null` (`WorkspaceHandoffState`, ADR-0045 decision 8), `take_back_when_done` from this desktop's record when the server has none |
 | `handoff_status_many` | `{conversation_uuids: string[]}` | `{statuses: Record<uuid, HandoffStatus>}` — for the sidebar: a thread this desktop never sent is `LOCAL` with no request; the rest from the host's records, refreshed at most once per project per call and cached 15 s |
@@ -2157,29 +2157,50 @@ type HandoffEvent = { conversation_uuid: string;
   a cloud turn ran (202 `reclaim_pending`, `RECLAIMING` one epoch later)
   releases with the later epoch.
 - **Send while running** (ADR-0045 decision 8, U5). A send of a thread
-  whose own turn runs here does not cancel it: the host emits the phase
+  whose own turn runs here does not cancel it. First the send's own checks
+  run on a snapshot read without the claim (secret scan, includes to
+  confirm, env limits, the policy's caps): a send they refuse never stops
+  the turn. Then the host emits the phase
   `stopping`, asks the turn to stop at its next step boundary (the adk
   steering safe point: the step's tool results are in history, the next
   model request is not sent), waits for the turn to commit (`done` with
   `handed_off: true`, the `status` note `handoff_stopped`; an empty answer
   reads "The agent stopped here to continue in the cloud."), then claims
   the workspace (retried for up to 10 s while the commit lets it go) and
-  sends. A cancel while it waits withdraws the stop if the boundary is not
-  reached yet. A stopped turn starts no local continuation, writes no
-  `chain_outcome` and forgets its resume record. `complete` carries
+  sends. Request, claim and withdraw are one atomic state: a cancel while
+  it waits withdraws the stop only if the run has not claimed it. Once a
+  stop is requested, any end that would start a local continuation (the
+  step limit, the tool-call cap a grant continues, a goal check that would
+  go on) ends as handed off instead; an end that ends the chain
+  (`completed`, `failed`) settles as usual and the send goes without
+  `continue`. A stopped turn starts no local continuation and writes no
+  `chain_outcome`; its resume record stays until the send settles. A send
+  that lands forgets it. A send that fails or is cancelled after the stop
+  resumes the run here at once (`turn_continued` with `kind: "resume"`,
+  `resumed_after_send: true`; the error message says so). If the
+  continuation is refused the chain ends (`chain_ended`); any other failure
+  keeps the record for the resume loop and offers **Continue**. Both come
+  with a native notice. `complete` carries
   `continue: {prompt, mode, grant}` — the prompt is the run brief's
   continuation prompt, else "Continue where you left off."; `mode` is
   `build`, `plan` or `bypass`; `grant` (unattended turns only) is the
   turn's `{grant_id, continue_step_limit, goal_check, chain?,
-  chain_root_execution_id}` — and `take_back_when_done`. A 422
-  `unattended_grant_refused` is answered by completing again without
-  `continue`: the send succeeds with `continue_refused` set. A turn
+  chain_root_execution_id}` — and `take_back_when_done`. A plan-mode turn
+  is never sent with `continue` (a cloud turn has no plan mode): the
+  thread waits in the cloud, and `continue_refused` says why. A refusal of
+  the continue alone is answered by completing again without `continue`,
+  and the send succeeds with `continue_refused` set. The refusals are
+  422 `unattended_grant_refused`, 422 `continue_refused` (`reason`
+  `mode`), 409 `chain_limit_reached`, 409 `chain_ended`, 503
+  `handoff_unavailable` and `invalid_handoff`. A complete without
+  `continue` after a stopped unattended turn carries
+  `stopped_chain_root_execution_id`, so Main ends that chain `waiting`. A turn
   waiting on a person's answer (an approval, "Continue?" at the step
   limit) reaches the boundary only once that is answered or times out.
 - **Take back when done** (ADR-0045 decision 8, U5). A send with
   `take_back_when_done` writes a record before `complete` (`threads.sqlite`
   table `take_back_threads`, schema 5: thread, owner, workspace, project,
-  title, when, the last notice's key); it survives a restart and is
+  title, when, the last notice's key, `phase`); it survives a restart and is
   dropped by a take-back's acknowledged release, an erase, or a thread
   found `LOCAL`. The host looks at its recorded threads when a cloud
   `run_finished` arrives (`handoff_run_finished`), at startup, at sign-in
@@ -2191,7 +2212,9 @@ type HandoffEvent = { conversation_uuid: string;
   worktree, `error` is not taken back (the person is told; the record
   stays). An apply refused for any reason but `workspace_busy` falls back
   to a worktree. `reclaim_pending` and `workspace_busy` wait for the next
-  look, silently. Each result is a native notice, shown even while the
+  look, silently. The record's `phase` (`reclaim_pending`, `reclaimed`)
+  remembers a take-back that began: a later look that finds the thread
+  `RECLAIMING` (which has no `last_cloud_run`) goes on from the preflight. Each result is a native notice, shown even while the
   window is focused: "Took back {title}", "Opened {title} as a worktree"
   (with why), "Could not take back {title}"; a run that `failed`, is
   `waiting`, hit its `limit_reached` or was `cancelled` is noticed once per

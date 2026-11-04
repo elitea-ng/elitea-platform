@@ -71,7 +71,8 @@
 //! take_back_threads (conversation_uuid TEXT PRIMARY KEY, origin TEXT,
 //!         user_id INTEGER, workspace_id TEXT, project_id INTEGER,
 //!         title TEXT NULL, created_at INTEGER /* Unix ms */,
-//!         noticed TEXT NULL /* the last notice shown for it */)
+//!         noticed TEXT NULL /* the last notice shown for it */,
+//!         phase TEXT NULL /* reclaim_pending | reclaimed: the take-back began */)
 //! ```
 //!
 //! `resume_turns` (schema 4, ADR-0045 decision 7) holds one record per
@@ -207,12 +208,13 @@ CREATE TABLE IF NOT EXISTS take_back_threads (
     project_id INTEGER NOT NULL,
     title TEXT,
     created_at INTEGER NOT NULL,
-    noticed TEXT
+    noticed TEXT,
+    phase TEXT
 );
 ";
 
 const TAKE_BACK_SELECT: &str = "SELECT conversation_uuid, origin, user_id, workspace_id,
-    project_id, title, created_at, noticed FROM take_back_threads";
+    project_id, title, created_at, noticed, phase FROM take_back_threads";
 
 fn take_back_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TakeBackRecord> {
     Ok(TakeBackRecord {
@@ -226,6 +228,7 @@ fn take_back_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TakeBackRecord> {
         title: row.get(5)?,
         created_at: row.get(6)?,
         noticed: row.get(7)?,
+        phase: row.get(8)?,
     })
 }
 
@@ -244,6 +247,11 @@ pub struct TakeBackRecord {
     /// The last notice shown for it (an outcome and its run), so one run
     /// is noticed once.
     pub noticed: Option<String>,
+    /// How far the take-back got: `reclaim_pending` (asked while a cloud
+    /// turn ran) or `reclaimed` (the thread is `RECLAIMING` for this
+    /// desktop); `None` before. A later pass goes on from there, as the
+    /// state then has no `last_cloud_run`.
+    pub phase: Option<String>,
 }
 
 /// How a resume record's turn ran: the person's mode.
@@ -1545,13 +1553,14 @@ impl HistoryStore {
         self.with("could not keep the take-back record", |conn| {
             conn.execute(
                 "INSERT INTO take_back_threads (conversation_uuid, origin, user_id,
-                     workspace_id, project_id, title, created_at, noticed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                     workspace_id, project_id, title, created_at, noticed, phase)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT (conversation_uuid) DO UPDATE SET
                      origin = excluded.origin, user_id = excluded.user_id,
                      workspace_id = excluded.workspace_id,
                      project_id = excluded.project_id, title = excluded.title,
-                     created_at = excluded.created_at, noticed = excluded.noticed",
+                     created_at = excluded.created_at, noticed = excluded.noticed,
+                     phase = excluded.phase",
                 params![
                     record.conversation_uuid,
                     record.owner.origin,
@@ -1561,6 +1570,7 @@ impl HistoryStore {
                     record.title,
                     record.created_at,
                     record.noticed,
+                    record.phase,
                 ],
             )
             .map(|_| ())
@@ -1613,6 +1623,25 @@ impl HistoryStore {
             conn.execute(
                 "UPDATE take_back_threads SET noticed = ?2 WHERE conversation_uuid = ?1",
                 params![conversation_uuid, key],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// How far the thread's take-back got ([`TakeBackRecord::phase`]).
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn take_back_phase(
+        &self,
+        conversation_uuid: &str,
+        phase: Option<&str>,
+    ) -> Result<(), HostError> {
+        self.with("could not update the take-back record", |conn| {
+            conn.execute(
+                "UPDATE take_back_threads SET phase = ?2 WHERE conversation_uuid = ?1",
+                params![conversation_uuid, phase],
             )
             .map(|_| ())
         })
@@ -3683,12 +3712,16 @@ mod tests {
             title: Some("Fix the login test".into()),
             created_at: 10,
             noticed: None,
+            phase: None,
         };
         {
             let store = HistoryStore::open(dir.path()).unwrap();
             store.take_back_put(&record).unwrap();
             store
                 .take_back_noticed(&record.conversation_uuid, "failed:e1")
+                .unwrap();
+            store
+                .take_back_phase(&record.conversation_uuid, Some("reclaimed"))
                 .unwrap();
         }
         // The app started again: the record is still there.
@@ -3697,6 +3730,7 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].title.as_deref(), Some("Fix the login test"));
         assert_eq!(kept[0].noticed.as_deref(), Some("failed:e1"));
+        assert_eq!(kept[0].phase.as_deref(), Some("reclaimed"));
         assert!(store.take_back_records(&owner(2)).unwrap().is_empty());
         store.take_back_delete(&record.conversation_uuid).unwrap();
         assert!(store.take_back_records(&owner(1)).unwrap().is_empty());

@@ -478,12 +478,15 @@ SELECT conversation_uuid::text FROM elitea_runtime.workspace_handoffs WHERE proj
 		if err != nil {
 			return fmt.Errorf("workspace handoff: resolve handoff: %w", err)
 		}
-		row, err := completeHandoffTx(ctx, tx, workspacehandoff.Thread{ProjectID: record.ProjectID, ConversationUUID: conversation},
-			record, false)
+		thread := workspacehandoff.Thread{ProjectID: record.ProjectID, ConversationUUID: conversation}
+		row, err := completeHandoffTx(ctx, tx, thread, record, false)
 		if err != nil {
 			return err
 		}
 		out = row.Handoff
+		if record.StoppedChainRootExecutionID != "" {
+			out.StoppedChainEnded = endStoppedChain(ctx, tx, thread, record.ActorUserID, record.StoppedChainRootExecutionID)
+		}
 		return nil
 	})
 	return out, err

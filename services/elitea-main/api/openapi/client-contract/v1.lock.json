@@ -23522,6 +23522,10 @@
               "sha": {
                 "type": "string"
               },
+              "stopped_chain_root_execution_id": {
+                "type": "string",
+                "max_length": 64
+              },
               "take_back_when_done": {
                 "type": "boolean"
               }

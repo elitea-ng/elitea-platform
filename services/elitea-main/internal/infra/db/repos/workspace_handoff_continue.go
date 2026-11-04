@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -105,6 +106,46 @@ WHERE root_execution_id = $1`, root, string(startJSON)); err != nil {
 		return fmt.Errorf("unattended chain: move the chain to the cloud: %w", err)
 	}
 	return nil
+}
+
+// endStoppedChain ends the chain of the unattended local turn the desktop
+// stopped for a send that does not continue (a complete without
+// `continue`), in the complete's transaction: the thread now waits in the
+// cloud for the person's next message, so the chain ends `waiting` and its
+// origin becomes `cloud` (where it ended; the handoff row is CLOUD_IDLE
+// in this transaction, so its run_finished counts as handed off). Only a
+// chain of this caller, project and conversation that is still open ends.
+// Best-effort: a chain that is not found, not open or not the caller's, and
+// a failure, end nothing and never fail the send (the failure rolls back to
+// a savepoint; the sweeper still ends an open chain later).
+func endStoppedChain(ctx context.Context, tx pgx.Tx, thread workspacehandoff.Thread, actorUserID int64, root string) bool {
+	if !unattended.ValidExecutionID(root) {
+		return false
+	}
+	var ended bool
+	err := pgx.BeginFunc(ctx, tx, func(savepoint pgx.Tx) error {
+		end, err := scanChainEnd(savepoint.QueryRow(ctx, `
+UPDATE elitea_runtime.run_chains AS c
+SET end_state = $5, end_limit = NULL, origin = 'cloud', ended_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE c.root_execution_id = $1 AND c.owner_user_id = $2 AND c.project_id = $3
+  AND c.conversation_uuid = $4::uuid AND c.end_state IS NULL`+chainEndReturning,
+			root, actorUserID, thread.ProjectID, thread.ConversationUUID, unattended.EndWaiting))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("unattended chain: end the stopped chain: %w", err)
+		}
+		notifyChainEnd(ctx, savepoint, end)
+		ended = true
+		return nil
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "workspace handoff: the send completes without ending the stopped chain",
+			"chain_root_execution_id", root, "err", err)
+		return false
+	}
+	return ended
 }
 
 // LatestChainLink answers the chain's newest link (its last_execution_id):

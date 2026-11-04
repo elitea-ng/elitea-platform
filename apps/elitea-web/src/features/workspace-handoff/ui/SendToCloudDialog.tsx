@@ -270,8 +270,10 @@ function blocked(state: SendToCloud): boolean {
 export function SendToCloudDialog({ open, onClose, ipc, workspaceId, conversationUuid, title, onSent }: SendToCloudDialogProps): React.JSX.Element {
   const state = useSendToCloud(ipc, workspaceId, conversationUuid, onSent, title);
   const { sending } = state;
+  // After a completed send (the cloud has the thread) every way out (OK, Escape, the backdrop) reports the send.
+  const close = state.continueRefused !== null ? state.acknowledge : onClose;
   return (
-    <Dialog open={open} onClose={sending ? undefined : onClose} aria-labelledby="handoff-send-title" fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={sending ? undefined : close} aria-labelledby="handoff-send-title" fullWidth maxWidth="sm">
       <DialogTitle id="handoff-send-title">{t('workspace.handoff.sendTitle', 'Send this thread to the cloud')}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Body state={state} />

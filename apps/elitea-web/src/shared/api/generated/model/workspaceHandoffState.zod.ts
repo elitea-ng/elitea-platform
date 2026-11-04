@@ -83,7 +83,7 @@ export const WorkspaceHandoffState = zod
       .union([WorkspaceHandoffCloudRun, zod.null()])
       .optional()
       .describe(
-        "Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, and outside CLOUD_IDLE and CLOUD_RUNNING.",
+        "Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, outside CLOUD_IDLE and CLOUD_RUNNING, and whenever `take_back_when_done` is false (only the take back reads it, so the polled banner does not pay for it).",
       ),
   })
   .describe(

@@ -4385,12 +4385,12 @@ export interface components {
         WorkspaceHandoffError: {
             details?: components["schemas"]["WorkspaceHandoffErrorDetails"];
             error: string;
-            /** @description Contract 1.33. With `unattended_grant_refused`, the refused grant field. */
+            /** @description Contract 1.33. With `unattended_grant_refused`, the refused grant field; with `continue_refused`, the refused `continue` field (`mode`). */
             field?: string;
             /** @description Contract 1.33. With `chain_limit_reached`, the limit the chain reached: `continuations`, `spend` or `deadline`. */
             limit?: string;
             message?: string;
-            /** @description Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn. */
+            /** @description Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn. With `continue_refused`: why the cloud cannot run the continue (`mode`: a cloud turn has no plan mode). */
             reason?: string;
             /** @description Contract 1.33. With `unattended_grant_refused`, the refused `toolkit_name/tool_name`. */
             tool?: string;
@@ -4451,7 +4451,7 @@ export interface components {
             handoff_id?: string;
             has_upstream?: boolean;
             history_mode?: string;
-            /** @description Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, and outside CLOUD_IDLE and CLOUD_RUNNING. */
+            /** @description Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, outside CLOUD_IDLE and CLOUD_RUNNING, and whenever `take_back_when_done` is false (only the take back reads it, so the polled banner does not pay for it). */
             last_cloud_run?: components["schemas"]["WorkspaceHandoffCloudRun"] | null;
             /** @description Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none. */
             pull_request_credential?: components["schemas"]["WorkspaceForgeCredential"] | null;

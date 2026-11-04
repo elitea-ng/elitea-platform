@@ -52,13 +52,13 @@ export const WorkspaceHandoffError = zod
       .string()
       .optional()
       .describe(
-        "Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn.",
+        "Contract 1.33. With `unattended_grant_refused` (a complete with `continue`): why the grant was refused, as on a local turn. With `continue_refused`: why the cloud cannot run the continue (`mode`: a cloud turn has no plan mode).",
       ),
     field: zod
       .string()
       .optional()
       .describe(
-        "Contract 1.33. With `unattended_grant_refused`, the refused grant field.",
+        "Contract 1.33. With `unattended_grant_refused`, the refused grant field; with `continue_refused`, the refused `continue` field (`mode`).",
       ),
     tool: zod
       .string()

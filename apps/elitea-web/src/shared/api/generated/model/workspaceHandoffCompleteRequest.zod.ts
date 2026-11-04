@@ -43,6 +43,8 @@
 import * as zod from "zod";
 import { WorkspaceHandoffContinue } from "./workspaceHandoffContinue.zod";
 
+export const workspaceHandoffCompleteRequestStoppedChainRootExecutionIdMax = 64;
+
 export const WorkspaceHandoffCompleteRequest = zod
   .object({
     epoch: zod.int(),
@@ -55,6 +57,13 @@ export const WorkspaceHandoffCompleteRequest = zod
         "Contract 1.33 (ADR-0045 decision 8). The owner's desktop takes the thread back by itself when its cloud run completes. Stored on the handoff; the state answers it. Absent is false.",
       ),
     continue: WorkspaceHandoffContinue.optional(),
+    stopped_chain_root_execution_id: zod
+      .string()
+      .max(workspaceHandoffCompleteRequestStoppedChainRootExecutionIdMax)
+      .optional()
+      .describe(
+        "Contract 1.33 (ADR-0045 decision 8). The `chain_root_execution_id` of the unattended local turn the desktop stopped for this send. Without `continue`, Main ends that chain as `waiting` in the transaction that completes the send: the thread now waits in the cloud for the person's next message, and the chain's `run_finished` names `outcome` `waiting` and `origin` `cloud`. Only a chain of the caller on this thread that is still open ends; any other id (unknown, ended, another person's, malformed) is ignored and the send completes. With `continue` it is ignored: the continue links the chain. Send it on a retry without `continue` after a refused continue (`continue_refused`, `unattended_grant_refused`, `chain_ended`, `invalid_handoff`, `handoff_unavailable`); after `chain_limit_reached` the chain has already ended and the field changes nothing.",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:357 (`completeBody`).",

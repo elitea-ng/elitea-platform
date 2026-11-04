@@ -57,14 +57,14 @@ export const WorkspaceHandoffContinue = zod
     mode: zod
       .string()
       .describe(
-        "The thread's mode: `build`, `plan` or `bypass`. Recorded in the audit; the cloud turn runs as any cloud turn does.",
+        "The thread's mode: `build`, `plan` or `bypass`. Recorded in the audit; the cloud turn runs as any cloud turn does. A cloud turn has no plan mode: `plan` fails the whole complete with 422 `continue_refused` (`reason` `mode`, `field` `mode`) and the send stays HANDING_OFF; complete it again without `continue`.",
       ),
     grant: LocalTurnUnattendedRequest.optional().describe(
       "The thread's unattended grant, as on a local turn. With `chain_root_execution_id`, the cloud turn continues that chain (link kind `handoff`): the same `grant_id`, no `kind`, and the chain's limits count across both executors; its `run_finished` names `origin` `cloud`. Without it, the turn starts a new cloud chain; the desktop-only parts (`continue_tool_call_cap`, `hook_asks`, `remote_confirmations`) are dropped. Absent: an attended cloud turn.",
     ),
   })
   .describe(
-    "Contract 1.33 (ADR-0045 decision 8). Send a running task to the cloud and continue: Main completes the send, writes the person's message and starts the cloud turn in ONE transaction, so the complete answers CLOUD_RUNNING. A refused grant or chain fails the whole complete (422 `unattended_grant_refused`, 409 `chain_limit_reached` or `chain_ended`) and the send stays HANDING_OFF: complete it again, with or without `continue`. NOTE(W2): internal/api/v2/workspacehandoff/route.go (`continueBody`).",
+    "Contract 1.33 (ADR-0045 decision 8). Send a running task to the cloud and continue: Main completes the send, writes the person's message and starts the cloud turn in ONE transaction, so the complete answers CLOUD_RUNNING. A refused grant or chain fails the whole complete (422 `unattended_grant_refused`, 409 `chain_limit_reached` or `chain_ended`), as does a continue in mode `plan` (422 `continue_refused`); the send stays HANDING_OFF: complete it again, with or without `continue`. Without it, send `stopped_chain_root_execution_id` so the stopped chain ends as `waiting`. NOTE(W2): internal/api/v2/workspacehandoff/route.go (`continueBody`).",
   );
 
 export type WorkspaceHandoffContinue = zod.input<

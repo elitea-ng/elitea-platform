@@ -13,9 +13,21 @@ package workspacehandoff
 // cloud turn is a continuation of it (link kind `handoff`): the chain's
 // limits count across both executors.
 //
+// A cloud turn has no plan mode (ADR-0034 tool gaps), so a continue in mode
+// `plan` is refused before anything changes (ContinueRefusedError, 422
+// continue_refused): the desktop completes again without `continue`.
+//
+// A complete WITHOUT `continue` may name the chain of the unattended local
+// turn the desktop stopped for the send (StoppedChainRootExecutionID). The
+// send then ends that chain as `waiting`, in the transaction that completes
+// it: the thread waits in the cloud for the person's next message. With
+// `continue` the field is ignored (the continue links the chain).
+//
 // take_back_when_done is stored on the row. Main never takes a thread back
 // by itself: the owner's desktop reads the flag and the last finished cloud
-// run of the handoff (State) and reclaims.
+// run of the handoff (State) and reclaims. State reads that run only for a
+// handoff with the flag set: the banner polls State, and nothing else reads
+// the run.
 
 import (
 	"context"
@@ -32,7 +44,8 @@ const MaxContinuePromptRunes = 32768
 
 // Thread modes a continue may name: the desktop's (build, plan, bypass).
 // The cloud turn runs as any cloud turn does; the mode is recorded in the
-// audit. A cloud copy has no plan mode (ADR-0034 tool gaps).
+// audit. A cloud copy has no plan mode (ADR-0034 tool gaps): a continue in
+// `plan` is refused (ContinueRefusedError).
 const (
 	ModeBuild  = "build"
 	ModePlan   = "plan"
@@ -46,6 +59,30 @@ type Continue struct {
 	// Grant is the thread's unattended grant; nil for an attended turn.
 	// With ChainRootExecutionID set, the cloud turn continues that chain.
 	Grant *unattended.Request
+}
+
+// ContinueRefusedReasonMode: a continue in mode `plan` (a cloud turn has no
+// plan mode).
+const ContinueRefusedReasonMode = "mode"
+
+// ContinueRefusedError refuses a well-formed `continue` the cloud cannot run:
+// 422 continue_refused with reason and field. Nothing changes; the send stays
+// HANDING_OFF and the desktop completes again without `continue`.
+type ContinueRefusedError struct {
+	Reason string
+	Field  string
+}
+
+func (e *ContinueRefusedError) Error() string {
+	return "handoff continue refused: " + e.Reason
+}
+
+// refusal answers why the cloud cannot run a well-formed continue, or nil.
+func (c *Continue) refusal() error {
+	if c != nil && c.Mode == ModePlan {
+		return &ContinueRefusedError{Reason: ContinueRefusedReasonMode, Field: "mode"}
+	}
+	return nil
 }
 
 func (c *Continue) valid() bool {
@@ -175,10 +212,12 @@ func (s *Service) WithCloudRuns(reader CloudRunReader) *Service {
 }
 
 // lastCloudRun answers the last finished run while the cloud owns the
-// thread; nil in any other state, or when it cannot be read (the banner
-// must not fail on it).
+// thread and the owner asked to take it back when done; nil in any other
+// case, or when it cannot be read (the banner must not fail on it). Only
+// the take back reads the run, and the banner polls State, so a handoff
+// without the flag never pays for the scan.
 func (s *Service) lastCloudRun(ctx context.Context, handoff Handoff) *CloudRun {
-	if s.cloudRuns == nil || !handoff.State.Cloud() {
+	if s.cloudRuns == nil || !handoff.TakeBackWhenDone || !handoff.State.Cloud() {
 		return nil
 	}
 	run, err := s.cloudRuns.LastCloudRun(ctx, handoff)

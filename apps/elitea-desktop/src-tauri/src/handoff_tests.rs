@@ -135,8 +135,9 @@ struct Platform {
     rest_expired: bool,
     /// Every `complete` body, in order (U5).
     completes: Vec<Value>,
-    /// A `complete` with `continue` answers 422 `unattended_grant_refused`.
-    refuse_grant: bool,
+    /// A `complete` with `continue` answers this (status, body): a refusal
+    /// of the continue alone.
+    refuse_continue: Option<(u16, Value)>,
     /// The state's `take_back_when_done` and `last_cloud_run` (`WorkspaceHandoffState`, ADR-0045 decision 8).
     take_back_when_done: bool,
     last_cloud_run: Option<Value>,
@@ -299,12 +300,10 @@ fn handle(platform: &Mutex<Platform>, req: &Req) -> Res {
                 p.refs.get("refs/elitea/handoff/1").map(String::as_str)
             );
             p.completes.push(body.clone());
-            if p.refuse_grant && body.get("continue").is_some() {
-                return Res::json(
-                    422,
-                    &json!({"error": "unattended_grant_refused", "message": "The platform refused the unattended grant (over_maximum).",
-                            "details": {"reason": "over_maximum", "field": "chain.max_continuations"}}),
-                );
+            if body.get("continue").is_some()
+                && let Some((status, refusal)) = p.refuse_continue.clone()
+            {
+                return Res::json(status, &refusal);
             }
             p.take_back_when_done = body["take_back_when_done"] == json!(true);
             p.epoch += 1;
@@ -2655,6 +2654,16 @@ struct Running {
 /// A harness whose thread runs a local turn that is inside its first step
 /// (the gate); `unattended` gives the turn a grant.
 async fn running_turn(unattended: Option<crate::d0::unattended::UnattendedTurn>) -> Running {
+    running_turn_in(unattended, false, |_| {}).await
+}
+
+/// [`running_turn`] in plan mode or not; `prepare` runs on the harness
+/// before the turn starts.
+async fn running_turn_in(
+    unattended: Option<crate::d0::unattended::UnattendedTurn>,
+    plan_mode: bool,
+    prepare: impl FnOnce(&Harness),
+) -> Running {
     use crate::d0::turn::TurnRequest;
     let convo = Arc::new(Mutex::new(crate::d0::tests::Convo::default()));
     let h = harness_scripted(
@@ -2664,6 +2673,7 @@ async fn running_turn(unattended: Option<crate::d0::unattended::UnattendedTurn>)
         Some(endless_gate_script()),
     )
     .await;
+    prepare(&h);
     let entered = Arc::new(tokio::sync::Notify::new());
     let open = Arc::new(tokio::sync::Semaphore::new(0));
     h.agents
@@ -2680,7 +2690,7 @@ async fn running_turn(unattended: Option<crate::d0::unattended::UnattendedTurn>)
             application_id: 5,
             version_id: 9,
             prompt: "keep going until it is done".into(),
-            plan_mode: false,
+            plan_mode,
             bypass: false,
             mentions: Vec::new(),
             skills: Vec::new(),
@@ -2708,6 +2718,14 @@ async fn running_turn(unattended: Option<crate::d0::unattended::UnattendedTurn>)
 /// Send while the turn is in its step; open the gate once the send asked
 /// for the stop.
 async fn send_while_running(run: &Running, options: super::SendOptions) -> super::Sent {
+    send_while_running_result(run, options).await.expect("sent")
+}
+
+/// [`send_while_running`], its result as it is.
+async fn send_while_running_result(
+    run: &Running,
+    options: super::SendOptions,
+) -> Result<super::Sent, super::HandoffError> {
     let host = run.h.host.clone();
     let workspace_id = run.h.workspace_id.clone();
     let send = tokio::spawn(async move {
@@ -2734,7 +2752,6 @@ async fn send_while_running(run: &Running, options: super::SendOptions) -> super
         .await
         .expect("the send finished")
         .unwrap()
-        .expect("sent")
 }
 
 fn llm_requests(h: &Harness) -> usize {
@@ -2833,7 +2850,11 @@ async fn a_refused_grant_completes_without_continue_and_says_why() {
         ..UnattendedGrant::default()
     };
     let run = running_turn(Some(UnattendedTurn::root(grant))).await;
-    run.h.platform.lock().unwrap().refuse_grant = true;
+    run.h.platform.lock().unwrap().refuse_continue = Some((
+        422,
+        json!({"error": "unattended_grant_refused", "message": "The platform refused the unattended grant (over_maximum).",
+                "details": {"reason": "over_maximum", "field": "chain.max_continuations"}}),
+    ));
     let sent = send_while_running(
         &run,
         super::SendOptions {
@@ -2850,6 +2871,12 @@ async fn a_refused_grant_completes_without_continue_and_says_why() {
     assert_eq!(grant["chain_root_execution_id"], run.execution_id.as_str());
     assert!(complete[1].get("continue").is_none());
     assert!(complete[1].get("take_back_when_done").is_none());
+    // Main ends the stopped chain `waiting`.
+    assert_eq!(
+        complete[1]["stopped_chain_root_execution_id"],
+        run.execution_id.as_str()
+    );
+    assert!(complete[0].get("stopped_chain_root_execution_id").is_none());
     assert_eq!(sent.state, "CLOUD_IDLE");
     assert!(sent.continued.is_none());
     assert!(!sent.take_back_when_done);
@@ -2998,4 +3025,302 @@ async fn an_older_server_without_last_cloud_run_follows_the_notification() {
         .await;
     assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
     assert_eq!(notices(&h)[0].0, "Took back Greet the cloud");
+}
+
+fn stopping(h: &Harness) -> bool {
+    h.events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|e| e.phase == "stopping")
+}
+
+/// Finding 1: every check that can refuse the send runs before the turn
+/// is stopped. A refused send never stops it.
+#[tokio::test]
+async fn a_send_refused_by_its_own_checks_never_stops_the_running_turn() {
+    let run = running_turn(None).await;
+    let h = &run.h;
+    let key = ["AKIA", "Z7QWERTYUIOPASDF"].concat();
+    std::fs::write(h.folder.join("config.ini"), format!("key = {key}\n")).unwrap();
+    let error = h
+        .host
+        .send_with(
+            &h.workspace_id,
+            CONVERSATION,
+            Vec::new(),
+            false,
+            super::SendOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "secret_found");
+    assert!(!stopping(h), "the turn was never asked to stop");
+    assert!(
+        h.agents
+            .running_turn_of(&h.workspace_id, CONVERSATION)
+            .is_some(),
+        "the turn still runs"
+    );
+    assert!(h.platform.lock().unwrap().begin.is_none());
+    // A policy cap refuses before the stop too.
+    std::fs::remove_file(h.folder.join("config.ini")).unwrap();
+    h.platform.lock().unwrap().policy = Some(server_policy(
+        json!({"limits": {"max_segment_bytes": 1, "max_file_bytes": 26_214_400, "max_files": 20000,
+        "max_unpacked_bytes": 2_147_483_648_u64, "project_workspace_bytes_left": 53_687_091_200_u64}}),
+    ));
+    let error = h
+        .host
+        .send_with(
+            &h.workspace_id,
+            CONVERSATION,
+            Vec::new(),
+            false,
+            super::SendOptions::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.code == "handoff_too_large" || error.code == "workspace_quota_exceeded",
+        "{error:?}"
+    );
+    assert!(!stopping(h));
+    h.agents.cancel(&run.turn_id).unwrap();
+    run.open.add_permits(10);
+}
+
+/// Findings 1 and 3: a send that fails after the stop (here the upload)
+/// resumes the run on this computer at once, as a `resume` continuation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_that_fails_after_the_stop_resumes_the_run_here() {
+    let run = running_turn(None).await;
+    run.h.platform.lock().unwrap().fail_upload = true;
+    let error = send_while_running_result(&run, super::SendOptions::default())
+        .await
+        .unwrap_err();
+    let h = &run.h;
+    assert!(
+        error.message.contains("goes on on this computer"),
+        "{error:?}"
+    );
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+    let continued = h
+        .emitter
+        .all()
+        .into_iter()
+        .find(|e| e.kind == "turn_continued" && e.turn_id == run.turn_id)
+        .expect("the stopped turn goes on");
+    assert_eq!(continued.payload["kind"], "resume");
+    assert_eq!(continued.payload["resumed_after_send"], true);
+    let next = continued.payload["next_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        h.agents
+            .running_turn_of(&h.workspace_id, CONVERSATION)
+            .is_some_and(|turn| turn.turn_id == next)
+    );
+    assert!(notices(h).is_empty(), "it went on: nothing to notice");
+    let _ = h.agents.cancel(&next);
+    run.open.add_permits(10);
+}
+
+/// Finding 2: each continue-only refusal completes again without
+/// `continue`, naming the stopped chain, and says why.
+#[test]
+fn the_continue_fallback_table() {
+    use super::{HandoffError, continue_refusal};
+    let refusal = |code: &str, details: Value| {
+        continue_refusal(&HandoffError {
+            code: code.into(),
+            message: "The platform's reason.".into(),
+            details,
+        })
+    };
+    assert_eq!(
+        refusal("unattended_grant_refused", Value::Null).as_deref(),
+        Some("The platform's reason.")
+    );
+    assert_eq!(
+        refusal("chain_limit_reached", json!({"limit": "max_continuations"})).as_deref(),
+        Some("The platform's reason.")
+    );
+    assert!(
+        refusal(
+            "continue_refused",
+            json!({"reason": "mode", "field": "mode"})
+        )
+        .unwrap()
+        .contains("Plan mode")
+    );
+    assert!(
+        refusal("chain_ended", Value::Null)
+            .unwrap()
+            .contains("ended")
+    );
+    assert!(
+        refusal("handoff_unavailable", Value::Null)
+            .unwrap()
+            .contains("no room")
+    );
+    assert!(refusal("invalid_handoff", Value::Null).is_some());
+    for other in ["stale_epoch", "handoff_expired", "internal", "http_500"] {
+        assert!(refusal(other, Value::Null).is_none(), "{other}");
+    }
+    // The flat envelope's reason reaches the details.
+    assert_eq!(
+        super::flat_details(
+            &json!({"error": "continue_refused", "reason": "mode", "field": "mode"})
+        ),
+        json!({"reason": "mode", "field": "mode"})
+    );
+}
+
+#[tokio::test]
+async fn a_chain_that_ended_completes_without_continue_and_names_the_chain() {
+    use crate::d0::unattended::{UnattendedGrant, UnattendedTurn};
+    let grant = UnattendedGrant {
+        continue_step_limit: true,
+        goal_check: Some(false),
+        ..UnattendedGrant::default()
+    };
+    let run = running_turn(Some(UnattendedTurn::root(grant))).await;
+    run.h.platform.lock().unwrap().refuse_continue = Some((
+        409,
+        json!({"error": "chain_ended", "message": "The unattended chain has ended."}),
+    ));
+    let sent = send_while_running(&run, super::SendOptions::default()).await;
+    let complete = run.h.platform.lock().unwrap().completes.clone();
+    assert_eq!(complete.len(), 2);
+    assert!(complete[1].get("continue").is_none());
+    assert_eq!(
+        complete[1]["stopped_chain_root_execution_id"],
+        run.execution_id.as_str()
+    );
+    assert!(sent.continued.is_none());
+    let said = sent.continue_refused.unwrap();
+    assert!(said.contains("had already ended"), "{said}");
+    assert!(said.contains("waits for your next message"), "{said}");
+}
+
+/// A plan-mode turn is never sent with `continue`: the thread waits in
+/// the cloud, and the person is told why.
+#[tokio::test]
+async fn a_plan_mode_turn_is_sent_without_continue() {
+    let run = running_turn_in(None, true, |_| {}).await;
+    let sent = send_while_running(&run, super::SendOptions::default()).await;
+    let complete = run.h.platform.lock().unwrap().completes.clone();
+    assert_eq!(complete.len(), 1, "no refused continue first");
+    assert!(complete[0].get("continue").is_none());
+    assert!(
+        complete[0].get("stopped_chain_root_execution_id").is_none(),
+        "an attended turn has no chain"
+    );
+    assert_eq!(sent.state, "CLOUD_IDLE");
+    assert!(
+        sent.continue_refused
+            .unwrap()
+            .contains("Plan mode does not run in the cloud")
+    );
+}
+
+/// Finding 8: the send waits on the workspace's release, not a poll; a
+/// cancel ends the wait at once.
+#[tokio::test]
+async fn the_claim_after_a_stop_waits_on_the_release() {
+    let h = harness().await;
+    tokio::time::pause();
+    let switch = Arc::new(super::CancelSwitch::default());
+    let held = h.agents.claim_workspace(&h.workspace_id, "busy").unwrap();
+    let started = tokio::time::Instant::now();
+    let wait = {
+        let (host, workspace_id, switch) = (h.host.clone(), h.workspace_id.clone(), switch.clone());
+        tokio::spawn(async move {
+            host.claim_for_send(&workspace_id, true, &switch)
+                .await
+                .map(|_| ())
+        })
+    };
+    tokio::task::yield_now().await;
+    drop(held);
+    wait.await.unwrap().unwrap();
+    assert_eq!(
+        started.elapsed(),
+        Duration::ZERO,
+        "woken by the release, no time slept"
+    );
+    // A cancel ends the wait without a poll either.
+    let _held = h.agents.claim_workspace(&h.workspace_id, "busy").unwrap();
+    let wait = {
+        let (host, workspace_id, switch) = (h.host.clone(), h.workspace_id.clone(), switch.clone());
+        tokio::spawn(async move {
+            host.claim_for_send(&workspace_id, true, &switch)
+                .await
+                .map(|_| ())
+        })
+    };
+    tokio::task::yield_now().await;
+    switch.cancel();
+    assert_eq!(wait.await.unwrap().unwrap_err().code, "handoff_cancelled");
+    assert_eq!(started.elapsed(), Duration::ZERO);
+    // Past the bound: the folder stays busy.
+    let fresh = super::CancelSwitch::default();
+    let error = h
+        .host
+        .claim_for_send(&h.workspace_id, true, &fresh)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "workspace_busy");
+    assert!(started.elapsed() >= super::CLAIM_AFTER_STOP);
+}
+
+/// Finding 4: a take-back that reclaimed and then met a busy folder goes on
+/// from the preflight at the next pass, although the RECLAIMING state has
+/// no `last_cloud_run`.
+#[tokio::test]
+async fn a_reclaimed_take_back_goes_on_at_the_next_pass() {
+    let h = sent_with_take_back("completed").await;
+    // A turn holds the folder: the apply is refused, the reclaim stays.
+    let held = h.agents.claim_workspace(&h.workspace_id, "busy").unwrap();
+    h.host.catch_up().await;
+    assert_eq!(h.platform.lock().unwrap().state, "RECLAIMING");
+    let record = h.history.take_back_of(CONVERSATION).unwrap().unwrap();
+    assert_eq!(record.phase.as_deref(), Some("reclaimed"));
+    assert!(notices(&h).is_empty(), "busy is not an error");
+    // As Main answers RECLAIMING.
+    h.platform.lock().unwrap().last_cloud_run = None;
+    drop(held);
+    h.host.catch_up().await;
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+    assert_eq!(
+        std::fs::read_to_string(h.folder.join("README.md")).unwrap(),
+        "hello from the cloud\n"
+    );
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
+    assert_eq!(notices(&h)[0].0, "Took back Greet the cloud");
+}
+
+/// A take-back asked while a cloud turn ran (`reclaim_pending`) goes on
+/// once the server reclaimed.
+#[tokio::test]
+async fn a_pending_take_back_goes_on_once_reclaimed() {
+    let h = sent_with_take_back("completed").await;
+    h.platform.lock().unwrap().turn_running = true;
+    h.host.catch_up().await;
+    let record = h.history.take_back_of(CONVERSATION).unwrap().unwrap();
+    assert_eq!(record.phase.as_deref(), Some("reclaim_pending"));
+    {
+        // The cloud turn ended: the server reclaims, without a last run.
+        let mut p = h.platform.lock().unwrap();
+        p.turn_running = false;
+        p.state = "RECLAIMING".into();
+        p.epoch += 1;
+        p.last_cloud_run = None;
+    }
+    h.host.catch_up().await;
+    assert_eq!(h.platform.lock().unwrap().state, "LOCAL");
+    assert!(h.history.take_back_of(CONVERSATION).unwrap().is_none());
 }

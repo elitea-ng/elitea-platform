@@ -702,6 +702,9 @@ struct TurnEntry {
     state: Mutex<RunState>,
     /// The `done` event's payload, once sent (`agent_turn_status`).
     done: Mutex<Option<Value>>,
+    /// Bumped on every change of `done` (sent, its commit settled): what
+    /// [`AgentHost::turn_settled`] waits on.
+    done_changed: tokio::sync::watch::Sender<u64>,
     /// Its changes were undone: by its own undo, or by restoring the
     /// folder to before an earlier turn.
     undone: std::sync::atomic::AtomicBool,
@@ -756,6 +759,23 @@ pub struct TurnSettled {
     pub handed_off: bool,
 }
 
+/// What became of a turn stopped for a send that then failed
+/// ([`AgentHost::resume_after_send`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AfterSend {
+    /// It goes on here: the next turn started.
+    Resumed,
+    /// Not started yet (no network, a busy folder, …): the record stays,
+    /// the resume loop tries again and the turn offers **Continue**. The
+    /// reason.
+    Waiting(String),
+    /// The platform refused the continuation: the chain ended. The reason.
+    Ended(String),
+    /// Nothing to resume (no record, or the thread is in the cloud after
+    /// all).
+    Nothing,
+}
+
 impl TurnEntry {
     /// Record the turn's end, then send its `done` event (always the last).
     fn finish(&self, events: &TurnEvents, payload: Value) {
@@ -763,7 +783,24 @@ impl TurnEntry {
             .done
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(payload.clone());
+        self.done_changed
+            .send_modify(|seq| *seq = seq.wrapping_add(1));
         events.send("done", payload);
+    }
+
+    /// The turn ends here for a send to the cloud after all (its goal check
+    /// would have continued the chain locally): `turn_settled` says so.
+    fn mark_handed_off(&self) {
+        let mut done = self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(Value::Object(payload)) = done.as_mut() {
+            payload.insert("handed_off".into(), json!(true));
+        }
+        drop(done);
+        self.done_changed
+            .send_modify(|seq| *seq = seq.wrapping_add(1));
     }
 
     /// The turn's commit settled after its `done` (`committed` or
@@ -777,6 +814,9 @@ impl TurnEntry {
             payload.insert("commit".into(), json!(outcome));
             payload.insert("committed".into(), json!(outcome == "committed"));
         }
+        drop(done);
+        self.done_changed
+            .send_modify(|seq| *seq = seq.wrapping_add(1));
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
@@ -998,6 +1038,10 @@ pub struct AgentHost {
     resume_wake: tokio::sync::Notify,
     /// The turns `resume_offered` was sent for: once each.
     resume_offers: Mutex<std::collections::HashSet<String>>,
+    /// Turns stopped for a send that failed and whose resume did not start
+    /// yet: the resume loop takes their records although the host still
+    /// knows the turn ([`Self::resume_after_send`]).
+    resume_after_send: Mutex<std::collections::HashSet<String>>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1210,6 +1254,7 @@ impl AgentHost {
             awake: Arc::new(KeepAwake::default()),
             resume_wake: tokio::sync::Notify::new(),
             resume_offers: Mutex::new(std::collections::HashSet::new()),
+            resume_after_send: Mutex::new(std::collections::HashSet::new()),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
         })
@@ -1970,6 +2015,7 @@ impl AgentHost {
                     checkpoint: Mutex::new(TurnCheckpoint::None),
                     state: Mutex::new(RunState::Running),
                     done: Mutex::new(None),
+                    done_changed: tokio::sync::watch::Sender::new(0),
                     undone: std::sync::atomic::AtomicBool::new(false),
                     steering: Arc::new(TurnSteering::new(events.clone())),
                     origin: TurnOrigin {
@@ -2851,7 +2897,7 @@ impl AgentHost {
             drop(awake);
             return;
         };
-        let (answer, stopped_at_limit, stopped_at_calls, exhausted, handed_off, failure) =
+        let (answer, stopped_at_limit, stopped_at_calls, exhausted, mut handed_off, failure) =
             match result {
                 Ok(AgentAnswer {
                     text,
@@ -2872,7 +2918,7 @@ impl AgentHost {
         // An unattended turn's chain: the next turn starts once the commit
         // landed, or the chain ends and the commit says how. A turn stopped
         // for a send goes on in the cloud: neither (ADR-0045 decision 8).
-        let turn_end = if failure.is_some() {
+        let mut turn_end = if failure.is_some() {
             TurnEnd::Failed
         } else if handed_off {
             TurnEnd::Handoff
@@ -2883,10 +2929,20 @@ impl AgentHost {
         } else {
             TurnEnd::Answered
         };
-        let chain_step = request
+        let mut chain_step = request
             .unattended
             .as_ref()
             .map(|turn| unattended::next_step(&turn.grant, turn_end));
+        // A send waits for this turn (ADR-0045 decision 8): an end that
+        // would start a local continuation (the tool-call cap, a step limit
+        // the grant continues) ends here for the cloud instead. An end that
+        // ends the chain settles as it is; the send then has nothing to
+        // continue.
+        if chain_step == Some(ChainStep::Continue) && entry.steering.claim_stop() {
+            turn_end = TurnEnd::Handoff;
+            handed_off = true;
+            chain_step = Some(ChainStep::Handoff);
+        }
         let continuation = match (&chain_step, &request.unattended) {
             (Some(ChainStep::Continue), Some(turn)) => Some(unattended::continuation(
                 &request,
@@ -3091,6 +3147,13 @@ impl AgentHost {
                             chain_step = Some(ChainStep::End(outcome));
                             goal = summary;
                         }
+                        // A send waits for this turn: the cloud continues it,
+                        // not a local turn (ADR-0045 decision 8).
+                        GoalDecision::Continue(_) if entry.steering.claim_stop() => {
+                            chain_step = Some(ChainStep::Handoff);
+                            continuation = None;
+                            entry.mark_handed_off();
+                        }
                         GoalDecision::Continue(next) => {
                             chain_step = Some(ChainStep::Continue);
                             continuation = Some(*next);
@@ -3150,7 +3213,12 @@ impl AgentHost {
                         (&chain_step, &continuation),
                         (Some(ChainStep::Continue), Some(_))
                     );
-                if goes_on {
+                // A turn stopped for a send keeps its record until the send
+                // settles: a send that fails resumes it here
+                // ([`AgentHost::resume_after_send`]), one that lands
+                // forgets it ([`AgentHost::forget_handed_off`]).
+                let handed = landed && (handed_off || chain_step == Some(ChainStep::Handoff));
+                if goes_on || handed {
                     if let Some(history) = &host.deps.history {
                         let goal = resume_goal.as_ref();
                         let progress = crate::history::ResumeProgress {
@@ -3565,7 +3633,12 @@ impl AgentHost {
             }
         };
         for record in records {
-            if record.owner != owner || self.entry(&record.turn_id).is_ok() {
+            let after_send = self
+                .resume_after_send
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(&record.turn_id);
+            if record.owner != owner || (self.entry(&record.turn_id).is_ok() && !after_send) {
                 continue;
             }
             if resume::expired(&record, chrono::Utc::now().timestamp_millis()) {
@@ -3579,6 +3652,10 @@ impl AgentHost {
             }
             match self.start_resumed(&record).await {
                 Ok(started) => {
+                    self.resume_after_send
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .remove(&record.turn_id);
                     pass.resumed += 1;
                     old.send(
                         "turn_continued",
@@ -3591,6 +3668,11 @@ impl AgentHost {
                             "resumed_after_restart": true,
                         }),
                     );
+                }
+                // The thread went to the cloud (a send that landed): it
+                // goes on there, nothing is resumed here.
+                Err(error) if resume::moved_to_cloud(&error) => {
+                    history.resume_delete(&record.workspace_id, &record.turn_id);
                 }
                 // Not the platform's refusal (no network, a 401 or 5xx, a
                 // busy folder): the next pass tries again, and the person
@@ -3664,11 +3746,99 @@ impl AgentHost {
         }
         let started = self.start_resumed(&record).await;
         if let Err(error) = &started
-            && resume::refused(error)
+            && (resume::refused(error) || resume::moved_to_cloud(error))
         {
             history.resume_delete(&record.workspace_id, &record.turn_id);
         }
         started
+    }
+
+    /// A send that stopped `turn_id` landed (ADR-0045 decision 8): the
+    /// turn goes on in the cloud, its resume record goes.
+    pub fn forget_handed_off(&self, workspace_id: &str, turn_id: &str) {
+        self.forget_resume(workspace_id, turn_id);
+    }
+
+    /// A send that stopped `turn_id` failed or was cancelled after the stop
+    /// (ADR-0045 decision 8): the person's run is never silently killed. It
+    /// goes on here at once, as a continuation of link kind `resume` from
+    /// the turn's record (the U4 machinery); the old turn says
+    /// `turn_continued`. A refused continuation ends the chain
+    /// (`chain_ended`, its record goes); any other failure keeps the record
+    /// for the resume loop and offers **Continue** on the turn.
+    pub async fn resume_after_send(self: &Arc<Self>, turn_id: &str) -> AfterSend {
+        let Some(history) = self.deps.history.clone() else {
+            return AfterSend::Nothing;
+        };
+        let record = match history.read_resume_records().await {
+            Ok(records) => records.into_iter().find(|record| record.turn_id == turn_id),
+            Err(error) => {
+                log::warn!("the stopped turn's record could not be read: {error}");
+                None
+            }
+        };
+        let Some(record) = record else {
+            return AfterSend::Nothing;
+        };
+        let old = TurnEvents::new(record.turn_id.clone(), self.deps.emitter.clone());
+        match self.start_resumed(&record).await {
+            Ok(started) => {
+                old.send(
+                    "turn_continued",
+                    json!({
+                        "next_turn_id": started.turn_id,
+                        "execution_id": started.execution_id,
+                        "continuation_index": record.continuation_index.saturating_add(1),
+                        "chain_root_execution_id": record.chain_root_execution_id,
+                        "kind": ContinuationKind::Resume.as_str(),
+                        "resumed_after_send": true,
+                    }),
+                );
+                AfterSend::Resumed
+            }
+            // The send landed after all (a lost answer): the cloud has it.
+            Err(error) if resume::moved_to_cloud(&error) => {
+                history.resume_delete(&record.workspace_id, &record.turn_id);
+                AfterSend::Nothing
+            }
+            Err(error) if resume::refused(&error) => {
+                log::warn!(
+                    "a stopped turn did not resume after its send: {}",
+                    log_reason(&error.code, error.status)
+                );
+                history.resume_delete(&record.workspace_id, &record.turn_id);
+                let outcome = if error.code == unattended::CHAIN_LIMIT_REACHED {
+                    ChainOutcome::LimitReached
+                } else {
+                    ChainOutcome::Failed
+                };
+                if record.grant.is_some() {
+                    unattended::chain_ended(
+                        &old,
+                        outcome,
+                        error.limit.as_deref(),
+                        Some(&error.message),
+                        None,
+                    );
+                }
+                AfterSend::Ended(error.message)
+            }
+            Err(error) => {
+                log::warn!(
+                    "a stopped turn was not resumed yet: {}",
+                    log_reason(&error.code, error.status)
+                );
+                if record.grant.is_some() {
+                    self.resume_after_send
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(record.turn_id.clone());
+                    self.resume_wake.notify_one();
+                }
+                self.offer_resume(&record);
+                AfterSend::Waiting(error.message)
+            }
+        }
     }
 
     /// Commits queued or running, and failed ones kept: what a quit now
@@ -4363,8 +4533,9 @@ impl AgentHost {
                     });
                 }
                 // At the step limit with a send waiting: the send continues
-                // the turn, nobody is asked "Continue?".
-                RunEnd::StepLimit if steering.stop_requested() => {
+                // the turn, nobody is asked "Continue?" (the claim is final:
+                // the send can no longer take its stop back).
+                RunEnd::StepLimit if steering.claim_stop() => {
                     return Ok(AgentAnswer {
                         text: sink.last_text(),
                         handed_off: true,
@@ -4519,7 +4690,11 @@ impl AgentHost {
     /// the turn's commit did not land (the thread then stays here).
     pub async fn turn_settled(&self, turn_id: &str) -> Result<TurnSettled, TurnError> {
         let entry = self.entry(turn_id)?;
+        // Subscribed before each read: a change between the two still
+        // wakes the wait. No polling: the entry says when `done` changes.
+        let mut changed = entry.done_changed.subscribe();
         loop {
+            changed.borrow_and_update();
             let done = entry
                 .done
                 .lock()
@@ -4541,8 +4716,15 @@ impl AgentHost {
                     _ => {}
                 }
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // The sender lives in the entry, which this wait holds.
+            let _ = changed.changed().await;
         }
+    }
+
+    /// A receiver bumped on every release of a workspace claim: a send
+    /// waits on it for the stopped turn's commit to free the folder.
+    pub(crate) fn workspace_released(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.busy.released.subscribe()
     }
 
     /// `agent_turn_steer`: queue `text` against a running turn; the agent

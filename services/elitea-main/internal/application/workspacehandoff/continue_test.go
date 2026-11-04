@@ -130,7 +130,7 @@ func TestCompleteRefusesAMalformedContinue(t *testing.T) {
 		"nul in prompt": {Prompt: "a\x00b", Mode: ModeBuild},
 		"unknown mode":  {Prompt: "go", Mode: "auto"},
 		"missing mode":  {Prompt: "go"},
-		"invalid utf-8": {Prompt: "\xff", Mode: ModePlan},
+		"invalid utf-8": {Prompt: "\xff", Mode: ModeBuild},
 	} {
 		if _, err := service.Complete(context.Background(), completeWith(next, false)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v, want ErrInvalid", name, err)
@@ -143,6 +143,61 @@ func TestCompleteRefusesAMalformedContinue(t *testing.T) {
 	if _, err := service.Complete(context.Background(),
 		completeWith(&Continue{Prompt: strings.Repeat("é", MaxContinuePromptRunes), Mode: ModeBypass}, false)); err != nil {
 		t.Fatalf("a prompt at the bound = %v", err)
+	}
+}
+
+// A cloud turn has no plan mode: a continue in `plan` is refused before
+// anything changes, with the reason and field the desktop falls back on.
+func TestCompleteRefusesAContinueInPlanMode(t *testing.T) {
+	service, repo, recorder, _ := continueService(t, Handoff{})
+	starter := &recordingStarter{}
+	service.WithContinueStarter(starter)
+	_, err := service.Complete(context.Background(), completeWith(&Continue{Prompt: "go", Mode: ModePlan}, true))
+	var refused *ContinueRefusedError
+	if !errors.As(err, &refused) || refused.Reason != ContinueRefusedReasonMode || refused.Field != "mode" {
+		t.Fatalf("plan continue = %v, want ContinueRefusedError{mode, mode}", err)
+	}
+	if len(starter.starts) != 0 || len(repo.completes) != 0 || len(recorder.actions) != 0 {
+		t.Fatalf("a refused continue changed something: starts %d, completes %d, audit %d",
+			len(starter.starts), len(repo.completes), len(recorder.actions))
+	}
+}
+
+// A complete without continue passes the stopped chain; a malformed id names
+// none; with continue the field is ignored.
+func TestCompleteEndsTheStoppedChainOnlyWithoutContinue(t *testing.T) {
+	const root = "9f8e7d6c5b4a39281706f5e4d3c2b1a0"
+	service, repo, recorder, _ := continueService(t, Handoff{ProjectID: 1, ConversationUUID: forgeThread,
+		State: workspacestore.StateCloudIdle, Epoch: 4, StoppedChainEnded: true})
+	request := completeWith(nil, false)
+	request.StoppedChainRootExecutionID = root
+	if _, err := service.Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.completes) != 1 || repo.completes[0].StoppedChainRootExecutionID != root {
+		t.Fatalf("completes = %+v, want the stopped chain", repo.completes)
+	}
+	if last := recorder.actions[len(recorder.actions)-1]; !strings.Contains(last, "stopped chain "+root+" waiting") {
+		t.Fatalf("audit = %q", last)
+	}
+	request.StoppedChainRootExecutionID = "not an execution id'"
+	if _, err := service.Complete(context.Background(), request); err != nil {
+		t.Fatalf("a malformed stopped chain failed the send: %v", err)
+	}
+	if got := repo.completes[1].StoppedChainRootExecutionID; got != "" {
+		t.Fatalf("a malformed stopped chain reached the repository: %q", got)
+	}
+	// With continue the complete runs in the turn's admission; the chain is
+	// the continue's to link.
+	starter := &recordingStarter{}
+	service.WithContinueStarter(starter)
+	request = completeWith(&Continue{Prompt: "go", Mode: ModeBuild}, false)
+	request.StoppedChainRootExecutionID = root
+	if _, err := service.Complete(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.completes) != 2 || len(starter.starts) != 1 {
+		t.Fatalf("with continue: completes %d, starts %d", len(repo.completes), len(starter.starts))
 	}
 }
 
@@ -167,7 +222,8 @@ func TestStateAnswersTheLastCloudRunWhileTheCloudOwnsTheThread(t *testing.T) {
 		{workspacestore.StateCloudIdle, true}, {workspacestore.StateCloudRunning, true},
 		{workspacestore.StateHandingOff, false}, {workspacestore.StateReclaiming, false},
 	} {
-		service, _, _, _ := continueService(t, Handoff{ProjectID: 1, ConversationUUID: forgeThread, State: test.state, Epoch: 2})
+		service, _, _, _ := continueService(t, Handoff{ProjectID: 1, ConversationUUID: forgeThread, State: test.state, Epoch: 2,
+			TakeBackWhenDone: true})
 		service.WithCloudRuns(runs)
 		view, err := service.State(context.Background(), Thread{ProjectID: 1, ConversationUUID: forgeThread})
 		if err != nil {
@@ -180,9 +236,25 @@ func TestStateAnswersTheLastCloudRunWhileTheCloudOwnsTheThread(t *testing.T) {
 	// An unreadable run never fails the banner.
 	runs.err = errors.New("down")
 	service, _, _, _ := continueService(t, Handoff{ProjectID: 1, ConversationUUID: forgeThread,
-		State: workspacestore.StateCloudIdle, Epoch: 2})
+		State: workspacestore.StateCloudIdle, Epoch: 2, TakeBackWhenDone: true})
 	service.WithCloudRuns(runs)
 	if view, err := service.State(context.Background(), Thread{ProjectID: 1, ConversationUUID: forgeThread}); err != nil || view.LastCloudRun != nil {
 		t.Fatalf("state with an unreadable run = %+v, %v", view, err)
+	}
+}
+
+// The banner polls State: a handoff without take_back_when_done never reads
+// the last cloud run.
+func TestStateReadsTheLastCloudRunOnlyForATakeBack(t *testing.T) {
+	runs := &fixedCloudRuns{run: &CloudRun{Outcome: CloudRunCompleted, ExecutionID: "e", FinishedAt: time.Now()}}
+	service, _, _, _ := continueService(t, Handoff{ProjectID: 1, ConversationUUID: forgeThread,
+		State: workspacestore.StateCloudIdle, Epoch: 2})
+	service.WithCloudRuns(runs)
+	view, err := service.State(context.Background(), Thread{ProjectID: 1, ConversationUUID: forgeThread})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.LastCloudRun != nil || runs.calls != 0 {
+		t.Fatalf("without take back: last cloud run %+v, reads %d", view.LastCloudRun, runs.calls)
 	}
 }

@@ -393,4 +393,111 @@ func TestPostgresHandoffContinueCarriesTheDesktopChainIntoTheCloud(t *testing.T)
 	if err != nil || run == nil || run.Outcome != workspacehandoff.CloudRunCompleted || run.ExecutionID != outcome.ExecutionID {
 		t.Fatalf("last cloud run of the ended chain = %+v, %v", run, err)
 	}
+	// The state answers it while take_back_when_done is set, and never reads
+	// it once the flag is cleared.
+	f.harness.service.WithCloudRuns(repo)
+	view, err := f.harness.service.State(ctx, f.thread.thread)
+	if err != nil || !view.Handoff.TakeBackWhenDone || view.LastCloudRun == nil ||
+		view.LastCloudRun.ExecutionID != outcome.ExecutionID {
+		t.Fatalf("state with take back = %+v, %v", view.LastCloudRun, err)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.workspace_handoffs SET take_back_when_done = FALSE
+WHERE project_id = 1 AND conversation_uuid = $1::uuid`, f.thread.thread.ConversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	if view, err := f.harness.service.State(ctx, f.thread.thread); err != nil || view.LastCloudRun != nil {
+		t.Fatalf("state without take back = %+v, %v; want no last cloud run", view.LastCloudRun, err)
+	}
+}
+
+// completeStopped completes the fixture's send without `continue`, naming
+// the stopped chain.
+func (f handoffContinueFixture) completeStopped(t *testing.T, owner int64, root string) workspacehandoff.Handoff {
+	t.Helper()
+	handoff, err := f.harness.service.Complete(context.Background(), workspacehandoff.CompleteRequest{
+		ProjectID: 1, HandoffID: f.handoffID, ActorUserID: owner, Epoch: f.epoch,
+		HandoffRef: workspacestore.RefHandoff1, SHA: f.snapshotSHA, AuditRoute: "/complete",
+		StoppedChainRootExecutionID: root,
+	})
+	if err != nil {
+		t.Fatalf("complete with the stopped chain = %v", err)
+	}
+	if handoff.State != workspacestore.StateCloudIdle {
+		t.Fatalf("complete = %+v, want CLOUD_IDLE", handoff)
+	}
+	return handoff
+}
+
+func chainEndOf(t *testing.T, pool *pgxpool.Pool, root string) (state *string, origin string, notified int) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(), `
+SELECT end_state, origin,
+       (SELECT count(*) FROM centry.notifications
+        WHERE event_type = 'run_finished' AND meta ->> 'chain_root_execution_id' = $1
+          AND meta ->> 'outcome' = 'waiting' AND meta ->> 'origin' = 'cloud')
+FROM elitea_runtime.run_chains WHERE root_execution_id = $1`, root).Scan(&state, &origin, &notified); err != nil {
+		t.Fatal(err)
+	}
+	return state, origin, notified
+}
+
+// A send that does not continue ends the stopped desktop chain as `waiting`
+// in the complete's transaction (its run_finished names the cloud, where
+// the thread now waits). A chain that is not the caller's, not this
+// thread's or no longer open is left alone, and the send still completes.
+func TestPostgresHandoffCompleteEndsTheStoppedChainAsWaiting(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedHandoffContinueSchema(t, pool)
+	ctx := context.Background()
+	const owner int64 = 5403
+
+	f := newHandoffContinueFixture(t, pool, owner)
+	chain := seedDesktopChain(t, pool, f, owner, 3)
+	if got := f.completeStopped(t, owner, chain.RootExecutionID); !got.StoppedChainEnded {
+		t.Fatalf("complete = %+v, want the stopped chain ended", got)
+	}
+	state, origin, notified := chainEndOf(t, pool, chain.RootExecutionID)
+	if state == nil || *state != unattended.EndWaiting || origin != unattended.OriginCloud || notified != 1 {
+		t.Fatalf("stopped chain = %v, origin %s, run_finished %d; want waiting, cloud, 1", state, origin, notified)
+	}
+
+	// Another person's chain on another thread: not ended, the send completes.
+	other := newHandoffContinueFixture(t, pool, owner+1)
+	foreign := seedDesktopChain(t, pool, other, owner+1, 3)
+	g := newHandoffContinueFixture(t, pool, owner)
+	if got := g.completeStopped(t, owner, foreign.RootExecutionID); got.StoppedChainEnded {
+		t.Fatal("a complete ended another person's chain")
+	}
+	if state, _, _ := chainEndOf(t, pool, foreign.RootExecutionID); state != nil {
+		t.Fatalf("another person's chain = %s, want open", *state)
+	}
+
+	// The caller's chain of another thread: not ended.
+	h := newHandoffContinueFixture(t, pool, owner)
+	elsewhere := seedDesktopChain(t, pool, f, owner, 3)
+	if got := h.completeStopped(t, owner, elsewhere.RootExecutionID); got.StoppedChainEnded {
+		t.Fatal("a complete ended a chain of another thread")
+	}
+
+	// A chain that already ended (chain_limit_reached ended it): unchanged.
+	k := newHandoffContinueFixture(t, pool, owner)
+	ended := seedDesktopChain(t, pool, k, owner, 3)
+	if _, err := NewRunChainsRepository(pool).EndChain(ctx, ended.RootExecutionID, unattended.EndLimitReached,
+		unattended.LimitContinuations); err != nil {
+		t.Fatal(err)
+	}
+	if got := k.completeStopped(t, owner, ended.RootExecutionID); got.StoppedChainEnded {
+		t.Fatal("a complete ended a chain twice")
+	}
+	if state, origin, _ := chainEndOf(t, pool, ended.RootExecutionID); state == nil ||
+		*state != unattended.EndLimitReached || origin != unattended.OriginDesktop {
+		t.Fatalf("an ended chain = %v, %s; want limit_reached, desktop", state, origin)
+	}
+
+	// No chain of that id: the send completes.
+	m := newHandoffContinueFixture(t, pool, owner)
+	if got := m.completeStopped(t, owner, uuidHex32()); got.StoppedChainEnded {
+		t.Fatal("a complete ended a chain that does not exist")
+	}
 }

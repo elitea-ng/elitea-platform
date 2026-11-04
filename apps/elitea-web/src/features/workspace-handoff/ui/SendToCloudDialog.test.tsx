@@ -3,7 +3,7 @@
  * preview (ok, findings, caps), the send with live progress, and each kind of
  * refusal.
  */
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -501,5 +501,21 @@ describe('SendToCloudDialog while the thread runs (ADR-0045 decision 8)', () => 
 
     await user.click(screen.getByRole('button', { name: 'OK' }));
     expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ continue_refused: expect.stringContaining('waits') as unknown }));
+  });
+
+  it('reports a send whose continue was refused when the dialog closes by Escape', async () => {
+    const user = userEvent.setup();
+    const ipc = createFakeHandoffIpc({ preview: { running_turn: true } });
+    ipc.setSent({ continue_refused: 'Plan mode does not run in the cloud. The thread is in the cloud and waits for your next message.' });
+    const { onSent, onClose } = mount(ipc);
+
+    await user.click(await screen.findByRole('button', { name: 'Send to cloud' }));
+    await screen.findByTestId('handoff-continue-refused');
+    expect(onSent).not.toHaveBeenCalled();
+
+    // Focus left with the Send button: Escape on the dialog, as MUI's modal handles it.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalledWith(expect.objectContaining({ continue_refused: expect.stringContaining('Plan mode') as unknown }));
   });
 });

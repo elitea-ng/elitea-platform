@@ -78,6 +78,13 @@ pub fn refused(error: &TurnError) -> bool {
         }
 }
 
+/// The thread is in the cloud (409 `thread_executor_is_cloud`): a send of
+/// it landed, so the turn goes on there and nothing is resumed here.
+#[must_use]
+pub fn moved_to_cloud(error: &TurnError) -> bool {
+    error.code == "thread_executor_is_cloud"
+}
+
 /// The record of a turn that just started: `turn_id` of `request`, as the
 /// platform started it (`started`), for `owner`, at `now_ms`.
 #[must_use]

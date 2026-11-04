@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
@@ -248,6 +249,12 @@ type CompleteRequest struct {
 	// TakeBackWhenDone and Continue (ADR-0045 decision 8, continue.go).
 	TakeBackWhenDone bool
 	Continue         *Continue
+	// StoppedChainRootExecutionID names the chain of the unattended local
+	// turn the desktop stopped for this send (continue.go). Without
+	// Continue, the complete ends that chain as `waiting` when the caller
+	// owns it on this thread and it is still open; otherwise it is ignored.
+	// With Continue it is ignored.
+	StoppedChainRootExecutionID string
 }
 
 // Complete moves HANDING_OFF to CLOUD_IDLE once the store holds the snapshot.
@@ -260,22 +267,35 @@ func (s *Service) Complete(ctx context.Context, request CompleteRequest) (Handof
 		!request.Continue.valid() {
 		return Handoff{}, ErrInvalid
 	}
+	if err := request.Continue.refusal(); err != nil {
+		return Handoff{}, err
+	}
 	if request.Continue != nil {
 		return s.completeAndContinue(ctx, request, started)
+	}
+	// A malformed chain id names no chain: ignored, as one not found is (the
+	// send never fails on it).
+	stopped := request.StoppedChainRootExecutionID
+	if !unattended.ValidExecutionID(stopped) {
+		stopped = ""
 	}
 	handoff, err := s.repo.Complete(ctx, CompleteRecord{
 		ProjectID: request.ProjectID, HandoffID: request.HandoffID, ActorUserID: request.ActorUserID,
 		Epoch: request.Epoch, HandoffRef: request.HandoffRef, SHA: request.SHA,
-		TakeBackWhenDone: request.TakeBackWhenDone,
-		Message:          EventMessage{Event: "handoff.complete"},
+		TakeBackWhenDone: request.TakeBackWhenDone, StoppedChainRootExecutionID: stopped,
+		Message: EventMessage{Event: "handoff.complete"},
 	})
 	if err != nil {
 		return Handoff{}, err
 	}
+	ended := ""
+	if handoff.StoppedChainEnded {
+		ended = ", stopped chain " + stopped + " waiting"
+	}
 	s.record(ctx, Thread{ProjectID: handoff.ProjectID, ConversationUUID: handoff.ConversationUUID},
 		request.ActorUserID, "POST", request.AuditRoute, started,
-		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s%s, take back when done %t", handoff.Epoch, request.SHA,
-			includeAndEnvSummary(handoff.IncludedExcluded, handoff.EnvNames), request.TakeBackWhenDone), false)
+		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s%s, take back when done %t%s", handoff.Epoch, request.SHA,
+			includeAndEnvSummary(handoff.IncludedExcluded, handoff.EnvNames), request.TakeBackWhenDone, ended), false)
 	return handoff, nil
 }
 
@@ -436,7 +456,8 @@ type View struct {
 	// taking them back (a rest RECLAIMING row).
 	RestPending bool
 	// LastCloudRun is the last finished cloud chain or turn of the current
-	// cloud epoch (continue.go); nil when none, or outside CLOUD_*.
+	// cloud epoch (continue.go); nil when none, outside CLOUD_*, or when the
+	// handoff does not have TakeBackWhenDone.
 	LastCloudRun *CloudRun
 }
 
