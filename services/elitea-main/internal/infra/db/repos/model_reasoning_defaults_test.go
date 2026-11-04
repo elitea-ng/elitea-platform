@@ -112,11 +112,18 @@ func TestModelReasoningDefaultsReaderCachesAndNeverFails(t *testing.T) {
 		t.Fatal("a second read inside the TTL must use the cache")
 	}
 
-	// A failed refresh keeps the last rows.
+	// A failed refresh keeps the last rows, and is not cached.
 	clock = clock.Add(modelReasoningDefaultsTTL + time.Second)
 	db.err = errors.New("connection reset")
 	if got := reader.Load(context.Background()); len(got) != 1 {
 		t.Fatalf("a failed refresh must keep the last rows, got %d", len(got))
+	}
+	waitForFlight(t, reader)
+	db.err = nil
+	reader.Load(context.Background())
+	waitForFlight(t, reader)
+	if db.calls != 3 {
+		t.Fatalf("calls = %d, want a retry after the failed refresh", db.calls)
 	}
 
 	// A database before 0225 has no table: no defaults, no failure.
@@ -124,7 +131,89 @@ func TestModelReasoningDefaultsReaderCachesAndNeverFails(t *testing.T) {
 		db:  &fakeReasoningQuerier{err: &pgconn.PgError{Code: "42P01"}},
 		now: time.Now,
 	}
-	if got := missing.Load(context.Background()); got != nil {
+	if got := missing.Load(context.Background()); len(got) != 0 {
 		t.Fatalf("a missing table must read as no defaults, got %v", got)
+	}
+}
+
+// waitForFlight waits until no refresh is running.
+func waitForFlight(t *testing.T, reader *modelReasoningDefaultsReader) {
+	t.Helper()
+	done := reader.flight.DoChan("defaults", func() (any, error) { return nil, nil })
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh did not finish")
+	}
+}
+
+// blockingReasoningQuerier holds the read until released, and records
+// whether the read's context was cancelled with the caller's.
+type blockingReasoningQuerier struct {
+	release chan struct{}
+	calls   int
+	err     error
+	rows    [][3]any
+}
+
+func (q *blockingReasoningQuerier) Query(ctx context.Context, _ string, _ ...any) (sqlRows, error) {
+	q.calls++
+	select {
+	case <-q.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if q.err != nil {
+		return nil, q.err
+	}
+	return &fakeReasoningRows{rows: q.rows}, nil
+}
+
+// A caller that gives up during the first read gets no defaults and caches
+// nothing; a read that failed is not cached either, so the next call loads.
+func TestACancelledFirstReadLeavesTheCacheEmpty(t *testing.T) {
+	db := &blockingReasoningQuerier{release: make(chan struct{}), err: errors.New("connection reset"),
+		rows: [][3]any{{"(^|/)qwen", "toggle", false}}}
+	reader := &modelReasoningDefaultsReader{db: db, now: time.Now}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan []configurationapp.ModelReasoningDefault, 1)
+	go func() { got <- reader.Load(ctx) }()
+	cancel()
+	if rules := <-got; rules != nil {
+		t.Fatalf("a cancelled caller got %v, want nothing", rules)
+	}
+	close(db.release) // the detached read goes on, and fails
+	waitForFlight(t, reader)
+	reader.mu.Lock()
+	loaded := reader.loaded
+	reader.mu.Unlock()
+	if loaded {
+		t.Fatal("a failed read was cached")
+	}
+
+	db.err = nil
+	if rules := reader.Load(context.Background()); len(rules) != 1 {
+		t.Fatalf("the next call loaded %d rules, want 1", len(rules))
+	}
+	if db.calls != 2 {
+		t.Fatalf("calls = %d, want 2", db.calls)
+	}
+}
+
+// The read is detached from the caller: a caller that gives up does not
+// cancel the read, which then fills the cache for the next call.
+func TestTheReadOutlivesACancelledCaller(t *testing.T) {
+	db := &blockingReasoningQuerier{release: make(chan struct{}), rows: [][3]any{{"(^|/)qwen", "toggle", false}}}
+	reader := &modelReasoningDefaultsReader{db: db, now: time.Now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if rules := reader.Load(ctx); rules != nil {
+		t.Fatalf("a cancelled caller got %v", rules)
+	}
+	close(db.release)
+	waitForFlight(t, reader)
+	if rules := reader.Load(context.Background()); len(rules) != 1 || db.calls != 1 {
+		t.Fatalf("rules=%d calls=%d, want the detached read's one rule from one read", len(rules), db.calls)
 	}
 }

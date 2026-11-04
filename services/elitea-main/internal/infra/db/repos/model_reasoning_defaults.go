@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
@@ -22,11 +23,21 @@ import (
 // interval.
 //
 // The defaults are an enrichment of the catalogue, never a condition of it.
-// A database before 0225 has no table; a read that fails keeps the last rows
-// it read, or none. The catalogue then serves each model without a family
-// default, which is the behaviour before ADR-0038. It never fails the read.
+// A read that fails is not cached: the catalogue keeps the last rows it read
+// (or none) and the next catalogue read tries again. A database before 0225
+// has no table, which is a definite answer, so it is cached as no rows. The
+// catalogue then serves each model without a family default, which is the
+// behaviour before ADR-0038. It never fails the read.
+//
+// The read runs once at a time (singleflight) on a context detached from the
+// caller, so a caller that gives up does not cancel the read every other
+// caller waits for, and no lock is held across the query. While a refresh
+// runs, callers get the last good rules at once.
 
 const modelReasoningDefaultsTTL = time.Minute
+
+// modelReasoningDefaultsReadTimeout bounds the detached read.
+const modelReasoningDefaultsReadTimeout = 5 * time.Second
 
 const listModelReasoningDefaultsSQL = `SELECT name_pattern, reasoning_control, tool_steps
 FROM elitea_runtime.model_reasoning_defaults
@@ -45,6 +56,8 @@ type modelReasoningDefaultsQuerier interface {
 type modelReasoningDefaultsReader struct {
 	db  modelReasoningDefaultsQuerier
 	now func() time.Time
+
+	flight singleflight.Group
 
 	mu       sync.Mutex
 	rules    []configurationapp.ModelReasoningDefault
@@ -66,22 +79,48 @@ func (r *modelReasoningDefaultsReader) Load(ctx context.Context) []configuration
 		return nil
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.loaded && r.now().Sub(r.loadedAt) < modelReasoningDefaultsTTL {
-		return r.rules
+	rules, loaded, fresh := r.rules, r.loaded, r.loaded && r.now().Sub(r.loadedAt) < modelReasoningDefaultsTTL
+	r.mu.Unlock()
+	if fresh {
+		return rules
 	}
-	rules, err := r.read(ctx)
-	if err != nil {
-		if ctx.Err() == nil && !isUndefinedTable(err) {
-			slog.WarnContext(ctx, "reading the model reasoning defaults failed; the catalogue keeps the last defaults it read",
-				"error", err)
+	result := r.flight.DoChan("defaults", func() (any, error) {
+		return r.refresh(ctx)
+	})
+	if loaded {
+		// Stale: serve the last good rules; the refresh lands for later reads.
+		return rules
+	}
+	select {
+	case done := <-result:
+		if done.Err != nil {
+			return nil
 		}
-		// Retry after the TTL, not on every catalogue read.
-		r.loadedAt, r.loaded = r.now(), true
-		return r.rules
+		fetched, _ := done.Val.([]configurationapp.ModelReasoningDefault)
+		return fetched
+	case <-ctx.Done():
+		return nil
 	}
+}
+
+// refresh reads the table on a context detached from the caller and caches a
+// successful read only.
+func (r *modelReasoningDefaultsReader) refresh(caller context.Context) ([]configurationapp.ModelReasoningDefault, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(caller), modelReasoningDefaultsReadTimeout)
+	defer cancel()
+	rules, err := r.read(ctx)
+	if err != nil && isUndefinedTable(err) {
+		rules, err = []configurationapp.ModelReasoningDefault{}, nil
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "reading the model reasoning defaults failed; the catalogue keeps the last defaults it read",
+			"error", err)
+		return nil, err
+	}
+	r.mu.Lock()
 	r.rules, r.loadedAt, r.loaded = rules, r.now(), true
-	return r.rules
+	r.mu.Unlock()
+	return rules, nil
 }
 
 func (r *modelReasoningDefaultsReader) read(ctx context.Context) ([]configurationapp.ModelReasoningDefault, error) {
