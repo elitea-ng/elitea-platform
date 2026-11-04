@@ -133,6 +133,58 @@ impl Thinking {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The `auto` per-step policy (ADR-0038 decision 4). Shared by the agent
+// runtime (which classifies an adk request) and the engines' model client
+// (which classifies its own chat messages), so both resolve `auto` alike.
+// ---------------------------------------------------------------------------
+
+/// The catalogue's `auto` defaults for one model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoPolicy {
+    /// `reasoning_tool_steps`: thinking stays on for a routine follow-up
+    /// after successful tool results. Default off.
+    pub tool_steps: bool,
+}
+
+/// What kind of step one model request is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepKind {
+    /// The first model step of a turn, or any step that does not follow
+    /// tool results.
+    Planning,
+    /// A step after a tool error or a refused tool call.
+    Recovery,
+    /// A step after successful tool results.
+    ToolFollowUp,
+    /// A step of an agent with a structured output schema.
+    StructuredAnswer,
+    /// Summarisation, compaction, chat naming or a cut-off summary.
+    Auxiliary,
+}
+
+/// The thinking of one request: `None` sends nothing.
+#[must_use]
+pub const fn resolve(
+    setting: Option<Thinking>,
+    kind: StepKind,
+    policy: AutoPolicy,
+) -> Option<StepThinking> {
+    let Some(setting) = setting else {
+        return None;
+    };
+    if let Some(explicit) = setting.explicit() {
+        return Some(explicit);
+    }
+    Some(match kind {
+        StepKind::Planning | StepKind::Recovery | StepKind::StructuredAnswer => {
+            StepThinking::On(DEFAULT_LEVEL)
+        }
+        StepKind::ToolFollowUp if policy.tool_steps => StepThinking::On(DEFAULT_LEVEL),
+        StepKind::ToolFollowUp | StepKind::Auxiliary => StepThinking::Off,
+    })
+}
+
 /// How a model's thinking can be controlled: the catalogue attribute
 /// `reasoning_control` (ADR-0038 decision 3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

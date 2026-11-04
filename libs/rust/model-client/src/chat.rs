@@ -210,6 +210,37 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
 }
 
+/// The kind of one engine request for the `auto` policy: a step after the
+/// trailing tool results is a follow-up, or a recovery when one of them
+/// reports an error (`{"error": ...}` not null, or `{"status": "error"}`);
+/// anything else is a first step.
+fn step_kind(messages: &[ChatMessage]) -> elitea_llm_wire::thinking::StepKind {
+    use elitea_llm_wire::thinking::StepKind;
+    let mut results = messages
+        .iter()
+        .rev()
+        .take_while(|message| matches!(message, ChatMessage::Tool { .. }))
+        .peekable();
+    if results.peek().is_none() {
+        return StepKind::Planning;
+    }
+    let failed = results.any(|message| match message {
+        ChatMessage::Tool { content, .. } => serde_json::from_str::<Value>(content)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .is_some_and(|fields| {
+                fields.get("error").is_some_and(|error| !error.is_null())
+                    || fields.get("status").and_then(Value::as_str) == Some("error")
+            }),
+        _ => false,
+    });
+    if failed {
+        StepKind::Recovery
+    } else {
+        StepKind::ToolFollowUp
+    }
+}
+
 impl ChatRequest {
     /// A request with no tools, default sampling and the settings' budget.
     #[must_use]
@@ -310,6 +341,47 @@ impl ChatClient {
         }
     }
 
+    /// Writes the thinking form of one request into its body.
+    fn apply_thinking(&self, fields: &mut serde_json::Map<String, Value>, request: &ChatRequest) {
+        // Only when configured, so a body without it is the parity body.
+        // The form is the model's (ADR-0038: the table in
+        // `elitea_llm_wire::thinking`). With a declared control, `auto` is
+        // the per-step policy of the agent runtime (`thinking::resolve`):
+        // on for a first step and after a tool error, off on a routine step
+        // after tool results unless `reasoning_tool_steps`. An undeclared
+        // control never sends the off form for `auto` (an o-series model
+        // refuses `none`), so `auto` there thinks at the default level. A
+        // model that thinks by effort or by budget refuses a sampling
+        // temperature while it thinks, so the temperature is dropped then.
+        let Some(setting) = self.settings.reasoning_effort else {
+            return;
+        };
+        {
+            let control = self
+                .settings
+                .reasoning_control
+                .unwrap_or(crate::settings::ReasoningControl::Effort);
+            let step = match self.settings.reasoning_control {
+                None => setting.single_call(),
+                Some(_) => elitea_llm_wire::thinking::resolve(
+                    Some(setting),
+                    step_kind(&request.messages),
+                    elitea_llm_wire::thinking::AutoPolicy {
+                        tool_steps: self.settings.reasoning_tool_steps,
+                    },
+                )
+                .unwrap_or_else(|| setting.single_call()),
+            };
+            if control.refuses_temperature(step) {
+                fields.remove("temperature");
+            }
+            elitea_llm_wire::thinking::apply_openai(
+                fields,
+                elitea_llm_wire::thinking::openai_form(control, step),
+            );
+        }
+    }
+
     /// The request body.
     ///
     /// # Errors
@@ -357,27 +429,8 @@ impl ChatClient {
         if stream {
             body["stream_options"] = json!({"include_usage": true});
         }
-        // Only when configured, so a body without it is the parity body.
-        // The form is the model's (ADR-0038: the table in
-        // `elitea_llm_wire::thinking`). An engine call has no steps, so
-        // `auto` thinks at the default level. A model that thinks by effort
-        // or by budget refuses a sampling temperature while it thinks, so
-        // the temperature is dropped then.
-        if let Some(setting) = self.settings.reasoning_effort
-            && let Some(fields) = body.as_object_mut()
-        {
-            let control = self
-                .settings
-                .reasoning_control
-                .unwrap_or(crate::settings::ReasoningControl::Effort);
-            let step = setting.single_call();
-            if control.refuses_temperature(step) {
-                fields.remove("temperature");
-            }
-            elitea_llm_wire::thinking::apply_openai(
-                fields,
-                elitea_llm_wire::thinking::openai_form(control, step),
-            );
+        if let Some(fields) = body.as_object_mut() {
+            self.apply_thinking(fields, request);
         }
         if !request.tools.is_empty() {
             let mut tools = Vec::with_capacity(request.tools.len());
@@ -917,6 +970,78 @@ mod tests {
             )
             .is_err(),
             "a conflicting setting is refused, never dropped"
+        );
+    }
+
+    #[test]
+    fn auto_with_a_declared_control_is_the_per_step_policy() {
+        let first = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        let call = ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCall {
+                id: "c1".to_owned(),
+                name: "get_code".to_owned(),
+                arguments: "{}".to_owned(),
+            }],
+        };
+        let after_tool = ChatRequest::new(vec![
+            ChatMessage::User("q".to_owned()),
+            call.clone(),
+            ChatMessage::Tool {
+                tool_call_id: "c1".to_owned(),
+                content: "fn main() {}".to_owned(),
+            },
+        ]);
+        let after_error = ChatRequest::new(vec![
+            ChatMessage::User("q".to_owned()),
+            call,
+            ChatMessage::Tool {
+                tool_call_id: "c1".to_owned(),
+                content: r#"{"error": "not found"}"#.to_owned(),
+            },
+        ]);
+        let toggle =
+            client_with(json!({"reasoning_effort": "auto", "reasoning_control": "toggle"}));
+        let thinks = |client: &ChatClient, request: &ChatRequest| {
+            client.body(request, false).unwrap_or_default()["chat_template_kwargs"]["enable_thinking"].clone()
+        };
+        assert_eq!(thinks(&toggle, &first), json!(true), "a first step thinks");
+        assert_eq!(
+            thinks(&toggle, &after_tool),
+            json!(false),
+            "a routine tool step does not"
+        );
+        assert_eq!(
+            thinks(&toggle, &after_error),
+            json!(true),
+            "a recovery step thinks"
+        );
+
+        let interleaved = client_with(json!({
+            "reasoning_effort": "auto", "reasoning_control": "toggle", "reasoning_tool_steps": true
+        }));
+        assert_eq!(
+            thinks(&interleaved, &after_tool),
+            json!(true),
+            "tool_steps keeps thinking on"
+        );
+
+        let explicit =
+            client_with(json!({"reasoning_effort": "low", "reasoning_control": "toggle"}));
+        assert_eq!(
+            thinks(&explicit, &after_tool),
+            json!(true),
+            "an explicit level wins"
+        );
+
+        // Undeclared: never the off form for auto, even after a tool result.
+        let undeclared = client_with(json!({"reasoning_effort": "auto"}))
+            .body(&after_tool, false)
+            .unwrap_or_default();
+        assert_eq!(undeclared["reasoning_effort"], "medium");
+        assert!(
+            client_with_settings(&json!({"reasoning_tool_steps": "yes"})).is_err(),
+            "reasoning_tool_steps is a boolean"
         );
     }
 
