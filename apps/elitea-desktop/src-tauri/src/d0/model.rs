@@ -928,20 +928,16 @@ pub(super) fn request_body_in(
     if let Some(temperature) = model.temperature {
         body.insert("temperature".into(), json!(temperature));
     }
-    // The translation table and the `auto` per-step policy (ADR-0038
-    // decisions 2 and 4), as the worker facades apply them.
-    let structured = request
-        .config
-        .as_ref()
-        .is_some_and(|config| config.response_schema.is_some());
+    // The translation table and the one `auto` per-step policy (ADR-0038
+    // decisions 2 and 4), as the worker facades apply them: the request's
+    // step kind, its response schema and whether it declares tools.
     if elitea_agent_runtime::thinking::apply_openai_step(
         &mut body,
         model
             .reasoning_effort
             .map(elitea_agent_runtime::host::ReasoningEffort::thinking),
         model.reasoning,
-        &request.contents,
-        structured,
+        request,
     ) {
         body.remove("temperature");
     }

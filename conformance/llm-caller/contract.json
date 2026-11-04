@@ -136,6 +136,50 @@
         "control": "fixed_off",
         "setting": "high"
       }
-    ]
+    ],
+    "auto_policy": {
+      "description": "ADR-0038 decision 4: the thinking of one request (elitea-llm-wire thinking::step), the one copy of the auto policy. control null: the catalogue declares none. setting null: nothing configured. expect: off, a level, or null (nothing sent).",
+      "cases": [
+        {"note": "no setting sends nothing", "setting": null, "control": "toggle", "tool_steps": false, "off_with_tools": false, "kind": "planning", "has_tools": false, "expect": null},
+        {"note": "undeclared: auto thinks at the default level on every step", "setting": "auto", "control": null, "tool_steps": false, "off_with_tools": false, "kind": "tool_follow_up", "has_tools": false, "expect": "medium"},
+        {"note": "undeclared: an explicit setting", "setting": "off", "control": null, "tool_steps": false, "off_with_tools": false, "kind": "planning", "has_tools": false, "expect": "off"},
+        {"note": "an explicit level wins on every step", "setting": "high", "control": "toggle", "tool_steps": false, "off_with_tools": false, "kind": "tool_follow_up", "has_tools": false, "expect": "high"},
+        {"note": "auto plans", "setting": "auto", "control": "toggle", "tool_steps": false, "off_with_tools": false, "kind": "planning", "has_tools": false, "expect": "medium"},
+        {"note": "auto recovers", "setting": "auto", "control": "effort", "tool_steps": false, "off_with_tools": false, "kind": "recovery", "has_tools": false, "expect": "medium"},
+        {"note": "auto answers a schema", "setting": "auto", "control": "effort", "tool_steps": false, "off_with_tools": false, "kind": "structured_answer", "has_tools": false, "expect": "medium"},
+        {"note": "auto skips a routine tool step", "setting": "auto", "control": "toggle", "tool_steps": false, "off_with_tools": false, "kind": "tool_follow_up", "has_tools": false, "expect": "off"},
+        {"note": "tool_steps keeps a tool step on", "setting": "auto", "control": "effort", "tool_steps": true, "off_with_tools": false, "kind": "tool_follow_up", "has_tools": false, "expect": "medium"},
+        {"note": "auxiliary calls do not think", "setting": "auto", "control": "effort", "tool_steps": true, "off_with_tools": false, "kind": "auxiliary", "has_tools": false, "expect": "off"},
+        {"note": "budget: one state through the tool loop", "setting": "auto", "control": "budget", "tool_steps": false, "off_with_tools": false, "kind": "tool_follow_up", "has_tools": false, "expect": "medium"},
+        {"note": "budget: a recovery step keeps it", "setting": "auto", "control": "budget", "tool_steps": false, "off_with_tools": false, "kind": "recovery", "has_tools": false, "expect": "medium"},
+        {"note": "budget: auxiliary calls do not think", "setting": "auto", "control": "budget", "tool_steps": false, "off_with_tools": false, "kind": "auxiliary", "has_tools": false, "expect": "off"},
+        {"note": "off_with_tools: the planning step of a tool request", "setting": "auto", "control": "effort", "tool_steps": false, "off_with_tools": true, "kind": "planning", "has_tools": true, "expect": "off"},
+        {"note": "off_with_tools: a step without tools still thinks", "setting": "auto", "control": "effort", "tool_steps": false, "off_with_tools": true, "kind": "planning", "has_tools": false, "expect": "medium"},
+        {"note": "off_with_tools: no setting still sends off beside tools", "setting": null, "control": "effort", "tool_steps": false, "off_with_tools": true, "kind": "planning", "has_tools": true, "expect": "off"},
+        {"note": "off_with_tools: an explicit level is the caller's", "setting": "high", "control": "effort", "tool_steps": false, "off_with_tools": true, "kind": "planning", "has_tools": true, "expect": "high"}
+      ]
+    },
+    "classify": {
+      "description": "The kind of an agent-loop request from the tool results of its last conversation turn (elitea-llm-wire thinking::classify).",
+      "cases": [
+        {"structured": false, "results": [], "kind": "planning"},
+        {"structured": false, "results": [{"text": "ok"}], "kind": "tool_follow_up"},
+        {"structured": false, "results": [{"text": "ok"}, {"error": "denied"}], "kind": "recovery"},
+        {"structured": false, "results": [{"status": "error"}], "kind": "recovery"},
+        {"structured": false, "results": [{"error": null, "text": "ok"}], "kind": "tool_follow_up"},
+        {"structured": true, "results": [{"text": "ok"}], "kind": "structured_answer"}
+      ]
+    },
+    "continuation": {
+      "description": "The setting an output continuation runs at (elitea-llm-wire thinking::continuation_setting). control null: undeclared.",
+      "cases": [
+        {"setting": "auto", "control": "toggle", "expect": "off"},
+        {"setting": "auto", "control": "budget", "expect": "auto"},
+        {"setting": "auto", "control": "effort", "expect": "low"},
+        {"setting": "auto", "control": null, "expect": "low"},
+        {"setting": "high", "control": "toggle", "expect": "low"},
+        {"setting": "off", "control": "effort", "expect": "off"}
+      ]
+    }
   }
 }

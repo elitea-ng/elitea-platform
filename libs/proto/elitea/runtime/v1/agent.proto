@@ -152,7 +152,11 @@ message ModelReasoningV1 {
   // `auto` keeps thinking on for a routine step after successful tool
   // results (families whose interleaved thinking helps tool choice).
   bool tool_steps = 2;
-  reserved 3 to 15;
+  // `auto` does not think on a request that carries tools: the provider
+  // refuses thinking beside tool calls on its chat-completions wire
+  // (OpenAI GPT-5.6 requires reasoning_effort none there).
+  bool off_with_tools = 3;
+  reserved 4 to 15;
 }
 
 // One unattended grant (ADR-0045 decision 1). Main admitted every part of it

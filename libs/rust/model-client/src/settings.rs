@@ -96,6 +96,10 @@ pub struct ModelSettings {
     /// thinking on a routine step after successful tool results. Read only
     /// with a declared `reasoning_control`. Default false.
     pub reasoning_tool_steps: bool,
+    /// `llm_settings.reasoning_off_with_tools`, from the catalogue: `auto`
+    /// does not think on a request that carries tools. Read only with a
+    /// declared `reasoning_control`. Default false.
+    pub reasoning_off_with_tools: bool,
     pub model_name: String,
     pub max_retries: u32,
     pub max_tokens: u32,
@@ -115,6 +119,7 @@ impl fmt::Debug for ModelSettings {
             .field("reasoning_effort", &self.reasoning_effort)
             .field("reasoning_control", &self.reasoning_control)
             .field("reasoning_tool_steps", &self.reasoning_tool_steps)
+            .field("reasoning_off_with_tools", &self.reasoning_off_with_tools)
             .field("model_name", &self.model_name)
             .field("max_retries", &self.max_retries)
             .field("max_tokens", &self.max_tokens)
@@ -202,7 +207,7 @@ fn base_url(raw: &str, provider: Provider) -> Result<String, EngineError> {
 /// the control cannot honour is refused, never dropped.
 fn reasoning_settings(
     settings: &serde_json::Map<String, Value>,
-) -> Result<(Option<ReasoningEffort>, Option<ReasoningControl>, bool), EngineError> {
+) -> Result<ReasoningSettings, EngineError> {
     let reasoning_effort = match first_string(settings, &["reasoning_effort"])?.as_deref() {
             None => None,
             Some(value) => Some(ReasoningEffort::parse(value).ok_or_else(|| {
@@ -227,16 +232,27 @@ fn reasoning_settings(
             conflict.message()
         )));
     }
-    let reasoning_tool_steps = match settings.get("reasoning_tool_steps") {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(_) => {
-            return Err(invalid(
-                "llm_settings.reasoning_tool_steps must be true or false",
-            ));
-        }
+    let flag = |name: &str| match settings.get(name) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(flag)) => Ok(*flag),
+        Some(_) => Err(invalid(format!(
+            "llm_settings.{name} must be true or false"
+        ))),
     };
-    Ok((reasoning_effort, reasoning_control, reasoning_tool_steps))
+    Ok(ReasoningSettings {
+        effort: reasoning_effort,
+        control: reasoning_control,
+        tool_steps: flag("reasoning_tool_steps")?,
+        off_with_tools: flag("reasoning_off_with_tools")?,
+    })
+}
+
+/// The thinking keys of `llm_settings`, read.
+struct ReasoningSettings {
+    effort: Option<ReasoningEffort>,
+    control: Option<ReasoningControl>,
+    tool_steps: bool,
+    off_with_tools: bool,
 }
 
 impl ModelSettings {
@@ -292,8 +308,7 @@ impl ModelSettings {
                 )));
             }
         };
-        let (reasoning_effort, reasoning_control, reasoning_tool_steps) =
-            reasoning_settings(settings)?;
+        let reasoning = reasoning_settings(settings)?;
         let streaming = match settings.get("streaming") {
             None | Some(Value::Null) => true,
             Some(Value::Bool(flag)) => *flag,
@@ -315,9 +330,10 @@ impl ModelSettings {
             api_key,
             organization,
             execution_id,
-            reasoning_effort,
-            reasoning_control,
-            reasoning_tool_steps,
+            reasoning_effort: reasoning.effort,
+            reasoning_control: reasoning.control,
+            reasoning_tool_steps: reasoning.tool_steps,
+            reasoning_off_with_tools: reasoning.off_with_tools,
             model_name,
             max_retries,
             max_tokens,

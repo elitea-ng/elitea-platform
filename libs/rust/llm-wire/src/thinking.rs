@@ -134,17 +134,26 @@ impl Thinking {
 }
 
 // ---------------------------------------------------------------------------
-// The `auto` per-step policy (ADR-0038 decision 4). Shared by the agent
-// runtime (which classifies an adk request) and the engines' model client
-// (which classifies its own chat messages), so both resolve `auto` alike.
+// The `auto` per-step policy (ADR-0038 decision 4). The ONE copy: the agent
+// runtime (desktop and the worker facades, through
+// `elitea_agent_runtime::thinking`) and the engines' model client call
+// [`classify`] and [`step`]; `conformance/llm-caller/contract.json`
+// (`thinking.auto_policy`, `thinking.classify`, `thinking.continuation`)
+// pins both.
 // ---------------------------------------------------------------------------
 
 /// The catalogue's `auto` defaults for one model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AutoPolicy {
     /// `reasoning_tool_steps`: thinking stays on for a routine follow-up
-    /// after successful tool results. Default off.
+    /// after successful tool results. Default off. A `budget` model keeps
+    /// thinking on through its tool loop whatever this says ([`step`]).
     pub tool_steps: bool,
+    /// `reasoning_off_with_tools`: a request that carries tools does not
+    /// think under `auto`, whatever the step. The provider refuses thinking
+    /// beside tool calls on its chat-completions wire (`OpenAI` GPT-5.6
+    /// requires `reasoning_effort: none` there).
+    pub off_with_tools: bool,
 }
 
 /// What kind of step one model request is.
@@ -163,7 +172,107 @@ pub enum StepKind {
     Auxiliary,
 }
 
-/// The thinking of one request: `None` sends nothing.
+/// Whether a tool result reports a failure: an `error` member that is not
+/// null, or `status: "error"` (the agent loop writes the first for a failed,
+/// denied or unknown call; the platform's own tools write the second).
+#[must_use]
+pub fn reports_error(response: &Value) -> bool {
+    response.as_object().is_some_and(|fields| {
+        fields.get("error").is_some_and(|error| !error.is_null())
+            || fields.get("status").and_then(Value::as_str) == Some("error")
+    })
+}
+
+/// The kind of an agent-loop request from the tool results of its last
+/// conversation turn (none: the turn is not a tool turn). `structured` is
+/// whether the request carries a response schema: every step of such an
+/// agent thinks, because the runtime cannot tell which one answers.
+#[must_use]
+pub fn classify<'a, I>(structured: bool, results: I) -> StepKind
+where
+    I: IntoIterator<Item = &'a Value>,
+{
+    if structured {
+        return StepKind::StructuredAnswer;
+    }
+    let mut results = results.into_iter().peekable();
+    if results.peek().is_none() {
+        return StepKind::Planning;
+    }
+    if results.any(reports_error) {
+        StepKind::Recovery
+    } else {
+        StepKind::ToolFollowUp
+    }
+}
+
+/// One request, as the policy sees it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepRequest {
+    pub kind: StepKind,
+    /// Whether the request declares tools.
+    pub has_tools: bool,
+}
+
+/// The thinking of one request (ADR-0038 decision 4): `None` sends nothing.
+///
+/// * A model that is `off_with_tools` (declared) sends the off form on a
+///   request with tools under `auto` AND with no setting at all: its
+///   provider refuses thinking beside tool calls, and its own default
+///   thinks (GPT-5.6 defaults to medium). Only an explicit level, the
+///   caller's own choice, is sent as it is.
+/// * Otherwise no setting sends nothing.
+/// * An explicit setting (`off`, `low`, `medium`, `high`) applies to every
+///   step.
+/// * `declared` is the model's catalogue control and `auto` policy. A model
+///   that declares none never switches thinking off by itself (an `OpenAI`
+///   o-series model refuses `reasoning_effort: none`): `auto` thinks at
+///   [`DEFAULT_LEVEL`] on every step ([`Thinking::single_call`]).
+/// * `auto` on a declared model:
+///   * off on any request with tools when the model is `off_with_tools`;
+///   * on a `budget` model, ONE state for the whole tool loop: on, at
+///     [`DEFAULT_LEVEL`], on every loop step. Anthropic refuses a request
+///     that thinks when the last assistant tool-use turn carries no thinking
+///     block, so a loop must never switch from off to on. Auxiliary calls
+///     are separate requests and stay off;
+///   * otherwise on for planning, recovery and a structured answer, off for
+///     a routine tool follow-up (unless `tool_steps`) and auxiliary calls.
+#[must_use]
+pub const fn step(
+    setting: Option<Thinking>,
+    declared: Option<(ReasoningControl, AutoPolicy)>,
+    request: StepRequest,
+) -> Option<StepThinking> {
+    if let Some((_, policy)) = declared
+        && policy.off_with_tools
+        && request.has_tools
+        && !matches!(
+            setting,
+            Some(Thinking::Low | Thinking::Medium | Thinking::High)
+        )
+    {
+        return Some(StepThinking::Off);
+    }
+    let Some(setting) = setting else {
+        return None;
+    };
+    let Some((control, policy)) = declared else {
+        return Some(setting.single_call());
+    };
+    if let Some(explicit) = setting.explicit() {
+        return Some(explicit);
+    }
+    if matches!(control, ReasoningControl::Budget) {
+        return Some(match request.kind {
+            StepKind::Auxiliary => StepThinking::Off,
+            _ => StepThinking::On(DEFAULT_LEVEL),
+        });
+    }
+    resolve(Some(setting), request.kind, policy)
+}
+
+/// The per-kind half of [`step`], for a model with no loop rule. Prefer
+/// [`step`]: it applies the control's rules too.
 #[must_use]
 pub const fn resolve(
     setting: Option<Thinking>,
@@ -183,6 +292,33 @@ pub const fn resolve(
         StepKind::ToolFollowUp if policy.tool_steps => StepThinking::On(DEFAULT_LEVEL),
         StepKind::ToolFollowUp | StepKind::Auxiliary => StepThinking::Off,
     })
+}
+
+/// The setting an output continuation runs at: the call that continues an
+/// answer cut off at the output limit, where thinking spends what is left.
+///
+/// * `off` stays off.
+/// * An explicit level runs at `low`, the same knob at a lower value.
+/// * `auto`: off on a `toggle` model (it has no levels, and `low` would be
+///   `enable_thinking: true`); `auto` again on a `budget` model, which keeps
+///   its loop's state ([`step`]); `low` on an `effort` model and on one that
+///   declares no control; `auto` on a fixed kind, which sends nothing.
+#[must_use]
+pub const fn continuation_setting(
+    setting: Thinking,
+    control: Option<ReasoningControl>,
+) -> Thinking {
+    match setting {
+        Thinking::Off => Thinking::Off,
+        Thinking::Low | Thinking::Medium | Thinking::High => Thinking::Low,
+        Thinking::Auto => match control {
+            Some(ReasoningControl::Toggle) => Thinking::Off,
+            Some(
+                ReasoningControl::Budget | ReasoningControl::FixedOn | ReasoningControl::FixedOff,
+            ) => Thinking::Auto,
+            Some(ReasoningControl::Effort) | None => Thinking::Low,
+        },
+    }
 }
 
 /// How a model's thinking can be controlled: the catalogue attribute

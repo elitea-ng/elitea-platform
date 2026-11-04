@@ -1084,6 +1084,56 @@ async fn no_setting_sends_no_thinking_form_even_with_tools() {
     assert!(bodies[0].get("chat_template_kwargs").is_none());
 }
 
+/// ADR-0038 (#1574 review): GPT-5.6 refuses thinking beside chat-completions
+/// tool calls. The catalogue says so as data (`reasoning_off_with_tools`, the
+/// gpt-5.6 family default), not as a model-name rule: `auto` sends `none` on
+/// the planning step of a tool request, and a request without tools still
+/// thinks.
+#[tokio::test(flavor = "current_thread")]
+async fn off_with_tools_sends_none_beside_tools_and_thinks_without() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("effort", false)
+        .map(|reasoning| reasoning.with_off_with_tools(true));
+    let bodies = thinking_bodies(
+        invocation.clone(),
+        vec![tool_request(vec![
+            Content::new("user").with_text("double 21"),
+        ])],
+    )
+    .await;
+    assert_eq!(bodies[0]["reasoning_effort"], "none");
+
+    let mut plain = tool_request(vec![Content::new("user").with_text("say hi")]);
+    plain.tools.clear();
+    let bodies = thinking_bodies(invocation, vec![plain]).await;
+    assert_eq!(bodies[0]["reasoning_effort"], "medium");
+    assert!(bodies[0].get("tools").is_none());
+}
+
+/// ADR-0038 (#1574 review): a `budget` model keeps ONE thinking state through
+/// its tool loop under `auto`. Anthropic refuses a thinking request whose last
+/// assistant tool-use turn has no thinking block, so off on a tool step and
+/// on again at recovery must never happen.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_on_a_budget_model_never_switches_thinking_inside_the_loop() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("budget", false);
+    let bodies = thinking_bodies(
+        invocation,
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+            after_tool(serde_json::json!({"error": "Tool 'double' execution denied"})),
+        ],
+    )
+    .await;
+    for body in &bodies {
+        assert_eq!(body["reasoning_effort"], "medium", "{body}");
+    }
+}
+
 /// ADR-0038 decisions 2 and 4 on a `toggle` model (Qwen on vLLM): `auto`
 /// thinks on the first step and not on a routine tool follow-up, and the
 /// form is `enable_thinking`, never `reasoning_effort`.

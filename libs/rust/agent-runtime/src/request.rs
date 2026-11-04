@@ -124,6 +124,9 @@ pub struct AgentExecutionPayload {
 pub struct ModelReasoning {
     pub control: crate::thinking::ReasoningControl,
     pub tool_steps: bool,
+    /// `reasoning_off_with_tools`: `auto` does not think on a request that
+    /// carries tools (the provider refuses thinking beside tool calls).
+    pub off_with_tools: bool,
 }
 
 impl ModelReasoning {
@@ -136,27 +139,40 @@ impl ModelReasoning {
         crate::thinking::ReasoningControl::parse(control).map(|control| Self {
             control,
             tool_steps,
+            off_with_tools: false,
         })
     }
 
+    /// The same data with `reasoning_off_with_tools` set.
+    #[must_use]
+    pub const fn with_off_with_tools(self, off_with_tools: bool) -> Self {
+        Self {
+            off_with_tools,
+            ..self
+        }
+    }
+
     /// The data from a nested version's `model_reasoning` JSON object:
-    /// `{"control": <kind>, "tool_steps": <bool>}`. Members other than
-    /// these two are refused.
+    /// `{"control": <kind>, "tool_steps": <bool>, "off_with_tools": <bool>}`.
+    /// Other members are refused.
     #[must_use]
     pub fn from_json(value: &Value) -> Option<Self> {
         let fields = value.as_object()?;
         if fields
             .keys()
-            .any(|key| key != "control" && key != "tool_steps")
+            .any(|key| key != "control" && key != "tool_steps" && key != "off_with_tools")
         {
             return None;
         }
-        let tool_steps = match fields.get("tool_steps") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(flag)) => *flag,
-            Some(_) => return None,
+        let flag = |name: &str| match fields.get(name) {
+            None | Some(Value::Null) => Some(false),
+            Some(Value::Bool(flag)) => Some(*flag),
+            Some(_) => None,
         };
+        let tool_steps = flag("tool_steps")?;
+        let off_with_tools = flag("off_with_tools")?;
         Self::parse(fields.get("control")?.as_str()?, tool_steps)
+            .map(|reasoning| reasoning.with_off_with_tools(off_with_tools))
     }
 
     /// The `auto` policy this data sets.
@@ -164,6 +180,7 @@ impl ModelReasoning {
     pub const fn auto_policy(self) -> crate::thinking::AutoPolicy {
         crate::thinking::AutoPolicy {
             tool_steps: self.tool_steps,
+            off_with_tools: self.off_with_tools,
         }
     }
 }

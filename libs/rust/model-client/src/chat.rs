@@ -210,35 +210,22 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
 }
 
-/// The kind of one engine request for the `auto` policy: a step after the
-/// trailing tool results is a follow-up, or a recovery when one of them
-/// reports an error (`{"error": ...}` not null, or `{"status": "error"}`);
-/// anything else is a first step.
+/// The kind of one engine request for the `auto` policy: the one
+/// classification of `elitea_llm_wire::thinking::classify` over the trailing
+/// tool results (a result that is not JSON is a string result, which reports
+/// no error).
 fn step_kind(messages: &[ChatMessage]) -> elitea_llm_wire::thinking::StepKind {
-    use elitea_llm_wire::thinking::StepKind;
-    let mut results = messages
+    let results: Vec<Value> = messages
         .iter()
         .rev()
         .take_while(|message| matches!(message, ChatMessage::Tool { .. }))
-        .peekable();
-    if results.peek().is_none() {
-        return StepKind::Planning;
-    }
-    let failed = results.any(|message| match message {
-        ChatMessage::Tool { content, .. } => serde_json::from_str::<Value>(content)
-            .ok()
-            .and_then(|value| value.as_object().cloned())
-            .is_some_and(|fields| {
-                fields.get("error").is_some_and(|error| !error.is_null())
-                    || fields.get("status").and_then(Value::as_str) == Some("error")
-            }),
-        _ => false,
-    });
-    if failed {
-        StepKind::Recovery
-    } else {
-        StepKind::ToolFollowUp
-    }
+        .map(|message| match message {
+            ChatMessage::Tool { content, .. } => serde_json::from_str::<Value>(content)
+                .unwrap_or_else(|_| Value::String(content.clone())),
+            _ => Value::Null,
+        })
+        .collect();
+    elitea_llm_wire::thinking::classify(false, results.iter())
 }
 
 impl ChatRequest {
@@ -346,9 +333,11 @@ impl ChatClient {
         // Only when configured, so a body without it is the parity body.
         // The form is the model's (ADR-0038: the table in
         // `elitea_llm_wire::thinking`). With a declared control, `auto` is
-        // the per-step policy of the agent runtime (`thinking::resolve`):
-        // on for a first step and after a tool error, off on a routine step
-        // after tool results unless `reasoning_tool_steps`. An undeclared
+        // the one per-step policy (`thinking::step`, pinned by the caller
+        // contract): on for a first step and after a tool error, off on a
+        // routine step after tool results unless `reasoning_tool_steps`, one
+        // state through a `budget` model's loop, and off on a tool request
+        // of a `reasoning_off_with_tools` model. An undeclared
         // control never sends the off form for `auto` (an o-series model
         // refuses `none`), so `auto` there thinks at the default level. A
         // model that thinks by effort or by budget refuses a sampling
@@ -361,17 +350,24 @@ impl ChatClient {
                 .settings
                 .reasoning_control
                 .unwrap_or(crate::settings::ReasoningControl::Effort);
-            let step = match self.settings.reasoning_control {
-                None => setting.single_call(),
-                Some(_) => elitea_llm_wire::thinking::resolve(
-                    Some(setting),
-                    step_kind(&request.messages),
+            let declared = self.settings.reasoning_control.map(|control| {
+                (
+                    control,
                     elitea_llm_wire::thinking::AutoPolicy {
                         tool_steps: self.settings.reasoning_tool_steps,
+                        off_with_tools: self.settings.reasoning_off_with_tools,
                     },
                 )
-                .unwrap_or_else(|| setting.single_call()),
-            };
+            });
+            let step = elitea_llm_wire::thinking::step(
+                Some(setting),
+                declared,
+                elitea_llm_wire::thinking::StepRequest {
+                    kind: step_kind(&request.messages),
+                    has_tools: !request.tools.is_empty(),
+                },
+            )
+            .unwrap_or_else(|| setting.single_call());
             if control.refuses_temperature(step) {
                 fields.remove("temperature");
             }
@@ -1042,6 +1038,31 @@ mod tests {
         assert!(
             client_with_settings(&json!({"reasoning_tool_steps": "yes"})).is_err(),
             "reasoning_tool_steps is a boolean"
+        );
+    }
+
+    /// ADR-0038 (#1574 review): a `reasoning_off_with_tools` model (GPT-5.6
+    /// on chat completions) does not think under auto on a request with
+    /// tools, from its first step; a request without tools still thinks.
+    #[test]
+    fn off_with_tools_turns_auto_off_on_a_tool_request() {
+        let client = client_with(json!({
+            "reasoning_effort": "auto", "reasoning_control": "effort", "reasoning_off_with_tools": true
+        }));
+        let mut with_tools = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        with_tools.tools.push(ToolDefinition {
+            name: "lookup".to_owned(),
+            description: "Looks up.".to_owned(),
+            parameters: json!({"type": "object", "properties": {}}),
+        });
+        let body = client.body(&with_tools, false).unwrap_or_default();
+        assert_eq!(body["reasoning_effort"], "none");
+        let plain = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        let body = client.body(&plain, false).unwrap_or_default();
+        assert_eq!(body["reasoning_effort"], "medium");
+        assert!(
+            client_with_settings(&json!({"reasoning_off_with_tools": 1})).is_err(),
+            "reasoning_off_with_tools is a boolean"
         );
     }
 

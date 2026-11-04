@@ -132,12 +132,14 @@ class AgentExecutionInputV1(_message.Message):
     def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ..., unattended_grant: _Optional[_Union[UnattendedGrantV1, _Mapping]] = ..., model_reasoning: _Optional[_Union[ModelReasoningV1, _Mapping]] = ...) -> None: ...
 
 class ModelReasoningV1(_message.Message):
-    __slots__ = ("control", "tool_steps")
+    __slots__ = ("control", "tool_steps", "off_with_tools")
     CONTROL_FIELD_NUMBER: _ClassVar[int]
     TOOL_STEPS_FIELD_NUMBER: _ClassVar[int]
+    OFF_WITH_TOOLS_FIELD_NUMBER: _ClassVar[int]
     control: str
     tool_steps: bool
-    def __init__(self, control: _Optional[str] = ..., tool_steps: _Optional[bool] = ...) -> None: ...
+    off_with_tools: bool
+    def __init__(self, control: _Optional[str] = ..., tool_steps: _Optional[bool] = ..., off_with_tools: _Optional[bool] = ...) -> None: ...
 
 class UnattendedGrantV1(_message.Message):
     __slots__ = ("grant_id", "chain_root_execution_id", "owner_user_id", "sensitive_tools", "continue_step_limit", "continue_output_limit", "chain", "continuation_index")

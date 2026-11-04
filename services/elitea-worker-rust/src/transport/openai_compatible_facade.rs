@@ -205,26 +205,22 @@ impl ModelFacadeInvocation {
     }
 
     /// The thinking of one request: the setting, resolved for the step the
-    /// request is (`auto`), or `None` when nothing is configured.
+    /// request is (`auto`), or `None` when nothing is configured. The one
+    /// policy, `elitea_llm_wire::thinking::step` (through the agent
+    /// runtime's adk reader), as the desktop host applies it.
     ///
     /// `auto` switches thinking off on a step only for a model whose catalogue
     /// row declares its control form. An undeclared model may not take the
     /// off form at all: an `OpenAI` o-series model refuses `reasoning_effort:
     /// none`, so a routine tool step would fail. There `auto` thinks at the
-    /// default level on every step, the single-call rule.
+    /// default level on every step, the single-call rule. A model whose row
+    /// says `reasoning_off_with_tools` (GPT-5.6 on chat completions) does not
+    /// think under `auto` on a request with tools.
     pub(crate) fn step_thinking(&self, request: &LlmRequest) -> Option<StepThinking> {
-        let setting = self.reasoning_effort?.thinking();
-        let Some(reasoning) = self.reasoning else {
-            return Some(setting.single_call());
-        };
-        let structured = request
-            .config
-            .as_ref()
-            .is_some_and(|config| config.response_schema.is_some());
-        crate::agents::thinking::resolve(
-            Some(setting),
-            crate::agents::thinking::classify(&request.contents, structured),
-            reasoning.auto_policy(),
+        crate::agents::thinking::step_for_request(
+            self.reasoning_effort.map(ModelReasoningEffort::thinking),
+            self.reasoning,
+            request,
         )
     }
 

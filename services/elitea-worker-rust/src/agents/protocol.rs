@@ -298,9 +298,11 @@ fn model_context_limits(
 fn model_reasoning(
     reasoning: crate::protocol::elitea::runtime::v1::ModelReasoningV1,
 ) -> Result<super::request::ModelReasoning, AgentProtocolError> {
-    super::request::ModelReasoning::parse(&reasoning.control, reasoning.tool_steps).ok_or(
-        AgentProtocolError::InvalidInput("the model reasoning control is not known"),
-    )
+    super::request::ModelReasoning::parse(&reasoning.control, reasoning.tool_steps)
+        .map(|parsed| parsed.with_off_with_tools(reasoning.off_with_tools))
+        .ok_or(AgentProtocolError::InvalidInput(
+            "the model reasoning control is not known",
+        ))
 }
 
 fn validate_binding(binding: &AgentInputBinding) -> Result<(), AgentProtocolError> {

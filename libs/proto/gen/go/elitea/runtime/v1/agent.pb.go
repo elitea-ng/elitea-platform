@@ -643,7 +643,11 @@ type ModelReasoningV1 struct {
 	Control string `protobuf:"bytes,1,opt,name=control,proto3" json:"control,omitempty"`
 	// `auto` keeps thinking on for a routine step after successful tool
 	// results (families whose interleaved thinking helps tool choice).
-	ToolSteps     bool `protobuf:"varint,2,opt,name=tool_steps,json=toolSteps,proto3" json:"tool_steps,omitempty"`
+	ToolSteps bool `protobuf:"varint,2,opt,name=tool_steps,json=toolSteps,proto3" json:"tool_steps,omitempty"`
+	// `auto` does not think on a request that carries tools: the provider
+	// refuses thinking beside tool calls on its chat-completions wire
+	// (OpenAI GPT-5.6 requires reasoning_effort none there).
+	OffWithTools  bool `protobuf:"varint,3,opt,name=off_with_tools,json=offWithTools,proto3" json:"off_with_tools,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -688,6 +692,13 @@ func (x *ModelReasoningV1) GetControl() string {
 func (x *ModelReasoningV1) GetToolSteps() bool {
 	if x != nil {
 		return x.ToolSteps
+	}
+	return false
+}
+
+func (x *ModelReasoningV1) GetOffWithTools() bool {
+	if x != nil {
+		return x.OffWithTools
 	}
 	return false
 }
@@ -1590,11 +1601,12 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15_execution_generationB\x12\n" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
-	"\v_debug_modeJ\x04\b(\x10@\"Q\n" +
+	"\v_debug_modeJ\x04\b(\x10@\"w\n" +
 	"\x10ModelReasoningV1\x12\x18\n" +
 	"\acontrol\x18\x01 \x01(\tR\acontrol\x12\x1d\n" +
 	"\n" +
-	"tool_steps\x18\x02 \x01(\bR\ttoolStepsJ\x04\b\x03\x10\x10\"\xb7\x03\n" +
+	"tool_steps\x18\x02 \x01(\bR\ttoolSteps\x12$\n" +
+	"\x0eoff_with_tools\x18\x03 \x01(\bR\foffWithToolsJ\x04\b\x04\x10\x10\"\xb7\x03\n" +
 	"\x11UnattendedGrantV1\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x125\n" +
 	"\x17chain_root_execution_id\x18\x02 \x01(\tR\x14chainRootExecutionId\x12\"\n" +

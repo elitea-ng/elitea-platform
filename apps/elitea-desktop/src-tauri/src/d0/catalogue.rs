@@ -112,7 +112,8 @@ impl Catalogue {
 }
 
 /// The catalogue's thinking data for `model` (ADR-0038 decision 3): its
-/// `reasoning_control` and `reasoning_tool_steps`. `None` when the row
+/// `reasoning_control`, `reasoning_tool_steps` and
+/// `reasoning_off_with_tools`. `None` when the row
 /// declares no control form, or one this build does not know: the request
 /// then keeps the `reasoning_effort` form and `auto` never switches thinking
 /// off by itself (`elitea_agent_runtime::thinking::step`).
@@ -126,7 +127,12 @@ pub fn model_reasoning(
         .get("reasoning_tool_steps")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let off_with_tools = row
+        .get("reasoning_off_with_tools")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     elitea_agent_runtime::request::ModelReasoning::parse(control, tool_steps)
+        .map(|reasoning| reasoning.with_off_with_tools(off_with_tools))
 }
 
 /// How a model's reasoning is replayed in a later request's history.

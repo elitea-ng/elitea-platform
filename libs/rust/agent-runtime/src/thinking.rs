@@ -1,78 +1,40 @@
-//! `auto` thinking as a per-step policy (ADR-0038 decision 4).
+//! `auto` thinking as a per-step policy (ADR-0038 decision 4), for an agent
+//! run.
 //!
-//! The canonical setting ([`Thinking`]) and the request forms live in
-//! `elitea_llm_wire::thinking`. This module decides, for one model request
-//! of an agent run, whether `auto` thinks:
-//!
-//! * **On**, at [`DEFAULT_LEVEL`] (`auto` has no level of its own):
-//!   * the first model step of a turn (planning) — the request ends with a
-//!     message that is not a tool result;
-//!   * a step after a tool error or a refused tool call (recovery) — a tool
-//!     result that reports an error (`{"error": …}`, which the agent loop
-//!     writes for a failed, denied or unknown call, or `{"status":
-//!     "error"}`, which the platform's own tools write);
-//!   * a step of an agent with a structured output schema. The runtime
-//!     cannot tell which step gives the final answer before the model
-//!     answers, so every step of such an agent thinks.
-//! * **Off**:
-//!   * a routine follow-up after successful tool results, unless the model's
-//!     catalogue entry keeps thinking on for tool steps
-//!     ([`AutoPolicy::tool_steps`]: families whose interleaved thinking
-//!     helps tool choice);
-//!   * an auxiliary call: summarisation, compaction, chat naming and
-//!     cut-off summaries.
-//!
-//! An explicit setting (`off`, `low`, `medium`, `high`) always wins and
-//! applies to every step. No setting (`None`) sends nothing, as before the
-//! policy existed. The verified-loop roles of decisions 6 and 10 are not
-//! built yet.
+//! The policy itself is ONE copy, in `elitea_llm_wire::thinking`
+//! ([`classify`] of tool results, [`step`] of a request), pinned by
+//! `conformance/llm-caller/contract.json`. This module only reads an adk
+//! request for it: the tool results of the last conversation turn (system
+//! contents, instructions and context notes, do not change what that turn
+//! was), whether it carries a response schema, and whether it declares
+//! tools. The desktop host and both worker facades call [`step_for_request`].
 
-use adk_core::{Content, Part};
+use adk_core::{Content, LlmRequest, Part};
 use serde_json::{Map, Value};
 
 pub use elitea_llm_wire::thinking::{
-    AutoPolicy, DEFAULT_LEVEL, Level, ReasoningControl, StepKind, StepThinking, Thinking, resolve,
+    AutoPolicy, DEFAULT_LEVEL, Level, ReasoningControl, StepKind, StepRequest, StepThinking,
+    Thinking, continuation_setting, reports_error, resolve,
 };
 
 /// The kind of an agent-loop request from its contents. `structured` is
 /// whether the request carries a response schema.
 #[must_use]
 pub fn classify(contents: &[Content], structured: bool) -> StepKind {
-    if structured {
-        return StepKind::StructuredAnswer;
-    }
-    // Instructions and context notes are system contents; they do not
-    // change what the last turn of the conversation was.
-    let Some(last) = contents
+    let last = contents
         .iter()
         .rev()
-        .find(|content| content.role != "system")
-    else {
-        return StepKind::Planning;
-    };
-    let mut results = last.parts.iter().filter_map(|part| match part {
-        Part::FunctionResponse {
-            function_response, ..
-        } => Some(&function_response.response),
-        _ => None,
-    });
-    let Some(first) = results.next() else {
-        return StepKind::Planning;
-    };
-    if reports_error(first) || results.any(reports_error) {
-        StepKind::Recovery
-    } else {
-        StepKind::ToolFollowUp
-    }
-}
-
-/// Whether a tool result reports a failure: an `error` member that is not
-/// null, or `status: "error"`.
-fn reports_error(response: &Value) -> bool {
-    response.as_object().is_some_and(|fields| {
-        fields.get("error").is_some_and(|error| !error.is_null())
-            || fields.get("status").and_then(Value::as_str) == Some("error")
-    })
+        .find(|content| content.role != "system");
+    let results = last
+        .into_iter()
+        .flat_map(|content| content.parts.iter())
+        .filter_map(|part| match part {
+            Part::FunctionResponse {
+                function_response, ..
+            } => Some(&function_response.response),
+            _ => None,
+        });
+    elitea_llm_wire::thinking::classify(structured, results)
 }
 
 /// The control kind a request is built for: the catalogue's, else the kind
@@ -89,44 +51,42 @@ pub const fn effective_control(
     }
 }
 
-/// The thinking of one request on a model that has `reasoning` (the
-/// catalogue's data, or `None` when the row declares no control form).
-///
-/// A declared form takes the `auto` per-step policy. An undeclared one never
-/// switches thinking off by itself: an `OpenAI` o-series model refuses
-/// `reasoning_effort: none`, so `auto` there thinks at the default level on
-/// every step (the single-call rule). The worker facades apply the same rule.
+/// The thinking of one adk request on a model that has `reasoning` (the
+/// catalogue's data, or `None` when the row declares no control form):
+/// `elitea_llm_wire::thinking::step` over the request's kind and tools.
 #[must_use]
-pub fn step(
+pub fn step_for_request(
     setting: Option<Thinking>,
     reasoning: Option<crate::request::ModelReasoning>,
-    contents: &[Content],
-    structured: bool,
+    request: &LlmRequest,
 ) -> Option<StepThinking> {
-    let setting = setting?;
-    match reasoning {
-        None => Some(setting.single_call()),
-        Some(reasoning) => resolve(
-            Some(setting),
-            classify(contents, structured),
-            reasoning.auto_policy(),
-        ),
-    }
+    let structured = request
+        .config
+        .as_ref()
+        .is_some_and(|config| config.response_schema.is_some());
+    elitea_llm_wire::thinking::step(
+        setting,
+        reasoning.map(|reasoning| (reasoning.control, reasoning.auto_policy())),
+        StepRequest {
+            kind: classify(&request.contents, structured),
+            has_tools: !request.tools.is_empty(),
+        },
+    )
 }
 
 /// Writes the thinking form of one OpenAI-compatible chat-completions request
 /// into `body`, for a host that builds its own body (the desktop): the
 /// translation table, with the catalogue's control form (`reasoning_effort`
-/// when undeclared, the form such a host always sent) and [`step`]. It
-/// returns whether the request must carry no temperature.
+/// when undeclared, the form such a host always sent) and
+/// [`step_for_request`]. It returns whether the request must carry no
+/// temperature.
 pub fn apply_openai_step(
     body: &mut Map<String, Value>,
     setting: Option<Thinking>,
     reasoning: Option<crate::request::ModelReasoning>,
-    contents: &[Content],
-    structured: bool,
+    request: &LlmRequest,
 ) -> bool {
-    let Some(step) = step(setting, reasoning, contents, structured) else {
+    let Some(step) = step_for_request(setting, reasoning, request) else {
         return false;
     };
     let control = reasoning.map_or(ReasoningControl::Effort, |reasoning| reasoning.control);
@@ -190,13 +150,127 @@ mod tests {
     }
 
     #[test]
+    fn an_undeclared_control_keeps_the_callers_previous_form() {
+        assert_eq!(effective_control(None, true), ReasoningControl::Budget);
+        assert_eq!(effective_control(None, false), ReasoningControl::Effort);
+        assert_eq!(
+            effective_control(Some(ReasoningControl::Toggle), false),
+            ReasoningControl::Toggle
+        );
+    }
+
+    fn request(contents: Vec<Content>, tools: bool) -> LlmRequest {
+        let mut request = LlmRequest::new("m", contents);
+        if tools {
+            request
+                .tools
+                .insert("read_file".to_owned(), json!({"name": "read_file"}));
+        }
+        request
+    }
+
+    #[test]
+    fn a_host_body_takes_the_table_and_the_policy() {
+        let toggle = crate::request::ModelReasoning::parse("toggle", false);
+        let first = request(vec![user("go")], true);
+        let after_tool = request(vec![user("go"), call(), result(json!({"value": 1}))], true);
+
+        let mut body = Map::new();
+        let refuses = apply_openai_step(&mut body, Some(Thinking::Auto), toggle, &first);
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
+        assert!(!refuses, "a toggle model takes a temperature");
+
+        let mut body = Map::new();
+        apply_openai_step(&mut body, Some(Thinking::Auto), toggle, &after_tool);
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
+        );
+
+        // Undeclared: reasoning_effort, and auto never sends the off form.
+        let mut body = Map::new();
+        let refuses = apply_openai_step(&mut body, Some(Thinking::Auto), None, &after_tool);
+        assert_eq!(body["reasoning_effort"], json!("medium"));
+        assert!(refuses);
+
+        let mut body = Map::new();
+        apply_openai_step(&mut body, Some(Thinking::Off), None, &after_tool);
+        assert_eq!(body["reasoning_effort"], json!("none"));
+
+        let mut body = Map::new();
+        assert!(!apply_openai_step(&mut body, None, toggle, &after_tool));
+        assert!(body.is_empty(), "no setting sends nothing");
+    }
+
+    /// ADR-0038 (#1574 review): a model whose chat-completions tool calls
+    /// refuse thinking (GPT-5.6) does not think under auto on a request
+    /// with tools, from the planning step on; without tools it thinks.
+    #[test]
+    fn off_with_tools_turns_auto_off_on_a_tool_request() {
+        let gpt = crate::request::ModelReasoning::parse("effort", false)
+            .map(|reasoning| reasoning.with_off_with_tools(true));
+        let mut body = Map::new();
+        let refuses = apply_openai_step(
+            &mut body,
+            Some(Thinking::Auto),
+            gpt,
+            &request(vec![user("go")], true),
+        );
+        assert_eq!(body["reasoning_effort"], json!("none"));
+        assert!(
+            !refuses,
+            "an effort model that does not think takes a temperature"
+        );
+
+        let mut body = Map::new();
+        apply_openai_step(
+            &mut body,
+            Some(Thinking::Auto),
+            gpt,
+            &request(vec![user("go")], false),
+        );
+        assert_eq!(body["reasoning_effort"], json!("medium"));
+    }
+
+    /// ADR-0038 (#1574 review): a budget model never switches thinking from
+    /// off to on inside one tool loop under auto.
+    #[test]
+    fn a_budget_loop_keeps_one_thinking_state() {
+        let claude = crate::request::ModelReasoning::parse("budget", false);
+        let loop_steps = [
+            request(vec![user("go")], true),
+            request(vec![user("go"), call(), result(json!({"value": 1}))], true),
+            request(
+                vec![user("go"), call(), result(json!({"error": "denied"}))],
+                true,
+            ),
+            request(
+                vec![
+                    user("go"),
+                    call(),
+                    result(json!({"value": 1})),
+                    call(),
+                    result(json!({"value": 2})),
+                ],
+                true,
+            ),
+        ];
+        let states: Vec<_> = loop_steps
+            .iter()
+            .map(|step| step_for_request(Some(Thinking::Auto), claude, step))
+            .collect();
+        assert!(
+            states
+                .iter()
+                .all(|state| *state == Some(StepThinking::On(DEFAULT_LEVEL))),
+            "{states:?}"
+        );
+    }
+
+    #[test]
     fn steps_are_classified_from_the_last_conversation_content() {
         assert_eq!(classify(&[], false), StepKind::Planning);
         assert_eq!(classify(&[user("hi")], false), StepKind::Planning);
-        assert_eq!(
-            classify(&[user("hi"), call(), result(json!({"text": "ok"}))], false),
-            StepKind::ToolFollowUp
-        );
         assert_eq!(
             classify(
                 &[user("hi"), call(), result(json!({"text": "ok"})), system()],
@@ -213,118 +287,8 @@ mod tests {
             StepKind::Recovery
         );
         assert_eq!(
-            classify(
-                &[user("hi"), call(), result(json!({"status": "error"}))],
-                false
-            ),
-            StepKind::Recovery
-        );
-        assert_eq!(
-            classify(
-                &[
-                    user("hi"),
-                    call(),
-                    result(json!({"error": null, "text": "ok"}))
-                ],
-                false
-            ),
-            StepKind::ToolFollowUp
-        );
-        assert_eq!(
             classify(&[user("hi"), call(), result(json!({}))], true),
             StepKind::StructuredAnswer
         );
-    }
-
-    #[test]
-    fn auto_thinks_on_planning_and_recovery_and_not_on_routine_tool_steps() {
-        let policy = AutoPolicy::default();
-        let auto = Some(Thinking::Auto);
-        let on = Some(StepThinking::On(Level::Medium));
-        assert_eq!(resolve(auto, StepKind::Planning, policy), on);
-        assert_eq!(resolve(auto, StepKind::Recovery, policy), on);
-        assert_eq!(resolve(auto, StepKind::StructuredAnswer, policy), on);
-        assert_eq!(
-            resolve(auto, StepKind::ToolFollowUp, policy),
-            Some(StepThinking::Off)
-        );
-        assert_eq!(
-            resolve(auto, StepKind::Auxiliary, policy),
-            Some(StepThinking::Off)
-        );
-        let interleaved = AutoPolicy { tool_steps: true };
-        assert_eq!(resolve(auto, StepKind::ToolFollowUp, interleaved), on);
-        assert_eq!(
-            resolve(auto, StepKind::Auxiliary, interleaved),
-            Some(StepThinking::Off)
-        );
-    }
-
-    #[test]
-    fn an_explicit_setting_wins_and_no_setting_sends_nothing() {
-        let policy = AutoPolicy::default();
-        assert_eq!(
-            resolve(Some(Thinking::High), StepKind::ToolFollowUp, policy),
-            Some(StepThinking::On(Level::High))
-        );
-        assert_eq!(
-            resolve(Some(Thinking::Off), StepKind::Planning, policy),
-            Some(StepThinking::Off)
-        );
-        assert_eq!(resolve(None, StepKind::Planning, policy), None);
-    }
-
-    #[test]
-    fn an_undeclared_control_keeps_the_callers_previous_form() {
-        assert_eq!(effective_control(None, true), ReasoningControl::Budget);
-        assert_eq!(effective_control(None, false), ReasoningControl::Effort);
-        assert_eq!(
-            effective_control(Some(ReasoningControl::Toggle), false),
-            ReasoningControl::Toggle
-        );
-    }
-
-    #[test]
-    fn a_host_body_takes_the_table_and_the_policy() {
-        let toggle = crate::request::ModelReasoning::parse("toggle", false);
-        let after_tool = vec![user("go"), call(), result(json!({"value": 1}))];
-
-        let mut body = Map::new();
-        let refuses = apply_openai_step(
-            &mut body,
-            Some(Thinking::Auto),
-            toggle,
-            &[user("go")],
-            false,
-        );
-        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
-        assert!(!refuses, "a toggle model takes a temperature");
-
-        let mut body = Map::new();
-        apply_openai_step(&mut body, Some(Thinking::Auto), toggle, &after_tool, false);
-        assert_eq!(
-            body["chat_template_kwargs"]["enable_thinking"],
-            json!(false)
-        );
-
-        // Undeclared: reasoning_effort, and auto never sends the off form.
-        let mut body = Map::new();
-        let refuses = apply_openai_step(&mut body, Some(Thinking::Auto), None, &after_tool, false);
-        assert_eq!(body["reasoning_effort"], json!("medium"));
-        assert!(refuses);
-
-        let mut body = Map::new();
-        apply_openai_step(&mut body, Some(Thinking::Off), None, &after_tool, false);
-        assert_eq!(body["reasoning_effort"], json!("none"));
-
-        let mut body = Map::new();
-        assert!(!apply_openai_step(
-            &mut body,
-            None,
-            toggle,
-            &after_tool,
-            false
-        ));
-        assert!(body.is_empty(), "no setting sends nothing");
     }
 }
