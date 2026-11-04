@@ -1147,6 +1147,26 @@ async fn auto_and_explicit_levels_on_an_effort_model() {
     );
 }
 
+/// `auto` on a model whose row declares no control form never sends the off
+/// form: an o-series model refuses `reasoning_effort: none`.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_on_an_undeclared_model_thinks_on_every_step() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = None;
+    let bodies = thinking_bodies(
+        invocation,
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+        ],
+    )
+    .await;
+    for body in &bodies {
+        assert_eq!(body["reasoning_effort"], "medium");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn model_credential_and_completion_are_single_use() {
     let response = test_model_gateway_response(Body::new(Full::new(Bytes::from(ordinary_sse()))));

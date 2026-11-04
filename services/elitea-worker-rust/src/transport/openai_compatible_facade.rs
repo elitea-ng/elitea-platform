@@ -206,8 +206,17 @@ impl ModelFacadeInvocation {
 
     /// The thinking of one request: the setting, resolved for the step the
     /// request is (`auto`), or `None` when nothing is configured.
+    ///
+    /// `auto` switches thinking off on a step only for a model whose catalogue
+    /// row declares its control form. An undeclared model may not take the
+    /// off form at all: an OpenAI o-series model refuses `reasoning_effort:
+    /// none`, so a routine tool step would fail. There `auto` thinks at the
+    /// default level on every step, the single-call rule.
     pub(crate) fn step_thinking(&self, request: &LlmRequest) -> Option<StepThinking> {
         let setting = self.reasoning_effort?.thinking();
+        let Some(reasoning) = self.reasoning else {
+            return Some(setting.single_call());
+        };
         let structured = request
             .config
             .as_ref()
@@ -215,9 +224,7 @@ impl ModelFacadeInvocation {
         crate::agents::thinking::resolve(
             Some(setting),
             crate::agents::thinking::classify(&request.contents, structured),
-            self.reasoning
-                .map(crate::agents::request::ModelReasoning::auto_policy)
-                .unwrap_or_default(),
+            reasoning.auto_policy(),
         )
     }
 
