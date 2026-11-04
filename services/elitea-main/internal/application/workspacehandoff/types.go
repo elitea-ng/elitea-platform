@@ -147,6 +147,13 @@ type Handoff struct {
 	// regenerate of the newest cloud turn, and the worker moves
 	// refs/elitea/cloud from CloudSHA back to this commit before it runs.
 	RewindTo *string
+	// TakeBackWhenDone: the owner's desktop takes the thread back by itself
+	// when its cloud run completes (ADR-0045 decision 8, shared 0224). Main
+	// never takes a thread back by itself.
+	TakeBackWhenDone bool
+	// Continued is set only on the answer of a complete with `continue`:
+	// the cloud turn the send started.
+	Continued *ContinuedTurn
 }
 
 // EnvSecret reports whether the thread has harvested variables (the runtime

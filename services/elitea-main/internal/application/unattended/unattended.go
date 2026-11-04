@@ -52,6 +52,11 @@ const (
 	// LinkGoalNotMet is a continuation that a goal check started
 	// (ADR-0045 decision 11).
 	LinkGoalNotMet = "goal_not_met"
+	// LinkHandoff is the first cloud run of a chain that a desktop turn
+	// started: the send continues it (ADR-0045 decision 8). The chain's
+	// origin becomes cloud with it. Only Main starts one; a desktop host
+	// never names it.
+	LinkHandoff = "handoff"
 )
 
 // ValidDesktopContinuationKind reports whether kind is a link kind that a
@@ -456,4 +461,7 @@ type ChainContinue struct {
 	ProjectID         int64
 	ConversationUUID  string
 	ResponseMessageID string
+	// Start is set on a LinkHandoff link only: how Main starts the chain's
+	// later cloud continuations. The link stores it in the chain's grant.
+	Start *CloudStart
 }

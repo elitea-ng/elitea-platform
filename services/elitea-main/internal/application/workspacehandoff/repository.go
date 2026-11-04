@@ -65,7 +65,9 @@ type CompleteRecord struct {
 	Epoch       int64
 	HandoffRef  string
 	SHA         string
-	Message     EventMessage
+	// TakeBackWhenDone is stored on the row (shared 0224).
+	TakeBackWhenDone bool
+	Message          EventMessage
 }
 
 // ReleaseRecord moves RECLAIMING to LOCAL.

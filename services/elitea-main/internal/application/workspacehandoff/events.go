@@ -33,7 +33,17 @@ func (s *Service) WithStateEvents(events StateEvents) *Service {
 		return s
 	}
 	s.repo = eventingRepository{Repository: s.repo, events: events}
+	s.events = events
 	return s
+}
+
+// emit publishes a change the repository did not make itself: a complete
+// that the cloud turn's admission made (continue.go).
+func (s *Service) emit(ctx context.Context, handoff Handoff) {
+	if s.events == nil {
+		return
+	}
+	eventingRepository{events: s.events}.emit(ctx, handoff)
 }
 
 // eventingRepository emits after each successful transition. It wraps the

@@ -1023,7 +1023,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// centry.push_subscriptions, the outbox elitea_runtime.web_push_queue
 	// (an AFTER INSERT trigger on centry.notifications writes it, so nothing
 	// old is sent) and elitea_runtime.web_push_deliveries. No permission.
-	require.EqualValues(t, 223, Head(shared))
+	//
+	// 224: shared/0224_handoff_take_back_when_done.sql, send a running task
+	// to the cloud (ADR-0045 decision 8, #1439):
+	// workspace_handoffs.take_back_when_done and the link kind handoff. No
+	// data, no permission.
+	require.EqualValues(t, 224, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

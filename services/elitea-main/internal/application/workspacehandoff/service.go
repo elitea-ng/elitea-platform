@@ -47,6 +47,12 @@ type Service struct {
 	// The thread's pull-request credential (forge_credential.go).
 	forgeStore    ForgeCredentialStore
 	forgeResolver ForgeCredentialResolver
+	// Complete with `continue` and the last cloud run (continue.go).
+	continuer ContinueStarter
+	cloudRuns CloudRunReader
+	// events is WithStateEvents' receiver, for the one change the
+	// repository does not make (a complete the turn's admission made).
+	events StateEvents
 }
 
 // WithEnvVault supplies the vault of the harvested environment. Without it a
@@ -239,27 +245,37 @@ type CompleteRequest struct {
 	HandoffRef  string
 	SHA         string
 	AuditRoute  string
+	// TakeBackWhenDone and Continue (ADR-0045 decision 8, continue.go).
+	TakeBackWhenDone bool
+	Continue         *Continue
 }
 
 // Complete moves HANDING_OFF to CLOUD_IDLE once the store holds the snapshot.
+// With Continue it also starts the cloud turn in the same transaction; the
+// answer's Continued names it.
 func (s *Service) Complete(ctx context.Context, request CompleteRequest) (Handoff, error) {
 	started := s.now()
 	if request.ProjectID <= 0 || !workspacestore.ValidUUID(request.HandoffID) || !validActor(request.ActorUserID) ||
-		request.Epoch <= 0 || request.HandoffRef != workspacestore.RefHandoff1 || !workspacestore.ValidSHA1(request.SHA) {
+		request.Epoch <= 0 || request.HandoffRef != workspacestore.RefHandoff1 || !workspacestore.ValidSHA1(request.SHA) ||
+		!request.Continue.valid() {
 		return Handoff{}, ErrInvalid
+	}
+	if request.Continue != nil {
+		return s.completeAndContinue(ctx, request, started)
 	}
 	handoff, err := s.repo.Complete(ctx, CompleteRecord{
 		ProjectID: request.ProjectID, HandoffID: request.HandoffID, ActorUserID: request.ActorUserID,
 		Epoch: request.Epoch, HandoffRef: request.HandoffRef, SHA: request.SHA,
-		Message: EventMessage{Event: "handoff.complete"},
+		TakeBackWhenDone: request.TakeBackWhenDone,
+		Message:          EventMessage{Event: "handoff.complete"},
 	})
 	if err != nil {
 		return Handoff{}, err
 	}
 	s.record(ctx, Thread{ProjectID: handoff.ProjectID, ConversationUUID: handoff.ConversationUUID},
 		request.ActorUserID, "POST", request.AuditRoute, started,
-		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s%s", handoff.Epoch, request.SHA,
-			includeAndEnvSummary(handoff.IncludedExcluded, handoff.EnvNames)), false)
+		fmt.Sprintf("handoff.complete: epoch %d, snapshot %s%s, take back when done %t", handoff.Epoch, request.SHA,
+			includeAndEnvSummary(handoff.IncludedExcluded, handoff.EnvNames), request.TakeBackWhenDone), false)
 	return handoff, nil
 }
 
@@ -419,6 +435,9 @@ type View struct {
 	// release left (a released LOCAL row within its return grace), or is
 	// taking them back (a rest RECLAIMING row).
 	RestPending bool
+	// LastCloudRun is the last finished cloud chain or turn of the current
+	// cloud epoch (continue.go); nil when none, or outside CLOUD_*.
+	LastCloudRun *CloudRun
 }
 
 // State reads the banner state.
@@ -453,6 +472,7 @@ func (s *Service) State(ctx context.Context, thread Thread) (View, error) {
 			view.DeleteAfter = &deadline
 		}
 	}
+	view.LastCloudRun = s.lastCloudRun(ctx, handoff)
 	return view, nil
 }
 

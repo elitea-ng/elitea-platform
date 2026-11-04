@@ -54,6 +54,13 @@ func admitAgentChain(
 		if err != nil {
 			return err
 		}
+		// A send's continue turn carries a desktop chain into the cloud
+		// (ADR-0045 decision 8): the chain ends where its last run ran.
+		if next.Kind == unattended.LinkHandoff {
+			if err := moveChainToCloud(ctx, tx, link.RootExecutionID, next.Start); err != nil {
+				return err
+			}
+		}
 		return markContinuedMessages(ctx, tx, projectionProject, chain.MarkMessageIDs, link.ContinuationIndex,
 			link.RootExecutionID, link.GrantID)
 	}

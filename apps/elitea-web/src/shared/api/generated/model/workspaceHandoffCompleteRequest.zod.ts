@@ -41,12 +41,20 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { WorkspaceHandoffContinue } from "./workspaceHandoffContinue.zod";
 
 export const WorkspaceHandoffCompleteRequest = zod
   .object({
     epoch: zod.int(),
     handoff_ref: zod.string().describe("`refs/elitea/handoff/1`."),
     sha: zod.string(),
+    take_back_when_done: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Contract 1.33 (ADR-0045 decision 8). The owner's desktop takes the thread back by itself when its cloud run completes. Stored on the handoff; the state answers it. Absent is false.",
+      ),
+    continue: WorkspaceHandoffContinue.optional(),
   })
   .describe(
     "NOTE(W2): internal/api/v2/workspacehandoff/route.go:357 (`completeBody`).",

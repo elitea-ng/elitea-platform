@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { WorkspaceForgeCredential } from "./workspaceForgeCredential.zod";
+import { WorkspaceHandoffCloudRun } from "./workspaceHandoffCloudRun.zod";
 import { WorkspaceHandoffStats } from "./workspaceHandoffStats.zod";
 
 export const WorkspaceHandoffState = zod
@@ -71,6 +72,18 @@ export const WorkspaceHandoffState = zod
       .optional()
       .describe(
         "Contract 1.29. The GitHub or GitLab configuration the owner chose for the cloud executor's pushes and pull requests; null when none.",
+      ),
+    take_back_when_done: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Contract 1.33 (ADR-0045 decision 8). The owner asked, at send, that the desktop take the thread back by itself when its cloud run completes. Main never takes a thread back by itself: the owner's desktop reads this flag and `last_cloud_run` and takes the thread back. Cleared by a take back, a release, an expiry or an erase.",
+      ),
+    last_cloud_run: zod
+      .union([WorkspaceHandoffCloudRun, zod.null()])
+      .optional()
+      .describe(
+        "Contract 1.33. The last finished cloud chain or cloud turn of the current handoff; null while none finished, and outside CLOUD_IDLE and CLOUD_RUNNING.",
       ),
   })
   .describe(
