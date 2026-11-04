@@ -7,10 +7,20 @@ import {
   mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync,
   readdirSync, statSync, lstatSync, realpathSync, existsSync,
 } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join, resolve, relative, dirname, sep } from 'node:path';
 
-const GO_CACHE = process.env.EVAL_GOCACHE ?? join(homedir(), 'Library', 'Caches', 'go-build');
+// The Go build cache, as `go env GOCACHE` reports it (it honours a GOCACHE
+// in the environment). Commands may write there. Without `go` on PATH, a
+// directory in the system temp dir.
+let goCacheDir;
+export function goCache() {
+  if (goCacheDir !== undefined) return goCacheDir;
+  const r = spawnSync('go', ['env', 'GOCACHE'], { encoding: 'utf8' });
+  const dir = r.status === 0 ? r.stdout.trim() : '';
+  goCacheDir = dir && dir !== 'off' ? dir : join(tmpdir(), 'adr0038-gocache');
+  return goCacheDir;
+}
 
 let sandboxKind;
 export function sandboxKindAvailable() {
@@ -121,7 +131,7 @@ function profile(root) {
     '(allow network* (remote unix-socket))',
     '(deny file-write* (require-not (require-any',
     `  (subpath "${root}")`,
-    `  (subpath "${GO_CACHE}")`,
+    `  (subpath "${goCache()}")`,
     '  (literal "/dev/null") (literal "/dev/tty") (subpath "/dev/fd"))))',
   ].join('\n');
 }
@@ -137,7 +147,7 @@ export function runCommand(run, command, { timeoutMs = 60_000, maxOutput = 8000 
     HOME: join(run.root, 'home'),
     TMPDIR: join(run.root, 'tmp'),
     GOTMPDIR: join(run.root, 'tmp'),
-    GOCACHE: GO_CACHE,
+    GOCACHE: goCache(),
     GOPATH: join(run.root, 'home', 'go'),
     GOFLAGS: '-mod=mod',
     GOPROXY: 'off',
