@@ -527,6 +527,17 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			}
 			completedHandoff = &completed
 		}
+		// A new question of a handed-off thread (ADR-0045 decision 9): the
+		// resolve found it CLOUD_IDLE in its own read. The check repeats
+		// here under the handoff row's share lock, before the conversation
+		// lock (the handoff-first order), so a take back, a release or a
+		// claim that changed the thread since then refuses this turn.
+		if admission.CloudThread && admission.HandoffCompletion == nil &&
+			(admission.CurrentTurn != nil || admission.CurrentAdhocTurn != nil) {
+			if err := fenceCloudIdleThread(ctx, tx, currentProjectID, conversationID); err != nil {
+				return executionapp.AdmissionOutcome{}, nil, err
+			}
+		}
 		if _, err := txQueries.LockCurrentAgentConversation(ctx, conversationUUID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return executionapp.AdmissionOutcome{}, nil, agentexecutionapp.ErrUnsupportedCurrentAgentStart

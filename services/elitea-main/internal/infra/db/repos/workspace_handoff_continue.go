@@ -72,6 +72,35 @@ SELECT conversation_uuid::text FROM elitea_runtime.workspace_handoffs WHERE proj
 	return row.Handoff, nil
 }
 
+// fenceCloudIdleThread is the Local work fence of a new question, again in
+// the admission transaction: the thread's handoff row, under a share lock,
+// must be CLOUD_IDLE with no take back pending. Every state change of the
+// row takes its update lock, so it waits for this admission to commit, and
+// the worker's claim then finds the turn admitted after the last change.
+// The refusals are the resolve's: ErrCloudTurnRunning while a cloud turn
+// runs, ErrLocalWorkThread for any other state.
+func fenceCloudIdleThread(ctx context.Context, tx pgx.Tx, projectID int64, conversationUUID string) error {
+	var (
+		state   string
+		reclaim bool
+	)
+	err := tx.QueryRow(ctx, `
+SELECT state, reclaim_pending FROM elitea_runtime.workspace_handoffs
+WHERE project_id = $1 AND conversation_uuid = $2::uuid AND deleted_at IS NULL
+FOR SHARE`, projectID, conversationUUID).Scan(&state, &reclaim)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return agentexecutionapp.ErrLocalWorkThread
+	case err != nil:
+		return fmt.Errorf("workspace handoff: check the thread: %w", err)
+	case state == string(workspacestore.StateCloudIdle) && !reclaim:
+		return nil
+	case state == string(workspacestore.StateCloudRunning) && !reclaim:
+		return agentexecutionapp.ErrCloudTurnRunning
+	}
+	return agentexecutionapp.ErrLocalWorkThread
+}
+
 // startHandoffCloudTurn moves the completed send to CLOUD_RUNNING for the
 // admitted execution.
 func startHandoffCloudTurn(
@@ -188,13 +217,32 @@ WHERE project_id = $1 AND handoff_id = $2::uuid`, projectID, handoffID).Scan(&ou
 	if err != nil {
 		return handoffcontinue.Target{}, fmt.Errorf("workspace handoff: read the send: %w", err)
 	}
+	participant, err := threadParticipant(ctx, r.pool, projectID, out.ConversationUUID)
+	if err != nil {
+		return handoffcontinue.Target{}, err
+	}
+	return participant.Target, nil
+}
+
+// threadParticipant reads the participant the thread's last local turn
+// addressed; a thread without one takes its agent participant, else its
+// model participant. VersionID is the agent participant's mapped version.
+func threadParticipant(
+	ctx context.Context, db rowQueryer, projectID int64, conversationUUID string,
+) (handoffcontinue.ThreadTarget, error) {
+	out := handoffcontinue.ThreadTarget{Target: handoffcontinue.Target{ConversationUUID: conversationUUID}}
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
-		return handoffcontinue.Target{}, workspacehandoff.ErrInvalid
+		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrInvalid
 	}
-	var entity string
-	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
-SELECT participant.id, participant.entity_name
+	var (
+		entity  string
+		version *int64
+	)
+	err = db.QueryRow(ctx, fmt.Sprintf(`
+SELECT participant.id, participant.entity_name,
+       CASE WHEN mapping.entity_settings ->> 'version_id' ~ '^[0-9]{1,18}$'
+            THEN (mapping.entity_settings ->> 'version_id')::bigint END
 FROM %[1]s.chat_conversations AS conversation
 JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
 JOIN %[1]s.chat_participants AS participant
@@ -207,20 +255,95 @@ LEFT JOIN LATERAL (
 WHERE conversation.uuid = $1::uuid
 ORDER BY participant.id = last_turn.target_participant_id DESC NULLS LAST,
          participant.entity_name = 'application' DESC, participant.id
-LIMIT 1`, schema), out.ConversationUUID, projectID).Scan(&out.ParticipantID, &entity)
+LIMIT 1`, schema), conversationUUID, projectID).Scan(&out.ParticipantID, &entity, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return handoffcontinue.Target{}, workspacehandoff.ErrNotLocalWork
+		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrNotLocalWork
 	}
 	if err != nil {
-		return handoffcontinue.Target{}, fmt.Errorf("workspace handoff: read the thread's participant: %w", err)
+		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread's participant: %w", err)
 	}
 	out.Agent = entity == "application"
+	if out.Agent && version != nil {
+		out.VersionID = *version
+	}
 	return out, nil
+}
+
+// ThreadTarget reads a handed-off thread for a schedule or a trigger
+// (ADR-0045 decision 9): the participant its next turn addresses, and
+// whether a turn may start now. Idle is the Local work fence's open state
+// (CLOUD_IDLE, no take back pending) with no answer of the thread
+// streaming. A thread with no handoff row, an erased one, or a conversation
+// that is gone answers ErrNotFound.
+func (r *WorkspaceHandoffsRepository) ThreadTarget(
+	ctx context.Context, projectID int64, conversationUUID string,
+) (handoffcontinue.ThreadTarget, error) {
+	if !workspacestore.ValidUUID(conversationUUID) {
+		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrNotFound
+	}
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrInvalid
+	}
+	var (
+		localWork, idle bool
+		conversation    *string
+	)
+	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT c.uuid::text, COALESCE(c.source = 'local_work', FALSE),
+       h.state = 'CLOUD_IDLE' AND NOT h.reclaim_pending
+       AND NOT EXISTS (SELECT 1 FROM %[1]s.chat_message_group AS g
+                       WHERE g.conversation_id = c.id AND g.is_streaming)
+FROM elitea_runtime.workspace_handoffs AS h
+LEFT JOIN %[1]s.chat_conversations AS c ON c.uuid = h.conversation_uuid
+WHERE h.project_id = $1 AND h.conversation_uuid = $2::uuid AND h.deleted_at IS NULL`, schema),
+		projectID, conversationUUID).Scan(&conversation, &localWork, &idle)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (conversation == nil || !localWork)) {
+		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrNotFound
+	}
+	if err != nil {
+		if undefinedColumnOrTable(err) {
+			return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrNotFound
+		}
+		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread: %w", err)
+	}
+	out, err := threadParticipant(ctx, r.pool, projectID, *conversation)
+	if err != nil {
+		return handoffcontinue.ThreadTarget{}, err
+	}
+	out.Idle = idle
+	return out, nil
+}
+
+// RunActive reports whether the run of an execution of the project still
+// goes: its newest generation is not settled, or it is the root of a chain
+// that has not ended. A schedule's overlap check reads it for the run its
+// last occurrence started (last_execution_id).
+func (r *WorkspaceHandoffsRepository) RunActive(ctx context.Context, projectID int64, executionID string) (bool, error) {
+	if executionID == "" {
+		return false, nil
+	}
+	var active bool
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS (
+           SELECT 1 FROM elitea_runtime.run_chains AS c
+           WHERE c.root_execution_id = $1 AND c.project_id = $2 AND c.end_state IS NULL)
+    OR COALESCE((
+           SELECT j.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'QUARANTINED')
+           FROM elitea_runtime.execution_jobs AS j
+           WHERE j.execution_id = $1 AND j.resource_project_id = $2
+           ORDER BY j.generation DESC LIMIT 1), FALSE)`,
+		executionID, projectID).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("workspace handoff: read the previous run: %w", err)
+	}
+	return active, nil
 }
 
 var (
 	_ workspacehandoff.CloudRunReader = (*WorkspaceHandoffsRepository)(nil)
 	_ handoffcontinue.Targets         = (*WorkspaceHandoffsRepository)(nil)
+	_ handoffcontinue.Threads         = (*WorkspaceHandoffsRepository)(nil)
 	_ handoffcontinue.Chains          = (*RunChainsRepository)(nil)
 )
 

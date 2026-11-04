@@ -244,6 +244,7 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 		SIOEvent: "chat_predict", Input: input,
 		TriggerOrigin:     request.TriggerOrigin,
 		HandoffCompletion: request.HandoffCompletion.Clone(),
+		CloudThread:       target.CloudWorkspace,
 		CurrentAdhocTurn: &CurrentAdhocTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID: request.ConversationUUID, TargetParticipantID: target.TargetParticipantID,

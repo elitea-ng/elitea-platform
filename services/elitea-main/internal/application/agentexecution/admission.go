@@ -62,6 +62,12 @@ type SubmitRequest struct {
 	// Not part of the request digest: the question id is derived from the
 	// send.
 	HandoffCompletion *HandoffCompletion
+	// CloudThread: the turn is a new question of a thread handed off to the
+	// cloud executor, which the resolve found CLOUD_IDLE (ADR-0034 decision
+	// 7). The admission transaction checks CLOUD_IDLE again under the
+	// handoff row's share lock, so the check and the start are one step
+	// (ADR-0045 decision 9). Not part of the request digest.
+	CloudThread bool
 }
 
 // AssertedScope is the toolkit scope of a verified delegation assertion.
@@ -140,6 +146,9 @@ type Admission struct {
 	// HandoffCompletion: the transaction completes this send first and
 	// starts the cloud turn on the new execution (handoff_continue.go).
 	HandoffCompletion *HandoffCompletion
+	// CloudThread: the transaction checks that the handed-off thread is
+	// still CLOUD_IDLE before it writes the turn (SubmitRequest.CloudThread).
+	CloudThread bool
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -310,6 +319,7 @@ func (s *AdmissionService) Submit(
 		BindingVersionID:      bindingVersionID(request.Release, 0),
 		Unattended:            request.Unattended.Clone(),
 		HandoffCompletion:     request.HandoffCompletion.Clone(),
+		CloudThread:           request.CloudThread && request.HandoffCompletion == nil,
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)

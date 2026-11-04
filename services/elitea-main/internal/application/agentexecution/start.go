@@ -436,6 +436,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		AssertedScope:     request.AssertedScope,
 		Release:           target.Release.Clone(),
 		HandoffCompletion: request.HandoffCompletion.Clone(),
+		CloudThread:       target.CloudWorkspace,
 		CurrentTurn: &CurrentApplicationTurn{
 			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
 			ConversationUUID:     request.ConversationUUID,
