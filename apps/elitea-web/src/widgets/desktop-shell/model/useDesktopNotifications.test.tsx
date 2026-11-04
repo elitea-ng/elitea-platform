@@ -78,8 +78,15 @@ describe('useDesktopNotifications', () => {
     const { hook, notices, arrive } = mount();
     await waitFor(() => expect(hook.result.current.feed.rows).toHaveLength(1));
     await arrive(row(2, 'Nightly report is ready'));
-    await waitFor(() => expect(notices.shown).toEqual([{ title: 'Agent run finished', body: 'Nightly report is ready' }]));
+    await waitFor(() => expect(notices.shown).toEqual([{ title: 'Agent run finished', body: 'Nightly report is ready', about: { id: '2', eventType: 'agent_run_finished' } }]));
     expect(notices.unread).toBe(2);
+  });
+
+  it('names a run_finished row to the host, with its origin and the fixed text for its outcome', async () => {
+    const { hook, notices, arrive } = mount();
+    await waitFor(() => expect(hook.result.current.feed.rows).toHaveLength(1));
+    await arrive({ id: 3, event_type: 'run_finished', created_at: '2026-11-01T10:00:00Z', is_seen: false, meta: { outcome: 'failed', origin: 'cloud', conversation_uuid: 'c-1' } } as unknown as ReturnType<typeof row>);
+    await waitFor(() => expect(notices.shown).toEqual([{ title: 'Run failed', body: 'A run stopped with an error.', about: { id: '3', eventType: 'run_finished', origin: 'cloud' } }]));
   });
 
   it('stays quiet when system notifications are turned off', async () => {

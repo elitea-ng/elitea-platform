@@ -16,6 +16,7 @@ import type { Notification } from '@/entities/notification';
 import type { FullNotificationMeta } from '../api/normalize';
 import { parseNotificationMessage, resolveNotificationHref } from '../lib/routes';
 import { LegacyNotificationMessage } from './LegacyNotificationMessage';
+import { RunFinishedMessage } from './RunFinishedMessage';
 
 export interface NotificationMessageProps {
   readonly notification: Omit<Notification, 'meta'> & { readonly meta?: FullNotificationMeta };
@@ -38,6 +39,19 @@ export function NotificationMessage(props: NotificationMessageProps): ReactEleme
   const segments = useMemo(() => parseNotificationMessage(message), [message]);
   const resolvedHref = resolveNotificationHref(notification.eventType, notification.meta, notification.projectId);
   const linkColor = notification.isSeen ? theme.vars.palette.text.linkSeen : theme.vars.palette.text.link;
+
+  if (notification.eventType === 'run_finished') {
+    return (
+      <RunFinishedMessage
+        meta={notification.meta}
+        projectId={notification.projectId}
+        textVariant={textVariant}
+        textColor={textColor}
+        linkColor={linkColor}
+        onCloseNotificationList={onCloseNotificationList}
+      />
+    );
+  }
 
   if (message !== undefined && message !== '') {
     return (

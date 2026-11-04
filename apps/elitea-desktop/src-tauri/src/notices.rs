@@ -7,8 +7,14 @@
 //! it asks; the host decides. The text is the deployment's, so it is
 //! length-checked, stripped of control and bidi characters and shortened
 //! before the OS shows it, and nothing is shown while the window is in front.
+//!
+//! The page also says which notification a notice is for. The host shows
+//! one notice per notification, and none for a `run_finished` (ADR-0045
+//! decision 5) that did not run in the cloud: a chain that ran on this
+//! computer was already noticed when its last turn ended (`attention.rs`).
 
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use tauri::State;
 
@@ -22,6 +28,10 @@ pub const MAX_BODY: usize = 1000;
 pub const SHOWN_BODY: usize = 120;
 /// The largest unread count the badge carries.
 pub const MAX_UNREAD: u32 = 999;
+/// Notification ids remembered as already shown; past this the oldest are dropped.
+const MAX_REMEMBERED: usize = 512;
+/// The longest notification id the page may name, in characters.
+const MAX_ID: usize = 64;
 
 /// Why a notice was refused. Its text is what the page gets.
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
@@ -96,6 +106,50 @@ pub fn notice_text(title: &str, body: &str) -> Result<(String, String), NoticeEr
     Ok((title, shorten(&sanitize(body), SHOWN_BODY)))
 }
 
+/// The notifications already shown, so that each one shows once.
+#[derive(Default)]
+pub struct NoticeFilter {
+    shown: Mutex<Shown>,
+}
+
+#[derive(Default)]
+struct Shown {
+    ids: HashSet<String>,
+    order: VecDeque<String>,
+}
+
+impl NoticeFilter {
+    /// Whether a notice for this notification may show, remembering it if so.
+    ///
+    /// - A `run_finished` shows only when its `origin` is `cloud` (a cloud
+    ///   chain or a handed-off thread). Any other origin, or none, is this
+    ///   computer's own chain, already noticed by the host.
+    /// - A notification `id` shows once. A notice without an id (an older
+    ///   page) is not remembered.
+    pub fn admit(&self, id: Option<&str>, event_type: Option<&str>, origin: Option<&str>) -> bool {
+        if event_type == Some("run_finished") && origin != Some("cloud") {
+            return false;
+        }
+        let Some(id) = id.filter(|id| !id.is_empty() && id.chars().count() <= MAX_ID) else {
+            return true;
+        };
+        let mut shown = self
+            .shown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !shown.ids.insert(id.to_owned()) {
+            return false;
+        }
+        shown.order.push_back(id.to_owned());
+        if shown.order.len() > MAX_REMEMBERED
+            && let Some(oldest) = shown.order.pop_front()
+        {
+            shown.ids.remove(&oldest);
+        }
+        true
+    }
+}
+
 /// The unread count the badge carries.
 #[must_use]
 pub fn clamp_unread(unread: u32) -> usize {
@@ -105,21 +159,35 @@ pub fn clamp_unread(unread: u32) -> usize {
 
 /// Show a platform notification while the window is not in front.
 ///
+/// `notification_id`, `event_type` and `origin` name the notification (see
+/// [`NoticeFilter::admit`]); all three are optional.
+///
 /// # Errors
 ///
 /// The title or body is too long, or the title is empty (see
-/// [`notice_text`]). Not showing it (window in front, permission refused) is
-/// not an error.
+/// [`notice_text`]). Not showing it (window in front, permission refused,
+/// shown before, a local `run_finished`) is not an error.
 // Async so it runs off the main thread: the first notice may ask the OS for
 // permission, as `Attention::notify` does off the emitting thread.
 #[tauri::command(rename_all = "snake_case")]
 #[allow(clippy::needless_pass_by_value)] // tauri's extractors and owned args
 pub async fn platform_notice_show(
     attention: State<'_, Arc<Attention>>,
+    filter: State<'_, NoticeFilter>,
     title: String,
     body: String,
+    notification_id: Option<String>,
+    event_type: Option<String>,
+    origin: Option<String>,
 ) -> Result<(), String> {
     let (title, body) = notice_text(&title, &body).map_err(|e| e.to_string())?;
+    if !filter.admit(
+        notification_id.as_deref(),
+        event_type.as_deref(),
+        origin.as_deref(),
+    ) {
+        return Ok(());
+    }
     attention.show_unfocused(&title, &body);
     Ok(())
 }
@@ -201,5 +269,46 @@ mod tests {
             usize::MAX,
             "saturates"
         );
+    }
+
+    #[test]
+    fn notice_run_finished_shows_for_cloud_origin_only() {
+        let filter = NoticeFilter::default();
+        assert!(filter.admit(Some("1"), Some("run_finished"), Some("cloud")));
+        assert!(!filter.admit(Some("2"), Some("run_finished"), Some("desktop")));
+        assert!(
+            !filter.admit(Some("3"), Some("run_finished"), None),
+            "no origin is not the cloud"
+        );
+        // Other kinds do not depend on an origin.
+        assert!(filter.admit(Some("4"), Some("chat_user_mentioned"), None));
+        // A dropped local row was not remembered as shown.
+        assert!(filter.admit(Some("2"), Some("chat_user_mentioned"), None));
+    }
+
+    #[test]
+    fn notice_shows_once_per_notification() {
+        let filter = NoticeFilter::default();
+        assert!(filter.admit(Some("7"), Some("run_finished"), Some("cloud")));
+        assert!(!filter.admit(Some("7"), Some("run_finished"), Some("cloud")));
+        assert!(filter.admit(Some("8"), Some("run_finished"), Some("cloud")));
+        // Without an id (an older page) every notice shows.
+        assert!(filter.admit(None, None, None));
+        assert!(filter.admit(None, None, None));
+        // An over-long id is treated as none: shown, not remembered.
+        let long = "x".repeat(MAX_ID + 1);
+        assert!(filter.admit(Some(&long), None, None));
+        assert!(filter.admit(Some(&long), None, None));
+    }
+
+    #[test]
+    fn notice_filter_forgets_the_oldest_past_its_bound() {
+        let filter = NoticeFilter::default();
+        for id in 0..=MAX_REMEMBERED {
+            assert!(filter.admit(Some(&id.to_string()), None, None));
+        }
+        // "0" was dropped to make room; the newest is still remembered.
+        assert!(filter.admit(Some("0"), None, None));
+        assert!(!filter.admit(Some(&MAX_REMEMBERED.to_string()), None, None));
     }
 }

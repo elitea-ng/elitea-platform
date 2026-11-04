@@ -25,4 +25,9 @@ describe('systemNoticeText', () => {
     expect(body).not.toContain('](');
     expect(body).toContain('to take it back');
   });
+
+  it('gives a run_finished row the fixed text for its outcome (the row has no message)', () => {
+    const notification = { id: '2', eventType: 'run_finished', meta: { outcome: 'limit_reached', origin: 'cloud' } } as unknown as NormalizedNotification;
+    expect(systemNoticeText(notification)).toEqual({ title: 'Run stopped at its limit', body: 'A run reached its chain limit.' });
+  });
 });

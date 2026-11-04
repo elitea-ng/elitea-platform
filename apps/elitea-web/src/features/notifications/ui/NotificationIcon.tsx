@@ -107,6 +107,13 @@ function indexDataChangedIcon(theme: Theme, meta: FullNotificationMeta | undefin
   return hasError ? errorRejected(theme) : successPublished(theme);
 }
 
+/** `run_finished` (ADR-0045): by outcome — done, failed, or waiting / stopped at a limit. */
+function runFinishedIcon(theme: Theme, meta: FullNotificationMeta | undefined): ReactElement | null {
+  if (meta?.outcome === 'failed') return errorRejected(theme);
+  if (meta?.outcome === 'waiting' || meta?.outcome === 'limit_reached') return attentionOnModeration(theme);
+  return successPublished(theme);
+}
+
 function noIcon(): null {
   return null;
 }
@@ -216,6 +223,7 @@ const ICON_RENDERERS: Record<NotificationEventType, IconRenderer> = {
   comments: commentsIcon,
   reward_new_level: rewardNewLevelIcon,
   contributor_request_for_publish_approve: noIcon,
+  run_finished: runFinishedIcon,
 };
 
 /**

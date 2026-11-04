@@ -103,6 +103,13 @@ export interface NotificationMetaWire {
   readonly updated?: number;
   readonly reindex?: boolean;
   readonly initiator?: string;
+  /* run_finished (ADR-0045 decision 5, U3 contract §1) — ids and an outcome, never content. */
+  readonly outcome?: string;
+  readonly limit?: string;
+  readonly conversation_uuid?: string;
+  readonly thread_id?: string;
+  readonly origin?: string;
+  readonly continuations?: number;
   readonly [key: string]: unknown;
 }
 

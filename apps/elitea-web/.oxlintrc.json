@@ -513,6 +513,21 @@
       "rules": { "elitea/no-adhoc-envelope-unwrap": "off" }
     },
     {
+      // The web push service worker (ADR-0045 decision 6) is a plain script
+      // served verbatim from public/: no TypeScript program includes it, so
+      // every value in it reads as an error type to the type-aware rules.
+      // Its behaviour is pinned by
+      // src/features/notifications/lib/pushServiceWorker.test.ts instead.
+      "files": ["public/push-sw.js"],
+      "rules": {
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off"
+      }
+    },
+    {
       // R-A6 scope: `items` here is a ControlsDropdown MENU row's children,
       // not an API list envelope — the rule matches on the key name alone and
       // cannot tell the two apart. Narrowed to the one component that models

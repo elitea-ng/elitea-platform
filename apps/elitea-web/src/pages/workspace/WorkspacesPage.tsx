@@ -27,6 +27,7 @@ import { t } from '@/shared/i18n';
 import { folderContextActions, ProjectPickerSheet, ShowSidebarButton, TitleBarSpacer, useAppIpc, useContextMenu, useDesktopLayout, type ContextAction } from '@/widgets/desktop-shell';
 
 import { useBindableProjects } from './useBindableProjects';
+import { useOpenThreadFromSearch } from './useOpenThreadFromSearch';
 
 const LIST_KEY = ['workspace', 'list'] as const;
 
@@ -52,6 +53,7 @@ export default function WorkspacesPage(): React.JSX.Element {
   const appIpc = useAppIpc();
   const showMenu = useContextMenu();
   const [picking, setPicking] = useState<Workspace | null>(null);
+  useOpenThreadFromSearch(ipc);
 
   const list = useQuery({ queryKey: LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
   const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: LIST_KEY });

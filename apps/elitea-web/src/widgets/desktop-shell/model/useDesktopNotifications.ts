@@ -7,7 +7,9 @@
  *  - the "Take back requested" banner — the latest unread rows;
  *  - native OS notices — one per notification that arrives while the window
  *    is in the background (the host skips them while it is focused), unless
- *    Settings › Notifications turned "Show system notifications" off;
+ *    Settings › Notifications turned "Show system notifications" off (the
+ *    host drops a `run_finished` that ran on this computer — it noticed that
+ *    chain itself — and any row it already showed);
  *  - the Dock badge — the unread count, beside the approvals waiting.
  *
  * It listens like the web bell does: the stream signals, the list says what;
@@ -75,7 +77,7 @@ function useNativeNotices(rows: readonly NormalizedNotification[] | undefined, h
     if (host === undefined || !systemNoticesEnabled()) return;
     for (const row of fresh.slice(0, MAX_NOTICES_AT_ONCE)) {
       const { title, body } = systemNoticeText(row);
-      void host.show(title, body).catch(() => undefined);
+      void host.show(title, body, { id: row.id, eventType: String(row.eventType), origin: row.meta?.origin }).catch(() => undefined);
     }
   }, [rows, host]);
 }
