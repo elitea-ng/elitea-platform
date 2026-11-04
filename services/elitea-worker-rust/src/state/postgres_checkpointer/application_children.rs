@@ -47,6 +47,22 @@ impl ApplicationBranchCatalog {
         Self { by_parent }
     }
 
+    /// The family of one fan-out child. A Map item whose worker owns no
+    /// application subgraph (a State Modifier) has none: every node that
+    /// owns one (an Agent or an inline LLM worker) is admitted by path, so
+    /// a Map miss is exactly a path-free worker and is given no thread
+    /// (least authority). Any other miss is refused.
+    fn for_child(
+        &self,
+        activation: &ParallelActivation,
+        node: &str,
+    ) -> Result<&[String], GraphError> {
+        match self.for_owned_node(&activation.root_thread_id, node) {
+            Err(_) if activation.map.is_some() => Ok(&[]),
+            result => result,
+        }
+    }
+
     fn for_owned_node(&self, parent_thread: &str, node: &str) -> Result<&[String], GraphError> {
         self.by_parent
             .get(parent_thread)
@@ -291,9 +307,7 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         origin: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         let parent = self.for_thread(&activation.root_thread_id)?;
-        let paths = self
-            .branch_paths
-            .for_owned_node(&activation.root_thread_id, branch.node())?;
+        let paths = self.branch_paths.for_child(activation, branch.node())?;
         // The compiler admits the branch identity and frozen definition first.
         // The parent adapter adds its opaque claim scope to the hashed lineage.
         let child = parent
@@ -326,7 +340,7 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         for request in children {
             let paths = self
                 .branch_paths
-                .for_owned_node(&activation.root_thread_id, request.branch.node())?;
+                .for_child(activation, request.branch.node())?;
             let thread_id = parent.branch_thread_id(
                 activation,
                 request.branch,

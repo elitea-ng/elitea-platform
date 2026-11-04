@@ -1148,3 +1148,136 @@ async fn fanout_restore_and_lease_loss_log_no_payload_or_identity() {
         assert!(!text.contains(&value), "a log line exposed {value}");
     }
 }
+
+/// A Map pipeline whose worker `worker` is a node of `worker_yaml`; the
+/// admitted application paths come from its definition exactly as a run's
+/// session derives them (`session.rs`: Agent nodes plus fan-out LLM nodes).
+fn production_paths(worker_yaml: &str) -> Vec<String> {
+    let yaml = format!(
+        "entry_point: map_items\nstate:\n  items: list\n  mapped: list\n  item_result: str\nnodes:\n  - {{id: map_items, type: map, worker: worker, source: items, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 1, reduction: ordered_collection, transition: END}}\n  - {worker_yaml}\n"
+    );
+    let definition = crate::agents::graph::compiler::PipelineDefinition::from_yaml(&yaml)
+        .expect("a Map pipeline");
+    definition
+        .application_node_ids()
+        .chain(definition.parallel_llm_branch_ids())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Runs the Map fixture through the production child factory
+/// (`ApplicationCheckpointers`, the one a run's session binds) with the
+/// admitted `paths`; answers the run's output and the item threads the
+/// factory admitted.
+async fn run_through_the_production_factory(
+    paths: &[String],
+) -> (serde_json::Value, BTreeSet<String>) {
+    let database_url = crate::test_pg::database_url_var(TEST_DATABASE_URL).expect("database url");
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let writer = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer(
+            "execution-1",
+            "claim-execution-1",
+            1,
+            1,
+            DEFINITION,
+            [0x61; 32],
+        ),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate the execution's root checkpoint writer");
+    let family = Arc::new(
+        writer
+            .with_application_children(paths.iter().map(String::as_str))
+            .await
+            .expect("admit the pipeline's application paths"),
+    );
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let parent: Arc<dyn ParallelCheckpointAppender> = family.clone();
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
+        family.clone(),
+        Arc::new(LineageWorkers {
+            calls: Arc::clone(&calls),
+            hold: None,
+            hook: None,
+        }),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ));
+    let node = DurableParallelNode::from_source(
+        FanoutSource::Map(MapSource::new(map_definition(), [0x19; 32]).expect("valid Map fixture")),
+        runtime,
+    );
+    let output = node
+        .execute(&map_context())
+        .await
+        .expect("the Map runs through the production factory");
+    assert_eq!(*calls.lock().expect("call log"), vec![0, 1, 2]);
+    let admitted: BTreeSet<String> = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT thread_id FROM elitea_runtime.agent_graph_checkpoints",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("list the activated threads")
+    .into_iter()
+    .collect();
+    (output.updates["mapped"].clone(), admitted)
+}
+
+/// T-2A3 code review (one test per worker family through the production
+/// child factory, not a test double): a State Modifier worker owns no
+/// application subgraph, so its items get the empty family and run. Before
+/// the fix every item was refused at activation ("the owned application
+/// checkpoint family is not admitted").
+#[tokio::test]
+async fn map_state_modifier_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: state_modifier, input: [entity], output: [item_result], template: '{{ entity }}'}",
+    );
+    assert!(!paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, threads) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
+    assert!(
+        !threads.iter().any(|thread| thread.ends_with("/worker")),
+        "{threads:?}"
+    );
+}
+
+/// The saved Agent worker family: the session admits the Agent node by path,
+/// and each item's own Agent subgraph thread is admitted under the item.
+#[tokio::test]
+async fn map_agent_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: agent, tool: Research Agent, input: [entity], input_mapping: {task: {type: fixed, value: Research}}, output: [item_result]}",
+    );
+    assert!(paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, _) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
+}
+
+/// The inline LLM worker family: a Map-owned LLM node is admitted by path
+/// like a Parallel's LLM branch (it runs in its own child family).
+#[tokio::test]
+async fn map_llm_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: llm, input: [entity], input_mapping: {task: {type: fstring, value: 'Draft {entity}'}}, output: [item_result]}",
+    );
+    assert!(paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, _) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
+}

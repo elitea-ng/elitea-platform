@@ -14,7 +14,8 @@ const isMapWorker = (node: YamlPipelineNode): boolean => MAP_WORKER_TYPES.includ
 
 /** Map On Error and Join (v2), as a fixed Parallel's. */
 const MAP_ON_ERROR = ['continue', 'stop'];
-const MAP_JOIN = ['append', 'keyed', 'merge'];
+// A Map never merges: its items all land the same output keys.
+const MAP_JOIN = ['append', 'keyed'];
 
 /** The exact worker scope owns these channels. No state descriptors are created. */
 export function mapOwnedWorkerChannels(document: YamlPipelineDocument, workerId: string): readonly string[] {
@@ -78,18 +79,19 @@ function mapWorkerIssues(document: YamlPipelineDocument, node: YamlPipelineNode,
 /**
  * The v1 shape is `reduction: ordered_collection` (stop on the first failed
  * item, append); the v2 shape is `on_error` and `join`, which default to
- * continue and append. `reduction` with `join` is refused, as the Worker and
- * Main refuse it, and `merge` needs `stop` (map_yaml.rs, compiler.rs
- * validate_fanout_joins).
+ * continue and append. One shape per document: `reduction` with `join` or
+ * `on_error` is refused, and a Map never joins by `merge`, as the Worker and
+ * Main refuse them (map_yaml.rs, limits.go checkMapForms).
  */
 function mapPolicyIssues(node: YamlPipelineNode, check: ExtensionValidator): void {
-  const has = (field: string): boolean => Object.hasOwn(node, field);
+  // A YAML null is an absent key, as the Worker reads it.
+  const has = (field: string): boolean => Object.hasOwn(node, field) && node[field] !== null;
   if (has('reduction')) validateExtensionEnum(node['reduction'], 'reduction', ['ordered_collection'], check);
   if (has('on_error')) validateExtensionEnum(node['on_error'], 'on_error', MAP_ON_ERROR, check);
   if (has('join')) validateExtensionEnum(node['join'], 'join', MAP_JOIN, check);
   if (has('reduction') && has('join')) check.issue('reduction', 'Remove reduction: join: append replaces it.');
-  const onError = has('on_error') ? node['on_error'] : (has('reduction') ? 'stop' : 'continue');
-  if (node['join'] === 'merge' && onError !== 'stop') check.issue('join', 'Merge needs On Error stop.');
+  if (has('reduction') && has('on_error')) check.issue('reduction', 'Remove reduction: On Error and Join replace it.');
+  if (node['join'] === 'merge') check.issue('join', 'A Map cannot merge: every item lands the same output keys. Use append or keyed.');
 }
 function mapIssues(document: YamlPipelineDocument, node: YamlPipelineNode): readonly GraphAdmissionIssue[] {
   const check = extensionValidator(node.id, 'map_yaml.rs::MapNodeDefinition::from_yaml, map_compiler.rs::validate_map_ownership');
@@ -97,7 +99,7 @@ function mapIssues(document: YamlPipelineDocument, node: YamlPipelineNode): read
     ['worker', 'source', 'item', 'index', 'outputs', 'destination', 'max_items', 'max_concurrency'], check);
   mapPolicyIssues(node, check);
   // As a fixed Parallel's output: append lands a list, keyed and merge one object.
-  const destinationTypes = node['join'] === 'keyed' || node['join'] === 'merge' ? ['dict'] : ['list'];
+  const destinationTypes = node['join'] === 'keyed' ? ['dict'] : ['list'];
   validateDeclaredExtensionChannel(document, node['source'], 'source', ['list'], check);
   validateDeclaredExtensionChannel(document, node['destination'], 'destination', destinationTypes, check);
   mapLocalChannels(document, node, check);

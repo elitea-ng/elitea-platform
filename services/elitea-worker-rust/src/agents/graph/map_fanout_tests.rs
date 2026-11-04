@@ -550,7 +550,12 @@ async fn an_item_result_over_its_bound_fails_that_item() {
     let error = run(&harness, json!([0]), "root-child-bound")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("branch '0' failed"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.map.item_failed: item '0' failed"),
+        "{error}"
+    );
 }
 
 /// v1 stops on the first failed item: no later item is admitted, the node
@@ -570,7 +575,12 @@ async fn a_failed_item_under_v1_stop_fails_the_map_by_its_index() {
     let error = run(&harness, json!(["a", "b", "c"]), "root-stop")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("branch '1' failed"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.map.item_failed: item '1' failed"),
+        "{error}"
+    );
     assert_eq!(*harness.runs.lock().unwrap(), vec![0, 1]);
 }
 
@@ -835,22 +845,23 @@ fn v2(join: &str, on_error: &str, destination: &str) -> String {
 fn a_map_join_is_checked_against_its_destination_reducer_at_save_time() {
     const LIST_APPEND: &str = "{type: list, value: [], reducer: append}";
     const DICT_MERGE: &str = "{type: dict, value: {}, reducer: merge}";
-    const KIND: &str = "its destination a list (append) or dict (keyed, merge)";
-    const JOIN: &str = "a Map join does not match its destination reducer or On Error";
+    const KIND: &str = "its destination a list (append) or dict (keyed)";
+    const MERGE: &str = "a Map node cannot join by `merge`";
     for yaml in [
         v2("append", "continue", LIST_APPEND),
         v2("append", "continue", "{type: list, value: []}"),
         v2("keyed", "continue", DICT_MERGE),
-        v2("merge", "stop", DICT_MERGE),
+        v2("keyed", "stop", DICT_MERGE),
     ] {
         PipelineDefinition::from_yaml(&yaml).unwrap_or_else(|error| panic!("{yaml}: {error}"));
     }
-    // A destination of the wrong kind is refused by its type first; a
-    // well-typed join that cannot land (merge needs stop) by the join check.
+    // A destination of the wrong kind is refused by its type; a Map never
+    // joins by merge (its items land the same keys), refused with the reason.
     for (yaml, expected) in [
         (v2("append", "continue", DICT_MERGE), KIND),
         (v2("keyed", "continue", LIST_APPEND), KIND),
-        (v2("merge", "continue", DICT_MERGE), JOIN),
+        (v2("merge", "stop", DICT_MERGE), MERGE),
+        (v2("merge", "continue", DICT_MERGE), MERGE),
     ] {
         let Err(error) = PipelineDefinition::from_yaml(&yaml) else {
             panic!("a join that cannot land compiled: {yaml}");
@@ -967,4 +978,29 @@ fn a_recovery_leaf_may_be_an_unowned_map_but_not_its_worker() {
     let siblings = PipelineDefinition::from_yaml(SIBLINGS).unwrap();
     assert!(siblings.is_unowned_fanout("gather"));
     assert!(!siblings.is_unowned_fanout("workerA"));
+}
+
+/// Code review: an LLM worker's `variable` mapping must read the item, its
+/// index or a broadcast, as an Agent worker's must; a parent key outside the
+/// frozen item input is refused at save time instead of reaching the model
+/// as an empty value.
+#[test]
+fn a_map_llm_worker_mapping_outside_its_item_input_is_refused() {
+    let llm = |source: &str| {
+        PIPELINE.replace(
+            "type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ entity }}-{{ item_index }}'",
+            &format!("type: llm, input: [entity], input_mapping: {{task: {{type: variable, value: {source}}}}}, output: [item_result]"),
+        )
+    };
+    PipelineDefinition::from_yaml(&llm("entity")).expect("the item is readable");
+    let yaml = llm("mapped");
+    let Err(error) = PipelineDefinition::from_yaml(&yaml) else {
+        panic!("an LLM worker mapping a parent key compiled");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("the Map LLM mapping reads outside its frozen item input"),
+        "{error}"
+    );
 }

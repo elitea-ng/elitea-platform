@@ -34,9 +34,9 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
   const join = Object.hasOwn(node, 'join') ? extensionText(node['join']) : 'append';
   const legacyReduction = Object.hasOwn(node, 'reduction');
   // Picking a policy moves a v1 document to the v2 shape in one YAML write:
-  // `reduction` goes (with `join` it is refused) and its stop-on-failure is
-  // kept explicitly, so the meaning never changes silently. Merge needs Stop,
-  // so the two selectors never offer a combination the Worker refuses.
+  // `reduction` goes (with `join` or `on_error` it is refused) and its stop-on-failure is
+  // kept explicitly, so the meaning never changes silently. A Map never merges
+  // (its items land the same keys), so Join offers append and keyed only.
   const changePolicy = (field: 'on_error' | 'join', value: string): void => {
     if (disabled) return;
     if (!context || !Object.hasOwn(node, 'reduction')) {
@@ -92,13 +92,13 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
       {t('pipelines.graphExtensions.addWorkerOutput', 'Add worker output')}
     </Button>
     <SingleSelect label={t('pipelines.graphExtensions.mapOnError', 'On Error')} value={onError} disabled={disabled}
-      options={(join === 'merge' ? ['stop'] : ['continue', 'stop']).map(policyOption)}
+      options={['continue', 'stop'].map(policyOption)}
       onChange={(value) => changePolicy('on_error', value)} />
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapOnErrorHelp', 'Continue keeps the other items and returns partial results. Stop fails the node after running items finish.')}</Typography>
     <SingleSelect label={t('pipelines.graphExtensions.mapJoin', 'Join')} value={join} disabled={disabled}
-      options={(onError === 'stop' ? ['append', 'keyed', 'merge'] : ['append', 'keyed']).map(policyOption)}
+      options={['append', 'keyed'].map(policyOption)}
       onChange={(value) => changePolicy('join', value)} />
-    <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapJoinHelp', 'Append lists the item results in source order, Keyed maps them by item index, Merge combines their outputs and needs Stop.')}</Typography>
+    <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapJoinHelp', 'Append lists the item results in source order. Keyed maps them by item index.')}</Typography>
     <StateChannelSelect label={t('pipelines.graphExtensions.mapDestination', 'Result list state variable')} value={destination}
       types={join === 'append' ? ['list'] : ['dict']} disabled={disabled} change={(value) => change('destination', value)} />
     {legacyReduction && <ExtensionChoice label={t('pipelines.graphExtensions.reduction', 'Reduction')} value={extensionText(node['reduction'])}

@@ -80,3 +80,32 @@ func TestCheckRefusesAMapWithBothReductionAndJoin(t *testing.T) {
 		}
 	}
 }
+
+// A YAML null is an absent key, as the Worker reads it: `reduction` with
+// `join: null` is a v1 Map, not a reduction-and-join refusal.
+func TestCheckReadsANullMapPolicyKeyAsAbsent(t *testing.T) {
+	for _, extra := range []string{
+		"    reduction: ordered_collection\n    join: null\n",
+		"    reduction: ordered_collection\n    join: ~\n",
+		"    reduction: null\n    join: append\n",
+	} {
+		if err := pipelinelimits.Check(mapOver("state_modifier", extra)); err != nil {
+			t.Fatalf("%q: %v", extra, err)
+		}
+	}
+}
+
+// Code review A and B: one shape per document, and a Map never joins by
+// merge (every item lands the same output keys), refused readably at save.
+func TestCheckRefusesAMapMergeJoinAndReductionWithOnError(t *testing.T) {
+	for extra, want := range map[string]string{
+		"    on_error: stop\n    join: merge\n":                   "`merge`",
+		"    join: merge\n":                                       "`merge`",
+		"    reduction: ordered_collection\n    on_error: stop\n": "`on_error`",
+	} {
+		api := mapRefusal(t, extra, pipelinelimits.Check(mapOver("state_modifier", extra)))
+		if !strings.Contains(api.Message, want) || !strings.Contains(api.Message, `Node "each"`) {
+			t.Errorf("%q: message %q", extra, api.Message)
+		}
+	}
+}

@@ -19,8 +19,16 @@ same limits (64 children, 8 concurrent, 16 open cards).
   (Main at save: `PIPELINE_MAP_FORM_UNSUPPORTED`; Worker at bind: `graph.fanout.child_contains_code`).
 - v1 documents (`reduction: ordered_collection`) keep their meaning and digest: stop on the first failed item, and the
   ordered `{index, outputs}` collection written through the destination key's own (overwrite) reducer (M2).
-- v2 documents: `on_error` (continue | stop) and `join` (append | keyed | merge), as Parallel's, landing through the
-  destination's declared reducer, checked at save time. `reduction` with `join` is refused with the fix (M2).
+- v2 documents: `on_error` (continue | stop) and `join` (append | keyed), landing through the destination's declared
+  reducer, checked at save time. One shape per document: `reduction` with `join` (M2) or with `on_error` is refused with
+  the fix ("remove `reduction`") in all three layers.
+  - **Deliberate narrowing of the brief: a Map never joins by `merge`.** Every item lands the same output keys, so a
+    merge of 2 or more items always conflicts (`graph.fanout.join_merge_conflict`), and only after every item ran. It is
+    refused readably at save in all three layers (`map_yaml.rs` `MAP_JOIN_MERGE`; Main `PIPELINE_MAP_FORM_UNSUPPORTED`;
+    the Web offers append and keyed only). The shared `plan::land` is unchanged.
+  - No saved document can hold `reduction` with `on_error`: on main (`0c41d5b65`) the Map YAML was
+    `#[serde(deny_unknown_fields)]` with no `on_error` field
+    (`services/elitea-worker-rust/src/agents/graph/map_yaml.rs:12-13`), so such a document never compiled.
 - A Map item's delegated sign-in meets the same `credential_unavailable` gate as a Parallel member (M1).
 - An empty source lands an empty collection and starts no child.
 
@@ -90,6 +98,16 @@ admitted" (commit 9).
   `elitea.graph.parallel.occurrence.v3`, read back only by the same adapter; a restore compares the whole activation,
   `map` included. The `map` field is present only for a Map (skipped when absent, so Parallel bytes are unchanged:
   `a_parallel_source_never_carries_the_map_identity`). Frame labels never include it.
+- **Through the production child factory**, one test per worker family on real PostgreSQL (the code review found
+  that a Map State Modifier or LLM worker was refused at activation by `ApplicationCheckpointers`, which every other
+  Map test bypassed with a test double): `map_state_modifier_items_run_through_the_production_application_factory`,
+  `map_agent_items_run_through_the_production_application_factory`,
+  `map_llm_items_run_through_the_production_application_factory`
+  (`src/state/postgres_checkpointer_tests/fanout_lineage.rs`); the admitted paths are derived from the pipeline
+  definition exactly as the session derives them. The fix: Map-owned LLM workers are admitted fan-out paths
+  (`src/agents/graph/compiler.rs` `parallel_llm_branch_ids`), and a Map item whose worker owns no subgraph gets the
+  empty family, only when the activation carries the Map identity (`src/state/postgres_checkpointer/application_children.rs`
+  `for_child`).
 - Completed items are never re-run after a takeover by a new execution, and lease loss mid-item records no failure
   and a later claim completes: `map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_again`,
   `map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes` (real PostgreSQL).
@@ -245,6 +263,16 @@ Changed (own branch test, not from main): ID a_map_child_on_the_shared_adapter_k
 
 Counts (commit 6): deleted 8 (5 + 2 + 1), added 4 (MF: empty Map, siblings, saved child pipeline, recovery leaf),
 changed 1 (ID pinned vectors).
+
+## Code review (`/code-review` high on the full diff)
+
+Ten findings, triaged in `handoffs/point5-wave1-20261008/map/REVIEW-CODE-20261104.md`: the production-factory refusal,
+the LLM-worker mapping check, the Map failure wording (`graph.map.item_failed`), the repeated source reads and per-item
+worker checks, the `join: null` drift between Main and the Worker, and the Web grouping scope and order are fixed with
+tests; `merge` and `reduction` + `on_error` are refused (above). Kept, with reasons: the shared pause text
+`Parallel branches paused.` (a protocol sentinel the Web matches to hide the park summary,
+`apps/elitea-web/src/features/chat-messages/lib/hitlInterrupts.ts:240`), and the constant-size double configuration
+check on the node (no I/O; Parallel tests rely on the order).
 
 ## Follow-ups
 

@@ -45,3 +45,24 @@ describe('ApplicationAnswerThinking status grouping', () => {
     expect(summaries()).toHaveLength(16);
   });
 });
+
+describe('ApplicationAnswerThinking grouping keeps other instances and the timeline', () => {
+  const coord = (id: string, name: string) => ({ id, type: 'llm', name, status: 'complete', content: name, created_at: at, timestamp: at });
+  const named = (name: string, ordinal: number) => ({ ...item(ordinal, 'complete'), id: `${name}-${ordinal}`, name, original_name: name, parent_agent_call_id: `${name}-${ordinal}` });
+
+  it('does not group two fan-outs that are each 16 or fewer', () => {
+    const list = [...Array.from({ length: 10 }, (_, i) => named('Left', i + 1)), ...Array.from({ length: 8 }, (_, i) => named('Right', i + 1))];
+    renderWithTheme(<ApplicationAnswerThinking isStreaming actions={actions(list)} />);
+    expect(summaries().some((text) => /^(Waiting|Running|Failed|Completed) \(/u.test(text ?? ''))).toBe(false);
+    expect(summaries()).toHaveLength(18);
+  });
+
+  it('groups only the large fan-out, in place, and keeps the coordinator order', () => {
+    const list = [coord('c1', 'Plan'), ...Array.from({ length: 17 }, (_, i) => item(i + 1, 'complete')), coord('c2', 'Summarise')];
+    renderWithTheme(<ApplicationAnswerThinking isStreaming actions={actions(list)} />);
+    expect(summaries().filter((text) => /^(Waiting|Running|Failed|Completed) \(/u.test(text ?? ''))).toEqual(['Completed (17)']);
+    const order = screen.getAllByText(/^(Plan|Summarise|Worker)$/u).map((node) => node.textContent);
+    expect(order[0]).toBe('Plan');
+    expect(order.at(-1)).toBe('Summarise');
+  });
+});

@@ -2,7 +2,10 @@ use elitea_agent_runtime::graph::fanout::plan::{JoinMode, OnError};
 use ring::digest;
 use serde::Serialize;
 
-use super::{MAP_REDUCTION_AND_JOIN, MapNodeDefinition, MapYamlError};
+use super::{
+    MAP_JOIN_MERGE, MAP_REDUCTION_AND_JOIN, MAP_REDUCTION_AND_ON_ERROR, MapNodeDefinition,
+    MapYamlError,
+};
 use crate::agents::graph::map_reduce::{MapJoin, MapOnError, MapPolicy, MapReduction};
 
 const NODE: &str = "id: map_entities\ntype: map\nworker: render\nsource: entities\nitem: entity\nindex: item_index\nbroadcast: [tone]\noutputs: [item_result]\ndestination: mapped\nmax_items: 64\nmax_concurrency: 4\n";
@@ -94,11 +97,6 @@ fn a_v2_map_reads_every_on_error_and_join() {
             OnError::Continue,
             JoinMode::Keyed,
         ),
-        (
-            "on_error: stop\njoin: merge\n",
-            OnError::Stop,
-            JoinMode::Merge,
-        ),
     ] {
         let node = MapNodeDefinition::from_yaml(&document(extra)).expect(extra);
         assert_eq!(
@@ -109,15 +107,34 @@ fn a_v2_map_reads_every_on_error_and_join() {
     }
 }
 
+/// One shape per document (code review B): `reduction` with an explicit
+/// `on_error` is refused with the fix, never read silently as v2. No saved
+/// document can hold it: main's Map YAML was `deny_unknown_fields` with no
+/// `on_error` field, so such a document never compiled.
 #[test]
-fn reduction_with_an_explicit_on_error_is_a_v2_append() {
-    let node = MapNodeDefinition::from_yaml(&document(
+fn reduction_with_an_explicit_on_error_is_refused_with_the_fix() {
+    let error = MapNodeDefinition::from_yaml(&document(
         "reduction: ordered_collection\non_error: continue\n",
     ))
-    .expect("compiles");
-    assert_eq!(node.runtime().on_error(), OnError::Continue);
-    assert_eq!(node.runtime().join(), JoinMode::Append);
-    assert_ne!(node.config_digest(), v1_digest());
+    .err()
+    .expect("refused");
+    assert_eq!(error, MapYamlError::ReductionAndOnError);
+    assert!(MAP_REDUCTION_AND_ON_ERROR.contains("remove `reduction`"));
+}
+
+/// A Map joins by `append` or `keyed` only (code review A): its items all
+/// land the same output keys, so a merge always conflicts after every item
+/// ran.
+#[test]
+fn a_map_join_by_merge_is_refused_with_the_reason() {
+    for extra in ["join: merge\n", "on_error: stop\njoin: merge\n"] {
+        assert_eq!(
+            MapNodeDefinition::from_yaml(&document(extra)).err(),
+            Some(MapYamlError::JoinMerge),
+            "{extra}"
+        );
+    }
+    assert!(MAP_JOIN_MERGE.contains("use `append` or `keyed`"));
 }
 
 // M2: a document that could mean two collections is refused readably,

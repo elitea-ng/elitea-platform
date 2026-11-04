@@ -62,21 +62,18 @@ const optionsOf = async (user: ReturnType<typeof userEvent.setup>, screen: Retur
 afterEach(cleanup);
 
 describe('Map On Error and Join', () => {
-  it('offers merge only with stop and writes the exact YAML keys', async () => {
+  it('offers append and keyed (a Map never merges) and writes the exact YAML keys', async () => {
     const screen = renderExtensionCard(EditableMapSettings, mapYaml(''));
     const user = userEvent.setup();
     expect(await screen.findByRole('combobox', { name: 'On Error' })).toHaveTextContent('continue');
-    let join = await optionsOf(user, screen, 'Join');
-    expect(join.values).toEqual(['append', 'keyed']);
-    await user.click(within(join.listbox).getByRole('option', { name: 'append' }));
     const onError = await optionsOf(user, screen, 'On Error');
+    expect(onError.values).toEqual(['continue', 'stop']);
     await user.click(within(onError.listbox).getByRole('option', { name: 'stop' }));
     expect(owner()).toMatchObject({ on_error: 'stop' });
-    join = await optionsOf(user, screen, 'Join');
-    expect(join.values).toEqual(['append', 'keyed', 'merge']);
-    await user.click(within(join.listbox).getByRole('option', { name: 'merge' }));
-    expect(owner()).toMatchObject({ on_error: 'stop', join: 'merge' });
-    expect((await optionsOf(user, screen, 'On Error')).values).toEqual(['stop']);
+    const join = await optionsOf(user, screen, 'Join');
+    expect(join.values).toEqual(['append', 'keyed']);
+    await user.click(within(join.listbox).getByRole('option', { name: 'keyed' }));
+    expect(owner()).toMatchObject({ on_error: 'stop', join: 'keyed' });
   });
 
   it('moves a v1 document to v2 without changing its meaning', async () => {

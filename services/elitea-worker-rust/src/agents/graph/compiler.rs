@@ -72,7 +72,10 @@ use elitea_agent_runtime::graph::fanout::plan::JoinMode;
 mod map_compiler;
 #[path = "parallel_compiler.rs"]
 mod parallel_compiler;
-use super::map_yaml::{MAP_REDUCTION_AND_JOIN, MapNodeDefinition, MapYamlError};
+use super::map_yaml::{
+    MAP_JOIN_MERGE, MAP_REDUCTION_AND_JOIN, MAP_REDUCTION_AND_ON_ERROR, MapNodeDefinition,
+    MapYamlError,
+};
 use super::{pipeline_completed_event, pipeline_result_event};
 use map_compiler::validate_map_ownership;
 pub(crate) use parallel_compiler::refuse_child_parallel;
@@ -1314,11 +1317,15 @@ impl PipelineDefinition {
         })
     }
 
-    /// The inline LLM nodes a fixed Parallel owns as branches: each runs in
-    /// its own branch checkpoint family, like an Agent branch.
+    /// The inline LLM nodes a fan-out owns as children (a fixed Parallel's
+    /// branches, a Map's worker): each runs in its own child checkpoint
+    /// family, like an Agent child.
     pub(crate) fn parallel_llm_branch_ids(&self) -> impl Iterator<Item = &str> {
         self.nodes.iter().filter_map(|node| match node {
-            PipelineNodeDefinition::Llm(node) if self.parallel_owned_nodes.contains(node.id()) => {
+            PipelineNodeDefinition::Llm(node)
+                if self.parallel_owned_nodes.contains(node.id())
+                    || self.map_owned_nodes.contains(node.id()) =>
+            {
                 Some(node.id())
             }
             _ => None,
@@ -2706,6 +2713,10 @@ fn parse_pipeline_node(
                 MapYamlError::ReductionAndJoin => {
                     PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_JOIN)
                 }
+                MapYamlError::ReductionAndOnError => {
+                    PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_ON_ERROR)
+                }
+                MapYamlError::JoinMerge => PipelineConfigurationError::Invalid(MAP_JOIN_MERGE),
                 MapYamlError::Invalid => {
                     PipelineConfigurationError::Invalid("a Map node is invalid")
                 }
@@ -2808,8 +2819,8 @@ fn validate_node_state(
     match node {
         PipelineNodeDefinition::Map(node) => {
             let map = node.runtime();
-            // As a Parallel output: append (v1 included) lands the ordered
-            // collection, keyed and merge land one object.
+            // Append (v1 included) lands the ordered collection, keyed one
+            // object (a Map never merges: its items share their keys).
             let destination = match map.join() {
                 JoinMode::Append => "list",
                 JoinMode::Keyed | JoinMode::Merge => "dict",
@@ -2820,7 +2831,7 @@ fn validate_node_state(
                 || builtin_state_key(&map.destination)
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "a Map source must be a declared business list and its destination a list (append) or dict (keyed, merge)",
+                    "a Map source must be a declared business list and its destination a list (append) or dict (keyed)",
                 ));
             }
         }

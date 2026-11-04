@@ -665,9 +665,14 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
         self.validate_source(source)?;
         let branches = source.children(context)?;
         // Children that come from state are checked here, at activation.
+        // Validated once per distinct node: a Map's items all run its one
+        // worker, so 64 items cost one worker check, not 64.
         if source.declared_children().is_none() {
+            let mut checked = BTreeSet::new();
             for branch in branches.iter() {
-                self.graphs.validate_branch(branch)?;
+                if checked.insert(branch.node()) {
+                    self.graphs.validate_branch(branch)?;
+                }
             }
         }
         let inputs = self.project_inputs(activation, source, &branches, &context.state)?;
@@ -2172,10 +2177,7 @@ impl DurableParallelNode {
                 }
                 return Err(GraphError::NodeExecutionFailed {
                     node: self.source.id().to_owned(),
-                    message: format!(
-                        "graph.parallel.branch_failed: branch '{key}' failed after all admitted branches drained ({})",
-                        failure.code,
-                    ),
+                    message: self.source.child_failure(&key, &failure.code),
                 });
             }
         };

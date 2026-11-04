@@ -4712,7 +4712,7 @@
   "pipelines.graphExtensions.mapOnError": "On Error",
   "pipelines.graphExtensions.mapOnErrorHelp": "Continue keeps the other items and returns partial results. Stop fails the node after running items finish.",
   "pipelines.graphExtensions.mapJoin": "Join",
-  "pipelines.graphExtensions.mapJoinHelp": "Append lists the item results in source order, Keyed maps them by item index, Merge combines their outputs and needs Stop.",
+  "pipelines.graphExtensions.mapJoinHelp": "Append lists the item results in source order. Keyed maps them by item index.",
   "pipelines.graphExtensions.maxConcurrency": "Maximum concurrent items",
   "pipelines.graphExtensions.maxConcurrencyHelp": "Set an integer from 1 to 8.",
   "pipelines.graphExtensions.maxItems": "Maximum items",

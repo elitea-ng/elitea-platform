@@ -154,6 +154,20 @@ impl MapDefinition {
         hash_json(b"elitea.graph.map.config.v1\0", self, MAX_PLAN_BYTES)
     }
 
+    /// How many items the source holds, refused over `max_items`; no walk of
+    /// the items themselves (`source_items` validates them).
+    pub(super) fn item_count(&self, state: &State) -> Result<usize, GraphError> {
+        let count = state
+            .get(&self.source)
+            .and_then(Value::as_array)
+            .ok_or_else(|| map_error("invalid_source"))?
+            .len();
+        if count > self.max_items {
+            return Err(map_error("resource_exhausted"));
+        }
+        Ok(count)
+    }
+
     /// The activation's source items, bounded and validated.
     pub(super) fn source_items<'a>(&self, state: &'a State) -> Result<&'a [Value], GraphError> {
         let items = state

@@ -231,9 +231,10 @@ function blockRunning(block: SubBlock): boolean {
 }
 
 /**
- * Above this many sub-agent instances (a Map holds up to 64 items) the
- * instances are grouped by status, each group one accordion, instead of one
- * row each; a Parallel (at most 16 branches) keeps its rows (T-2A3).
+ * Above this many instances of one sub-agent (a Map holds up to 64 items of
+ * one worker) its instances are grouped by status, each group one accordion,
+ * instead of one row each; a Parallel (at most 16 branches) keeps its rows
+ * (T-2A3).
  */
 const MAX_UNGROUPED_INSTANCES = 16;
 type InstanceStatus = 'waiting' | 'running' | 'failed' | 'completed';
@@ -281,37 +282,43 @@ function ThinkBlocks({ blocks, decorated, isStreaming, tools, pendingInstanceKey
       </SubAgentAccordion>
     );
   };
+  // A Map's items all run one worker, so they share one name: a name with
+  // more than 16 instances is grouped by status, in place of its first
+  // instance; everything else keeps its row and the timeline order.
   const subs = blocks.filter((block): block is SubBlock => block.kind === 'sub');
-  if (subs.length > MAX_UNGROUPED_INSTANCES) {
+  const counts = new Map<string, number>();
+  for (const block of subs) counts.set(block.name, (counts.get(block.name) ?? 0) + 1);
+  const grouped = new Set([...counts].filter(([, count]) => count > MAX_UNGROUPED_INSTANCES).map(([name]) => name));
+  const statusGroups = (name: string): ReactNode => {
     const groups = new Map<InstanceStatus, SubBlock[]>();
-    for (const block of subs) {
+    for (const block of subs.filter((entry) => entry.name === name)) {
       const status = instanceStatus(block, isStreaming, isPaused(block));
       groups.set(status, [...(groups.get(status) ?? []), block]);
     }
-    return [
-      ...blocks.flatMap((block, index) => block.kind === 'coord'
-        ? block.actions.map((action, actionIndex) => (
-          <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />
-        ))
-        : []),
-      ...STATUS_ORDER.filter((status) => groups.has(status)).map((status) => {
-        const members = groups.get(status) ?? [];
-        return (
-          <SubAgentAccordion
-            key={`group-${status}`}
-            name={statusLabel(status, members.length)}
-            running={status === 'running'}
-            paused={status === 'waiting'}
-          >
-            {members.map(instance)}
-          </SubAgentAccordion>
-        );
-      }),
-    ];
-  }
+    return (
+      <SubAgentAccordion key={`group-${name}`} name={name} tools={tools} defaultExpanded
+        running={groups.has('running')} paused={groups.has('waiting')}>
+        {STATUS_ORDER.filter((status) => groups.has(status)).map((status) => {
+          const members = groups.get(status) ?? [];
+          return (
+            <SubAgentAccordion key={`group-${name}-${status}`} name={statusLabel(status, members.length)}
+              running={status === 'running'} paused={status === 'waiting'}>
+              {members.map(instance)}
+            </SubAgentAccordion>
+          );
+        })}
+      </SubAgentAccordion>
+    );
+  };
+  const emitted = new Set<string>();
   // Coordinator runs and sub-agent instances interleave in timeline order
   // (reference `StreamingThinkBlocks`), never coordinator-first.
   return blocks.map((block, index) => {
+    if (block.kind === 'sub' && grouped.has(block.name)) {
+      if (emitted.has(block.name)) return null;
+      emitted.add(block.name);
+      return statusGroups(block.name);
+    }
     if (block.kind === 'coord') {
       return block.actions.map((action, actionIndex) => (
         <ActionView key={`coord-${index}-${actionKey(action, actionIndex)}`} action={toActionViewAction(action)} />

@@ -102,9 +102,11 @@ impl FanoutSource {
         match self {
             Self::Parallel(definition) => Ok(Cow::Borrowed(definition.branches())),
             Self::Map(map) => {
-                let items = map.definition.source_items(&context.state)?;
+                // The count only: `map_identity` validated the same source in
+                // this activation, and `frozen_inputs` freezes it.
+                let count = map.definition.item_count(&context.state)?;
                 Ok(Cow::Owned(
-                    (0..items.len())
+                    (0..count)
                         .map(|index| {
                             ParallelBranchDefinition::map_item(index, &map.definition.worker)
                         })
@@ -216,6 +218,19 @@ impl FanoutSource {
 }
 
 impl FanoutSource {
+    /// The node's readable failure when a child failure fails the node, in
+    /// the family's own words: a Parallel branch, a Map item.
+    pub(crate) fn child_failure(&self, key: &str, code: &str) -> String {
+        match self {
+            Self::Parallel(_) => format!(
+                "graph.parallel.branch_failed: branch '{key}' failed after all admitted branches drained ({code})"
+            ),
+            Self::Map(_) => format!(
+                "graph.map.item_failed: item '{key}' failed after all admitted items drained ({code})"
+            ),
+        }
+    }
+
     /// A child's outputs as its node lands them: a Parallel branch lands every
     /// declared output of its node, a Map item only the Map's own `outputs`.
     pub(crate) fn project_settled(&self, settled: Vec<SettledChild>) -> Vec<SettledChild> {

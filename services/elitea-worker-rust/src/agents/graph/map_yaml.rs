@@ -4,7 +4,8 @@
 //! and keeps its meaning: stop on the first failed item, ordered collection.
 //! It serializes, and therefore digests, as it always has. The v2 shape names
 //! `on_error` and `join` like a Parallel node (`continue` and `append` by
-//! default) and has no `reduction`.
+//! default) and has no `reduction`: one shape per document. A Map joins by
+//! `append` or `keyed` only, since its items all land the same output keys.
 
 use adk_rust::graph::GraphError;
 use elitea_agent_runtime::graph::fanout::plan::{JoinMode, OnError};
@@ -17,6 +18,10 @@ use crate::bounded_yaml;
 
 /// The readable refusal of a Map node that names both `reduction` and `join`.
 pub(crate) const MAP_REDUCTION_AND_JOIN: &str = "a Map node sets both `reduction` and `join`; remove `reduction`, which `join: append` replaces";
+/// The readable refusal of a Map node that names both `reduction` and `on_error`.
+pub(crate) const MAP_REDUCTION_AND_ON_ERROR: &str = "a Map node sets both `reduction` and `on_error`; remove `reduction`, which `on_error` and `join` replace";
+/// The readable refusal of a Map node that joins by `merge`.
+pub(crate) const MAP_JOIN_MERGE: &str = "a Map node cannot join by `merge`: every item lands the same output keys, so the merge always conflicts; use `append` or `keyed`";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +45,7 @@ struct RawMapNodeDefinition {
     /// `continue` (default in the v2 shape) or `stop`.
     #[serde(default)]
     on_error: Option<String>,
-    /// `append` (default), `keyed` or `merge`. Not with `reduction`.
+    /// `append` (default) or `keyed`. Not with `reduction`.
     #[serde(default)]
     join: Option<String>,
     #[serde(default)]
@@ -54,6 +59,10 @@ pub(crate) enum MapYamlError {
     Invalid,
     /// Both `reduction` and `join`: see [`MAP_REDUCTION_AND_JOIN`].
     ReductionAndJoin,
+    /// Both `reduction` and `on_error`: see [`MAP_REDUCTION_AND_ON_ERROR`].
+    ReductionAndOnError,
+    /// `join: merge`: see [`MAP_JOIN_MERGE`].
+    JoinMerge,
 }
 
 #[derive(Clone)]
@@ -135,7 +144,8 @@ impl MapNodeDefinition {
 }
 
 /// The v1 shape keeps no policy (its meaning is fixed); the v2 shape always
-/// records one. `reduction` with an explicit `on_error` is v2 with `append`.
+/// records one. A document names one shape: `reduction` with `join` or
+/// `on_error` is refused, never resolved silently.
 fn policy(
     reduction: Option<MapReduction>,
     on_error: Option<&str>,
@@ -144,8 +154,14 @@ fn policy(
     if reduction.is_some() && join.is_some() {
         return Err(MapYamlError::ReductionAndJoin);
     }
-    if reduction.is_some() && on_error.is_none() {
+    if reduction.is_some() && on_error.is_some() {
+        return Err(MapYamlError::ReductionAndOnError);
+    }
+    if reduction.is_some() {
         return Ok(None);
+    }
+    if join == Some("merge") {
+        return Err(MapYamlError::JoinMerge);
     }
     let on_error = OnError::parse(on_error).map_err(|_| MapYamlError::Invalid)?;
     let join = JoinMode::parse(join).map_err(|_| MapYamlError::Invalid)?;

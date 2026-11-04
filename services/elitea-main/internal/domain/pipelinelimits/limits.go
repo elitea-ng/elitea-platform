@@ -62,7 +62,8 @@ const (
 	CodeParallelBranchUnsupported = "PIPELINE_PARALLEL_BRANCH_UNSUPPORTED"
 	// CodeMapFormUnsupported is a Map node whose form the runtime cannot run:
 	// a worker that is not a State Modifier, Agent or LLM node (Code and a
-	// direct Router wait for Wave 3), or `reduction` together with `join`.
+	// direct Router wait for Wave 3), `reduction` together with `join` or
+	// `on_error`, or `join: merge` (every item lands the same keys).
 	// The Worker compiler refuses the same (map_compiler.rs
 	// validate_map_ownership, map_yaml.rs MAP_REDUCTION_AND_JOIN).
 	CodeMapFormUnsupported = "PIPELINE_MAP_FORM_UNSUPPORTED"
@@ -228,11 +229,29 @@ func checkMapForms(declared []map[string]*yaml.Node) error {
 		if nodeType, _ := stringScalar(owner["type"]); nodeType != "map" {
 			continue
 		}
-		if owner["reduction"] != nil && owner["join"] != nil {
+		// A YAML null is an absent key, as the Worker reads it (Option).
+		if present(owner["reduction"]) && present(owner["join"]) {
 			return &apierr.APIError{
 				Status: http.StatusBadRequest,
 				Code:   CodeMapFormUnsupported,
 				Message: fmt.Sprintf("%s sets both `reduction` and `join`. Remove `reduction`: `join: append` replaces it.",
+					nodeLabel(owner["id"])),
+			}
+		}
+		if present(owner["reduction"]) && present(owner["on_error"]) {
+			return &apierr.APIError{
+				Status: http.StatusBadRequest,
+				Code:   CodeMapFormUnsupported,
+				Message: fmt.Sprintf("%s sets both `reduction` and `on_error`. Remove `reduction`: `on_error` and `join` replace it.",
+					nodeLabel(owner["id"])),
+			}
+		}
+		// Every item lands the same output keys, so a merge always conflicts.
+		if join, _ := stringScalar(owner["join"]); join == "merge" {
+			return &apierr.APIError{
+				Status: http.StatusBadRequest,
+				Code:   CodeMapFormUnsupported,
+				Message: fmt.Sprintf("%s joins by `merge`, but every Map item lands the same output keys, so the merge always conflicts. Use `append` or `keyed` before saving.",
 					nodeLabel(owner["id"])),
 			}
 		}
@@ -264,6 +283,11 @@ func checkMapForms(declared []map[string]*yaml.Node) error {
 	return nil
 }
 
+// present reports a declared, non-null value.
+func present(node *yaml.Node) bool {
+	return node != nil && !(node.Kind == yaml.ScalarNode && node.ShortTag() == "!!null")
+}
+
 // branchNode is a Parallel branch's scalar `node`, or "".
 func branchNode(branch *yaml.Node) string {
 	if branch.Kind != yaml.MappingNode {
@@ -287,7 +311,7 @@ func nodeFields(node *yaml.Node) map[string]*yaml.Node {
 	fields := make(map[string]*yaml.Node, 4)
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		switch key := aliased(node.Content[i]).Value; key {
-		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join":
+		case "id", "type", "toolkit_name", "branches", "worker", "reduction", "join", "on_error":
 			fields[key] = aliased(node.Content[i+1])
 		}
 	}

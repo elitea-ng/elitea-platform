@@ -293,6 +293,16 @@ impl LlmNodeDefinition {
         &self.input_mapping
     }
 
+    /// The state keys this node's `variable` mappings read.
+    pub(super) fn mapped_variables(&self) -> impl Iterator<Item = &str> {
+        self.input_mapping
+            .values()
+            .filter_map(|mapping| match mapping {
+                LlmInputMapping::Variable(key) => Some(key.as_str()),
+                _ => None,
+            })
+    }
+
     pub(crate) fn tool_selections(&self) -> &[LlmToolkitSelection] {
         &self.tool_selections
     }

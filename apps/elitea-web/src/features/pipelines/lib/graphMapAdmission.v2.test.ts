@@ -28,12 +28,12 @@ describe('Map v2 policy and worker families', () => {
     expect(fields(graph(v2))).toEqual([]);
     expect(fields(graph({ ...v2, on_error: 'continue', join: 'append' }))).toEqual([]);
     expect(fields(graph({ ...v2, on_error: 'continue', join: 'keyed', destination: 'keyedResults' }))).toEqual([]);
-    expect(fields(graph({ ...v2, on_error: 'stop', join: 'merge', destination: 'keyedResults' }))).toEqual([]);
-    expect(fields(graph({ ...v1, on_error: 'stop' }))).toEqual([]);
+    expect(fields(graph({ ...v2, on_error: 'stop', join: 'keyed', destination: 'keyedResults' }))).toEqual([]);
   });
   it.each([
     [{ ...v1, join: 'append' }, 'reduction'],
-    [{ ...v2, on_error: 'continue', join: 'merge', destination: 'keyedResults' }, 'join'],
+    [{ ...v1, on_error: 'stop' }, 'reduction'],
+    [{ ...v2, on_error: 'stop', join: 'merge', destination: 'keyedResults' }, 'join'],
     [{ ...v2, join: 'merge', destination: 'keyedResults' }, 'join'],
     [{ ...v2, join: 'keyed' }, 'destination'],
     [{ ...v2, join: 'append', destination: 'keyedResults' }, 'destination'],
