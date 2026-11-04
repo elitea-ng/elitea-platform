@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, symlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate, scoreChecks, scoreRubric } from '../lib/schema.mjs';
@@ -79,6 +79,38 @@ test('test score from runner output', () => {
   assert.equal(testScore('# pass 2\n# fail 1', 1), 1);
   assert.equal(testScore('--- FAIL: TestA\n--- FAIL: TestB\nFAIL', 1), -2);
   assert.equal(testScore('', 0), 1e6);
+});
+
+test('symlinks cannot lead read_file or write_file out of the workspace', async () => {
+  const seed = mkdtempSync(join(tmpdir(), 'adr0038-seed-'));
+  const outside = mkdtempSync(join(tmpdir(), 'adr0038-outside-'));
+  writeFileSync(join(seed, 'a.txt'), 'hello');
+  writeFileSync(join(outside, 'secret.txt'), 'secret');
+  const run = createRun(seed);
+  try {
+    symlinkSync(outside, join(run.ws, 'dirlink'));
+    symlinkSync(join(outside, 'secret.txt'), join(run.ws, 'filelink'));
+    symlinkSync(join(outside, 'new.txt'), join(run.ws, 'dangling'));
+    symlinkSync(join(run.ws, 'a.txt'), join(run.ws, 'innerlink'));
+    for (const path of ['dirlink/secret.txt', 'filelink', 'dirlink/sub/new.txt']) {
+      const r = await execTool(run, 'read_file', JSON.stringify({ path }));
+      assert.equal(r.ok, false, path);
+      assert.match(r.text, /outside the workspace/);
+    }
+    const w1 = await execTool(run, 'write_file', JSON.stringify({ path: 'dirlink/x.txt', content: 'x' }));
+    const w2 = await execTool(run, 'write_file', JSON.stringify({ path: 'dangling', content: 'x' }));
+    assert.equal(w1.ok, false);
+    assert.equal(w2.ok, false);
+    assert.equal(existsSync(join(outside, 'x.txt')), false);
+    assert.equal(existsSync(join(outside, 'new.txt')), false);
+    // A link that stays inside works.
+    assert.equal((await execTool(run, 'read_file', '{"path":"innerlink"}')).text, 'hello');
+    assert.doesNotMatch((await execTool(run, 'list_files', '{}')).text, /secret/);
+  } finally {
+    destroyRun(run);
+    rmSync(seed, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('tools stay inside the workspace and commands are bounded', async () => {

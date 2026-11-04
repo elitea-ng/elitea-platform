@@ -5,7 +5,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
   mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync,
-  readdirSync, statSync, realpathSync, existsSync,
+  readdirSync, statSync, lstatSync, realpathSync, existsSync,
 } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve, relative, dirname, sep } from 'node:path';
@@ -55,11 +55,30 @@ export function restore(run, dir) {
   cpSync(dir, run.ws, { recursive: true });
 }
 
-// Resolve a model-given path. Refuses paths outside the workspace.
+const inside = (root, p) => p === root || p.startsWith(root + sep);
+
+// Resolve a model-given path. Refuses paths outside the workspace, also
+// through a symlink: the real path of the target (or of its nearest
+// existing parent, for a new file) must stay inside the real workspace.
+// A dangling symlink is refused, because a write would follow it.
 export function safePath(ws, p) {
+  const outside = () => new Error(`path is outside the workspace: ${p}`);
   const full = resolve(ws, String(p ?? '.'));
-  if (full !== ws && !full.startsWith(ws + sep)) {
-    throw new Error(`path is outside the workspace: ${p}`);
+  if (!inside(ws, full)) throw outside();
+  const root = realpathSync(ws);
+  let probe = full;
+  for (;;) {
+    let exists = true;
+    try { lstatSync(probe); } catch { exists = false; }
+    if (exists) {
+      let real;
+      try { real = realpathSync(probe); } catch { throw outside(); }
+      if (!inside(root, real)) throw outside();
+      break;
+    }
+    const parent = dirname(probe);
+    if (parent === probe) throw outside();
+    probe = parent;
   }
   return full;
 }
@@ -141,8 +160,9 @@ export function listFiles(dir, base = dir, out = [], limit = 300) {
     if (out.length >= limit) break;
     if (SKIP.has(name)) continue;
     const full = join(dir, name);
-    const st = statSync(full);
-    if (st.isDirectory()) listFiles(full, base, out, limit);
+    const st = lstatSync(full);
+    if (st.isSymbolicLink()) out.push(`${relative(base, full)} (symlink, not followed)`);
+    else if (st.isDirectory()) listFiles(full, base, out, limit);
     else out.push(`${relative(base, full)} (${st.size} B)`);
   }
   return out;
