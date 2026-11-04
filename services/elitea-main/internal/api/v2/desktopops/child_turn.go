@@ -518,6 +518,7 @@ func childTurnView(state localturn.ChildTurnState) map[string]any {
 			"llm_calls":         state.Usage.LLMCalls,
 			"prompt_tokens":     state.Usage.PromptTokens,
 			"completion_tokens": state.Usage.CompletionTokens,
+			"reasoning_tokens":  state.Usage.ReasoningTokens,
 		}
 	}
 	return view

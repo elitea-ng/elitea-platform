@@ -178,6 +178,7 @@ WHERE target_kind = 'shared' AND name = $1`, name).Scan(&appliedAt); err != nil 
 const figuresColumns = `count(*) FILTER (WHERE NOT is_tool)::bigint,
        coalesce(sum(prompt_tokens) FILTER (WHERE NOT is_tool), 0)::bigint,
        coalesce(sum(completion_tokens) FILTER (WHERE NOT is_tool), 0)::bigint,
+       coalesce(sum(reasoning_tokens) FILTER (WHERE NOT is_tool), 0)::bigint,
        count(*) FILTER (WHERE NOT is_tool AND ` + errorPredicate + `)::bigint,
        coalesce(avg(duration_ms) FILTER (WHERE NOT is_tool), 0)::double precision,
        count(*) FILTER (WHERE NOT is_tool AND (in_rate IS NOT NULL OR out_rate IS NOT NULL))::bigint,
@@ -250,7 +251,7 @@ func figuresTargets(figures *analytics.UsageFigures) ([]any, func()) {
 	var inCost, outCost, totalCost, toolCost string
 	targets := []any{
 		&figures.LLMCalls, &figures.PromptTokens, &figures.CompletionTokens,
-		&figures.Errors, &figures.AvgDurationMS, &pricedCalls,
+		&figures.ReasoningTokens, &figures.Errors, &figures.AvgDurationMS, &pricedCalls,
 		&inCost, &outCost, &totalCost, &figures.ToolCalls, &toolCost,
 	}
 	return targets, func() {
