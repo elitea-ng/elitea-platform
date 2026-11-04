@@ -83,6 +83,7 @@ Current results: `results/qwen-2026-11-04-r2.md`. The first run, `results/qwen-2
 | c | single run | `auto`: on for the first step and after a tool error or a failed command; off for routine follow-up steps |
 | d | verified loop | manager on; workers `auto`; summary and finish calls off; reviewer on |
 | e | control: single run told the check | `auto`, as (c). The prompt also gets the check description that a loop worker sees. It separates the gain of the loop from the gain of telling the agent the check. Not in the default set: run it with `--variants e`. |
+| f | single run, `auto-exit` | `auto`, and also on after a `run_command` that exits non-zero (a failing test run, but also a `grep` with no match). Not in the default set: run it with `--variants f`. |
 
 For the `auto` policy, a tool result is a failure only when the tool itself
 failed: bad arguments, a refused path, an unknown tool, or a `run_command`
