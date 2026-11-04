@@ -41,12 +41,41 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
+
+export const pipelineScheduleUpdatePromptMax = 32768;
 
 export const PipelineScheduleUpdate = zod
   .object({
     cron: zod.string(),
     active: zod.boolean().optional(),
-    input: zod.string().optional(),
+    input: zod
+      .string()
+      .optional()
+      .describe(
+        "The text a pipeline run starts with. A `workspace_thread` schedule does not read it.",
+      ),
+    target_kind: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. `pipeline` or `workspace_thread`. Absent keeps the stored target. A `workspace_thread` schedule may be saved on a pipeline or an agent version: the version is the anchor, and it does not run.\n",
+      ),
+    conversation_uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.34. Required with `workspace_thread`. The conversation must be in this project, the caller must be its user participant (else 404), and it must have been handed off to the cloud at least once (else 422 `not_handed_off`).\n",
+      ),
+    prompt: zod
+      .string()
+      .min(1)
+      .max(pipelineScheduleUpdatePromptMax)
+      .optional()
+      .describe(
+        "Client contract 1.34. Required with `workspace_thread`. The message each occurrence starts the turn with.",
+      ),
+    grant: ChatUnattendedRequest.optional(),
     on_approval_required: zod
       .enum(["fail", "skip", "notify_and_wait"])
       .optional()
@@ -55,7 +84,7 @@ export const PipelineScheduleUpdate = zod
       ),
   })
   .describe(
-    "The accepted schedule write (schedules.go scheduleBody, :126-130). There is deliberately no `author_id` and no `last_*` field: the author is the authenticated caller, and the outcome columns belong to the runner.\n",
+    "The accepted schedule write (schedules.go scheduleBody, :126-130). There is deliberately no `author_id` and no `last_*` field: the author is the authenticated caller, and the outcome columns belong to the runner.\nClient contract 1.34 (ADR-0045 decision 9): the `workspace_thread` target. Its `grant` holds only the `continue` and `chain` parts and `goal_check`. No person is there at the start, so `sensitive_tools`, `hook_asks` and `remote_confirmations` are refused with 422 `unattended_grant_refused` (reason `origin_not_allowed`), and `continue_tool_call_cap`, `chain_root_execution_id` and `kind` with reason `invalid`. A chain limit over the platform maximum is refused with reason `over_maximum`. An absent grant is the default: continue at the step and output limits, with the platform's chain limits and the goal check. Each occurrence starts a new chain with the trigger origin `schedule`; its end reaches the author as `run_finished`. When an administrator turns unattended grants off, an occurrence runs with no grant and is not refused.\n",
   );
 
 export type PipelineScheduleUpdate = zod.input<typeof PipelineScheduleUpdate>;

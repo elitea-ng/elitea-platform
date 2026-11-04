@@ -41,6 +41,9 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
+
+export const pipelineInboundTriggerModeRequestPromptMax = 32768;
 
 export const pipelineInboundTriggerModeRequestSignatureHeaderMax = 128;
 
@@ -50,6 +53,27 @@ export const pipelineInboundTriggerModeRequestEventsMax = 32;
 
 export const PipelineInboundTriggerModeRequest = zod
   .object({
+    target_kind: zod
+      .string()
+      .optional()
+      .describe(
+        "Client contract 1.34. `workspace_thread`, or `pipeline` or `agent` (the version's own kind: the version runs). Another value is refused with 400.\n",
+      ),
+    conversation_uuid: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.34. Required with `workspace_thread`. The conversation must be in this project, the caller must be its user participant (else 404), and it must have been handed off to the cloud at least once (else 422 `not_handed_off`).\n",
+      ),
+    prompt: zod
+      .string()
+      .min(1)
+      .max(pipelineInboundTriggerModeRequestPromptMax)
+      .optional()
+      .describe(
+        "Client contract 1.34. Required with `workspace_thread`. The message each call starts the turn with. The call's `input`, or its payload in the untrusted-data envelope, follows it.\n",
+      ),
+    grant: ChatUnattendedRequest.optional(),
     type: zod
       .enum(["custom", "github", "gitlab"])
       .optional()
@@ -95,7 +119,7 @@ export const PipelineInboundTriggerModeRequest = zod
       ),
   })
   .describe(
-    "What a create/rotate may ask for. Every field is optional, and a call with no body at all mints the bearer trigger this route has always minted.\n",
+    "What a create/rotate may ask for. Every field is optional, and a call with no body at all mints the bearer trigger this route has always minted. Client contract 1.34: `target_kind: workspace_thread` with `conversation_uuid`, `prompt` and an optional `grant` makes each inbound call start a cloud turn on a handed-off thread. A body with no `target_kind` keeps the stored target, so a rotation keeps the thread. `target_kind: pipeline` or `agent` clears it. The grant rules are those of `PipelineScheduleUpdate`, with the trigger origin `webhook`.\n",
   );
 
 export type PipelineInboundTriggerModeRequest = zod.input<
