@@ -357,16 +357,27 @@ impl ChatClient {
         if stream {
             body["stream_options"] = json!({"include_usage": true});
         }
-        // Only when configured, so a body without it is the parity body. A
-        // reasoning model refuses a sampling temperature (the worker refuses
-        // the pair at configuration), so an effort other than `none` drops it.
-        if let Some(effort) = self.settings.reasoning_effort {
-            body["reasoning_effort"] = json!(effort.as_str());
-            if effort != crate::settings::ReasoningEffort::None
-                && let Some(fields) = body.as_object_mut()
-            {
+        // Only when configured, so a body without it is the parity body.
+        // The form is the model's (ADR-0038: the table in
+        // `elitea_llm_wire::thinking`). An engine call has no steps, so
+        // `auto` thinks at the default level. A model that thinks by effort
+        // or by budget refuses a sampling temperature while it thinks, so
+        // the temperature is dropped then.
+        if let Some(setting) = self.settings.reasoning_effort
+            && let Some(fields) = body.as_object_mut()
+        {
+            let control = self
+                .settings
+                .reasoning_control
+                .unwrap_or(crate::settings::ReasoningControl::Effort);
+            let step = setting.single_call();
+            if control.refuses_temperature(step) {
                 fields.remove("temperature");
             }
+            elitea_llm_wire::thinking::apply_openai(
+                fields,
+                elitea_llm_wire::thinking::openai_form(control, step),
+            );
         }
         if !request.tools.is_empty() {
             let mut tools = Vec::with_capacity(request.tools.len());
@@ -847,6 +858,15 @@ mod tests {
         ChatClient::new(transport, settings)
     }
 
+    fn client_with_settings(extra: &Value) -> Result<ModelSettings, EngineError> {
+        let mut block =
+            json!({"api_base": "http://gw/llm/v1", "api_key": "k", "model_name": "qwen3"});
+        if let (Some(block), Some(extra)) = (block.as_object_mut(), extra.as_object()) {
+            block.extend(extra.clone());
+        }
+        ModelSettings::from_llm_settings(&block)
+    }
+
     #[test]
     fn reasoning_effort_is_sent_only_when_configured() {
         let request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
@@ -871,6 +891,33 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(off["reasoning_effort"], "none");
         assert!(off.get("temperature").is_some());
+        // A toggle model (Qwen on vLLM): enable_thinking, never an effort,
+        // and the temperature stays.
+        let toggle_off =
+            client_with(json!({"reasoning_effort": "off", "reasoning_control": "toggle"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert_eq!(toggle_off["chat_template_kwargs"]["enable_thinking"], false);
+        assert!(toggle_off.get("reasoning_effort").is_none());
+        assert!(toggle_off.get("temperature").is_some());
+        let toggle_auto =
+            client_with(json!({"reasoning_effort": "auto", "reasoning_control": "toggle"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert_eq!(toggle_auto["chat_template_kwargs"]["enable_thinking"], true);
+        let fixed =
+            client_with(json!({"reasoning_effort": "high", "reasoning_control": "fixed_on"}))
+                .body(&request, false)
+                .unwrap_or_default();
+        assert!(fixed.get("reasoning_effort").is_none());
+        assert!(fixed.get("chat_template_kwargs").is_none());
+        assert!(
+            client_with_settings(
+                &json!({"reasoning_effort": "off", "reasoning_control": "fixed_on"})
+            )
+            .is_err(),
+            "a conflicting setting is refused, never dropped"
+        );
     }
 
     #[test]

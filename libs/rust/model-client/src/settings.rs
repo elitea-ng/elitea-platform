@@ -6,7 +6,8 @@
 //! header the worker sends, ADR-0018's primary selector), `execution_id`
 //! (the run the gateway attributes spend to, `X-Elitea-Execution-Id`) and
 //! the caller's `model_name`; `LiftToolLLMSettings` may add `max_tokens`,
-//! `temperature` and `reasoning_effort`. The headers and their rules are the
+//! `temperature` and `reasoning_effort`, and Main adds the model's
+//! `reasoning_control` from the catalogue (ADR-0038). The headers and their rules are the
 //! `/llm` caller contract the worker follows too
 //! (`docs/llm-caller-contract.md` in this crate). The Python workers also read the legacy
 //! `openai_api_base` / `openai_api_key` spellings, `provider`,
@@ -49,29 +50,11 @@ pub const DEFAULT_MAX_TOKENS: u32 = 64_000;
 /// is.
 pub use elitea_llm_wire::headers::{MAX_EXECUTION_ID_BYTES, valid_execution_id};
 
-/// A reasoning model's effort, sent as `reasoning_effort` when set. The
-/// worker's values (`ModelReasoningEffort`): `none` turns reasoning off on a
-/// model that reasons by default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReasoningEffort {
-    None,
-    Low,
-    Medium,
-    High,
-}
-
-impl ReasoningEffort {
-    /// The wire value.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-}
+/// The canonical thinking setting (ADR-0038 decision 1): `auto`, `off`
+/// (`none` is read as `off`), `low`, `medium` or `high`. The request form
+/// comes from the model's [`ReasoningControl`] through the one table in
+/// `elitea_llm_wire::thinking`.
+pub use elitea_llm_wire::thinking::{ReasoningControl, Thinking as ReasoningEffort};
 
 /// A retry count above this is a configuration mistake, not a policy: with
 /// the backoff cap of 8 s it would keep a dead gateway busy for minutes.
@@ -103,8 +86,12 @@ pub struct ModelSettings {
     /// `X-Elitea-Execution-Id`. Absent, the call is billed but belongs to no
     /// run.
     pub execution_id: Option<String>,
-    /// Sent as `reasoning_effort` when set; unset, the body is unchanged.
+    /// The thinking setting; unset, the body is unchanged.
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// How the model's thinking is controlled (`llm_settings.reasoning_control`,
+    /// from the catalogue). Unset: `reasoning_effort` is sent as it was
+    /// before the catalogue declared a kind.
+    pub reasoning_control: Option<ReasoningControl>,
     pub model_name: String,
     pub max_retries: u32,
     pub max_tokens: u32,
@@ -122,6 +109,7 @@ impl fmt::Debug for ModelSettings {
             .field("organization", &self.organization)
             .field("execution_id", &self.execution_id)
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_control", &self.reasoning_control)
             .field("model_name", &self.model_name)
             .field("max_retries", &self.max_retries)
             .field("max_tokens", &self.max_tokens)
@@ -259,16 +247,28 @@ impl ModelSettings {
         };
         let reasoning_effort = match first_string(settings, &["reasoning_effort"])?.as_deref() {
             None => None,
-            Some("none") => Some(ReasoningEffort::None),
-            Some("low") => Some(ReasoningEffort::Low),
-            Some("medium") => Some(ReasoningEffort::Medium),
-            Some("high") => Some(ReasoningEffort::High),
-            Some(other) => {
-                return Err(invalid(format!(
-                    "llm_settings.reasoning_effort must be none, low, medium or high, got '{other}'"
-                )));
-            }
+            Some(value) => Some(ReasoningEffort::parse(value).ok_or_else(|| {
+                invalid(format!(
+                    "llm_settings.reasoning_effort must be auto, off, none, low, medium or high, got '{value}'"
+                ))
+            })?),
         };
+        let reasoning_control = match first_string(settings, &["reasoning_control"])?.as_deref() {
+            None => None,
+            Some(value) => Some(ReasoningControl::parse(value).ok_or_else(|| {
+                invalid(format!(
+                    "llm_settings.reasoning_control must be effort, budget, toggle, fixed_on or fixed_off, got '{value}'"
+                ))
+            })?),
+        };
+        if let (Some(control), Some(setting)) = (reasoning_control, reasoning_effort)
+            && let Some(conflict) = control.conflict(setting)
+        {
+            return Err(invalid(format!(
+                "llm_settings.reasoning_effort: {}",
+                conflict.message()
+            )));
+        }
         let streaming = match settings.get("streaming") {
             None | Some(Value::Null) => true,
             Some(Value::Bool(flag)) => *flag,
@@ -291,6 +291,7 @@ impl ModelSettings {
             organization,
             execution_id,
             reasoning_effort,
+            reasoning_control,
             model_name,
             max_retries,
             max_tokens,
@@ -388,6 +389,20 @@ mod tests {
             Some(ReasoningEffort::Low)
         );
         assert!(with("reasoning_effort", json!("max")).is_err());
+        assert_eq!(
+            with("reasoning_effort", json!("none"))
+                .ok()
+                .and_then(|s| s.reasoning_effort),
+            Some(ReasoningEffort::Off),
+            "none is read as off"
+        );
+        assert_eq!(
+            with("reasoning_effort", json!("auto"))
+                .ok()
+                .and_then(|s| s.reasoning_effort),
+            Some(ReasoningEffort::Auto)
+        );
+        assert!(with("reasoning_control", json!("dial")).is_err());
     }
 
     #[test]
