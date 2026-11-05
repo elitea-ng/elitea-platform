@@ -688,6 +688,11 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"error":   "project_skill_name_conflict",
 			"message": "A project skill you picked has the same name as another skill of this agent.",
 		})
+	case errors.Is(err, agentexecutionapp.ErrAgentTargetRequired):
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
+			"error":   "agent_target_required",
+			"message": "This conversation has several agents. Pick the agent this message is for.",
+		})
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
 		writeUnsupported(writer)
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):

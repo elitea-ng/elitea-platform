@@ -44,6 +44,8 @@ Participants extend what a conversation can do:
 
 To add a participant, select **+** in the input toolbar and browse by category, or type `#` followed by a name to search across agents, pipelines, toolkits, and MCPs. Added participants appear in the **Participants** panel on the right, grouped by type; select an agent or pipeline card to make it the active participant.
 
+When a conversation holds several agents or pipelines, a message goes to the one you selected. If you selected none, it goes to the agent you last addressed in this conversation. If you have not addressed any agent yet, Elitea does not send the message: it asks you to pick the agent the message is for. It never sends the message to the plain model behind your agents' backs.
+
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 
 Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).

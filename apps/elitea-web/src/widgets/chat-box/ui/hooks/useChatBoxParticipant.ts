@@ -25,6 +25,8 @@ interface AgentEditorParticipantDetails {
 export interface UseChatBoxParticipantParams {
   readonly activeParticipant: unknown;
   readonly conversationParticipants: unknown[] | undefined;
+  /** The agent the history last addressed (ADR-0050 D7c), for the attachments gate. */
+  readonly stickyParticipantId?: string | undefined;
   /** #905: the agent/pipeline EDITOR surface computes the attachments gate from its own (unsaved) form state — the gate below stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }
@@ -57,6 +59,7 @@ export interface UseChatBoxParticipantResult {
 export function useChatBoxParticipant({
   activeParticipant,
   conversationParticipants,
+  stickyParticipantId,
   isAgentsPage,
 }: UseChatBoxParticipantParams): UseChatBoxParticipantResult {
   const participantForEditor = useMemo(() => toParticipant(activeParticipant), [activeParticipant]);
@@ -80,7 +83,7 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
-  const areAttachmentsGated = useChatBoxAttachmentsGate({ activeParticipant, participants: conversationParticipants, isAgentsPage });
+  const areAttachmentsGated = useChatBoxAttachmentsGate({ activeParticipant, participants: conversationParticipants, stickyParticipantId, isAgentsPage });
   const versionDetails = participantForEditor === undefined ? undefined : rawParticipantDetails['version_details'];
   const tools = useMemo(() => (versionDetails === undefined ? undefined : grantableTools(versionDetails)), [versionDetails]);
 

@@ -72,6 +72,8 @@ export interface UseChatBoxSendParams {
   readonly userId?: string | undefined;
   readonly activeParticipant?: unknown;
   readonly participants?: readonly unknown[] | undefined;
+  /** The agent the history last addressed, the target when nothing is selected (ADR-0050 D7c). */
+  readonly stickyParticipantId?: string | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
@@ -149,8 +151,8 @@ export function useChatBoxSend(
     [params.llmSettings, params.model, params.configuredModelProjectId],
   );
   const target = useMemo(
-    () => resolveTargetParticipant(params.activeParticipant, params.participants),
-    [params.activeParticipant, params.participants],
+    () => resolveTargetParticipant(params.activeParticipant, params.participants, params.stickyParticipantId),
+    [params.activeParticipant, params.participants, params.stickyParticipantId],
   );
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({

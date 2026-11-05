@@ -31,6 +31,8 @@ export interface SendDeps {
 export interface ChatStreamContextSource {
   readonly activeParticipant?: unknown;
   readonly participants?: readonly unknown[] | undefined;
+  /** The agent the history last addressed (`stickyAgentParticipantId`), the target when nothing is selected. */
+  readonly stickyParticipantId?: string | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
 }
@@ -42,6 +44,7 @@ export function buildChatStreamContext(
   const target = resolveTargetParticipant(
     params.activeParticipant,
     params.participants,
+    params.stickyParticipantId,
   );
   const participantId = (
     target as { id?: string | number } | undefined
@@ -140,13 +143,34 @@ export function positiveParticipantId(raw: unknown): number | undefined {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
 }
 
-export function resolveTargetParticipant(activeParticipant: unknown, participants: readonly unknown[] | undefined): unknown {
+/** ADR-0050 D7c sticky target: the newest history row whose `participantId` (its `sent_to_id`) names one of the agents. */
+export function stickyAgentParticipantId(
+  messages: readonly { readonly participantId?: string | undefined }[] | undefined,
+  participants: readonly unknown[] | undefined,
+): string | undefined {
+  const agentIds = new Set(
+    (participants ?? []).filter(isApplicationParticipant).map((p) => String((p as { id?: unknown }).id)),
+  );
+  if (agentIds.size === 0) return undefined;
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const id = messages?.[index]?.participantId;
+    if (id !== undefined && agentIds.has(id)) return id;
+  }
+  return undefined;
+}
+
+/** With nothing selected: the only agent, else the sticky one; unresolved, the server answers `agent_target_required` (issue 1602). */
+export function resolveTargetParticipant(activeParticipant: unknown, participants: readonly unknown[] | undefined, stickyParticipantId?: string): unknown {
   if (isApplicationParticipant(activeParticipant) || isAdhocModelParticipant(activeParticipant)) return activeParticipant;
   if (participantEntityName(activeParticipant) === 'user') return activeParticipant;
   const adhocModel = (participants ?? []).find(isAdhocModelParticipant);
   if (activeParticipant !== undefined && activeParticipant !== null) return adhocModel;
   const applications = (participants ?? []).filter(isApplicationParticipant);
-  return applications.length === 1 ? applications[0] : activeParticipant;
+  if (applications.length === 1) return applications[0];
+  const sticky = stickyParticipantId === undefined
+    ? undefined
+    : applications.find((p) => String((p as { id?: unknown }).id) === stickyParticipantId);
+  return sticky ?? activeParticipant;
 }
 
 export function resolveStartContract(target: unknown): string {

@@ -22,7 +22,7 @@ import { describe, expect, it } from 'vitest';
 
 import { conversationApi } from '@/entities/conversation';
 
-import { buildRegenerateBody, buildStartBody, resolveSendLlmSettings, resolveSendModelName, resolveStartContract, resolveTargetParticipant } from './useChatBoxSend.helpers';
+import { buildRegenerateBody, buildStartBody, resolveSendLlmSettings, resolveSendModelName, resolveStartContract, resolveTargetParticipant, stickyAgentParticipantId } from './useChatBoxSend.helpers';
 
 const agent = { id: 42, entity_name: 'application' };
 const pipeline = { id: 43, entity_name: 'pipeline' };
@@ -96,8 +96,38 @@ describe('resolveTargetParticipant', () => {
     expect(resolveTargetParticipant(undefined, [model, agent])).toBe(agent);
   });
 
-  it('stays unresolved when the conversation holds more than one agent', () => {
+  it('stays unresolved when the conversation holds more than one agent and none was addressed', () => {
+    // The server then refuses with agent_target_required (issue 1602), never the plain model.
     expect(resolveTargetParticipant(undefined, [agent, pipeline])).toBeUndefined();
+  });
+
+  it('addresses the sticky agent when several agents are present and nothing is selected', () => {
+    expect(resolveTargetParticipant(undefined, [agent, pipeline], String(pipeline.id))).toBe(pipeline);
+  });
+
+  it('ignores a sticky id that is not one of the conversation agents', () => {
+    expect(resolveTargetParticipant(undefined, [agent, pipeline], '999999')).toBeUndefined();
+  });
+
+  it('lets an explicit selection win over the sticky agent', () => {
+    expect(resolveTargetParticipant(agent, [agent, pipeline], String(pipeline.id))).toBe(agent);
+  });
+});
+
+describe('stickyAgentParticipantId', () => {
+  it('returns the newest history row addressed to an agent', () => {
+    const history = [
+      { participantId: String(agent.id) },
+      { participantId: String(pipeline.id) },
+      { participantId: String(dummy.id) },
+      {},
+    ];
+    expect(stickyAgentParticipantId(history, [agent, pipeline, dummy])).toBe(String(pipeline.id));
+  });
+
+  it('is undefined when no row names an agent', () => {
+    expect(stickyAgentParticipantId([{ participantId: String(dummy.id) }], [agent, pipeline, dummy])).toBeUndefined();
+    expect(stickyAgentParticipantId(undefined, [agent])).toBeUndefined();
   });
 
   it('routes a stale toolkit or model selection through the ad-hoc model participant', () => {

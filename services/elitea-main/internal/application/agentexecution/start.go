@@ -35,6 +35,12 @@ var (
 	// is handed off to it and idle (ADR-0034 decision 7): a handoff row in
 	// CLOUD_IDLE with no take back pending.
 	ErrLocalWorkThread = errors.New("conversation is a desktop Local work thread")
+	// ErrAgentTargetRequired refuses an ad-hoc start that names no
+	// participant in a conversation holding more than one agent (ADR-0050
+	// phase 0, issue 1602). Without it the start resolved to the
+	// conversation's plain model and the agents never saw the message. The
+	// route answers 422 `agent_target_required`.
+	ErrAgentTargetRequired = errors.New("conversation holds several agents and the start names none")
 	// ErrCloudTurnRunning refuses a send in a handed-off thread while a
 	// cloud turn runs in it (CLOUD_RUNNING): one turn at a time owns the
 	// workspace. The route answers 409 `cloud_turn_running` (retryable).
