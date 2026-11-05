@@ -111,7 +111,7 @@ pub fn app_ready(queue: State<'_, CommandQueue>) -> Vec<AppCommand> {
 
 /// Bring the main window forward (it may be hidden or minimised).
 pub fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = crate::window::main_window(app) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();

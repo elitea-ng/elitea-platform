@@ -52,6 +52,7 @@ function paletteEntries(workspaces: readonly Workspace[], eliteaItems: readonly 
   ];
   if (hasSession) {
     entries.push({ id: 'toggle_plan', group: actions, label: t('desktop.palette.togglePlan', 'Toggle plan mode'), action: { type: 'toggle_plan' } });
+    entries.push({ id: 'toggle_browser', group: actions, label: t('desktop.palette.toggleBrowser', 'Toggle browser'), hint: `${mod}⇧B`, action: { type: 'toggle_browser' } });
     entries.push({ id: 'create_agent', group: actions, label: t('desktop.palette.createAgent', 'Create agent…'), action: { type: 'create_agent' } });
   }
   entries.push(

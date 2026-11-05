@@ -14,10 +14,29 @@
 //! same-origin document from its own React tree. It loads nothing and holds
 //! no capability (its label, `panel-<tab>`, is in no capability file); it
 //! may not navigate anywhere. Every other `window.open` is refused.
+//!
+//! Remote pages live only in the browser pane (src/browser_pane.rs): a child
+//! webview of this window with a label of its own that no capability names.
 
 use tauri::webview::{NewWindowFeatures, NewWindowResponse};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
 use url::{Host, Url};
+
+/// The label of the main window and of its own webview (the bundled UI).
+pub const MAIN: &str = "main";
+
+/// The main window. Not a `get_webview_window` lookup: once the browser
+/// pane adds a child webview (src/browser_pane.rs) the window holds two
+/// webviews and is no longer a `WebviewWindow`, so that lookup would find
+/// nothing and the dock badge, progress, show and close rules would stop.
+pub fn main_window(app: &AppHandle) -> Option<Window> {
+    app.get_window(MAIN)
+}
+
+/// The main window's own webview, the bundled UI (zoom, reload, its data).
+pub fn main_webview(app: &AppHandle) -> Option<Webview> {
+    app.get_webview(MAIN)
+}
 
 /// True for the origins Tauri serves bundled assets from, per platform
 /// (`tauri://localhost` on macOS and Linux, `http(s)://tauri.localhost` on
@@ -164,6 +183,16 @@ pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     let window = builder.build()?;
     let handle = app.clone();
     window.on_window_event(move |event| on_window_event(&handle, event));
+    // With Tauri's `unstable` feature (the browser pane's child webviews) a
+    // drop on the window arrives as the main webview's event, not the
+    // window's. A drop on a browser pane is the page's own (its drag-drop
+    // handler is off) and never arrives here.
+    let handle = app.clone();
+    window.on_webview_event(move |event| {
+        if let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+            crate::app_events::open_paths(&handle, paths);
+        }
+    });
     Ok(())
 }
 
@@ -283,7 +312,9 @@ pub fn confirm_quit(app: &AppHandle) {
 fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
     match event {
         // A folder dropped on the window opens as a workspace; files go to
-        // the UI (IPC.md, `workspace_opened` / `files_dropped`).
+        // the UI (IPC.md, `workspace_opened` / `files_dropped`). Without the
+        // `unstable` feature this was the only path; it stays for a window
+        // whose content is not a child webview.
         tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
             crate::app_events::open_paths(app, paths);
         }
@@ -298,7 +329,7 @@ fn on_window_event(app: &AppHandle, event: &tauri::WindowEvent) {
                 return;
             }
             api.prevent_close();
-            if let Some(window) = tauri::Manager::get_webview_window(app, "main") {
+            if let Some(window) = main_window(app) {
                 let _ = if action == CloseAction::Hide {
                     window.hide()
                 } else {

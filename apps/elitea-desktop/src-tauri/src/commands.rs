@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, State, Webview};
 
 use crate::auth::{AccessToken, AuthService, DeploymentInfo, HostState, RefreshResult};
 use crate::error::HostError;
@@ -95,7 +95,8 @@ pub async fn host_refresh(state: State<'_, AppState>) -> Result<RefreshResult, H
 /// without waiting for the network.
 #[tauri::command]
 pub async fn host_sign_out(
-    window: WebviewWindow,
+    app: AppHandle,
+    window: Webview,
     state: State<'_, AppState>,
     local: State<'_, LocalState>,
 ) -> Result<(), HostError> {
@@ -106,6 +107,8 @@ pub async fn host_sign_out(
     // The background delivery is detached.
     let result = state.auth.sign_out().await.map(drop);
     clear_webview_data(&window);
+    // Every browser pane closes and its store is deleted (ADR-0048).
+    crate::browser_pane::forget_all(&app).await;
     result
 }
 
@@ -113,7 +116,8 @@ pub async fn host_sign_out(
 /// (`device_revoked`, or a refresh token the server no longer honours).
 #[tauri::command]
 pub async fn host_wipe(
-    window: WebviewWindow,
+    app: AppHandle,
+    window: Webview,
     state: State<'_, AppState>,
     local: State<'_, LocalState>,
 ) -> Result<(), HostError> {
@@ -122,6 +126,7 @@ pub async fn host_wipe(
     local.agents.wipe_sessions().await;
     let result = state.auth.wipe().await;
     clear_webview_data(&window);
+    crate::browser_pane::forget_all(&app).await;
     result
 }
 
@@ -129,7 +134,7 @@ pub async fn host_wipe(
 /// caches, cookies). Done here, not left to the page: the host is the
 /// authority on what a wiped install holds, and the page may already be gone.
 /// The page runs its own logout sweep first as well; this is the backstop.
-fn clear_webview_data(window: &WebviewWindow) {
+fn clear_webview_data(window: &Webview) {
     if let Err(error) = window.clear_all_browsing_data() {
         log::warn!("could not clear the webview's data: {error}");
     }
