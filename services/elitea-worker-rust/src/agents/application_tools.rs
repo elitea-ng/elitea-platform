@@ -613,12 +613,26 @@ impl ApplicationResumeCoordinator {
         calls: HashMap<String, ChildApplicationResume>,
     ) -> Result<(), NativeAgentAssemblyError> {
         let mut stored = self.inner.lock().await;
+        if stored.root.is_some() || calls.is_empty() {
+            return Err(invalid_configuration());
+        }
+        stored.root = Some(calls);
+        Ok(())
+    }
+
+    /// A fan-out member's resume (T-2A3). The items of one saved Agent node
+    /// (Map items, or Parallel branches of the same Agent) share the node's
+    /// coordinator, and each wakes with its own call's decision, so member
+    /// resumes accumulate. A call never gets a second resume, and a root or
+    /// continuation batch ([`Self::install_root`]) stays one batch.
+    async fn install_member(
+        &self,
+        calls: HashMap<String, ChildApplicationResume>,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let mut stored = self.inner.lock().await;
         if calls.is_empty() {
             return Err(invalid_configuration());
         }
-        // A Map's items of one saved Agent node share this coordinator: each
-        // item installs its own call's resume. A call never gets a second one,
-        // so a repeated install is still refused (T-2A3).
         let root = stored.root.get_or_insert_with(HashMap::new);
         if calls.keys().any(|call| root.contains_key(call)) {
             return Err(invalid_configuration());
@@ -879,6 +893,18 @@ pub(crate) async fn install_nested_application_resume(
 ) -> Result<(), NativeAgentAssemblyError> {
     let (child_resumes, _) = build_nested_application_resume(events, decisions, applications)?;
     coordinator.install_root(child_resumes).await
+}
+
+/// [`install_nested_application_resume`] for one fan-out member's decision:
+/// the member's call joins the node's other members (`install_member`).
+pub(crate) async fn install_nested_application_member_resume(
+    events: &[Event],
+    decisions: Vec<ResolvedDirectHitlDecision>,
+    applications: &ApplicationToolPresentationCatalog,
+    coordinator: &ApplicationResumeCoordinator,
+) -> Result<(), NativeAgentAssemblyError> {
+    let (child_resumes, _) = build_nested_application_resume(events, decisions, applications)?;
+    coordinator.install_member(child_resumes).await
 }
 
 fn build_nested_application_resume(
@@ -6424,6 +6450,27 @@ mod tests {
             history: Vec::new(),
             action: ChildApplicationResumeAction::RetainedPipeline(Box::new(pause)),
         }
+    }
+
+    /// R1 (T-2A3): a root or continuation install stays one batch; only a
+    /// fan-out member's install accumulates, and never twice for one call.
+    #[tokio::test]
+    async fn a_second_root_batch_is_refused_and_only_member_resumes_accumulate() {
+        let one = |call: &str| HashMap::from([(call.to_owned(), retained_pipeline_probe_resume())]);
+        let root = ApplicationResumeCoordinator::default();
+        root.install_root(one("first")).await.unwrap();
+        assert!(root.install_root(one("second")).await.is_err());
+        assert!(root.install_root(one("first")).await.is_err());
+
+        let members = ApplicationResumeCoordinator::default();
+        members.install_member(one("item-0")).await.unwrap();
+        members.install_member(one("item-2")).await.unwrap();
+        assert!(members.install_member(one("item-0")).await.is_err());
+        assert!(members.install_member(HashMap::new()).await.is_err());
+        // A root batch never joins members' resumes.
+        assert!(members.install_root(one("item-1")).await.is_err());
+        assert!(members.has_resume("root-owner", "item-0").await);
+        assert!(members.has_resume("root-owner", "item-2").await);
     }
 
     #[tokio::test]

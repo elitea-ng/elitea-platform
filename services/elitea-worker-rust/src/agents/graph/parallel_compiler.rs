@@ -560,10 +560,34 @@ impl PipelineDefinition {
     }
 }
 
+/// FU-291: a member whose saved Agent calls a saved pipeline is refused by
+/// name before the run starts (Map and Parallel alike); the pipeline used
+/// directly as the worker or branch is not affected.
+fn reject_agent_calling_pipeline(
+    owned: &BTreeMap<String, OwnedBranch>,
+    runtimes: &PipelineNodeRuntimes,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(resolver) = runtimes.application.as_ref() else {
+        return Ok(());
+    };
+    for branch in owned.values() {
+        if let OwnedBranch::Agent(node) = branch
+            && resolver.agent_calls_saved_pipeline(node.id(), node.selection().alias())
+        {
+            return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: format!("{}/{}", node.id(), node.selection().alias()),
+                refusal: FanoutChildRefusal::AgentCallsPipeline,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn reject_nested_parallel(
     owned: &BTreeMap<String, OwnedBranch>,
     runtimes: &PipelineNodeRuntimes,
 ) -> Result<(), PipelineConfigurationError> {
+    reject_agent_calling_pipeline(owned, runtimes)?;
     // Only an Agent branch runs a saved composition; an LLM branch has none.
     let owned = owned
         .iter()
@@ -786,7 +810,7 @@ impl CompilerParallelBranches {
         let events = session.events().all();
         scope
             .applications
-            .install_scope_resume(&events, resolved)
+            .install_scope_member_resume(&events, resolved)
             .await
             .map_err(|error| {
                 refused(&format!(

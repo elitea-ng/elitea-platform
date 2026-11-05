@@ -3465,6 +3465,9 @@ pub(crate) enum FanoutChildRefusal {
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
+    /// The member's saved Agent calls a saved pipeline among its tools; that
+    /// pipeline's checkpoint threads are not admitted to the member (FU-291).
+    AgentCallsPipeline,
 }
 
 impl FanoutChildRefusal {
@@ -3474,15 +3477,21 @@ impl FanoutChildRefusal {
             Self::Kind => "graph.fanout.child_kind_unsupported",
             Self::ContainsCode => "graph.fanout.child_contains_code",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
+            Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
         }
     }
 
     /// Whether `code` is a fan-out child refusal: fixed by editing the pipeline.
     #[must_use]
     pub(crate) fn is_code(code: &str) -> bool {
-        [Self::Kind, Self::ContainsCode, Self::ContainsParallel]
-            .iter()
-            .any(|refusal| refusal.code() == code)
+        [
+            Self::Kind,
+            Self::ContainsCode,
+            Self::ContainsParallel,
+            Self::AgentCallsPipeline,
+        ]
+        .iter()
+        .any(|refusal| refusal.code() == code)
     }
 }
 
@@ -3493,6 +3502,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
+            }
+            Self::AgentCallsPipeline => {
+                "an Agent that calls a saved pipeline cannot run as a Map item or Parallel branch yet"
             }
         })
     }
@@ -3533,6 +3545,7 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::ContainsCode => "fanout_child_code",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
+                FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
             }),
         }
     }

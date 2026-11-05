@@ -61,3 +61,22 @@ func TestOutputServerAcceptsFanoutMemberFailureFrame(t *testing.T) {
 		t.Fatalf("ingested fan-out failure frame is invalid: %v", err)
 	}
 }
+
+// FU-291: a Map item or Parallel branch whose Agent calls a saved pipeline is
+// refused before the run with its own readable text, and only that text.
+func TestFanoutAgentCallsPipelineShowsItsReadableText(t *testing.T) {
+	if len(fanoutAgentCallsPipelineSafeMessage) > outputapp.MaxRuntimeFailureSafeMessageBytes {
+		t.Fatalf("text is %d bytes, over the frame bound", len(fanoutAgentCallsPipelineSafeMessage))
+	}
+	code := runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY
+	payload := &runtimev1.RuntimeErrorV1{Code: code, SafeMessage: fanoutAgentCallsPipelineSafeMessage}
+	policy, ok := runtimeFailurePolicyForError(payload)
+	if !ok || policy.Code != "PIPELINE_NODE_TYPE_NOT_AVAILABLE" || policy.SafeMessage != fanoutAgentCallsPipelineSafeMessage || policy.Retryable {
+		t.Fatalf("agent-calls-pipeline policy: %+v", policy)
+	}
+	payload.SafeMessage += " untrusted detail"
+	policy, _ = runtimeFailurePolicyForError(payload)
+	if policy.SafeMessage == payload.GetSafeMessage() {
+		t.Fatalf("unregistered worker text admitted: %+v", policy)
+	}
+}

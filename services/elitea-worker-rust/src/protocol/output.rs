@@ -105,6 +105,9 @@ pub enum RuntimeFailureKind {
     /// FU-288: a fan-out (Map item or Parallel branch) failed under On Error
     /// `stop`; the node failed after the other members drained.
     FanoutMemberFailed,
+    /// A Map item or Parallel branch runs a saved Agent that calls a saved
+    /// pipeline, refused before the run (FU-291).
+    FanoutAgentCallsPipeline,
     PipelineResultInvalid,
     PipelineResultLimit,
     PipelineCodeFailed,
@@ -848,7 +851,10 @@ pub(crate) const FANOUT_MEMBER_FAILED_UPSTREAM_CODE: &str = "graph.fanout.member
 
 /// FU-288: the chat-visible text for [`RuntimeFailureKind::FanoutMemberFailed`].
 /// Main recognizes this exact text on `PIPELINE_TOOL_FAILED`.
-pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details to see the failed item.";
+pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.";
+
+/// The chat-visible text for [`RuntimeFailureKind::FanoutAgentCallsPipeline`] (FU-291).
+pub(crate) const FANOUT_AGENT_CALLS_PIPELINE_MESSAGE: &str = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
@@ -962,6 +968,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::FanoutMemberFailed => (
             RuntimeErrorCodeV1::PipelineToolFailed,
             FANOUT_MEMBER_FAILED_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::FanoutAgentCallsPipeline => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            FANOUT_AGENT_CALLS_PIPELINE_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineResultInvalid => (

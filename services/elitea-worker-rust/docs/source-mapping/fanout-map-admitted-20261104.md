@@ -192,13 +192,14 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
     lifecycle as `native_agent.event_failed`, so the chat showed the generic "The runtime operation failed."
     (browser case 3, chat 63).
   - The cause was a mapping table without fan-out codes: the join-stop branch sent no registered failure.
-  - Now it sends `graph.fanout.member_failed` (`W/agents/graph/parallel.rs`, `JoinOutcome::Failed`), which the
-    registry maps to `PIPELINE_TOOL_FAILED` with a fixed, non-retryable message
+  - Now it sends `graph.fanout.member_failed` (`W/agents/graph/parallel.rs`, `JoinOutcome::Failed`, which is On
+    Error `stop` or every member failed, `libs/rust/agent-runtime/src/graph/fanout/plan.rs:211-217`; the text says
+    both), which the registry maps to `PIPELINE_TOOL_FAILED` with a fixed, non-retryable message
     (`W/protocol/output.rs`, `FANOUT_MEMBER_FAILED_MESSAGE`). Main admits exactly that message for that code
     (`M/internal/transport/runtimegrpc/output/server.go`, `fanoutMemberFailedSafeMessage`); any other text under
     the code is still replaced by the generic tool-failure text.
   - The first message was 257 bytes. Main refused that terminal frame (a failure frame's safe message is at most 256
-    bytes), so the run never settled; the fanpar browser re-run found it. The message is now 203 bytes, and both
+    bytes), so the run never settled; the fanpar browser re-run found it. The message is now 211 bytes (worded for both join failures), and both
     sides test the bound: the Worker registry test, and a Main test that publishes the frame through the output
     server and runs the application's own frame validation on what was ingested.
   - The message is fixed, so it does not name the item: Main admits registered text only. The item and its error
@@ -225,8 +226,11 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
     - Each member is its own invocation. `ScopedAgentMember::bind` (`W/agents/application_tools.rs:4667`) and
       `PipelineApplicationNodeRuntime::for_member` (`W/agents/pipeline/scoped_runtime.rs:180`) are called from the
       ScopedAgent arm of `rebind_participant` (`W/agents/pipeline/parallel_application_resolver.rs:165`).
-    - The shared coordinator accepts each item's own call resume and still refuses a second resume for the same
-      call (`W/agents/application_tools.rs:611`).
+    - Each item installs its own call's resume through a member-only entry, `install_member`
+      (`W/agents/application_tools.rs`, reached only from the member wake `resume_agent_member` →
+      `install_scope_member_resume`, `W/agents/graph/parallel_compiler.rs`). It refuses a second resume for the same
+      call. Root and continuation callers keep `install_root`'s one-batch rule (review R1); proven by
+      `a_second_root_batch_is_refused_and_only_member_resumes_accumulate`.
     - The member event scope is bounded by the fan-out maximum
       (`W/agents/graph/node_events_parallel.rs:62`, `MAX_FANOUT_MEMBERS = MAX_FANOUT_CHILDREN`).
   - **Nested saved applications.**
@@ -237,10 +241,42 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
       `W/agents/application_tools.rs:298`; the nested saved pipeline tool in `W/agents/application_pipeline.rs`).
     - It is carried across the one spawn on that path, `DrivenTask` (`W/agents/driven.rs:84`). The vendored agent
       runs tools inline.
+    - **Every other spawn reachable from a member's tool execution runs no application send** (review R2):
+      - the sub-agent child (`libs/rust/agent-runtime/src/subagents/child.rs:517`): a child is never offered the
+        saved-application toolset `elitea_nested_applications` (built at `W/agents/application_tools.rs:3128`,
+        withheld by `W/agents/subagents.rs:36-38`, filtered at `:60`), and the runtime's read-only filter applies on
+        top;
+      - `graph/fanout/admission.rs:142`, `toolkits/delegated_auth/discovery.rs:247`,
+        `toolkits/families/openapi/source.rs:167,224`: inside `#[cfg(test)]` modules only (`:127`, `:238`, `:119`);
+      - `toolkits/families/web/meter.rs:348` (`spawn_settle`): settles a web tool's cost with the meter, no event;
+      - `toolkits/mcp/governed/session.rs:215`: a session-expiry timer, no event;
+      - the vendored ADK crates spawn only for action triggers, MCP health checks and model or session transport,
+        never around a tool call.
     - **Proof:** `postgres_map_items_of_a_saved_agent_with_a_nested_saved_agent_keep_their_own_events`. 3 items whose
       agent calls a nested saved agent all complete with their own answers, and every nested answer frame sits
       under its own item's `sibling_ordinal`. Without the routing, no nested frame reaches the run.
     - Parallel drains each branch node's own channel, which its nested tools share, so it never needed this.
+    - **An Agent member that calls a saved pipeline is refused before the run, Map and Parallel alike (review R3,
+      FU-291).** The nested pipeline checkpoints on a thread of the Agent's own session (`e1:<session>/<call>`),
+      which is not among the member's admitted `p1:` threads, so its first leaf event was refused at the member's
+      projection (`W/agents/graph/node_events_parallel.rs:149-176` via `W/agents/pipeline/scoped_runtime.rs:650`) and
+      the member failed. This predates Map: two Parallel branches of such an Agent failed the same way.
+      - Now `reject_agent_calling_pipeline` (`W/agents/graph/parallel_compiler.rs`, called through
+        `reject_nested_parallel` for Parallel branches and the Map worker) asks the frozen resolver
+        (`agent_calls_saved_pipeline`, `W/agents/pipeline.rs`; the catalog walk
+        `has_pipeline_descendant`, `W/agents/events.rs`) and refuses `graph.fanout.agent_calls_saved_pipeline`
+        naming `<node>/<agent alias>`. The chat shows the registered `FANOUT_AGENT_CALLS_PIPELINE_MESSAGE`
+        (`W/protocol/output.rs`), which Main admits exactly (`fanoutAgentCallsPipelineSafeMessage`). The chat text is
+        fixed (Main admits registered text only); the node and the Agent are named in the refusal's diagnostic.
+      - Main has no save-time walker over a saved Agent's tools, so the run-start refusal is the gate.
+      - A saved pipeline used directly as the worker or branch is not affected, and a nested saved Agent still works.
+      - Proofs: `postgres_a_map_item_agent_calling_a_saved_pipeline_is_refused_readably`,
+        `postgres_a_parallel_branch_agent_calling_a_saved_pipeline_is_refused_readably` (typed cause, nothing ran),
+        `an_agent_member_calling_a_saved_pipeline_ends_as_its_registered_text` (the chat text; the diagnostic names
+        node and Agent), `postgres_a_saved_pipeline_map_worker_still_runs_every_item`,
+        `postgres_map_items_of_a_saved_agent_with_a_nested_saved_agent_keep_their_own_events`; Main
+        `TestFanoutAgentCallsPipelineShowsItsReadableText`.
+      - Support is FU-291 (admit the nested pipeline's threads into the member scope and extend recovery).
   - **No silent hang.** A send into a full, undrained channel is ended by the node's deadline, typed
     `deadline_exceeded` (`items_blocked_on_a_full_channel_end_typed_at_the_deadline`).
   - **Parallel isn't affected.** Its branches own distinct nodes. On fanpar, a Parallel with the same saved agent in
@@ -328,7 +364,7 @@ extracted and checked for strings unique to this branch.
 | 1. 64-item State Modifier Map | PASS. Live status groups ("Running (3)", "Completed (47)"), never 64 rows; after a reload 64 ordered entries, all succeeded. Re-confirmed on the final images. |
 | 2. Saved-Agent Map, 3 items ask | PASS. 3 cards "(1)–(3)", answered out of order across two tabs, each dropped live in the other tab; reload keeps open cards; ledger 3 CONSUMED, no duplicate card; ordered answers. Re-confirmed on the final images. |
 | 3. On Error and Join | PASS. `continue` + Router branches on the typed failed entry ("PARTIAL: 2 failed"); keyed join read by index; `stop` drains, then the chat shows the registered text (FU-288 fixed here) and the run settles `PIPELINE_TOOL_FAILED`. |
-| 4. Worker kill | PASS. At the park: still 3 cards, none duplicated. At the decision seam: resumed after lease expiry, decision CONSUMED once. Mid-Map (8 LLM items): completed items never re-admitted, in-flight read-only items re-run, one ordered answer. |
+| 4. Worker kill (on `map-bf94753dc`, which has the per-item invocation) | PASS. At the park: still 3 cards, none duplicated. At the decision seam: resumed after lease expiry, decision CONSUMED once. Mid-Map (8 LLM items): completed items never re-admitted, in-flight read-only items re-run, one ordered answer. |
 | 5. Map in a saved child pipeline; Map and Parallel as siblings | PASS. "CHILD MAP SAID: ALPHA-0 BETA-1 GAMMA-2"; "MAP ONE,TWO,THREE,FOUR \| PARALLEL succeeded,succeeded". |
 | 6. Stop during a paused Map | PASS, as the Parallel pass: a parked turn has settled, so no Stop is offered; Regenerate closed the 3 open cards (`SUPERSEDED` once each) and the other tab dropped them within 3 s without a reload. |
 | 7. Agent node beside a Map | PASS. "MAP RED,GREEN,BLUE \| AGENT Lisbon". |

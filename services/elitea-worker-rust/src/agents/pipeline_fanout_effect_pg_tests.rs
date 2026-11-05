@@ -6281,6 +6281,166 @@ async fn postgres_map_items_of_a_saved_agent_with_a_nested_saved_agent_keep_thei
     db.pool.close().await;
 }
 
+/// A saved Agent that delegates to a nested saved pipeline (application 5,
+/// version 6, the tool `elitea_agent_5_v_6`).
+fn pipeline_delegating_agent() -> Value {
+    let mut agent = delegating_agent();
+    agent["instructions"] = json!("Delegate the topic to the helper flow and report its answer.");
+    agent["tools"][0]["name"] = json!("helper-flow");
+    agent["tools"][0]["toolkit_name"] = json!("helper-flow");
+    agent["tools"][0]["agent_type"] = json!("pipeline");
+    agent
+}
+
+/// The nested saved pipeline: one LLM node answers the topic it is given.
+fn helper_pipeline() -> Value {
+    let mut pipeline = effectful_agent();
+    pipeline["agent_type"] = json!("pipeline");
+    pipeline["tools"] = json!([]);
+    pipeline["instructions"] = json!(
+        "state:\n  input: str\n  messages: list\n  answer: str\nentry_point: answer\nnodes:\n  - id: answer\n    type: llm\n    input: [input]\n    input_mapping:\n      system: {type: fixed, value: 'Answer the topic you are given.'}\n      task: {type: variable, value: input}\n    output: [answer]\n    transition: END\n"
+    );
+    pipeline
+}
+
+/// FU-291 (T-2A3 review R3): a fan-out member whose saved Agent calls a saved
+/// pipeline cannot run yet (the pipeline's checkpoint threads are not the
+/// member's). `yaml` is refused before the run with the typed cause the chat
+/// maps to its registered text (the refusal's own text names the node and the
+/// Agent: `an_agent_member_calling_a_saved_pipeline_ends_as_its_registered_text`).
+async fn assert_agent_member_calling_a_pipeline_is_refused(yaml: String) {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the FU-291 refusal proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let runtime = saved_runtime_on(
+        Vec::new(),
+        pipeline_delegating_agent(),
+        Some(helper_pipeline()),
+        None,
+        test_model_gateway_config(),
+    );
+    let (assembler, captured) = assembler_on(
+        &db.pool,
+        runtime,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] = json!(yaml);
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let Err(error) = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+    else {
+        panic!("an Agent member calling a saved pipeline was assembled");
+    };
+    let cause = error.cause().expect("a typed cause");
+    assert_eq!(
+        cause.code(),
+        crate::agents::graph::compiler::FanoutChildRefusal::AgentCallsPipeline.code()
+    );
+    assert_eq!(cause.detail(), Some("fanout_agent_calls_pipeline"));
+    assert_eq!(model_requests(&captured), 0, "nothing ran");
+    db.pool.close().await;
+}
+
+/// FU-291: a Map whose item Agent calls a saved pipeline is refused readably.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_map_item_agent_calling_a_saved_pipeline_is_refused_readably() {
+    let topics = (0..3)
+        .map(|index| format!("topic-p{index:02}x"))
+        .collect::<Vec<_>>();
+    assert_agent_member_calling_a_pipeline_is_refused(saved_agent_map_yaml(&topics, 3)).await;
+}
+
+/// FU-291: a Parallel branch whose Agent calls a saved pipeline is refused
+/// the same way.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_parallel_branch_agent_calling_a_saved_pipeline_is_refused_readably() {
+    assert_agent_member_calling_a_pipeline_is_refused(
+        "state:\n  left: str\n  right: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: left, node: ask_left}, {id: right, node: ask_right}]\n    max_concurrency: 2\n    wait: all\n    on_error: continue\n    output: [joined]\n    transition: END\n  - id: ask_left\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'left'}\n    output: [left]\n  - id: ask_right\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'right'}\n    output: [right]\n".to_owned(),
+    )
+    .await;
+}
+
+/// FU-291 scope: a saved pipeline used directly as the Map worker is not
+/// affected. Three items each run the pipeline's LLM node with their own
+/// topic and land in source order.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_pipeline_map_worker_still_runs_every_item() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the saved-pipeline worker proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..3)
+        .map(|index| format!("topic-w{index:02}x"))
+        .collect::<Vec<_>>();
+    let outcomes = topics
+        .iter()
+        .map(|topic| TestModelGatewayOutcome::ResponseForRequest {
+            marker: Box::leak(topic.clone().into_boxed_str()),
+            response: pipeline_text_response(&format!("flow answer for {topic}")),
+        })
+        .collect();
+    let runtime = saved_runtime_on(
+        outcomes,
+        helper_pipeline(),
+        None,
+        None,
+        test_model_gateway_config(),
+    );
+    let (assembler, captured) = assembler_on(
+        &db.pool,
+        runtime,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+    );
+    let mut request = request_for("continue", "pipeline");
+    request.payload.application["version_details"]["instructions"] =
+        json!(saved_agent_map_yaml(&topics, 3));
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("a saved pipeline worker assembles");
+    run_collecting(invocation).await.expect("the Map joins");
+    assert_eq!(model_requests(&captured), 3);
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for (index, (entry, topic)) in entries.iter().zip(&topics).enumerate() {
+        assert_eq!(entry["index"], index, "{entries:?}");
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+        assert!(
+            entry["outputs"]["answer"]
+                .to_string()
+                .contains(&format!("flow answer for {topic}")),
+            "{entries:?}"
+        );
+    }
+    db.pool.close().await;
+}
+
 /// T-2A3 measurement (not a gate): 64 items of one saved Agent whose model
 /// answers after a fixed 100 ms, on a multi-thread runtime. At concurrency 8
 /// the items overlap their model latency (about 8 x faster than one at a

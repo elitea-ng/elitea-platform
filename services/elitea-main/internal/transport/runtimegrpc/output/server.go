@@ -1157,8 +1157,14 @@ const applicationCompositionInvalidSafeMessage = applicationcomposition.RuntimeM
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
 
 // fanoutMemberFailedSafeMessage is the Worker's registered text for a fan-out
-// (Map item or Parallel branch) that failed under On Error `stop` (FU-288).
-const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details to see the failed item."
+// (Map item or Parallel branch) whose join failed: On Error `stop`, or every
+// member failed (FU-288).
+const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item."
+
+// fanoutAgentCallsPipelineSafeMessage is the Worker's registered text for a Map
+// item or Parallel branch whose saved Agent calls a saved pipeline, refused
+// before the run (FU-291).
+const fanoutAgentCallsPipelineSafeMessage = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools."
 
 // The budget scope that refused a model call (#6732). The gateway names the
 // scope in its 402 refusal (error.code insufficient_quota for the project
@@ -1197,6 +1203,9 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == fanoutAgentCallsPipelineSafeMessage {
+		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: fanoutAgentCallsPipelineSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY && payload.GetSafeMessage() == nodeTypeNotAvailableSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_NODE_TYPE_NOT_AVAILABLE", SafeMessage: nodeTypeNotAvailableSafeMessage}, true

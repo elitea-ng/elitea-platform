@@ -235,6 +235,22 @@ impl ApplicationRuntimeProjection {
         install_nested_application_resume(events, decisions, &self.presentations, coordinator).await
     }
 
+    /// [`Self::install_scope_resume`] for one fan-out member's decision.
+    pub(crate) async fn install_scope_member_resume(
+        &self,
+        events: &[Event],
+        decisions: Vec<ResolvedDirectHitlDecision>,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let coordinator = self.resume.as_ref().ok_or_else(invalid_configuration)?;
+        super::application_tools::install_nested_application_member_resume(
+            events,
+            decisions,
+            &self.presentations,
+            coordinator,
+        )
+        .await
+    }
+
     pub(crate) async fn install_scope_static_resume(
         &self,
         events: &[Event],

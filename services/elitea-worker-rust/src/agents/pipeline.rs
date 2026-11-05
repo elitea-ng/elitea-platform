@@ -1675,6 +1675,22 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
     }
 
+    fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
+        let participant = if self.nodes.is_empty() {
+            self.participants.get(alias)
+        } else {
+            self.nodes
+                .get(node)
+                .filter(|(selected, _)| selected == alias)
+                .map(|(_, participant)| participant)
+        };
+        matches!(
+            participant,
+            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. })
+                if scope.applications.presentation_catalog().has_pipeline_descendant()
+        )
+    }
+
     fn fixed_parallel_definition_digest(
         &self,
         node: &str,

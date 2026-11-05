@@ -694,6 +694,14 @@ impl ApplicationToolPresentationCatalog {
         self.by_tool_name.contains_key(tool_name)
     }
 
+    /// Whether a saved pipeline is among these tools or any nested tools.
+    #[must_use]
+    pub(crate) fn has_pipeline_descendant(&self) -> bool {
+        self.by_tool_name.values().any(|entry| {
+            entry.agent_type == "pipeline" || entry.child_tools.has_pipeline_descendant()
+        })
+    }
+
     pub(crate) fn child_tools(&self, tool_name: &str) -> Option<&Self> {
         self.get(tool_name)
             .map(|presentation| &presentation.child_tools)

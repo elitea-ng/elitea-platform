@@ -378,6 +378,14 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         None
     }
 
+    /// Whether the saved Agent that `node` runs (by `alias`) calls a saved
+    /// pipeline among its tools, at any depth. Such an Agent cannot run as a
+    /// fan-out member yet (FU-291): its pipeline's checkpoint threads are not
+    /// among the member's admitted threads.
+    fn agent_calls_saved_pipeline(&self, _node: &str, _alias: &str) -> bool {
+        false
+    }
+
     /// Rebind the existing frozen resolver to one exact branch event sender.
     fn for_parallel_events(
         &self,
