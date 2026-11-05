@@ -7,14 +7,14 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
 )
 
 // FU-288: a Map item or Parallel branch that failed under On Error `stop`
 // reaches the chat with its own readable text, and only that exact text.
 func TestFanoutMemberFailureShowsItsReadableText(t *testing.T) {
-	// A failure frame's safe message is at most 256 bytes (RuntimeFailureFrame.Validate).
-	if len(fanoutMemberFailedSafeMessage) > 256 {
-		t.Fatalf("fan-out failure text is %d bytes, over the 256-byte frame bound", len(fanoutMemberFailedSafeMessage))
+	if len(fanoutMemberFailedSafeMessage) > outputapp.MaxRuntimeFailureSafeMessageBytes {
+		t.Fatalf("fan-out failure text is %d bytes, over the frame bound", len(fanoutMemberFailedSafeMessage))
 	}
 	code := runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED
 	payload := &runtimev1.RuntimeErrorV1{Code: code, SafeMessage: fanoutMemberFailedSafeMessage}
