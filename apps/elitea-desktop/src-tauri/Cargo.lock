@@ -1682,7 +1682,9 @@ dependencies = [
  "log",
  "objc2-foundation",
  "percent-encoding",
+ "plist",
  "rand 0.10.3",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "rustix",
@@ -1702,6 +1704,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "unicode-general-category",
  "url",
  "uuid",
 ]

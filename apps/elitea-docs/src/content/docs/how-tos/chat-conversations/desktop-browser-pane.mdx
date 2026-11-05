@@ -15,6 +15,8 @@ The Elitea desktop app can show a web page beside a **Local work** thread, in th
 
 The toolbar has **Back**, **Forward**, **Reload** (or **Stop** while a page loads), **Open in browser** (the page's address in your usual browser), and **⋯ ▸ Forget site data**. The × closes the page; its site data stays until you forget it.
 
+**Back**, **Forward** and **Stop** ask the page to move through its history, so a page can ignore them. The address field and the × always work: type an address to leave a page.
+
 The page itself cannot open the app's menus or reach any app function. While a dialog or sheet is open, the page is hidden, and it shows again when the dialog closes.
 
 ## What the browser opens
@@ -23,6 +25,10 @@ The page itself cannot open the app's menus or reach any app function. While a d
 - **`http` pages.** Only when the app's `browser_allow_http` setting is on (off by default; see below).
 - **Refused:** `file:`, `data:`, `javascript:` and other non-web addresses; `localhost` and other names on your own network (`.local`, `.internal`, `.home.arpa`); private and loopback IP addresses (`10.x`, `192.168.x`, `127.0.0.1`, …); and addresses with a user name or password in them. The tab says why a page was refused.
 - **Links that open a new window** open in the same tab instead. **Back** returns to the page that opened them.
+
+<Warning>
+**Not blocked yet.** These rules apply to the pages you open and the frames inside them. A public page can still load images, scripts and data from `localhost` or a private address, for example a service on your computer or your router. A public name that points to a private address is not blocked either. A later release blocks the first case on macOS. Keep sensitive local services behind authentication.
+</Warning>
 
 The page cannot use your camera, microphone, location or notifications: every request is denied. Password and form autofill are off.
 
@@ -42,6 +48,8 @@ A thread's site data is deleted when you:
 ## Downloads
 
 A file the page downloads is saved, without asking, to `~/Downloads/Elitea/<thread>/`. A file with the same name as one already there gets a number (`report (2).pdf`). Each download shows as a card in the thread, with **Show in Finder** once it has finished.
+
+Downloads are **quarantined**, as they are in Safari: the first time you open a downloaded app or script, macOS checks it and asks before running it. Finder's **Get Info** shows where the file came from. Invisible characters that can disguise a file name (for example, a right-to-left mark that makes an app named `invoice…fdp.app` look like `invoice…ppa.pdf`) are removed from the name.
 
 ## Allow plain `http` pages
 

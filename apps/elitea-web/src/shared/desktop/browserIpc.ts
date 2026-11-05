@@ -31,7 +31,7 @@ export type BrowserEvent =
   /** The host closed the pane to keep at most four alive; the next open makes a new page. */
   | { thread_id: string; kind: 'closed' };
 
-export const BROWSER_EVENT_CHANNEL = 'browser://event';
+const BROWSER_EVENT_CHANNEL = 'browser://event';
 
 export interface BrowserIpc {
   /** Open (or re-point) the thread's page at `address` (`example.com` means https). Resolves with the URL it loads. */
@@ -49,7 +49,7 @@ export interface BrowserIpc {
   onEvent(handler: (event: BrowserEvent) => void): Promise<() => void>;
 }
 
-export function createBrowserIpc(hostInvoke: HostInvoke, listen: ListenFn): BrowserIpc {
+function createBrowserIpc(hostInvoke: HostInvoke, listen: ListenFn): BrowserIpc {
   const invoke = <T>(command: string, args: Record<string, unknown>): Promise<T> =>
     hostInvoke<T>(command, args).catch((error: unknown) => {
       throw toWorkspaceIpcError(error);

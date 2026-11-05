@@ -17,6 +17,18 @@
 //!   classification of `libs/rust/egress-guard`) and the names that are
 //!   private by definition (`localhost`, `.local`, …). wry calls the guard
 //!   for frames as well as the top level, so the rule is the same for both.
+//!
+//!   **Known gap (#1634).** The guard sees navigations only, and judges
+//!   the URL's host as written. A public page can still make SUBRESOURCE
+//!   loads (images, scripts, `fetch`/XHR, WebSockets) to loopback and
+//!   private addresses, and a public name that resolves to a private
+//!   address (DNS rebinding, or a record that simply points inside) passes.
+//!   On macOS the fix is a `WKContentRuleList` blocking those hosts for
+//!   every load ([`content_rules`] builds it, tested); installing it needs
+//!   WebKit calls that are `unsafe` in objc2-web-kit, which this crate
+//!   forbids, so it waits on the follow-up. Resolving names in the guard
+//!   would be racy (the page's own lookup can differ), so the follow-up
+//!   does not do that either: the residual DNS gap stays documented.
 //! - **A new window** (`target=_blank`, `window.open`) is never a window:
 //!   an allowed URL replaces the page (the opener stays in its history).
 //! - **An isolated store per thread.** macOS 14+: a
@@ -29,13 +41,23 @@
 //!   geolocation, notifications, …) is denied; no autofill; Tauri's own
 //!   drag-and-drop handler is off, so a drop reaches the page as a plain
 //!   HTML drop and never becomes a host event.
-//! - **Downloads** go to `~/Downloads/Elitea/<thread>/` and are reported on
-//!   `browser://event`, which the UI turns into a transcript card.
+//! - **Downloads** go to `~/Downloads/Elitea/<thread>/`, without a prompt
+//!   (owner-accepted, ADR-0048), and are reported on `browser://event`,
+//!   which the UI turns into a transcript card. On macOS every finished
+//!   download is QUARANTINED (`com.apple.quarantine`, so Gatekeeper checks
+//!   it on first open, as for a Safari download) and records where it came
+//!   from (`com.apple.metadata:kMDItemWhereFroms`). A download that cannot
+//!   be quarantined is deleted and reported as failed.
+//! - **History buttons** (Back, Forward, Stop) run `history.back()` and
+//!   friends in the page, because the native `goBack`/`stopLoading` calls
+//!   need `unsafe` (same follow-up, #1634). A page can override them, so they are a
+//!   convenience, not a control: the address field and Close are host-side
+//!   and always work. Reload is native (`webview.reload()`).
 //!
 //! Tauri's child webviews are behind its `unstable` feature: this module is
 //! the one place that uses them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -339,14 +361,28 @@ impl LivePanes {
 }
 
 /// A file name for a download: the name the page suggested, without path
-/// separators, control characters or a leading dot, at most 120
-/// characters; `download` when nothing is left.
+/// separators, control characters, Unicode format characters (category
+/// Cf: the bidi overrides that make `invoice\u{202e}fdp.app` show as
+/// `invoiceppa.pdf`, zero-width marks, the BOM) or a leading dot, at most
+/// 120 characters; `download` when nothing is left.
 #[must_use]
 pub fn download_name(suggested: &str) -> String {
+    use unicode_general_category::{GeneralCategory, get_general_category};
     let base = suggested.rsplit(['/', '\\']).next().unwrap_or_default();
     let cleaned: String = base
         .chars()
-        .map(|c| if c.is_control() || c == ':' { '_' } else { c })
+        .filter(|c| get_general_category(*c) != GeneralCategory::Format)
+        .map(|c| {
+            let separator = matches!(
+                get_general_category(c),
+                GeneralCategory::LineSeparator | GeneralCategory::ParagraphSeparator
+            );
+            if c.is_control() || separator || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_start_matches('.').trim();
     let mut name: String = cleaned.chars().take(120).collect();
@@ -354,6 +390,176 @@ pub fn download_name(suggested: &str) -> String {
         name = "download".to_owned();
     }
     name
+}
+
+/// Downloads in flight, by (pane label, URL) → where each is written
+/// (macOS does not report the path when one finishes). wry gives a
+/// download no id, so two downloads of the same URL queue under one key
+/// and are paired first-in, first-out: each finish takes one path, so no
+/// path is lost or reported twice.
+#[derive(Debug, Default)]
+pub struct PendingDownloads(HashMap<(String, String), VecDeque<PathBuf>>);
+
+impl PendingDownloads {
+    pub fn start(&mut self, label: &str, url: &str, path: PathBuf) {
+        self.0
+            .entry((label.to_owned(), url.to_owned()))
+            .or_default()
+            .push_back(path);
+    }
+
+    /// The oldest download of `url` in `label`'s pane finished.
+    pub fn finish(&mut self, label: &str, url: &str) -> Option<PathBuf> {
+        let key = (label.to_owned(), url.to_owned());
+        let queue = self.0.get_mut(&key)?;
+        let path = queue.pop_front();
+        if queue.is_empty() {
+            self.0.remove(&key);
+        }
+        path
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// The `com.apple.quarantine` value of a download, in the format the
+/// system's own downloaders write: `<flags>;<seconds since 1970, hex>;
+/// <agent>;<event UUID>`. Flags `0081`: downloaded (`0x0001`) by an app
+/// that is not sandboxed (`0x0080`), as Edge and Chrome write; Gatekeeper
+/// checks the file on first open. The agent, `Elitea`, is the app Finder
+/// names as the downloader.
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "macOS only")
+)]
+#[must_use]
+pub fn quarantine_value(unix_seconds: u64, event: uuid::Uuid) -> String {
+    format!(
+        "0081;{unix_seconds:08x};Elitea;{}",
+        event
+            .hyphenated()
+            .encode_upper(&mut uuid::Uuid::encode_buffer())
+    )
+}
+
+/// The `com.apple.metadata:kMDItemWhereFroms` value: a binary plist array
+/// holding the download's URL (at most 2048 characters), which Finder's
+/// Get Info shows as "Where from".
+#[cfg(target_os = "macos")]
+fn where_froms(url: &str) -> Vec<u8> {
+    let url: String = url.chars().take(2048).collect();
+    let value = plist::Value::Array(vec![plist::Value::String(url)]);
+    let mut bytes = Vec::new();
+    // Writing to a Vec cannot fail.
+    let _ = value.to_writer_binary(&mut bytes);
+    bytes
+}
+
+/// Mark a finished download as quarantined, and where it came from. The
+/// quarantine is the part that matters: its error is returned. The origin
+/// is best effort.
+#[cfg(target_os = "macos")]
+fn quarantine(path: &Path, url: &str) -> std::io::Result<()> {
+    use rustix::fs::{XattrFlags, setxattr};
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let value = quarantine_value(now, uuid::Uuid::new_v4());
+    setxattr(
+        path,
+        "com.apple.quarantine",
+        value.as_bytes(),
+        XattrFlags::empty(),
+    )?;
+    if let Err(error) = setxattr(
+        path,
+        "com.apple.metadata:kMDItemWhereFroms",
+        &where_froms(url),
+        XattrFlags::empty(),
+    ) {
+        log::info!(target: "browser", "a download's origin was not recorded: {error}");
+    }
+    Ok(())
+}
+
+/// Other systems have no quarantine attribute; their delivery (#1593)
+/// decides the equivalent (Windows: the Mark of the Web).
+#[cfg(not(target_os = "macos"))]
+const fn quarantine(_path: &Path, _url: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Host names whose every load the pane's content rules block (ADR-0048
+/// decision 2): the private-by-definition names of [`PRIVATE_SUFFIXES`].
+const RULE_HOSTS: &[&str] = &[
+    "([^/:@]*\\.)?localhost",
+    "[^/:@]*\\.local",
+    "[^/:@]*\\.internal",
+    "[^/:@]*\\.home\\.arpa",
+];
+
+/// Address literals the content rules block, as WebKit writes them in a
+/// canonical URL (IPv4 dotted decimal, IPv6 lower-case and compressed).
+/// WebKit's rule regexes have no alternation (`|`) and no counted
+/// repetition (`{n}`), so a range is several patterns.
+const RULE_ADDRESSES: &[&str] = &[
+    // 0.0.0.0/8, 127.0.0.0/8 (loopback), 10.0.0.0/8
+    "0\\.[0-9]+\\.[0-9]+\\.[0-9]+",
+    "127\\.[0-9]+\\.[0-9]+\\.[0-9]+",
+    "10\\.[0-9]+\\.[0-9]+\\.[0-9]+",
+    // 172.16.0.0/12
+    "172\\.1[6-9]\\.[0-9]+\\.[0-9]+",
+    "172\\.2[0-9]\\.[0-9]+\\.[0-9]+",
+    "172\\.3[01]\\.[0-9]+\\.[0-9]+",
+    // 192.168.0.0/16, 169.254.0.0/16 (link-local: the metadata endpoints)
+    "192\\.168\\.[0-9]+\\.[0-9]+",
+    "169\\.254\\.[0-9]+\\.[0-9]+",
+    // 100.64.0.0/10 (CGNAT, private to the egress guard)
+    "100\\.6[4-9]\\.[0-9]+\\.[0-9]+",
+    "100\\.[7-9][0-9]\\.[0-9]+\\.[0-9]+",
+    "100\\.1[01][0-9]\\.[0-9]+\\.[0-9]+",
+    "100\\.12[0-7]\\.[0-9]+\\.[0-9]+",
+    // [::], [::1], IPv4-mapped [::ffff:…]
+    "\\[::\\]",
+    "\\[::1\\]",
+    "\\[::ffff:[0-9a-f:.]*\\]",
+    // fc00::/7 (unique-local), fe80::/10 (link-local)
+    "\\[f[cd][0-9a-f][0-9a-f]:[0-9a-f:.]*\\]",
+    "\\[fe[89ab][0-9a-f]:[0-9a-f:.]*\\]",
+];
+
+/// The `WKContentRuleList` JSON that blocks EVERY load (top level, frames,
+/// subresources, `fetch`/XHR, WebSockets: no `resource-type`, so all of
+/// them) to loopback, private and link-local addresses and the private
+/// names, whatever the scheme. `None` when the policy allows the private
+/// network. Not installed yet: see the module docs ("Known gap").
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "installed by the webkit-shim follow-up, #1634")
+)]
+#[must_use]
+pub fn content_rules(policy: GuardPolicy) -> Option<String> {
+    if policy.allow_private_network {
+        return None;
+    }
+    // Any scheme, optional user info, the host, then a port or the path
+    // (a canonical http(s)/ws(s) URL always has one). An optional final
+    // dot on a name (`localhost.`).
+    let rules: Vec<Value> = RULE_HOSTS
+        .iter()
+        .map(|host| format!("{host}\\.?"))
+        .chain(RULE_ADDRESSES.iter().map(|address| (*address).to_owned()))
+        .map(|host| {
+            json!({
+                "trigger": { "url-filter": format!("^[a-z][-a-z0-9+.]*://([^/@]*@)?{host}[:/]") },
+                "action": { "type": "block" },
+            })
+        })
+        .collect();
+    Some(Value::Array(rules).to_string())
 }
 
 /// `dir/name`, or `dir/name (2).ext`, … when that exists already.
@@ -415,9 +621,7 @@ pub struct BrowserPanes {
 struct Inner {
     registry: StoreRegistry,
     live: LivePanes,
-    /// Downloads in flight: (label, url) → where they are written (macOS
-    /// does not report the path when one finishes).
-    downloads: HashMap<(String, String), PathBuf>,
+    downloads: PendingDownloads,
 }
 
 impl BrowserPanes {
@@ -549,21 +753,25 @@ fn on_download(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             path.clone_into(destination);
-            panes
-                .lock()
-                .downloads
-                .insert((label.to_owned(), url.to_string()), path);
+            panes.lock().downloads.start(label, url.as_str(), path);
             emit(app, thread_id, "download_started", json!({ "name": name }));
             true
         }
         DownloadEvent::Finished { url, path, success } => {
-            let kept = panes
-                .lock()
-                .downloads
-                .remove(&(label.to_owned(), url.to_string()));
+            let kept = panes.lock().downloads.finish(label, url.as_str());
             let Some(path) = kept.or(path) else {
                 return true;
             };
+            // Quarantined whenever the file is there (a failed download can
+            // leave a partial one). Fail closed: no quarantine, no file.
+            let mut success = success;
+            if path.is_file()
+                && let Err(error) = quarantine(&path, url.as_str())
+            {
+                log::warn!(target: "browser", "a download was not quarantined, deleted: {error}");
+                let _ = std::fs::remove_file(&path);
+                success = false;
+            }
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -881,7 +1089,9 @@ pub enum GoAction {
 }
 
 impl GoAction {
-    /// The script run in the page. History only: nothing is read back.
+    /// The script run in the page. History only: nothing is read back. The
+    /// page can override these (module docs, "History buttons"); the native
+    /// calls wait on the webkit-shim follow-up (#1634).
     const fn script(self) -> &'static str {
         match self {
             Self::Back => "history.back()",
@@ -1287,6 +1497,27 @@ mod tests {
         assert_eq!(download_name(""), "download");
         assert_eq!(download_name("..."), "download");
         assert_eq!(download_name(&"x".repeat(500)).chars().count(), 120);
+        // Unicode format characters (Cf) go: the right-to-left override that
+        // shows `invoice\u{202e}fdp.app` as `invoiceppa.pdf`, the other bidi
+        // embeddings and isolates, zero-width marks, the BOM.
+        assert_eq!(download_name("invoice\u{202e}fdp.app"), "invoicefdp.app");
+        for c in [
+            '\u{200b}', '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}',
+            '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+            '\u{feff}', '\u{00ad}', '\u{061c}',
+        ] {
+            assert_eq!(
+                download_name(&format!("a{c}b.pdf")),
+                "ab.pdf",
+                "U+{:04X}",
+                u32::from(c)
+            );
+        }
+        assert_eq!(download_name("\u{feff}.\u{202e}bashrc"), "bashrc");
+        assert_eq!(download_name("\u{202e}\u{200b}"), "download");
+        assert_eq!(download_name("a\u{2028}b\u{2029}c"), "a_b_c");
+        // Letters and marks of other scripts stay.
+        assert_eq!(download_name("отчёт-報告.pdf"), "отчёт-報告.pdf");
 
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(unique_path(dir.path(), "a.pdf"), dir.path().join("a.pdf"));
@@ -1304,6 +1535,172 @@ mod tests {
         assert_eq!(
             unique_path(dir.path(), "notes"),
             dir.path().join("notes (2)")
+        );
+    }
+
+    #[test]
+    fn downloads_of_the_same_url_pair_first_in_first_out() {
+        let mut pending = PendingDownloads::default();
+        let url = "https://example.com/report.pdf";
+        pending.start("browser-a", url, PathBuf::from("/d/report.pdf"));
+        pending.start("browser-a", url, PathBuf::from("/d/report (2).pdf"));
+        pending.start("browser-b", url, PathBuf::from("/e/report.pdf"));
+        assert_eq!(
+            pending.finish("browser-a", url),
+            Some(PathBuf::from("/d/report.pdf"))
+        );
+        assert_eq!(
+            pending.finish("browser-a", url),
+            Some(PathBuf::from("/d/report (2).pdf")),
+            "the second download keeps its own path"
+        );
+        assert_eq!(pending.finish("browser-a", url), None, "each path once");
+        assert_eq!(
+            pending.finish("browser-a", "https://example.com/other"),
+            None
+        );
+        assert_eq!(
+            pending.finish("browser-b", url),
+            Some(PathBuf::from("/e/report.pdf")),
+            "another pane's download is its own"
+        );
+        assert!(pending.is_empty(), "a finished key is dropped");
+    }
+
+    #[test]
+    fn a_download_is_quarantined_as_the_system_downloaders_do() {
+        let event = uuid::Uuid::parse_str("89387f8c-3c2e-4230-8d57-23c6e2bdcba6").unwrap();
+        assert_eq!(
+            quarantine_value(0x6aea_4fc9, event),
+            "0081;6aea4fc9;Elitea;89387F8C-3C2E-4230-8D57-23C6E2BDCBA6"
+        );
+        assert_eq!(
+            quarantine_value(5, event),
+            "0081;00000005;Elitea;89387F8C-3C2E-4230-8D57-23C6E2BDCBA6",
+            "the time is eight hex digits"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_finished_download_carries_its_quarantine_and_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.pdf");
+        std::fs::write(&path, "%PDF").unwrap();
+        quarantine(&path, "https://example.com/report.pdf").unwrap();
+
+        let mut buffer = vec![0_u8; 512];
+        let n = rustix::fs::getxattr(&path, "com.apple.quarantine", &mut buffer[..]).unwrap();
+        let value = std::str::from_utf8(&buffer[..n]).unwrap();
+        let fields: Vec<&str> = value.split(';').collect();
+        assert_eq!(fields.len(), 4, "{value}");
+        assert_eq!(fields[0], "0081");
+        assert_eq!(fields[2], "Elitea");
+        assert!(uuid::Uuid::parse_str(fields[3]).is_ok(), "{value}");
+
+        let n = rustix::fs::getxattr(
+            &path,
+            "com.apple.metadata:kMDItemWhereFroms",
+            &mut buffer[..],
+        )
+        .unwrap();
+        let froms = plist::Value::from_reader(std::io::Cursor::new(&buffer[..n])).unwrap();
+        assert_eq!(
+            froms,
+            plist::Value::Array(vec![plist::Value::String(
+                "https://example.com/report.pdf".into()
+            )])
+        );
+        assert!(
+            quarantine(&dir.path().join("gone"), "https://example.com/").is_err(),
+            "no file: an error, so the caller fails closed"
+        );
+    }
+
+    /// Does any rule block `url`? WebKit's rule regexes are a subset of
+    /// these (no `|`, no `{n}`), matched case-insensitively.
+    fn blocked(rules: &str, url: &str) -> bool {
+        let rules: Vec<Value> = serde_json::from_str(rules).unwrap();
+        rules.iter().any(|rule| {
+            let filter = rule["trigger"]["url-filter"].as_str().unwrap();
+            regex::RegexBuilder::new(filter)
+                .case_insensitive(true)
+                .build()
+                .unwrap()
+                .is_match(url)
+        })
+    }
+
+    #[test]
+    fn the_content_rules_block_every_private_load() {
+        let rules = content_rules(STRICT).unwrap();
+        let parsed: Vec<Value> = serde_json::from_str(&rules).unwrap();
+        for rule in &parsed {
+            assert_eq!(rule["action"]["type"], "block");
+            assert!(
+                rule["trigger"].get("resource-type").is_none(),
+                "every kind of load"
+            );
+            let filter = rule["trigger"]["url-filter"].as_str().unwrap();
+            assert!(
+                !filter.contains('|') && !filter.contains('{'),
+                "WebKit has no alternation or counted repetition: {filter}"
+            );
+        }
+        for url in [
+            "http://localhost/",
+            "https://localhost:5173/api",
+            "ws://localhost/socket",
+            "wss://LOCALHOST./x",
+            "https://tauri.localhost/index.html",
+            "https://user@app.localhost/",
+            "https://printer.local/",
+            "https://db.internal:8443/",
+            "https://nas.home.arpa/",
+            "http://127.0.0.1/",
+            "http://127.255.0.9:9400/healthz",
+            "http://0.0.0.0/",
+            "http://10.1.2.3/",
+            "http://172.16.0.1/",
+            "http://172.24.9.9/",
+            "http://172.31.255.255/",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://100.64.0.1/",
+            "http://100.127.255.255/",
+            "http://[::1]/",
+            "http://[::]/",
+            "http://[::ffff:7f00:1]/",
+            "http://[fc00::1]/",
+            "http://[fd12:3456::1]:8080/",
+            "http://[fe80::1]/",
+        ] {
+            assert!(blocked(&rules, url), "{url} must be blocked");
+        }
+        for url in [
+            "https://example.com/",
+            "https://localhost.example.com/",
+            "https://example.local.dev/",
+            "https://mylocalhost/",
+            "https://93.184.216.34/",
+            "https://172.15.0.1/",
+            "https://172.32.0.1/",
+            "https://100.63.0.1/",
+            "https://100.128.0.1/",
+            "https://110.0.0.1/",
+            "https://192.169.0.1/",
+            "https://[2606:4700::1111]/",
+            "https://example.com/?next=http://127.0.0.1/",
+            "https://example.com/http://localhost/",
+        ] {
+            assert!(!blocked(&rules, url), "{url} must load");
+        }
+        assert_eq!(
+            content_rules(GuardPolicy {
+                allow_http: true,
+                allow_private_network: true,
+            }),
+            None
         );
     }
 

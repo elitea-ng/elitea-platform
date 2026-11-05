@@ -94,6 +94,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # path resolver does without starting Tauri. Already in the tree through
 # tauri (MIT OR Apache-2.0).
 dirs = "=7.0.0"
+# The browser pane's download names drop Unicode format characters
+# (general category Cf: bidi overrides, zero-width marks). Already in the
+# tree through elitea-agent-runtime (Apache-2.0).
+unicode-general-category = "1.1.0"
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
@@ -112,6 +116,10 @@ keepawake = { version = "=0.6.1", default-features = false }
 # `NSProcessInfo`: the macOS version, which picks the browser pane's data
 # store (src/browser_pane.rs).
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSProcessInfo"] }
+# The origin of a browser pane download (`com.apple.metadata:kMDItemWhereFroms`,
+# a binary plist). Already in the tree through tauri-codegen (MIT); `Value`
+# only, no serde.
+plist = { version = "1.10", default-features = false }
 
 # The credentials file's owner check (geteuid) and O_NOFOLLOW, without
 # `unsafe` (src/credentials_file.rs). Already in the tree through tauri.
@@ -124,6 +132,9 @@ tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 # The opener plugin's own matcher, so the capability's URL globs are tested as the plugin reads them.
 glob = "0.3"
+# The browser pane's content-rule patterns (WebKit's regex subset) are
+# checked against sample URLs. Already in the tree.
+regex = "1"
 
 # The runtime's patched-adk guard (libs/rust/agent-runtime/src/lib.rs) needs
 # the same patches every workspace that links it applies

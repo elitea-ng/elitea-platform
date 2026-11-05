@@ -69,7 +69,7 @@ export function foldBrowserEvent(pane: PaneState, event: BrowserEvent): PaneStat
 
 type Store = UseBoundStore<StoreApi<BrowserPaneStore>>;
 
-export function createBrowserPaneStore(): Store {
+function createBrowserPaneStore(): Store {
   return create<BrowserPaneStore>()((set) => ({
     panes: {},
     update: (threadId, change) => set((state) => ({ panes: { ...state.panes, [threadId]: { ...(state.panes[threadId] ?? EMPTY_PANE), ...change } } })),

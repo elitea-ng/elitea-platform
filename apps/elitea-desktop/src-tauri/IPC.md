@@ -2585,6 +2585,14 @@ private or forbidden (`libs/rust/egress-guard`). A new window
 (`target=_blank`, `window.open`) is not opened: the page navigates there,
 the opener kept in history.
 
+**Known gap (#1634).** The guard judges navigations only, by the host as
+written. Subresources (images, scripts, `fetch`/XHR, WebSockets) to
+loopback and private addresses are not blocked yet, and neither is a public
+name that resolves to a private address. The macOS fix is a
+`WKContentRuleList` (`browser_pane::content_rules` builds and tests it),
+which needs WebKit calls this crate's `unsafe_code = "forbid"` rules out;
+#1634 holds the decision. The DNS case stays a documented residual gap.
+
 **Site data.** Each thread has its own store. macOS 14+: a persistent
 `WKWebsiteDataStore(forIdentifier:)`, its UUID kept in
 `<data>/browser/stores.json`. macOS 12–13 (and other systems for now): a
@@ -2597,7 +2605,14 @@ request (camera, microphone, location, notifications, …) is denied; no
 autofill, no link preview, no drag-and-drop into the page.
 
 **Downloads** go to `~/Downloads/Elitea/<thread_id>/` (a clash becomes
-`name (2).ext`), never prompting; each one is a transcript card.
+`name (2).ext`), never prompting; each one is a transcript card. The name
+loses path separators, control and Unicode format characters (category
+Cf: bidi overrides such as U+202E, zero-width marks, the BOM) and a leading
+dot. On macOS a finished download gets `com.apple.quarantine`
+(`0081;<hex time>;Elitea;<uuid>`: Gatekeeper checks it on first open) and
+`com.apple.metadata:kMDItemWhereFroms` (its URL). A file that cannot be
+quarantined is deleted and reported `success: false`. Two downloads of the
+same URL in one pane are paired with their files first-in, first-out.
 
 `rect` is `{x, y, width, height}` in the main page's CSS pixels (the host
 scales it by the app's zoom).
@@ -2606,7 +2621,7 @@ scales it by the app's zoom).
 | --- | --- | --- |
 | `browser_open` | `{thread_id, address, rect}` | `{url}` — opens the thread's page (or re-points it) at `address` (`example.com` means `https://example.com/`). Rejects `browser_invalid` (bad thread id or address), `browser_refused` (the guard; `message` says why), `browser_unavailable` (no main window) |
 | `browser_set_rect` | `{thread_id, rect, visible}` | `null` — moves the page; `visible: false` hides it (another tab, a modal sheet, the tab in its own window). No page: no-op |
-| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed` |
+| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed`. Reload is native; back, forward and stop run `history.back()`, `history.forward()`, `window.stop()` in the page, which the page can override (native calls: #1634) |
 | `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
 | `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
 | `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |

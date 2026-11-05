@@ -9,7 +9,7 @@ import { useEffect, useRef } from 'react';
 import { useBrowserHost, useBrowserPanes } from '@/features/workspace-browser';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
-export function toggleBrowserPane(threadId: string, close: (threadId: string) => void): void {
+function toggleBrowserPane(threadId: string, close: (threadId: string) => void): void {
   if (threadId === '') return;
   const layout = useDesktopLayout.getState();
   const panes = useBrowserPanes.getState();
