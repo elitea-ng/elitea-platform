@@ -24,12 +24,15 @@ fn golden_path(name: &str) -> PathBuf {
 
 #[test]
 fn schema_snapshot() {
-    let actual = serde_json::to_string_pretty(&spec::schema_snapshot()).unwrap() + "\n";
+    // Compared as JSON values, not text: when the workspace enables
+    // serde_json's `preserve_order`, keys print in insertion order instead
+    // of sorted, and the contract is the same either way.
+    let actual = spec::schema_snapshot();
     let path = golden_path("schemas.json");
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&path, &actual).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&actual).unwrap() + "\n").unwrap();
     }
-    let expected = std::fs::read_to_string(&path).unwrap();
+    let expected: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(
         actual, expected,
         "the browser tool contract changed: review it, then UPDATE_GOLDEN=1"
