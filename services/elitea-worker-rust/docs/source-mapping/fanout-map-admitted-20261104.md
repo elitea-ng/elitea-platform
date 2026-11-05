@@ -69,9 +69,9 @@ binds a Map as a fan-out node (`bind_map_node`, `:460`).
 
 | Layer | Tests | Result |
 |---|---|---|
-| Worker | full suite | 2669 passed at c6af819cb (no Worker change after it); PostgreSQL tests are ignored locally and run in CI. New: `map_fanout_tests.rs` (22), `parallel_map_identity_tests.rs` (3), `parallel_compiler_map_tests.rs` (3), `parallel_compiler_map_agent_tests.rs` (4), `map_yaml_tests.rs` (7). The Parallel golden (`parallel_cards_tests.rs` `shared_adapter_golden`) passes unchanged across the whole branch and the merge with main. |
+| Worker | full suite | 3016 passed, 0 failed, 109 ignored at 0bd5aae73 (final head), with `ELITEA_TEST_DATABASE_URL` on a disposable PostgreSQL 18, so the real-PostgreSQL tests ran; clippy `-D warnings` and fmt clean. FU-288 added `a_map_stopped_by_a_failed_item_ends_the_run_with_readable_chat_text`, `a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_text`, `fanout_member_failure_restores_its_actionable_message`; FU-290 (1) added `every_registered_runtime_failure_message_fits_mains_frame_bound`, `the_failure_message_bound_matches_mains`. New: `map_fanout_tests.rs` (22), `parallel_map_identity_tests.rs` (3), `parallel_compiler_map_tests.rs` (3), `parallel_compiler_map_agent_tests.rs` (4), `map_yaml_tests.rs` (7). The Parallel golden (`parallel_cards_tests.rs` `shared_adapter_golden`) passes unchanged across the whole branch and the merge with main. |
 | Worker, real PostgreSQL 18 | `fanout_lineage` (11: incl. the two Map tests ported to the adapter and the three production-factory tests, one per worker family) | green before and after the merge with main (throwaway database) |
-| Main | `pipelinelimits` (`map_forms_test.go`, 3), `executioninterrupt` (`map_card_test.go`, 1), real PostgreSQL `TestAMapItemAuthorizeIsGatedToAnOptedInWorkerAndCarriesOnlyItsGrant` | green |
+| Main | `pipelinelimits` (`map_forms_test.go`, 3), `executioninterrupt` (`map_card_test.go`, 1), real PostgreSQL `TestAMapItemAuthorizeIsGatedToAnOptedInWorkerAndCarriesOnlyItsGrant`; FU-288 `TestFanoutMemberFailureShowsItsReadableText`, `TestOutputServerAcceptsFanoutMemberFailureFrame` | `go test ./internal/...` at 0bd5aae73: 278 packages ok, 0 failed; vet clean |
 | Web | full suite on final head `52ff237a7` | node project: 1889 files, 18622 passed, 6 expected fails, 1 skip; storybook project: 69 files, 278 passed. New: `graphMapAdmission.v2.test.ts` (10 cases), `MapSettings.policy.test.tsx` (4), `ApplicationAnswerThinking.grouping.test.tsx` (6). |
 
 Existing tests edited (each approved by the orchestrator): 12 struct literals gained `map: None` (mechanical); the
@@ -312,12 +312,38 @@ path, not with a Map-specific two-process PostgreSQL test; the browser pass has 
 
 ## Browser evidence
 
-**Pending.** The Map browser pass runs on the shared stack `fanpar` after it moves to `main` (snapshot first, main's
-migrations, then the Map images), per the plan. Until then this mapping claims no browser evidence.
+Real browser (Claude in Chrome), no response mocks, a reload after each case, on the shared production-profile stack
+`fanpar` (snapshot taken first; moved to main's images and migrations, verify-profile and a smoke test, then the Map
+images). Run-to-completion was off in every chat, read from the toggle before send and, where it mattered, from
+`elitea_runtime.run_chains`. Fixtures were created through the UI's own REST endpoints from the signed-in page, never
+the database.
+
+**Images.** Cases 1, 2 and 4: Main `map-b2cd3c031` (`sha256:2122304f…`), Worker `map-bf94753dc` (`sha256:378c2300…`),
+Web `map-c6af819cb` (`sha256:ac5e6201…`). Case 3 stop, cases 5–7 and the re-confirms of 1 and 2: Main and Worker
+`map-a6b1ac96c` (`sha256:23749b28…`, `sha256:02ba042a…`), the same Web. verify-profile 50/50 on each. Each binary was
+extracted and checked for strings unique to this branch.
+
+| Case | Result |
+|---|---|
+| 1. 64-item State Modifier Map | PASS. Live status groups ("Running (3)", "Completed (47)"), never 64 rows; after a reload 64 ordered entries, all succeeded. Re-confirmed on the final images. |
+| 2. Saved-Agent Map, 3 items ask | PASS. 3 cards "(1)–(3)", answered out of order across two tabs, each dropped live in the other tab; reload keeps open cards; ledger 3 CONSUMED, no duplicate card; ordered answers. Re-confirmed on the final images. |
+| 3. On Error and Join | PASS. `continue` + Router branches on the typed failed entry ("PARTIAL: 2 failed"); keyed join read by index; `stop` drains, then the chat shows the registered text (FU-288 fixed here) and the run settles `PIPELINE_TOOL_FAILED`. |
+| 4. Worker kill | PASS. At the park: still 3 cards, none duplicated. At the decision seam: resumed after lease expiry, decision CONSUMED once. Mid-Map (8 LLM items): completed items never re-admitted, in-flight read-only items re-run, one ordered answer. |
+| 5. Map in a saved child pipeline; Map and Parallel as siblings | PASS. "CHILD MAP SAID: ALPHA-0 BETA-1 GAMMA-2"; "MAP ONE,TWO,THREE,FOUR \| PARALLEL succeeded,succeeded". |
+| 6. Stop during a paused Map | PASS, as the Parallel pass: a parked turn has settled, so no Stop is offered; Regenerate closed the 3 open cards (`SUPERSEDED` once each) and the other tab dropped them within 3 s without a reload. |
+| 7. Agent node beside a Map | PASS. "MAP RED,GREEN,BLUE \| AGENT Lisbon". |
+
+**Found and fixed during the pass:** concurrent saved-Agent items (per-item invocation), items past 16 (member
+event scope bound), nested-app events (task-local routing), Map frames labelled `parallel`, and FU-288 (including its
+first, too-long text). **Registered:** FU-284 (goal check while parked; this pass narrowed its claim, see the
+handoff), FU-287 (O(n²) root refresh), FU-289 (run-to-completion toggle not kept per chat), FU-290 (a refused
+terminal frame strands the run; part (1) guarded here). Case 4 was not re-run on the final images: the change after
+it touches only the join-stop branch and the failure registry, no recovery code.
 
 ## Fixtures
 
-All test fixtures are code (in-memory stores and a throwaway PostgreSQL 18 container); none were created through the UI.
+Automated-test fixtures are code (in-memory stores and a throwaway PostgreSQL 18 container). Browser fixtures were
+created through the UI's own REST endpoints from the signed-in page (not the database); see Browser evidence.
 
 ## Deleted tests and their coverage
 
@@ -423,7 +449,6 @@ check on the node (no I/O; Parallel tests rely on the order).
 
 ## Follow-ups
 
-- Browser pass on `fanpar` (moves `fanpar` to `main` first) and a 64-item load measurement.
 - A Map-specific two-process PostgreSQL crash test for mid-model and in-flight tool (the adapter's classes).
 - The Wave 3 forms: Code and direct Router workers, saved worker pipelines holding Code (W3-1, W3-2).
 - `parallel_in_child_pipeline` is now also the refusal for a Map in a fan-out member's saved pipeline; a Map-specific
