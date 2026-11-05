@@ -1,0 +1,629 @@
+//! The WebKit half of the driver (macOS): [`WebKitEngine`].
+//!
+//! **The driver world.** [`install`] adds the page script ([`crate::SCRIPT`])
+//! to the webview's user content controller as a user script in a PRIVATE
+//! `WKContentWorld` ([`WORLD_NAME`]), at document start, in every frame,
+//! and a script message handler ([`FRAME_HANDLER`]) in that same world only.
+//! A content world has its own JavaScript globals over the shared DOM: the
+//! page's scripts cannot read the driver's globals, call its functions,
+//! replace the built-ins it captured, or post to its handler (the page
+//! world's `window.webkit.messageHandlers` has no such name). Every call is
+//! `callAsyncJavaScript(_:arguments:in:in:)` in that world, with a fixed
+//! function body ([`CALL_BODY`]) and the operation and its JSON arguments
+//! as ARGUMENTS: no source text is ever built from the model's input.
+//!
+//! **Frames.** The script announces each subframe to [`FRAME_HANDLER`];
+//! the host keeps the `WKFrameInfo` it came with, and calls into a cross-
+//! origin frame with it. A same-origin frame is read by its parent's walk.
+//!
+//! **Screenshots** are `takeSnapshot(with:)`, PNG-encoded.
+//!
+//! **Trusted input** is a `CGEvent` mouse click at the element's point of
+//! the page view, posted to this process only (`CGEventPostToPid`), and
+//! only while `AXIsProcessTrusted()` (the ADR-0047 grant) holds.
+//!
+//! WebKit is main-thread only: every call hops to the main queue and
+//! answers on a oneshot channel. Nothing here blocks the main thread.
+
+use std::ffi::c_void;
+use std::ptr::NonNull;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use block2::RcBlock;
+use dispatch2::{DispatchQueue, MainThreadBound};
+use elitea_browser_tools::driver::{HistoryStep, Screenshot};
+use elitea_browser_tools::{BrowserError, ErrorCode};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{DefinedClass as _, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSView};
+use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_graphics::{CGEvent, CGEventField, CGEventType, CGMouseButton};
+use objc2_foundation::{
+    NSDictionary, NSError, NSObject, NSObjectProtocol, NSString, NSURL, NSURLRequest,
+};
+use objc2_web_kit::{
+    WKContentWorld, WKFrameInfo, WKScriptMessage, WKScriptMessageHandler, WKSnapshotConfiguration,
+    WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebView,
+};
+use serde_json::Value;
+use tokio::sync::oneshot;
+
+use crate::driver::{Engine, EnginePage, FrameId, TOP};
+use crate::reply::{self, RawRect};
+
+/// The driver's content world. Named, so the Web Inspector shows it; the
+/// name is not a secret (a world is reached through the API, not by name).
+pub const WORLD_NAME: &str = "elitea-browser-driver";
+
+/// The message handler a subframe announces itself on, in the driver world.
+pub const FRAME_HANDLER: &str = "eliteaBrowserFrame";
+
+/// The one function body ever passed to `callAsyncJavaScript`. `op` and
+/// `args` are its arguments (a string and a JSON string), never source.
+pub const CALL_BODY: &str = "const driver = globalThis.__eliteaBrowserDriver; \
+if (driver === undefined) return MISSING; \
+return await driver.run(op, args);";
+
+/// [`CALL_BODY`]'s answer in a document loaded before the user script was
+/// installed (the pane's first page): the engine then evaluates the
+/// script itself in that frame, in the driver world, and calls again.
+const MISSING: &str = "elitea-driver-missing";
+
+/// Frames remembered per page (a page that makes frames without end).
+const MAX_FRAMES: usize = 64;
+
+struct Frames {
+    next: FrameId,
+    known: Vec<(FrameId, String, MainThreadBound<Retained<WKFrameInfo>>)>,
+}
+
+impl Frames {
+    fn add(&mut self, url: String, info: Retained<WKFrameInfo>, mtm: MainThreadMarker) {
+        self.next += 1;
+        self.known
+            .push((self.next, url, MainThreadBound::new(info, mtm)));
+        if self.known.len() > MAX_FRAMES {
+            self.known.remove(0);
+        }
+    }
+}
+
+/// What the frame handler shares with the engine.
+#[derive(Clone)]
+struct Shared(Arc<Mutex<Frames>>);
+
+impl Shared {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Frames> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+struct HandlerIvars {
+    shared: Shared,
+}
+
+define_class!(
+    // SAFETY: NSObject has no subclassing requirements; the class adds no
+    // Drop-sensitive state beyond its ivars.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = HandlerIvars]
+    struct FrameHandler;
+
+    // SAFETY: NSObjectProtocol has no extra requirements.
+    unsafe impl NSObjectProtocol for FrameHandler {}
+
+    // SAFETY: the method signature is WKScriptMessageHandler's.
+    unsafe impl WKScriptMessageHandler for FrameHandler {
+        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+        fn did_receive(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
+            self.frame_announced(message);
+        }
+    }
+);
+
+impl FrameHandler {
+    fn new(shared: Shared, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(HandlerIvars { shared });
+        // SAFETY: NSObject's `init` on a freshly allocated instance.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    fn frame_announced(&self, message: &WKScriptMessage) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        // SAFETY: WKScriptMessage getters on the main thread.
+        let (world, frame, body) =
+            unsafe { (message.world(), message.frameInfo(), message.body()) };
+        // SAFETY: a WKContentWorld getter on the main thread.
+        let from_driver =
+            unsafe { world.name() }.is_some_and(|name| name.to_string() == WORLD_NAME);
+        // SAFETY: a WKFrameInfo getter on the main thread.
+        if !from_driver || unsafe { frame.isMainFrame() } {
+            return;
+        }
+        let Ok(text) = body.downcast::<NSString>() else {
+            return;
+        };
+        let url = serde_json::from_str::<Value>(&text.to_string())
+            .ok()
+            .and_then(|value| value.get("url").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_default();
+        self.ivars().shared.lock().add(url, frame, mtm);
+    }
+}
+
+/// Install the driver world in `webview`'s content controller. Idempotent
+/// per controller: call it once, when the pane's webview is made, before
+/// its first page loads.
+///
+/// # Safety
+///
+/// `webview` must be a live `WKWebView` and this must run on the main
+/// thread.
+unsafe fn install(webview: &WKWebView, mtm: MainThreadMarker) -> Shared {
+    let shared = Shared(Arc::new(Mutex::new(Frames {
+        next: TOP,
+        known: Vec::new(),
+    })));
+    // SAFETY: WebKit calls on the main thread with live objects.
+    unsafe {
+        let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
+        let controller = webview.configuration().userContentController();
+        let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
+            WKUserScript::alloc(mtm),
+            &NSString::from_str(crate::SCRIPT),
+            WKUserScriptInjectionTime::AtDocumentStart,
+            false,
+            &world,
+        );
+        controller.addUserScript(&script);
+        let handler = FrameHandler::new(shared.clone(), mtm);
+        controller.addScriptMessageHandler_contentWorld_name(
+            ProtocolObject::from_ref(&*handler),
+            &world,
+            &NSString::from_str(FRAME_HANDLER),
+        );
+    }
+    shared
+}
+
+/// The driver's engine over one `WKWebView`.
+pub struct WebKitEngine {
+    webview: Arc<MainThreadBound<Retained<WKWebView>>>,
+    shared: Shared,
+    /// Whether trusted input may be posted (the Accessibility grant).
+    trusted: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl WebKitEngine {
+    /// Take over `webview`: install the driver world. On the main thread.
+    #[must_use]
+    pub fn new(webview: Retained<WKWebView>, mtm: MainThreadMarker) -> Self {
+        // SAFETY: on the main thread (the marker), with a live webview.
+        let shared = unsafe { install(&webview, mtm) };
+        Self {
+            webview: Arc::new(MainThreadBound::new(webview, mtm)),
+            shared,
+            trusted: Arc::new(accessibility_granted),
+        }
+    }
+
+    /// The engine of a raw `WKWebView` pointer (Tauri's
+    /// `PlatformWebview::inner`). On the main thread.
+    ///
+    /// # Safety
+    ///
+    /// `pointer` must be a live `WKWebView`.
+    #[must_use]
+    pub unsafe fn from_raw(pointer: *mut c_void, mtm: MainThreadMarker) -> Option<Self> {
+        let pointer = NonNull::new(pointer.cast::<WKWebView>())?;
+        // SAFETY: the caller guarantees a live WKWebView; retaining it keeps
+        // it alive for the engine's lifetime.
+        let webview = unsafe { Retained::retain(pointer.as_ptr()) }?;
+        Some(Self::new(webview, mtm))
+    }
+
+    /// Replace the grant check (tests: a page that needs trusted input).
+    #[must_use]
+    pub fn with_trusted_input(mut self, trusted: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.trusted = trusted;
+        self
+    }
+
+    /// Run `work` with the webview on the main thread; its answer.
+    async fn on_main<T, F>(&self, work: F) -> Result<T, BrowserError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&WKWebView, MainThreadMarker, oneshot::Sender<T>) + Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let webview = self.webview.clone();
+        DispatchQueue::main().exec_async(move || {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            work(webview.get(mtm), mtm, tx);
+        });
+        rx.await
+            .map_err(|_| BrowserError::new(ErrorCode::Internal, "the page view is gone"))
+    }
+}
+
+impl WebKitEngine {
+    /// One call; `None` when the frame's document has no driver yet.
+    async fn call_once(
+        &self,
+        frame: FrameId,
+        op: &str,
+        args: &str,
+    ) -> Result<Option<Value>, BrowserError> {
+        let op = op.to_owned();
+        let args = args.to_owned();
+        let shared = self.shared.clone();
+        self.on_main(move |webview, mtm, tx| {
+            let info = match frame_info(&shared, frame, mtm) {
+                Ok(info) => info,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            };
+            let tx = Mutex::new(Some(tx));
+            let done = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+                let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) else {
+                    return;
+                };
+                // SAFETY: WebKit passes a valid object or null.
+                let text = unsafe { result.as_ref() }
+                    .and_then(|object| object.downcast_ref::<NSString>())
+                    .map(NSString::to_string);
+                let _ = tx.send(match text {
+                    Some(text) if text == MISSING => Ok(None),
+                    Some(text) => reply::parse(&text).map(Some),
+                    None => Err(ns_error(error, "the page script did not answer")),
+                });
+            });
+            let keys = [
+                &*NSString::from_str("op"),
+                &*NSString::from_str("args"),
+                &*NSString::from_str("MISSING"),
+            ];
+            let op = NSString::from_str(&op);
+            let args = NSString::from_str(&args);
+            let missing = NSString::from_str(MISSING);
+            let values: [&AnyObject; 3] = [op.as_ref(), args.as_ref(), missing.as_ref()];
+            let arguments = NSDictionary::<NSString, AnyObject>::from_slices(&keys, &values);
+            // SAFETY: WebKit on the main thread; the arguments are an
+            // NSDictionary of NSString keys to NSString values, as
+            // `callAsyncJavaScript` requires (JSON-serialisable).
+            unsafe {
+                let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
+                webview.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(CALL_BODY),
+                    Some(&arguments),
+                    info.as_deref(),
+                    &world,
+                    Some(&*done),
+                );
+            }
+        })
+        .await?
+    }
+
+    /// Evaluate the driver script (the constant [`crate::SCRIPT`], never
+    /// anything else) in `frame`, in the driver world.
+    async fn inject(&self, frame: FrameId) -> Result<(), BrowserError> {
+        let shared = self.shared.clone();
+        self.on_main(move |webview, mtm, tx| {
+            let info = match frame_info(&shared, frame, mtm) {
+                Ok(info) => info,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            };
+            let tx = Mutex::new(Some(tx));
+            let done = RcBlock::new(move |_result: *mut AnyObject, error: *mut NSError| {
+                if let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) {
+                    let _ = tx.send(if error.is_null() {
+                        Ok(())
+                    } else {
+                        Err(ns_error(error, "the driver could not start in this page"))
+                    });
+                }
+            });
+            // SAFETY: WebKit on the main thread with live objects.
+            unsafe {
+                let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
+                webview.evaluateJavaScript_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(crate::SCRIPT),
+                    info.as_deref(),
+                    &world,
+                    Some(&*done),
+                );
+            }
+        })
+        .await?
+    }
+}
+
+/// The frame's `WKFrameInfo` (`None`: the top document).
+fn frame_info(
+    shared: &Shared,
+    frame: FrameId,
+    mtm: MainThreadMarker,
+) -> Result<Option<Retained<WKFrameInfo>>, BrowserError> {
+    if frame == TOP {
+        return Ok(None);
+    }
+    let frames = shared.lock();
+    frames
+        .known
+        .iter()
+        .find(|(id, ..)| *id == frame)
+        .map(|(_, _, info)| Some(info.get(mtm).clone()))
+        .ok_or_else(|| BrowserError::stale_ref("that frame is gone: snapshot again"))
+}
+
+/// Whether the person gave Elitea the macOS Accessibility grant (the
+/// ADR-0047 permission that trusted input needs).
+#[must_use]
+pub fn accessibility_granted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+    // SAFETY: a C function without arguments or preconditions.
+    unsafe { AXIsProcessTrusted() }
+}
+
+fn ns_error(error: *mut NSError, fallback: &str) -> BrowserError {
+    // SAFETY: WebKit passes a valid NSError or null.
+    let text = unsafe { error.as_ref() }.map_or_else(
+        || fallback.to_owned(),
+        |error| error.localizedDescription().to_string(),
+    );
+    // A WebKit error message can name page content (an exception text):
+    // it goes to the logs' level of detail, cut short.
+    BrowserError::new(
+        ErrorCode::Internal,
+        text.chars().take(200).collect::<String>(),
+    )
+}
+
+#[async_trait]
+impl Engine for WebKitEngine {
+    async fn call(&self, frame: FrameId, op: &str, args: Value) -> Result<Value, BrowserError> {
+        let args = args.to_string();
+        if let Some(answer) = self.call_once(frame, op, &args).await? {
+            return Ok(answer);
+        }
+        // A document from before the user script was installed: put the
+        // driver in it (in the driver world), then call again.
+        self.inject(frame).await?;
+        self.call_once(frame, op, &args).await?.ok_or_else(|| {
+            BrowserError::new(
+                ErrorCode::Internal,
+                "the driver could not start in this page",
+            )
+        })
+    }
+
+    async fn frames(&self) -> Vec<(FrameId, String)> {
+        self.shared
+            .lock()
+            .known
+            .iter()
+            .map(|(id, url, _)| (*id, url.clone()))
+            .collect()
+    }
+
+    async fn load(&self, url: &str) -> Result<(), BrowserError> {
+        let url = url.to_owned();
+        let shared = self.shared.clone();
+        self.on_main(move |webview, _mtm, tx| {
+            shared.lock().known.clear();
+            let Some(nsurl) = NSURL::URLWithString(&NSString::from_str(&url)) else {
+                let _ = tx.send(Err(BrowserError::invalid("not a URL")));
+                return;
+            };
+            let request = NSURLRequest::requestWithURL(&nsurl);
+            // SAFETY: WebKit on the main thread.
+            let started = unsafe { webview.loadRequest(&request) };
+            let _ = tx.send(started.map(|_| ()).ok_or_else(|| {
+                BrowserError::new(
+                    ErrorCode::NavigationFailed,
+                    "the page did not start loading",
+                )
+            }));
+        })
+        .await?
+    }
+
+    async fn history(&self, step: HistoryStep) -> Result<(), BrowserError> {
+        let shared = self.shared.clone();
+        self.on_main(move |webview, _mtm, tx| {
+            shared.lock().known.clear();
+            // SAFETY: WebKit on the main thread.
+            let started = unsafe {
+                match step {
+                    HistoryStep::Back => webview.goBack(),
+                    HistoryStep::Forward => webview.goForward(),
+                    HistoryStep::Reload => webview.reload(),
+                }
+            };
+            let _ = tx.send(started.map(|_| ()).ok_or_else(|| {
+                BrowserError::invalid(match step {
+                    HistoryStep::Back => "there is no page to go back to",
+                    HistoryStep::Forward => "there is no page to go forward to",
+                    HistoryStep::Reload => "there is no page to reload",
+                })
+            }));
+        })
+        .await?
+    }
+
+    async fn page(&self) -> Result<EnginePage, BrowserError> {
+        self.on_main(|webview, _mtm, tx| {
+            // SAFETY: WebKit getters on the main thread.
+            let page = unsafe {
+                EnginePage {
+                    url: webview
+                        .URL()
+                        .and_then(|url| url.absoluteString())
+                        .map(|url| url.to_string())
+                        .unwrap_or_else(|| "about:blank".to_owned()),
+                    title: webview
+                        .title()
+                        .map(|title| title.to_string())
+                        .unwrap_or_default(),
+                    loading: webview.isLoading(),
+                }
+            };
+            let _ = tx.send(page);
+        })
+        .await
+    }
+
+    async fn screenshot(&self, rect: Option<RawRect>) -> Result<Screenshot, BrowserError> {
+        self.on_main(move |webview, mtm, tx| {
+            let tx = Mutex::new(Some(tx));
+            let done = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+                let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) else {
+                    return;
+                };
+                // SAFETY: WebKit passes a valid NSImage or null.
+                let shot = match unsafe { image.as_ref() } {
+                    Some(image) => png(image),
+                    None => Err(ns_error(error, "the page could not be captured")),
+                };
+                let _ = tx.send(shot);
+            });
+            // SAFETY: WebKit on the main thread.
+            unsafe {
+                let configuration = WKSnapshotConfiguration::new(mtm);
+                if let Some(rect) = rect {
+                    configuration.setRect(CGRect::new(
+                        CGPoint::new(rect.x, rect.y),
+                        CGSize::new(rect.width.max(1.0), rect.height.max(1.0)),
+                    ));
+                }
+                webview
+                    .takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &done);
+            }
+        })
+        .await?
+    }
+
+    fn trusted_input(&self) -> bool {
+        (self.trusted)()
+    }
+
+    async fn trusted_click(&self, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
+        if !self.trusted_input() {
+            return Err(BrowserError::new(
+                ErrorCode::Unsupported,
+                "trusted input needs the Accessibility permission",
+            ));
+        }
+        self.on_main(move |webview, _mtm, tx| {
+            let _ = tx.send(post_click(webview, at, double));
+        })
+        .await?
+    }
+}
+
+/// The NSImage as PNG bytes.
+fn png(image: &NSImage) -> Result<Screenshot, BrowserError> {
+    let fail = || BrowserError::new(ErrorCode::Internal, "the capture could not be encoded");
+    let tiff = image.TIFFRepresentation().ok_or_else(fail)?;
+    let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or_else(fail)?;
+    // SAFETY: AppKit encoding with an empty property dictionary.
+    let data = unsafe {
+        bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }
+    .ok_or_else(fail)?;
+    Ok(Screenshot {
+        media_type: "image/png",
+        data: data.to_vec(),
+        width: u32::try_from(bitmap.pixelsWide()).unwrap_or(0),
+        height: u32::try_from(bitmap.pixelsHigh()).unwrap_or(0),
+    })
+}
+
+/// A real left click at `at` (CSS pixels of the page view, top-left
+/// origin), posted to this process only, aimed at the page view's window.
+fn post_click(webview: &WKWebView, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
+    let unavailable = || BrowserError::new(ErrorCode::Internal, "the page view is not on screen");
+    let view: &NSView = webview;
+    let window = view.window().ok_or_else(unavailable)?;
+    if view.isHiddenOrHasHiddenAncestor() || !window.isVisible() {
+        // The pane is hidden (another tab, a modal sheet): never click
+        // whatever is under that point instead.
+        return Err(unavailable());
+    }
+    // SAFETY: a WebKit getter on the main thread.
+    let zoom = unsafe { webview.pageZoom() };
+    let bounds = view.bounds();
+    let local_y = if view.isFlipped() {
+        at.1 * zoom
+    } else {
+        bounds.size.height - at.1 * zoom
+    };
+    let local = CGPoint::new(at.0 * zoom, local_y);
+    if local.x < 0.0 || local.y < 0.0 || local.x > bounds.size.width || local.y > bounds.size.height
+    {
+        return Err(BrowserError::invalid(
+            "that element is outside the visible page",
+        ));
+    }
+    let in_window = view.convertPoint_toView(local, None);
+    let on_screen = window.convertPointToScreen(in_window);
+    // CGEvent coordinates have their origin at the top-left of the main
+    // display; AppKit's screen coordinates at its bottom-left.
+    let main_height = objc2_app_kit::NSScreen::screens(MainThreadMarker::from(webview))
+        .firstObject()
+        .map_or(0.0, |screen| screen.frame().size.height);
+    let point = CGPoint::new(on_screen.x, main_height - on_screen.y);
+    let window_number = window.windowNumber();
+    let pid = std::process::id();
+    let clicks = if double { 2 } else { 1 };
+    for click in 1..=clicks {
+        for kind in [CGEventType::LeftMouseDown, CGEventType::LeftMouseUp] {
+            let event = CGEvent::new_mouse_event(None, kind, point, CGMouseButton::Left)
+                .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "no input event"))?;
+            CGEvent::set_integer_value_field(
+                Some(&event),
+                CGEventField::MouseEventClickState,
+                click,
+            );
+            CGEvent::set_integer_value_field(
+                Some(&event),
+                CGEventField::MouseEventWindowUnderMousePointer,
+                i64::try_from(window_number).unwrap_or(0),
+            );
+            CGEvent::set_integer_value_field(
+                Some(&event),
+                CGEventField::MouseEventWindowUnderMousePointerThatCanHandleThisEvent,
+                i64::try_from(window_number).unwrap_or(0),
+            );
+            CGEvent::post_to_pid(libc::pid_t::try_from(pid).unwrap_or(0), Some(&event));
+        }
+    }
+    Ok(())
+}
+
+/// Built by [`crate::attach`]: the engine of a Tauri webview.
+#[cfg(feature = "tauri")]
+pub(crate) fn engine_of(platform: &tauri::webview::PlatformWebview) -> Option<WebKitEngine> {
+    let mtm = MainThreadMarker::new()?;
+    // SAFETY: Tauri hands the live WKWebView of a webview it owns, on the
+    // main thread (`with_webview` runs there).
+    unsafe { WebKitEngine::from_raw(platform.inner(), mtm) }
+}

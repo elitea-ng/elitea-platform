@@ -1,0 +1,92 @@
+---
+title: "The macOS browser driver"
+description: "How the desktop app drives the browser pane's WKWebView for the agent: the private content world, the DOM and ARIA snapshot, actions as DOM events, cross-origin frames, the trusted-input fallback, the hard limits, and how to run the WebKit tests."
+---
+
+The desktop browser pane (#1588) shows a web page in a WKWebView, a Tauri child webview. The macOS driver lets the agent of a Local work thread read and use that page. It implements the shared contract, so the agent gets the same tools, results and errors as it would from the cloud driver (see [The browser tool contract](/development/browser-tools)). The driver follows ADR-0048 decisions 5 and 6.
+
+The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-desktop/src-tauri/browser-driver-macos`. It is a separate crate because the desktop host forbids `unsafe`, and the WebKit, AppKit and CoreGraphics calls need it. The crate is a member of the `src-tauri` workspace, so the host and the driver share one `Cargo.lock`. Its bindings are `objc2-web-kit` 0.3, `objc2-app-kit` and `objc2-core-graphics`, which are already in the lock through wry and tao.
+
+## Layout
+
+| Part | Holds |
+| --- | --- |
+| `js/driver.js` | The driver's page script, loaded with `include_str!`. It builds the snapshot and performs the actions. |
+| `src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
+| `src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
+| `src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
+| `src-tauri/src/browser_tools.rs` | The host's `browser` toolset. It holds the drivers of a turn's thread, plus the `gate` seam for approvals and policy (#1590). |
+
+The host attaches a driver when it makes the pane's webview (`browser_pane.rs`, through `with_webview`). It detaches the driver when the pane closes or the person signs out. The `browser` toolset is added next to the local, index and MCP toolsets of a turn. It is never one of the workspace tools, and sub-agents do not get it. If a thread's pane is not open, every browser tool answers `unsupported` and tells the model to ask the person to open the pane.
+
+## The driver world
+
+The page script runs only in a private `WKContentWorld` named `elitea-browser-driver`. It is installed as a `WKUserScript` that runs at document start in every frame. A document that existed before the script was installed gets the script on its first call. The page's own scripts run in the page world. They cannot see the driver's global, cannot call it, and cannot replace anything it uses. At install time the script takes its own references to `getComputedStyle`, the input value accessors and `JSON`.
+
+The host calls the script through `callAsyncJavaScript:arguments:inFrame:inContentWorld:`. The function body is fixed, and the only arguments are an operation name and a JSON string. No JavaScript ever comes from the model.
+
+A frame announces itself by posting to a message handler (`eliteaBrowserFrame`) that exists only in the driver world. The host keeps a `WKFrameInfo` for each announced frame. It accepts only messages that come from the driver world and from a subframe.
+
+## The snapshot
+
+The script walks the DOM and builds the tree from:
+
+- the implicit ARIA role of each element, or its explicit `role`;
+- the accessible name (`aria-labelledby`, `aria-label`, labels, `alt`, legends and captions, name from content, `title`, `placeholder`);
+- states: level, checked, pressed, selected, expanded, disabled, readonly, required, invalid and focused;
+- visibility from layout: `display: none` and `aria-hidden` subtrees are skipped. A `visibility: hidden` element is skipped, but its visible children are kept.
+
+Shadow roots and slotted content are inlined in place. A same-origin frame is walked inline from its `contentDocument`.
+
+A cross-origin frame is read in its own frame: the host matches the frame element's address to an announced frame, first by full URL and then by origin. Nested frames are followed to a depth of 3. The host then builds the contract tree with `Snapshot::build` and keeps its refs in the `SnapshotSlot`.
+
+A node's key is its frame slot and its element number. Each document gets a random id when it loads. When the top document changes, every ref is stale. A ref into a frame whose document changed is stale too.
+
+Secure fields (`is_secure_field`: password inputs, and the `current-password`, `new-password` and card `autocomplete` tokens) never carry a value or children. Typing into one is refused before anything reaches the page.
+
+## Actions
+
+Click, type, select, scroll and press are DOM events on the target element. A click is a focus, then pointer and mouse events, then `click`. A text field is set through the native value setter and gets `input` and `change` events. An action in a cross-origin frame runs in that frame.
+
+Some pages accept trusted events only. A page that cancels every event of a click, and shows no change, has ignored it. In that case:
+
+- If the app has the Accessibility grant (`AXIsProcessTrusted`, ADR-0047), the driver posts a real CGEvent click at the element's centre, to this process only.
+- Otherwise the click answers `unsupported`, and the message tells the model to use `browser_request_user`.
+
+The screenshot uses `takeSnapshot(with:)` and is encoded as PNG. For an element, the shot is cropped to the element's rectangle in the top page.
+
+## Hard limits
+
+- No model JavaScript: the model can only name an operation, and the host owns every script body.
+- `browser_open` checks the URL with the contract's `check_url` and then with the pane's own guard: https only, unless `browser_allow_http` is on, and no private or forbidden hosts. The page the agent ends up on is checked again.
+- At most 10 actions per second (`ActRate`). Any more answer `rate_limited`.
+- Secure fields are as described above.
+
+Approvals and the `local_work_browser*` policy keys are #1590's. They plug into `browser_tools::gate`. Handing the page to the person (`browser_request_user`) and the control pill are #1591's. Until then, `request_user` answers `unsupported`.
+
+## Run the tests
+
+The contract logic is tested with a fake engine. These tests run everywhere:
+
+```sh
+cd apps/elitea-desktop/src-tauri
+cargo test -p elitea-browser-driver-macos
+```
+
+The WebKit tests drive a real WKWebView, so they need a Mac with a logged-in session. They open one small window for a few seconds:
+
+```sh
+cd apps/elitea-desktop/src-tauri
+cargo test -p elitea-browser-driver-macos --test webkit -- --ignored
+```
+
+They run:
+
+- the conformance kit (`conformance::run`) against its fixture pages;
+- a cross-origin frame that is read, typed into and clicked;
+- a hostile page that tampers with `JSON`, the value accessor, `getAttribute`, `getComputedStyle`, `dispatchEvent` and `Promise.then`, plants a fake driver global, and probes for the driver world and its frame handler;
+- a page that takes trusted input only.
+
+WebKit currently passes the conformance kit with no pinned differences (`Config.differences` is empty). If a WebKit tree has to differ from a golden, pin the difference in `differences()` in `tests/webkit.rs`, with the reason.
+
+CI runs both sets of tests on the macOS runner (`ci-desktop.yml`).

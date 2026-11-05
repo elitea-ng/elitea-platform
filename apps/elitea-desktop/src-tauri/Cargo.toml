@@ -7,6 +7,12 @@ rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
+# The host and its macOS browser driver (browser-driver-macos: the FFI this
+# crate forbids for itself) share one lock. `cargo test` here tests the host
+# only; CI tests the driver with `-p elitea-browser-driver-macos`.
+[workspace]
+members = [".", "browser-driver-macos"]
+
 [lib]
 name = "elitea_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -75,6 +81,9 @@ elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
 # The browser pane's navigation guard judges an address literal as the
 # agent's web fetch does (src/browser_pane.rs, ADR-0048 decision 2).
 elitea-egress-guard = { path = "../../../libs/rust/egress-guard" }
+# The browser tool contract (ADR-0048 decision 3): the toolset the agent
+# drives the pane with (src/browser_tools.rs). No engine, no runtime.
+elitea-browser-tools = { path = "../../../libs/rust/browser-tools" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.
 adk-agent = { version = "~2.3.0", default-features = false }
@@ -113,6 +122,10 @@ keepawake = { version = "=0.6.1", default-features = false }
 # The app's own preferences domain (src/window.rs: the input-source
 # indicator). Already in the tree through tauri/tao; safe bindings only.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The pane's WKWebView driver (ADR-0048 decision 6): its scripts in a
+# private WKContentWorld, CGEvent trusted input. Its own crate because it is
+# FFI, which this crate forbids.
+elitea-browser-driver-macos = { path = "browser-driver-macos", features = ["tauri"] }
 # `NSProcessInfo`: the macOS version, which picks the browser pane's data
 # store (src/browser_pane.rs).
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSProcessInfo"] }

@@ -4,6 +4,25 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Desktop: the agent drives the browser pane on macOS (#1589, ADR-0048 decisions 5 and 6)
+
+Desktop app only; no server change, no new setting. On macOS, the agent of
+a Local work thread whose Browser tab is open gets the `browser_*` tools
+(the shared contract, `libs/rust/browser-tools`). The tools are not offered
+to sub-agents and are not workspace tools.
+
+- Every tool call runs without an approval prompt until #1590 adds the
+  approvals and the `local_work_browser*` policy keys. A deployment that
+  must not let the agent use web pages should hold this release until then.
+- `browser_open` follows the pane's own rules: https only unless
+  `browser_allow_http` is on, never a loopback, private or link-local host.
+- Pages that accept only real input are clicked with a real mouse event
+  only when the app has the Accessibility permission (System Settings >
+  Privacy & Security > Accessibility). Without it, the agent is told to
+  ask the person. Nothing asks for that permission yet.
+- The driver's script runs in a private WebKit content world; pages cannot
+  see it or call it.
+
 ## Computer use policy keys (#1582, ADR-0047 decisions 3 and 4)
 
 Client contract 1.36. The native client policy's `local_work` group gains

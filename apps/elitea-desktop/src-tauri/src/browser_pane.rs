@@ -70,8 +70,10 @@ use tauri::webview::{
 use tauri::{AppHandle, Emitter as _, Manager as _, State, Webview, WebviewUrl, Wry};
 use url::{Host, Url};
 
+use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
+use crate::browser_tools::BrowserDrivers;
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
 
@@ -614,6 +616,8 @@ pub struct BrowserPanes {
     settings: SettingsFiles,
     registry_path: PathBuf,
     downloads_root: PathBuf,
+    /// The agent's driver of each open pane (`crate::browser_tools`).
+    drivers: Arc<BrowserDrivers>,
     inner: Mutex<Inner>,
 }
 
@@ -626,13 +630,19 @@ struct Inner {
 
 impl BrowserPanes {
     #[must_use]
-    pub fn new(config_dir: PathBuf, data_dir: &Path, downloads_root: PathBuf) -> Self {
+    pub fn new(
+        config_dir: PathBuf,
+        data_dir: &Path,
+        downloads_root: PathBuf,
+        drivers: Arc<BrowserDrivers>,
+    ) -> Self {
         let registry_path = data_dir.join("browser").join("stores.json");
         let registry = StoreRegistry::load(&registry_path);
         Self {
             settings: SettingsFiles::new(config_dir),
             registry_path,
             downloads_root,
+            drivers,
             inner: Mutex::new(Inner {
                 registry,
                 ..Inner::default()
@@ -910,6 +920,7 @@ fn build_pane(
 
 fn close_pane(app: &AppHandle, panes: &BrowserPanes, thread_id: &str) {
     panes.lock().live.remove(thread_id);
+    panes.drivers.detach(thread_id);
     if let Some(webview) = webview_of(app, thread_id)
         && let Err(error) = webview.close()
     {
@@ -998,6 +1009,7 @@ pub async fn forget_all(app: &AppHandle) {
         return;
     };
     let live = panes.lock().live.take_all();
+    panes.drivers.detach_all();
     let had_panes = !live.is_empty();
     for thread in live {
         close_pane(app, &panes, &thread);
@@ -1012,6 +1024,54 @@ pub async fn forget_all(app: &AppHandle) {
     }
     remove_pending(app, &panes).await;
 }
+
+/// The agent's verdict on a URL it asks the pane to open: the pane's own
+/// guard ([`check`]) under the settings as they are now, as an
+/// `elitea-browser-tools` error.
+fn agent_check(
+    panes: std::sync::Weak<BrowserPanes>,
+) -> impl Fn(&str) -> Result<(), BrowserError> + Send + Sync {
+    move |address| {
+        if address.eq_ignore_ascii_case("about:blank") {
+            return Ok(());
+        }
+        let panes = panes
+            .upgrade()
+            .ok_or_else(|| BrowserError::new(ErrorCode::Unsupported, "the browser pane closed"))?;
+        let url = Url::parse(address).map_err(|_| BrowserError::invalid("not a URL"))?;
+        check(&url, panes.policy()).map_err(|reason| {
+            let code = match reason {
+                Refusal::Scheme => ErrorCode::SchemeRefused,
+                Refusal::Credentials => ErrorCode::InvalidArgument,
+                Refusal::Http | Refusal::PrivateNetwork | Refusal::Forbidden => {
+                    ErrorCode::EgressRefused
+                }
+            };
+            BrowserError::new(code, reason.message())
+        })
+    }
+}
+
+/// Install the agent's driver in a pane just made (macOS: the WKWebView
+/// driver's private content world). Without one the pane is the person's
+/// only, and the browser tools say so.
+#[cfg(target_os = "macos")]
+async fn attach_driver(panes: &Arc<BrowserPanes>, thread_id: &str, webview: &Webview) {
+    // TODO(#1591): the hand-over (`browser_request_user`) and the control
+    // pill; until then the request answers `unsupported`.
+    let hand_over = Arc::new(elitea_browser_driver_macos::NoHandOver);
+    let check = Arc::new(agent_check(Arc::downgrade(panes)));
+    match elitea_browser_driver_macos::attach(webview, check, hand_over).await {
+        Ok(driver) => panes.drivers.attach(thread_id, Arc::new(driver)),
+        Err(error) => {
+            log::warn!(target: "browser", "the agent cannot drive this page: {error}");
+        }
+    }
+}
+
+/// Windows and Linux drivers are #1593's.
+#[cfg(not(target_os = "macos"))]
+async fn attach_driver(_panes: &Arc<BrowserPanes>, _thread_id: &str, _webview: &Webview) {}
 
 #[derive(Debug, Serialize)]
 pub struct BrowserOpened {
@@ -1040,7 +1100,8 @@ pub async fn browser_open(
             .navigate(url)
             .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))?;
     } else {
-        build_pane(&app, &panes, &thread_id, url, rect)?;
+        let webview = build_pane(&app, &panes, &thread_id, url, rect)?;
+        attach_driver(&panes, &thread_id, &webview).await;
     }
     let evicted = panes.lock().live.touch(&thread_id);
     if let Some(evicted) = evicted {
