@@ -649,12 +649,12 @@ crate is its only caller and keeps every vendor type behind its own
 **Why vendored.** The upstream crates are not published, and they are a
 new, fast-moving project. A copy keeps the code that drives a person's other
 applications as a reviewed diff in this tree. The patches add a tag on
-synthetic events and two small readers that upstream does not have.
+synthetic events and three small readers that upstream does not have.
 
 | | |
 | --- | --- |
 | Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core` and `crates/macos` |
-| Tree digest | `cbd03c2aabbd6fea0025b2c0b82f51831bc99fcbb78460986faf76f29c0d1c7d` (624 files, 3.9 MB, after the patches; command below) |
+| Tree digest | `88c4e6697e77ce55281f692813dcdeedfe66858e046b2a36c8ddcc01daaa927e` (624 files, 3.9 MB, after the patches; command below) |
 | Licence | `Apache-2.0`; the repository's `LICENSE` is at `agent-desktop/LICENSE`. Upstream has no `NOTICE` file. The root `NOTICE` names the copy. |
 | Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`; the upstream manifests as `core/Cargo.toml.orig` and `macos/Cargo.toml.orig` |
 | Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, the CLI crate (`src/` at the root), the Windows and Linux crates, `skills/`, `npm/`, `apps/`, benchmarks, probes |
@@ -677,11 +677,15 @@ synthetic events and two small readers that upstream does not have.
    declares the module, and `lib.rs` re-exports the three public items.
    The user-active guard (#1584) reads the field to tell the driver's events
    from the person's.
-3. The new file `macos/src/elitea_ext.rs` adds two functions.
+3. The new file `macos/src/elitea_ext.rs` adds three functions.
    `focused_element(pid, deadline)` returns the app's
    `AXFocusedUIElement`; `type_text(None)` and `key` use it for the
    secure-field check. `secure_event_input_enabled()` wraps Carbon's
-   `IsSecureEventInputEnabled`. `lib.rs` declares the module.
+   `IsSecureEventInputEnabled`. `screen_state()` returns a `ScreenState`
+   read from CoreGraphics: `CGSessionCopyCurrentDictionary`
+   (`CGSSessionScreenIsLocked`, `kCGSSessionOnConsoleKey`) and
+   `CGDisplayIsAsleep(CGMainDisplayID())`, for the `screen_unavailable`
+   gate of ADR-0047 decision 5. `lib.rs` declares the module.
 
 The two `Cargo.toml` files are rewritten as standalone manifests:
 

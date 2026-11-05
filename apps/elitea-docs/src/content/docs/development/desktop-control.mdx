@@ -32,11 +32,34 @@ Refs have the form `@<snapshot>:eN`, for example `@s3:e12`. A ref is valid only 
 
 ## Hard limits
 
-The driver enforces the limits that only it can see, whoever calls it. Policy, per-app approvals and rate limits belong to the caller.
+The driver enforces the hard limits of ADR-0047 decision 5 that only it can see, whoever calls it and in bypass mode too. Policy, per-app approvals and rate limits belong to the caller.
 
-- A secure text field (`AXSecureTextField`) appears with `secure: true` and no value. Writing into one fails with `secure_field_refused`. So does `type_text` or `key` while the focused element is secure, or while macOS secure input is on.
-- Denied chords fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through.
+- **Locked or idle screen.** Every call except `permissions()` fails with `screen_unavailable` while the screen is locked, the screensaver is up, the main display sleeps, or this login session is not on the console (another user is switched in). On macOS the driver reads `CGSessionCopyCurrentDictionary` (`CGSSessionScreenIsLocked`, `kCGSSessionOnConsoleKey`), `CGDisplayIsAsleep(CGMainDisplayID())`, and whether the frontmost app is `ScreenSaverEngine`. `wait` checks again on every poll.
+- **Secure input.** While macOS secure input is on (a password prompt anywhere), every act fails with `secure_field_refused`: `act` of any kind, `type_text` and `key`. Reads still run.
+- **Secure fields.** A secure text field (`AXSecureTextField`) appears with `secure: true` and no value. Writing into one, with `type_text` or `act set_value`, fails with `secure_field_refused`. So does `type_text` with no ref or `key` while the focused element is secure.
+- **No Elitea control.** Elitea's own windows are never read, acted on or captured. A process is Elitea when its pid is the driver's own process or its bundle id is `ai.elitea.desktop`; the host adds its helper processes with `MacDriver::with_own_apps(OwnApps::with_extra(pids, bundle_ids))`. Elitea is left out of `list_apps` and `list_windows`. A snapshot, `act`, `key`, `wait` or window capture that targets it fails with `own_window_refused`, and so do `type_text` with no ref and `key` while Elitea is the frontmost app. A region capture that overlaps any Elitea window is refused, not masked.
+- **Text length.** `type_text` and `act set_value` write at most 10,000 characters (`MAX_TYPED_CHARS`). Longer text fails with `invalid_args` before anything is sent.
+- **Denied chords.** They fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through. Switch user has no entry: macOS has no default fast-user-switching chord, only the menu-bar and Control Centre item. A switched-out session fails every call with `screen_unavailable`.
 - Every event the driver posts carries its marker in `kCGEventSourceUserData`. A physical event carries 0 there, so an event tap can classify each event with `is_synthetic_event`.
+
+## Error codes
+
+`DesktopError::code()` returns a stable code for each failure. The computer toolset maps it to the tool result. A code is never renamed or reused.
+
+| Code | Meaning |
+| --- | --- |
+| `stale_ref` | The ref's snapshot is gone, or the element changed. Take a new snapshot |
+| `secure_field_refused` | A write into a secure field, or any act while macOS secure input is on |
+| `chord_refused` | A denied key chord |
+| `own_window_refused` | The target is Elitea's own app, window or a region over one |
+| `screen_unavailable` | The screen is locked, the screensaver is up, the display sleeps, or the session is not on the console |
+| `app_not_found`, `window_not_found` | No such application or window |
+| `permission_denied` | The Accessibility or Screen Recording grant is missing |
+| `action_not_supported`, `action_failed` | The element cannot do the action, or it did not take effect |
+| `timeout` | A wait or an OS read ran out of time |
+| `invalid_args` | Bad arguments, such as text over 10,000 characters |
+| `platform_not_supported` | The `Unsupported` driver of a non-macOS OS |
+| `internal` | Anything else |
 
 ## The macOS driver
 

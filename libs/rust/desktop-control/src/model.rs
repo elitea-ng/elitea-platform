@@ -6,6 +6,25 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The longest text one `type_text` or `act(SetValue)` writes, in
+/// characters (the vendor's own `type_text` limit).
+pub const MAX_TYPED_CHARS: usize = 10_000;
+
+/// Validates text the driver is asked to write into an element
+/// (`type_text`, `act(SetValue)`).
+///
+/// # Errors
+/// [`DesktopError::InvalidArgs`](crate::DesktopError::InvalidArgs) when the
+/// text is longer than [`MAX_TYPED_CHARS`].
+pub fn validate_text_write(text: &str) -> Result<(), crate::DesktopError> {
+    if text.chars().count() > MAX_TYPED_CHARS {
+        return Err(crate::DesktopError::InvalidArgs(format!(
+            "text exceeds {MAX_TYPED_CHARS} characters"
+        )));
+    }
+    Ok(())
+}
+
 /// A rectangle in global screen points (top-left origin, as macOS reports
 /// accessibility frames).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -286,6 +305,18 @@ impl Action {
         matches!(self, Self::SetValue { .. })
     }
 
+    /// Checks the action's arguments before anything is sent: a
+    /// `SetValue` is capped as `type_text` is.
+    ///
+    /// # Errors
+    /// [`DesktopError::InvalidArgs`](crate::DesktopError::InvalidArgs).
+    pub fn validate(&self) -> Result<(), crate::DesktopError> {
+        match self {
+            Self::SetValue { value } => validate_text_write(value),
+            _ => Ok(()),
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
@@ -449,4 +480,35 @@ pub enum Grant {
     Unknown,
     /// The platform needs no grant for this.
     NotRequired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_writes_are_capped_in_characters() {
+        assert_eq!(validate_text_write(&"a".repeat(MAX_TYPED_CHARS)), Ok(()));
+        // Multi-byte characters count once each.
+        assert_eq!(validate_text_write(&"é".repeat(MAX_TYPED_CHARS)), Ok(()));
+        assert_eq!(
+            validate_text_write(&"a".repeat(MAX_TYPED_CHARS + 1))
+                .unwrap_err()
+                .code(),
+            "invalid_args"
+        );
+    }
+
+    #[test]
+    fn set_value_is_capped_like_type_text() {
+        let long = Action::SetValue {
+            value: "a".repeat(MAX_TYPED_CHARS + 1),
+        };
+        assert_eq!(long.validate().unwrap_err().code(), "invalid_args");
+        let ok = Action::SetValue {
+            value: "hello".into(),
+        };
+        assert_eq!(ok.validate(), Ok(()));
+        assert_eq!(Action::Press.validate(), Ok(()));
+    }
 }

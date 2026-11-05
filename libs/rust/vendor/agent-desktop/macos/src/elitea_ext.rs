@@ -39,3 +39,68 @@ unsafe extern "C" {
 pub fn secure_event_input_enabled() -> bool {
     unsafe { IsSecureEventInputEnabled() != 0 }
 }
+
+// Elitea patch 3, continued: the screen state ADR-0047 decision 5 needs
+// ("no call runs while the screen is locked, the screensaver is up or the
+// display sleeps"). Reads only.
+
+/// What the window server reports about this login session and the main
+/// display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenState {
+    /// `CGSessionCopyCurrentDictionary` returned a dictionary: the process
+    /// runs inside a window-server session.
+    pub session_present: bool,
+    /// `kCGSSessionOnConsoleKey`: the session owns the console (false while
+    /// another user is switched in).
+    pub on_console: bool,
+    /// `CGSSessionScreenIsLocked`: the lock screen is up.
+    pub locked: bool,
+    /// `CGDisplayIsAsleep(CGMainDisplayID())`.
+    pub display_asleep: bool,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGSessionCopyCurrentDictionary() -> core_foundation_sys::dictionary::CFDictionaryRef;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayIsAsleep(display: u32) -> u32;
+}
+
+/// The session and display state, read live.
+pub fn screen_state() -> ScreenState {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    let display_asleep = unsafe { CGDisplayIsAsleep(CGMainDisplayID()) != 0 };
+    let raw = unsafe { CGSessionCopyCurrentDictionary() };
+    if raw.is_null() {
+        return ScreenState {
+            session_present: false,
+            on_console: false,
+            locked: false,
+            display_asleep,
+        };
+    }
+    // The dictionary follows the Create rule: this wrapper releases it.
+    let dict: CFDictionary<CFString, CFType> = unsafe { CFDictionary::wrap_under_create_rule(raw) };
+    let flag = |key: &'static str| -> Option<bool> {
+        let value = dict.find(CFString::from_static_string(key))?;
+        if let Some(b) = value.downcast::<CFBoolean>() {
+            return Some(bool::from(b));
+        }
+        value
+            .downcast::<CFNumber>()
+            .and_then(|n| n.to_i64())
+            .map(|n| n != 0)
+    };
+    ScreenState {
+        session_present: true,
+        on_console: flag("kCGSSessionOnConsoleKey").unwrap_or(false),
+        locked: flag("CGSSessionScreenIsLocked").unwrap_or(false),
+        display_asleep,
+    }
+}

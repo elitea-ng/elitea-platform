@@ -13,10 +13,14 @@
 //!   [`DesktopError::PlatformNotSupported`].
 //! - [`default_driver`] returns the one this OS has.
 //!
-//! The driver itself enforces what only it can see: a secure text field is
-//! reported as `secure` with no value and is never typed into, denied key
-//! chords are refused, and a ref from a dropped or changed snapshot fails as
-//! [`DesktopError::StaleRef`]. Every input event it posts carries the
+//! The driver itself enforces the hard limits of ADR-0047 decision 5, in
+//! bypass mode too: a secure text field is reported as `secure` with no
+//! value and is never typed into; while macOS secure input is on every act
+//! is refused; denied key chords are refused; Elitea's own windows are never
+//! read, acted on or captured ([`DesktopError::OwnWindowRefused`]); and no
+//! call but `permissions` runs while the screen is locked, the screensaver
+//! is up or the display sleeps ([`DesktopError::ScreenUnavailable`]). A ref
+//! from a dropped or changed snapshot fails as [`DesktopError::StaleRef`]. Every input event it posts carries the
 //! [`SyntheticMarker`], so the user-active guard can tell the person's input
 //! from the driver's ([`DesktopDriver::is_synthetic_event`]).
 //!
@@ -24,6 +28,7 @@
 
 mod driver;
 mod error;
+mod guard;
 mod model;
 mod policy;
 pub mod snapshot;
@@ -33,12 +38,13 @@ mod macos;
 
 pub use driver::{DesktopDriver, Unsupported};
 pub use error::DesktopError;
+pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlaps};
 #[cfg(target_os = "macos")]
 pub use macos::MacDriver;
 pub use model::{
     Action, ActionOutcome, AppInfo, Capture, CaptureTarget, Delivery, ElementRef, Grant, KeyChord,
-    Modifier, Node, Permissions, Point, Rect, ScrollDirection, Snapshot, SnapshotBudget,
-    SnapshotId, WaitCondition, WindowInfo, WindowTarget,
+    MAX_TYPED_CHARS, Modifier, Node, Permissions, Point, Rect, ScrollDirection, Snapshot,
+    SnapshotBudget, SnapshotId, WaitCondition, WindowInfo, WindowTarget, validate_text_write,
 };
 pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord};
 

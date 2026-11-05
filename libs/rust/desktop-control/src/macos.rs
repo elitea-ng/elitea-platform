@@ -20,11 +20,13 @@ use std::time::{Duration, Instant};
 use agent_desktop_core as ad;
 use agent_desktop_core::{ObservationOps, RefEntry, SystemOps};
 
+use crate::guard::{self, HostState};
 use crate::snapshot::{Binding, RawNode, RefRegistry, build_tree};
 use crate::{
     Action, ActionOutcome, AppInfo, Capture, CaptureTarget, Delivery, DesktopDriver, DesktopError,
-    ElementRef, Grant, KeyChord, Modifier, Node, Permissions, Rect, ScrollDirection, Snapshot,
-    SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo, WindowTarget,
+    ElementRef, Grant, KeyChord, Modifier, Node, OwnApps, Permissions, Rect, ScreenStatus,
+    ScrollDirection, Snapshot, SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo,
+    WindowTarget,
 };
 
 /// How many snapshots the driver keeps refs for.
@@ -33,8 +35,8 @@ const HELD_SNAPSHOTS: usize = 8;
 const SNAPSHOT_TIMEOUT_MS: u64 = 5_000;
 /// The deadline of one action, key or capture.
 const ACTION_TIMEOUT_MS: u64 = 5_000;
-/// The longest text one `type_text` sends (the vendor's own limit).
-const MAX_TYPED_CHARS: usize = 10_000;
+/// The deadline of the frontmost-app read behind the screensaver check.
+const SCREEN_CHECK_TIMEOUT_MS: u64 = 1_000;
 /// The poll interval of `wait`.
 const WAIT_POLL: Duration = Duration::from_millis(150);
 
@@ -42,10 +44,15 @@ const WAIT_POLL: Duration = Duration::from_millis(150);
 type Payload = ad::WindowInfo;
 
 /// The macOS [`DesktopDriver`].
+///
+/// Before each call it checks the screen (`screen_unavailable`), before each
+/// act macOS secure input (`secure_field_refused`), and on every target
+/// whether it is Elitea itself (`own_window_refused`; [`OwnApps`]).
 pub struct MacDriver {
     adapter: agent_desktop_macos::MacOSAdapter,
     refs: Mutex<RefRegistry<RefEntry, Payload>>,
     marker: SyntheticMarker,
+    own: OwnApps,
 }
 
 impl Default for MacDriver {
@@ -63,7 +70,17 @@ impl MacDriver {
             adapter: agent_desktop_macos::MacOSAdapter::new(),
             refs: Mutex::new(RefRegistry::new(HELD_SNAPSHOTS)),
             marker: SyntheticMarker::new(tag).unwrap_or_else(|| unreachable!("tag is never 0")),
+            own: OwnApps::default(),
         }
+    }
+
+    /// The same driver, refusing `own` as Elitea's processes. The default
+    /// set is this process and `ai.elitea.desktop`; the host adds its
+    /// helper processes with [`OwnApps::with_extra`].
+    #[must_use]
+    pub fn with_own_apps(mut self, own: OwnApps) -> Self {
+        self.own = own;
+        self
     }
 
     /// A driver that stamps `marker` into the events it posts. The tag is
@@ -84,8 +101,24 @@ impl MacDriver {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The window `target` names; `own_window_refused` when it is Elitea's.
     fn resolve_window(&self, target: &WindowTarget) -> Result<ad::WindowInfo, DesktopError> {
+        if let WindowTarget::App(bundle_id) = target
+            && self.own.is_own_bundle(bundle_id)
+        {
+            return Err(DesktopError::OwnWindowRefused(bundle_id.clone()));
+        }
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
+        let window = self.resolve_window_unchecked(target, deadline)?;
+        self.refuse_own_pid(window.pid, deadline, "an Elitea window")?;
+        Ok(window)
+    }
+
+    fn resolve_window_unchecked(
+        &self,
+        target: &WindowTarget,
+        deadline: ad::Deadline,
+    ) -> Result<ad::WindowInfo, DesktopError> {
         match target {
             WindowTarget::Focused => self
                 .adapter
@@ -152,6 +185,44 @@ impl MacDriver {
             .ok_or_else(|| DesktopError::AppNotFound(bundle.to_owned()))
     }
 
+    /// `own_window_refused` when the process `pid` is Elitea, by pid or by
+    /// bundle id.
+    fn refuse_own_pid(
+        &self,
+        pid: ad::ProcessId,
+        deadline: ad::Deadline,
+        what: &str,
+    ) -> Result<(), DesktopError> {
+        self.own.refuse(pid.get(), None, what)?;
+        let bundle = self.bundle_of(pid, deadline);
+        self.own.refuse(pid.get(), bundle.as_deref(), what)
+    }
+
+    /// The pids of every running Elitea process.
+    fn own_pids(&self, deadline: ad::Deadline) -> Result<Vec<ad::ProcessId>, DesktopError> {
+        Ok(self
+            .adapter
+            .list_apps(deadline)
+            .map_err(map_err)?
+            .into_iter()
+            .filter(|a| self.own.is_own(a.pid.get(), a.bundle_id.as_deref()))
+            .map(|a| a.pid)
+            .collect())
+    }
+
+    /// `own_window_refused` when the frontmost application is Elitea: input
+    /// with no element target lands there.
+    fn refuse_own_frontmost(&self, deadline: ad::Deadline) -> Result<(), DesktopError> {
+        if let Some(app) = self.adapter.focused_app(deadline).map_err(map_err)? {
+            self.own.refuse(
+                app.pid.get(),
+                app.bundle_id.as_deref(),
+                "Elitea is the frontmost application",
+            )?;
+        }
+        Ok(())
+    }
+
     fn bundle_of(&self, pid: ad::ProcessId, deadline: ad::Deadline) -> Option<String> {
         self.adapter
             .list_apps(deadline)
@@ -168,11 +239,14 @@ impl MacDriver {
         element_ref: &ElementRef,
         deadline: ad::Deadline,
     ) -> Result<(Binding<RefEntry>, ad::NativeHandle), DesktopError> {
-        let binding = {
+        let (binding, pid) = {
             let registry = self.registry();
-            let (binding, _window) = registry.resolve(element_ref)?;
-            binding.clone()
+            let (binding, window) = registry.resolve(element_ref)?;
+            (binding.clone(), window.pid)
         };
+        // A snapshot of an Elitea window is never taken; this holds even if
+        // a pid was reused or the set of own apps grew since.
+        self.refuse_own_pid(pid, deadline, "an Elitea window")?;
         let handle = ad::refs::resolve_saved_ref::resolve_saved_ref(
             &self.adapter,
             &binding.handle,
@@ -205,12 +279,9 @@ impl MacDriver {
         Ok(())
     }
 
-    /// Refuses when the focused element of `pid` is a secure field, or when
-    /// macOS secure event input is on.
+    /// Refuses when the focused element of `pid` is a secure field. macOS
+    /// secure input is checked before every act ([`guard::before_act`]).
     fn refuse_if_focus_secure(&self, pid: u32, deadline: ad::Deadline) -> Result<(), DesktopError> {
-        if agent_desktop_macos::elitea_ext::secure_event_input_enabled() {
-            return Err(DesktopError::SecureFieldRefused);
-        }
         if let Some(focused) =
             agent_desktop_macos::elitea_ext::focused_element(pid, deadline).map_err(map_err)?
         {
@@ -231,6 +302,8 @@ impl MacDriver {
         action: ad::Action,
         writes_text: bool,
     ) -> Result<ActionOutcome, DesktopError> {
+        // Every act, whatever its kind, is refused while secure input is
+        // on; the caller ran `guard::before_act` before this.
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
         let (binding, handle) = self.resolve_ref(element_ref, deadline)?;
         if writes_text {
@@ -238,9 +311,6 @@ impl MacDriver {
                 return Err(DesktopError::SecureFieldRefused);
             }
             self.refuse_if_secure(&handle, deadline)?;
-            if agent_desktop_macos::elitea_ext::secure_event_input_enabled() {
-                return Err(DesktopError::SecureFieldRefused);
-            }
         }
         let name = action.name();
         let lease = Self::lease(deadline)?;
@@ -349,6 +419,27 @@ impl MacDriver {
     }
 }
 
+impl HostState for MacDriver {
+    fn screen(&self) -> ScreenStatus {
+        let state = agent_desktop_macos::elitea_ext::screen_state();
+        let screensaver = deadline(SCREEN_CHECK_TIMEOUT_MS)
+            .ok()
+            .and_then(|d| self.adapter.focused_app(d).ok().flatten())
+            .is_some_and(|a| crate::is_screensaver(a.bundle_id.as_deref(), &a.name));
+        ScreenStatus {
+            session_present: state.session_present,
+            on_console: state.on_console,
+            locked: state.locked,
+            screensaver,
+            display_asleep: state.display_asleep,
+        }
+    }
+
+    fn secure_input(&self) -> bool {
+        agent_desktop_macos::elitea_ext::secure_event_input_enabled()
+    }
+}
+
 impl DesktopDriver for MacDriver {
     fn permissions(&self) -> Permissions {
         let Ok(deadline) = deadline(ACTION_TIMEOUT_MS) else {
@@ -370,6 +461,7 @@ impl DesktopDriver for MacDriver {
     }
 
     fn list_apps(&self) -> Result<Vec<AppInfo>, DesktopError> {
+        guard::before_call(self)?;
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
         let focused = self
             .adapter
@@ -382,6 +474,8 @@ impl DesktopDriver for MacDriver {
             .list_apps(deadline)
             .map_err(map_err)?
             .into_iter()
+            // Elitea itself is not listed: the agent never reads it.
+            .filter(|a| !self.own.is_own(a.pid.get(), a.bundle_id.as_deref()))
             .map(|a| AppInfo {
                 focused: Some(a.pid) == focused,
                 name: a.name,
@@ -392,8 +486,16 @@ impl DesktopDriver for MacDriver {
     }
 
     fn list_windows(&self, bundle_id: Option<&str>) -> Result<Vec<WindowInfo>, DesktopError> {
+        guard::before_call(self)?;
+        if let Some(bundle) = bundle_id
+            && self.own.is_own_bundle(bundle)
+        {
+            return Err(DesktopError::OwnWindowRefused(bundle.to_owned()));
+        }
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
-        let windows = self.vendor_windows(bundle_id, deadline)?;
+        let own = self.own_pids(deadline)?;
+        let mut windows = self.vendor_windows(bundle_id, deadline)?;
+        windows.retain(|w| !own.contains(&w.pid) && !self.own.is_own(w.pid.get(), None));
         Ok(windows
             .iter()
             .map(|w| self.to_window(w, deadline))
@@ -405,6 +507,7 @@ impl DesktopDriver for MacDriver {
         target: &WindowTarget,
         budget: &SnapshotBudget,
     ) -> Result<Snapshot, DesktopError> {
+        guard::before_call(self)?;
         self.snapshot_inner(target, budget)
     }
 
@@ -413,6 +516,8 @@ impl DesktopDriver for MacDriver {
         element_ref: &ElementRef,
         action: &Action,
     ) -> Result<ActionOutcome, DesktopError> {
+        action.validate()?;
+        guard::before_act(self)?;
         let vendor = match action {
             Action::Press => ad::Action::Click,
             Action::SetValue { value } => ad::Action::SetValue(value.clone()),
@@ -441,11 +546,8 @@ impl DesktopDriver for MacDriver {
         element_ref: Option<&ElementRef>,
         text: &str,
     ) -> Result<ActionOutcome, DesktopError> {
-        if text.chars().count() > MAX_TYPED_CHARS {
-            return Err(DesktopError::InvalidArgs(format!(
-                "text exceeds {MAX_TYPED_CHARS} characters"
-            )));
-        }
+        crate::validate_text_write(text)?;
+        guard::before_act(self)?;
         if let Some(element_ref) = element_ref {
             let mut out =
                 self.run_action(element_ref, ad::Action::TypeText(text.to_owned()), true)?;
@@ -459,6 +561,11 @@ impl DesktopDriver for MacDriver {
             .map_err(map_err)?
             .ok_or_else(|| DesktopError::AppNotFound("no frontmost application".into()))?;
         let pid = app.pid.get();
+        self.own.refuse(
+            pid,
+            app.bundle_id.as_deref(),
+            "Elitea is the frontmost application",
+        )?;
         self.refuse_if_focus_secure(pid, deadline)?;
         let focused = agent_desktop_macos::elitea_ext::focused_element(pid, deadline)
             .map_err(map_err)?
@@ -480,6 +587,7 @@ impl DesktopDriver for MacDriver {
         if crate::is_denied_chord(chord) {
             return Err(DesktopError::ChordRefused(chord_text(chord)));
         }
+        guard::before_act(self)?;
         let combo = ad::KeyCombo {
             key: chord.key.clone(),
             modifiers: chord
@@ -498,6 +606,8 @@ impl DesktopDriver for MacDriver {
         }
         let window = self.resolve_window(target)?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
+        // A chord may land in the frontmost app rather than the window.
+        self.refuse_own_frontmost(deadline)?;
         self.refuse_if_focus_secure(window.pid.get(), deadline)?;
         let lease = Self::lease(deadline)?;
         let result = self
@@ -508,6 +618,7 @@ impl DesktopDriver for MacDriver {
     }
 
     fn capture(&self, target: &CaptureTarget) -> Result<Capture, DesktopError> {
+        guard::before_call(self)?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
         match target {
             CaptureTarget::Window { id } => {
@@ -536,6 +647,15 @@ impl DesktopDriver for MacDriver {
                 if !region.is_valid() || region.width < 1.0 || region.height < 1.0 {
                     return Err(DesktopError::InvalidArgs("empty or invalid region".into()));
                 }
+                // Refused, not masked, when any Elitea window shows in it.
+                let own = self.own_pids(deadline)?;
+                let own_frames: Vec<Rect> = self
+                    .vendor_windows(None, deadline)?
+                    .iter()
+                    .filter(|w| own.contains(&w.pid) || self.own.is_own(w.pid.get(), None))
+                    .filter_map(|w| w.bounds.map(rect))
+                    .collect();
+                guard::refuse_region(region, &own_frames)?;
                 let displays = self.adapter.list_displays(deadline).map_err(map_err)?;
                 let (index, display) = displays
                     .iter()
@@ -562,7 +682,14 @@ impl DesktopDriver for MacDriver {
     fn wait(&self, condition: &WaitCondition, timeout: Duration) -> Result<(), DesktopError> {
         let end = Instant::now() + timeout;
         let mut previous: Option<Node> = None;
+        if let WaitCondition::Window { bundle_id, .. } = condition
+            && self.own.is_own_bundle(bundle_id)
+        {
+            return Err(DesktopError::OwnWindowRefused(bundle_id.clone()));
+        }
         loop {
+            // The screen can lock while the wait polls.
+            guard::before_call(self)?;
             let done = if let WaitCondition::Stable { target } = condition {
                 let snap = self.snapshot_inner(target, &SnapshotBudget::default())?;
                 let same = previous.as_ref().is_some_and(|p| same_shape(p, &snap.root));

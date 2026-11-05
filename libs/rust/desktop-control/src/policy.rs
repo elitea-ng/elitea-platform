@@ -4,9 +4,16 @@
 use crate::{KeyChord, Modifier};
 
 /// The chords a driver never sends: quit, force quit, log out, shut down,
-/// lock screen, switch user, Spotlight and Siri. A chord is denied when its
-/// key matches an entry and it holds at least that entry's modifiers, so
-/// adding a modifier to a denied chord does not get it through.
+/// lock screen, Spotlight and Siri. A chord is denied when its key matches
+/// an entry and it holds at least that entry's modifiers, so adding a
+/// modifier to a denied chord does not get it through.
+///
+/// Switch user (ADR-0047 decision 5) has no entry: macOS has no default
+/// fast-user-switching chord (it lives in the menu-bar and Control Centre
+/// item only), and the key vocabulary has no `loginwindow`-like key to deny.
+/// A person can bind one in System Settings > Keyboard > Shortcuts; the
+/// login window is on the platform deny list (decision 3), and a session
+/// that is switched out fails every call as `screen_unavailable`.
 const DENIED: &[(&[Modifier], &str)] = &[
     // Quit and force quit.
     (&[Modifier::Command], "q"),

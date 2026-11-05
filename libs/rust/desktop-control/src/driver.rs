@@ -11,10 +11,19 @@ use crate::{
 /// Control of the person's other applications (ADR-0047 decision 1).
 ///
 /// One driver per desktop host, used from a dedicated thread: the calls
-/// block, some for as long as their timeout. The driver applies only the
-/// limits it alone can see (secure fields, denied chords, stale refs). The
-/// policy ceiling, per-app approvals, rate limits and the user-active guard
-/// belong to the caller (#1583, #1584).
+/// block, some for as long as their timeout. The driver applies the hard
+/// limits of ADR-0047 decision 5 that it alone can see, in bypass mode too:
+/// secure fields and macOS secure input, denied chords, Elitea's own windows
+/// (`own_window_refused`), the locked or sleeping screen
+/// (`screen_unavailable`), and stale refs. The policy ceiling, per-app
+/// approvals, rate limits and the user-active guard belong to the caller
+/// (#1583, #1584).
+///
+/// Every call except [`DesktopDriver::permissions`] fails with
+/// [`DesktopError::ScreenUnavailable`] while the screen is locked, the
+/// screensaver is up, the display sleeps or the session is not on the
+/// console. Elitea's own apps and windows are left out of the lists, and a
+/// target that is one fails with [`DesktopError::OwnWindowRefused`].
 pub trait DesktopDriver: Send + Sync {
     /// The OS privacy grants, read live.
     fn permissions(&self) -> Permissions;
@@ -50,8 +59,10 @@ pub trait DesktopDriver: Send + Sync {
     ///
     /// # Errors
     /// [`DesktopError::StaleRef`] when the snapshot is gone or the element
-    /// changed; [`DesktopError::SecureFieldRefused`] for a text write into a
-    /// secure field; [`DesktopError::ActionNotSupported`] /
+    /// changed; [`DesktopError::SecureFieldRefused`] for any action while
+    /// macOS secure input is on, and for a text write into a secure field;
+    /// [`DesktopError::InvalidArgs`] for a `SetValue` longer than
+    /// [`MAX_TYPED_CHARS`](crate::MAX_TYPED_CHARS); [`DesktopError::ActionNotSupported`] /
     /// [`DesktopError::ActionFailed`].
     fn act(&self, element_ref: &ElementRef, action: &Action)
     -> Result<ActionOutcome, DesktopError>;
@@ -60,9 +71,12 @@ pub trait DesktopDriver: Send + Sync {
     /// into the focused element of the frontmost app.
     ///
     /// # Errors
-    /// [`DesktopError::SecureFieldRefused`] when the target is a secure
-    /// field (or, with `None`, when the focused element is one, or macOS
-    /// secure input is on); otherwise as [`DesktopDriver::act`].
+    /// [`DesktopError::SecureFieldRefused`] when macOS secure input is on, or
+    /// the target is a secure field (with `None`, the focused element);
+    /// [`DesktopError::OwnWindowRefused`] when, with `None`, Elitea is the
+    /// frontmost app; [`DesktopError::InvalidArgs`] past
+    /// [`MAX_TYPED_CHARS`](crate::MAX_TYPED_CHARS); otherwise as
+    /// [`DesktopDriver::act`].
     fn type_text(
         &self,
         element_ref: Option<&ElementRef>,
@@ -73,8 +87,10 @@ pub trait DesktopDriver: Send + Sync {
     ///
     /// # Errors
     /// [`DesktopError::ChordRefused`] for a denied chord (quit, log out,
-    /// lock, Spotlight, ...); [`DesktopError::SecureFieldRefused`] when the
-    /// window's focused element is secure; [`DesktopError::WindowNotFound`].
+    /// lock, Spotlight, ...); [`DesktopError::SecureFieldRefused`] when macOS
+    /// secure input is on or the window's focused element is secure;
+    /// [`DesktopError::OwnWindowRefused`] when the window, or the frontmost
+    /// app, is Elitea; [`DesktopError::WindowNotFound`].
     fn key(&self, target: &WindowTarget, chord: &KeyChord) -> Result<ActionOutcome, DesktopError>;
 
     /// A window or a screen region as PNG.
@@ -82,7 +98,9 @@ pub trait DesktopDriver: Send + Sync {
     /// # Errors
     /// [`DesktopError::PermissionDenied`] without the Screen Recording
     /// grant; [`DesktopError::WindowNotFound`]; [`DesktopError::InvalidArgs`]
-    /// for a region outside every display.
+    /// for a region outside every display; [`DesktopError::OwnWindowRefused`]
+    /// for an Elitea window, or a region that overlaps one (refused, not
+    /// masked).
     fn capture(&self, target: &CaptureTarget) -> Result<Capture, DesktopError>;
 
     /// Polls until `condition` holds or `timeout` passes.
