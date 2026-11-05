@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout</title>
+</head>
+<body>
+  <h1>Checkout</h1>
+  <form aria-label="Payment" onsubmit="event.preventDefault();">
+    <label for="name">Name on card</label>
+    <input id="name" autocomplete="cc-name" value="Ada Lovelace">
+    <label for="cc">Card number</label>
+    <input id="cc" autocomplete="cc-number" inputmode="numeric" value="4111111111111111">
+    <label for="csc">Security code</label>
+    <input id="csc" autocomplete="cc-csc" value="737">
+    <label for="newpw">New password</label>
+    <input id="newpw" type="text" autocomplete="new-password" value="s3cret-new">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" value="hunter2">
+    <button type="submit">Pay now</button>
+  </form>
+</body>
+</html>

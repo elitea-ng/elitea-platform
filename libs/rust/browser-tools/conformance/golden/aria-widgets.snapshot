@@ -1,0 +1,13 @@
+- heading "Widgets" [level=1]
+- tablist "Settings":
+  - tab "General" [selected] [ref=e1]
+  - tab "Billing" [ref=e2]
+- tabpanel "General":
+  - text "General settings"
+- button "More options" [collapsed] [ref=e3]
+- button "Bold" [pressed] [ref=e4]
+- switch "Dark mode" [ref=e5]
+- slider "Volume" [ref=e6]: "3"
+- button "Custom action" [ref=e7]
+- button "Unavailable" [disabled] [ref=e8]
+- alert "Saved"

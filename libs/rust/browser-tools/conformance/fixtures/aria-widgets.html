@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ARIA widgets</title>
+</head>
+<body>
+  <h1>Widgets</h1>
+  <div role="tablist" aria-label="Settings">
+    <button role="tab" id="tab-general" aria-selected="true" aria-controls="panel-general">General</button>
+    <button role="tab" id="tab-billing" aria-selected="false" aria-controls="panel-billing" tabindex="-1">Billing</button>
+  </div>
+  <div role="tabpanel" id="panel-general" aria-labelledby="tab-general">General settings</div>
+  <div role="tabpanel" id="panel-billing" aria-labelledby="tab-billing" hidden>Billing settings</div>
+  <button id="toggle-more" aria-expanded="false" aria-controls="more">More options</button>
+  <div id="more" hidden><a href="#advanced">Advanced</a></div>
+  <button aria-pressed="true">Bold</button>
+  <div role="switch" aria-checked="false" tabindex="0" aria-label="Dark mode"></div>
+  <div role="slider" aria-label="Volume" aria-valuemin="0" aria-valuemax="10" aria-valuenow="3" tabindex="0"></div>
+  <div role="button" tabindex="0">Custom action</div>
+  <button disabled>Unavailable</button>
+  <div role="alert">Saved</div>
+  <script>
+    for (const tab of document.querySelectorAll('[role=tab]')) {
+      tab.addEventListener('click', () => {
+        for (const other of document.querySelectorAll('[role=tab]')) {
+          const selected = other === tab;
+          other.setAttribute('aria-selected', String(selected));
+          other.tabIndex = selected ? 0 : -1;
+          document.getElementById(other.getAttribute('aria-controls')).hidden = !selected;
+        }
+      });
+    }
+    const toggle = document.getElementById('toggle-more');
+    toggle.addEventListener('click', () => {
+      const open = toggle.getAttribute('aria-expanded') !== 'true';
+      toggle.setAttribute('aria-expanded', String(open));
+      document.getElementById('more').hidden = !open;
+    });
+  </script>
+</body>
+</html>

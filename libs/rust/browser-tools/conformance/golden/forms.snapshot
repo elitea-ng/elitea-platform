@@ -1,0 +1,12 @@
+- main:
+  - heading "Sign in" [level=1]
+  - form "Sign in":
+    - textbox "Email" [required] [ref=e1]
+    - textbox "Password" [secure] [ref=e2]
+    - checkbox "Remember me" [ref=e3]
+    - combobox "Country" [ref=e4]: "France"
+      - option "Canada" [ref=e5]
+      - option "France" [selected] [ref=e6]
+    - textbox "About you" [ref=e7]
+    - button "Sign in" [ref=e8]
+  - paragraph "Status: idle"

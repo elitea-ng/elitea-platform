@@ -1,0 +1,5 @@
+- heading "Frames" [level=1]
+- iframe "Embedded form":
+  - textbox "Inner name" [ref=e1]
+  - button "Inner submit" [ref=e2]
+- link "After the frame" [ref=e3]

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Forms</title>
+</head>
+<body>
+<main>
+  <h1>Sign in</h1>
+  <form aria-label="Sign in" onsubmit="event.preventDefault(); document.getElementById('status').textContent = 'Status: submitted';">
+    <label for="email">Email</label>
+    <input id="email" type="email" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <label><input id="remember" type="checkbox"> Remember me</label>
+    <label for="country">Country</label>
+    <select id="country">
+      <option>Canada</option>
+      <option selected>France</option>
+    </select>
+    <label for="bio">About you</label>
+    <textarea id="bio"></textarea>
+    <button type="submit">Sign in</button>
+  </form>
+  <p id="status">Status: idle</p>
+</main>
+</body>
+</html>
