@@ -1,0 +1,64 @@
+---
+title: "Desktop control driver"
+description: "The elitea-desktop-control crate (ADR-0047): the DesktopDriver trait, the macOS driver on vendored agent-desktop, snapshots and refs, the hard limits, and how to run the live test."
+---
+
+`libs/rust/desktop-control` (package `elitea-desktop-control`) is the layer that drives the person's other applications on their own computer (ADR-0047, #1581). It is a library and has no caller yet: the desktop agent's tools (#1583) and the user-active guard (#1584) will build on it.
+
+## The trait
+
+`DesktopDriver` is the whole interface. No vendor type crosses it.
+
+| Call | What it does |
+| --- | --- |
+| `permissions()` | The Accessibility and Screen Recording grants, read live |
+| `list_apps()`, `list_windows(bundle_id)` | Running apps and their top-level windows |
+| `snapshot(target, budget)` | One window's filtered accessibility tree, with refs |
+| `act(ref, action)` | Press, set value, focus, select, scroll, expand, collapse, toggle |
+| `type_text(ref or None, text)` | Text into an element, or into the focused element |
+| `key(target, chord)` | One key chord, such as `cmd+shift+a`, into a window |
+| `capture(target)` | A window or a screen region as PNG |
+| `wait(condition, timeout)` | Polls for a window, a ref state, some text or a stable tree |
+| `synthetic_marker()`, `is_synthetic_event(field)` | Tell the driver's own input events from the person's |
+| `forget_snapshots()` | Make every ref handed out so far stale |
+
+`default_driver()` returns the macOS driver on macOS. On every other OS it returns `Unsupported`, which fails every call with `platform_not_supported`, so Linux CI compiles and tests the crate.
+
+## Snapshots and refs
+
+A snapshot keeps visible, on-screen nodes. Under `actionable_only`, the default, it keeps only the nodes you can act on, text nodes, and their ancestors, and it collapses inert wrappers that have a single child. `SnapshotBudget` caps the depth (12), the node count (400) and the text length (200). When a cap cuts the tree, or the platform stops early, the snapshot says `truncated: true`.
+
+Refs have the form `@<snapshot>:eN`, for example `@s3:e12`. A ref is valid only while its snapshot is held. The driver keeps the most recent snapshots and evicts the oldest. A ref to an evicted snapshot, to a forgotten one, or to an element that no longer matches what the snapshot recorded fails with `stale_ref`. The caller then takes a new snapshot.
+
+## Hard limits
+
+The driver enforces the limits that only it can see, whoever calls it. Policy, per-app approvals and rate limits belong to the caller.
+
+- A secure text field (`AXSecureTextField`) appears with `secure: true` and no value. Writing into one fails with `secure_field_refused`. So does `type_text` or `key` while the focused element is secure, or while macOS secure input is on.
+- Denied chords fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through.
+- Every event the driver posts carries its marker in `kCGEventSourceUserData`. A physical event carries 0 there, so an event tap can classify each event with `is_synthetic_event`.
+
+## The macOS driver
+
+The macOS driver wraps vendored copies of the `core` and `macos` crates of [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0). They live in `libs/rust/vendor/agent-desktop/` with three recorded patches. `libs/rust/vendor/README.md` lists what was copied and every change. Capture runs `/usr/sbin/screencapture` through the vendor's own code. `screencapturekit-rs` was not used, because its build script runs `swift build`.
+
+Actions are semantic first, through the accessibility API, with no pointer move and no change of focus. `ActionOutcome.delivery` says whether an action was delivered semantically or needed physical input.
+
+## Run the live test
+
+The unit tests run everywhere. The live test drives TextEdit and needs a logged-in macOS session.
+
+<Steps>
+<Step title="Grant access">
+In System Settings > Privacy & Security, add the terminal that runs `cargo` to **Accessibility**. Add it to **Screen Recording** too, for the capture check. Then restart the terminal, because TCC reads the grant at launch.
+</Step>
+<Step title="Run it">
+From `libs/rust`:
+
+```bash
+cargo test -p elitea-desktop-control --test macos_live -- --ignored --nocapture --test-threads=1
+```
+
+Keep your hands off the keyboard and the mouse while it runs. It opens an untitled TextEdit document and types into it. Close that document afterwards without saving.
+</Step>
+</Steps>

@@ -4,6 +4,14 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Desktop control driver library (#1581, ADR-0047)
+
+Nothing to do. `libs/rust/desktop-control` (`elitea-desktop-control`) is a
+new library. It holds the `DesktopDriver` trait and a macOS driver on a
+vendored copy of agent-desktop (`libs/rust/vendor/agent-desktop/`). No
+service, worker or app calls it yet, so no image, configuration or
+migration changes.
+
 ## Thinking policy: auto and off, reasoning control, reasoning tokens (#1452, ADR-0038 decisions 1 to 5)
 
 Upgrade the workers (`elitea-worker-rust`) before Main. A
