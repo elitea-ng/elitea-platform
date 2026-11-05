@@ -19,11 +19,22 @@
 //!   CoreGraphics calls: `callAsyncJavaScript` in the driver world,
 //!   `takeSnapshot(with:)`, and CGEvent clicks posted to this process only
 //!   when the Accessibility grant (ADR-0047) is there.
+//! * `native` (macOS) — the pane's own controls that wry and Tauri do not
+//!   expose (#1634): the private-network `WKContentRuleList`
+//!   ([`native::install_content_rules`]) and native Back, Forward and Stop
+//!   ([`native::go`]).
+//!
+//! This is the one first-party crate allowed `unsafe` (`unsafe_code =
+//! "deny"`, each FFI item opted in with `#[allow(unsafe_code)]` and a
+//! `// SAFETY:` comment; repo-root `AGENTS.md`). Everything it exports is
+//! safe to call.
 //!
 //! No JavaScript ever comes from the model: the host sends an operation
 //! name and JSON arguments to a fixed function body.
 
 pub mod driver;
+#[cfg(target_os = "macos")]
+pub mod native;
 pub mod reply;
 #[cfg(target_os = "macos")]
 pub mod webkit;

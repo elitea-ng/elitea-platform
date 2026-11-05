@@ -9,7 +9,11 @@ publish = false
 
 # A crate of its own because the WebKit, AppKit and CoreGraphics calls are
 # FFI (`unsafe`), which the desktop host forbids for itself
-# (`unsafe_code = "forbid"`). Everything that is not FFI (the snapshot
+# (`unsafe_code = "forbid"`). This is the ONE first-party crate allowed
+# `unsafe` (owner decision on #1634, recorded in the repo-root AGENTS.md):
+# `unsafe_code = "deny"`, each unsafe fn or block opted in with
+# `#[allow(unsafe_code)]` and explained by a `// SAFETY:` comment, and only
+# safe functions exported. Everything that is not FFI (the snapshot
 # reader, the reply parser, the script body) is plain Rust and tested on
 # every OS; the WebKit part builds on macOS only.
 
@@ -36,7 +40,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSResponder", "NSWindow", "NSScreen", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEvent", "CGEventTypes", "CGRemoteOperation", "libc"] }
-objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKContentWorld", "WKFrameInfo", "WKUserScript", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandler", "WKSnapshotConfiguration", "WKNavigation", "WKSecurityOrigin"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKWebViewConfiguration", "WKContentWorld", "WKFrameInfo", "WKUserScript", "WKUserContentController", "WKScriptMessage", "WKScriptMessageHandler", "WKSnapshotConfiguration", "WKNavigation", "WKSecurityOrigin", "WKContentRuleList", "WKContentRuleListStore"] }
 libc = "0.2"
 tauri = { version = "2.12", default-features = false, features = ["wry"], optional = true }
 
@@ -56,6 +60,9 @@ name = "webkit"
 harness = false
 
 [lints.rust]
+# Not `forbid` (every other first-party crate): FFI here is opted in per
+# item with `#[allow(unsafe_code)]` and a `// SAFETY:` comment (AGENTS.md).
+unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]

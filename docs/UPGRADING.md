@@ -98,12 +98,17 @@ site data per thread (macOS 14+: a persistent store per thread; macOS
   (`com.apple.quarantine`, agent `Elitea`, so Gatekeeper checks it on first
   open) and records its URL (`kMDItemWhereFroms`). Unicode format
   characters (bidi overrides, zero-width marks) are removed from the name.
-- Private-network blocking covers navigations only: top-level pages and
-  frames whose address is `localhost`, a private name or a private or
-  loopback IP are refused. Subresources (`fetch`, images, WebSockets) to
-  those addresses, and public names that resolve to private addresses, are
-  NOT blocked yet (#1634). Do not rely on the pane to protect local
+- Private-network blocking: top-level pages and frames whose address is
+  `localhost`, a private name or a private or loopback IP are refused. On
+  macOS, subresources (`fetch`, images, scripts, WebSockets) to those
+  addresses are blocked too, by a `WKContentRuleList` installed in each
+  pane before its first page loads (#1634). If the rules cannot be
+  installed, the pane does not open (`browser_unprotected`). Public names
+  that resolve to private addresses are NOT blocked (the rules match URLs,
+  not resolved addresses). Do not rely on the pane alone to protect local
   services on managed machines.
+- The pane's Back, Forward and Stop are native on macOS: a page cannot
+  override them (#1634).
 - Signing out now also deletes every thread's browser site data.
 
 ## Desktop control driver library (#1581, ADR-0047)

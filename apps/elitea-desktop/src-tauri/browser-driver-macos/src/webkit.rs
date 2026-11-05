@@ -25,8 +25,6 @@
 //! WebKit is main-thread only: every call hops to the main queue and
 //! answers on a oneshot channel. Nothing here blocks the main thread.
 
-use std::ffi::c_void;
-use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -127,23 +125,31 @@ define_class!(
 );
 
 impl FrameHandler {
+    #[allow(unsafe_code)]
     fn new(shared: Shared, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(HandlerIvars { shared });
-        // SAFETY: NSObject's `init` on a freshly allocated instance.
+        // SAFETY: `this` is a freshly allocated, ivar-initialised instance
+        // of a direct NSObject subclass; NSObject's `init` takes no
+        // arguments and returns the same, now initialised, object.
         unsafe { msg_send![super(this), init] }
     }
 
+    #[allow(unsafe_code)]
     fn frame_announced(&self, message: &WKScriptMessage) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        // SAFETY: WKScriptMessage getters on the main thread.
+        // SAFETY: on the main thread (`mtm` above); `message` is the live
+        // message WebKit passed in, and these getters take no arguments and
+        // return retained, non-null objects.
         let (world, frame, body) =
             unsafe { (message.world(), message.frameInfo(), message.body()) };
-        // SAFETY: a WKContentWorld getter on the main thread.
+        // SAFETY: on the main thread; `world` is a retained WKContentWorld
+        // and `name` returns a retained NSString or nil.
         let from_driver =
             unsafe { world.name() }.is_some_and(|name| name.to_string() == WORLD_NAME);
-        // SAFETY: a WKFrameInfo getter on the main thread.
+        // SAFETY: on the main thread; `frame` is a retained WKFrameInfo and
+        // `isMainFrame` is a plain BOOL getter.
         if !from_driver || unsafe { frame.isMainFrame() } {
             return;
         }
@@ -166,12 +172,17 @@ impl FrameHandler {
 ///
 /// `webview` must be a live `WKWebView` and this must run on the main
 /// thread.
+#[allow(unsafe_code)]
 unsafe fn install(webview: &WKWebView, mtm: MainThreadMarker) -> Shared {
     let shared = Shared(Arc::new(Mutex::new(Frames {
         next: TOP,
         known: Vec::new(),
     })));
-    // SAFETY: WebKit calls on the main thread with live objects.
+    // SAFETY: the caller guarantees a live WKWebView on the main thread
+    // (`mtm`). Every argument is a live, retained object of the declared
+    // class (the NSStrings, the world, the user script, the handler, which
+    // implements WKScriptMessageHandler); the controller retains what it is
+    // given, so nothing here must outlive this block.
     unsafe {
         let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
         let controller = webview.configuration().userContentController();
@@ -204,29 +215,16 @@ pub struct WebKitEngine {
 impl WebKitEngine {
     /// Take over `webview`: install the driver world. On the main thread.
     #[must_use]
+    #[allow(unsafe_code)]
     pub fn new(webview: Retained<WKWebView>, mtm: MainThreadMarker) -> Self {
-        // SAFETY: on the main thread (the marker), with a live webview.
+        // SAFETY: `install`'s contract: `webview` is retained (so live) and
+        // `mtm` proves the main thread.
         let shared = unsafe { install(&webview, mtm) };
         Self {
             webview: Arc::new(MainThreadBound::new(webview, mtm)),
             shared,
             trusted: Arc::new(accessibility_granted),
         }
-    }
-
-    /// The engine of a raw `WKWebView` pointer (Tauri's
-    /// `PlatformWebview::inner`). On the main thread.
-    ///
-    /// # Safety
-    ///
-    /// `pointer` must be a live `WKWebView`.
-    #[must_use]
-    pub unsafe fn from_raw(pointer: *mut c_void, mtm: MainThreadMarker) -> Option<Self> {
-        let pointer = NonNull::new(pointer.cast::<WKWebView>())?;
-        // SAFETY: the caller guarantees a live WKWebView; retaining it keeps
-        // it alive for the engine's lifetime.
-        let webview = unsafe { Retained::retain(pointer.as_ptr()) }?;
-        Some(Self::new(webview, mtm))
     }
 
     /// Replace the grant check (tests: a page that needs trusted input).
@@ -257,6 +255,7 @@ impl WebKitEngine {
 
 impl WebKitEngine {
     /// One call; `None` when the frame's document has no driver yet.
+    #[allow(unsafe_code)]
     async fn call_once(
         &self,
         frame: FrameId,
@@ -279,7 +278,9 @@ impl WebKitEngine {
                 let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) else {
                     return;
                 };
-                // SAFETY: WebKit passes a valid object or null.
+                // SAFETY: WebKit calls the handler with a valid object (alive
+                // for the call) or null, which `as_ref` maps to `None`; the
+                // reference does not escape the call.
                 let text = unsafe { result.as_ref() }
                     .and_then(|object| object.downcast_ref::<NSString>())
                     .map(NSString::to_string);
@@ -299,9 +300,12 @@ impl WebKitEngine {
             let missing = NSString::from_str(MISSING);
             let values: [&AnyObject; 3] = [op.as_ref(), args.as_ref(), missing.as_ref()];
             let arguments = NSDictionary::<NSString, AnyObject>::from_slices(&keys, &values);
-            // SAFETY: WebKit on the main thread; the arguments are an
-            // NSDictionary of NSString keys to NSString values, as
-            // `callAsyncJavaScript` requires (JSON-serialisable).
+            // SAFETY: on the main thread (`mtm`), with the retained webview.
+            // The arguments are an NSDictionary of NSString keys to NSString
+            // values (JSON-serialisable, as `callAsyncJavaScript` requires);
+            // `info` is a retained WKFrameInfo or None (the top frame); the
+            // completion block has the declared `(id, NSError *)` signature
+            // and WebKit copies it.
             unsafe {
                 let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
                 webview.callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
@@ -318,6 +322,7 @@ impl WebKitEngine {
 
     /// Evaluate the driver script (the constant [`crate::SCRIPT`], never
     /// anything else) in `frame`, in the driver world.
+    #[allow(unsafe_code)]
     async fn inject(&self, frame: FrameId) -> Result<(), BrowserError> {
         let shared = self.shared.clone();
         self.on_main(move |webview, mtm, tx| {
@@ -338,7 +343,10 @@ impl WebKitEngine {
                     });
                 }
             });
-            // SAFETY: WebKit on the main thread with live objects.
+            // SAFETY: on the main thread (`mtm`), with the retained webview;
+            // the source is the constant driver script, `info` a retained
+            // WKFrameInfo or None, and the block has the declared
+            // `(id, NSError *)` signature (WebKit copies it).
             unsafe {
                 let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
                 webview.evaluateJavaScript_inFrame_inContentWorld_completionHandler(
@@ -374,17 +382,23 @@ fn frame_info(
 /// Whether the person gave Elitea the macOS Accessibility grant (the
 /// ADR-0047 permission that trusted input needs).
 #[must_use]
+#[allow(unsafe_code)]
 pub fn accessibility_granted() -> bool {
     #[link(name = "ApplicationServices", kind = "framework")]
     unsafe extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
-    // SAFETY: a C function without arguments or preconditions.
+    // SAFETY: `AXIsProcessTrusted` (ApplicationServices) takes no
+    // arguments, has no preconditions and returns a C `Boolean`, which is
+    // ABI-compatible with `bool` (0 or 1).
     unsafe { AXIsProcessTrusted() }
 }
 
+#[allow(unsafe_code)]
 fn ns_error(error: *mut NSError, fallback: &str) -> BrowserError {
-    // SAFETY: WebKit passes a valid NSError or null.
+    // SAFETY: every caller passes the `NSError *` WebKit gave its completion
+    // handler, valid for the handler's call or null (`as_ref`: `None`); the
+    // reference does not escape this function.
     let text = unsafe { error.as_ref() }.map_or_else(
         || fallback.to_owned(),
         |error| error.localizedDescription().to_string(),
@@ -424,6 +438,7 @@ impl Engine for WebKitEngine {
             .collect()
     }
 
+    #[allow(unsafe_code)]
     async fn load(&self, url: &str) -> Result<(), BrowserError> {
         let url = url.to_owned();
         let shared = self.shared.clone();
@@ -434,7 +449,9 @@ impl Engine for WebKitEngine {
                 return;
             };
             let request = NSURLRequest::requestWithURL(&nsurl);
-            // SAFETY: WebKit on the main thread.
+            // SAFETY: on the main thread (`on_main`), with the retained
+            // webview and a retained NSURLRequest; the returned navigation
+            // is retained or nil.
             let started = unsafe { webview.loadRequest(&request) };
             let _ = tx.send(started.map(|_| ()).ok_or_else(|| {
                 BrowserError::new(
@@ -446,11 +463,14 @@ impl Engine for WebKitEngine {
         .await?
     }
 
+    #[allow(unsafe_code)]
     async fn history(&self, step: HistoryStep) -> Result<(), BrowserError> {
         let shared = self.shared.clone();
         self.on_main(move |webview, _mtm, tx| {
             shared.lock().known.clear();
-            // SAFETY: WebKit on the main thread.
+            // SAFETY: on the main thread (`on_main`), with the retained
+            // webview; these methods take no arguments and return a
+            // retained navigation or nil.
             let started = unsafe {
                 match step {
                     HistoryStep::Back => webview.goBack(),
@@ -469,9 +489,12 @@ impl Engine for WebKitEngine {
         .await?
     }
 
+    #[allow(unsafe_code)]
     async fn page(&self) -> Result<EnginePage, BrowserError> {
         self.on_main(|webview, _mtm, tx| {
-            // SAFETY: WebKit getters on the main thread.
+            // SAFETY: on the main thread (`on_main`), with the retained
+            // webview; `URL`, `title` and `isLoading` are getters that take
+            // no arguments and return retained objects, nil or a BOOL.
             let page = unsafe {
                 EnginePage {
                     url: webview
@@ -491,6 +514,7 @@ impl Engine for WebKitEngine {
         .await
     }
 
+    #[allow(unsafe_code)]
     async fn screenshot(&self, rect: Option<RawRect>) -> Result<Screenshot, BrowserError> {
         self.on_main(move |webview, mtm, tx| {
             let tx = Mutex::new(Some(tx));
@@ -498,14 +522,19 @@ impl Engine for WebKitEngine {
                 let Some(tx) = tx.lock().ok().and_then(|mut tx| tx.take()) else {
                     return;
                 };
-                // SAFETY: WebKit passes a valid NSImage or null.
+                // SAFETY: WebKit calls the handler with a valid NSImage (alive
+                // for the call) or null (`as_ref`: `None`); `png` copies the
+                // bytes out, so the reference does not escape.
                 let shot = match unsafe { image.as_ref() } {
                     Some(image) => png(image),
                     None => Err(ns_error(error, "the page could not be captured")),
                 };
                 let _ = tx.send(shot);
             });
-            // SAFETY: WebKit on the main thread.
+            // SAFETY: on the main thread (`mtm`), with the retained webview;
+            // the configuration is a fresh retained object and the block has
+            // the declared `(NSImage *, NSError *)` signature (WebKit copies
+            // it and calls it once).
             unsafe {
                 let configuration = WKSnapshotConfiguration::new(mtm);
                 if let Some(rect) = rect {
@@ -540,11 +569,14 @@ impl Engine for WebKitEngine {
 }
 
 /// The NSImage as PNG bytes.
+#[allow(unsafe_code)]
 fn png(image: &NSImage) -> Result<Screenshot, BrowserError> {
     let fail = || BrowserError::new(ErrorCode::Internal, "the capture could not be encoded");
     let tiff = image.TIFFRepresentation().ok_or_else(fail)?;
     let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or_else(fail)?;
-    // SAFETY: AppKit encoding with an empty property dictionary.
+    // SAFETY: `bitmap` is a retained NSBitmapImageRep; the properties are
+    // an empty (so correctly typed) dictionary; the result is retained
+    // NSData or nil.
     let data = unsafe {
         bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
     }
@@ -559,6 +591,7 @@ fn png(image: &NSImage) -> Result<Screenshot, BrowserError> {
 
 /// A real left click at `at` (CSS pixels of the page view, top-left
 /// origin), posted to this process only, aimed at the page view's window.
+#[allow(unsafe_code)]
 fn post_click(webview: &WKWebView, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
     let unavailable = || BrowserError::new(ErrorCode::Internal, "the page view is not on screen");
     let view: &NSView = webview;
@@ -568,7 +601,8 @@ fn post_click(webview: &WKWebView, at: (f64, f64), double: bool) -> Result<(), B
         // whatever is under that point instead.
         return Err(unavailable());
     }
-    // SAFETY: a WebKit getter on the main thread.
+    // SAFETY: on the main thread (`on_main` calls this), with the retained
+    // webview; `pageZoom` is a CGFloat getter.
     let zoom = unsafe { webview.pageZoom() };
     let bounds = view.bounds();
     let local_y = if view.isFlipped() {
@@ -623,7 +657,5 @@ fn post_click(webview: &WKWebView, at: (f64, f64), double: bool) -> Result<(), B
 #[cfg(feature = "tauri")]
 pub(crate) fn engine_of(platform: &tauri::webview::PlatformWebview) -> Option<WebKitEngine> {
     let mtm = MainThreadMarker::new()?;
-    // SAFETY: Tauri hands the live WKWebView of a webview it owns, on the
-    // main thread (`with_webview` runs there).
-    unsafe { WebKitEngine::from_raw(platform.inner(), mtm) }
+    crate::native::webview_of(platform).map(|webview| WebKitEngine::new(webview, mtm))
 }

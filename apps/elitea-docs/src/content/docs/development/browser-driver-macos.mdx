@@ -1,11 +1,11 @@
 ---
 title: "The macOS browser driver"
-description: "How the desktop app drives the browser pane's WKWebView for the agent: the private content world, the DOM and ARIA snapshot, actions as DOM events, cross-origin frames, the trusted-input fallback, the hard limits, and how to run the WebKit tests."
+description: "How the desktop app drives the browser pane's WKWebView for the agent: the private content world, the DOM and ARIA snapshot, actions as DOM events, cross-origin frames, the trusted-input fallback, the hard limits, the pane's content rules and native history, the unsafe rules, and how to run the WebKit tests."
 ---
 
 The desktop browser pane (#1588) shows a web page in a WKWebView, a Tauri child webview. The macOS driver lets the agent of a Local work thread read and use that page. It implements the shared contract, so the agent gets the same tools, results and errors as it would from the cloud driver (see [The browser tool contract](/development/browser-tools)). The driver follows ADR-0048 decisions 5 and 6.
 
-The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-desktop/src-tauri/browser-driver-macos`. It is a separate crate because the desktop host forbids `unsafe`, and the WebKit, AppKit and CoreGraphics calls need it. The crate is a member of the `src-tauri` workspace, so the host and the driver share one `Cargo.lock`. Its bindings are `objc2-web-kit` 0.3, `objc2-app-kit` and `objc2-core-graphics`, which are already in the lock through wry and tao.
+The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-desktop/src-tauri/browser-driver-macos`. It is a separate crate because the desktop host forbids `unsafe`, and the WebKit, AppKit and CoreGraphics calls need it. It is the only first-party crate that may contain `unsafe` (see [Unsafe code](#unsafe-code)). The crate is a member of the `src-tauri` workspace, so the host and the driver share one `Cargo.lock`. Its bindings are `objc2-web-kit` 0.3, `objc2-app-kit` and `objc2-core-graphics`, which are already in the lock through wry and tao.
 
 ## Layout
 
@@ -15,6 +15,7 @@ The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-deskt
 | `src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
 | `src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
 | `src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
+| `src/native.rs` | The pane's own controls that wry and Tauri do not expose: `install_content_rules` and `go` (Back, Forward, Stop). |
 | `src-tauri/src/browser_tools.rs` | The host's `browser` toolset. It holds the drivers of a turn's thread, plus the `gate` seam for approvals and policy (#1590). |
 
 The host attaches a driver when it makes the pane's webview (`browser_pane.rs`, through `with_webview`). It detaches the driver when the pane closes or the person signs out. The `browser` toolset is added next to the local, index and MCP toolsets of a turn. It is never one of the workspace tools, and sub-agents do not get it. If a thread's pane is not open, every browser tool answers `unsupported` and tells the model to ask the person to open the pane.
@@ -64,6 +65,35 @@ The screenshot uses `takeSnapshot(with:)` and is encoded as PNG. For an element,
 
 Approvals and the `local_work_browser*` policy keys are #1590's. They plug into `browser_tools::gate`. Handing the page to the person (`browser_request_user`) and the control pill are #1591's. Until then, `request_user` answers `unsupported`.
 
+## Content rules and native history
+
+The pane's navigation guard (`browser_pane::check`) sees only navigations. To block every other load as well, the host installs a `WKContentRuleList` in each pane. `browser_pane::content_rules(policy)` builds the rule JSON. Its rules block every kind of load (no `resource-type`) to `localhost`, `.local`, `.internal`, `.home.arpa`, and loopback, private and link-local IP literals, whatever the scheme.
+
+`native::install_content_rules(webview, json)` compiles the JSON in `WKContentRuleListStore.defaultStore`, under an identifier derived from the JSON's hash, and adds the list to the webview's `userContentController`. Compiling is asynchronous, so the host does this:
+
+1. It makes the pane at `about:blank`. wry loads nothing for that address.
+2. It awaits `install_content_rules`.
+3. It attaches the driver, and only then navigates to the address.
+
+No page loads before the rules apply. If WebKit refuses the rules, the host closes the pane and `browser_open` fails with `browser_unprotected` (fail closed). `browser_open` is serialised, so a second open cannot navigate a pane before its rules are installed. A compiled list is reused for the next pane with the same JSON.
+
+The policy, and so the rules, is fixed when the pane is made. A change to `allow_private_network` (the #1590 policy key; it is always off until then) applies to panes made after the change.
+
+Content rules match URLs, not resolved addresses. A public name that resolves to a private address still passes. That residual gap needs a filtering proxy, which is a separate decision.
+
+`native::go(webview, Back | Forward | Stop)` calls `goBack`, `goForward` and `stopLoading` on the WKWebView. The toolbar's `browser_go` uses it on macOS, so a page that replaces `history.back` or `window.stop` cannot stop the buttons. Windows and Linux keep the in-page scripts until #1593.
+
+## Unsafe code
+
+objc2-web-kit declares every WebKit method as an `unsafe fn`, and Tauri hands the webview over as a raw pointer. wry and Tauri expose neither content rules nor native history. So this crate is the one first-party exception to `unsafe_code = "forbid"` (owner decision on #1634, recorded in the repository's `AGENTS.md`):
+
+- The crate's lints set `unsafe_code = "deny"`, not `allow`.
+- Each function that holds an `unsafe` block, or each `unsafe fn`, has `#[allow(unsafe_code)]`.
+- Each `unsafe` block has a `// SAFETY:` comment that says why it is sound. Clippy's `undocumented_unsafe_blocks` is `deny`.
+- The crate exports safe functions only. The raw pointer from Tauri is turned into a retained `WKWebView` in one place (`native::webview_of`).
+
+The desktop host and every other crate stay `forbid`. A new crate with `unsafe` needs its own owner decision.
+
 ## Run the tests
 
 The contract logic is tested with a fake engine. These tests run everywhere:
@@ -73,7 +103,7 @@ cd apps/elitea-desktop/src-tauri
 cargo test -p elitea-browser-driver-macos
 ```
 
-The WebKit tests drive a real WKWebView, so they need a Mac with a logged-in session. They open one small window for a few seconds:
+The WebKit tests drive a real WKWebView, so they need a Mac with a logged-in session. They open three small windows for a few seconds:
 
 ```sh
 cd apps/elitea-desktop/src-tauri
@@ -85,7 +115,9 @@ They run:
 - the conformance kit (`conformance::run`) against its fixture pages;
 - a cross-origin frame that is read, typed into and clicked;
 - a hostile page that tampers with `JSON`, the value accessor, `getAttribute`, `getComputedStyle`, `dispatchEvent` and `Promise.then`, plants a fake driver global, and probes for the driver world and its frame handler;
-- a page that takes trusted input only.
+- a page that takes trusted input only;
+- the host's own content rules (`tests/fixtures/content-rules.json`, kept equal to `content_rules` by a host test). A page loaded as inline HTML under the public base URL `http://public.example/` tries a `fetch` and an image to the test's own loopback server, and an image from `10.0.0.1`. All three fail, and no request reaches the server. The same page in a webview without the rules does reach the server, which shows that the block comes from the rules;
+- native Back and Forward on a page that replaces `history.back`, `history.forward`, `history.go` and `window.stop`. An in-page `history.back()` stays on the page; native Back goes back.
 
 WebKit currently passes the conformance kit with no pinned differences (`Config.differences` is empty). If a WebKit tree has to differ from a golden, pin the difference in `differences()` in `tests/webkit.rs`, with the reason.
 

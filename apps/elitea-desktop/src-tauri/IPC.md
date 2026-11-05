@@ -2585,13 +2585,22 @@ private or forbidden (`libs/rust/egress-guard`). A new window
 (`target=_blank`, `window.open`) is not opened: the page navigates there,
 the opener kept in history.
 
-**Known gap (#1634).** The guard judges navigations only, by the host as
-written. Subresources (images, scripts, `fetch`/XHR, WebSockets) to
-loopback and private addresses are not blocked yet, and neither is a public
-name that resolves to a private address. The macOS fix is a
-`WKContentRuleList` (`browser_pane::content_rules` builds and tests it),
-which needs WebKit calls this crate's `unsafe_code = "forbid"` rules out;
-#1634 holds the decision. The DNS case stays a documented residual gap.
+**Content rules** (macOS, #1634). The guard judges navigations only, so
+each pane also gets a `WKContentRuleList` (`browser_pane::content_rules`)
+that blocks EVERY load (subresources, `fetch`/XHR, WebSockets, frames) to
+the same private names and to loopback, private and link-local address
+literals. The pane is made at `about:blank`, the rules are installed
+(`browser-driver-macos`, `native::install_content_rules`), and only then
+is it navigated: no page loads before the rules apply. Rules WebKit
+refuses close the pane, and `browser_open` rejects `browser_unprotected`
+(fail closed). The rules are fixed when the pane is made: a policy change
+applies to panes made after it. Windows and Linux block navigations only
+until #1593.
+
+**Residual gap.** Content rules match URLs, not resolved addresses: a
+public name that resolves to a private address (DNS rebinding, or a record
+that points inside) passes both the guard and the rules. A real fix needs
+a filtering proxy, a separate decision.
 
 **Site data.** Each thread has its own store. macOS 14+: a persistent
 `WKWebsiteDataStore(forIdentifier:)`, its UUID kept in
@@ -2619,9 +2628,9 @@ scales it by the app's zoom).
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `browser_open` | `{thread_id, address, rect}` | `{url}` — opens the thread's page (or re-points it) at `address` (`example.com` means `https://example.com/`). Rejects `browser_invalid` (bad thread id or address), `browser_refused` (the guard; `message` says why), `browser_unavailable` (no main window) |
+| `browser_open` | `{thread_id, address, rect}` | `{url}` — opens the thread's page (or re-points it) at `address` (`example.com` means `https://example.com/`). Rejects `browser_invalid` (bad thread id or address), `browser_refused` (the guard; `message` says why), `browser_unprotected` (macOS: the content rules could not be installed, so the page was not opened), `browser_unavailable` (no main window) |
 | `browser_set_rect` | `{thread_id, rect, visible}` | `null` — moves the page; `visible: false` hides it (another tab, a modal sheet, the tab in its own window). No page: no-op |
-| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed`. Reload is native; back, forward and stop run `history.back()`, `history.forward()`, `window.stop()` in the page, which the page can override (native calls: #1634) |
+| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed`. Native on macOS (`goBack`, `goForward`, `reload`, `stopLoading` on the WKWebView), so the page cannot override them. Windows and Linux until #1593: reload is native; back, forward and stop run `history.back()`, `history.forward()`, `window.stop()` in the page, which the page can override |
 | `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
 | `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
 | `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |

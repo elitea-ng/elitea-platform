@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{}</title>
+<script>
+  // Each load reports how it ended in the title, as JSON.
+  const seen = {};
+  function mark(name, how) {
+    seen[name] = how;
+    document.title = JSON.stringify(seen);
+  }
+  fetch('http://127.0.0.1:{PORT}/probe?fetch', { mode: 'no-cors', cache: 'no-store' })
+    .then(() => mark('fetch', 'ok'), () => mark('fetch', 'error'));
+</script>
+</head>
+<body>
+  <h1>Private loads</h1>
+  <img alt="" src="http://127.0.0.1:{PORT}/probe?img" onload="mark('loopback_img', 'load')" onerror="mark('loopback_img', 'error')">
+  <img alt="" src="http://10.0.0.1/" onload="mark('private_img', 'load')" onerror="mark('private_img', 'error')">
+</body>
+</html>
