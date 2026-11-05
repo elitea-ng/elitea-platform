@@ -103,6 +103,12 @@ const (
 // com.apple.mail), or such an id followed by `.*`, which names every bundle id
 // under that prefix (com.example.*). At most MaxBundleIDBytes. The desktop
 // applies the same rule (libs/rust/local-tools policy.rs).
+// bundleIDByte reports whether c may appear in a bundle id component:
+// ASCII letters, digits and '-'.
+func bundleIDByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
+}
+
 func ValidBundleIDPattern(pattern string) bool {
 	if pattern == "" || len(pattern) > MaxBundleIDBytes {
 		return false
@@ -116,8 +122,7 @@ func ValidBundleIDPattern(pattern string) bool {
 			return false
 		}
 		for i := 0; i < len(part); i++ {
-			c := part[i]
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+			if !bundleIDByte(part[i]) {
 				return false
 			}
 		}
