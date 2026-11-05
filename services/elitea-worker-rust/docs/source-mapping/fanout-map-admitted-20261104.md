@@ -29,6 +29,9 @@ same limits (64 children, 8 concurrent, 16 open cards).
   - No saved document can hold `reduction` with `on_error`: on main (`0c41d5b65`) the Map YAML was
     `#[serde(deny_unknown_fields)]` with no `on_error` field
     (`services/elitea-worker-rust/src/agents/graph/map_yaml.rs:12-13`), so such a document never compiled.
+  - **Narrowing until FU-291:** a Map item's or Parallel branch's saved Agent that merely *has* a saved-pipeline tool is
+    now refused before the run (`graph.fanout.agent_calls_saved_pipeline`), even if the model would not call it.
+    Before, it failed only when it called it. A typed, readable refusal over an intermittent failure.
 - A Map item's delegated sign-in meets the same `credential_unavailable` gate as a Parallel member (M1).
 - An empty source lands an empty collection and starts no child.
 
