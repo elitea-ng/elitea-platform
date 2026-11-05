@@ -1,0 +1,200 @@
+name: CI — elitea-browser-session
+
+# ADR-0049 decisions 2 and 4: the cloud browser's in-pod session agent and
+# its image. The proof ADR-0049 verification 2 asks for, against a REAL
+# engine rather than a fake:
+#
+#   * the `elitea-browser-tools` conformance kit (fixture pages served over a
+#     local HTTP server, golden snapshots, every tool), the hard limits and
+#     the screencast, against the pinned chrome-headless-shell on the runner;
+#   * the image itself: built from libs/rust/browser-session/Containerfile,
+#     then the agent binary's line-protocol test run INSIDE it, under gVisor
+#     (runsc), where the agent must start the engine with `engine_sandbox:
+#     false` — the production arrangement. The image's size and the engine
+#     version it reports go to the job summary.
+#
+# One job, on purpose (the 20-job plan): both halves share the checkout and
+# the toolchain, and the container half reuses the host half's test build.
+# ci-rust-shared.yml also runs this crate's tests, but with no engine: there
+# the conformance tests report a skip, so a broken driver only goes red HERE,
+# where ELITEA_REQUIRE_BROWSER_CONFORMANCE turns a skip into a failure.
+
+on:
+  pull_request:
+    paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
+      - "libs/rust/browser-session/**"
+      # The contract and conformance kit the driver implements, and the
+      # workspace both inherit package fields, lints and the lock from.
+      - "libs/rust/browser-tools/**"
+      - "libs/rust/Cargo.toml"
+      - "libs/rust/Cargo.lock"
+      - "libs/rust/rust-toolchain.toml"
+      # The protocol the agent speaks to the sandbox supervisor.
+      - "libs/proto/elitea/runtime/v1/browser_session_agent_v1.md"
+      - ".github/workflows/ci-browser-session.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "33 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  # The engine the image ships (libs/rust/browser-session/Containerfile):
+  # change all three together.
+  CFT_VERSION: "157.0.8103.38"
+  CFT_SHA256_LINUX64: "deafffa74660b34853a4119c361fd427ac8c9fcb62db51ddb8a797cd83a4ba2d"
+  # gVisor for the container half: a dated release, verified by SHA-512.
+  GVISOR_RELEASE: "20261102"
+  GVISOR_SHA512: "3c400f72be459b57b99b1c4f69be96bcd67eef3caf2078e595fc98e688b6b9a3af7802646b3dde7da8a9aba96d34f86be303e0430c7868ab2d13becdd403c0c1"
+
+jobs:
+  conformance:
+    name: elitea-browser-session — conformance on chrome-headless-shell, image under gVisor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assert the pinned toolchain
+        working-directory: libs/rust
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: The Containerfile and this workflow pin the same engine
+        run: |
+          set -euo pipefail
+          file=libs/rust/browser-session/Containerfile
+          grep -qx "ARG CFT_VERSION=${CFT_VERSION}" "$file" \
+            || { echo "::error::$file does not pin CFT_VERSION=${CFT_VERSION}"; exit 1; }
+          grep -q "amd64) platform=linux64; sum=${CFT_SHA256_LINUX64} ;;" "$file" \
+            || { echo "::error::$file does not pin the linux64 checksum this workflow verifies"; exit 1; }
+
+      # Read everywhere, write on main only. Registry and git only: this
+      # crate's own build is small, and a target directory per job crowds
+      # the 10 GB Actions cache.
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: browser-session
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-targets: false
+          workspaces: libs/rust
+
+      - name: Fetch the pinned chrome-headless-shell
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/cft"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            -o "$dir/engine.zip" \
+            "https://storage.googleapis.com/chrome-for-testing-public/${CFT_VERSION}/linux64/chrome-headless-shell-linux64.zip"
+          echo "${CFT_SHA256_LINUX64}  $dir/engine.zip" | sha256sum -c -
+          unzip -q "$dir/engine.zip" -d "$dir"
+          engine="$dir/chrome-headless-shell-linux64/chrome-headless-shell"
+          test -x "$engine"
+          # The same libraries the image installs, so a missing one fails
+          # here first.
+          sudo apt-get update -q
+          sudo apt-get install --no-install-recommends -y -q \
+            fonts-liberation libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 \
+            libatspi2.0-0t64 libdbus-1-3 libgbm1 libnss3 libxcomposite1 \
+            libxdamage1 libxkbcommon0 libxrandr2
+          if ldd "$engine" | grep 'not found'; then
+            echo "::error::the engine needs a library the runner lacks"; exit 1
+          fi
+          echo "ELITEA_BROWSER_ENGINE=$engine" >> "$GITHUB_ENV"
+
+      - name: Formatting and Clippy
+        working-directory: libs/rust
+        run: |
+          cargo fmt -p elitea-browser-session -- --check
+          cargo clippy --locked -p elitea-browser-session --all-targets -- -D warnings
+
+      # The runner's kernel allows unprivileged user namespaces only through
+      # AppArmor's per-binary profile, which an unpacked engine does not
+      # have; without one the engine's own sandbox cannot start. Allow them
+      # for this job so the host half runs the engine sandboxed, as the
+      # image does outside gVisor.
+      - name: Let the engine create its sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Conformance kit, hard limits, view stream and line protocol
+        working-directory: libs/rust
+        env:
+          ELITEA_REQUIRE_BROWSER_CONFORMANCE: "1"
+        run: cargo test --locked -p elitea-browser-session --all-targets -- --nocapture
+
+      - name: Install gVisor (runsc)
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/gvisor"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            -o "$dir/gvisor.tar.zstd" \
+            "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/x86_64/gvisor.tar.zstd"
+          echo "${GVISOR_SHA512}  $dir/gvisor.tar.zstd" | sha512sum -c -
+          tar --zstd -xf "$dir/gvisor.tar.zstd" -C "$dir"
+          runsc="$(find "$dir" -type f -name runsc | head -1)"
+          test -n "$runsc"
+          sudo install -m 0755 "$runsc" /usr/local/bin/runsc
+          sudo /usr/local/bin/runsc install
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | grep -q runsc
+
+      - name: Build the session image
+        run: |
+          set -euo pipefail
+          docker build -f libs/rust/browser-session/Containerfile \
+            -t elitea-browser-session:ci .
+          size="$(docker image inspect --format '{{.Size}}' elitea-browser-session:ci)"
+          {
+            echo "### elitea-browser-session"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| engine | chrome-headless-shell ${CFT_VERSION} |"
+            echo "| image size (uncompressed, linux/amd64) | $((size / 1024 / 1024)) MiB |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The test binary from the host half drives the agent binary INSIDE the
+      # image: the fixtures are served on the container's own loopback by the
+      # test, and the agent must refuse the network (`proxy: null`) and start
+      # its engine without the engine sandbox, which it allows only because
+      # it sees gVisor. Read-only root, uid 10001, memory-backed /tmp and
+      # /dev/shm, no network: the supervisor's pod spec, as near as docker
+      # gets.
+      - name: The agent in its image, under gVisor
+        working-directory: libs/rust
+        run: |
+          set -euo pipefail
+          test_bin="$(cargo test --locked -p elitea-browser-session --test conformance --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "conformance" and .executable != null) | .executable' | tail -1)"
+          test -x "$test_bin"
+          docker run --rm --runtime=runsc --network=none --read-only \
+            --user 10001:10001 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --tmpfs /dev/shm:rw,nosuid,nodev,size=256m \
+            -v "$test_bin:/usr/local/bin/conformance-test:ro" \
+            -e ELITEA_BROWSER_ENGINE=/opt/chrome-headless-shell/chrome-headless-shell \
+            -e ELITEA_BROWSER_SESSION_BIN=/usr/local/bin/elitea-browser-session \
+            -e ELITEA_REQUIRE_BROWSER_CONFORMANCE=1 \
+            --entrypoint /usr/local/bin/conformance-test \
+            elitea-browser-session:ci --nocapture 2>&1 | tee "${RUNNER_TEMP}/in-image.log"
+          version="$(grep -o 'engine: chrome-headless-shell/[0-9.]*' "${RUNNER_TEMP}/in-image.log" | head -1 | cut -d/ -f2)"
+          echo "| engine version reported in the image | ${version:-not reported} |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${version}" != "${CFT_VERSION}" ]; then
+            echo "::error::the image's engine reports '${version}', not ${CFT_VERSION}"; exit 1
+          fi

@@ -245,6 +245,26 @@ target "elitea-workspace-runner" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# The cloud browser's session image (ADR-0049 decisions 2 and 4): one pod per
+# browser session runs `elitea-browser-session`, which drives a pinned,
+# checksum-verified chrome-headless-shell over CDP on a pipe. Debian 13
+# (trixie-slim) because the engine links a desktop userland (glib, NSS, X11
+# libraries): its scan is exempt (.github/image-scan-exempt.txt), not
+# distroless. Repo-root context: the Containerfile COPYs libs/rust and the
+# contracts under libs/proto that workspace members compile.
+#
+# Not in `group "default"`: it compiles from source.
+target "elitea-browser-session" {
+  context    = "."
+  dockerfile = "libs/rust/browser-session/Containerfile"
+  tags       = ["${REGISTRY}/elitea-browser-session:${TAG}"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-browser-session:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-browser-session:linux-amd64",
+  ]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"
