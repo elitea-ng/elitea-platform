@@ -71,14 +71,15 @@
 //! | a `PreToolUse` hook's `ask` ([`HOOK_ASK_PAYLOAD_KEY`]) | an allow from layers 3–5 is asked instead; never remembered; a deny stays a deny. In an unattended turn ([`RulesEngine::set_unattended`]) a grant with `hook_asks` allows it ([`Source::Grant`]); without `hook_asks` it is asked as in every other turn |
 //! | a `PreToolUse` hook's `allow` | changes nothing: hooks tighten, never loosen |
 //! | a `PreToolUse` hook's `modified_input` | checked against the tool's schema, then decided by every layer like the model's own input |
-//! | `ComputerRead` ([`ToolKind::ComputerRead`], ADR-0047) on an app not yet approved in this thread | asked: "Let the agent see *App*?"; "allow for this thread" ([`APPROVE_THREAD`]) or "always for this app" ([`APPROVE_ALWAYS`], the choice store, by bundle id) |
-//! | `ComputerRead` on an approved app | allowed; kept in plan mode |
+//! | `computer_apps` ([`ComputerTarget::list_apps`], ADR-0047) | allowed: it lists the running applications (the toolset leaves the denied ones out) and reads none of them. The only `computer` call that names no application: every other one with no bundle id is denied by the ceiling, so a display or region capture, or a wait, names the app it is about (or the toolset refuses it) |
+//! | `ComputerRead` ([`ToolKind::ComputerRead`]) on an app not yet approved in this thread | asked: "Let the agent see *App*?"; "allow for this thread" ([`APPROVE_THREAD`], offered only once the host set the turn's thread: [`RulesEngine::set_thread`]) or "always for this app" ([`APPROVE_ALWAYS`], the choice store, by bundle id) |
+//! | `ComputerRead` on an approved app | allowed; kept in plan mode, and in an unattended turn |
 //! | `ComputerAct` ([`ToolKind::ComputerAct`]) on an app not yet approved for actions | asked separately from seeing it: "Let the agent use *App*?"; the same two scopes |
-//! | `ComputerAct` on an approved app | allowed, except the two rows below |
-//! | `computer_open_app` ([`ComputerTarget::open_app`]) | asked once per bundle id per thread (an approval is kept for the thread; never written) |
-//! | a consequential action ([`is_consequential`]: Send, Delete, Buy, Pay, Sign, Submit and their kin; a destructive role) | asked every time; never remembered |
+//! | `ComputerAct` on an approved app | allowed, except the three rows below |
+//! | `computer_open_app` ([`ComputerTarget::open_app`]) | asked once per bundle id per thread (an approval is kept for the thread; never written). With no thread set, asked every time |
+//! | a consequential action ([`is_consequential`]: Send, Delete, Buy, Pay, Sign, Submit, Confirm and their kin, CamelCase names included; a destructive role) | asked every time; never remembered |
 //! | any `computer` call in plan mode but `ComputerRead` | denied |
-//! | a `ComputerAct` ask in an unattended turn | never answered by a grant (a hook's ask included): it waits for the person, and anything but an approval declines it (ADR-0047 decision 8) |
+//! | `ComputerAct` in an unattended turn ([`RulesEngine::set_unattended`]) | asked every time: no thread or "always" approval answers it, and no grant answers the ask (a hook's ask included). It waits for the person, and anything but an approval declines it (ADR-0047 decision 8: every `ComputerAct` of an unattended turn waits for the person) |
 //! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
 //!
 //! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
@@ -90,8 +91,10 @@
 //! call is denied. An app the platform deny list
 //! ([`crate::policy::PLATFORM_APP_DENY`], always merged in) or the policy's
 //! `computer_use_apps_deny` names, or one outside a non-empty
-//! `computer_use_apps_allow`, is denied whatever was approved; a System
-//! Settings window is judged by its pane too. Only these rows apply to the
+//! `computer_use_apps_allow`, is denied whatever was approved. System
+//! Settings (`com.apple.systempreferences`) is admitted only with a known
+//! pane ([`ComputerTarget::pane`]) that no deny entry names: with no pane it
+//! is denied, since a security pane could be on screen. Only these rows apply to the
 //! `computer` tools (no workspace rule names an app), and bypass mode does
 //! not answer their asks. The ask names the bundle id, the window title and
 //! the action; an approval is for the bundle id. The tools are local-only:
@@ -398,11 +401,19 @@ pub struct McpTarget {
 /// can change.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ComputerTarget {
-    /// The application's bundle id. `None` only for `computer_apps`, which
-    /// lists the running applications (the toolset leaves the denied ones
-    /// out) and reads none of them.
+    /// The application's bundle id. `None` only for `computer_apps`
+    /// ([`Self::list_apps`]); any other call without one is denied by the
+    /// policy ceiling ("a computer call names its application"). The
+    /// toolset (#1583) names the app a display or region screenshot, or a
+    /// wait, is about, or refuses the call: a capture of no app could show
+    /// a denied one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
+    /// `computer_apps`: lists the running applications (the toolset leaves
+    /// the denied ones out) and reads none of them. The only call allowed
+    /// without a bundle id, and only as a [`ToolKind::ComputerRead`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub list_apps: bool,
     /// The application's name, as the ask shows it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_name: Option<String>,
@@ -410,7 +421,9 @@ pub struct ComputerTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_title: Option<String>,
     /// The System Settings pane the window shows (its extension's bundle
-    /// id), matched against the deny lists like an application.
+    /// id), matched against the deny lists like an application. System
+    /// Settings with no pane is denied (fail closed: the window could show
+    /// a security pane).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<String>,
     /// The action, as the ask shows it (`press`, `set_value`, `type`, `key
@@ -447,10 +460,41 @@ pub struct ComputerControl {
 /// The words that make a control consequential (ADR-0047 decision 4):
 /// sending, deleting, buying, paying, signing, submitting, and their usual
 /// synonyms on buttons and menu items. Matched as whole words of the
-/// control's name, ignoring case.
+/// control's name (split at non-alphanumerics and CamelCase boundaries),
+/// ignoring case. A word here only makes an action asked every time, so a
+/// false match costs a question, a missed one an unasked action.
 pub const CONSEQUENTIAL_WORDS: &[&str] = &[
-    "send", "delete", "buy", "pay", "sign", "submit", "purchase", "checkout", "order", "transfer",
-    "erase", "trash", "remove", "publish",
+    // Sending something to someone else.
+    "send",
+    "post",
+    "share",
+    "publish",
+    // Deleting or destroying data.
+    "delete",
+    "erase",
+    "trash",
+    "remove",
+    "wipe",
+    "reset",
+    "format",
+    // Buying, paying, moving money, committing to a booking or plan.
+    "buy",
+    "pay",
+    "purchase",
+    "checkout",
+    "order",
+    "transfer",
+    "withdraw",
+    "book",
+    "subscribe",
+    // Signing, submitting, and the confirm/approve step that commits one.
+    "sign",
+    "submit",
+    "confirm",
+    "approve",
+    "authorize",
+    "authorise",
+    "accept",
 ];
 
 /// Subroles that mark a control destructive where the platform says so.
@@ -460,7 +504,7 @@ const DESTRUCTIVE_SUBROLES: &[&str] = &["AXDestructiveButton", "AXDestructiveAct
 /// never remembered (ADR-0047 decision 4). True when the platform marks the
 /// control destructive (the flag, or a destructive subrole), or when a word
 /// of its name is one of [`CONSEQUENTIAL_WORDS`] (`Send`, `Delete…`,
-/// `Move to Trash`, `Sign In`, `Place Order`).
+/// `Move to Trash`, `Sign In`, `Place Order`, `Confirm payment`, `SendNow`).
 #[must_use]
 pub fn is_consequential(control: &ComputerControl) -> bool {
     if control.destructive
@@ -474,13 +518,36 @@ pub fn is_consequential(control: &ComputerControl) -> bool {
     }
     control.name.as_deref().is_some_and(|name| {
         name.split(|c: char| !c.is_alphanumeric())
-            .filter(|word| !word.is_empty())
+            .flat_map(camel_words)
             .any(|word| {
                 CONSEQUENTIAL_WORDS
                     .iter()
                     .any(|consequential| word.eq_ignore_ascii_case(consequential))
             })
     })
+}
+
+/// `word` split at its CamelCase boundaries: before an upper-case letter
+/// that follows a lower-case letter or a digit (`SendNow`: `Send`, `Now`),
+/// and before the last capital of a run followed by a lower-case letter
+/// (`URLSend`: `URL`, `Send`). Empty pieces are left out.
+fn camel_words(word: &str) -> Vec<&str> {
+    let chars: Vec<(usize, char)> = word.char_indices().collect();
+    let mut words = Vec::new();
+    let mut start = 0;
+    for (i, &(at, c)) in chars.iter().enumerate().skip(1) {
+        let prev = chars[i - 1].1;
+        let next_lower = chars.get(i + 1).is_some_and(|&(_, n)| n.is_lowercase());
+        if c.is_uppercase()
+            && (prev.is_lowercase() || prev.is_numeric() || (prev.is_uppercase() && next_lower))
+        {
+            words.push(&word[start..at]);
+            start = at;
+        }
+    }
+    words.push(&word[start..]);
+    words.retain(|piece| !piece.is_empty());
+    words
 }
 
 impl ComputerTarget {
@@ -1165,17 +1232,24 @@ impl RulesEngine {
         }
     }
 
-    fn thread_key(&self) -> String {
-        self.thread
-            .read()
-            .ok()
-            .and_then(|thread| thread.clone())
-            .unwrap_or_default()
+    /// The running turn's thread, if the host set one. With none, nothing
+    /// is approved "for this thread": such an approval would hold for every
+    /// turn of the session.
+    fn thread_key(&self) -> Option<String> {
+        self.thread.read().ok().and_then(|thread| thread.clone())
     }
 
-    /// Whether the running thread holds `pick`'s set for `key`.
+    /// Whether a thread is set, so "allow for this thread" can be offered.
+    fn has_thread(&self) -> bool {
+        self.thread_key().is_some()
+    }
+
+    /// Whether the running thread holds `pick`'s set for `key` (never, with
+    /// no thread set).
     fn thread_has(&self, key: &str, pick: fn(&ThreadComputer) -> &HashSet<String>) -> bool {
-        let thread = self.thread_key();
+        let Some(thread) = self.thread_key() else {
+            return false;
+        };
         self.computer_threads.lock().is_ok_and(|threads| {
             threads
                 .get(&thread)
@@ -1191,8 +1265,9 @@ impl RulesEngine {
     ///
     /// # Errors
     ///
-    /// Any other tool, a call with no bundle id, and a consequential
-    /// action (asked every time).
+    /// Any other tool, a call with no bundle id, a consequential action
+    /// (asked every time), and a turn with no thread set
+    /// ([`Self::set_thread`]).
     pub fn remember_for_thread(&self, call: &ToolCall) -> ToolResult<()> {
         let target = call
             .computer
@@ -1213,7 +1288,12 @@ impl RulesEngine {
                 CONSEQUENTIAL_NEVER_REMEMBERED,
             ));
         }
-        let thread = self.thread_key();
+        let thread = self.thread_key().ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::Denied,
+                "no thread is set; the call is approved once",
+            )
+        })?;
         let mut threads = self
             .computer_threads
             .lock()
@@ -2234,7 +2314,9 @@ impl RulesEngine {
     /// `computer_use` off (or absent) denies every call; an application
     /// the deny lists name (the platform's always among them), or one
     /// outside a non-empty allow list, is denied whatever else allows it.
-    /// Only `computer_apps` names no application; an action must.
+    /// Only `computer_apps` ([`ComputerTarget::list_apps`], a
+    /// [`ToolKind::ComputerRead`]) names no application; every other call
+    /// must, a screenshot or a wait included.
     fn computer_ceiling(&self, call: &ToolCall) -> Option<Decision> {
         let deny = |reason: String| Some(Decision::new(Verdict::Deny, Source::Policy, reason));
         if !self.policy.computer_use {
@@ -2242,8 +2324,11 @@ impl RulesEngine {
         }
         let target = call.computer.as_ref();
         let Some(bundle_id) = target.and_then(|target| target.bundle_id.as_deref()) else {
-            return (call.tool == ToolKind::ComputerAct)
-                .then(|| Decision::new(Verdict::Deny, Source::Policy, "no application named"));
+            let lists_apps = call.tool == ToolKind::ComputerRead
+                && target.is_some_and(|target| target.list_apps);
+            return (!lists_apps)
+                .then(|| deny("a computer call names its application".to_owned()))
+                .flatten();
         };
         self.policy
             .computer_use_refusal(bundle_id, target.and_then(|target| target.pane.as_deref()))
@@ -2267,11 +2352,20 @@ impl RulesEngine {
         let target = call.computer.clone().unwrap_or_default();
         let Some(key) = target.key() else {
             // `computer_apps`: the running apps' names (the denied ones left
-            // out by the toolset); no window is read.
+            // out by the toolset); no window is read. The ceiling denies
+            // every other call with no application; so does this, should
+            // it be reached without the ceiling.
+            if call.tool == ToolKind::ComputerRead && target.list_apps {
+                return Decision::new(
+                    Verdict::Allow,
+                    Source::Default,
+                    "listing the running applications reads none of them",
+                );
+            }
             return Decision::new(
-                Verdict::Allow,
-                Source::Default,
-                "listing the running applications reads none of them",
+                Verdict::Deny,
+                Source::Policy,
+                "a computer call names its application",
             );
         };
         let app = target.label();
@@ -2284,6 +2378,14 @@ impl RulesEngine {
                 return remembered("you always let the agent see this app");
             }
             return ask(format!("Let the agent see {app}?{detail}"));
+        }
+        if self.unattended().is_some() {
+            // ADR-0047 decision 8: every `ComputerAct` of an unattended turn
+            // waits for the person; no thread or "always" approval answers
+            // it. `ask_computer` declines it unless the person approves.
+            return ask(format!(
+                "This run is unattended. Let the agent use {app}?{detail}"
+            ));
         }
         if target.open_app {
             if self.thread_has(&key, |approved| &approved.opened) {
@@ -2521,16 +2623,18 @@ impl RuleApprovals {
     ) -> Result<ApprovalOutcome, HostError> {
         let target = call.computer.clone().unwrap_or_default();
         let remember = rememberable && self.engine.can_remember(call);
-        request.available_actions = if remember {
-            vec![
-                "approve".to_owned(),
-                APPROVE_THREAD.to_owned(),
-                APPROVE_ALWAYS.to_owned(),
-                "reject".to_owned(),
-            ]
-        } else {
-            vec!["approve".to_owned(), "reject".to_owned()]
-        };
+        // "Allow for this thread" needs a thread: without one it would hold
+        // for every turn of the session.
+        let for_thread = remember && self.engine.has_thread();
+        let mut actions = vec!["approve".to_owned()];
+        if for_thread {
+            actions.push(APPROVE_THREAD.to_owned());
+        }
+        if remember {
+            actions.push(APPROVE_ALWAYS.to_owned());
+        }
+        actions.push("reject".to_owned());
+        request.available_actions = actions;
         let attended_only =
             call.tool == ToolKind::ComputerAct && self.engine.unattended().is_some();
         request.message.clone_from(&decision.reason);
@@ -2547,7 +2651,9 @@ impl RuleApprovals {
             value,
         };
         match outcome {
-            ApprovalOutcome::Decided { action, value } if action == APPROVE_THREAD && remember => {
+            ApprovalOutcome::Decided { action, value }
+                if action == APPROVE_THREAD && for_thread =>
+            {
                 if let Err(error) = self.engine.remember_for_thread(call) {
                     tracing::warn!(reason = error.message(), "approved once");
                 }
@@ -2562,7 +2668,11 @@ impl RuleApprovals {
                 }
                 Ok(approved(value))
             }
-            ApprovalOutcome::Decided { action, value } if action == "approve" => {
+            // "approve", or a remember scope that was not offered (no
+            // thread set, a call never remembered): approved once.
+            ApprovalOutcome::Decided { action, value }
+                if action == "approve" || action == APPROVE_THREAD || action == APPROVE_ALWAYS =>
+            {
                 if target.open_app
                     && let Err(error) = self.engine.remember_for_thread(call)
                 {

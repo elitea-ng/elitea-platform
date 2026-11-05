@@ -17,7 +17,8 @@ them:
 - `local_work_computer_use_apps_deny` (default empty): bundle ids it never
   touches. The desktop always adds its own list (Elitea, password
   managers, terminals, Screen Time, the login window and the security
-  panes of System Settings).
+  panes of System Settings). System Settings is refused when the pane it
+  shows is unknown.
 
 Nothing changes until an administrator turns `local_work_computer_use` on
 under Configuration, *Native client policy*. The `computer` tools

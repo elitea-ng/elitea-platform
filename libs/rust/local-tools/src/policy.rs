@@ -149,7 +149,8 @@ impl Default for LocalWorkPolicy {
 /// Each entry is a bundle id, or a `prefix.*` family ([`bundle_id_matches`]).
 /// The list is also matched against the System Settings pane a window
 /// shows (the pane extension's bundle id), so the security panes are denied
-/// while the rest of System Settings is not.
+/// while the rest of System Settings is not; a System Settings window whose
+/// pane is unknown is denied too.
 pub const PLATFORM_APP_DENY: &[&str] = &[
     // Elitea itself: the agent must never approve its own asks (decision 5,
     // "No Elitea control").
@@ -199,6 +200,10 @@ pub const PLATFORM_APP_DENY: &[&str] = &[
     "com.apple.preferences.password",               // Touch ID (macOS 12)
     "com.apple.preferences.users",                  // Users & Groups (macOS 12)
 ];
+
+/// System Settings' bundle id. Computer use admits it only with a known
+/// pane that no deny entry names ([`LocalWorkPolicy::computer_use_refusal`]).
+pub const SYSTEM_SETTINGS: &str = "com.apple.systempreferences";
 
 /// The longest bundle id (or `prefix.*` pattern) a policy may carry.
 pub const MAX_BUNDLE_ID_BYTES: usize = 255;
@@ -260,7 +265,9 @@ impl LocalWorkPolicy {
     /// admits it. The `computer_use` switch is checked by the caller. In
     /// order: a value that is not a bundle id; a deny entry (the platform's
     /// or the policy's) matching the bundle id or the pane, whatever the
-    /// allow list says; a non-empty allow list that does not name the app.
+    /// allow list says; System Settings ([`SYSTEM_SETTINGS`]) with no known
+    /// pane (fail closed: it could show a security pane); a non-empty allow
+    /// list that does not name the app.
     #[must_use]
     pub fn computer_use_refusal(&self, bundle_id: &str, pane: Option<&str>) -> Option<String> {
         if bundle_id.ends_with(".*") || !valid_bundle_id_pattern(bundle_id) {
@@ -280,6 +287,17 @@ impl LocalWorkPolicy {
             return Some(format!(
                 "computer use never reads or acts on the `{pane}` settings"
             ));
+        }
+        // System Settings fails closed: with no pane named, the window could
+        // show a security pane, so only a known pane no deny entry names
+        // admits it.
+        if bundle_id.eq_ignore_ascii_case(SYSTEM_SETTINGS)
+            && !pane.is_some_and(|pane| !pane.ends_with(".*") && valid_bundle_id_pattern(pane))
+        {
+            return Some(
+                "computer use reads or acts on System Settings only when the pane it shows is known"
+                    .to_owned(),
+            );
         }
         if !self.computer_use_apps_allow.is_empty()
             && !self
@@ -434,13 +452,31 @@ mod tests {
             .computer_use_refusal("com.apple.Safari", None)
             .expect("refused");
         assert!(outside.contains("computer_use_apps_allow"), "{outside}");
-        // System Settings itself is admitted; its security panes are not.
+        // System Settings is admitted on a known pane that is not denied;
+        // with no pane (or a pane that is no bundle id) it fails closed.
         let open = LocalWorkPolicy {
             computer_use: true,
             ..LocalWorkPolicy::default()
         };
+        for unknown in [None, Some(""), Some("not a pane"), Some("com.apple.*")] {
+            let refused = open
+                .computer_use_refusal("com.apple.systempreferences", unknown)
+                .expect("refused");
+            assert!(
+                refused.contains("pane it shows is known"),
+                "{unknown:?}: {refused}"
+            );
+        }
+        assert!(
+            open.computer_use_refusal("com.apple.SystemPreferences", None)
+                .is_some(),
+            "bundle ids compare ignoring case"
+        );
         assert_eq!(
-            open.computer_use_refusal("com.apple.systempreferences", None),
+            open.computer_use_refusal(
+                "com.apple.systempreferences",
+                Some("com.apple.Displays-Settings.extension")
+            ),
             None
         );
         assert!(

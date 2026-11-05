@@ -249,7 +249,19 @@ fn the_policy_is_the_ceiling_of_every_computer_call() {
         }),
         ..ToolCall::new(ToolKind::ComputerRead)
     };
-    assert_eq!(verdict(&open.engine, &settings(None)).0, Verdict::Ask);
+    // With no pane it fails closed: a security pane could be on screen.
+    assert_eq!(
+        verdict(&open.engine, &settings(None)),
+        (Verdict::Deny, Source::Policy)
+    );
+    assert_eq!(
+        verdict(
+            &open.engine,
+            &settings(Some("com.apple.Displays-Settings.extension"))
+        )
+        .0,
+        Verdict::Ask
+    );
     assert_eq!(
         verdict(
             &open.engine,
@@ -257,15 +269,88 @@ fn the_policy_is_the_ceiling_of_every_computer_call() {
         ),
         (Verdict::Deny, Source::Policy)
     );
-    // `computer_apps` names no app and is allowed; an action must name one.
+}
+
+/// `computer_apps` names no app and is allowed; every other call must name
+/// one: a display or region screenshot, a wait, an action.
+#[test]
+fn only_listing_the_apps_names_no_application() {
+    let open = fixture(policy());
+    let list_apps = ToolCall {
+        computer: Some(ComputerTarget {
+            list_apps: true,
+            ..ComputerTarget::default()
+        }),
+        ..ToolCall::new(ToolKind::ComputerRead)
+    };
     assert_eq!(
-        verdict(&open.engine, &ToolCall::new(ToolKind::ComputerRead)).0,
-        Verdict::Allow
+        verdict(&open.engine, &list_apps),
+        (Verdict::Allow, Source::Default)
+    );
+    let no_app = |tool: ToolKind, action: Option<&str>, list_apps: bool| ToolCall {
+        computer: Some(ComputerTarget {
+            action: action.map(str::to_owned),
+            list_apps,
+            ..ComputerTarget::default()
+        }),
+        ..ToolCall::new(tool)
+    };
+    for call in [
+        ToolCall::new(ToolKind::ComputerRead),
+        ToolCall::new(ToolKind::ComputerAct),
+        no_app(ToolKind::ComputerRead, Some("screenshot display"), false),
+        no_app(ToolKind::ComputerRead, Some("screenshot region"), false),
+        no_app(ToolKind::ComputerRead, Some("wait"), false),
+        no_app(ToolKind::ComputerAct, Some("click_at"), false),
+        // `list_apps` on an action is no listing.
+        no_app(ToolKind::ComputerAct, None, true),
+    ] {
+        let decision = open.engine.decide(&call);
+        assert_eq!(
+            (decision.verdict, decision.source),
+            (Verdict::Deny, Source::Policy),
+            "{call:?}"
+        );
+        assert!(
+            decision.reason.contains("names its application"),
+            "{}",
+            decision.reason
+        );
+        assert!(open.engine.refused_before_hooks(&call));
+    }
+}
+
+/// With no thread set, nothing is approved "for this thread": it is not
+/// offered, cannot be remembered, and an opened app is asked every time.
+#[tokio::test]
+async fn no_thread_means_no_thread_approvals() {
+    let fx = fixture(policy());
+    fx.engine.set_thread(None);
+    assert!(fx.engine.remember_for_thread(&see(MAIL)).is_err());
+    assert!(fx.engine.remember_for_thread(&open(MAIL)).is_err());
+
+    let script = Script::new(&[Some(APPROVE_THREAD), Some("approve"), Some("approve")]);
+    let channel = RuleApprovals::new(fx.engine.clone(), script.clone());
+    // A forged "allow for this thread" is approved once, never kept.
+    assert_eq!(action_of(&ask(&channel, &see(MAIL)).await), "approve");
+    assert_eq!(
+        script.seen()[0].available_actions,
+        ["approve", APPROVE_ALWAYS, "reject"]
     );
     assert_eq!(
-        verdict(&open.engine, &ToolCall::new(ToolKind::ComputerAct)),
-        (Verdict::Deny, Source::Policy)
+        verdict(&fx.engine, &see(MAIL)),
+        (Verdict::Ask, Source::Default)
     );
+    // An opened app is asked again.
+    assert_eq!(action_of(&ask(&channel, &open(MAIL)).await), "approve");
+    assert_eq!(verdict(&fx.engine, &open(MAIL)).0, Verdict::Ask);
+    assert_eq!(action_of(&ask(&channel, &open(MAIL)).await), "approve");
+    assert_eq!(script.seen().len(), 3);
+
+    // Setting a thread afterwards does not see a session-wide approval.
+    fx.engine.set_thread(Some("thread-a".to_owned()));
+    assert_eq!(verdict(&fx.engine, &see(MAIL)).0, Verdict::Ask);
+    assert_eq!(verdict(&fx.engine, &open(MAIL)).0, Verdict::Ask);
 }
 
 /// Row 1 and 2: seeing an app not yet approved is asked, with both
@@ -513,6 +598,26 @@ fn the_consequential_matcher_reads_names_and_roles() {
         "Remove account",
         "Publish",
         "Send\u{a0}reply",
+        "SendNow",
+        "sendNow",
+        "QuickSend",
+        "URLSend",
+        "Confirm payment",
+        "Confirm",
+        "Approve request",
+        "Authorize",
+        "Authorise app",
+        "Accept invitation",
+        "Post",
+        "Share",
+        "Book now",
+        "Subscribe",
+        "Withdraw",
+        "Wipe Device",
+        "Reset",
+        "Format",
+        "PlaceOrder",
+        "Place order",
     ] {
         assert!(is_consequential(&named(name)), "{name}");
     }
@@ -526,6 +631,11 @@ fn the_consequential_matcher_reads_names_and_roles() {
         "Submitted",
         "Archive",
         "Cancel",
+        "Sendmail",
+        "Posted",
+        "Booking history",
+        "Formatting",
+        "Resetting…",
         "",
     ] {
         assert!(!is_consequential(&named(name)), "{name}");
@@ -590,17 +700,53 @@ async fn unattended_turns_never_answer_acting_from_a_grant() {
     let outcome = channel.request(hooked).await.expect("answered");
     let seen = script.seen();
     assert_eq!(seen.len(), 1, "the person was asked, not the grant");
-    assert_eq!(seen[0].payload["source"], "hook");
+    // Unattended, the act is asked by the default row already (the
+    // thread's approval does not answer it); the hook's ask changes nothing.
+    assert_eq!(seen[0].payload["source"], "default");
+    assert_eq!(seen[0].payload["attended_only"], Value::Bool(true));
     assert_eq!(action_of(&outcome), "reject", "unanswered, it declines");
 
-    // An act approved before the run still applies, without a question.
-    let script = Script::new(&[]);
-    let channel = RuleApprovals::new(fx.engine.clone(), script.clone());
+    // No approval made before the run answers an act: not the thread's
+    // (above), not "always for this app", not an opened app. Each waits
+    // for the person, and declines unanswered.
+    fx.choices
+        .remember(super::RememberedChoice {
+            tool: ToolKind::ComputerAct,
+            command: None,
+            paths: None,
+            glob: None,
+            sandbox: None,
+            network: false,
+            runner: None,
+            loopback: false,
+            bundle_id: Some(MAIL.to_owned()),
+        })
+        .expect("remember");
+    fx.engine.remember_for_thread(&open(MAIL)).expect("opened");
+    for call in [act(MAIL, "Reply"), open(MAIL)] {
+        assert_eq!(verdict(&fx.engine, &call), (Verdict::Ask, Source::Default));
+        let script = Script::new(&[None]);
+        let channel = RuleApprovals::new(fx.engine.clone(), script.clone());
+        assert_eq!(action_of(&ask(&channel, &call).await), "reject");
+        assert_eq!(script.seen().len(), 1, "the person was asked");
+        assert_eq!(script.seen()[0].payload["attended_only"], Value::Bool(true));
+    }
+    // Attended again, the same approvals answer it.
+    fx.engine.set_unattended(None);
     assert_eq!(
-        action_of(&ask(&channel, &act(MAIL, "Reply")).await),
-        "approve"
+        verdict(&fx.engine, &act(MAIL, "Reply")),
+        (Verdict::Allow, Source::Remembered)
     );
-    assert_eq!(script.seen().len(), 0, "no question");
+    fx.engine
+        .set_unattended(Some(Unattended { hook_asks: true }));
+
+    // Seeing an app approved before the run still applies (decision 8
+    // limits acting only).
+    fx.engine.remember_for_thread(&see(MAIL)).expect("approved");
+    assert_eq!(
+        verdict(&fx.engine, &see(MAIL)),
+        (Verdict::Allow, Source::Remembered)
+    );
 
     // A person who is there answers, and the answer stands.
     let script = Script::new(&[Some("approve")]);
