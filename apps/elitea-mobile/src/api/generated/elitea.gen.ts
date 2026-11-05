@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.35
+ * client contract:    1.36
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -3426,6 +3426,12 @@ export interface components {
             command_allow: string[];
             /** @description Command patterns that never run. A deny wins over an allow. Same bounds. */
             command_deny: string[];
+            /** @description Client contract 1.36 (ADR-0047 decision 3). Local turns may see and act on the user's other applications through the platform's accessibility interface. Absent or false is off (the default): the app does not offer the computer tools and denies their calls. The user also turns it on per device and approves each application; an unattended run never acts on one. */
+            computer_use?: boolean;
+            /** @description Client contract 1.36. When not empty, the only applications computer use may read or act on, by bundle id (com.apple.mail) or bundle id prefix (com.example.*). At most 200 entries of at most 255 bytes. Absent or empty: no ceiling. A ceiling, not an approval: the user is still asked per application. */
+            computer_use_apps_allow?: string[];
+            /** @description Client contract 1.36. Applications computer use never reads or acts on, by bundle id or prefix, whatever the allow list says. The app always adds its own platform list (itself, password managers, terminals, Screen Time, the login window and the security panes of System Settings), which no policy removes. Same bounds. */
+            computer_use_apps_deny?: string[];
             /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
             host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */
