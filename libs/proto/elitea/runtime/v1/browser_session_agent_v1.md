@@ -59,7 +59,9 @@ The supervisor side is `services/elitea-worker-rust/src/sandbox/browser_session_
   - `url` is `http://<ip literal>:<port>`. The container has no resolver,
     so the proxy resolves names.
   - `token` is the signed run token. Send it to the proxy as
-    `Proxy-Authorization: Bearer <token>` on every CONNECT.
+    `Proxy-Authorization: Basic <base64(run:<token>)>` on every CONNECT:
+    the user is `run` and the password is the token. The proxy does not
+    accept `Bearer`.
   - The token exists only in memory. Never write it to argv, the
     environment, a file or a log.
   - `proxy: null` means the engine has no network.
