@@ -2467,7 +2467,7 @@ export interface components {
             user_declined_mcp_servers?: string[];
             user_input?: string;
         };
-        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
+        /** @description A refused send, regenerate or continue. NOTE(W2): internal/api/v2/agentexecution/route.go:558 (`writeStartError`) and :601 (`writeUnsupported`). `error` is a machine code for 409 and 422 (`agent_regeneration_pending`, `agent_hitl_already_resolved`, `project_skills_limit`, `project_skills_too_large`, `project_skill_name_conflict`, `project_skill_unknown`, `project_skills_forbidden`, `agent_authorization_already_resolved`, `agent_output_limit_already_resolved`, `unsupported_agent_execution`, `agent_target_required`) and a message otherwise; the idempotency conflict is a 409 whose `error` is the message "Agent execution request conflicts with an existing turn". */
         ChatExecutionError: {
             error: string;
             /** @description Client contract 1.30. With `unattended_grant_refused`, the refused request field. */
@@ -6535,7 +6535,7 @@ export interface operations {
                     "application/json": components["schemas"]["ChatExecutionError"];
                 };
             };
-            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent); or `unattended_grant_refused` (client contract 1.30) with `reason`, `field` and `tool`. */
+            /** @description `unsupported_agent_execution`: this turn cannot run on the current execution path; or `agent_target_required`: an `agent.execute.adhoc.v1` start with no `participant_id` in a conversation that holds more than one agent (pick the agent, or name the model participant explicitly); or a refused skill pick: `project_skills_limit` (more than five skills in the turn), `project_skills_too_large` (more than 64 KiB of skill instructions) or `project_skill_name_conflict` (a picked skill shares its name with a different skill of the agent); or `unattended_grant_refused` (client contract 1.30) with `reason`, `field` and `tool`. */
             422: {
                 headers: {
                     [name: string]: unknown;
