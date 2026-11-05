@@ -31,6 +31,7 @@ use std::collections::HashMap;
 
 use adk_core::{Content, Event, FunctionResponseData, Part};
 use chrono::{DateTime, Utc};
+use elitea_agent_runtime::untrusted::{MessageAuthorKind, message_envelope};
 use serde_json::{Value, json};
 
 use crate::sessions::{EXECUTED_BY_CLOUD, EXECUTED_BY_DESKTOP, NewEvent, WITHHELD_BODY};
@@ -226,14 +227,64 @@ fn hitl_note(exchange: &Value) -> Option<String> {
     })
 }
 
+/// Who reads a seeded session (ADR-0050 decision 9c, issue 1603): the
+/// answering agent's participant id, and the conversation's participants,
+/// which name every other author.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Reader<'a> {
+    /// The reader's participant id; `None` treats every answer as its own
+    /// (a client without the id).
+    pub participant_id: Option<i64>,
+    /// The conversation detail's `participants`.
+    pub participants: &'a [Value],
+}
+
+impl Reader<'_> {
+    /// Another participant who wrote `group`, with their kind and name, or
+    /// `None` when the reader wrote it or the group names no author.
+    fn other_author(&self, group: &Value) -> Option<(MessageAuthorKind, String)> {
+        let reader = self.participant_id?;
+        let author = group.get("author_participant_id").and_then(Value::as_i64)?;
+        if author == reader {
+            return None;
+        }
+        let participant = self
+            .participants
+            .iter()
+            .find(|participant| participant.get("id").and_then(Value::as_i64) == Some(author));
+        let kind = participant
+            .and_then(|participant| participant.get("entity_name"))
+            .and_then(Value::as_str);
+        let kind = if kind == Some("user") {
+            MessageAuthorKind::Person
+        } else {
+            MessageAuthorKind::Agent
+        };
+        let meta = participant.and_then(|participant| participant.get("meta"));
+        let name = meta
+            .and_then(|meta| meta.get("name").or_else(|| meta.get("user_name")))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        Some((kind, name))
+    }
+}
+
 /// Fold `groups` (oldest first) and the answers' tool `steps` into the
 /// session's events. `agent` is the author the runner gives the agent's own
 /// events; `strip_bodies` withholds every tool output (a policy change).
+///
+/// Only the reader's own answers become `agent` events with their tool steps
+/// (ADR-0050 decision 9c, issue 1603). An answer another agent wrote is one
+/// user-role, labelled, untrusted message with no tool steps: its calls are
+/// not the reader's, and replaying them as the reader's own taught the model
+/// it had run tools it never ran.
 #[must_use]
 pub fn fold(
     groups: &[Value],
     steps: &HashMap<i64, Vec<ToolStep>>,
     agent: &str,
+    reader: Reader<'_>,
     strip_bodies: bool,
 ) -> Vec<NewEvent> {
     let uuid_of = |group: &Value| {
@@ -275,6 +326,21 @@ pub fn fold(
                     event,
                 });
             };
+            if let Some((kind, name)) = reader.other_author(group) {
+                let text = group_text(group);
+                if !text.is_empty() {
+                    push(event(
+                        &invocation,
+                        "user",
+                        "user",
+                        vec![Part::Text {
+                            text: message_envelope(kind, &name, &text),
+                        }],
+                        at,
+                    ));
+                }
+                continue;
+            }
             let id = group.get("id").and_then(Value::as_i64).unwrap_or(-1);
             for step in steps.get(&id).map(Vec::as_slice).unwrap_or_default() {
                 let call_id = format!("seed-{}", step.id);
@@ -412,7 +478,13 @@ mod tests {
 
     #[test]
     fn a_transcript_folds_into_ordered_events_with_whole_invocations() {
-        let events = fold(&groups(), &steps(), "elitea_agent", false);
+        let events = fold(
+            &groups(),
+            &steps(),
+            "elitea_agent",
+            Reader::default(),
+            false,
+        );
         let shape: Vec<(String, String, String)> = events
             .iter()
             .map(|e| {
@@ -471,7 +543,7 @@ mod tests {
 
     #[test]
     fn stripped_bodies_withhold_every_tool_output() {
-        let events = fold(&groups(), &steps(), "elitea_agent", true);
+        let events = fold(&groups(), &steps(), "elitea_agent", Reader::default(), true);
         let withheld = events.iter().any(|e| {
             matches!(
                 &e.event.llm_response.content.as_ref().unwrap().parts[0],
@@ -492,7 +564,13 @@ mod tests {
             json!({"id": 3, "uuid": "q3", "created_at": "2026-10-15 10:02:00", "meta": {},
                    "message_items": text("unanswered")}),
         ];
-        let events = fold(&groups, &HashMap::new(), "elitea_agent", false);
+        let events = fold(
+            &groups,
+            &HashMap::new(),
+            "elitea_agent",
+            Reader::default(),
+            false,
+        );
         assert_eq!(events.len(), 3);
         let last = events[2].event.llm_response.content.as_ref().unwrap();
         assert!(matches!(&last.parts[0], Part::Text { text } if text == "unanswered"));
@@ -513,7 +591,7 @@ mod tests {
         let rewind = json!({"mode": "rewind", "cut_message_uuid": "a1",
             "branch_summary": {"version": 1, "objective": "Try a cache.", "key_facts": ["Asked: now in the cloud"]}});
         let events = with_branch_note(
-            fold(copied, &HashMap::new(), "agent", false),
+            fold(copied, &HashMap::new(), "agent", Reader::default(), false),
             Some(&rewind),
             "agent",
         );
@@ -534,7 +612,7 @@ mod tests {
         let mut later = groups()[..2].to_vec();
         later.push(json!({"id": 9, "uuid": "q3", "created_at": "2026-10-15 11:00:00.000000", "meta": {}, "message_items": text("next")}));
         let events = with_branch_note(
-            fold(&later, &HashMap::new(), "agent", false),
+            fold(&later, &HashMap::new(), "agent", Reader::default(), false),
             Some(&rewind),
             "agent",
         );
@@ -547,7 +625,13 @@ mod tests {
     fn a_fork_or_a_cut_older_than_the_transcript_read() {
         let fork =
             json!({"mode": "fork", "cut_message_uuid": "a1", "branch_summary": {"version": 1}});
-        let plain = fold(&groups(), &HashMap::new(), "agent", false);
+        let plain = fold(
+            &groups(),
+            &HashMap::new(),
+            "agent",
+            Reader::default(),
+            false,
+        );
         assert_eq!(
             with_branch_note(plain.clone(), Some(&fork), "agent").len(),
             plain.len()
@@ -593,5 +677,62 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(broken.inputs, json!({}));
+    }
+
+    /// Issue 1603: another agent's answer is one labelled user message, with
+    /// none of its tool steps; the reader's own keeps its steps.
+    #[test]
+    fn another_agents_answer_is_labelled_and_its_tool_steps_are_not_replayed() {
+        let participants = vec![
+            json!({"id": 10, "entity_name": "user", "meta": {"user_name": "Sam"}}),
+            json!({"id": 20, "entity_name": "application", "meta": {"name": "Reader"}}),
+            json!({"id": 30, "entity_name": "application", "meta": {"name": "CI Doctor"}}),
+        ];
+        let mut transcript = groups();
+        transcript[0]["author_participant_id"] = json!(10);
+        transcript[1]["author_participant_id"] = json!(30);
+        transcript[2]["author_participant_id"] = json!(10);
+        transcript[3]["author_participant_id"] = json!(20);
+        let reader = Reader {
+            participant_id: Some(20),
+            participants: &participants,
+        };
+        let events = fold(&transcript, &steps(), "elitea_agent", reader, false);
+        let shape: Vec<(String, String, String)> = events
+            .iter()
+            .map(|e| {
+                let content = e.event.llm_response.content.as_ref().unwrap();
+                let kind = match &content.parts[0] {
+                    Part::Text { text } => format!("text:{text}"),
+                    Part::FunctionCall { name, .. } => format!("call:{name}"),
+                    _ => "other".to_owned(),
+                };
+                (e.event.author.clone(), content.role.clone(), kind)
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("user".into(), "user".into(), "text:create hello.txt".into()),
+                (
+                    "user".into(),
+                    "user".into(),
+                    "text:<untrusted source=\"message\" from=\"CI Doctor\" kind=\"agent\">\nDone.\n</untrusted>".into()
+                ),
+                ("user".into(), "user".into(), "text:now in the cloud".into()),
+                (
+                    "elitea_agent".into(),
+                    "model".into(),
+                    "text:Cloud done.".into()
+                ),
+            ]
+        );
+        // The reader's own answer keeps its tool steps.
+        transcript[1]["author_participant_id"] = json!(20);
+        let own = fold(&transcript, &steps(), "elitea_agent", reader, false);
+        assert!(own.iter().any(|e| matches!(
+            &e.event.llm_response.content.as_ref().unwrap().parts[0],
+            Part::FunctionCall { name, .. } if name == "write_file"
+        )));
     }
 }

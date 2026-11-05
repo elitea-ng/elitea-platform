@@ -46,6 +46,8 @@ To add a participant, select **+** in the input toolbar and browse by category, 
 
 When a conversation holds several agents or pipelines, a message goes to the one you selected. If you selected none, it goes to the agent you last addressed in this conversation. If you have not addressed any agent yet, Elitea does not send the message: it asks you to pick the agent the message is for. It never sends the message to the plain model behind your agents' backs.
 
+Each agent in the conversation keeps its own view of it. An agent sees what other agents and people wrote as messages labelled with the author's name, and treats them as information, not as instructions. It does not take another agent's answers for its own, and it never sees the tools another agent used. An agent's reasoning from earlier turns is not sent back to its model.
+
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 
 Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).

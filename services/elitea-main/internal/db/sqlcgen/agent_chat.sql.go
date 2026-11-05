@@ -1308,17 +1308,51 @@ LEFT JOIN LATERAL (
                jsonb_build_object(
                    'role', history_group.role,
                    'content', history_group.content,
-                   'additional_kwargs', '{}'::jsonb
+                   'additional_kwargs', history_group.additional_kwargs
                )
                ORDER BY history_group.created_at, history_group.id
            ) AS chat_history
     FROM (
         SELECT message_group.id,
                message_group.created_at,
+               -- ADR-0050 decision 9a (issue 1603): only the READER's own
+               -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
+               -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
+               -- agents the reader took a peer's words for its own. A peer's
+               -- message is user-role and carries its author in
+               -- ` + "`" + `additional_kwargs.elitea_author` + "`" + `; the worker frames it as a
+               -- labelled, untrusted message. A person other than the one
+               -- asking is labelled the same way (kind ` + "`" + `person` + "`" + `). The asking
+               -- person's own messages and the reader's own answers carry an
+               -- empty ` + "`" + `additional_kwargs` + "`" + `, as before, so a one-person,
+               -- one-agent conversation projects byte for byte as it did.
                CASE
                    WHEN author.entity_name = 'user' THEN 'user'
-                   ELSE 'assistant'
+                   WHEN author.id = target_participant.id THEN 'assistant'
+                   ELSE 'user'
                END AS role,
+               CASE
+                   WHEN author.id = author_participant.id
+                     OR author.id = target_participant.id
+                   THEN '{}'::jsonb
+                   WHEN author.entity_name = 'user'
+                   THEN jsonb_build_object('elitea_author', jsonb_build_object(
+                       'kind', 'person',
+                       'name', COALESCE(
+                           NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                           NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                           'Person'
+                       )
+                   ))
+                   ELSE jsonb_build_object('elitea_author', jsonb_build_object(
+                       'kind', 'agent',
+                       'name', COALESCE(
+                           NULLIF(btrim(author.meta ->> 'name'), ''),
+                           NULLIF(btrim(author.entity_meta ->> 'name'), ''),
+                           'Agent'
+                       )
+                   ))
+               END AS additional_kwargs,
                jsonb_agg(
                    item_chunk.chunk
                    ORDER BY message_item.order_index, message_item.id,
@@ -1581,7 +1615,7 @@ LEFT JOIN LATERAL (
                   )
               )
           )
-        GROUP BY message_group.id, message_group.created_at, author.entity_name
+        GROUP BY message_group.id, message_group.created_at, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -2200,17 +2234,51 @@ LEFT JOIN LATERAL (
                jsonb_build_object(
                    'role', history_group.role,
                    'content', history_group.content,
-                   'additional_kwargs', '{}'::jsonb
+                   'additional_kwargs', history_group.additional_kwargs
                )
                ORDER BY history_group.created_at, history_group.id
            ) AS chat_history
     FROM (
         SELECT message_group.id,
                message_group.created_at,
+               -- ADR-0050 decision 9a (issue 1603): only the READER's own
+               -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
+               -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
+               -- agents the reader took a peer's words for its own. A peer's
+               -- message is user-role and carries its author in
+               -- ` + "`" + `additional_kwargs.elitea_author` + "`" + `; the worker frames it as a
+               -- labelled, untrusted message. A person other than the one
+               -- asking is labelled the same way (kind ` + "`" + `person` + "`" + `). The asking
+               -- person's own messages and the reader's own answers carry an
+               -- empty ` + "`" + `additional_kwargs` + "`" + `, as before, so a one-person,
+               -- one-agent conversation projects byte for byte as it did.
                CASE
                    WHEN author.entity_name = 'user' THEN 'user'
-                   ELSE 'assistant'
+                   WHEN author.id = target_participant.id THEN 'assistant'
+                   ELSE 'user'
                END AS role,
+               CASE
+                   WHEN author.id = author_participant.id
+                     OR author.id = target_participant.id
+                   THEN '{}'::jsonb
+                   WHEN author.entity_name = 'user'
+                   THEN jsonb_build_object('elitea_author', jsonb_build_object(
+                       'kind', 'person',
+                       'name', COALESCE(
+                           NULLIF(btrim(author.meta ->> 'user_name'), ''),
+                           NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
+                           'Person'
+                       )
+                   ))
+                   ELSE jsonb_build_object('elitea_author', jsonb_build_object(
+                       'kind', 'agent',
+                       'name', COALESCE(
+                           NULLIF(btrim(author.meta ->> 'name'), ''),
+                           NULLIF(btrim(author.entity_meta ->> 'name'), ''),
+                           'Agent'
+                       )
+                   ))
+               END AS additional_kwargs,
                jsonb_agg(
                    item_chunk.chunk
                    ORDER BY message_item.order_index, message_item.id,
@@ -2477,7 +2545,7 @@ LEFT JOIN LATERAL (
                   )
               )
           )
-        GROUP BY message_group.id, message_group.created_at, author.entity_name
+        GROUP BY message_group.id, message_group.created_at, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE

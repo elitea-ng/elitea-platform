@@ -18,8 +18,8 @@ use adk_anthropic::{
     ContentBlockDeltaEvent, ContentBlockStartEvent, ContentBlockStopEvent, EffortLevel, ImageBlock,
     ImageMediaType, MessageCreateParams, MessageDeltaEvent, MessageParam, MessageRole,
     MessageStartEvent, MessageStreamEvent, Model, OutputConfig, OutputFormat, StopReason,
-    SystemPrompt, TextBlock, ThinkingConfig, ThinkingDisplay, ToolParam, ToolResultBlock,
-    ToolResultBlockContent, ToolUnionParam, ToolUseBlock,
+    SystemPrompt, TextBlock, ThinkingBlock, ThinkingConfig, ThinkingDisplay, ToolParam,
+    ToolResultBlock, ToolResultBlockContent, ToolUnionParam, ToolUseBlock,
 };
 use adk_rust::model::anthropic::AnthropicSchemaAdapter;
 use adk_rust::{
@@ -41,9 +41,10 @@ use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
     ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, budget_refusal,
-    gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
-    rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
-    validate_invocation, validate_llm_request, validate_response_head,
+    current_loop_start, gateway_sse_splitter, is_generic_rejection, model_error,
+    next_response_chunk, rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id,
+    valid_tool_name, validate_invocation, validate_llm_request, validate_response_head,
+    without_thinking,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -448,11 +449,22 @@ fn encode_anthropic_body(
 ) -> Result<Vec<u8>, AdkError> {
     let contents = validate_llm_request(request, stream, invocation)?;
     let generation = native_generation(invocation, invocation.step_thinking(request))?;
+    // Thinking from an earlier turn is never replayed; within this turn's
+    // tool loop a signed block goes back as a native thinking block, which
+    // Anthropic requires before a tool result (issue 1603).
+    let loop_start = current_loop_start(contents);
     let messages = contents
         .iter()
-        .filter(|content| content.role != "system")
         .enumerate()
-        .map(|(index, content)| anthropic_message(content, index + 1 == contents.len()))
+        .filter(|(_, content)| content.role != "system")
+        .filter_map(|(index, content)| {
+            if index < loop_start {
+                without_thinking(content).map(|content| (index, content))
+            } else {
+                Some((index, std::borrow::Cow::Borrowed(content)))
+            }
+        })
+        .map(|(index, content)| anthropic_message(&content, index + 1 == contents.len()))
         .collect::<Result<Vec<_>, _>>()?;
     let mut params = MessageCreateParams::new_streaming(
         generation.max_tokens,
@@ -556,62 +568,126 @@ fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, A
     if is_last && let [Part::Text { text }] = content.parts.as_slice() {
         return Ok(MessageParam::new_with_string(text.clone(), role));
     }
-    let blocks = content
-        .parts
-        .iter()
-        .map(|part| match part {
-            Part::Text { text } => Ok(ContentBlock::Text(TextBlock::new(text))),
-            // #981: an attached image, decoded from its `image_url` chunk by
-            // `agents/attachments.rs`. Anthropic takes RAW base64 plus a media
-            // type — not a data URL — so the bytes are re-encoded here rather
-            // than a URL being carried through; `ImageMediaType` is the same
-            // four types that module renders, which is why the mapping is
-            // total and an unknown one still falls through to the refusal
-            // below.
-            Part::InlineData {
-                mime_type, data, ..
-            } if anthropic_image_media_type(mime_type).is_some() && !data.is_empty() => {
-                let media_type =
-                    anthropic_image_media_type(mime_type).ok_or_else(invalid_anthropic_request)?;
-                Ok(ContentBlock::Image(ImageBlock::new_with_base64(
-                    Base64ImageSource::new(BASE64_STANDARD.encode(data), media_type),
-                )))
-            }
-            Part::Thinking { thinking, .. } => Ok(ContentBlock::Text(TextBlock::new(thinking))),
-            Part::FunctionCall {
-                name,
-                args,
-                id: Some(id),
-                ..
-            } => Ok(ContentBlock::ToolUse(ToolUseBlock::new(
-                id,
-                name,
-                args.clone(),
-            ))),
-            Part::FunctionResponse {
-                function_response,
-                id: Some(id),
-                ..
-            } => {
-                let result = serde_json::to_string(&function_response.response)
-                    .map_err(|_| invalid_anthropic_request())?;
-                // ADR-0043 decision 4: tool content is data.
-                let result =
-                    elitea_agent_runtime::untrusted::envelope(&function_response.name, &result);
-                Ok(ContentBlock::ToolResult(ToolResultBlock {
-                    tool_use_id: id.clone(),
-                    cache_control: None,
-                    content: Some(ToolResultBlockContent::String(result)),
-                    is_error: None,
-                }))
-            }
-            _ => Err(invalid_anthropic_request()),
+    let parts = signed_thinking_blocks(&content.parts);
+    let blocks = parts
+        .into_iter()
+        .filter_map(|part| match part {
+            AnthropicPart::Thinking {
+                thinking,
+                signature,
+            } => Some(Ok(ContentBlock::Thinking(ThinkingBlock::new(
+                thinking, signature,
+            )))),
+            // Unsigned thinking cannot be replayed as thinking, and replaying
+            // it as text would put the model's private reasoning into its
+            // visible answer (issue 1603).
+            AnthropicPart::UnsignedThinking => None,
+            AnthropicPart::Other(part) => Some(anthropic_block(part)),
         })
         .collect::<Result<Vec<_>, _>>()?;
     if blocks.is_empty() {
         return Err(invalid_anthropic_request());
     }
     Ok(MessageParam::new_with_blocks(blocks, role))
+}
+
+/// One content part as the Anthropic encoder sees it: a run of thinking
+/// fragments that ends in its signature is one signed block.
+enum AnthropicPart<'a> {
+    Thinking {
+        thinking: String,
+        signature: &'a str,
+    },
+    UnsignedThinking,
+    Other(&'a Part),
+}
+
+/// Fold each run of adjacent thinking parts into one block. The facade
+/// streams a block's text as unsigned deltas and then its signature as one
+/// more thinking part (`thinking_signature`), so a run that ends in a signed
+/// part is exactly one provider block. A run with no signature (another
+/// provider's reasoning, or a stream cut before the signature) is unsigned.
+fn signed_thinking_blocks(parts: &[Part]) -> Vec<AnthropicPart<'_>> {
+    let mut folded = Vec::with_capacity(parts.len());
+    let mut run = String::new();
+    let mut in_run = false;
+    for part in parts {
+        if let Part::Thinking {
+            thinking,
+            signature,
+        } = part
+        {
+            in_run = true;
+            run.push_str(thinking);
+            if let Some(signature) = signature.as_deref() {
+                folded.push(AnthropicPart::Thinking {
+                    thinking: std::mem::take(&mut run),
+                    signature,
+                });
+                in_run = false;
+            }
+            continue;
+        }
+        if std::mem::take(&mut in_run) {
+            run.clear();
+            folded.push(AnthropicPart::UnsignedThinking);
+        }
+        folded.push(AnthropicPart::Other(part));
+    }
+    if in_run {
+        folded.push(AnthropicPart::UnsignedThinking);
+    }
+    folded
+}
+
+fn anthropic_block(part: &Part) -> Result<ContentBlock, AdkError> {
+    match part {
+        Part::Text { text } => Ok(ContentBlock::Text(TextBlock::new(text))),
+        // #981: an attached image, decoded from its `image_url` chunk by
+        // `agents/attachments.rs`. Anthropic takes RAW base64 plus a media
+        // type — not a data URL — so the bytes are re-encoded here rather
+        // than a URL being carried through; `ImageMediaType` is the same
+        // four types that module renders, which is why the mapping is
+        // total and an unknown one still falls through to the refusal
+        // below.
+        Part::InlineData {
+            mime_type, data, ..
+        } if anthropic_image_media_type(mime_type).is_some() && !data.is_empty() => {
+            let media_type =
+                anthropic_image_media_type(mime_type).ok_or_else(invalid_anthropic_request)?;
+            Ok(ContentBlock::Image(ImageBlock::new_with_base64(
+                Base64ImageSource::new(BASE64_STANDARD.encode(data), media_type),
+            )))
+        }
+        Part::FunctionCall {
+            name,
+            args,
+            id: Some(id),
+            ..
+        } => Ok(ContentBlock::ToolUse(ToolUseBlock::new(
+            id,
+            name,
+            args.clone(),
+        ))),
+        Part::FunctionResponse {
+            function_response,
+            id: Some(id),
+            ..
+        } => {
+            let result = serde_json::to_string(&function_response.response)
+                .map_err(|_| invalid_anthropic_request())?;
+            // ADR-0043 decision 4: tool content is data.
+            let result =
+                elitea_agent_runtime::untrusted::envelope(&function_response.name, &result);
+            Ok(ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: id.clone(),
+                cache_control: None,
+                content: Some(ToolResultBlockContent::String(result)),
+                is_error: None,
+            }))
+        }
+        _ => Err(invalid_anthropic_request()),
+    }
 }
 
 fn anthropic_tools(
@@ -872,7 +948,9 @@ fn build_unmarked_anthropic_request(
 #[derive(Debug, Eq, PartialEq)]
 enum ActiveBlock {
     Text,
-    Thinking,
+    Thinking {
+        signature: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -980,7 +1058,9 @@ impl AnthropicStreamState {
             ContentBlock::Thinking(thinking)
                 if thinking.thinking.is_empty() && thinking.signature.is_empty() =>
             {
-                ActiveBlock::Thinking
+                ActiveBlock::Thinking {
+                    signature: String::new(),
+                }
             }
             ContentBlock::Text(_) | ContentBlock::Thinking(_) => {
                 return Err(invalid_anthropic_stream());
@@ -1033,10 +1113,21 @@ impl AnthropicStreamState {
             (ActiveBlock::Text, ContentBlockDelta::TextDelta(delta)) => {
                 Ok(partial_text(delta.text))
             }
-            (ActiveBlock::Thinking, ContentBlockDelta::ThinkingDelta(delta)) => {
+            (ActiveBlock::Thinking { .. }, ContentBlockDelta::ThinkingDelta(delta)) => {
                 Ok(partial_thinking(delta.thinking))
             }
-            (ActiveBlock::Thinking, ContentBlockDelta::SignatureDelta(_)) => Ok(None),
+            // Issue 1603: the signature is what lets this block go back to
+            // Anthropic as thinking within the tool loop. It is sent as the
+            // block's last part when the block stops.
+            (ActiveBlock::Thinking { signature }, ContentBlockDelta::SignatureDelta(delta)) => {
+                if signature.len().saturating_add(delta.signature.len())
+                    > super::openai_compatible_facade::MAX_THINKING_SIGNATURE_BYTES
+                {
+                    return Err(anthropic_output_too_large());
+                }
+                signature.push_str(&delta.signature);
+                Ok(None)
+            }
             (ActiveBlock::ToolUse { arguments, .. }, ContentBlockDelta::InputJsonDelta(delta)) => {
                 if arguments.len().saturating_add(delta.partial_json.len())
                     > MAX_TOOL_ARGUMENT_BYTES
@@ -1059,6 +1150,12 @@ impl AnthropicStreamState {
             return Err(invalid_anthropic_stream());
         }
         let active = self.active.take().ok_or_else(invalid_anthropic_stream)?;
+        let signed = match &active {
+            (_, ActiveBlock::Thinking { signature }) if !signature.is_empty() => {
+                Some(thinking_signature(signature.clone()))
+            }
+            _ => None,
+        };
         if let (
             _,
             ActiveBlock::ToolUse {
@@ -1092,7 +1189,7 @@ impl AnthropicStreamState {
             .next_block
             .checked_add(1)
             .ok_or_else(invalid_anthropic_stream)?;
-        Ok(None)
+        Ok(signed)
     }
 
     fn apply_message_delta(
@@ -1307,6 +1404,24 @@ fn partial_thinking(thinking: String) -> Option<LlmResponse> {
         partial: true,
         ..LlmResponse::default()
     })
+}
+
+/// A thinking block's signature, as one more streamed thinking part with no
+/// text: it follows the block's deltas, so the encoder folds the run into one
+/// signed block (`signed_thinking_blocks`), and it adds nothing to what the
+/// person sees.
+fn thinking_signature(signature: String) -> LlmResponse {
+    LlmResponse {
+        content: Some(Content {
+            role: "model".to_owned(),
+            parts: vec![Part::Thinking {
+                thinking: String::new(),
+                signature: Some(signature),
+            }],
+        }),
+        partial: true,
+        ..LlmResponse::default()
+    }
 }
 
 fn finish_reason(reason: StopReason) -> Result<(FinishReason, bool), AdkError> {

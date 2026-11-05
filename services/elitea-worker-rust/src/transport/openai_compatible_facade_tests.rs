@@ -2873,3 +2873,92 @@ async fn a_budget_refusal_over_the_model_service_reads_as_the_http_refusal() {
     assert_eq!(error.code, "model_gateway.project_budget_exhausted");
     assert!(!format!("{error:?} {error}").contains("secret"));
 }
+
+/// Issue 1603 (ADR-0050 decision 9a): an earlier turn's reasoning is never
+/// sent back as `reasoning_content`; this turn's tool loop keeps its own.
+#[tokio::test(flavor = "current_thread")]
+async fn an_earlier_turns_reasoning_is_not_replayed_but_the_loops_is() {
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(stream_body(vec![Bytes::from(ordinary_sse())])),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            23,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let mut request = test_model_request("earlier question");
+    request.contents.extend([
+        Content {
+            role: "model".to_owned(),
+            parts: vec![
+                Part::Thinking {
+                    thinking: "old reasoning".to_owned(),
+                    signature: None,
+                },
+                Part::Text {
+                    text: "earlier answer".to_owned(),
+                },
+            ],
+        },
+        // A reasoning-only earlier answer leaves nothing to send.
+        Content::new("user").with_text("and then?"),
+        Content {
+            role: "model".to_owned(),
+            parts: vec![Part::Thinking {
+                thinking: "only reasoning".to_owned(),
+                signature: None,
+            }],
+        },
+        Content::new("user").with_text("double two"),
+        Content {
+            role: "model".to_owned(),
+            parts: vec![
+                Part::Thinking {
+                    thinking: "new reasoning".to_owned(),
+                    signature: None,
+                },
+                Part::FunctionCall {
+                    name: "double".to_owned(),
+                    args: serde_json::json!({"value": 2}),
+                    id: Some("call_1".to_owned()),
+                    thought_signature: None,
+                },
+            ],
+        },
+        Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    "double",
+                    serde_json::json!({"result": 4}),
+                ),
+                id: Some("call_1".to_owned()),
+                annotations: None,
+            }],
+        },
+    ]);
+    drain(bound.generate_for_test(request).await.expect("stream"))
+        .await
+        .expect("valid stream");
+    let captured = captured.lock().expect("captured request");
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).expect("body");
+    let wire = body.to_string();
+    assert!(
+        !wire.contains("old reasoning") && !wire.contains("only reasoning"),
+        "{wire}"
+    );
+    let messages = body["messages"].as_array().expect("messages");
+    let assistants = messages
+        .iter()
+        .filter(|message| message["role"] == "assistant")
+        .collect::<Vec<_>>();
+    assert_eq!(assistants.len(), 2, "{wire}");
+    assert!(assistants[0].get("reasoning_content").is_none());
+    assert_eq!(assistants[1]["reasoning_content"], "new reasoning");
+}

@@ -827,12 +827,7 @@ fn encode_request_body(
             "content": system,
         }));
     }
-    for (index, content) in contents.iter().enumerate() {
-        if content.role == "system" {
-            continue;
-        }
-        append_openai_messages(content, index + 1 == contents.len(), &mut messages)?;
-    }
+    append_history_messages(contents, &mut messages)?;
     body.insert("messages".to_owned(), serde_json::Value::Array(messages));
     if !request.tools.is_empty() {
         body.insert("tools".to_owned(), openai_tools(&request.tools)?);
@@ -972,8 +967,19 @@ fn validate_openai_content(content: &Content) -> Result<(), AdkError> {
             _ => Err(invalid_llm_request()),
         }),
         "model" | "assistant" => content.parts.iter().try_for_each(|part| match part {
-            Part::Text { text } | Part::Thinking { thinking: text, .. }
+            Part::Text { text } | Part::Thinking { thinking: text, signature: None }
                 if valid_part_text(text) =>
+            {
+                Ok(())
+            }
+            // A signed thinking block's signature (the Anthropic facade emits
+            // it as its own part at the end of the block, issue 1603): the
+            // text may be empty, the signature may not.
+            Part::Thinking {
+                thinking,
+                signature: Some(signature),
+            } if (thinking.is_empty() || valid_part_text(thinking))
+                && valid_thinking_signature(signature) =>
             {
                 Ok(())
             }
@@ -1039,6 +1045,56 @@ fn valid_part_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_COMPLETION_BYTES && !value.contains('\0')
 }
 
+/// The longest thinking signature a request may replay, in bytes.
+pub(super) const MAX_THINKING_SIGNATURE_BYTES: usize = 64 * 1_024;
+
+fn valid_thinking_signature(value: &str) -> bool {
+    !value.is_empty() && value.len() <= MAX_THINKING_SIGNATURE_BYTES && !value.contains('\0')
+}
+
+/// Where the current tool loop starts in a request's contents (ADR-0050
+/// decision 9a, issue 1603): the index of the last user message that is not
+/// a tool result, so the question being answered. Thinking before it is an
+/// earlier turn's and is never replayed, on any provider; thinking after it
+/// belongs to this turn's tool loop and is replayed where the provider
+/// needs it.
+pub(super) fn current_loop_start(contents: &[Content]) -> usize {
+    contents
+        .iter()
+        .rposition(|content| {
+            content.role == "user"
+                && content
+                    .parts
+                    .iter()
+                    .any(|part| !matches!(part, Part::FunctionResponse { .. }))
+        })
+        .unwrap_or(0)
+}
+
+/// `content` without its thinking parts, or `None` when nothing else is
+/// left.
+pub(super) fn without_thinking(content: &Content) -> Option<std::borrow::Cow<'_, Content>> {
+    if !content
+        .parts
+        .iter()
+        .any(|part| matches!(part, Part::Thinking { .. }))
+    {
+        return Some(std::borrow::Cow::Borrowed(content));
+    }
+    let parts = content
+        .parts
+        .iter()
+        .filter(|part| !matches!(part, Part::Thinking { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| {
+        std::borrow::Cow::Owned(Content {
+            role: content.role.clone(),
+            parts,
+        })
+    })
+}
+
 fn validate_tool_declaration(name: &str, declaration: &serde_json::Value) -> Result<(), AdkError> {
     if !valid_tool_name(name) {
         return Err(invalid_llm_request());
@@ -1101,6 +1157,31 @@ fn leading_system_text(
         }
     }
     Ok(sections.join("\n\n"))
+}
+
+/// Append every non-system content as provider messages. Reasoning is
+/// replayed within this turn's tool loop only; an earlier turn's never
+/// reaches the provider again (issue 1603).
+fn append_history_messages(
+    contents: &[Content],
+    messages: &mut Vec<serde_json::Value>,
+) -> Result<(), AdkError> {
+    let loop_start = current_loop_start(contents);
+    for (index, content) in contents.iter().enumerate() {
+        if content.role == "system" {
+            continue;
+        }
+        let content = if index < loop_start {
+            match without_thinking(content) {
+                Some(content) => content,
+                None => continue,
+            }
+        } else {
+            std::borrow::Cow::Borrowed(content)
+        };
+        append_openai_messages(&content, index + 1 == contents.len(), messages)?;
+    }
+    Ok(())
 }
 
 fn append_openai_messages(

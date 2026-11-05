@@ -155,7 +155,7 @@ impl SessionPlan {
             None => (!empty_conversation, false),
         };
         let events = if needs_seed && !empty_conversation {
-            let (mut groups, mut steps, forked_from) = api
+            let (mut groups, mut steps, forked_from, participants) = api
                 .server_transcript(
                     project_id,
                     &answering.conversation_uuid,
@@ -177,7 +177,16 @@ impl SessionPlan {
                 leave_out(&mut groups, &mut steps, &skips);
             }
             seed::with_branch_note(
-                seed::fold(&groups, &steps, AGENT_AUTHOR, strip),
+                seed::fold(
+                    &groups,
+                    &steps,
+                    AGENT_AUTHOR,
+                    seed::Reader {
+                        participant_id: Some(answering.id),
+                        participants: &participants,
+                    },
+                    strip,
+                ),
                 forked_from.as_ref(),
                 AGENT_AUTHOR,
             )
