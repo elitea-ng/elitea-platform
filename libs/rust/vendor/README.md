@@ -640,6 +640,115 @@ the isolation test). Drop this copy when an upstream release requires `zip` 9.
 **Upstream.** The `zip` 9 move, the name handling above and the test-directory
 fixes, on the current `zavora-ai/zavora-xlsx` default branch: https://github.com/zavora-ai/zavora-xlsx/pull/2.
 
+## `agent-desktop/` — agent-desktop 1.2.0 (`core` and `macos`) with three patches
+
+The macOS driver behind `elitea-desktop-control` (ADR-0047, #1581). That
+crate is its only caller and keeps every vendor type behind its own
+`DesktopDriver` trait.
+
+**Why vendored.** The upstream crates are not published, and they are a
+new, fast-moving project. A copy keeps the code that drives a person's other
+applications as a reviewed diff in this tree. The patches add a tag on
+synthetic events and three small readers that upstream does not have.
+
+| | |
+| --- | --- |
+| Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core` and `crates/macos` |
+| Tree digest | `88c4e6697e77ce55281f692813dcdeedfe66858e046b2a36c8ddcc01daaa927e` (624 files, 3.9 MB, after the patches; command below) |
+| Licence | `Apache-2.0`; the repository's `LICENSE` is at `agent-desktop/LICENSE`. Upstream has no `NOTICE` file. The root `NOTICE` names the copy. |
+| Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`; the upstream manifests as `core/Cargo.toml.orig` and `macos/Cargo.toml.orig` |
+| Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, the CLI crate (`src/` at the root), the Windows and Linux crates, `skills/`, `npm/`, `apps/`, benchmarks, probes |
+
+**Changes.**
+
+1. `core/src/commands/skills.rs` is deleted. It `include_str!`s files from
+   `../../../../skills/`, outside the crates. `core/src/commands/mod.rs`
+   has a comment in place of its `pub mod skills;`.
+2. Synthetic-event tag. The new file `macos/src/input/synthetic_mark.rs`
+   holds a process-wide tag. It defaults to `DEFAULT_SYNTHETIC_EVENT_TAG`,
+   `set_synthetic_event_tag` sets it and refuses zero, and
+   `synthetic_event_tag` reads it. Its `mark` writes the tag into a
+   `CGEvent`'s `kCGEventSourceUserData` field (field 42). Three
+   constructors call `mark` before they return the event:
+   `input/mouse/mod.rs::create_event_with_source`,
+   `input/keyboard/keyboard_event.rs::create_key_event`, and the event
+   that `input/mouse/mouse_scroll.rs` posts. Every vendored post goes
+   through one of them (`grep -rn '\.post(' macos/src`). `input/mod.rs`
+   declares the module, and `lib.rs` re-exports the three public items.
+   The user-active guard (#1584) reads the field to tell the driver's events
+   from the person's.
+3. The new file `macos/src/elitea_ext.rs` adds three functions.
+   `focused_element(pid, deadline)` returns the app's
+   `AXFocusedUIElement`; `type_text(None)` and `key` use it for the
+   secure-field check. `secure_event_input_enabled()` wraps Carbon's
+   `IsSecureEventInputEnabled`. `screen_state()` returns a `ScreenState`
+   read from CoreGraphics: `CGSessionCopyCurrentDictionary`
+   (`CGSSessionScreenIsLocked`, `kCGSSessionOnConsoleKey`) and
+   `CGDisplayIsAsleep(CGMainDisplayID())`, for the `screen_unavailable`
+   gate of ADR-0047 decision 5. `lib.rs` declares the module.
+
+The two `Cargo.toml` files are rewritten as standalone manifests:
+
+- the `workspace = true` keys are written out with the upstream root's values;
+- `rust-version` is 1.89, the upstream value, which is at or below the
+  `rust-toolchain.toml` pin;
+- core is taken by path;
+- `[lib] test = false, doctest = false`, because the tests are not copied;
+- `autobins`, `autoexamples`, `autotests` and `autobenches` are false;
+- the upstream lint table is dropped;
+- the no-op features `dev-tools` and `interactive-tests` stay in macos, so
+  its `cfg(feature = ...)` lines are known.
+
+Every other file matches upstream byte for byte.
+
+**Verify** (from `libs/rust`; the clone is data only, so never build in it).
+
+```bash
+git clone https://github.com/vercel-labs/agent-desktop /tmp/ad && git -C /tmp/ad checkout b43ac4f6e892ef608f8851428613c4009f0e84c7
+for c in core macos; do
+  diff -r -x '*_tests.rs' -x tests.rs -x bin /tmp/ad/crates/$c/src vendor/agent-desktop/$c/src
+  diff /tmp/ad/crates/$c/Cargo.toml vendor/agent-desktop/$c/Cargo.toml.orig
+done                       # only the patched files above differ
+diff /tmp/ad/crates/macos/build.rs vendor/agent-desktop/macos/build.rs
+(cd vendor/agent-desktop && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
+```
+
+**How it is built.** `elitea-desktop-control` uses both crates as path
+dependencies, and only under `cfg(target_os = "macos")`. A Linux build of
+the workspace never compiles them, and Cargo still resolves them into
+`Cargo.lock`. On macOS, `macos/build.rs` compiles the `.m` bridges with
+`xcrun clang` and links AppKit, ApplicationServices and the other system
+frameworks. That build script runs in this tree, never in the upstream
+clone. The crates are not workspace members (`libs/rust/Cargo.toml`
+excludes `vendor`).
+
+**Capture and input.** Screenshots use the vendor's own path, which runs
+`/usr/sbin/screencapture`, and input uses the vendor's own CGEvent code.
+`screencapturekit-rs` was not used: its `build.rs` runs `swift build` on a
+Swift package and pulls `apple-cf` and `apple-metal`, which does not fit
+cleanly.
+
+**Review (2026-11-05).**
+
+- `unsafe`: 61 files use it, for the AX, CoreFoundation and CoreGraphics
+  FFI and the `.m` bridges. The lint table applies per crate, so
+  `elitea-desktop-control` keeps the workspace `unsafe_code = "forbid"` and
+  has none.
+- Subprocesses: `xcrun` (only in `build.rs`), and at run time `/usr/bin/osascript`,
+  `/usr/bin/pgrep`, `/bin/ps`, `/bin/sh`, `/bin/sleep` and
+  `/usr/sbin/screencapture`, all at fixed paths.
+- Network: only `core/src/system/cdp_endpoint.rs`, a local Chrome DevTools
+  endpoint probe. The driver never calls it.
+- The vendor's interaction lease writes a file under `/tmp`. The driver
+  bypasses it with an in-process `InteractionLease::guarded`, and snapshots
+  are built in memory (`snapshot::build`), so the `RefStore` disk cache is
+  never written.
+
+Updating: re-copy the listed paths at the new commit, re-apply the three
+patches, refresh the tree digest and this table, then run
+`cargo clippy -p elitea-desktop-control -- -D warnings` and the ignored
+live test (`desktop-control/tests/macos_live.rs`) on a Mac.
+
 ## Moving zip
 
 `zip` is pinned exactly, `=9.1.3`, in every manifest that names it: the host

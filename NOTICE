@@ -25,3 +25,9 @@ schema/v1 at commit e2d83349bc9e28a4059ea3acefa1c91c966f74e2) in
 apps/elitea-desktop/src-tauri/src/acp/types.rs, and examples from its
 documentation as test fixtures in
 apps/elitea-desktop/src-tauri/src/acp/fixtures/.
+
+This product includes software from agent-desktop (Apache-2.0),
+by the agent-desktop authors (https://github.com/vercel-labs/agent-desktop, commit
+b43ac4f6e892ef608f8851428613c4009f0e84c7): the crates core and macos,
+vendored with three patches in libs/rust/vendor/agent-desktop/ (see
+libs/rust/vendor/README.md) and used by libs/rust/desktop-control/.

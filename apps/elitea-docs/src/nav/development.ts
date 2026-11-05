@@ -29,6 +29,7 @@ export const developmentTab: NavTab = {
         { kind: 'page', slug: 'development/frontend', title: 'elitea-web development' },
         { kind: 'page', slug: 'development/backend', title: 'Backend services and workers' },
         { kind: 'page', slug: 'development/browser-tools', title: 'The browser tool contract' },
+        { kind: 'page', slug: 'development/desktop-control', title: 'Desktop control driver' },
         { kind: 'page', slug: 'development/docs-site', title: 'Work on the documentation' },
       ],
     },

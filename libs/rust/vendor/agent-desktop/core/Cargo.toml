@@ -1,0 +1,31 @@
+# Vendored agent-desktop-core 1.2.0 (vercel-labs/agent-desktop at
+# b43ac4f6e892ef608f8851428613c4009f0e84c7, Apache-2.0). Cargo.toml.orig is
+# the upstream manifest. This one spells out the `workspace = true` keys with
+# the values of the upstream workspace root, and drops the upstream lint
+# table. Every change is listed in libs/rust/vendor/README.md
+# ("agent-desktop").
+[package]
+name = "agent-desktop-core"
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+# The upstream unit tests are not vendored (vendor/README.md).
+test = false
+doctest = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+thiserror = "2.0"
+tracing = "0.1"
+rustc-hash = "2.1"
+base64 = "0.23"
+libc = "0.2"
+smallvec = { version = "1.13", features = ["serde", "union"] }
