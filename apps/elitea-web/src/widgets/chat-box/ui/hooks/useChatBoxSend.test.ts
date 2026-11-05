@@ -122,11 +122,17 @@ describe('stickyAgentParticipantId', () => {
       { participantId: String(dummy.id) },
       {},
     ];
-    expect(stickyAgentParticipantId(history, [agent, pipeline, dummy])).toBe(String(pipeline.id));
+    expect(stickyAgentParticipantId(history.slice(0, 2), [agent, pipeline, dummy])).toBe(String(pipeline.id));
   });
 
-  it('is undefined when no row names an agent', () => {
-    expect(stickyAgentParticipantId([{ participantId: String(dummy.id) }], [agent, pipeline, dummy])).toBeUndefined();
+  it('follows a later turn addressed to the model explicitly', () => {
+    const history = [{ participantId: String(agent.id) }, { participantId: String(dummy.id) }, {}];
+    expect(stickyAgentParticipantId(history, [agent, pipeline, dummy])).toBe(String(dummy.id));
+    expect(resolveTargetParticipant(undefined, [agent, pipeline, dummy], String(dummy.id))).toBe(dummy);
+  });
+
+  it('is undefined when no row names an agent or the model', () => {
+    expect(stickyAgentParticipantId([{ participantId: '999' }], [agent, pipeline, dummy])).toBeUndefined();
     expect(stickyAgentParticipantId(undefined, [agent])).toBeUndefined();
   });
 

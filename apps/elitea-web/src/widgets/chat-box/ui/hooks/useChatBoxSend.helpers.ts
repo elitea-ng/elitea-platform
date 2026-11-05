@@ -143,13 +143,13 @@ export function positiveParticipantId(raw: unknown): number | undefined {
   return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
 }
 
-/** ADR-0050 D7c sticky target: the newest history row whose `participantId` (its `sent_to_id`) names one of the agents. */
+/** ADR-0050 D7c sticky target: the newest history row whose `participantId` (its `sent_to_id`) names an agent or the conversation's model. */
 export function stickyAgentParticipantId(
   messages: readonly { readonly participantId?: string | undefined }[] | undefined,
   participants: readonly unknown[] | undefined,
 ): string | undefined {
   const agentIds = new Set(
-    (participants ?? []).filter(isApplicationParticipant).map((p) => String((p as { id?: unknown }).id)),
+    (participants ?? []).filter((p) => isApplicationParticipant(p) || isAdhocModelParticipant(p)).map((p) => String((p as { id?: unknown }).id)),
   );
   if (agentIds.size === 0) return undefined;
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
@@ -169,7 +169,7 @@ export function resolveTargetParticipant(activeParticipant: unknown, participant
   if (applications.length === 1) return applications[0];
   const sticky = stickyParticipantId === undefined
     ? undefined
-    : applications.find((p) => String((p as { id?: unknown }).id) === stickyParticipantId);
+    : [...applications, adhocModel].find((p) => p !== undefined && String((p as { id?: unknown }).id) === stickyParticipantId);
   return sticky ?? activeParticipant;
 }
 
