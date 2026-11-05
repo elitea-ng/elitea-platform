@@ -63,14 +63,16 @@ export function shouldDisableParticipantAttachments(
 export interface UseChatBoxAttachmentsGateParams {
   readonly activeParticipant: unknown;
   readonly participants: readonly unknown[] | undefined;
+  /** The agent the history last addressed, so the gate follows the same target the send does. */
+  readonly stickyParticipantId?: string | undefined;
   /** The agent/pipeline EDITOR surface computes this gate from its own (unsaved) form state — this hook stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }
 
-export function useChatBoxAttachmentsGate({ activeParticipant, participants, isAgentsPage }: UseChatBoxAttachmentsGateParams): boolean {
+export function useChatBoxAttachmentsGate({ activeParticipant, participants, stickyParticipantId, isAgentsPage }: UseChatBoxAttachmentsGateParams): boolean {
   const target = useMemo(
-    () => (isAgentsPage ? undefined : resolveTargetParticipant(activeParticipant, participants)),
-    [isAgentsPage, activeParticipant, participants],
+    () => (isAgentsPage ? undefined : resolveTargetParticipant(activeParticipant, participants, stickyParticipantId)),
+    [isAgentsPage, activeParticipant, participants, stickyParticipantId],
   );
   const gated = isVersionedEntity(target);
   // `null` when the target is not a versioned entity: the details hook throws

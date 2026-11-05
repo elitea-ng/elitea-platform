@@ -84,6 +84,16 @@ type Querier interface {
 	CountArtifactBucketObjects(ctx context.Context, bucketID int64) (int64, error)
 	CountAttachmentChunks(ctx context.Context, arg CountAttachmentChunksParams) (int64, error)
 	CountAuthUserRolesInMode(ctx context.Context, arg CountAuthUserRolesInModeParams) (int64, error)
+	//
+	// How many agent participants (`application` rows) the conversation holds.
+	//
+	// ADR-0050 phase 0 (issue 1602). An ad-hoc start with no `participant_id`
+	// resolves to the conversation's `dummy` participant (ResolveCurrentAdhocTurn
+	// accepts 0 and matches any dummy). In a conversation that holds several
+	// agents that is a silent misroute: the person wrote to "the agents" and a
+	// plain model answered. The start path reads this count and refuses such a
+	// start with `agent_target_required` instead of guessing.
+	CountConversationAgentParticipants(ctx context.Context, conversationUuid pgtype.UUID) (int32, error)
 	CountCurrentConfigurations(ctx context.Context, arg CountCurrentConfigurationsParams) (int64, error)
 	CountCurrentNotifications(ctx context.Context, arg CountCurrentNotificationsParams) (int64, error)
 	CountCurrentSharedConfigurations(ctx context.Context, arg CountCurrentSharedConfigurationsParams) (int64, error)

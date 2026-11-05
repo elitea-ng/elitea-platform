@@ -261,8 +261,9 @@ export function toChatMessages(
 }
 
 /**
- * The single agent participant a mobile send can address: exactly one
- * `application` participant. Multi-agent conversations are read-only here.
+ * The conversation's only `application` participant, or why there is none.
+ * A multi-agent send is addressed by `chatTarget` (picked, then the agent
+ * that last answered, then the first), not by this.
  */
 export function agentParticipant(detail: Pick<ConversationDetail, 'participants'> | undefined):
   | { ok: true; participantId: number; name: string | null }

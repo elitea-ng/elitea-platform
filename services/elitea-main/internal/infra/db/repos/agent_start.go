@@ -93,6 +93,7 @@ type currentAdhocStartQuerier interface {
 		context.Context,
 		sqlcgen.ResolveCurrentAdhocTurnParams,
 	) (sqlcgen.ResolveCurrentAdhocTurnRow, error)
+	CountConversationAgentParticipants(context.Context, pgtype.UUID) (int32, error)
 }
 
 type currentRegenerationQuerier interface {
@@ -858,6 +859,20 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 				nesting, ok := tx.(currentApplicationNestingQuerier)
 				if !ok {
 					return errors.New("current application nesting query is unavailable")
+				}
+				if request.TargetParticipantID == 0 {
+					// ADR-0050 phase 0 (issue 1602): no target names the
+					// conversation's plain model only when no more than one
+					// agent sits in it. With several agents the person wrote
+					// to the agents, and answering from the model would be a
+					// silent misroute.
+					agents, countErr := queries.CountConversationAgentParticipants(ctx, conversationUUID)
+					if countErr != nil {
+						return fmt.Errorf("count conversation agent participants: %w", countErr)
+					}
+					if agents > 1 {
+						return agentexecutionapp.ErrAgentTargetRequired
+					}
 				}
 				row, queryErr := queries.ResolveCurrentAdhocTurn(
 					ctx,

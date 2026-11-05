@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countConversationAgentParticipants = `-- name: CountConversationAgentParticipants :one
+SELECT COUNT(*)::integer AS agent_participants
+FROM chat_conversations AS conversation
+JOIN chat_participant_mapping AS mapping
+  ON mapping.conversation_id = conversation.id
+JOIN chat_participants AS participant
+  ON participant.id = mapping.participant_id
+ AND participant.entity_name = 'application'
+WHERE conversation.uuid = $1::uuid
+`
+
+// How many agent participants (`application` rows) the conversation holds.
+//
+// ADR-0050 phase 0 (issue 1602). An ad-hoc start with no `participant_id`
+// resolves to the conversation's `dummy` participant (ResolveCurrentAdhocTurn
+// accepts 0 and matches any dummy). In a conversation that holds several
+// agents that is a silent misroute: the person wrote to "the agents" and a
+// plain model answered. The start path reads this count and refuses such a
+// start with `agent_target_required` instead of guessing.
+func (q *Queries) CountConversationAgentParticipants(ctx context.Context, conversationUuid pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countConversationAgentParticipants, conversationUuid)
+	var agent_participants int32
+	err := row.Scan(&agent_participants)
+	return agent_participants, err
+}
+
 const currentConversationResponseSettling = `-- name: CurrentConversationResponseSettling :one
 SELECT EXISTS (
     SELECT 1

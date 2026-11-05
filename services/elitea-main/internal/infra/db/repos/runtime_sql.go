@@ -183,6 +183,13 @@ func (e pgxExecutor) ResolveCurrentAdhocTurn(
 	return sqlcgen.New(e.queryer).ResolveCurrentAdhocTurn(ctx, arg)
 }
 
+func (e pgxExecutor) CountConversationAgentParticipants(
+	ctx context.Context,
+	conversationUUID pgtype.UUID,
+) (int32, error) {
+	return sqlcgen.New(e.queryer).CountConversationAgentParticipants(ctx, conversationUUID)
+}
+
 func (e pgxExecutor) CurrentConversationResponseSettling(
 	ctx context.Context,
 	conversationUUID pgtype.UUID,

@@ -6061,7 +6061,8 @@ components:
         `project_skill_name_conflict`, `project_skill_unknown`,
         `project_skills_forbidden`,
         `agent_authorization_already_resolved`,
-        `agent_output_limit_already_resolved`, `unsupported_agent_execution`)
+        `agent_output_limit_already_resolved`, `unsupported_agent_execution`,
+        `agent_target_required`)
         and a message otherwise; the idempotency conflict is a 409 whose
         `error` is the message "Agent execution request conflicts with an
         existing turn".
@@ -26453,7 +26454,10 @@ paths:
         '422':
           description: >-
             `unsupported_agent_execution`: this turn cannot run on the current
-            execution path; or a refused skill pick: `project_skills_limit`
+            execution path; or `agent_target_required`: an
+            `agent.execute.adhoc.v1` start with no `participant_id` in a
+            conversation that holds more than one agent (pick the agent, or
+            name the model participant explicitly); or a refused skill pick: `project_skills_limit`
             (more than five skills in the turn), `project_skills_too_large`
             (more than 64 KiB of skill instructions) or
             `project_skill_name_conflict` (a picked skill shares its name with a
