@@ -6,7 +6,7 @@
 //! ref, type, send a key chord, capture a window or region, and wait for a
 //! condition.
 //!
-//! - [`MacDriver`] (macOS only) is built on the vendored agent-desktop
+//! - `MacDriver` (macOS only) is built on the vendored agent-desktop
 //!   `core` and `macos` crates (`libs/rust/vendor/agent-desktop`). No vendor
 //!   type crosses the trait.
 //! - [`Unsupported`] is the driver of every other OS; every call fails with
@@ -48,7 +48,7 @@ pub use model::{
 };
 pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord};
 
-/// The driver of this OS: [`MacDriver`] on macOS, [`Unsupported`] elsewhere.
+/// The driver of this OS: `MacDriver` on macOS, [`Unsupported`] elsewhere.
 #[must_use]
 pub fn default_driver() -> Box<dyn DesktopDriver> {
     #[cfg(target_os = "macos")]
