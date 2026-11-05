@@ -248,6 +248,7 @@ export function planRouteCatalogues(sharedEn, desktopEn, routeCatalogues) {
 const DESKTOP_ONLY_PREFIXES = [
   'src/entries/desktop/',
   'src/features/workspace/',
+  'src/features/workspace-browser/',
   'src/features/workspace-handoff/',
   'src/features/workspace-hooks/',
   'src/features/workspace-index/',

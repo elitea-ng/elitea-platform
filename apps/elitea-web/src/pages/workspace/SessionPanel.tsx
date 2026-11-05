@@ -22,6 +22,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { ChangedFilesCard, plan } from '@/features/workspace';
+import { BrowserPane, useBrowserPane, useBrowserPanes } from '@/features/workspace-browser';
 import type { AppIpc } from '@/shared/desktop/appEvents';
 import { InspectorTab } from '@/shared/desktop/inspectorSlot';
 import type { PlanView } from '@/shared/desktop/planIpc';
@@ -57,6 +58,8 @@ export interface SessionPanelProps {
   planMode: boolean;
   /** The latest model call's context occupancy (the Context tab); absent before one reported it, and for the cloud copy. */
   context?: ContextMeter | undefined;
+  /** The thread's conversation (empty for a new thread): its browser pane, when open, is a tab. */
+  conversationId?: string;
 }
 
 function decisionLabel(decision: ApprovalDecision): string {
@@ -198,6 +201,17 @@ function contextTitle(meter: ContextMeter | undefined): string {
   return meter === undefined ? title : t('workspace.panel.contextPercent', '{{title}} · {{percent}}%', { title, percent: contextBreakdown(meter).percent });
 }
 
+/** Browser (⌘⇧B, ADR-0048): offered while the person has the thread's pane open; it fills the tab, unpadded. */
+function BrowserTab({ threadId, subject }: { readonly threadId: string; readonly subject: string }): React.JSX.Element | null {
+  const open = useBrowserPane(threadId).open;
+  if (!open) return null;
+  return (
+    <InspectorTab id="browser" title={t('workspace.panel.browser', 'Browser')} subject={subject}>
+      <BrowserPane threadId={threadId} onClose={() => useBrowserPanes.getState().update(threadId, { open: false })} />
+    </InspectorTab>
+  );
+}
+
 /** A tab's body: scrolls on its own, padded like the rest of the inspector. */
 function TabBody({ children }: { children: React.ReactNode }): React.JSX.Element {
   return <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>{children}</Box>;
@@ -249,6 +263,7 @@ export function SessionInspector(props: SessionPanelProps): React.JSX.Element {
           </Suspense>
         </TabBody>
       </InspectorTab>
+      {props.conversationId !== undefined && props.conversationId !== '' && <BrowserTab threadId={props.conversationId} subject={subject} />}
       {props.hasIndex && (
         <InspectorTab id="index" title={t('workspace.panel.index', 'Index')} subject={subject}>
           <TabBody>

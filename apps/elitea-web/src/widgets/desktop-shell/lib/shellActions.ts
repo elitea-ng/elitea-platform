@@ -14,6 +14,8 @@ export type ShellAction =
   | { type: 'toggle_sidebar' }
   | { type: 'toggle_changes' }
   | { type: 'toggle_plan' }
+  /** ⌘⇧B: the thread's browser pane (ADR-0048). */
+  | { type: 'toggle_browser' }
   /** Thread / Folder menu: the session on screen acts (`SessionActions`). */
   | { type: 'send_to_cloud' | 'open_in_chat' | 'choose_agent' | 'index_settings' | 'handoff_settings' }
   /** The palette's "Create agent…": the builder of the thread on screen (ADR-0037). */
@@ -32,7 +34,7 @@ export type ShellAction =
   /** Files (not a folder) were dropped on the window: images join the composer's message, anything else is told. */
   | { type: 'files_dropped'; paths: string[] };
 
-const PLAIN_COMMANDS = new Set<string>(['new_thread', 'settings', 'command_palette', 'toggle_sidebar', 'toggle_changes', 'back', 'forward', 'send_to_cloud', 'open_in_chat', 'toggle_plan', 'choose_agent', 'index_settings', 'handoff_settings']);
+const PLAIN_COMMANDS = new Set<string>(['new_thread', 'settings', 'command_palette', 'toggle_sidebar', 'toggle_changes', 'back', 'forward', 'send_to_cloud', 'open_in_chat', 'toggle_plan', 'toggle_browser', 'choose_agent', 'index_settings', 'handoff_settings']);
 
 const workspaceIdOf = (args: unknown): string | undefined => {
   const id = (args as { workspace_id?: unknown } | undefined)?.workspace_id;
@@ -77,13 +79,20 @@ interface KeyLike {
   shiftKey: boolean;
 }
 
+/** ⌘⇧B, the browser pane; every other ⌘⇧ chord is the page's. */
+function shiftedShortcut(event: KeyLike): ShellAction | undefined {
+  return !event.altKey && event.key.toLowerCase() === 'b' ? { type: 'toggle_browser' } : undefined;
+}
+
 /**
  * The shell's shortcuts: ⌘K palette, ⌘N new thread, ⌘O open folder,
- * ⌘\ sidebar, ⌘⌥\ changes panel, ⌘, settings (Ctrl on Windows/Linux).
- * `code` for the backslash: with ⌥ held, macOS changes the produced `key`.
+ * ⌘\ sidebar, ⌘⌥\ changes panel, ⌘⇧B browser pane, ⌘, settings (Ctrl on
+ * Windows/Linux). `code` for the backslash: with ⌥ held, macOS changes the
+ * produced `key`.
  */
 export function actionForShortcut(event: KeyLike): ShellAction | undefined {
-  if (!(event.metaKey || event.ctrlKey) || event.shiftKey) return undefined;
+  if (!(event.metaKey || event.ctrlKey)) return undefined;
+  if (event.shiftKey) return shiftedShortcut(event);
   if (event.code === 'Backslash') return { type: event.altKey ? 'toggle_changes' : 'toggle_sidebar' };
   if (event.altKey) return undefined;
   switch (event.key.toLowerCase()) {

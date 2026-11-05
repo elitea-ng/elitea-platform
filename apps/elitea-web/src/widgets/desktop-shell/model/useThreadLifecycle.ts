@@ -26,6 +26,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { conversationApi } from '@/entities/conversation';
 import { useArchiveConversation } from '@/features/chat-conversation-list';
 import { threadNames, useWorkspaceIpc } from '@/features/workspace';
+import { forgetThreadBrowser, useBrowserHost } from '@/features/workspace-browser';
 import { RemoveWorktreeError, useRemoveWorktree, type WorktreeRef } from '@/features/workspace-worktrees';
 import { getListConversationsQueryKey } from '@/shared/api/generated/chat/chat';
 import { archiveLocalThread, LOCAL_THREADS_KEY } from '@/shared/desktop/archivedThreads';
@@ -83,6 +84,7 @@ export function useThreadLifecycle(target: LocalThreadTarget, where: Where): Thr
   const queryClient = useQueryClient();
   const workspaceIpc = useWorkspaceIpc();
   const removeWorktree = useRemoveWorktree();
+  const browser = useBrowserHost();
   const projectId = target.projectId === null ? undefined : String(target.projectId);
   const { archive: archiveConversation } = useArchiveConversation({ projectId, removeRow: () => undefined, toastError: notify });
   const [ask, setAsk] = useState<LifecycleAsk>(null);
@@ -134,6 +136,8 @@ export function useThreadLifecycle(target: LocalThreadTarget, where: Where): Thr
     setBusy(true);
     if (!(await archiveConversation({ id: target.conversationId }))) return close();
     archiveLocalThread(target.conversationId);
+    // Archive deletes the thread's browser site data too (ADR-0048 decision 2).
+    await forgetThreadBrowser(browser.ipc, target.conversationId);
     await finish(withWorktree);
   };
 
@@ -150,6 +154,7 @@ export function useThreadLifecycle(target: LocalThreadTarget, where: Where): Thr
     // The host's stored history goes with it; a host that has none (or is gone) leaves nothing behind.
     await workspaceIpc?.deleteThreadHistory(target.workspaceId, target.conversationId).catch(() => 0);
     threadNames.forget(target.workspaceId, target.conversationId);
+    await forgetThreadBrowser(browser.ipc, target.conversationId);
     void queryClient.invalidateQueries({ queryKey: FOLDER_LIST_KEY });
     void queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey(projectId).slice(0, 1) });
     await finish(withWorktree);

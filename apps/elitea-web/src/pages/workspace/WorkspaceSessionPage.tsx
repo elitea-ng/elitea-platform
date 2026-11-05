@@ -25,6 +25,7 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
 import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
+import { BrowserDownloadCards, useBrowserEvents } from '@/features/workspace-browser';
 import { HooksProposals } from '@/features/workspace-hooks';
 import { useHasIndexHost } from '@/features/workspace-index';
 import { McpProposals } from '@/features/workspace-mcp';
@@ -50,6 +51,7 @@ import { useIdleCompacted, withIdleCompaction, type IdleCompacted } from './useI
 import { useCloudChat } from './useCloudChat';
 import { useSessionFork } from './useForkThread';
 import { useAgentSkills } from './useAgentSkills';
+import { useBrowserToggle } from './useBrowserToggle';
 import { useLocalCodingAgent } from './useLocalCodingAgent';
 import { useStickToBottom } from './useStickToBottom';
 import { useSessionMenuActions } from './useSessionMenuActions';
@@ -103,6 +105,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
 
   useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index'), createAgent: () => setCreateAgentOpen(true) });
+  useBrowserEvents();
+  useBrowserToggle(conversationId);
   const forking = useSessionFork({ ipc, workspaceId: workspace.id, projectId, conversationId, offLaptop: handoff.offLaptop });
   const queryClient = useQueryClient();
   // ⋯ ▸ Create Agent… and the palette's "Create agent…" (ADR-0037).
@@ -159,6 +163,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
+              <BrowserDownloadCards threadId={conversationId} />
               </>
             )}
           </Box>
@@ -181,6 +186,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         plan={session.plan}
         planMode={commands.planMode}
         context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
+        conversationId={conversationId}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
