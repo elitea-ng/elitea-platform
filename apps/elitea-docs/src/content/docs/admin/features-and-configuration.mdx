@@ -64,6 +64,44 @@ Web push also needs these items. When one is missing, web push is off and the sw
 Main sends the notification ids and the outcome only, never a message text. Each send is encrypted for one browser (RFC 8291) and signed with the install's key (RFC 8292). A push service that answers 404 or 410 removes that subscription. A push service that refuses the key (401 or 403) drops that send; three refusals in a row remove the subscription. Main tries other failures again with a longer wait each time, for at most 24 hours. A person keeps at most 10 browsers.
 </Accordion>
 
+<Accordion title="Native client policy (editable here)">
+What this deployment requires of its mobile and desktop apps. The policy goes out with every token an app receives, so a change reaches signed-in devices within one access-token lifetime. The apps enforce the device settings; the server refuses app versions below the minimum. The section needs the `configuration.native_clients` permission.
+
+The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `allow_screenshots`, `offline_retention_days`, `offline_max_mb`, `offline_attachments`, `min_client_version`, `allow_share_out`, `allow_share_in`, `allow_cloud_stt`, `notification_preview`, `allow_notification_actions` and `allow_system_surfaces`.
+
+**Local work** (the desktop app runs agents on the user's machine). Every key but the first shows only while **Allow Local Work** is on:
+
+| Key | Default | Effect |
+| --- | --- | --- |
+| `local_work_allowed` | Off | Local work at all. When off, the server refuses every local turn. |
+| `local_work_shell` | On | Local turns may run shell commands. |
+| `local_work_max_sandbox_mode` | `workspace-write` | The least confined sandbox a command may use: `read-only`, `workspace-write` or `full-access`. |
+| `local_work_network` | Off | Sandboxed commands may reach the network. |
+| `local_work_command_allow`, `local_work_command_deny`, `local_work_path_deny` | Empty | Command and path patterns, at most 200 of 512 bytes each. A deny wins. |
+| `local_work_local_mcp` | Off | People may add MCP servers that run on their machine. |
+| `local_work_local_index` | On | The app may index a workspace folder on the device. |
+| `local_work_cloud_sync` | Off | A workspace folder may be synced to an artifact bucket. |
+| `local_work_memory_write` | On | A local turn may save to the user's cloud memory. |
+| `local_work_cloud_handoff` | Off | A Local work thread may be sent to the cloud executor. |
+| `local_work_index_local_embeddings`, `local_work_index_remote_embeddings`, `local_work_index_model_mirror_url` | On, Off, empty | How a local index may be embedded. See [Desktop local index](/how-tos/indexing/desktop-local-index). |
+| `local_work_web`, `local_work_host_intel` | Off | A local turn may use the Web Search and Host Intelligence toolkits. |
+| `local_work_computer_use` | Off | A local turn may see and use the user's other applications (macOS, through the accessibility interface). |
+| `local_work_computer_use_apps_allow` | Empty | When not empty, the only applications computer use may touch. |
+| `local_work_computer_use_apps_deny` | Empty | Applications computer use never touches, added to the built-in list. |
+
+**Computer use.** Turning `local_work_computer_use` on lets people turn it on for their own device. It is still off on each device until the person turns it on in Settings and grants the macOS Accessibility permission. The agent then asks per application: once to see an app, and again to use it. The person can allow an app for one thread or always. The agent asks every time before an action that sends, deletes, buys, pays, signs or submits, and it never remembers that answer. In plan mode the agent can only look. A scheduled or other unattended run never acts on an application without a person at the machine: the request waits for an answer, then is declined.
+
+The app lists take bundle ids, such as `com.apple.mail`. A prefix such as `com.example.*` covers every application of that vendor. Each list holds at most 200 entries of at most 255 bytes. The save refuses anything else. A deny entry wins over an allow entry. The app always adds its own deny list, and no policy removes it:
+
+- Elitea itself.
+- Password managers: Keychain Access, Passwords, 1Password, Bitwarden, KeePassXC, LastPass, Enpass and Proton Pass.
+- Terminals: Terminal, iTerm2, Warp, Ghostty, Alacritty, kitty, WezTerm, Hyper and Tabby. The agent has its own sandboxed shell, and a terminal would bypass that sandbox.
+- Script Editor, Automator and Shortcuts.
+- The login window and the system's password prompts.
+- Screen Time.
+- The security panes of System Settings: Privacy & Security, Touch ID & Password, Users & Groups, Passwords, Lock Screen, and Login Items & Extensions.
+</Accordion>
+
 <Accordion title="Authentication, LLM Proxy, MCP Servers, Branding (dedicated pages)">
 These sections carry credentials or need a row-editor shape a flat form cannot express, so each is a page of its own: see [Authentication](/admin/authentication), [LLM proxy](/admin/llm-proxy), and [Branding](/admin/branding). MCP Servers configures the pre-built MCP server catalogue; see the MCP integration guides for what that catalogue offers.
 </Accordion>
