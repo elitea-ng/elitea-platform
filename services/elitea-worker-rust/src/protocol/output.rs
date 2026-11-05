@@ -848,7 +848,7 @@ pub(crate) const FANOUT_MEMBER_FAILED_UPSTREAM_CODE: &str = "graph.fanout.member
 
 /// FU-288: the chat-visible text for [`RuntimeFailureKind::FanoutMemberFailed`].
 /// Main recognizes this exact text on `PIPELINE_TOOL_FAILED`.
-pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details for the failed item, and share the support reference with your administrator.";
+pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details to see the failed item.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
@@ -1856,6 +1856,12 @@ mod continuation_failure_tests {
         assert_eq!(error.safe_message, FANOUT_MEMBER_FAILED_MESSAGE);
         assert!(!error.retryable);
         assert_eq!(canonical_runtime_failure(&error), Some(kind));
+        // Main refuses a failure frame whose safe message exceeds 256 bytes.
+        assert!(
+            error.safe_message.len() <= 256,
+            "{} bytes",
+            error.safe_message.len()
+        );
     }
 
     /// ADR-0041 decision 3: each cap's upstream code is its own registered,

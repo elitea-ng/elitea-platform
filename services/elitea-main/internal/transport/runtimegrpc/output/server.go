@@ -1158,7 +1158,7 @@ const childInputTypeSafeMessage = "The pipeline stopped because a mapped child i
 
 // fanoutMemberFailedSafeMessage is the Worker's registered text for a fan-out
 // (Map item or Parallel branch) that failed under On Error `stop` (FU-288).
-const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details for the failed item, and share the support reference with your administrator."
+const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details to see the failed item."
 
 // The budget scope that refused a model call (#6732). The gateway names the
 // scope in its 402 refusal (error.code insufficient_quota for the project

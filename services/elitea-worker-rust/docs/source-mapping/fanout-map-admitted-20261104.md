@@ -197,6 +197,10 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
     (`W/protocol/output.rs`, `FANOUT_MEMBER_FAILED_MESSAGE`). Main admits exactly that message for that code
     (`M/internal/transport/runtimegrpc/output/server.go`, `fanoutMemberFailedSafeMessage`); any other text under
     the code is still replaced by the generic tool-failure text.
+  - The first message was 257 bytes. Main refused that terminal frame (a failure frame's safe message is at most 256
+    bytes), so the run never settled; the fanpar browser re-run found it. The message is now 203 bytes, and both
+    sides test the bound: the Worker registry test, and a Main test that publishes the frame through the output
+    server and runs the application's own frame validation on what was ingested.
   - The message is fixed, so it does not name the item: Main admits registered text only. The item and its error
     code are in Execution details.
   - No contract or envelope change. A failure inside a fan-out member stays its branch outcome
@@ -204,7 +208,8 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
   - Proven by `a_map_stopped_by_a_failed_item_ends_the_run_with_readable_chat_text`,
     `a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_text`,
     `fanout_member_failure_restores_its_actionable_message` (Worker) and
-    `TestFanoutMemberFailureShowsItsReadableText` (Main: exact text admitted; extra text or another code refused).
+    `TestFanoutMemberFailureShowsItsReadableText` (Main: exact text admitted; extra text or another code refused) and
+    `TestOutputServerAcceptsFanoutMemberFailureFrame` (Main: the frame is accepted and validates).
 - Cancellation, deadline and lease loss are the shared node's (Parallel tests cited in the coverage table).
 - A join that cannot land is refused at save time, by name (`a_map_join_is_checked_against_its_destination_reducer_at_save_time`).
 - **Concurrent saved-agent items (found by the fanpar browser pass, fixed in this PR).**
