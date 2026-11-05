@@ -37,7 +37,7 @@ use crate::error::BrowserError;
 use crate::frame;
 #[cfg(doc)]
 use crate::snapshot::SnapshotSlot;
-use crate::snapshot::{MAX_NAME_CHARS, Snapshot};
+use crate::snapshot::{MAX_NAME_CHARS, Snapshot, collapse, cut_url};
 
 /// Where the page is after a call.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -268,11 +268,10 @@ async fn run(driver: &dyn BrowserDriver, call: BrowserCall) -> Result<ToolOutput
 
 /// The `# url` and `# title` lines.
 fn page_header(url: &str, title: &str) -> String {
-    let title: String = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    let title: String = title.chars().take(MAX_NAME_CHARS).collect();
+    let title = collapse(title, MAX_NAME_CHARS);
     format!(
         "# url {}\n# title {}\n",
-        Value::String(url.to_owned()),
+        Value::String(cut_url(url)),
         Value::String(title)
     )
 }
@@ -300,5 +299,29 @@ mod tests {
             page_header("https://a.test/\"x", " Two\n words "),
             "# url \"https://a.test/\\\"x\"\n# title \"Two words\"\n"
         );
+    }
+
+    #[test]
+    fn header_cuts_the_url() {
+        let long = format!(
+            "https://a.test/{}",
+            "a".repeat(crate::snapshot::MAX_URL_CHARS)
+        );
+        let header = page_header(&long, "t");
+        let url_line = header.lines().next().unwrap();
+        let url: String = serde_json::from_str(url_line.trim_start_matches("# url ")).unwrap();
+        assert_eq!(url.chars().count(), crate::snapshot::MAX_URL_CHARS);
+        assert!(url.ends_with('…'));
+        let title: String = serde_json::from_str(
+            header
+                .lines()
+                .nth(1)
+                .unwrap()
+                .trim_start_matches("# title "),
+        )
+        .unwrap();
+        assert_eq!(title, "t");
+        let long_title = page_header("u", &"t".repeat(MAX_NAME_CHARS + 1));
+        assert!(long_title.contains(&format!("{}…\"", "t".repeat(MAX_NAME_CHARS - 1))));
     }
 }

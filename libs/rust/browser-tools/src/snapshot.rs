@@ -6,7 +6,8 @@
 //! same code on both hosts:
 //!
 //! 1. **Normalise.** Names and values have their whitespace collapsed and
-//!    are cut ([`MAX_NAME_CHARS`], [`MAX_VALUE_CHARS`]). A role that is not
+//!    are cut ([`MAX_NAME_CHARS`], [`MAX_VALUE_CHARS`]); the page URL is cut
+//!    to [`MAX_URL_CHARS`]. A role that is not
 //!    a plain token (`[a-z][a-z0-9-]*`) becomes `generic`: roles come from
 //!    the page's `role` attribute, and a page must not be able to write
 //!    grammar. So that the wrappers and text runs each engine adds do not
@@ -21,7 +22,8 @@
 //!      name (`- paragraph "Status: idle"`).
 //!
 //!    States are sorted and deduplicated. A [`State::Secure`] node loses its
-//!    value.
+//!    value and all its children (so no text inside it can show, or be
+//!    hoisted into its name).
 //! 2. **Budget.** Nodes are kept in document order up to `max_nodes`; the
 //!    rest are counted in [`Snapshot::omitted`].
 //! 3. **Refs.** Every kept node with an interactive role
@@ -61,6 +63,9 @@ use crate::error::BrowserError;
 pub const MAX_NAME_CHARS: usize = 200;
 /// Longest value kept, in characters.
 pub const MAX_VALUE_CHARS: usize = 500;
+/// Longest page URL kept in a header, in characters (longer ones end in
+/// `…`).
+pub const MAX_URL_CHARS: usize = 2048;
 
 /// The roles that get a ref.
 pub const INTERACTIVE_ROLES: &[&str] = &[
@@ -273,7 +278,7 @@ impl Snapshot {
         let nodes = budget.take(normalised);
         Self {
             id,
-            url: url.to_owned(),
+            url: cut_url(url),
             title: collapse(title, MAX_NAME_CHARS),
             nodes,
             omitted: total.saturating_sub(max_nodes),
@@ -565,11 +570,18 @@ fn normalise(mut node: Node, out: &mut Vec<Node>) {
             .map(|value| collapse(&value, MAX_VALUE_CHARS))
             .filter(|value| !value.is_empty())
     };
-    let mut children = prune_text(
-        &node.name,
-        normalise_all(std::mem::take(&mut node.children)),
-    );
-    let hoists = node.name.is_empty()
+    // A secure node keeps no children either: an engine may expose the
+    // field's content as a text child, and the hoist below would make it
+    // the name.
+    let secure = node.is_secure();
+    let raw_children = std::mem::take(&mut node.children);
+    let mut children = if secure {
+        Vec::new()
+    } else {
+        prune_text(&node.name, normalise_all(raw_children))
+    };
+    let hoists = !secure
+        && node.name.is_empty()
         && (node.actionable || !TRANSPARENT_ROLES.contains(&node.role.as_str()))
         && node.role != "text"
         && matches!(children.as_slice(), [only] if only.role == "text" && only.children.is_empty());
@@ -623,7 +635,7 @@ fn is_role_token(role: &str) -> bool {
 }
 
 /// Whitespace runs as one space, trimmed, cut to `max` characters.
-fn collapse(text: &str, max: usize) -> String {
+pub(crate) fn collapse(text: &str, max: usize) -> String {
     let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= max {
         return collapsed;
@@ -631,6 +643,19 @@ fn collapse(text: &str, max: usize) -> String {
     let mut cut: String = collapsed.chars().take(max - 1).collect();
     cut.push('…');
     cut
+}
+
+/// A page URL cut to [`MAX_URL_CHARS`], ending in `…` when cut. The page
+/// controls its URL (`history.pushState`), so it is bounded like a name.
+pub(crate) fn cut_url(url: &str) -> String {
+    match url.char_indices().nth(MAX_URL_CHARS - 1) {
+        Some((at, _)) if url[at..].chars().nth(1).is_some() => {
+            let mut cut = url[..at].to_owned();
+            cut.push('…');
+            cut
+        }
+        _ => url.to_owned(),
+    }
 }
 
 fn count(nodes: &[Node]) -> usize {
@@ -867,6 +892,46 @@ mod tests {
         assert!(is_secure_field(Some("tel"), Some("cc-csc")));
         assert!(!is_secure_field(Some("text"), Some("email")));
         assert!(!is_secure_field(Some("text"), Some("cc-name")));
+    }
+
+    #[test]
+    fn secure_nodes_keep_no_children() {
+        let roots = vec![
+            Node::new("textbox", "")
+                .state(State::Secure)
+                .children(vec![Node::new("text", "hunter2")]),
+            Node::new("textbox", "PIN")
+                .state(State::Secure)
+                .children(vec![
+                    Node::new("text", "4242"),
+                    Node::new("generic", "").children(vec![Node::new("text", "s3cret")]),
+                ]),
+        ];
+        let snapshot = Snapshot::build(id(), "u", "t", roots, 100);
+        let rendered = snapshot.render();
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(!rendered.contains("4242"), "{rendered}");
+        assert!(!rendered.contains("s3cret"), "{rendered}");
+        assert_eq!(
+            snapshot.render_tree(),
+            "- textbox [secure] [ref=e1]\n\
+             - textbox \"PIN\" [secure] [ref=e2]\n"
+        );
+    }
+
+    #[test]
+    fn urls_are_cut() {
+        let short = "https://a.test/".to_owned();
+        assert_eq!(cut_url(&short), short);
+        let exact = "x".repeat(MAX_URL_CHARS);
+        assert_eq!(cut_url(&exact), exact);
+        let long = format!("https://a.test/{}", "é".repeat(MAX_URL_CHARS));
+        let cut = cut_url(&long);
+        assert_eq!(cut.chars().count(), MAX_URL_CHARS);
+        assert!(cut.ends_with('…'));
+        assert!(long.starts_with(cut.trim_end_matches('…')));
+        let snapshot = Snapshot::build(id(), &long, "t", Vec::new(), 10);
+        assert_eq!(snapshot.url, cut);
     }
 
     #[test]

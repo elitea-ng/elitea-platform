@@ -422,10 +422,7 @@ impl Args<'_> {
     fn scroll(&self) -> Result<ScrollTarget, BrowserError> {
         let element = self.element("ref")?;
         let direction = self.string("direction")?;
-        let pixels = match self.0.get("pixels") {
-            None => None,
-            Some(_) => Some(self.bounded("pixels", 1, 10_000, 1)?),
-        };
+        let pixels = self.optional_u32("pixels", 1, 10_000)?;
         match (element, direction) {
             (Some(element), None) if pixels.is_none() => Ok(ScrollTarget::Element(element)),
             (None, Some(direction)) => Ok(ScrollTarget::Page {
@@ -440,7 +437,7 @@ impl Args<'_> {
                         ));
                     }
                 },
-                pixels: pixels.and_then(|pixels| u32::try_from(pixels).ok()),
+                pixels,
             }),
             _ => Err(BrowserError::invalid(
                 "give ref, or direction (with optional pixels), not both",
@@ -510,6 +507,22 @@ impl Args<'_> {
                 })?,
         };
         usize::try_from(value).map_err(|_| BrowserError::invalid(format!("{name} is too large")))
+    }
+
+    /// An optional integer from `min` to `max`; absent or `null` is `None`.
+    fn optional_u32(&self, name: &str, min: u32, max: u32) -> Result<Option<u32>, BrowserError> {
+        let value = match self.0.get(name) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        value
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| (min..=max).contains(value))
+            .map(Some)
+            .ok_or_else(|| {
+                BrowserError::invalid(format!("{name} must be an integer from {min} to {max}"))
+            })
     }
 
     fn element(&self, name: &str) -> Result<Option<ElementRef>, BrowserError> {
@@ -737,6 +750,36 @@ mod tests {
             BrowserCall::Scroll(ScrollTarget::Page {
                 direction: Direction::Down,
                 pixels: Some(300)
+            })
+        );
+        for bad in [
+            json!(0),
+            json!(10_001),
+            json!(u64::MAX),
+            json!(-1),
+            json!(1.5),
+            json!("9"),
+        ] {
+            let scroll = BrowserCall::parse(
+                "browser_scroll",
+                &json!({"direction": "down", "pixels": bad}),
+            );
+            assert_eq!(
+                scroll.unwrap_err().code(),
+                ErrorCode::InvalidArgument,
+                "pixels {bad}"
+            );
+        }
+        let null = BrowserCall::parse(
+            "browser_scroll",
+            &json!({"direction": "up", "pixels": null}),
+        )
+        .unwrap();
+        assert_eq!(
+            null,
+            BrowserCall::Scroll(ScrollTarget::Page {
+                direction: Direction::Up,
+                pixels: None
             })
         );
     }

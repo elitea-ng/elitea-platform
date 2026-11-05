@@ -237,9 +237,7 @@ type CallResult = Result<Value, String>;
 async fn call(driver: &dyn BrowserDriver, name: &str, arguments: &Value) -> CallResult {
     let mut result = dispatch(driver, name, arguments).await.result().clone();
     if result["code"] == ErrorCode::RateLimited.as_str() {
-        // The kit has no runtime of its own to sleep on; it runs in a
-        // driver's test, where blocking for the window is harmless.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
+        sleep(std::time::Duration::from_millis(1100)).await;
         result = dispatch(driver, name, arguments).await.result().clone();
     }
     if result["status"] == "ok" {
@@ -247,6 +245,40 @@ async fn call(driver: &dyn BrowserDriver, name: &str, arguments: &Value) -> Call
     } else {
         Err(result.to_string())
     }
+}
+
+/// Wait `duration` without blocking the executor. The crate links no
+/// runtime, so the timer is a thread that wakes the task when it is done.
+async fn sleep(duration: std::time::Duration) {
+    use std::sync::{Arc, Mutex};
+    use std::task::{Poll, Waker};
+
+    #[derive(Default)]
+    struct Shared {
+        done: bool,
+        waker: Option<Waker>,
+    }
+    let shared = Arc::new(Mutex::new(Shared::default()));
+    let timer = Arc::clone(&shared);
+    std::thread::spawn(move || {
+        std::thread::sleep(duration);
+        let waker = timer.lock().ok().and_then(|mut state| {
+            state.done = true;
+            state.waker.take()
+        });
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    });
+    std::future::poll_fn(|context| match shared.lock() {
+        Ok(mut state) if !state.done => {
+            state.waker = Some(context.waker().clone());
+            Poll::Pending
+        }
+        // Done, or the timer thread panicked holding the lock: stop waiting.
+        _ => Poll::Ready(()),
+    })
+    .await;
 }
 
 fn expect_code(result: &CallResult, code: ErrorCode) -> Result<(), String> {
@@ -268,7 +300,9 @@ async fn snapshot(driver: &dyn BrowserDriver) -> Result<(Snapshot, String), Stri
     let result = call(driver, spec::BROWSER_SNAPSHOT, &json!({})).await?;
     let raw = result.to_string();
     let content = result["content"].as_str().unwrap_or_default();
-    let (inner, _) = frame::unframe(content).ok_or("content is not one nonce frame")?;
+    let (inner, nonce) = frame::unframe(content).ok_or("content is not one nonce frame")?;
+    // The nonce is random hex and may contain a secret's digits ("737").
+    let raw = raw.replace(nonce, "");
     let snapshot = Snapshot::parse(inner).map_err(|error| format!("not the grammar: {error}"))?;
     if result["snapshot"] != snapshot.id.as_str() {
         return Err("the snapshot field is not the rendered id".to_owned());
@@ -296,9 +330,10 @@ fn no_secrets(raw: &str) -> Result<(), String> {
 
 async fn text_mode(driver: &dyn BrowserDriver, fixture: &Fixture) -> Result<(), String> {
     let result = call(driver, spec::BROWSER_SNAPSHOT, &json!({ "mode": "text" })).await?;
-    no_secrets(&result.to_string())?;
     let content = result["content"].as_str().unwrap_or_default();
-    let (inner, _) = frame::unframe(content).ok_or("content is not one nonce frame")?;
+    let (inner, nonce) = frame::unframe(content).ok_or("content is not one nonce frame")?;
+    // The nonce is random hex and may contain a secret's digits ("737").
+    no_secrets(&result.to_string().replace(nonce, ""))?;
     let title = format!("# title {}", Value::String(fixture.title.to_owned()));
     if !inner.lines().any(|line| line == title) {
         return Err(format!("no {title:?} line"));
@@ -529,6 +564,19 @@ async fn staleness(driver: &dyn BrowserDriver, config: &Config<'_>, report: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sleep_waits_without_blocking() {
+        let started = std::time::Instant::now();
+        let ticker = async {
+            // Runs on the same current-thread executor while the sleep waits.
+            tokio::task::yield_now().await;
+            std::time::Instant::now()
+        };
+        let (yielded_at, ()) = tokio::join!(ticker, sleep(std::time::Duration::from_millis(50)));
+        assert!(yielded_at.duration_since(started) < std::time::Duration::from_millis(50));
+        assert!(started.elapsed() >= std::time::Duration::from_millis(50));
+    }
 
     #[test]
     fn exposed_tools_must_be_the_contract() {
