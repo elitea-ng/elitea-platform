@@ -16,8 +16,8 @@ use std::time::Duration;
 use adk_rust::graph::Node as _;
 use adk_rust::graph::checkpoint::{Checkpointer, MemoryCheckpointer};
 use adk_rust::graph::{
-    Channel, Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, NodeOutput,
-    START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, CompiledGraph, ExecutionConfig, FunctionNode, GraphError, NodeContext,
+    NodeOutput, START, State, StateGraph, StateSchema,
 };
 use async_trait::async_trait;
 use elitea_agent_runtime::graph::fanout_budget::{MAX_CHILD_RESULT_BYTES, MAX_JOINED_RESULT_BYTES};
@@ -1279,4 +1279,69 @@ async fn a_refused_item_input_names_the_item() {
     );
     assert!(children.issued.lock().await.is_empty());
     assert!(runs.lock().unwrap().is_empty());
+}
+
+/// The Map node over [`ItemGraphs`] with `behavior`, executed directly so a
+/// test can give it a deadline.
+fn map_node(definition: MapDefinition, behavior: ItemBehavior) -> DurableParallelNode {
+    let checkpoint_factory: Arc<dyn ParallelChildCheckpointerFactory> =
+        Arc::new(ItemChildren::default());
+    let appender: Arc<dyn ParallelCheckpointAppender> = Arc::new(ParentRows::default());
+    let graphs = Arc::new(ItemGraphs {
+        behavior,
+        runs: Arc::default(),
+        in_flight: Arc::new(AtomicUsize::new(0)),
+        peak: Arc::new(AtomicUsize::new(0)),
+    });
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
+        checkpoint_factory,
+        graphs,
+        Arc::new(ParallelOccurrenceCheckpointer::new(appender)),
+    ));
+    DurableParallelNode::from_source(
+        FanoutSource::Map(MapSource::new(definition, WORKER_DIGEST).expect("Map source")),
+        runtime,
+    )
+}
+
+/// No silent hang (T-2A3): items whose event channel is full and never
+/// drained block in `send`; the node's deadline ends them and the node fails
+/// typed `deadline_exceeded`, never waiting forever.
+#[tokio::test]
+async fn items_blocked_on_a_full_channel_end_typed_at_the_deadline() {
+    let (sender, receiver) = tokio::sync::mpsc::channel::<u8>(1);
+    sender.try_send(0).expect("fill the channel");
+    let blocked = Arc::new(AtomicUsize::new(0));
+    let behavior: ItemBehavior = {
+        let (sender, blocked) = (sender.clone(), Arc::clone(&blocked));
+        Arc::new(move |_, _| {
+            let (sender, blocked) = (sender.clone(), Arc::clone(&blocked));
+            Box::pin(async move {
+                blocked.fetch_add(1, Ordering::SeqCst);
+                sender
+                    .send(1)
+                    .await
+                    .map_err(|_| GraphError::InvalidGraph("closed".into()))?;
+                Ok(json!("sent"))
+            })
+        })
+    };
+    let node = map_node(map_definition(3, 3, V2_CONTINUE), behavior)
+        .with_deadline(tokio::time::Instant::now() + Duration::from_millis(200));
+    let context = NodeContext::new(
+        HashMap::from([
+            ("items".to_owned(), json!(["a", "b", "c"])),
+            ("prefix".to_owned(), json!("frozen")),
+        ]),
+        ExecutionConfig::new("root-full-channel"),
+        0,
+    );
+    let error = tokio::time::timeout(Duration::from_secs(5), node.execute(&context))
+        .await
+        .expect("the deadline ends the node, it never hangs")
+        .err()
+        .expect("deadline failure");
+    assert!(error.to_string().contains("deadline_exceeded"), "{error}");
+    assert_eq!(blocked.load(Ordering::SeqCst), 3);
+    drop(receiver);
 }

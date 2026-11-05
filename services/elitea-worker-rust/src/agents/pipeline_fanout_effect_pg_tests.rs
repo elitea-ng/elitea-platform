@@ -5765,3 +5765,591 @@ async fn postgres_a_member_whose_paused_pipeline_has_no_row_is_refused_typed() {
     );
     db.pool.close().await;
 }
+
+/// T-2A3: one saved Agent node run as three concurrent Map items. The node has
+/// one nested-event channel; each item waits for it instead of failing, a
+/// paused item releases it so the next one starts, and all three pause with
+/// their own card, and the run parks. Answered in reverse order, the wake
+/// resumes every item with its own answer and the Map joins three successes. Production assembler, real
+/// PostgreSQL; before the fix two of the three items failed at start.
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One park-then-wake scenario, its two runs and their checks together.
+async fn postgres_map_saved_agent_items_run_concurrently_configured_and_all_pause() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Map saved-Agent PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let (platform, model_facade, captured) = gated_saved_runtime(
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_text_response("item done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("item done")),
+            TestModelGatewayOutcome::Response(pipeline_text_response("item done")),
+        ],
+        asking_agent(),
+    );
+    let connector = || -> Arc<dyn McpConnector> {
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        })
+    };
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  topics: {type: list, value: [alpha, beta, gamma]}\n  answer: str\n  joined: list\n  messages: list\nentry_point: ask_each\nnodes:\n  - id: ask_each\n    type: map\n    worker: asker\n    source: topics\n    item: topic\n    index: topic_index\n    outputs: [answer]\n    destination: joined\n    max_items: 3\n    max_concurrency: 3\n    on_error: continue\n    join: append\n    transition: END\n  - id: asker\n    type: agent\n    tool: release-agent\n    input: [topic]\n    input_mapping:\n      task: {type: variable, value: topic}\n    output: [answer]\n"
+    );
+    let (assembler, _) = assembler_on(
+        &db.pool,
+        (
+            Arc::clone(&platform),
+            Arc::clone(&model_facade),
+            captured.clone(),
+        ),
+        connector(),
+    );
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Map pipeline");
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("three undecided cards park the run");
+    assert_eq!(cards.len(), 3, "{cards:?}");
+    let members = cards
+        .iter()
+        .map(|card| {
+            card["fanout_v1"]["member"]
+                .as_str()
+                .expect("member")
+                .to_owned()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(members, ["0", "1", "2"].map(str::to_owned).into());
+    assert_eq!(model_requests(&captured), 3, "each item asked once");
+    // Answered last first.
+    for card in cards.iter().rev() {
+        assert_eq!(card["kind"], "ask_user", "{card}");
+        let member = card["fanout_v1"]["member"].as_str().expect("member");
+        ledger.decide(
+            card["interrupt_key"].as_str().expect("card key"),
+            "answer",
+            Some(&format!("answer-{member}")),
+        );
+    }
+    let mut wake = request;
+    wake.payload.user_input = super::super::request::UserInput::Text(String::new());
+    wake.payload.meta.insert(
+        crate::agents::graph::fanout_wake::FANOUT_WAKE_META_KEY.to_owned(),
+        json!({"schema": "elitea.pipeline.fanout-wake.v1",
+            "response_message_id": "10000000-0000-4000-8000-000000000043",
+            "decision_revision": 1,
+            "parked_execution_id": EXECUTION,
+            "parked_generation": GENERATION}),
+    );
+    let (assembler, _) = assembler_on(
+        &db.pool,
+        (platform, model_facade, captured.clone()),
+        connector(),
+    );
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(2))
+        .assemble(claim(&wake, 2))
+        .await
+        .expect("assemble the wake");
+    run_collecting(invocation)
+        .await
+        .expect("the wake resumes every answered item and the Map joins");
+    assert_eq!(model_requests(&captured), 6);
+    let resumed = captured
+        .lock()
+        .expect("captured model requests")
+        .iter()
+        .skip(3)
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+        .collect::<Vec<_>>();
+    for member in ["0", "1", "2"] {
+        assert!(
+            resumed
+                .iter()
+                .any(|body| body.contains(&format!("answer-{member}"))),
+            "item {member} resumed with its own answer"
+        );
+    }
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for (index, entry) in entries.iter().enumerate() {
+        assert_eq!(entry["index"], index, "{entries:?}");
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+    }
+    db.pool.close().await;
+}
+
+/// A Map of one saved Agent over `topics` at `concurrency`, landing `joined`.
+fn saved_agent_map_yaml(topics: &[String], concurrency: usize) -> String {
+    format!(
+        "state:\n  topics: {{type: list, value: [{}]}}\n  answer: str\n  joined: list\n  messages: list\nentry_point: ask_each\nnodes:\n  - id: ask_each\n    type: map\n    worker: asker\n    source: topics\n    item: topic\n    index: topic_index\n    outputs: [answer]\n    destination: joined\n    max_items: {}\n    max_concurrency: {concurrency}\n    on_error: continue\n    join: append\n    transition: END\n  - id: asker\n    type: agent\n    tool: release-agent\n    input: [topic]\n    input_mapping:\n      task: {{type: variable, value: topic}}\n    output: [answer]\n",
+        topics.join(", "),
+        topics.len(),
+    )
+}
+
+/// T-2A3: sixteen items of one saved Agent at concurrency 8 each run as their
+/// own invocation and complete. The model answers by the item's own topic, so
+/// an item whose request carried another item's input, or whose result landed
+/// under another index, fails the check: no state crosses items.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_sixteen_item_saved_agent_map_completes_without_cross_item_state() {
+    saved_agent_map_without_cross_item_state(16).await;
+}
+
+/// The same past Parallel's 16-member bound: a saved-Agent Map of 24 items
+/// gives every item its own member event scope (T-2A3; items 16 and up were
+/// refused `graph.invalid` before).
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_a_saved_agent_map_of_more_than_sixteen_items_completes_every_item() {
+    saved_agent_map_without_cross_item_state(24).await;
+}
+
+async fn saved_agent_map_without_cross_item_state(items: usize) {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Map saved-Agent PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..items)
+        .map(|index| format!("topic-q{index:02}x"))
+        .collect::<Vec<_>>();
+    let outcomes = topics
+        .iter()
+        .map(|topic| TestModelGatewayOutcome::ResponseForRequest {
+            marker: Box::leak(topic.clone().into_boxed_str()),
+            response: pipeline_text_response(&format!("answer for {topic}")),
+        })
+        .collect();
+    let (assembler, captured) = gated_assembler(
+        &db.pool,
+        outcomes,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        asking_agent(),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] =
+        json!(saved_agent_map_yaml(&topics, 8));
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Map pipeline");
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("every item completes and the Map joins");
+    assert!(cards.is_empty(), "{cards:?}");
+    let entries = joined(&db.pool).await.expect("joined entries");
+    let failed = entries
+        .iter()
+        .filter(|entry| entry["status"] != "succeeded")
+        .map(|entry| (entry["index"].clone(), entry["error"].clone()))
+        .collect::<Vec<_>>();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(model_requests(&captured), items);
+    for body in captured
+        .lock()
+        .expect("captured model requests")
+        .iter()
+        .map(|request| String::from_utf8_lossy(&request.body).into_owned())
+    {
+        let carried = topics
+            .iter()
+            .filter(|topic| body.contains(topic.as_str()))
+            .count();
+        assert_eq!(
+            carried, 1,
+            "one item's request carried exactly its own input"
+        );
+    }
+    assert_eq!(entries.len(), items, "{entries:?}");
+    for (index, (entry, topic)) in entries.iter().zip(&topics).enumerate() {
+        assert_eq!(entry["index"], index, "{entries:?}");
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+        assert_eq!(
+            entry["outputs"]["answer"],
+            format!("answer for {topic}"),
+            "{entries:?}"
+        );
+    }
+    db.pool.close().await;
+}
+
+/// T-2A3: a fixed Parallel with the same saved Agent in two branches running
+/// at once: both pause with their own card (each member its own invocation).
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_parallel_branches_of_the_same_saved_agent_both_pause_concurrently() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: set ELITEA_TEST_DATABASE_URL for the Parallel saved-Agent PostgreSQL proof"
+        );
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let (assembler, captured) = gated_assembler(
+        &db.pool,
+        vec![
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+            TestModelGatewayOutcome::Response(pipeline_ask_user_call_response()),
+        ],
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        asking_agent(),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] = json!(
+        "state:\n  left: str\n  right: str\n  joined: list\n  messages: list\nentry_point: gather\nnodes:\n  - id: gather\n    type: parallel\n    branches: [{id: left, node: ask_left}, {id: right, node: ask_right}]\n    max_concurrency: 2\n    wait: all\n    on_error: continue\n    output: [joined]\n    transition: END\n  - id: ask_left\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'Ask about the left side'}\n    output: [left]\n  - id: ask_right\n    type: agent\n    tool: release-agent\n    input_mapping:\n      task: {type: fixed, value: 'Ask about the right side'}\n    output: [right]\n"
+    );
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Parallel pipeline");
+    let (_, cards) = run_collecting(invocation)
+        .await
+        .expect("both branches pause and the run parks");
+    assert_eq!(model_requests(&captured), 2);
+    let members = cards
+        .iter()
+        .map(|card| {
+            card["fanout_v1"]["member"]
+                .as_str()
+                .expect("member")
+                .to_owned()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        members,
+        ["left", "right"].map(str::to_owned).into(),
+        "{cards:?}"
+    );
+    db.pool.close().await;
+}
+
+/// T-2A3 measurement (not a gate): a 64-item saved-Agent Map at `concurrency`
+/// through the production assembler. Run one per process under
+/// `/usr/bin/time -l` to compare peak resident memory and wall time.
+async fn measure_saved_agent_map(concurrency: usize) {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Map measurement");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..64)
+        .map(|index| format!("topic-q{index:02}x"))
+        .collect::<Vec<_>>();
+    let outcomes = topics
+        .iter()
+        .map(|topic| TestModelGatewayOutcome::ResponseForRequest {
+            marker: Box::leak(topic.clone().into_boxed_str()),
+            response: pipeline_text_response(&format!("answer for {topic}")),
+        })
+        .collect();
+    let (assembler, captured) = gated_assembler(
+        &db.pool,
+        outcomes,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        asking_agent(),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] =
+        json!(saved_agent_map_yaml(&topics, concurrency));
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let started = std::time::Instant::now();
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Map pipeline");
+    run_collecting(invocation).await.expect("the Map joins");
+    let elapsed = started.elapsed();
+    let entries = joined(&db.pool).await.expect("joined");
+    let failed = entries
+        .iter()
+        .filter(|entry| entry["status"] != "succeeded")
+        .map(|entry| entry["error"]["code"].to_string())
+        .collect::<Vec<_>>();
+    eprintln!("T2A3_MAP_FAILED {failed:?}");
+    assert_eq!(model_requests(&captured), 64);
+    assert_eq!(entries.len(), 64);
+    eprintln!(
+        "T2A3_MAP_MEASURE concurrency={concurrency} items=64 elapsed_ms={} per_item_ms={:.2}",
+        elapsed.as_millis(),
+        elapsed.as_secs_f64() * 1_000.0 / 64.0
+    );
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "measurement: run alone under /usr/bin/time -l"]
+async fn measure_a_64_item_saved_agent_map_at_concurrency_8() {
+    measure_saved_agent_map(8).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "measurement: run alone under /usr/bin/time -l"]
+async fn measure_a_64_item_saved_agent_map_at_concurrency_1() {
+    measure_saved_agent_map(1).await;
+}
+
+/// A saved Agent that delegates to a nested saved Agent (application 5,
+/// version 6, the tool `elitea_agent_5_v_6`).
+fn delegating_agent() -> Value {
+    let mut agent = effectful_agent();
+    agent["instructions"] = json!("Delegate the topic to the helper and report its answer.");
+    agent["tools"] = json!([{
+        "id": 46, "type": "application", "name": "helper-agent",
+        "description": "Answers one topic.", "author_id": 11,
+        "settings": {"application_id": 5, "application_version_id": 6},
+        "meta": {}, "created_at": "2026-08-21T10:00:00Z", "toolkit_name": "helper-agent",
+        "author": null, "agent_type": "agent", "online": null, "icon_meta": null,
+        "variables": [], "is_pinned": false, "indexes_count": null
+    }]);
+    agent
+}
+
+/// The nested saved Agent: no tools, answers in text.
+fn helper_agent() -> Value {
+    let mut agent = effectful_agent();
+    agent["instructions"] = json!("Answer the topic you are given.");
+    agent["tools"] = json!([]);
+    agent
+}
+
+/// The outer Agent calls the nested saved Agent once with `task`.
+fn nested_agent_call_response(call_id: &str, task: &str) -> Response<Body> {
+    let arguments = serde_json::to_string(&json!({"task": task})).expect("arguments");
+    let raw = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":{call_id:?},\"type\":\"function\",\"function\":{{\"name\":\"elitea_agent_5_v_6\",\"arguments\":{arguments:?}}}}}]}},\"finish_reason\":null}}]}}\n\ndata: {{\"choices\":[{{\"delta\":{{}},\"finish_reason\":\"tool_calls\"}}]}}\n\ndata: {{\"choices\":[],\"usage\":{{\"prompt_tokens\":3,\"completion_tokens\":2}}}}\n\ndata: [DONE]\n\n"
+    );
+    test_model_gateway_response(Body::new(Full::<Bytes>::from(raw)))
+}
+
+/// T-2A3: three concurrent Map items of a saved Agent that itself calls a
+/// nested saved Agent. The nested Agent was built once with the node's
+/// channel; inside each item its events go to that item's own channel. All
+/// three items complete with their own answers, and every nested event is
+/// projected under the item that ran it.
+#[tokio::test(flavor = "current_thread")]
+async fn postgres_map_items_of_a_saved_agent_with_a_nested_saved_agent_keep_their_own_events() {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Map nested-Agent PostgreSQL proof");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..3)
+        .map(|index| format!("topic-q{index:02}x"))
+        .collect::<Vec<_>>();
+    // Per topic, in order: the outer Agent calls the helper, the helper
+    // answers, the outer Agent reports. Each request carries its own topic.
+    let mut outcomes = Vec::new();
+    for (index, topic) in topics.iter().enumerate() {
+        let marker: &'static str = Box::leak(topic.clone().into_boxed_str());
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: nested_agent_call_response(&format!("call_item_{index}"), topic),
+        });
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("nested answer for {topic}")),
+        });
+        outcomes.push(TestModelGatewayOutcome::ResponseForRequest {
+            marker,
+            response: pipeline_text_response(&format!("outer answer for {topic}")),
+        });
+    }
+    let mut config = test_model_gateway_config();
+    config.response_header_timeout = Duration::from_secs(60);
+    let runtime = saved_runtime_on(
+        outcomes,
+        delegating_agent(),
+        Some(helper_agent()),
+        None,
+        config,
+    );
+    let (assembler, captured) = assembler_on(
+        &db.pool,
+        runtime,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] =
+        json!(saved_agent_map_yaml(&topics, 3));
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let mut invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Map pipeline");
+    invocation
+        .project_start(timestamp(1))
+        .expect("pipeline browser start");
+    let (mut run, mut projector, completion) = invocation.start().expect("pipeline start");
+    // Every frame that carries a nested answer, with its member tier ordinal.
+    let mut nested = Vec::new();
+    while let Some(event) = run.next_event().await.expect("the run streams") {
+        for frame in projector.project(&event).expect("projected frames") {
+            let text = String::from_utf8_lossy(&frame.content).into_owned();
+            if text.contains("nested answer for") {
+                let metadata: Value =
+                    serde_json::from_slice(&frame.response_metadata).unwrap_or_default();
+                nested.push((text, metadata["parent_agent_path"].clone()));
+            }
+        }
+    }
+    completion.select().await.expect("the Map completes");
+    assert_eq!(model_requests(&captured), 9);
+    assert!(
+        !nested.is_empty(),
+        "the nested Agents' answers stream to the run"
+    );
+    for (text, path) in &nested {
+        let topic = topics
+            .iter()
+            .position(|topic| text.contains(topic.as_str()))
+            .expect("the nested answer names its topic");
+        assert_eq!(
+            path[0]["sibling_ordinal"],
+            topic + 1,
+            "a nested event lands under the item that ran it: {text} {path}"
+        );
+    }
+    let entries = joined(&db.pool).await.expect("joined entries");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for (index, (entry, topic)) in entries.iter().zip(&topics).enumerate() {
+        assert_eq!(entry["index"], index, "{entries:?}");
+        assert_eq!(entry["status"], "succeeded", "{entries:?}");
+        assert_eq!(
+            entry["outputs"]["answer"],
+            format!("outer answer for {topic}"),
+            "{entries:?}"
+        );
+    }
+    db.pool.close().await;
+}
+
+/// T-2A3 measurement (not a gate): 64 items of one saved Agent whose model
+/// answers after a fixed 100 ms, on a multi-thread runtime. At concurrency 8
+/// the items overlap their model latency (about 8 x faster than one at a
+/// time); the wall time is the evidence that a Map runs one Agent in parallel.
+async fn measure_saved_agent_map_with_latency(concurrency: usize) {
+    let Ok(url) = crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL") else {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the Map latency measurement");
+        return;
+    };
+    let db = IsolatedPostgres::create(&url).await;
+    install_schema(&db.pool).await;
+    sqlx::raw_sql(CHECKPOINT_MIGRATION)
+        .execute(&db.pool)
+        .await
+        .expect("apply checkpoint migration");
+    let topics = (0..64)
+        .map(|index| format!("topic-q{index:02}x"))
+        .collect::<Vec<_>>();
+    let outcomes = topics
+        .iter()
+        .map(|_| TestModelGatewayOutcome::Delayed {
+            delay: Duration::from_millis(100),
+            response: pipeline_text_response("item done"),
+        })
+        .collect();
+    let (assembler, captured) = gated_assembler(
+        &db.pool,
+        outcomes,
+        Arc::new(PipelineMcpConnector {
+            connections: Arc::new(AtomicUsize::new(0)),
+            tool_calls: Arc::new(AtomicUsize::new(0)),
+            read_only: false,
+        }),
+        asking_agent(),
+    );
+    let mut request = request("continue");
+    request.payload.application["version_details"]["instructions"] =
+        json!(saved_agent_map_yaml(&topics, concurrency));
+    let ledger = crate::agents::graph::fanout_test_ledger::TestLedger::new();
+    let started = std::time::Instant::now();
+    let invocation = assembler
+        .with_fanout_decisions_for_tests(ledger.client(1))
+        .assemble(claim(&request, 1))
+        .await
+        .expect("assemble the Map pipeline");
+    run_collecting(invocation).await.expect("the Map joins");
+    let elapsed = started.elapsed();
+    assert_eq!(model_requests(&captured), 64);
+    let entries = joined(&db.pool).await.expect("joined");
+    assert_eq!(entries.len(), 64);
+    assert!(
+        entries.iter().all(|entry| entry["status"] == "succeeded"),
+        "{entries:?}"
+    );
+    eprintln!(
+        "T2A3_MAP_LATENCY concurrency={concurrency} items=64 model_latency_ms=100 elapsed_ms={}",
+        elapsed.as_millis()
+    );
+    db.pool.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement: model latency overlap"]
+async fn measure_64_saved_agent_items_with_model_latency_at_concurrency_8() {
+    measure_saved_agent_map_with_latency(8).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement: model latency overlap"]
+async fn measure_64_saved_agent_items_with_model_latency_at_concurrency_1() {
+    measure_saved_agent_map_with_latency(1).await;
+}

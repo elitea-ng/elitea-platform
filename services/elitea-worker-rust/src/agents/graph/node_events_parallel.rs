@@ -11,10 +11,13 @@ use crate::agents::graph::ParallelBranchExecution;
 use crate::agents::pipeline::scoped_applications::PipelineApplicationActivation;
 
 const MAX_BRANCH_THREADS: usize = 129;
-const MAX_FIXED_BRANCHES: usize = 16;
+/// Members of one activation of any fan-out family: a Map's 64 items, of
+/// which a Parallel's 16 fixed branches are a subset (each family bounds its
+/// own members where it is declared).
+const MAX_FANOUT_MEMBERS: usize = 64;
 const _: () = assert!(
     MAX_BRANCH_THREADS == crate::agents::graph::fanout_budget::MAX_CHILD_THREADS
-        && MAX_FIXED_BRANCHES == crate::agents::graph::fanout_budget::MAX_PARALLEL_BRANCHES
+        && MAX_FANOUT_MEMBERS == crate::agents::graph::fanout_budget::MAX_FANOUT_CHILDREN
 );
 
 pub(super) struct ParallelEventScope {
@@ -56,7 +59,7 @@ impl PipelineNodeEventSender {
         execution: &ParallelBranchExecution,
         parent: Option<PipelineNodeEventScope>,
     ) -> adk_rust::Result<Self> {
-        if self.parallel_scope.is_some() || execution.branch_ordinal() >= MAX_FIXED_BRANCHES {
+        if self.parallel_scope.is_some() || execution.branch_ordinal() >= MAX_FANOUT_MEMBERS {
             return Err(pipeline_node_event_channel_error());
         }
         let captured = PipelineNodeEventScope::from_state(execution.parent_event_scope_value())?;

@@ -78,6 +78,17 @@ impl<T: Send + 'static> Future for DrivenTask<T> {
                     if let Stage::Inline(work) = std::mem::replace(&mut self.stage, Stage::Done) {
                         #[cfg(test)]
                         tests::SPAWNED.with(|spawned| spawned.set(spawned.get() + 1));
+                        // A fan-out member's routed application channel
+                        // (a task local) continues with its work (T-2A3).
+                        let work: BoxedWork<T> =
+                            match crate::agents::application_tools::current_member_events() {
+                                Some(sender) => {
+                                    Box::pin(crate::agents::application_tools::with_member_events(
+                                        sender, work,
+                                    ))
+                                }
+                                None => work,
+                            };
                         self.stage = Stage::Owned(tokio::spawn(work));
                     }
                 }

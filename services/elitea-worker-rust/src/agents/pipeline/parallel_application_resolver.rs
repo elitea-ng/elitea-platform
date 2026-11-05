@@ -162,15 +162,32 @@ fn rebind_participant(
             events: events.clone(),
             display_name: display_name.clone(),
         },
+        // T-2A3: each fan-out member is its own invocation of the saved Agent,
+        // with its own event channel (a Map runs one node as N concurrent
+        // items, like LangGraph `Send`); the built Agent stays shared.
         NativePipelineApplicationParticipant::ScopedAgent {
             tool,
             scope,
             fingerprint,
-        } => NativePipelineApplicationParticipant::ScopedAgent {
-            tool: Arc::clone(tool),
-            scope: Arc::new(scope.with_parallel_events(events.clone())),
-            fingerprint: *fingerprint,
-        },
+            member,
+        } => {
+            let (tool, scope) = match (member, scope.applications.resume_coordinator()) {
+                (Some(member), Some(resume)) => {
+                    let (tool, projection, member_events) =
+                        member.bind(scope.applications.presentation_catalog(), resume);
+                    let scope =
+                        scope.for_member(events.clone(), Arc::new(projection), member_events);
+                    (tool, scope)
+                }
+                _ => (Arc::clone(tool), scope.with_parallel_events(events.clone())),
+            };
+            NativePipelineApplicationParticipant::ScopedAgent {
+                tool,
+                scope: Arc::new(scope),
+                fingerprint: *fingerprint,
+                member: member.clone(),
+            }
+        }
         NativePipelineApplicationParticipant::Agent(_) => {
             return Err(ApplicationExecutionError::Unavailable);
         }

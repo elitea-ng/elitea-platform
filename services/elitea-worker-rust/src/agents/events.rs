@@ -412,7 +412,9 @@ pub(crate) struct OrdinaryProjectionInput {
 /// participant retain distinct provider call IDs and UI accordions.
 #[derive(Clone, Default)]
 pub(crate) struct ApplicationToolPresentationCatalog {
-    by_tool_name: BTreeMap<String, ApplicationToolPresentation>,
+    /// Shared copy-on-write: each Map item's own invocation carries the node's
+    /// catalog without copying it (T-2A3).
+    by_tool_name: std::sync::Arc<BTreeMap<String, ApplicationToolPresentation>>,
 }
 
 /// The toolkit each provider-visible tool name was bound from.
@@ -622,7 +624,8 @@ impl ApplicationToolPresentationCatalog {
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
-        self.by_tool_name.extend(other.by_tool_name);
+        std::sync::Arc::make_mut(&mut self.by_tool_name)
+            .extend(std::sync::Arc::unwrap_or_clone(other.by_tool_name));
         Ok(())
     }
 
@@ -664,8 +667,7 @@ impl ApplicationToolPresentationCatalog {
             || model_name.is_empty()
             || model_name.len() > MAX_CONTEXT_TEXT_BYTES
             || model_name.chars().any(char::is_control)
-            || self
-                .by_tool_name
+            || std::sync::Arc::make_mut(&mut self.by_tool_name)
                 .insert(
                     tool_name,
                     ApplicationToolPresentation {

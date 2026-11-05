@@ -1077,7 +1077,7 @@ impl PipelineNativeAgentAssembler {
                     display_name: alias.to_owned(),
                 }
             } else {
-                let (tool, projection, fingerprint) =
+                let (tool, projection, fingerprint, member) =
                     bind_scoped_agent(snapshot, profile.shell(), &runtime, alias).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
@@ -1095,6 +1095,7 @@ impl PipelineNativeAgentAssembler {
                     tool,
                     scope,
                     fingerprint,
+                    member,
                 }
             };
             if nodes
@@ -1600,6 +1601,8 @@ enum NativePipelineApplicationParticipant {
         tool: Arc<dyn Tool>,
         scope: Arc<scoped_runtime::PipelineApplicationNodeRuntime>,
         fingerprint: Option<SavedAgentFingerprint>,
+        /// Binds one fan-out member its own invocation (T-2A3).
+        member: Option<crate::agents::application_tools::ScopedAgentMember>,
     },
     Agent(Arc<dyn Tool>),
     Pipeline {
@@ -2540,7 +2543,7 @@ fn bind_admitted_saved_pipeline<'a>(
                 }
             } else {
                 // Bind one exact ordinary descendant to its registry-owned event receiver.
-                let (tool, projection, fingerprint) =
+                let (tool, projection, fingerprint, member) =
                     bind_scoped_agent(&snapshot, admitted.profile.shell(), runtime, alias).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
@@ -2559,6 +2562,7 @@ fn bind_admitted_saved_pipeline<'a>(
                     tool,
                     scope,
                     fingerprint,
+                    member,
                 }
             };
             if nodes
@@ -2596,6 +2600,7 @@ type ScopedAgentBinding = (
     Arc<dyn Tool>,
     ApplicationRuntimeProjection,
     Option<SavedAgentFingerprint>,
+    Option<crate::agents::application_tools::ScopedAgentMember>,
 );
 
 async fn bind_scoped_agent(
@@ -2638,12 +2643,12 @@ async fn bind_scoped_agent(
         runtime.materialization.record_skipped(&skipped);
     }
     let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
-    let fingerprint = materialized
+    let entry = materialized
         .tools
         .iter()
         .find(|entry| entry.alias == alias && entry.agent_type == "agent")
-        .ok_or_else(invalid_pipeline_tool_scope)?
-        .saved_agent_fingerprint;
+        .ok_or_else(invalid_pipeline_tool_scope)?;
+    let (fingerprint, member) = (entry.saved_agent_fingerprint, entry.member.clone());
     let (mut participants, projection) = application_participants(materialized)?;
     if participants.len() != 1 {
         return Err(invalid_pipeline_tool_scope());
@@ -2652,7 +2657,9 @@ async fn bind_scoped_agent(
         .remove(alias)
         .ok_or_else(invalid_pipeline_tool_scope)?
     {
-        NativePipelineApplicationParticipant::Agent(tool) => Ok((tool, projection, fingerprint)),
+        NativePipelineApplicationParticipant::Agent(tool) => {
+            Ok((tool, projection, fingerprint, member))
+        }
         _ => Err(invalid_pipeline_tool_scope()),
     }
 }

@@ -87,6 +87,18 @@ origin/main HEAD` is empty for each); none is new here:
 - `apps/elitea-web/src/pages/credentials/CredentialForm.test.tsx:383` (elitea_issues 4864/5937)
 - `apps/elitea-web/src/widgets/sidebar/__tests__/ProjectSwitcher.test.tsx:489` (elitea_issues 6561)
 
+**Which Map tests use stubs, and whether the production path also covers them** (three defects so far were hidden
+by stubs: the frame kind, concurrent saved-agent items with the wake's resume install, and the member event scope's 16 bound):
+
+| Test file | What is stubbed | Production-path cover |
+|---|---|---|
+| `map_fanout_tests.rs` (most tests) | Item graphs and child checkpoints (`ItemGraphs`, `MemoryAuthority`) | Ordering, admission, bounds and join land: `fanout_lineage` real-PG production-factory tests (State Modifier, Agent, LLM items) and the fanpar case 1 run |
+| `parallel_compiler_map_agent_tests.rs` | Application resolver (stub participant) | `postgres_map_saved_agent_items_run_concurrently_configured_and_all_pause` (3 concurrent items, park and wake), the 16- and 24-item no-leak tests and the Parallel same-agent test, all through the production assembler |
+| `parallel_compiler_map_tests.rs`, `map_compiler_tests.rs` | Compile only, no run | Save and compile refusals: Main and Worker admission tests; the run is case 1 to 7 |
+| `parallel_map_identity_tests.rs` | None (pure digest) | `fanout_lineage` B1 pins main's ids through PostgreSQL |
+| `map_yaml_tests.rs` | None (parse and validate) | n/a |
+| `a_map_of_more_than_sixteen_items_streams_map_member_frames` | Memory authority; the event channel and frames are real | fanpar case 1 (64 items) |
+
 ## Performance
 
 - Admission and per-child cost are Parallel's: one batched activation and one batched receipt read for N items (two
@@ -96,8 +108,48 @@ origin/main HEAD` is empty for each); none is new here:
   `frozen_inputs` for source and items, `src/agents/graph/map_reduce.rs:173`); bounded by `MAX_ITEM_BYTES` (512 KiB per
   item) and `MAX_PLAN_BYTES` (2 MiB per source).
 - Admission bound: `a_map_admits_at_most_its_concurrency` (6 items, concurrency 2: peak 2).
-- Measured: not re-measured for Map; the shared adapter's numbers are in `fanout-parallel-admitted-20261027.md`.
-  **Follow-up:** a 64-item Map load measurement on a stack (part of the browser pass).
+- **Measured on fanpar** (production profile; Worker `map-f106bbe31`): a 64-item State Modifier Map at concurrency
+  4 ran from the first admission to the join in 577 ms wall-clock, with 64 children admitted and 64 completed
+  (Worker trace, 2026-11-05 14:26:33.610 to 14:26:34.187 UTC). The activation span was 16 ms busy and 561 ms idle.
+- **One saved Agent, N concurrent invocations (like LangGraph `Send`).** Each Map item is its own invocation of the
+  worker's saved Agent.
+  - **Shared, behind `Arc` and never copied per item:** the built Agent (`BuiltApplication`: the lazy agent, its
+    toolsets including MCP with credentials by reference, its model handle and limiter, its instructions and
+    catalogs); the node's scope, prepare gate and call owner; the node's resume coordinator, keyed by invocation and
+    call; and the tool presentation catalog. The catalog is now copy-on-write (`W/agents/events.rs`
+    `ApplicationToolPresentationCatalog`, `Arc` plus `make_mut` at its two mutation sites).
+  - **Per item:** a bounded event channel (`APPLICATION_EVENT_CHANNEL_CAPACITY`, 64 signals) with its receiver, a
+    tool carrying the item's sender, the projection that holds them, and the item's own checkpoint thread (`m1:`)
+    and input.
+  - **Measured.** Per-item bind (`a_member_invocation_of_a_saved_agent_costs_a_small_constant`, 6,400 bound members
+    held alive, resident set read with `ps`):
+    - 8.1 KB per item, the same with or without the catalog. It was 13.4 KB before the catalog moved to
+      copy-on-write, of which 5.4 KB was the one-entry catalog clone.
+    - The rest is the channel's first slot block.
+    - Bind time: 0.81 µs on average, 10 µs at worst, against the 30 ms per-child budget.
+  - **Measured: memory.** 64-item saved-agent Map at concurrency 8 against concurrency 1, with an instant mock
+    model (`measure_a_64_item_saved_agent_map_*`; ignored, run alone under `/usr/bin/time -l`; debug build, real
+    PostgreSQL, 3 runs each). Peak resident memory was 111.1–112.4 MB at concurrency 8 against 108.9–111.8 MB at
+    concurrency 1.
+  - **Measured: concurrency.** 64 items with the model answering after a fixed 100 ms, on a multi-thread runtime
+    (`measure_64_saved_agent_items_with_model_latency_at_concurrency_*`):
+    - The model calls overlap 8-way. The first 32 items' calls finished within about 0.6 s, against about 3.2 s one
+      at a time; 8 calls started within the first 46 ms.
+    - Total wall time: 7.0–8.8 s at concurrency 8 against 10.4 s at concurrency 1.
+    - The total is not 8× because each item's non-model cost grows with the items already completed: later items
+      start 0.6–1.1 s apart, and the join takes about 2 s after the last call.
+    - **Pinned by a span profile.** After every root event, the native runner re-reads the whole root session
+      (`libs/rust/vendor/adk-runner/src/runner.rs:222-235`, called at `:1054`), which every native run enables
+      (`W/agents/runtime.rs:1393`). Root `get` ×322 took 2.3, 6.2, 10.4 then 14.6 ms by quarter, 2.7 s in total,
+      while appends and child checkpoint I/O stayed flat.
+    - **Known gap, tracked by FU-287 (HIGH, right after Map, before W3-1).** That remaining O(n) root refresh per
+      event is O(n²) per run, for every native run and not only Map. A correct fix changes shared session semantics:
+      the candidates are an incremental refresh by a durable sequence, a version check before the full read, or a
+      bounded tail.
+    - **What Map itself delivers:** the 8-way model-call overlap. The first 32 items' calls finished in about 0.6 s
+      against about 3.2 s one at a time.
+  - **Bounded:** live items stay within `max_concurrency` (≤ 8, `a_map_admits_at_most_its_concurrency`), and model
+    calls stay within the run's model limiter and child permits. 64 items are never 64 live model calls.
 
 ## Durability
 
@@ -134,6 +186,49 @@ origin/main HEAD` is empty for each); none is new here:
   v2 continue lands typed failed entries (Parallel's join).
 - Cancellation, deadline and lease loss are the shared node's (Parallel tests cited in the coverage table).
 - A join that cannot land is refused at save time, by name (`a_map_join_is_checked_against_its_destination_reducer_at_save_time`).
+- **Concurrent saved-agent items (found by the fanpar browser pass, fixed in this PR).**
+  - **Root cause.** A saved Agent node had one nested-event channel.
+    - `PipelineApplicationNodeRuntime::execute` takes the channel's receiver for the whole child run, and
+      `ApplicationEventReceiver::take` refuses a second taker.
+    - `rebind_participant` gave each fan-out member a new event scope over the node's shared tool and receiver.
+    - A Map runs one node as many concurrent items, so every item that started while another held the receiver
+      failed at once (`graph.node_execution_failed`). On fanpar, items 0 and 2 of 3 failed.
+    - On a wake, `ApplicationResumeCoordinator::install_root` refused a second item's resume.
+    - A saved-agent member past ordinal 16 was refused `graph.invalid` by the member event scope's Parallel bound.
+  - **Fix.**
+    - Each member is its own invocation. `ScopedAgentMember::bind` (`W/agents/application_tools.rs:4667`) and
+      `PipelineApplicationNodeRuntime::for_member` (`W/agents/pipeline/scoped_runtime.rs:180`) are called from the
+      ScopedAgent arm of `rebind_participant` (`W/agents/pipeline/parallel_application_resolver.rs:165`).
+    - The shared coordinator accepts each item's own call resume and still refuses a second resume for the same
+      call (`W/agents/application_tools.rs:611`).
+    - The member event scope is bounded by the fan-out maximum
+      (`W/agents/graph/node_events_parallel.rs:62`, `MAX_FANOUT_MEMBERS = MAX_FANOUT_CHILDREN`).
+  - **Nested saved applications.**
+    - A saved Agent's nested saved agents and pipelines are built once with the node's channel.
+    - Inside a member, every application send goes to the member's own channel. A task-local
+      `MEMBER_EVENT_SENDER` (`W/agents/application_tools.rs:293`) is set around the member's child run
+      (`W/agents/pipeline/scoped_runtime.rs:324`) and read first by every send site (`routed_sender`,
+      `W/agents/application_tools.rs:298`; the nested saved pipeline tool in `W/agents/application_pipeline.rs`).
+    - It is carried across the one spawn on that path, `DrivenTask` (`W/agents/driven.rs:84`). The vendored agent
+      runs tools inline.
+    - **Proof:** `postgres_map_items_of_a_saved_agent_with_a_nested_saved_agent_keep_their_own_events`. 3 items whose
+      agent calls a nested saved agent all complete with their own answers, and every nested answer frame sits
+      under its own item's `sibling_ordinal`. Without the routing, no nested frame reaches the run.
+    - Parallel drains each branch node's own channel, which its nested tools share, so it never needed this.
+  - **No silent hang.** A send into a full, undrained channel is ended by the node's deadline, typed
+    `deadline_exceeded` (`items_blocked_on_a_full_channel_end_typed_at_the_deadline`).
+  - **Parallel isn't affected.** Its branches own distinct nodes. On fanpar, a Parallel with the same saved agent in
+    two branches paused both (probe pipeline 26); with per-member invocation it still does
+    (`postgres_parallel_branches_of_the_same_saved_agent_both_pause_concurrently`). Saved-pipeline workers already
+    had a channel per member: 3 concurrent items paused, probe pipeline 27.
+  - **Proof** (production assembler, real PostgreSQL):
+    - `postgres_map_saved_agent_items_run_concurrently_configured_and_all_pause`: 3 concurrent items, 3 cards and a
+      park. The cards are answered last first, and the wake resumes each with its own answer. Without the
+      per-member bind there are 2 cards; without the coordinator change the wake is refused.
+    - `postgres_a_sixteen_item_saved_agent_map_completes_without_cross_item_state` and
+      `postgres_a_saved_agent_map_of_more_than_sixteen_items_completes_every_item` (24 items), both at concurrency 8:
+      each model request carries exactly its own item's input, and each entry holds its own answer. Without the
+      ordinal fix, items 16 and up fail `graph.invalid`.
 - **Frame kind per family (found by the fanpar browser pass, fixed in this PR).**
   - Each member frame carries its family's kind. `W/agents/graph/parallel_frames.rs:71` sets `map` when the activation
     has a Map identity and `parallel` otherwise. The frame check caps members per kind: `parallel` at 16 and `map`

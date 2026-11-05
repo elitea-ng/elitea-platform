@@ -2039,6 +2039,11 @@ pub(crate) enum TestModelGatewayOutcome {
     /// End the test process at this model request: a Worker that dies after
     /// everything before the request is durable (process-replacement proofs).
     ExitProcess(i32),
+    /// Answer after a fixed model latency (concurrency measurements).
+    Delayed {
+        delay: std::time::Duration,
+        response: Response<Body>,
+    },
 }
 
 #[cfg(test)]
@@ -2139,6 +2144,10 @@ impl ModelGatewayTransport for TestModelGatewayTransport {
                 Ok(response)
             }
             TestModelGatewayOutcome::ExitProcess(code) => std::process::exit(code),
+            TestModelGatewayOutcome::Delayed { delay, response } => {
+                tokio::time::sleep(delay).await;
+                Ok(response)
+            }
         }
     }
 }
