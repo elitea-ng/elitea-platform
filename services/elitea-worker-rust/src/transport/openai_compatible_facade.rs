@@ -1053,22 +1053,26 @@ fn valid_thinking_signature(value: &str) -> bool {
 }
 
 /// Where the current tool loop starts in a request's contents (ADR-0050
-/// decision 9a, issue 1603): the index of the last user message that is not
-/// a tool result, so the question being answered. Thinking before it is an
-/// earlier turn's and is never replayed, on any provider; thinking after it
-/// belongs to this turn's tool loop and is replayed where the provider
-/// needs it.
+/// decision 9a, issue 1603): just after the last finished answer, a model
+/// message with no tool call. Thinking before it is an earlier turn's and is
+/// never replayed, on any provider; thinking after it belongs to this turn's
+/// tool loop and is replayed where the provider needs it.
+///
+/// It is not "the last user message": a steering message the loop appends
+/// after a tool result (client contract 1.27) is a user message inside the
+/// loop, and the signed thinking before the open tool call must still go
+/// back with it.
 pub(super) fn current_loop_start(contents: &[Content]) -> usize {
     contents
         .iter()
         .rposition(|content| {
-            content.role == "user"
-                && content
+            matches!(content.role.as_str(), "model" | "assistant")
+                && !content
                     .parts
                     .iter()
-                    .any(|part| !matches!(part, Part::FunctionResponse { .. }))
+                    .any(|part| matches!(part, Part::FunctionCall { .. }))
         })
-        .unwrap_or(0)
+        .map_or(0, |index| index + 1)
 }
 
 /// `content` without its thinking parts, or `None` when nothing else is

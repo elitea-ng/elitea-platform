@@ -183,6 +183,8 @@ impl SessionPlan {
                     AGENT_AUTHOR,
                     seed::Reader {
                         participant_id: Some(answering.id),
+                        application_id: Some(answering.application_id),
+                        asker_user_id: owner.map(|owner| owner.user_id),
                         participants: &participants,
                     },
                     strip,

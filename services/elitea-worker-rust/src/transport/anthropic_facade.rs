@@ -460,6 +460,10 @@ fn encode_anthropic_body(
         .filter_map(|(index, content)| {
             if index < loop_start {
                 without_thinking(content).map(|content| (index, content))
+            } else if only_unsigned_thinking(content) {
+                // Nothing in it can be sent: unsigned thinking is never
+                // replayed (a step cut inside its thinking block).
+                None
             } else {
                 Some((index, std::borrow::Cow::Borrowed(content)))
             }
@@ -589,6 +593,18 @@ fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, A
         return Err(invalid_anthropic_request());
     }
     Ok(MessageParam::new_with_blocks(blocks, role))
+}
+
+fn only_unsigned_thinking(content: &Content) -> bool {
+    content.parts.iter().all(|part| {
+        matches!(
+            part,
+            Part::Thinking {
+                signature: None,
+                ..
+            }
+        )
+    })
 }
 
 /// One content part as the Anthropic encoder sees it: a run of thinking

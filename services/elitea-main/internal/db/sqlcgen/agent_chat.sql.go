@@ -1326,6 +1326,8 @@ LEFT JOIN LATERAL (
                -- person's own messages and the reader's own answers carry an
                -- empty ` + "`" + `additional_kwargs` + "`" + `, as before, so a one-person,
                -- one-agent conversation projects byte for byte as it did.
+               -- A participant with no name gets an empty one: the worker's
+               -- envelope, shared with the desktop seed, names it ` + "`" + `unknown` + "`" + `.
                CASE
                    WHEN author.entity_name = 'user' THEN 'user'
                    WHEN author.id = target_participant.id THEN 'assistant'
@@ -1341,7 +1343,7 @@ LEFT JOIN LATERAL (
                        'name', COALESCE(
                            NULLIF(btrim(author.meta ->> 'user_name'), ''),
                            NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
-                           'Person'
+                           ''
                        )
                    ))
                    ELSE jsonb_build_object('elitea_author', jsonb_build_object(
@@ -1349,7 +1351,7 @@ LEFT JOIN LATERAL (
                        'name', COALESCE(
                            NULLIF(btrim(author.meta ->> 'name'), ''),
                            NULLIF(btrim(author.entity_meta ->> 'name'), ''),
-                           'Agent'
+                           ''
                        )
                    ))
                END AS additional_kwargs,
@@ -2252,6 +2254,8 @@ LEFT JOIN LATERAL (
                -- person's own messages and the reader's own answers carry an
                -- empty ` + "`" + `additional_kwargs` + "`" + `, as before, so a one-person,
                -- one-agent conversation projects byte for byte as it did.
+               -- A participant with no name gets an empty one: the worker's
+               -- envelope, shared with the desktop seed, names it ` + "`" + `unknown` + "`" + `.
                CASE
                    WHEN author.entity_name = 'user' THEN 'user'
                    WHEN author.id = target_participant.id THEN 'assistant'
@@ -2267,7 +2271,7 @@ LEFT JOIN LATERAL (
                        'name', COALESCE(
                            NULLIF(btrim(author.meta ->> 'user_name'), ''),
                            NULLIF(btrim(author.entity_meta ->> 'user_name'), ''),
-                           'Person'
+                           ''
                        )
                    ))
                    ELSE jsonb_build_object('elitea_author', jsonb_build_object(
@@ -2275,7 +2279,7 @@ LEFT JOIN LATERAL (
                        'name', COALESCE(
                            NULLIF(btrim(author.meta ->> 'name'), ''),
                            NULLIF(btrim(author.entity_meta ->> 'name'), ''),
-                           'Agent'
+                           ''
                        )
                    ))
                END AS additional_kwargs,

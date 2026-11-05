@@ -477,6 +477,7 @@ impl PlatformApi {
         let id = participant_for(&detail, application_id, version_id)?;
         Ok(AnsweringParticipant {
             id,
+            application_id,
             conversation_uuid,
             numeric_id: number_of(detail.get("id")),
             message_count: number_of(detail.get("message_count")),
@@ -929,6 +930,9 @@ fn path_segment(value: &str) -> Result<String, ApiError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnsweringParticipant {
     pub id: i64,
+    /// The application the participant names: another participant row of
+    /// the same application is still the same agent (issue 1603).
+    pub application_id: i64,
     /// Lowercase canonical form, the only one the local turn route accepts.
     pub conversation_uuid: String,
     /// The conversation's numeric id (the traces routes take only it).

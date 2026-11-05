@@ -11,6 +11,7 @@ package repos
 // untrusted message.
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -85,13 +86,26 @@ func insertPostgresHistoryGroup(
 	minutesAgo int,
 ) int {
 	t.Helper()
+	return insertPostgresHistoryGroupIn(t, tx, 1, id, author, replyTo, text, minutesAgo)
+}
+
+// insertPostgresHistoryGroupIn is insertPostgresHistoryGroup in conversation
+// `conversation`.
+func insertPostgresHistoryGroupIn(
+	t *testing.T,
+	tx pgx.Tx,
+	conversation, id, author, replyTo int,
+	text string,
+	minutesAgo int,
+) int {
+	t.Helper()
 	if _, err := tx.Exec(t.Context(), `
 WITH message_group AS (
     INSERT INTO chat_message_group (
         id, uuid, author_participant_id, conversation_id, reply_to_id, meta,
         is_streaming, created_at
     ) VALUES (
-        $1, gen_random_uuid(), $2, 1, NULLIF($3, 0), '{}'::jsonb, FALSE,
+        $1, gen_random_uuid(), $2, $6, NULLIF($3, 0), '{}'::jsonb, FALSE,
         (statement_timestamp() AT TIME ZONE 'UTC') - make_interval(mins => $5)
     )
     RETURNING id, created_at
@@ -105,8 +119,48 @@ WITH message_group AS (
     RETURNING id
 )
 INSERT INTO chat_messages_text (id, content)
-SELECT message_item.id, $4 FROM message_item`, id, author, replyTo, text, minutesAgo); err != nil {
+SELECT message_item.id, $4 FROM message_item`, id, author, replyTo, text, minutesAgo, conversation); err != nil {
 		t.Fatal(err)
 	}
 	return id
+}
+
+// The ad-hoc projection is a separate copy of the same SQL: a model chat
+// with an agent participant labels that agent's answers too.
+func TestPostgresAdhocChatHistoryLabelsAnAgentParticipantsAnswer(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+
+	// Conversation 2: the asker (20), the model chat (23, `dummy`) and
+	// `leaf-agent` (30), a named agent participant.
+	question := insertPostgresHistoryGroupIn(t, tx, 2, 1603011, 20, 0, "check the build", 3)
+	insertPostgresHistoryGroupIn(t, tx, 2, 1603012, 30, question, "It is green.", 2)
+	insertPostgresHistoryGroupIn(t, tx, 2, 1603013, 23, question, "Confirmed.", 1)
+
+	target, err := queries.ResolveCurrentAdhocTurn(
+		t.Context(),
+		sqlcgen.ResolveCurrentAdhocTurnParams{
+			ActorUserID: 11, TargetParticipantID: 0, ProjectID: 1,
+			QuestionID:       mustCurrentPGUUID(t, "50000000-0000-4000-8000-000000001611"),
+			ConversationUuid: mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000032"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve ad-hoc turn: %v", err)
+	}
+	var history []postgresHistoryGroup
+	if err := json.Unmarshal([]byte(target.ChatHistoryJson), &history); err != nil {
+		t.Fatalf("decode %s: %v", target.ChatHistoryJson, err)
+	}
+	if len(history) != 3 || history[0].Role != "user" || len(history[0].AdditionalKwargs) != 0 ||
+		history[1].Role != "user" || history[2].Role != "assistant" ||
+		len(history[2].AdditionalKwargs) != 0 {
+		t.Fatalf("history=%s", target.ChatHistoryJson)
+	}
+	author, _ := history[1].AdditionalKwargs["elitea_author"].(map[string]any)
+	if author["kind"] != "agent" || author["name"] != "leaf-agent" {
+		t.Fatalf("peer=%+v", history[1].AdditionalKwargs)
+	}
 }
