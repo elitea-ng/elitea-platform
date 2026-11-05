@@ -629,3 +629,21 @@ func TestCheckWithAncestorsRefusesAChangeThatPushesAnAncestorPastTheLimit(t *tes
 		t.Fatalf("no ancestry: %v", err)
 	}
 }
+
+// T-2A3: a Map's LLM worker runs in its own child family, like a Parallel's
+// LLM branch, so it counts toward the depth and checkpoint-path caps; a State
+// Modifier worker and a free LLM node do not.
+func TestReadPipelineCountsAMapOwnedLLMWorker(t *testing.T) {
+	doc := func(workerType string) string {
+		return "state:\n  items: list\n  mapped: list\n  out: str\nentry_point: each\nnodes:\n" +
+			"  - id: each\n    type: map\n    worker: render\n    source: items\n    item: entity\n    index: item_index\n" +
+			"    outputs: [out]\n    destination: mapped\n    max_items: 8\n    max_concurrency: 2\n    transition: tail\n" +
+			"  - id: render\n    type: " + workerType + "\n    output: [out]\n" +
+			"  - id: tail\n    type: llm\n    transition: END\n"
+	}
+	for workerType, want := range map[string]int{"llm": 1, "state_modifier": 0} {
+		if _, _, _, branches := applicationcomposition.ReadPipeline(doc(workerType)); branches != want {
+			t.Fatalf("%s worker: inline LLM children = %d, want %d", workerType, branches, want)
+		}
+	}
+}

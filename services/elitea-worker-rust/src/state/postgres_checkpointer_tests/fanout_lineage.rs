@@ -8,16 +8,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::agents::graph::fanout_test_ledger::TestLedger;
-use crate::agents::graph::map_reduce::{
-    DurableMapNode, MapDefinition, MapItemExecution, MapNodeOutcome, MapOccurrenceCheckpointer,
-    MapReduction, MapWorkerGraphFactory, MapWorkerKind, MapWorkerTerminal,
-};
+use crate::agents::graph::map_reduce::{MapDefinition, MapReduction};
 use crate::agents::graph::{
     AdkParallelBranchRuntime, DurableParallelNode, FANOUT_PARKED_SCHEMA, ParallelBranchDefinition,
     ParallelBranchExecution, ParallelBranchGraphFactory, ParallelBranchPause,
     ParallelBranchRuntime, ParallelBranchTerminal, ParallelCheckpointAppender, ParallelDecision,
     ParallelOccurrenceCheckpointer, ParallelPauseCard,
 };
+use crate::agents::graph::{FanoutSource, MapSource};
 use adk_rust::graph::{
     CompiledGraph, FunctionNode, GraphError, Node, NodeContext, StateSchema, interrupt::Interrupt,
 };
@@ -336,6 +334,7 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     let prepared = first_runtime
         .prepare(&mut activation, &definition, &context)
@@ -428,7 +427,7 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
     );
 }
 
-/// A non-pausing Map worker that records each item it runs. While `hold` is
+/// A Map worker on the shared fan-out adapter that records each item it runs. While `hold` is
 /// set, the last item parks forever after announcing that it started.
 struct LineageWorkers {
     calls: Arc<std::sync::Mutex<Vec<usize>>>,
@@ -470,23 +469,24 @@ impl Node for LineageWorker {
     }
 }
 
-impl MapWorkerGraphFactory for LineageWorkers {
-    fn validate_nonpausing(&self, _definition: &MapDefinition) -> Result<(), GraphError> {
+/// A Map item on the shared fan-out adapter runs the counting worker.
+#[async_trait]
+impl ParallelBranchGraphFactory for LineageWorkers {
+    fn validate_branch(&self, _branch: &ParallelBranchDefinition) -> Result<(), GraphError> {
         Ok(())
     }
 
-    fn owned_definition_digest(&self) -> [u8; 32] {
-        [0x19; 32]
-    }
-
-    fn worker_kind(&self) -> MapWorkerKind {
-        MapWorkerKind::StateModifier
-    }
-
-    fn compile_item(
+    fn owned_definition_digest(
         &self,
-        _definition: &MapDefinition,
-        execution: &MapItemExecution,
+        _branch: &ParallelBranchDefinition,
+    ) -> Result<[u8; 32], GraphError> {
+        Ok([0x19; 32])
+    }
+
+    fn compile_branch(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        execution: ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
         let worker = LineageWorker {
             calls: Arc::clone(&self.calls),
@@ -506,30 +506,42 @@ impl MapWorkerGraphFactory for LineageWorkers {
         .with_max_concurrency(1))
     }
 
-    fn runtime_input(
+    fn project_input(
         &self,
-        input: &State,
-        _context: &NodeContext,
-        _thread: &str,
+        _branch: &ParallelBranchDefinition,
+        parent: &State,
     ) -> Result<State, GraphError> {
-        Ok(input.clone())
+        Ok(parent.clone())
     }
 
     fn project_result(
         &self,
-        _definition: &MapDefinition,
+        _branch: &ParallelBranchDefinition,
         state: &State,
-    ) -> Result<MapWorkerTerminal, GraphError> {
+    ) -> Result<ParallelBranchTerminal, GraphError> {
         let mut outputs = serde_json::Map::new();
         outputs.insert(
             "item_result".to_owned(),
             state.get("item_result").cloned().unwrap_or(Value::Null),
         );
-        Ok(MapWorkerTerminal::Completed(outputs))
+        Ok(ParallelBranchTerminal::Completed(outputs))
     }
 
-    fn validate_candidate(&self, _candidate: &State) -> Result<(), GraphError> {
-        Ok(())
+    fn pause_cards(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+    ) -> Result<Vec<ParallelPauseCard>, GraphError> {
+        Err(GraphError::Other("the Map worker never pauses".to_owned()))
+    }
+
+    async fn resume_input(
+        &self,
+        _branch: &ParallelBranchDefinition,
+        _pause: &ParallelBranchPause,
+        _decisions: &[ParallelDecision],
+    ) -> Result<State, GraphError> {
+        Err(GraphError::Other("the Map worker never pauses".to_owned()))
     }
 }
 
@@ -546,7 +558,8 @@ fn map_definition() -> MapDefinition {
         max_items: 64,
         // One item at a time makes "items 0 and 1 saved, item 2 running" exact.
         max_concurrency: 1,
-        reduction: MapReduction::OrderedCollection,
+        reduction: Some(MapReduction::OrderedCollection),
+        policy: None,
     }
 }
 
@@ -560,15 +573,20 @@ fn map_context() -> NodeContext {
     context
 }
 
-fn map_node(checkpointer: &Arc<PostgresCheckpointer>, workers: LineageWorkers) -> DurableMapNode {
+fn map_node(
+    checkpointer: &Arc<PostgresCheckpointer>,
+    workers: LineageWorkers,
+) -> DurableParallelNode {
     let parent: Arc<dyn ParallelCheckpointAppender> = checkpointer.clone();
-    DurableMapNode::new(
-        map_definition(),
-        Arc::new(MapOccurrenceCheckpointer::new(parent)),
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
         checkpointer.clone(),
         Arc::new(workers),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ));
+    DurableParallelNode::from_source(
+        FanoutSource::Map(MapSource::new(map_definition(), [0x19; 32]).expect("valid Map fixture")),
+        runtime,
     )
-    .expect("valid Map fixture")
 }
 
 /// C1a (Map). Items 0 and 1 complete under execution 1 and the process dies
@@ -603,7 +621,7 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
     tokio::select! {
         biased;
         () = started.notified() => {}
-        outcome = crashed.execute_outcome(&context) => {
+        outcome = crashed.execute(&context) => {
             panic!("the held item cannot finish: {:?}", outcome.is_ok());
         }
     }
@@ -626,12 +644,10 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
             hook: None,
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .expect("restore the Map occurrence under execution 2");
-    let MapNodeOutcome::Completed(output) = outcome else {
-        panic!("the restored Map stopped");
-    };
+    let output = outcome;
     assert_eq!(
         output.updates["mapped"].as_array().map(|entries| entries
             .iter()
@@ -780,22 +796,15 @@ async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
             hook: Some(hook),
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .err()
     .expect("lease loss is a control error");
     assert_lease_lost(&error);
     assert_eq!(*calls.lock().expect("call log"), vec![0]);
     assert_eq!(failed_receipts(&database).await, 0);
-    let recorded_stops: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
-         WHERE jsonb_typeof(metadata::jsonb -> 'elitea.graph.map.occurrence.v2' -> 'stop') \
-               IN ('object', 'string')",
-    )
-    .fetch_one(&database.pool)
-    .await
-    .expect("count recorded Map stops");
-    assert_eq!(recorded_stops, 0, "lease loss was recorded as a Map stop");
+    // The shared adapter keeps no stop record: no failed receipt is the
+    // whole proof that lease loss was not recorded as an item failure.
 
     let second = claim(
         &database,
@@ -812,12 +821,10 @@ async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
             hook: None,
         },
     )
-    .execute_outcome(&context)
+    .execute(&context)
     .await
     .expect("a later claim restores the Map occurrence");
-    let MapNodeOutcome::Completed(output) = outcome else {
-        panic!("the restored Map stopped");
-    };
+    let output = outcome;
     assert_eq!(output.updates["mapped"].as_array().map(Vec::len), Some(3));
     let calls = calls.lock().expect("call log").clone();
     for index in [1, 2] {
@@ -860,6 +867,7 @@ async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     first_runtime
         .prepare(&mut activation, &definition, &context)
@@ -1004,6 +1012,7 @@ async fn frozen_child_identity_cannot_be_reused_across_tenant_project_or_definit
         node_id: definition.id().to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     let branch = &definition.branches()[0];
     let origin = owner
@@ -1138,4 +1147,137 @@ async fn fanout_restore_and_lease_loss_log_no_payload_or_identity() {
     for value in forbidden {
         assert!(!text.contains(&value), "a log line exposed {value}");
     }
+}
+
+/// A Map pipeline whose worker `worker` is a node of `worker_yaml`; the
+/// admitted application paths come from its definition exactly as a run's
+/// session derives them (`session.rs`: Agent nodes plus fan-out LLM nodes).
+fn production_paths(worker_yaml: &str) -> Vec<String> {
+    let yaml = format!(
+        "entry_point: map_items\nstate:\n  items: list\n  mapped: list\n  item_result: str\nnodes:\n  - {{id: map_items, type: map, worker: worker, source: items, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 1, reduction: ordered_collection, transition: END}}\n  - {worker_yaml}\n"
+    );
+    let definition = crate::agents::graph::compiler::PipelineDefinition::from_yaml(&yaml)
+        .expect("a Map pipeline");
+    definition
+        .application_node_ids()
+        .chain(definition.parallel_llm_branch_ids())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Runs the Map fixture through the production child factory
+/// (`ApplicationCheckpointers`, the one a run's session binds) with the
+/// admitted `paths`; answers the run's output and the item threads the
+/// factory admitted.
+async fn run_through_the_production_factory(
+    paths: &[String],
+) -> (serde_json::Value, BTreeSet<String>) {
+    let database_url = crate::test_pg::database_url_var(TEST_DATABASE_URL).expect("database url");
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let writer = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer(
+            "execution-1",
+            "claim-execution-1",
+            1,
+            1,
+            DEFINITION,
+            [0x61; 32],
+        ),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate the execution's root checkpoint writer");
+    let family = Arc::new(
+        writer
+            .with_application_children(paths.iter().map(String::as_str))
+            .await
+            .expect("admit the pipeline's application paths"),
+    );
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let parent: Arc<dyn ParallelCheckpointAppender> = family.clone();
+    let runtime = Arc::new(AdkParallelBranchRuntime::new(
+        family.clone(),
+        Arc::new(LineageWorkers {
+            calls: Arc::clone(&calls),
+            hold: None,
+            hook: None,
+        }),
+        Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
+    ));
+    let node = DurableParallelNode::from_source(
+        FanoutSource::Map(MapSource::new(map_definition(), [0x19; 32]).expect("valid Map fixture")),
+        runtime,
+    );
+    let output = node
+        .execute(&map_context())
+        .await
+        .expect("the Map runs through the production factory");
+    assert_eq!(*calls.lock().expect("call log"), vec![0, 1, 2]);
+    let admitted: BTreeSet<String> = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT thread_id FROM elitea_runtime.agent_graph_checkpoints",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("list the activated threads")
+    .into_iter()
+    .collect();
+    (output.updates["mapped"].clone(), admitted)
+}
+
+/// T-2A3 code review (one test per worker family through the production
+/// child factory, not a test double): a State Modifier worker owns no
+/// application subgraph, so its items get the empty family and run. Before
+/// the fix every item was refused at activation ("the owned application
+/// checkpoint family is not admitted").
+#[tokio::test]
+async fn map_state_modifier_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: state_modifier, input: [entity], output: [item_result], template: '{{ entity }}'}",
+    );
+    assert!(!paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, threads) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
+    assert!(
+        !threads.iter().any(|thread| thread.ends_with("/worker")),
+        "{threads:?}"
+    );
+}
+
+/// The saved Agent worker family: the session admits the Agent node by path,
+/// and each item's own Agent subgraph thread is admitted under the item.
+#[tokio::test]
+async fn map_agent_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: agent, tool: Research Agent, input: [entity], input_mapping: {task: {type: fixed, value: Research}}, output: [item_result]}",
+    );
+    assert!(paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, _) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
+}
+
+/// The inline LLM worker family: a Map-owned LLM node is admitted by path
+/// like a Parallel's LLM branch (it runs in its own child family).
+#[tokio::test]
+async fn map_llm_items_run_through_the_production_application_factory() {
+    if crate::test_pg::database_url_var(TEST_DATABASE_URL).is_err() {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    }
+    let paths = production_paths(
+        "{id: worker, type: llm, input: [entity], input_mapping: {task: {type: fstring, value: 'Draft {entity}'}}, output: [item_result]}",
+    );
+    assert!(paths.iter().any(|path| path == "worker"), "{paths:?}");
+    let (mapped, _) = run_through_the_production_factory(&paths).await;
+    assert_eq!(mapped.as_array().map(Vec::len), Some(3));
 }

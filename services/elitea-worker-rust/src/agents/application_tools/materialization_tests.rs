@@ -1716,3 +1716,82 @@ async fn a_pipeline_agent_node_offers_a_refused_saved_agent() {
         Some(json!({"code":"DELEGATION_GRANT_MISSING","kind":"data_class","name":"pii"}))
     );
 }
+
+/// This process's resident set in bytes (`ps`, no unsafe code).
+fn resident_bytes() -> usize {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("ps");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<usize>()
+        .expect("rss in KiB")
+        * 1_024
+}
+
+/// T-2A3 per-item cost: one Map item's own invocation of a saved Agent is a
+/// fresh event channel, receiver and tool over the one shared built Agent.
+/// Holding 6,400 bound members alive measures the bytes each one adds; the
+/// built Agent (model, toolsets, catalogs) is never copied.
+#[tokio::test]
+async fn a_member_invocation_of_a_saved_agent_costs_a_small_constant() {
+    const MEMBERS: usize = 6_400;
+    let fixture = Fixture::with_outcomes_and_fingerprints(
+        BTreeMap::from([((32, 42), version("agent", "Frozen task", vec![]))]),
+        vec![],
+        BTreeMap::from([((32, 42), "12".repeat(32))]),
+    );
+    let (materialized, _) = fixture
+        .build(reference((32, 42), "agent", "worker alias"))
+        .await
+        .unwrap();
+    let runtime = materialized.unwrap();
+    let member = runtime.tools[0]
+        .member
+        .clone()
+        .expect("a saved Agent binds members");
+    let presentations = runtime.presentations.clone();
+    let before = resident_bytes();
+    let started = std::time::Instant::now();
+    let mut slowest = std::time::Duration::ZERO;
+    let bound = (0..MEMBERS)
+        .map(|_| {
+            let one = std::time::Instant::now();
+            let bound = member.bind(presentations.clone(), runtime.resume.clone());
+            slowest = slowest.max(one.elapsed());
+            bound
+        })
+        .collect::<Vec<_>>();
+    let elapsed = started.elapsed();
+    let after = resident_bytes();
+    let per_member = after.saturating_sub(before) / MEMBERS;
+    eprintln!(
+        "T2A3_MEMBER_BYTES per_member={per_member} members={MEMBERS} before={before} after={after} mean_bind_us={:.2} slowest_bind_us={}",
+        elapsed.as_secs_f64() * 1e6 / 6_400.0,
+        slowest.as_micros()
+    );
+    assert!(
+        slowest < std::time::Duration::from_millis(30),
+        "a member bind took {slowest:?}"
+    );
+    assert_eq!(bound.len(), MEMBERS);
+    // The same members over an empty presentation catalog: the difference is
+    // what the catalog clone adds per member.
+    let before_empty = resident_bytes();
+    let empty = (0..MEMBERS)
+        .map(|_| {
+            member.bind(
+                ApplicationToolPresentationCatalog::default(),
+                runtime.resume.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let per_member_empty = resident_bytes().saturating_sub(before_empty) / MEMBERS;
+    eprintln!("T2A3_MEMBER_BYTES without_catalog={per_member_empty}");
+    assert_eq!(empty.len(), MEMBERS);
+    assert!(
+        per_member < 100 * 1_024,
+        "per-member invocation costs {per_member} bytes"
+    );
+}

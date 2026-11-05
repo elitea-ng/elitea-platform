@@ -16,11 +16,8 @@ import (
 // node types each layer admits. The Worker compiler and the Web editor assert the
 // same file, so a node type added to one layer only fails the others' tests.
 type admissionContract struct {
-	Admitted      []string `json:"admitted"`
-	Refused       []string `json:"refused"`
-	PendingWave2a struct {
-		Main []string `json:"main"`
-	} `json:"pending_wave_2a"`
+	Admitted []string `json:"admitted"`
+	Refused  []string `json:"refused"`
 }
 
 func loadAdmissionContract(t *testing.T) admissionContract {
@@ -43,23 +40,14 @@ func loadAdmissionContract(t *testing.T) admissionContract {
 
 func TestSaveAdmissionMatchesTheSharedNodeTypeContract(t *testing.T) {
 	contract := loadAdmissionContract(t)
-	want := append(append([]string{}, contract.Admitted...), contract.PendingWave2a.Main...)
+	want := append([]string{}, contract.Admitted...)
 	sort.Strings(want)
 	if got := pipelinelimits.AdmittedNodeTypes(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("admitted node types = %v, contract (admitted + pending_wave_2a.main) = %v", got, want)
+		t.Fatalf("admitted node types = %v, contract admitted = %v", got, want)
 	}
 	for _, nodeType := range want {
 		if err := pipelinelimits.Check(pipelineWithNode("n", nodeType)); err != nil {
 			t.Errorf("type %s: Check refused a contract type: %v", nodeType, err)
-		}
-	}
-	pending := map[string]bool{}
-	for _, nodeType := range contract.PendingWave2a.Main {
-		pending[nodeType] = true
-	}
-	for _, nodeType := range contract.Admitted {
-		if pending[nodeType] {
-			t.Errorf("type %s is both admitted and pending", nodeType)
 		}
 	}
 	for _, nodeType := range contract.Refused {

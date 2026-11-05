@@ -22,12 +22,15 @@ use super::StateWriterLease;
 mod application_children;
 mod child_batch;
 mod fanout_children;
-mod map_children;
 mod node_attempts;
 #[cfg(test)]
 pub(in crate::state) use node_attempts::journal_activation_id;
 mod parallel_append;
 mod parallel_children;
+/// The child-id derivation, for the test that a Map child on the shared
+/// adapter keeps main's ids.
+#[cfg(test)]
+pub(crate) use parallel_children::derive_child_thread_id;
 
 const CHECKPOINT_FAMILY: &str = "adk-graph.2.0.0.v1";
 const MAX_DATABASE_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;

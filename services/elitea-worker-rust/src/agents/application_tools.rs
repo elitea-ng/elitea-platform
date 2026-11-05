@@ -285,6 +285,38 @@ type ApplicationFuture<'a> = Pin<
 
 pub(super) type ApplicationEventSender = mpsc::Sender<ApplicationEventSignal>;
 
+tokio::task_local! {
+    /// One fan-out member's own application event channel (T-2A3), set around
+    /// that member's child run. A saved Agent's nested saved applications were
+    /// built once with the node's channel; inside a member they send to the
+    /// member's channel instead, so each item's events stay with that item.
+    static MEMBER_EVENT_SENDER: ApplicationEventSender;
+}
+
+/// The channel an application send goes to: the running member's own, else
+/// the sender the tool was built with.
+pub(super) fn routed_sender(
+    own: Option<&ApplicationEventSender>,
+) -> Option<ApplicationEventSender> {
+    MEMBER_EVENT_SENDER
+        .try_with(Clone::clone)
+        .ok()
+        .or_else(|| own.cloned())
+}
+
+/// Run `work` as one fan-out member, its application sends routed to `sender`.
+pub(super) async fn with_member_events<F: Future>(
+    sender: ApplicationEventSender,
+    work: F,
+) -> F::Output {
+    MEMBER_EVENT_SENDER.scope(sender, work).await
+}
+
+/// The running member's channel, carried onto a task that continues its work.
+pub(super) fn current_member_events() -> Option<ApplicationEventSender> {
+    MEMBER_EVENT_SENDER.try_with(Clone::clone).ok()
+}
+
 pub(super) enum ApplicationEventSignal {
     ContainerEvent(Box<Event>),
     GraphDescendant {
@@ -588,6 +620,27 @@ impl ApplicationResumeCoordinator {
         Ok(())
     }
 
+    /// A fan-out member's resume (T-2A3). The items of one saved Agent node
+    /// (Map items, or Parallel branches of the same Agent) share the node's
+    /// coordinator, and each wakes with its own call's decision, so member
+    /// resumes accumulate. A call never gets a second resume, and a root or
+    /// continuation batch ([`Self::install_root`]) stays one batch.
+    async fn install_member(
+        &self,
+        calls: HashMap<String, ChildApplicationResume>,
+    ) -> Result<(), NativeAgentAssemblyError> {
+        let mut stored = self.inner.lock().await;
+        if calls.is_empty() {
+            return Err(invalid_configuration());
+        }
+        let root = stored.root.get_or_insert_with(HashMap::new);
+        if calls.keys().any(|call| root.contains_key(call)) {
+            return Err(invalid_configuration());
+        }
+        root.extend(calls);
+        Ok(())
+    }
+
     async fn install_children(
         &self,
         parent_invocation_id: String,
@@ -840,6 +893,18 @@ pub(crate) async fn install_nested_application_resume(
 ) -> Result<(), NativeAgentAssemblyError> {
     let (child_resumes, _) = build_nested_application_resume(events, decisions, applications)?;
     coordinator.install_root(child_resumes).await
+}
+
+/// [`install_nested_application_resume`] for one fan-out member's decision:
+/// the member's call joins the node's other members (`install_member`).
+pub(crate) async fn install_nested_application_member_resume(
+    events: &[Event],
+    decisions: Vec<ResolvedDirectHitlDecision>,
+    applications: &ApplicationToolPresentationCatalog,
+    coordinator: &ApplicationResumeCoordinator,
+) -> Result<(), NativeAgentAssemblyError> {
+    let (child_resumes, _) = build_nested_application_resume(events, decisions, applications)?;
+    coordinator.install_member(child_resumes).await
 }
 
 fn build_nested_application_resume(
@@ -2958,6 +3023,8 @@ pub(crate) struct MaterializedApplicationTool {
     /// effective grant digest and any refusal, for its step record.
     delegation: Option<DelegationEvidence>,
     pub(crate) tool: Arc<dyn Tool>,
+    /// A saved Agent's per-invocation factory (T-2A3); `None` for a pipeline child.
+    pub(crate) member: Option<ScopedAgentMember>,
 }
 
 impl MaterializedApplicationTool {
@@ -3297,6 +3364,7 @@ async fn materialize_pipeline_children(
             internal_tools: InternalToolCatalog::default(),
             delegation,
             tool,
+            member: None,
         });
     }
     Ok(MaterializedPipelineChildren { tools, skipped })
@@ -3386,6 +3454,7 @@ pub(crate) async fn materialize_application_tools(
             delegated_authorization: application.delegated_authorization.clone(),
             internal_tools: application.internal_tools,
             delegation: Some(application.delegation.clone()),
+            member: Some(ScopedAgentMember(Arc::clone(&application), identity)),
             tool: Arc::new(ApplicationAgentTool::new(
                 application,
                 identity,
@@ -3936,6 +4005,7 @@ fn refused_application_tool(
         delegated_authorization: DelegatedAuthorizationCatalog::default(),
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence.clone()),
+        member: None,
         tool: Arc::new(DelegationRefusedTool::new(
             refused.name.clone(),
             refused.description.clone(),
@@ -3967,6 +4037,7 @@ fn refused_pipeline_tool(
         delegated_authorization: DelegatedAuthorizationCatalog::default(),
         internal_tools: InternalToolCatalog::default(),
         delegation: Some(refused.evidence),
+        member: None,
         tool: Arc::new(DelegationRefusedTool::new(
             application_tool_name(reference.identity),
             pipeline_tool_description(&reference.alias, reference.description.as_deref()),
@@ -4613,6 +4684,45 @@ struct ApplicationAgentTool {
     resume: Option<ApplicationResumeCoordinator>,
 }
 
+/// One saved Agent invoked once per fan-out member (T-2A3). A Map applies one
+/// worker to N items concurrently, like `LangGraph`'s `Send`: each item is its own
+/// invocation with its own event channel and receiver, over the one built
+/// application (its agent, toolsets, model handle and catalogs stay shared
+/// behind `Arc`, never rebuilt per item). The node's resume coordinator stays
+/// shared: it is keyed by invocation and call, and each item's call is its own.
+#[derive(Clone)]
+pub(crate) struct ScopedAgentMember(Arc<BuiltApplication>, ApplicationIdentity);
+
+impl ScopedAgentMember {
+    /// A fresh tool and runtime projection for one member's invocation. The
+    /// channel keeps the bound every Agent channel has.
+    pub(super) fn bind(
+        &self,
+        presentations: ApplicationToolPresentationCatalog,
+        resume: ApplicationResumeCoordinator,
+    ) -> (
+        Arc<dyn Tool>,
+        super::session::ApplicationRuntimeProjection,
+        ApplicationEventSender,
+    ) {
+        let (sender, receiver) = mpsc::channel(APPLICATION_EVENT_CHANNEL_CAPACITY);
+        let tool: Arc<dyn Tool> = Arc::new(ApplicationAgentTool::new(
+            Arc::clone(&self.0),
+            self.1,
+            Some(sender.clone()),
+            Some(resume.clone()),
+        ));
+        let events = ApplicationEventReceiver {
+            inner: Arc::new(Mutex::new(Some(receiver))),
+        };
+        (
+            tool,
+            super::session::ApplicationRuntimeProjection::streaming(presentations, events, resume),
+            sender,
+        )
+    }
+}
+
 impl ApplicationAgentTool {
     fn new(
         application: Arc<BuiltApplication>,
@@ -4763,7 +4873,7 @@ impl ApplicationAgentTool {
                     ctx.as_ref(),
                     self.name(),
                     &arguments,
-                    self.event_sender.as_ref(),
+                    routed_sender(self.event_sender.as_ref()).as_ref(),
                 )
                 .await?
         {
@@ -4976,7 +5086,7 @@ impl ApplicationAgentTool {
     }
 
     async fn send_container_event(&self, event: Event) -> adk_rust::Result<()> {
-        let Some(sender) = &self.event_sender else {
+        let Some(sender) = routed_sender(self.event_sender.as_ref()) else {
             return Err(application_event_channel_error());
         };
         sender
@@ -4986,7 +5096,7 @@ impl ApplicationAgentTool {
     }
 
     async fn send_event(&self, ctx: &dyn ToolContext, event: Event) -> adk_rust::Result<()> {
-        let Some(sender) = &self.event_sender else {
+        let Some(sender) = routed_sender(self.event_sender.as_ref()) else {
             return Ok(());
         };
         let mut event = event;
@@ -5007,7 +5117,7 @@ impl ApplicationAgentTool {
     }
 
     async fn send_fatal(&self, failure: ApplicationEventFailure) -> adk_rust::Result<()> {
-        let Some(sender) = &self.event_sender else {
+        let Some(sender) = routed_sender(self.event_sender.as_ref()) else {
             return Ok(());
         };
         sender
@@ -6342,6 +6452,27 @@ mod tests {
             history: Vec::new(),
             action: ChildApplicationResumeAction::RetainedPipeline(Box::new(pause)),
         }
+    }
+
+    /// R1 (T-2A3): a root or continuation install stays one batch; only a
+    /// fan-out member's install accumulates, and never twice for one call.
+    #[tokio::test]
+    async fn a_second_root_batch_is_refused_and_only_member_resumes_accumulate() {
+        let one = |call: &str| HashMap::from([(call.to_owned(), retained_pipeline_probe_resume())]);
+        let root = ApplicationResumeCoordinator::default();
+        root.install_root(one("first")).await.unwrap();
+        assert!(root.install_root(one("second")).await.is_err());
+        assert!(root.install_root(one("first")).await.is_err());
+
+        let members = ApplicationResumeCoordinator::default();
+        members.install_member(one("item-0")).await.unwrap();
+        members.install_member(one("item-2")).await.unwrap();
+        assert!(members.install_member(one("item-0")).await.is_err());
+        assert!(members.install_member(HashMap::new()).await.is_err());
+        // A root batch never joins members' resumes.
+        assert!(members.install_root(one("item-1")).await.is_err());
+        assert!(members.has_resume("root-owner", "item-0").await);
+        assert!(members.has_resume("root-owner", "item-2").await);
     }
 
     #[tokio::test]

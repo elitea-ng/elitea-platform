@@ -1809,6 +1809,14 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
     match error.code() {
         NativeAgentAssemblyErrorCode::UnsupportedCapability
             if error.cause().is_some_and(|cause| {
+                cause.code()
+                    == crate::agents::graph::compiler::FanoutChildRefusal::AgentCallsPipeline.code()
+            }) =>
+        {
+            RuntimeFailureKind::FanoutAgentCallsPipeline
+        }
+        NativeAgentAssemblyErrorCode::UnsupportedCapability
+            if error.cause().is_some_and(|cause| {
                 // A toolkit a direct node's position cannot serve, or a node
                 // kind a Parallel branch cannot run (an inline LLM node until
                 // FU-247), is fixed by editing the pipeline.
@@ -2098,6 +2106,35 @@ mod taxonomy_tests {
             "the invocation-local native agent session could not be configured",
         );
         assert_eq!(assembly_failure(&other), RuntimeFailureKind::Internal);
+    }
+
+    /// FU-291: a Map item or Parallel branch whose saved Agent calls a saved
+    /// pipeline ends as its own registered text (data-free), never the
+    /// generic unsupported one; the diagnostic names the node and the Agent.
+    #[test]
+    fn an_agent_member_calling_a_saved_pipeline_ends_as_its_registered_text() {
+        use crate::agents::graph::compiler::{FanoutChildRefusal, PipelineConfigurationError};
+        use crate::protocol::output::{FANOUT_AGENT_CALLS_PIPELINE_MESSAGE, runtime_error_policy};
+
+        let refusal = PipelineConfigurationError::FanoutChildUnsupported {
+            node: "asker/release-agent".to_owned(),
+            refusal: FanoutChildRefusal::AgentCallsPipeline,
+        };
+        assert!(
+            refusal.to_string().contains("asker/release-agent"),
+            "{refusal}"
+        );
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &refusal,
+            "the stored pipeline could not be compiled",
+        );
+        let kind = assembly_failure(&error);
+        assert_eq!(kind, RuntimeFailureKind::FanoutAgentCallsPipeline);
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(message, FANOUT_AGENT_CALLS_PIPELINE_MESSAGE);
+        assert!(message.contains("Map item or Parallel branch"));
+        assert!(!message.contains("release-agent"), "data-free text");
+        assert!(!retryable);
     }
 
     /// A saved child pipeline holding a Parallel (FU-249) ends as the

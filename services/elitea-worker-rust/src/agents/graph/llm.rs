@@ -293,6 +293,28 @@ impl LlmNodeDefinition {
         &self.input_mapping
     }
 
+    /// The state keys this node's `variable` mappings read.
+    pub(super) fn mapped_variables(&self) -> impl Iterator<Item = &str> {
+        self.input_mapping
+            .values()
+            .filter_map(|mapping| match mapping {
+                LlmInputMapping::Variable(key) => Some(key.as_str()),
+                _ => None,
+            })
+    }
+
+    /// The placeholder keys this node's `fstring` mappings look up, by the
+    /// renderer's own rules (`render_fstring`).
+    pub(super) fn template_keys(&self) -> impl Iterator<Item = &str> {
+        self.input_mapping
+            .values()
+            .filter_map(|mapping| match mapping {
+                LlmInputMapping::Template(template) => Some(fstring_keys(template)),
+                _ => None,
+            })
+            .flatten()
+    }
+
     pub(crate) fn tool_selections(&self) -> &[LlmToolkitSelection] {
         &self.tool_selections
     }
@@ -2057,6 +2079,31 @@ pub(crate) fn prepare_pipeline_llm_replay(
         })
         .collect();
     (model, toolsets)
+}
+
+/// The placeholder keys `render_fstring` would look up in `template`.
+fn fstring_keys(template: &str) -> Vec<&str> {
+    let mut keys = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative_open) = template[cursor..].find('{') {
+        let open = cursor + relative_open;
+        let Some(relative_end) = template[open + 1..].find('}') else {
+            break;
+        };
+        let end = open + 1 + relative_end;
+        let key = &template[open + 1..end];
+        if valid_output_key(key)
+            && key
+                .bytes()
+                .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            keys.push(key);
+            cursor = end + 1;
+        } else {
+            cursor = open + 1;
+        }
+    }
+    keys
 }
 
 pub(super) fn render_fstring(template: &str, state: &State) -> Result<String, LlmExecutionError> {

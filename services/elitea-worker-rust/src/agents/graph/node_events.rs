@@ -36,8 +36,6 @@ pub(crate) const PIPELINE_NODE_EVENT_SCOPE_STATE_KEY: &str =
 pub(crate) const PIPELINE_NODE_EVENT_SCOPE_WRAPPER_KEY: &str = "elitea_event_scope";
 const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
-#[path = "node_events_map.rs"]
-mod map_scope;
 #[path = "node_events_parallel.rs"]
 mod parallel_scope;
 use parallel_scope::ParallelEventScope;

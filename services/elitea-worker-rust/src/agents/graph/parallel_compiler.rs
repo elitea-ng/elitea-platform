@@ -12,11 +12,13 @@ use crate::agents::graph::application::{
 };
 use crate::agents::graph::direct_tool::DIRECT_TOOL_RESUME_STATE_KEY;
 use crate::agents::graph::fanout_control::FanoutCancellation;
+use crate::agents::graph::fanout_source::{FanoutSource, MapSource};
 use crate::agents::graph::hitl::HITL_RESUME_STATE_KEY;
 use crate::agents::graph::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmNode, LlmNodeDefinition, PARALLEL_LLM_INPUTS_STATE_KEY,
     PipelineLlmAgentFactory,
 };
+use crate::agents::graph::map_yaml::MapNodeDefinition;
 use crate::agents::graph::node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender,
 };
@@ -26,6 +28,7 @@ use crate::agents::graph::parallel::{
     ParallelCheckpointAuthority, ParallelDecision, ParallelOccurrenceCheckpointer,
     ParallelPauseCard,
 };
+use crate::agents::graph::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
 use crate::agents::graph::yaml::ParallelNodeDefinition;
 use adk_rust::graph::{
     Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphError, Node, NodeContext,
@@ -158,7 +161,7 @@ impl PipelineNodeRuntimes {
         // absolute scope path (PM-2: a Parallel two Agent-node levels down).
         let descendants = format!("{node}/");
         if !definitions.iter().any(|(key, definition)| {
-            (key == node || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+            (key == node || key.starts_with(&descendants)) && definition.has_fanout_nodes()
         }) {
             return Ok(None);
         }
@@ -284,9 +287,16 @@ impl PipelineDefinition {
             .any(|node| matches!(node, PipelineNodeDefinition::Parallel(_)))
     }
 
-    pub(crate) fn first_parallel_node(&self) -> Option<&str> {
+    /// Whether this pipeline holds a fan-out node (a Parallel or a Map): both
+    /// bind the run's fan-out authority (T-2A3).
+    pub(crate) fn has_fanout_nodes(&self) -> bool {
+        self.has_parallel_nodes() || self.has_map_nodes()
+    }
+
+    /// The first fan-out node (a Parallel or a Map), by declaration order.
+    pub(crate) fn first_fanout_node(&self) -> Option<&str> {
         self.nodes.iter().find_map(|node| match node {
-            PipelineNodeDefinition::Parallel(node) => Some(node.id()),
+            PipelineNodeDefinition::Parallel(_) | PipelineNodeDefinition::Map(_) => Some(node.id()),
             _ => None,
         })
     }
@@ -297,14 +307,19 @@ impl PipelineDefinition {
         runtimes: &PipelineNodeRuntimes,
     ) -> Result<(Arc<dyn Checkpointer>, PipelineNodeRuntimes), PipelineConfigurationError> {
         let mut runtimes = runtimes.clone();
-        if !self.has_parallel_nodes() {
+        // A Map runs on the same fan-out adapter and binds the same authority.
+        if !self.has_fanout_nodes() {
             return Ok((checkpointer, runtimes));
         }
         let binding = runtimes
             .parallel
             .as_ref()
             .ok_or(PipelineConfigurationError::Unsupported(
-                "the fixed Parallel atomic checkpoint authority is not bound",
+                if self.has_parallel_nodes() {
+                    "the fixed Parallel atomic checkpoint authority is not bound"
+                } else {
+                    "the Map fan-out checkpoint authority is not bound"
+                },
             ))?;
         if !Arc::ptr_eq(&checkpointer, &binding.parent_checkpointer()) {
             return Err(PipelineConfigurationError::Invalid(
@@ -402,6 +417,7 @@ impl PipelineDefinition {
             .map(|branch| match owned.get(branch.id()) {
                 Some(OwnedBranch::Agent(node)) => node.selection().alias().to_owned(),
                 Some(OwnedBranch::Llm(node)) => node.id().to_owned(),
+                Some(OwnedBranch::StateModifier(node)) => node.id().to_owned(),
                 None => branch.node().to_owned(),
             })
             .collect();
@@ -437,16 +453,147 @@ impl PipelineDefinition {
     }
 }
 
+impl PipelineDefinition {
+    /// T-2A3: a Map runs on the shared fan-out adapter: one child per source
+    /// item, keyed by its index, every child running the Map's one owned
+    /// worker (a State Modifier, a saved Agent or an LLM node).
+    pub(super) fn bind_map_node(
+        &self,
+        mut builder: PipelineGraphBuilder,
+        definition: &MapNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
+        let binding = runtimes
+            .parallel
+            .as_ref()
+            .filter(|_| runtimes.parallel_authority_bound)
+            .ok_or(PipelineConfigurationError::Unsupported(
+                "the Map fan-out authority was not composed",
+            ))?;
+        let map = definition.runtime();
+        let worker = match self.nodes.iter().find(|node| node.id() == map.worker) {
+            Some(PipelineNodeDefinition::Application(node)) => OwnedBranch::Agent(node.clone()),
+            Some(PipelineNodeDefinition::Llm(node)) => OwnedBranch::Llm(node.clone()),
+            Some(PipelineNodeDefinition::StateModifier(node)) => {
+                OwnedBranch::StateModifier(node.clone())
+            }
+            Some(other) => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: other.id().to_owned(),
+                    refusal: FanoutChildRefusal::Kind,
+                });
+            }
+            None => {
+                return Err(PipelineConfigurationError::Invalid(
+                    "the Map owned worker is missing",
+                ));
+            }
+        };
+        // C1: a saved worker pipeline holding Code is refused by the worker's
+        // name, as a Parallel branch is.
+        reject_nested_parallel(
+            &BTreeMap::from([(map.worker.clone(), worker.clone())]),
+            runtimes,
+        )?;
+        if matches!(worker, OwnedBranch::Agent(_)) && runtimes.application.is_none() {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the Map Agent worker resolver is unavailable",
+            ));
+        }
+        if matches!(worker, OwnedBranch::Llm(_))
+            && runtimes
+                .llm
+                .as_ref()
+                .is_none_or(|factory| factory.for_fanout_branch().is_none())
+        {
+            return Err(PipelineConfigurationError::Unsupported(
+                "the Map LLM worker runtime is not bound to this compiler",
+            ));
+        }
+        let member_name = match &worker {
+            OwnedBranch::Agent(node) => node.selection().alias().to_owned(),
+            other => other.id().to_owned(),
+        };
+        let factory = Arc::new(CompilerParallelBranches {
+            owned: (0..map.max_items)
+                .map(|index| (index.to_string(), worker.clone()))
+                .collect(),
+            state_types: self.state.clone(),
+            resolver: runtimes.application.clone(),
+            llm: runtimes.llm.clone(),
+            events: runtimes.events.clone(),
+            root_session: binding.root_session.clone(),
+            // M1: a Map item's delegated sign-in pause meets the same
+            // `credential_unavailable` gate a Parallel member does.
+            delegated_servers: runtimes.delegated_servers(),
+        });
+        let worker_digest = factory
+            .owned_definition_digest(&crate::agents::graph::ParallelBranchDefinition::map_item(
+                0,
+                &map.worker,
+            ))
+            .map_err(|_| {
+                PipelineConfigurationError::Unsupported("the Map worker identity is unproved")
+            })?;
+        let source = MapSource::new(map.clone(), worker_digest)
+            .map_err(PipelineConfigurationError::Graph)?;
+        let runtime = Arc::new(AdkParallelBranchRuntime::new(
+            binding.authority.clone(),
+            factory,
+            Arc::clone(&binding.occurrence),
+        ));
+        let mut node = DurableParallelNode::from_source(FanoutSource::Map(source), runtime);
+        if let Some(decisions) = &binding.decisions {
+            node = node.with_decisions(Arc::clone(decisions));
+        }
+        builder = builder.node(
+            node.with_deadline(binding.deadline)
+                .with_cancellation(Arc::clone(&binding.cancellation))
+                .with_node_events(runtimes.events.clone())
+                .with_member_names(vec![member_name; map.max_items])
+                .with_output_reducer(self.state_reducers.get(&map.destination).copied()),
+        );
+        if let Some(target) = definition.transition() {
+            builder = builder.edge(definition.id(), if target == "END" { END } else { target });
+        }
+        Ok(builder)
+    }
+}
+
+/// FU-291: a member whose saved Agent calls a saved pipeline is refused by
+/// name before the run starts (Map and Parallel alike); the pipeline used
+/// directly as the worker or branch is not affected.
+fn reject_agent_calling_pipeline(
+    owned: &BTreeMap<String, OwnedBranch>,
+    runtimes: &PipelineNodeRuntimes,
+) -> Result<(), PipelineConfigurationError> {
+    let Some(resolver) = runtimes.application.as_ref() else {
+        return Ok(());
+    };
+    for branch in owned.values() {
+        if let OwnedBranch::Agent(node) = branch
+            && resolver.agent_calls_saved_pipeline(node.id(), node.selection().alias())
+        {
+            return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                node: format!("{}/{}", node.id(), node.selection().alias()),
+                refusal: FanoutChildRefusal::AgentCallsPipeline,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn reject_nested_parallel(
     owned: &BTreeMap<String, OwnedBranch>,
     runtimes: &PipelineNodeRuntimes,
 ) -> Result<(), PipelineConfigurationError> {
+    reject_agent_calling_pipeline(owned, runtimes)?;
     // Only an Agent branch runs a saved composition; an LLM branch has none.
     let owned = owned
         .iter()
         .filter_map(|(key, branch)| match branch {
             OwnedBranch::Agent(node) => Some((key.clone(), node)),
-            OwnedBranch::Llm(_) => None,
+            OwnedBranch::Llm(_) | OwnedBranch::StateModifier(_) => None,
         })
         .collect::<BTreeMap<_, _>>();
     if let Some(definitions) = runtimes.composition_definitions() {
@@ -470,7 +617,7 @@ fn reject_nested_parallel(
             let path = node.id().to_owned();
             let descendants = format!("{path}/");
             if definitions.iter().any(|(key, definition)| {
-                (key == &path || key.starts_with(&descendants)) && definition.has_parallel_nodes()
+                (key == &path || key.starts_with(&descendants)) && definition.has_fanout_nodes()
             }) {
                 return Err(PipelineConfigurationError::FanoutChildUnsupported {
                     node: node.id().to_owned(),
@@ -492,9 +639,9 @@ pub(crate) fn refuse_child_parallel(
         return Ok(());
     };
     for (path, definition) in definitions {
-        if let Some(parallel) = definition.first_parallel_node() {
+        if let Some(fanout) = definition.first_fanout_node() {
             return Err(PipelineConfigurationError::FanoutChildUnsupported {
-                node: format!("{path}/{parallel}"),
+                node: format!("{path}/{fanout}"),
                 refusal: FanoutChildRefusal::ContainsParallel,
             });
         }
@@ -560,6 +707,8 @@ pub(super) fn validate_parallel_ownership(
 enum OwnedBranch {
     Agent(ApplicationNodeDefinition),
     Llm(LlmNodeDefinition),
+    /// A Map's State Modifier worker (T-2A3); a fixed Parallel never owns one.
+    StateModifier(StateModifierNodeDefinition),
 }
 
 impl OwnedBranch {
@@ -567,6 +716,7 @@ impl OwnedBranch {
         match self {
             Self::Agent(node) => node.id(),
             Self::Llm(node) => node.id(),
+            Self::StateModifier(node) => node.id(),
         }
     }
 
@@ -574,6 +724,7 @@ impl OwnedBranch {
         match self {
             Self::Agent(node) => node.output_keys(),
             Self::Llm(node) => node.output_keys(),
+            Self::StateModifier(node) => node.output_keys(),
         }
     }
 }
@@ -659,7 +810,7 @@ impl CompilerParallelBranches {
         let events = session.events().all();
         scope
             .applications
-            .install_scope_resume(&events, resolved)
+            .install_scope_member_resume(&events, resolved)
             .await
             .map_err(|error| {
                 refused(&format!(
@@ -758,6 +909,43 @@ impl CompilerParallelBranches {
             })
     }
 
+    /// A Map item's State Modifier worker: one node over its declared inputs
+    /// and outputs, with typed defaults for outputs it has not written yet.
+    fn compile_item(
+        &self,
+        definition: &StateModifierNodeDefinition,
+        execution: &ParallelBranchExecution,
+    ) -> Result<CompiledGraph, GraphError> {
+        let mut channels = BTreeSet::from([
+            "messages".to_owned(),
+            "_pipeline_blocked".to_owned(),
+            PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+        ]);
+        channels.extend(definition.input_keys().iter().cloned());
+        channels.extend(definition.output_keys().iter().cloned());
+        let mut schema = StateSchema::new();
+        for key in channels {
+            let default = self
+                .state_types
+                .get(&key)
+                .map_or(serde_json::Value::Null, |kind| typed_default(kind));
+            schema
+                .channels
+                .insert(key.clone(), Channel::new(&key).with_default(default));
+        }
+        StateGraph::new(schema)
+            .add_node(execution.wrap_node(StateModifierNode::new(definition.clone())))
+            .add_edge(START, definition.id())
+            .add_edge(definition.id(), END)
+            .compile()
+            .map(|graph| {
+                graph
+                    .with_checkpointer_arc(execution.checkpointer())
+                    .with_max_concurrency(1)
+                    .with_strict_channels()
+            })
+    }
+
     fn definition(
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
@@ -800,6 +988,8 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 result.copy_from_slice(digest.finish().as_ref());
                 return Ok(result);
             }
+            // The Map worker digest main binds into every item id.
+            OwnedBranch::StateModifier(node) => return Ok(node.config_digest()),
         };
         let participant = self
             .resolver()?
@@ -831,6 +1021,21 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         match self.definition(branch)? {
             OwnedBranch::Agent(node) => node.freeze_parallel_input(parent),
             OwnedBranch::Llm(node) => node.freeze_parallel_input(parent),
+            // A State Modifier reads its declared inputs directly.
+            OwnedBranch::StateModifier(node) => node
+                .input_keys()
+                .iter()
+                .map(|key| {
+                    parent
+                        .get(key)
+                        .map(|value| (key.clone(), value.clone()))
+                        .ok_or_else(|| {
+                            GraphError::InvalidGraph(
+                                "a Map State Modifier input is missing from its item".to_owned(),
+                            )
+                        })
+                })
+                .collect(),
         }
     }
 
@@ -842,6 +1047,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         let definition = match self.definition(branch)? {
             OwnedBranch::Agent(node) => node.clone(),
             OwnedBranch::Llm(node) => return self.compile_llm_branch(node, &execution),
+            OwnedBranch::StateModifier(node) => return self.compile_item(node, &execution),
         };
         let mut failure_events = None;
         let resolver = match self.events.as_ref() {
@@ -1027,6 +1233,18 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
     }
 }
 
+/// The empty value of a declared state type, as the Map worker schema seeds it.
+fn typed_default(kind: &str) -> serde_json::Value {
+    match kind {
+        "str" => serde_json::Value::String(String::new()),
+        "list" => serde_json::json!([]),
+        "dict" => serde_json::json!({}),
+        "int" | "float" => serde_json::json!(0),
+        "bool" => serde_json::Value::Bool(false),
+        _ => serde_json::Value::Null,
+    }
+}
+
 /// FU-248: an Agent member's child threads belong to its branch's family, so
 /// the saved pipeline it runs journals its effectful direct nodes through it.
 fn branch_journal_resolver(
@@ -1092,3 +1310,11 @@ mod tests;
 #[cfg(test)]
 #[path = "parallel_cards_tests.rs"]
 mod card_tests;
+
+#[cfg(test)]
+#[path = "parallel_compiler_map_tests.rs"]
+mod map_tests;
+
+#[cfg(test)]
+#[path = "parallel_compiler_map_agent_tests.rs"]
+mod map_agent_tests;

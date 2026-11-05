@@ -358,20 +358,6 @@ pub(super) use parallel_application::PARALLEL_AGENT_INPUTS_STATE_KEY;
 
 /// Invocation-owned lookup of an already resolved saved Application tool.
 pub(crate) trait PipelineApplicationResolver: Send + Sync {
-    /// Admit only the original saved identity and an effect-free, nonpausing cohort.
-    fn map_worker_definition_digest(
-        &self,
-        _node: &str,
-    ) -> Result<[u8; 32], ApplicationExecutionError> {
-        Err(ApplicationExecutionError::Unavailable)
-    }
-    fn for_map_events(
-        &self,
-        _events: PipelineNodeEventSender,
-    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
-        Err(ApplicationExecutionError::Unavailable)
-    }
-
     /// One frozen saved participant fingerprint retained by admitted assembly.
     /// Aliases, tool names, and containing graph digests are not substitutes.
     fn fixed_parallel_definition_digest(
@@ -390,6 +376,14 @@ pub(crate) trait PipelineApplicationResolver: Send + Sync {
         _journals: Arc<dyn super::node_recovery_runtime::NodeRecoveryFactory>,
     ) -> Option<Arc<dyn PipelineApplicationResolver>> {
         None
+    }
+
+    /// Whether the saved Agent that `node` runs (by `alias`) calls a saved
+    /// pipeline among its tools, at any depth. Such an Agent cannot run as a
+    /// fan-out member yet (FU-291): its pipeline's checkpoint threads are not
+    /// among the member's admitted threads.
+    fn agent_calls_saved_pipeline(&self, _node: &str, _alias: &str) -> bool {
+        false
     }
 
     /// Rebind the existing frozen resolver to one exact branch event sender.

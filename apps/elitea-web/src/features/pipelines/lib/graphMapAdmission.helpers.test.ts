@@ -24,7 +24,7 @@ describe('Map explicit ownership and channel contract', () => {
   });
   it('keeps production type refusal and allows local reads only on the exact owned worker', () => {
     const issues = collectGraphAdmissionIssues(graph());
-    expect(issues.filter((issue) => issue.rule === 'node.type').map((issue) => issue.nodeId)).toEqual(['map_items']);
+    expect(issues.filter((issue) => issue.rule === 'node.type').map((issue) => issue.nodeId)).toEqual([]);
     expect(issues.filter((issue) => issue.rule === 'node.state-reference')).toEqual([]);
     const foreign = { id: 'foreign_reader', type: 'state_modifier', input: ['entity'], template: 'x' };
     expect(collectGraphAdmissionIssues({ ...graph(), nodes: [map, worker, foreign] })
@@ -42,7 +42,7 @@ describe('Map explicit ownership and channel contract', () => {
   ])('refuses exact Map field %s at %s', (patch, field) => {
     expect(fields(graph({ ...map, ...patch }))).toContain(field);
   });
-  it.each(['code', 'llm', 'toolkit', 'hitl', 'aggregate', 'parallel'])('refuses unreviewed %s worker effects', (type) => {
+  it.each(['code', 'toolkit', 'hitl', 'aggregate', 'parallel'])('refuses unreviewed %s worker effects', (type) => {
     expect(fields(graph(map, { ...worker, type }))).toContain('worker');
   });
   it('rejects duplicate Map ownership and local-channel exposure', () => {

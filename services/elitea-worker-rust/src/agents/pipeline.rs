@@ -1077,7 +1077,7 @@ impl PipelineNativeAgentAssembler {
                     display_name: alias.to_owned(),
                 }
             } else {
-                let (tool, projection, fingerprint) =
+                let (tool, projection, fingerprint, member) =
                     bind_scoped_agent(snapshot, profile.shell(), &runtime, alias).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
@@ -1095,6 +1095,7 @@ impl PipelineNativeAgentAssembler {
                     tool,
                     scope,
                     fingerprint,
+                    member,
                 }
             };
             if nodes
@@ -1600,6 +1601,8 @@ enum NativePipelineApplicationParticipant {
         tool: Arc<dyn Tool>,
         scope: Arc<scoped_runtime::PipelineApplicationNodeRuntime>,
         fingerprint: Option<SavedAgentFingerprint>,
+        /// Binds one fan-out member its own invocation (T-2A3).
+        member: Option<crate::agents::application_tools::ScopedAgentMember>,
     },
     Agent(Arc<dyn Tool>),
     Pipeline {
@@ -1657,32 +1660,6 @@ impl NativePipelineApplicationResolver {
     }
 }
 impl PipelineApplicationResolver for NativePipelineApplicationResolver {
-    fn map_worker_definition_digest(
-        &self,
-        node: &str,
-    ) -> Result<[u8; 32], ApplicationExecutionError> {
-        let (_, participant) = self
-            .nodes
-            .get(node)
-            .ok_or(ApplicationExecutionError::Unavailable)?;
-        match participant {
-            NativePipelineApplicationParticipant::Pipeline { definition, .. }
-                if definition.map_nonpausing_effectfree() =>
-            {
-                self.parallel_participant_digest(node)
-            }
-            _ => Err(ApplicationExecutionError::Unavailable),
-        }
-    }
-    fn for_map_events(
-        &self,
-        events: PipelineNodeEventSender,
-    ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
-        // The existing rebinder retains saved identity, call owners and exact scope.
-        self.rebind_parallel_events(&events)
-            .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
-    }
-
     fn for_branch_journals(
         &self,
         journals: Arc<dyn super::graph::node_recovery_runtime::NodeRecoveryFactory>,
@@ -1696,6 +1673,22 @@ impl PipelineApplicationResolver for NativePipelineApplicationResolver {
     ) -> Result<Arc<dyn PipelineApplicationResolver>, ApplicationExecutionError> {
         self.rebind_parallel_events(&events)
             .map(|resolver| Arc::new(resolver) as Arc<dyn PipelineApplicationResolver>)
+    }
+
+    fn agent_calls_saved_pipeline(&self, node: &str, alias: &str) -> bool {
+        let participant = if self.nodes.is_empty() {
+            self.participants.get(alias)
+        } else {
+            self.nodes
+                .get(node)
+                .filter(|(selected, _)| selected == alias)
+                .map(|(_, participant)| participant)
+        };
+        matches!(
+            participant,
+            Some(NativePipelineApplicationParticipant::ScopedAgent { scope, .. })
+                if scope.applications.presentation_catalog().has_pipeline_descendant()
+        )
     }
 
     fn fixed_parallel_definition_digest(
@@ -2174,7 +2167,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
     let parallel = if runtime.materialization.is_graph_path() {
         Ok(())
     } else {
-        definition.first_parallel_node().map_or_else(
+        definition.first_fanout_node().map_or_else(
             || crate::agents::graph::compiler::refuse_child_parallel(&bound.runtimes),
             |node| {
                 Err(PipelineConfigurationError::FanoutChildUnsupported {
@@ -2567,7 +2560,7 @@ fn bind_admitted_saved_pipeline<'a>(
                 }
             } else {
                 // Bind one exact ordinary descendant to its registry-owned event receiver.
-                let (tool, projection, fingerprint) =
+                let (tool, projection, fingerprint, member) =
                     bind_scoped_agent(&snapshot, admitted.profile.shell(), runtime, alias).await?;
                 if presented.insert(alias.to_owned()) {
                     presentations = merge_application_presentations(
@@ -2586,6 +2579,7 @@ fn bind_admitted_saved_pipeline<'a>(
                     tool,
                     scope,
                     fingerprint,
+                    member,
                 }
             };
             if nodes
@@ -2623,6 +2617,7 @@ type ScopedAgentBinding = (
     Arc<dyn Tool>,
     ApplicationRuntimeProjection,
     Option<SavedAgentFingerprint>,
+    Option<crate::agents::application_tools::ScopedAgentMember>,
 );
 
 async fn bind_scoped_agent(
@@ -2665,12 +2660,12 @@ async fn bind_scoped_agent(
         runtime.materialization.record_skipped(&skipped);
     }
     let materialized = materialized.ok_or_else(invalid_pipeline_tool_scope)?;
-    let fingerprint = materialized
+    let entry = materialized
         .tools
         .iter()
         .find(|entry| entry.alias == alias && entry.agent_type == "agent")
-        .ok_or_else(invalid_pipeline_tool_scope)?
-        .saved_agent_fingerprint;
+        .ok_or_else(invalid_pipeline_tool_scope)?;
+    let (fingerprint, member) = (entry.saved_agent_fingerprint, entry.member.clone());
     let (mut participants, projection) = application_participants(materialized)?;
     if participants.len() != 1 {
         return Err(invalid_pipeline_tool_scope());
@@ -2679,7 +2674,9 @@ async fn bind_scoped_agent(
         .remove(alias)
         .ok_or_else(invalid_pipeline_tool_scope)?
     {
-        NativePipelineApplicationParticipant::Agent(tool) => Ok((tool, projection, fingerprint)),
+        NativePipelineApplicationParticipant::Agent(tool) => {
+            Ok((tool, projection, fingerprint, member))
+        }
         _ => Err(invalid_pipeline_tool_scope()),
     }
 }

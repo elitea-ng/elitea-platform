@@ -43,6 +43,11 @@ type RuntimeFailureFrame struct {
 	Failure               RuntimeFailure
 }
 
+// MaxRuntimeFailureSafeMessageBytes bounds a runtime failure's safe message. The
+// Worker keeps every registered message within it (a parity test in
+// services/elitea-worker-rust/src/protocol/output.rs reads this line).
+const MaxRuntimeFailureSafeMessageBytes = 256
+
 func (f RuntimeFailureFrame) Validate() error {
 	if f.StreamID == "" || f.TenantID == "" || f.ResourceProjectID == "" || f.ProjectionProjectID == "" || f.WorkloadSessionID == "" || f.ProducerID == "" || f.EventID == "" || f.LogicalOutputID == "" || f.Sequence == 0 || f.OccurredAt.IsZero() {
 		return ErrInvalidValidationOutput
@@ -68,7 +73,7 @@ func (f RuntimeFailureFrame) Validate() error {
 	if f.PayloadDigest.IsZero() || len(f.EncodedFailure) == 0 || len(f.EncodedFailure) > MaxConfigurationValidationResultBytes || runtimedomain.SHA256(f.EncodedFailure) != f.PayloadDigest {
 		return ErrInvalidValidationOutput
 	}
-	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || len(f.Failure.SafeMessage) > 256 {
+	if f.Failure.Code == "" || f.Failure.SafeMessage == "" || len(f.Failure.Code) > 256 || len(f.Failure.SafeMessage) > MaxRuntimeFailureSafeMessageBytes {
 		return ErrInvalidValidationOutput
 	}
 	expectedOutcome := executionapp.SettlementFailed

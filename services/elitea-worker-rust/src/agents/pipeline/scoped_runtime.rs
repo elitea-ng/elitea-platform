@@ -137,6 +137,9 @@ pub(crate) struct PipelineApplicationNodeRuntime {
     /// Activation calls whose start this runtime forwarded and whose call is
     /// still running: a fan-out child that fails closes its visible call.
     visible_starts: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+    /// A fan-out member's own application channel: its child run, nested saved
+    /// applications included, sends there (T-2A3).
+    member_events: Option<crate::agents::application_tools::ApplicationEventSender>,
 }
 
 impl PipelineApplicationNodeRuntime {
@@ -154,6 +157,7 @@ impl PipelineApplicationNodeRuntime {
             events,
             prepare_gate,
             visible_starts: Arc::default(),
+            member_events: None,
         }
     }
 
@@ -166,6 +170,27 @@ impl PipelineApplicationNodeRuntime {
             events,
             prepare_gate: Arc::clone(&self.prepare_gate),
             visible_starts: Arc::default(),
+            member_events: self.member_events.clone(),
+        }
+    }
+
+    /// One fan-out member's own invocation (T-2A3): its event transport and
+    /// its own application projection (event channel), over the same saved
+    /// scope, recovery owner and prepare gate.
+    pub(super) fn for_member(
+        &self,
+        events: PipelineNodeEventSender,
+        applications: Arc<ApplicationRuntimeProjection>,
+        member_events: crate::agents::application_tools::ApplicationEventSender,
+    ) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            node_name: self.node_name.clone(),
+            applications,
+            events,
+            prepare_gate: Arc::clone(&self.prepare_gate),
+            visible_starts: Arc::default(),
+            member_events: Some(member_events),
         }
     }
 
@@ -288,10 +313,20 @@ impl PipelineApplicationNodeRuntime {
         let receiver_owner = self.applications.event_receiver().ok_or_else(failure)?;
         let mut receiver = receiver_owner.take().await.map_err(|_| failure())?;
         let tool = Arc::clone(tool);
+        let member_events = self.member_events.clone();
         let mut terminal = None;
         let result = self
             .run_child_draining(
-                async move { tool.execute(tool_context, arguments).await },
+                async move {
+                    let child = tool.execute(tool_context, arguments);
+                    match member_events {
+                        Some(sender) => {
+                            crate::agents::application_tools::with_member_events(sender, child)
+                                .await
+                        }
+                        None => child.await,
+                    }
+                },
                 &mut receiver,
                 &receipt,
                 graph_scope.as_ref(),

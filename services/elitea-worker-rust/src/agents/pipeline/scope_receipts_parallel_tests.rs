@@ -396,6 +396,7 @@ async fn ordinary_save_and_child_factory_keep_the_same_underlying_authority() {
         node_id: definition.id().to_owned(),
         step: 1,
         config_digest: definition.config_digest(),
+        map: None,
     };
     assert!(
         wrapped

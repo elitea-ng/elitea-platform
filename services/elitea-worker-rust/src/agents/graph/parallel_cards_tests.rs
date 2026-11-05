@@ -954,6 +954,244 @@ fn a_tool_guard_card_from_an_earlier_pause_keeps_its_bytes_and_a_recorded_rule_i
     assert_ne!(policy, platform);
 }
 
+/// T-2A3 golden (Map on the shared fan-out adapter): one Parallel run that
+/// pauses on a card in each child, then settles, captured on main
+/// `0c41d5b65` before the adapter was generalized. It pins the child thread
+/// ids and receipts, the parked cards and their parts, the join entries and
+/// the `kind` of every fan-out span. The refactor must leave it unchanged.
+mod shared_adapter_golden {
+    use super::*;
+    use elitea_agent_runtime::graph::fanout::identity::lowercase_hex;
+
+    const CHILD_ENV: &str = "ELITEA_PARALLEL_GOLDEN_CHILD";
+    const SUMMARY: &str = "PARALLEL_GOLDEN_SUMMARY ";
+
+    async fn scenario() -> serde_json::Value {
+        let fixture = Fixture::new(HITL_CHILD, PipelineNodeRuntimes::default());
+        let paused = fixture
+            .node(1)
+            .execute(&context())
+            .await
+            .expect("both children pause");
+        let Some(Interrupt::Dynamic {
+            data: Some(data), ..
+        }) = paused.interrupt.as_ref()
+        else {
+            panic!("expected the parked fan-out interrupt");
+        };
+        let mut children = Vec::new();
+        for branch in ["left", "right"] {
+            let thread = Fixture::thread(branch);
+            let saved = fixture
+                .store
+                .load(&thread)
+                .await
+                .unwrap()
+                .expect("paused child");
+            let pause = fixture.pause_of(branch).await;
+            let card = child_card(&pause).expect("proven").card;
+            let parts = crate::agents::graph::parallel_cards::card_parts(&pause).expect("parts");
+            children.push(json!({
+                "thread": thread,
+                "paused_checkpoint_id": pause.checkpoint_id,
+                "receipt": saved.metadata[RECEIPT],
+                "card": {"interrupt_id": card.interrupt_id, "tool_call_id": card.tool_call_id},
+                "parts": {
+                    "kind": format!("{:?}", parts.kind),
+                    "available_actions": parts.available_actions,
+                    "display": serde_json::to_value(&parts.display).expect("display json"),
+                    "payload_sha256": parts.payload_sha256,
+                },
+            }));
+        }
+        let cards = parked(&paused);
+        for (key, _) in &cards {
+            fixture.ledger.decide(key, "approve", None);
+        }
+        let done = fixture
+            .node(3)
+            .execute(&context())
+            .await
+            .expect("both children done");
+        // The activation's owned config digest, as main's `prepare` folds it
+        // (`parallel.rs` owned-config): the node's config digest, then each
+        // owned branch definition digest in declared order.
+        let mut owned = ring::digest::Context::new(&ring::digest::SHA256);
+        owned.update(b"elitea.graph.parallel.owned-config.v1\0");
+        owned.update(&fixture.parallel.config_digest());
+        for branch in fixture.parallel.branches() {
+            owned.update(
+                &fixture
+                    .branches
+                    .owned_definition_digest(branch)
+                    .expect("owned digest"),
+            );
+        }
+        let config_digest = lowercase_hex(owned.finish().as_ref());
+        json!({
+            "config_digest": config_digest,
+            "pending": data["pending"],
+            "children": children,
+            "joined": done.updates["joined"],
+        })
+    }
+
+    /// Runs in its own process under a global TRACE subscriber, so other
+    /// tests' spans stay out of the capture (#1172).
+    #[test]
+    fn parallel_golden_child() {
+        if std::env::var_os(CHILD_ENV).is_none() {
+            return;
+        }
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .with_ansi(false)
+            .with_writer(std::io::stdout)
+            .init();
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        let summary = runtime.block_on(scenario());
+        println!("{SUMMARY}{summary}");
+    }
+
+    #[test]
+    fn a_parallel_run_keeps_its_threads_cards_join_and_trace_kind() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "agents::graph::compiler::parallel_compiler::card_tests::shared_adapter_golden::parallel_golden_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .expect("the golden child runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let summary = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(SUMMARY))
+            .expect("the summary line");
+        let mut summary: serde_json::Value = serde_json::from_str(summary).expect("summary JSON");
+        // The node's config digest is frozen into every card key: pin it.
+        assert_eq!(summary["config_digest"], GOLDEN_CONFIG_DIGEST);
+        // Each card key is the contract function of its frozen inputs: the
+        // node, step, config digest, 1-based ordinal and child thread pinned
+        // here, plus this run's paused checkpoint and interrupt ids.
+        for (ordinal, child) in summary["children"].as_array().unwrap().iter().enumerate() {
+            let interrupt_id = child["card"]["interrupt_id"].as_str().unwrap();
+            let expected = elitea_agent_runtime::graph::fanout::identity::interrupt_key(
+                &elitea_agent_runtime::graph::fanout::identity::InterruptKeyInput {
+                    root_thread: ROOT,
+                    fanout_node_id: "gather",
+                    step: 0,
+                    config_digest: GOLDEN_CONFIG_DIGEST,
+                    ordinal: u64::try_from(ordinal + 1).unwrap(),
+                    child_thread: child["thread"].as_str().unwrap(),
+                    child_paused_checkpoint_id: child["paused_checkpoint_id"].as_str().unwrap(),
+                    interrupt_id,
+                    tool_call_id: child["card"]["tool_call_id"].as_str().unwrap(),
+                },
+            );
+            let pending = summary["pending"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|card| card["interrupt_id"] == interrupt_id)
+                .expect("the child's card is parked");
+            assert_eq!(
+                pending["interrupt_key"],
+                expected.as_str(),
+                "ordinal {}",
+                ordinal + 1
+            );
+        }
+        mask_run_ids(&mut summary);
+        let digest = lowercase_hex(
+            ring::digest::digest(&ring::digest::SHA256, summary.to_string().as_bytes()).as_ref(),
+        );
+        // Readable pins first, so a change says what moved.
+        let threads: Vec<&str> = summary["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|child| child["thread"].as_str().unwrap())
+            .collect();
+        assert_eq!(threads, ["child:gather:left:0:0", "child:gather:right:1:0"]);
+        // Two cards, keyed as recomputed above.
+        assert_eq!(summary["pending"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            summary["joined"],
+            json!([
+                {"branch_id": "left", "node": "workerA", "outputs": {}, "status": "succeeded"},
+                {"branch_id": "right", "node": "workerB", "outputs": {}, "status": "succeeded"},
+            ])
+        );
+        let fanout_spans: Vec<&str> = stdout
+            .lines()
+            .filter(|line| line.contains("graph.fanout."))
+            .collect();
+        assert!(
+            fanout_spans
+                .iter()
+                .any(|line| line.contains("graph.fanout.child{kind=\"parallel\""))
+        );
+        assert!(
+            fanout_spans
+                .iter()
+                .any(|line| line.contains("graph.fanout.activation{kind=\"parallel\""))
+        );
+        assert!(
+            !stdout.contains("kind=\"map\""),
+            "a Parallel run traced as Map"
+        );
+        // Every byte of the threads, receipts, cards, parts and join entries.
+        assert_eq!(
+            digest, GOLDEN_DIGEST,
+            "the Parallel run changed; see the readable pins above"
+        );
+    }
+
+    /// The in-memory store mints a random checkpoint id per save, and the
+    /// interrupt id, card key and payload digest derive from it; their
+    /// derivation is checked above, so only these values are masked.
+    fn mask_run_ids(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, entry) in map.iter_mut() {
+                    if matches!(
+                        key.as_str(),
+                        "checkpoint_id"
+                            | "paused_checkpoint_id"
+                            | "interrupt_id"
+                            | "interrupt_key"
+                            | "payload_sha256"
+                    ) {
+                        *entry = json!("<run>");
+                    } else {
+                        mask_run_ids(entry);
+                    }
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(mask_run_ids),
+            _ => {}
+        }
+    }
+
+    const GOLDEN_CONFIG_DIGEST: &str =
+        "609ff69f650951a18b0cb7e33c026ab68117c3b62db37f5dc3c9c5b7d57c6f00";
+    // `display` is pinned as its serialized bytes (what is stored and sent), not as Debug text.
+    const GOLDEN_DIGEST: &str = "7ea1ad1952ce8a08aac8e948266833584900dc5d587595e4e448d2eec89bbc9a";
+}
+
 /// FU-250 (M2, the FU-268 rule): a delegated sign-in pause stored without a
 /// toolkit id (by an earlier Worker) re-raises its card with no
 /// `display.toolkit_id`, so its bytes are the earlier ones and Main keeps it

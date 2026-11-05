@@ -102,6 +102,12 @@ pub enum RuntimeFailureKind {
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
+    /// FU-288: a fan-out (Map item or Parallel branch) failed under On Error
+    /// `stop`; the node failed after the other members drained.
+    FanoutMemberFailed,
+    /// A Map item or Parallel branch runs a saved Agent that calls a saved
+    /// pipeline, refused before the run (FU-291).
+    FanoutAgentCallsPipeline,
     PipelineResultInvalid,
     PipelineResultLimit,
     PipelineCodeFailed,
@@ -742,6 +748,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.input_limit") => RuntimeFailureKind::PipelineInputLimit,
         Some("pipeline.tool_unavailable") => RuntimeFailureKind::PipelineToolUnavailable,
         Some("pipeline.tool_failed") => RuntimeFailureKind::PipelineToolFailed,
+        Some(FANOUT_MEMBER_FAILED_UPSTREAM_CODE) => RuntimeFailureKind::FanoutMemberFailed,
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
         Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
@@ -837,6 +844,17 @@ pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline
 /// The upstream code a typed "may have started" refusal carries through the
 /// runtime (nested agents, pipeline nodes, root assembly causes).
 pub(crate) const RECOVERY_REFUSED_UPSTREAM_CODE: &str = "agent.recovery_refused";
+
+/// FU-288: the registered failure a fan-out node sends when a member fails under
+/// On Error `stop` (Map and Parallel alike).
+pub(crate) const FANOUT_MEMBER_FAILED_UPSTREAM_CODE: &str = "graph.fanout.member_failed";
+
+/// FU-288: the chat-visible text for [`RuntimeFailureKind::FanoutMemberFailed`].
+/// Main recognizes this exact text on `PIPELINE_TOOL_FAILED`.
+pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed (On Error is Stop, or every item failed). The other items finished first; later nodes did not run. Open Execution details to see the failed item.";
+
+/// The chat-visible text for [`RuntimeFailureKind::FanoutAgentCallsPipeline`] (FU-291).
+pub(crate) const FANOUT_AGENT_CALLS_PIPELINE_MESSAGE: &str = "A Map item or Parallel branch runs an Agent that calls a saved pipeline, which cannot run there yet. Use the saved pipeline directly as the Map worker or branch, or remove it from the Agent's tools.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
@@ -945,6 +963,16 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::PipelineToolFailed => (
             RuntimeErrorCodeV1::PipelineToolFailed,
             "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+            false,
+        ),
+        RuntimeFailureKind::FanoutMemberFailed => (
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            FANOUT_MEMBER_FAILED_MESSAGE,
+            false,
+        ),
+        RuntimeFailureKind::FanoutAgentCallsPipeline => (
+            RuntimeErrorCodeV1::UnsupportedCapability,
+            FANOUT_AGENT_CALLS_PIPELINE_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineResultInvalid => (
@@ -1116,61 +1144,74 @@ pub(crate) fn runtime_error(kind: RuntimeFailureKind) -> RuntimeErrorV1 {
     }
 }
 
+/// Main refuses a runtime failure frame whose safe message is longer than this
+/// (`MaxRuntimeFailureSafeMessageBytes` in
+/// `services/elitea-main/internal/application/output/runtime_failure.go`; a parity test
+/// keeps the two equal). A refused terminal frame strands the run (FU-290), so every
+/// registered message stays within it.
+#[cfg(test)]
+const MAX_RUNTIME_FAILURE_SAFE_MESSAGE_BYTES: usize = 256;
+
+/// Every failure kind whose `(code, message, retryable)` Main admits as canonical.
+const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
+    RuntimeFailureKind::UnsupportedCapability,
+    RuntimeFailureKind::IncompatibleVersion,
+    RuntimeFailureKind::InvalidInput,
+    RuntimeFailureKind::ResourceExhausted,
+    RuntimeFailureKind::ExecutionInputLimit,
+    RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::UserMessage),
+    RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::ChatHistory),
+    RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::AgentSettings),
+    RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::ToolConfiguration),
+    RuntimeFailureKind::OutputProjectionLimit,
+    RuntimeFailureKind::PipelineInputInvalid,
+    RuntimeFailureKind::PipelineChildInputTypeInvalid,
+    RuntimeFailureKind::PipelineNodeTypeNotAvailable,
+    RuntimeFailureKind::ApplicationCompositionInvalid,
+    RuntimeFailureKind::ApplicationCompositionTooLarge,
+    RuntimeFailureKind::PipelineInputLimit,
+    RuntimeFailureKind::PipelineToolUnavailable,
+    RuntimeFailureKind::PipelineToolFailed,
+    RuntimeFailureKind::FanoutMemberFailed,
+    RuntimeFailureKind::PipelineResultInvalid,
+    RuntimeFailureKind::PipelineResultLimit,
+    RuntimeFailureKind::PipelineCodeFailed,
+    RuntimeFailureKind::CodePreparationFailed,
+    RuntimeFailureKind::CodePreparationCancelled,
+    RuntimeFailureKind::CodePreparationUnconfirmed,
+    RuntimeFailureKind::DependencyUnavailable,
+    RuntimeFailureKind::DeadlineExceeded,
+    RuntimeFailureKind::AuthorizationFailed,
+    RuntimeFailureKind::ToolkitRunAuthorizationFailed,
+    RuntimeFailureKind::Cancelled,
+    RuntimeFailureKind::ResultRefused,
+    RuntimeFailureKind::RecoveryRefused,
+    RuntimeFailureKind::RecoveryFrontierUnsupported,
+    RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
+    RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
+    RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
+    RuntimeFailureKind::OutputContractViolation,
+    RuntimeFailureKind::OutputContinuationExhausted,
+    RuntimeFailureKind::ModelTimeout,
+    RuntimeFailureKind::ModelRateLimited,
+    RuntimeFailureKind::ModelAccessDenied,
+    RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown),
+    RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project),
+    RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member),
+    RuntimeFailureKind::ModelRequestRejected,
+    RuntimeFailureKind::ModelResponseInvalid,
+    RuntimeFailureKind::ContextBudgetExceeded,
+    RuntimeFailureKind::ModelRequestTooLarge,
+    RuntimeFailureKind::ModelUnavailable,
+    RuntimeFailureKind::ModelProviderFailure,
+    RuntimeFailureKind::Internal,
+];
+
 fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKind> {
-    [
-        RuntimeFailureKind::UnsupportedCapability,
-        RuntimeFailureKind::IncompatibleVersion,
-        RuntimeFailureKind::InvalidInput,
-        RuntimeFailureKind::ResourceExhausted,
-        RuntimeFailureKind::ExecutionInputLimit,
-        RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::UserMessage),
-        RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::ChatHistory),
-        RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::AgentSettings),
-        RuntimeFailureKind::ExecutionInputFieldLimit(super::InputLimitField::ToolConfiguration),
-        RuntimeFailureKind::OutputProjectionLimit,
-        RuntimeFailureKind::PipelineInputInvalid,
-        RuntimeFailureKind::PipelineChildInputTypeInvalid,
-        RuntimeFailureKind::PipelineNodeTypeNotAvailable,
-        RuntimeFailureKind::ApplicationCompositionInvalid,
-        RuntimeFailureKind::ApplicationCompositionTooLarge,
-        RuntimeFailureKind::PipelineInputLimit,
-        RuntimeFailureKind::PipelineToolUnavailable,
-        RuntimeFailureKind::PipelineToolFailed,
-        RuntimeFailureKind::PipelineResultInvalid,
-        RuntimeFailureKind::PipelineResultLimit,
-        RuntimeFailureKind::PipelineCodeFailed,
-        RuntimeFailureKind::CodePreparationFailed,
-        RuntimeFailureKind::CodePreparationCancelled,
-        RuntimeFailureKind::CodePreparationUnconfirmed,
-        RuntimeFailureKind::DependencyUnavailable,
-        RuntimeFailureKind::DeadlineExceeded,
-        RuntimeFailureKind::AuthorizationFailed,
-        RuntimeFailureKind::ToolkitRunAuthorizationFailed,
-        RuntimeFailureKind::Cancelled,
-        RuntimeFailureKind::ResultRefused,
-        RuntimeFailureKind::RecoveryRefused,
-        RuntimeFailureKind::RecoveryFrontierUnsupported,
-        RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
-        RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
-        RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
-        RuntimeFailureKind::OutputContractViolation,
-        RuntimeFailureKind::OutputContinuationExhausted,
-        RuntimeFailureKind::ModelTimeout,
-        RuntimeFailureKind::ModelRateLimited,
-        RuntimeFailureKind::ModelAccessDenied,
-        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Unknown),
-        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Project),
-        RuntimeFailureKind::ModelBudgetExhausted(ModelBudgetScope::Member),
-        RuntimeFailureKind::ModelRequestRejected,
-        RuntimeFailureKind::ModelResponseInvalid,
-        RuntimeFailureKind::ContextBudgetExceeded,
-        RuntimeFailureKind::ModelRequestTooLarge,
-        RuntimeFailureKind::ModelUnavailable,
-        RuntimeFailureKind::ModelProviderFailure,
-        RuntimeFailureKind::Internal,
-    ]
-    .into_iter()
-    .find(|kind| runtime_error(*kind) == *error)
+    REGISTERED_RUNTIME_FAILURES
+        .iter()
+        .copied()
+        .find(|kind| runtime_error(*kind) == *error)
 }
 
 fn validate_result_command_binding(
@@ -1826,6 +1867,51 @@ mod continuation_failure_tests {
         assert!(!error.retryable);
         assert!(error.safe_message.contains("wrong type"));
         assert_eq!(canonical_runtime_failure(&error), Some(kind));
+    }
+
+    /// FU-290 (1): every registered message fits Main's failure frame, so no
+    /// terminal frame is refused for its length.
+    #[test]
+    fn every_registered_runtime_failure_message_fits_mains_frame_bound() {
+        for kind in REGISTERED_RUNTIME_FAILURES {
+            let message = runtime_error(*kind).safe_message;
+            assert!(
+                !message.is_empty() && message.len() <= MAX_RUNTIME_FAILURE_SAFE_MESSAGE_BYTES,
+                "{kind:?}: {} bytes",
+                message.len()
+            );
+        }
+    }
+
+    /// The Worker's bound is Main's bound.
+    #[test]
+    fn the_failure_message_bound_matches_mains() {
+        let main =
+            include_str!("../../../elitea-main/internal/application/output/runtime_failure.go");
+        assert!(
+            main.contains(&format!(
+                "MaxRuntimeFailureSafeMessageBytes = {MAX_RUNTIME_FAILURE_SAFE_MESSAGE_BYTES}\n"
+            )),
+            "Main's MaxRuntimeFailureSafeMessageBytes differs from the Worker's bound"
+        );
+    }
+
+    /// FU-288: a fan-out stopped by a failed member keeps its readable text.
+    #[test]
+    fn fanout_member_failure_restores_its_actionable_message() {
+        let kind = model_failure(Some(FANOUT_MEMBER_FAILED_UPSTREAM_CODE));
+        assert_eq!(kind, RuntimeFailureKind::FanoutMemberFailed);
+        let error = runtime_error(kind);
+        assert_eq!(error.code, RuntimeErrorCodeV1::PipelineToolFailed as i32);
+        assert_eq!(error.safe_message, FANOUT_MEMBER_FAILED_MESSAGE);
+        assert!(!error.retryable);
+        assert_eq!(canonical_runtime_failure(&error), Some(kind));
+        // Main refuses a failure frame whose safe message exceeds 256 bytes.
+        assert!(
+            error.safe_message.len() <= 256,
+            "{} bytes",
+            error.safe_message.len()
+        );
     }
 
     /// ADR-0041 decision 3: each cap's upstream code is its own registered,

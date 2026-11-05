@@ -412,7 +412,9 @@ pub(crate) struct OrdinaryProjectionInput {
 /// participant retain distinct provider call IDs and UI accordions.
 #[derive(Clone, Default)]
 pub(crate) struct ApplicationToolPresentationCatalog {
-    by_tool_name: BTreeMap<String, ApplicationToolPresentation>,
+    /// Shared copy-on-write: each Map item's own invocation carries the node's
+    /// catalog without copying it (T-2A3).
+    by_tool_name: std::sync::Arc<BTreeMap<String, ApplicationToolPresentation>>,
 }
 
 /// The toolkit each provider-visible tool name was bound from.
@@ -622,7 +624,8 @@ impl ApplicationToolPresentationCatalog {
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
-        self.by_tool_name.extend(other.by_tool_name);
+        std::sync::Arc::make_mut(&mut self.by_tool_name)
+            .extend(std::sync::Arc::unwrap_or_clone(other.by_tool_name));
         Ok(())
     }
 
@@ -664,8 +667,7 @@ impl ApplicationToolPresentationCatalog {
             || model_name.is_empty()
             || model_name.len() > MAX_CONTEXT_TEXT_BYTES
             || model_name.chars().any(char::is_control)
-            || self
-                .by_tool_name
+            || std::sync::Arc::make_mut(&mut self.by_tool_name)
                 .insert(
                     tool_name,
                     ApplicationToolPresentation {
@@ -690,6 +692,14 @@ impl ApplicationToolPresentationCatalog {
     #[must_use]
     pub(crate) fn contains_runtime_tool(&self, tool_name: &str) -> bool {
         self.by_tool_name.contains_key(tool_name)
+    }
+
+    /// Whether a saved pipeline is among these tools or any nested tools.
+    #[must_use]
+    pub(crate) fn has_pipeline_descendant(&self) -> bool {
+        self.by_tool_name.values().any(|entry| {
+            entry.agent_type == "pipeline" || entry.child_tools.has_pipeline_descendant()
+        })
     }
 
     pub(crate) fn child_tools(&self, tool_name: &str) -> Option<&Self> {

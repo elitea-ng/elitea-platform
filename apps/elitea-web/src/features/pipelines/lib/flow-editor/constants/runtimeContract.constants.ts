@@ -68,13 +68,14 @@ export const NODE_ID_WORD_SEPARATOR = '_';
  * somebody adds it here, having checked the runtime actually admits it. There
  * is no build flag: the set is asserted against the shared contract
  * `libs/proto/contracts/pipeline-node-admission-v1.json` (Worker and Main
- * assert the same file; `parallel` and `map` are its recorded Wave 2a drift).
+ * assert the same file).
  *
  * Code nodes require a configured sandbox runtime at execution time.
  * `custom` remains unsupported by the compiler.
  */
 export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
   PipelineNodeTypes.Parallel, // compiler.rs:2342 "parallel"; execution binding remains independently gated
+  PipelineNodeTypes.Map, // map_compiler.rs + parallel_compiler.rs bind_map_node: the shared fan-out adapter (T-2A3)
   PipelineNodeTypes.Code, // compiler.rs:2328 "code"; admitted sandbox runtime required
   PipelineNodeTypes.Decision, // compiler.rs:2331 "decision"
   PipelineNodeTypes.Agent, // compiler.rs:2350 "agent"

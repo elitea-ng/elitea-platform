@@ -1266,6 +1266,7 @@ async fn child_pause_and_completion_survive_loss_before_parent_pause_save() {
         node_id: "gather".to_owned(),
         step: 4,
         config_digest: definition.config_digest(),
+        map: None,
     };
     for branch in runtime
         .prepare(&mut activation, &definition, &context)
@@ -1771,6 +1772,7 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     for branch in runtime
         .prepare(&mut activation, &definition, &context)
@@ -1912,6 +1914,7 @@ async fn immutable_pre_freeze_replay_stays_unchanged_and_does_not_replace_latest
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     runtime
         .prepare(&mut activation, &definition, &context)
@@ -2079,6 +2082,7 @@ async fn new_parallel_revision_consumes_previous_graph_call_marker_and_retains_r
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     runtime
         .prepare(
@@ -2656,6 +2660,7 @@ async fn a_third_parent_row_in_one_visit_is_refused_with_a_typed_error() {
         node_id: "gather".to_owned(),
         step: 0,
         config_digest: definition.config_digest(),
+        map: None,
     };
     // Row 1: the frozen occurrence. Row 2: the ADK pause row.
     runtime
@@ -2953,4 +2958,46 @@ async fn a_declared_append_reducer_on_the_output_key_receives_only_the_new_entri
             .collect::<Vec<_>>()),
         Some(vec![None, Some(json!("a")), Some(json!("b"))])
     );
+}
+
+/// FU-288: a Parallel under On Error `stop` whose branch fails ends the run
+/// with the registered fan-out failure, so the chat names the failed branch
+/// instead of the generic runtime text.
+#[tokio::test]
+async fn a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_text() {
+    use super::map_fanout_tests::{
+        assert_fanout_stop_reaches_the_chat_readably, failure_codes, framed_context,
+    };
+    let failing: Behavior = Arc::new(|| {
+        Box::pin(async {
+            Err(GraphError::NodeExecutionFailed {
+                node: "second".to_owned(),
+                message: "fixture failure".to_owned(),
+            })
+        }) as BehaviorFuture
+    });
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let codes = failure_codes(receiver);
+    let node = DurableParallelNode::new(
+        definition_with(&[("a", "first"), ("b", "second")], 2, "on_error: stop\n"),
+        runtime(
+            Arc::new(MemoryChildCheckpoints::default()),
+            HashMap::from([
+                ("first".to_owned(), constant(json!("first"))),
+                ("second".to_owned(), failing),
+            ]),
+        ),
+    )
+    .with_node_events(Some(sender));
+    let error = node
+        .execute(&framed_context(State::new(), "root-parallel-stop-text"))
+        .await
+        .err()
+        .expect("the Parallel stops");
+    assert!(
+        matches!(error, GraphError::NodeExecutionFailed { .. }),
+        "{error}"
+    );
+    drop(node);
+    assert_fanout_stop_reaches_the_chat_readably(&codes.await.expect("codes"));
 }

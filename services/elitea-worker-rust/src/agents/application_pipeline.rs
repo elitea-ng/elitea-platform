@@ -1348,7 +1348,7 @@ impl ApplicationPipelineTool {
                     ctx.as_ref(),
                     &self.name,
                     &arguments,
-                    self.event_sender.as_ref(),
+                    super::application_tools::routed_sender(self.event_sender.as_ref()).as_ref(),
                 )
                 .await?
         {
@@ -1863,7 +1863,7 @@ impl ApplicationPipelineTool {
                 MAX_PIPELINE_TOOL_PENDING_BYTES,
             ));
         }
-        if self.event_sender.is_none() {
+        if super::application_tools::routed_sender(self.event_sender.as_ref()).is_none() {
             // Without the descendant channel the card has nowhere to go, so the
             // pause would be invisible AND unanswerable.
             return Err(application_event_channel_error());
@@ -1886,7 +1886,8 @@ impl ApplicationPipelineTool {
         arguments: &Value,
         mut event: Event,
     ) -> adk_rust::Result<()> {
-        let Some(sender) = &self.event_sender else {
+        let Some(sender) = super::application_tools::routed_sender(self.event_sender.as_ref())
+        else {
             return Ok(());
         };
         event.llm_request = None;

@@ -4,17 +4,55 @@ import Button from '@mui/material/Button';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
+import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { FlowEditorContext } from '../../../lib/flow-editor/flowEditorContext';
-import { extensionNumberText, extensionStrings, extensionText, extensionValues } from '../../../lib/graphExtensions.helpers';
+import { MAP_WORKER_TYPES } from '../../../lib/graphMapAdmission.helpers';
+import { extensionNumberText, extensionStrings, extensionText, extensionValues, patchGraphExtensionNode } from '../../../lib/graphExtensions.helpers';
 import type { ExtensionSettingsProps } from '../../../lib/graphExtensions.types';
 import { ExtensionChoice, ExtensionField } from './ExtensionFields';
 import { MapWorkerInputs } from './MapWorkerInputs';
 import { StateChannelSelect } from './StateChannelSelect';
 
+/** A declared, non-null key: a YAML null is absent, as the Worker reads it. */
+function present(node: Readonly<Record<string, unknown>>, field: string): boolean {
+  return Object.hasOwn(node, field) && node[field] !== null && node[field] !== undefined;
+}
+
+/**
+ * The stored On Error. Absent means `continue` in the v2 shape; a v1 document
+ * (`reduction` without `on_error`) stops on the first failed item.
+ */
+function onErrorOf(node: Readonly<Record<string, unknown>>): string {
+  if (present(node, 'on_error')) return extensionText(node['on_error']);
+  return present(node, 'reduction') ? 'stop' : 'continue';
+}
+const policyOption = (value: string): { value: string; label: string } => ({
+  value, label: t(`pipelines.graphExtensions.values.${value}`, value),
+});
+
 export function MapSettings({ node, disabled, change }: ExtensionSettingsProps): ReactNode {
-  const document = useContext(FlowEditorContext)?.yamlJsonObject;
+  const context = useContext(FlowEditorContext);
+  const document = context?.yamlJsonObject;
   const worker = extensionText(node['worker']);
-  const workers = document?.nodes?.filter((entry) => entry.id !== node['id'] && (entry.type === 'state_modifier' || entry.type === 'agent')) ?? [];
+  const workers = document?.nodes?.filter((entry) => entry.id !== node['id'] && MAP_WORKER_TYPES.includes(entry.type ?? '')) ?? [];
+  const onError = onErrorOf(node);
+  const join = present(node, 'join') ? extensionText(node['join']) : 'append';
+  const legacyReduction = present(node, 'reduction');
+  // Picking a policy moves a v1 document to the v2 shape in one YAML write:
+  // `reduction` goes (with `join` or `on_error` it is refused) and its stop-on-failure is
+  // kept explicitly, so the meaning never changes silently. A Map never merges
+  // (its items land the same keys), so Join offers append and keyed only.
+  const changePolicy = (field: 'on_error' | 'join', value: string): void => {
+    if (disabled) return;
+    if (!context || !present(node, 'reduction')) {
+      change(field, value);
+      return;
+    }
+    const id = extensionText(node['id']);
+    let next = patchGraphExtensionNode(context.yamlJsonObject, id, 'reduction', undefined, true);
+    if (field === 'join' && !present(node, 'on_error')) next = patchGraphExtensionNode(next, id, 'on_error', onError);
+    context.setYamlJsonObject(patchGraphExtensionNode(next, id, field, value));
+  };
   const workerNode = workers.find((entry) => entry.id === worker);
   const rawOutputs = extensionValues(node['outputs']);
   const rawBroadcast = extensionValues(node['broadcast']);
@@ -26,7 +64,7 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapDescription', 'Run the same owned worker once per frozen list item. Preserve input order and original item identity.')}</Typography>
     <ExtensionChoice label={t('pipelines.graphExtensions.worker', 'Owned worker')} value={worker} disabled={disabled}
       choices={['', ...workers.map((entry) => entry.id)]} change={(value) => change('worker', value)}
-      help={t('pipelines.graphExtensions.workerHelp', 'The worker must have no transition, parent route, or static pause. Saved agents need verified effect and pause contracts.')} />
+      help={t('pipelines.graphExtensions.workerHelp', 'The worker must have no transition, parent route, or static pause. It can be a State Modifier, an LLM node, or a saved agent or pipeline.')} />
     <StateChannelSelect label={t('pipelines.graphExtensions.source', 'Source state variable')} value={source} types={['list']}
       disabled={disabled} change={(value) => change('source', value)} />
     <ExtensionField label={t('pipelines.graphExtensions.itemChannel', 'Child item channel')} value={extensionText(node['item'])}
@@ -58,11 +96,19 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
     <Button disabled={disabled || selectedOutputs.length >= 64} onClick={() => change('outputs', [...rawOutputs, ''])}>
       {t('pipelines.graphExtensions.addWorkerOutput', 'Add worker output')}
     </Button>
+    <SingleSelect label={t('pipelines.graphExtensions.mapOnError', 'On Error')} value={onError} disabled={disabled}
+      options={['continue', 'stop'].map(policyOption)}
+      onChange={(value) => changePolicy('on_error', value)} />
+    <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapOnErrorHelp', 'Continue keeps the other items and returns partial results. Stop fails the node after running items finish.')}</Typography>
+    <SingleSelect label={t('pipelines.graphExtensions.mapJoin', 'Join')} value={join} disabled={disabled}
+      options={['append', 'keyed'].map(policyOption)}
+      onChange={(value) => changePolicy('join', value)} />
+    <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapJoinHelp', 'Append lists the item results in source order. Keyed maps them by item index.')}</Typography>
     <StateChannelSelect label={t('pipelines.graphExtensions.mapDestination', 'Result list state variable')} value={destination}
-      types={['list']} disabled={disabled} change={(value) => change('destination', value)} />
-    <ExtensionChoice label={t('pipelines.graphExtensions.reduction', 'Reduction')} value={extensionText(node['reduction'])}
+      types={join === 'append' ? ['list'] : ['dict']} disabled={disabled} change={(value) => change('destination', value)} />
+    {legacyReduction && <ExtensionChoice label={t('pipelines.graphExtensions.reduction', 'Reduction')} value={extensionText(node['reduction'])}
       disabled={disabled} choices={['ordered_collection']} change={(value) => change('reduction', value)}
-      help={t('pipelines.graphExtensions.reductionHelp', 'Replace the destination once with ordered {index, outputs} records after every item succeeds. Selected parent output roots stay unchanged.')} />
+      help={t('pipelines.graphExtensions.reductionHelp', 'Replace the destination once with ordered {index, outputs} records after every item succeeds. Selected parent output roots stay unchanged.')} />}
     <ExtensionField label={t('pipelines.graphExtensions.maxItems', 'Maximum items')} value={extensionNumberText(node['max_items'])}
       disabled={disabled} number change={(value) => change('max_items', value === '' ? '' : Number(value))}
       help={t('pipelines.graphExtensions.maxItemsHelp', 'Set an integer from 1 to 64.')} />

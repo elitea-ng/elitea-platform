@@ -62,7 +62,7 @@ export function MapWorkerInputs({ owner, disabled }: MapWorkerInputsProps): Reac
     {worker.type === 'state_modifier' && approved.map((key) => <FormControlLabel key={key} label={key}
       control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={selected.includes(key)}
         onChange={(_, checked) => changeInput(key, checked)} />} />)}
-    {worker.type === 'agent' && <AgentTask worker={worker} channels={approved} disabled={disabled}
+    {(worker.type === 'agent' || worker.type === 'llm') && <AgentTask worker={worker} channels={approved} disabled={disabled}
       change={(mapping) => context.setYamlJsonObject(patchGraphExtensionNode(context.yamlJsonObject, workerId,
         'input_mapping', { ...worker.input_mapping, task: mapping }))} />}
     {hasTransition && <Button disabled={disabled} onClick={removeTransition}>

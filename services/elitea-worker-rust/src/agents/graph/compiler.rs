@@ -72,9 +72,11 @@ use elitea_agent_runtime::graph::fanout::plan::JoinMode;
 mod map_compiler;
 #[path = "parallel_compiler.rs"]
 mod parallel_compiler;
-use super::map_yaml::MapNodeDefinition;
+use super::map_yaml::{
+    MAP_JOIN_MERGE, MAP_REDUCTION_AND_JOIN, MAP_REDUCTION_AND_ON_ERROR, MapNodeDefinition,
+    MapYamlError,
+};
 use super::{pipeline_completed_event, pipeline_result_event};
-pub(crate) use map_compiler::MapCompilerBinding;
 use map_compiler::validate_map_ownership;
 pub(crate) use parallel_compiler::refuse_child_parallel;
 use parallel_compiler::validate_parallel_ownership;
@@ -307,8 +309,6 @@ pub(crate) struct PipelineNodeRuntimes {
     composition_definitions: Option<Arc<BTreeMap<String, PipelineDefinition>>>,
     parallel: Option<Arc<ParallelCompilerBinding>>,
     parallel_authority_bound: bool,
-    map: Option<Arc<MapCompilerBinding>>,
-    map_authority_bound: bool,
     application_scope_path: String,
     application_scopes:
         Option<Arc<crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry>>,
@@ -353,7 +353,7 @@ impl PipelineNodeRuntimes {
         &self,
         checkpointer: Arc<dyn Checkpointer>,
     ) -> Result<Arc<dyn Checkpointer>, PipelineConfigurationError> {
-        if self.parallel_authority_bound || self.map_authority_bound {
+        if self.parallel_authority_bound {
             return Ok(checkpointer);
         }
         match self.application_scopes() {
@@ -487,8 +487,6 @@ impl PipelineNodeRuntimes {
             application_scopes: None,
             parallel: None,
             parallel_authority_bound: false,
-            map: None,
-            map_authority_bound: false,
             application_scope_path: String::new(),
         }
     }
@@ -994,7 +992,7 @@ impl PipelineDefinition {
             .cloned()
             .collect();
         validate_overwrite_channels(&nodes, &state_reducers, &recovery_owned)?;
-        validate_parallel_joins(&nodes, &state_reducers)?;
+        validate_fanout_joins(&nodes, &state_reducers)?;
         let recovery = raw_recovery.admit(&nodes, &state, &raw.entry_point, &recovery_owned)?;
         let interrupt_before = validate_static_interrupts(raw.interrupt_before, &node_ids)?;
         let interrupt_after = validate_static_interrupts(raw.interrupt_after, &node_ids)?;
@@ -1073,15 +1071,18 @@ impl PipelineDefinition {
         self.nodes.iter().any(|node| node.id() == id)
     }
 
-    /// Whether `id` is a Parallel node no other fan-out owns: the only node a
-    /// recovery walk's leaf may be parked on (PM-2).
-    pub(crate) fn is_unowned_parallel(&self, id: &str) -> bool {
+    /// Whether `id` is a fan-out node (a Parallel or a Map) no other fan-out
+    /// owns: the only node a recovery walk's leaf may be parked on (PM-2).
+    pub(crate) fn is_unowned_fanout(&self, id: &str) -> bool {
         !self.parallel_owned_nodes.contains(id)
             && !self.map_owned_nodes.contains(id)
-            && self
-                .nodes
-                .iter()
-                .any(|node| node.id() == id && matches!(node, PipelineNodeDefinition::Parallel(_)))
+            && self.nodes.iter().any(|node| {
+                node.id() == id
+                    && matches!(
+                        node,
+                        PipelineNodeDefinition::Parallel(_) | PipelineNodeDefinition::Map(_)
+                    )
+            })
     }
 
     /// Whether `id` is a direct toolkit/MCP node no fan-out owns: the leaf a
@@ -1316,11 +1317,15 @@ impl PipelineDefinition {
         })
     }
 
-    /// The inline LLM nodes a fixed Parallel owns as branches: each runs in
-    /// its own branch checkpoint family, like an Agent branch.
+    /// The inline LLM nodes a fan-out owns as children (a fixed Parallel's
+    /// branches, a Map's worker): each runs in its own child checkpoint
+    /// family, like an Agent child.
     pub(crate) fn parallel_llm_branch_ids(&self) -> impl Iterator<Item = &str> {
         self.nodes.iter().filter_map(|node| match node {
-            PipelineNodeDefinition::Llm(node) if self.parallel_owned_nodes.contains(node.id()) => {
+            PipelineNodeDefinition::Llm(node)
+                if self.parallel_owned_nodes.contains(node.id())
+                    || self.map_owned_nodes.contains(node.id()) =>
+            {
                 Some(node.id())
             }
             _ => None,
@@ -1482,8 +1487,6 @@ impl PipelineDefinition {
         }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
-        let (checkpointer, bound_runtimes) =
-            self.bind_map_authority(checkpointer, &bound_runtimes)?;
         let runtimes = &bound_runtimes;
         let checkpointer: Arc<dyn Checkpointer> = Arc::new(StaticResumeCheckpointer::new(
             runtimes.scoped_checkpointer(checkpointer)?,
@@ -1581,8 +1584,6 @@ impl PipelineDefinition {
         }
         let (checkpointer, bound_runtimes) =
             self.bind_parallel_authority(checkpointer, runtimes)?;
-        let (checkpointer, bound_runtimes) =
-            self.bind_map_authority(checkpointer, &bound_runtimes)?;
         let runtimes = &bound_runtimes;
         let checkpointer = runtimes.scoped_checkpointer(checkpointer)?;
         let state_schema = self.state_schema(self.runtime_channels());
@@ -2708,7 +2709,18 @@ fn parse_pipeline_node(
             }),
         "map" => MapNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Map)
-            .map_err(|_| PipelineConfigurationError::Invalid("a Map node is invalid")),
+            .map_err(|error| match error {
+                MapYamlError::ReductionAndJoin => {
+                    PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_JOIN)
+                }
+                MapYamlError::ReductionAndOnError => {
+                    PipelineConfigurationError::Invalid(MAP_REDUCTION_AND_ON_ERROR)
+                }
+                MapYamlError::JoinMerge => PipelineConfigurationError::Invalid(MAP_JOIN_MERGE),
+                MapYamlError::Invalid => {
+                    PipelineConfigurationError::Invalid("a Map node is invalid")
+                }
+            }),
         "parallel" => ParallelNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Parallel)
             .map_err(|error| match error {
@@ -2807,13 +2819,19 @@ fn validate_node_state(
     match node {
         PipelineNodeDefinition::Map(node) => {
             let map = node.runtime();
+            // Append (v1 included) lands the ordered collection, keyed one
+            // object (a Map never merges: its items share their keys).
+            let destination = match map.join() {
+                JoinMode::Append => "list",
+                JoinMode::Keyed | JoinMode::Merge => "dict",
+            };
             if state.get(&map.source).map(String::as_str) != Some("list")
-                || state.get(&map.destination).map(String::as_str) != Some("list")
+                || state.get(&map.destination).map(String::as_str) != Some(destination)
                 || builtin_state_key(&map.source)
                 || builtin_state_key(&map.destination)
             {
                 return Err(PipelineConfigurationError::Invalid(
-                    "Map source and destination must be declared business list roots",
+                    "a Map source must be a declared business list and its destination a list (append) or dict (keyed)",
                 ));
             }
         }
@@ -3030,8 +3048,8 @@ fn typed_reducer(
     Ok(Some(reducer))
 }
 
-/// Channels whose writes must replace the value: a Map destination, a
-/// Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
+/// Channels whose writes must replace the value: a v1 Map destination (it
+/// writes main's whole `{index, outputs}` collection), a Parallel output, a shaping output, a HITL edit, a `StateModifier` clean, and
 /// every output of a node that runs inside a Parallel or Map parent (its
 /// updates never pass the top-level [`ReducerGuard`]).
 fn validate_overwrite_channels(
@@ -3052,7 +3070,11 @@ fn validate_overwrite_channels(
                 .collect()
         } else {
             match node {
-                PipelineNodeDefinition::Map(map) => vec![map.runtime().destination.as_str()],
+                // A v2 Map lands through its declared reducer, checked in
+                // `validate_fanout_joins`; a v1 Map keeps main's overwrite.
+                PipelineNodeDefinition::Map(map) if map.runtime().policy.is_none() => {
+                    vec![map.runtime().destination.as_str()]
+                }
                 PipelineNodeDefinition::SplitOut(_) | PipelineNodeDefinition::Aggregate(_) => {
                     node.output_keys().iter().map(String::as_str).collect()
                 }
@@ -3061,8 +3083,9 @@ fn validate_overwrite_channels(
                     node.cleaned_keys().iter().map(String::as_str).collect()
                 }
                 // A Parallel output lands through its declared reducer; the
-                // join mode is checked against it in `validate_parallel_joins`.
+                // join mode is checked against it in `validate_fanout_joins`.
                 PipelineNodeDefinition::Parallel(_)
+                | PipelineNodeDefinition::Map(_)
                 | PipelineNodeDefinition::Code(_)
                 | PipelineNodeDefinition::Application(_)
                 | PipelineNodeDefinition::Decision(_)
@@ -3081,10 +3104,10 @@ fn validate_overwrite_channels(
     Ok(())
 }
 
-/// Save-time check that every Parallel join can land on its output key's
-/// declared reducer (`JoinMode::check`), so no combination is discovered at
-/// run time.
-fn validate_parallel_joins(
+/// Save-time check that every Parallel and v2 Map join can land on its
+/// output key's declared reducer (`JoinMode::check`), so no combination is
+/// discovered at run time.
+fn validate_fanout_joins(
     nodes: &[PipelineNodeDefinition],
     reducers: &BTreeMap<String, StateReducer>,
 ) -> Result<(), PipelineConfigurationError> {
@@ -3099,6 +3122,18 @@ fn validate_parallel_joins(
                 .map_err(|_| {
                     PipelineConfigurationError::Invalid(
                         "a fixed Parallel join does not match its output reducer or On Error",
+                    )
+                })?;
+        }
+        if let PipelineNodeDefinition::Map(map) = node
+            && map.runtime().policy.is_some()
+        {
+            let map = map.runtime();
+            map.join()
+                .check(map.on_error(), reducers.get(&map.destination).copied())
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "a Map join does not match its destination reducer or On Error",
                     )
                 })?;
         }
@@ -3430,6 +3465,9 @@ pub(crate) enum FanoutChildRefusal {
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
+    /// The member's saved Agent calls a saved pipeline among its tools; that
+    /// pipeline's checkpoint threads are not admitted to the member (FU-291).
+    AgentCallsPipeline,
 }
 
 impl FanoutChildRefusal {
@@ -3439,15 +3477,21 @@ impl FanoutChildRefusal {
             Self::Kind => "graph.fanout.child_kind_unsupported",
             Self::ContainsCode => "graph.fanout.child_contains_code",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
+            Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
         }
     }
 
     /// Whether `code` is a fan-out child refusal: fixed by editing the pipeline.
     #[must_use]
     pub(crate) fn is_code(code: &str) -> bool {
-        [Self::Kind, Self::ContainsCode, Self::ContainsParallel]
-            .iter()
-            .any(|refusal| refusal.code() == code)
+        [
+            Self::Kind,
+            Self::ContainsCode,
+            Self::ContainsParallel,
+            Self::AgentCallsPipeline,
+        ]
+        .iter()
+        .any(|refusal| refusal.code() == code)
     }
 }
 
@@ -3458,6 +3502,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::ContainsCode => "a saved pipeline with a Code node cannot run as a fan-out child",
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
+            }
+            Self::AgentCallsPipeline => {
+                "an Agent that calls a saved pipeline cannot run as a Map item or Parallel branch yet"
             }
         })
     }
@@ -3498,6 +3545,7 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::ContainsCode => "fanout_child_code",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
+                FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
             }),
         }
     }
