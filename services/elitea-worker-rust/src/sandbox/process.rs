@@ -289,6 +289,7 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
     }
     let mut configs = Vec::with_capacity(paths.len());
     let mut workspace_profiles = Vec::new();
+    let mut browser_profiles = Vec::new();
     for path in paths {
         let raw = read_regular_file(path, 64 * 1024, false, "sandbox configuration")
             .map_err(|_| StartupError("read configuration"))?;
@@ -297,6 +298,12 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
         if super::workspace_run_profile::is_workspace_profile(&raw) {
             let config = super::workspace_run_profile::WorkspaceProfileConfig::parse(&raw)?;
             workspace_profiles.push(config);
+            continue;
+        }
+        // ADR-0049: a `browser` profile serves browser sessions.
+        if super::browser_session_profile::is_browser_profile(&raw) {
+            let config = super::browser_session_profile::BrowserProfileConfig::parse(&raw)?;
+            browser_profiles.push(config);
             continue;
         }
         let config: Config =
@@ -314,6 +321,11 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
             workspace_profiles
                 .iter()
                 .map(super::workspace_run_profile::WorkspaceProfileConfig::endpoint),
+        )
+        .chain(
+            browser_profiles
+                .iter()
+                .map(super::browser_session_profile::BrowserProfileConfig::endpoint),
         )
         .collect();
     for (index, endpoint) in endpoints.iter().enumerate() {
@@ -339,6 +351,12 @@ pub async fn run_profiles(paths: &[PathBuf]) -> Result<(), StartupError> {
     }
     for config in workspace_profiles {
         tasks.spawn(super::workspace_run_profile::run(config, shutdown_signal()));
+    }
+    for config in browser_profiles {
+        tasks.spawn(super::browser_session_profile::run(
+            config,
+            shutdown_signal(),
+        ));
     }
     while let Some(result) = tasks.join_next().await {
         result.map_err(|_| StartupError("join runtime profile"))??;

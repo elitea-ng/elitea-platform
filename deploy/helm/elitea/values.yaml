@@ -7693,6 +7693,68 @@ sandboxKubernetes:
         kubernetes.io/metadata.name: kube-system
       dnsPodLabels:
         k8s-app: kube-dns
+  # ADR-0049: cloud browser sessions, one Pod per session in the execution
+  # namespace (the browser session image: one engine and the session agent),
+  # started by the supervisor's `browser` profile at a run's first browser
+  # call. A session holds no credential and no workspace; its only route out
+  # is the egress proxy (egressProxy), with the run's allowlist in the run
+  # token. It is destroyed at the run's end plus a 10-minute linger, after 15
+  # minutes idle, or at its wall limit, and it is never reused.
+  browserSessions:
+    # Needs sandboxKubernetes.enabled, supervisor.enabled, a runtimeClass.name
+    # and the profile's audience in main.runtime.sandboxAudiences; the render
+    # fails on any half-enabled shape. Without egressProxy.enabled a session
+    # has no network at all.
+    enabled: false
+    # The browser node pool (ADR-0049 decision 10). Required, non-empty.
+    # Capacity planning: about 1 to 2 GiB per `full` session. Examples:
+    #   k3s / EKS (elitea-sandbox-runtime chart): {elitea.ai/browser: "true"}
+    #   GKE Sandbox: {sandbox.gke.io/runtime: gvisor, <your pool label>: ...}
+    nodeSelector:
+      elitea.ai/browser: "true"
+    # The browser nodes' taints, tolerated by every session Pod (at most 16).
+    tolerations: []
+    # The supervisor's `browser` profile, rendered into a ConfigMap and
+    # projected beside the material Secret, as the workspace profile is
+    # (services/elitea-worker-rust/src/sandbox/browser_session_profile.rs is
+    # the schema). That Secret must not carry a key named browser.json.
+    profile:
+      port: 9471
+      # The Service the worker and elitea-main dial; the supervisor
+      # certificate's SAN names it.
+      serviceName: elitea-sandbox-browser
+      owner: browser-sessions
+      # The grant audience: also an entry of main.runtime.sandboxAudiences.
+      audience: dns:elitea-sandbox-browser
+      # The browser session image, by digest (elitea-browser-session).
+      image: ""
+      # Sessions alive at once, starting, live and lingering together. A
+      # start at the limit waits up to 30 s, then fails `browser_capacity`.
+      # ADR-0049 plans for 10% of concurrent agents: 100 at 1,000 agents.
+      # Every session Pod also counts toward sandboxKubernetes.maxPods.
+      concurrency: 100
+      sessionsPerRun: 3
+      maxPages: 3
+      maxWallSeconds: 3600
+      # false: the engine runs with --no-sandbox, its container (gVisor) the
+      # boundary. The supervisor refuses every start with false unless the
+      # RuntimeClass's handler is gVisor's (runsc or gvisor); set true on
+      # Kata, where the engine keeps its own sandbox.
+      engineSandbox: false
+      # Ceilings per engine (ADR-0049 decision 1); a project may only go lower.
+      full:
+        maxCpuMillis: 2000
+        maxMemoryBytes: 2147483648
+      # Moli, admitted only after the bake-off (ADR-0049 decision 9). Off
+      # until then: an empty map renders no `lite` and the profile refuses it.
+      lite: {}
+      # Example once admitted: {maxCpuMillis: 1000, maxMemoryBytes: 536870912}
+      # Key names in the material Secret.
+      material:
+        ca: browser-client-ca.pem
+        certificate: browser-server.crt
+        privateKey: browser-server.key
+        keyring: browser-grant-keyring.json
   # Optional Python resolver boundary. Execution keeps its deny-all policy.
   preparation:
     enabled: false

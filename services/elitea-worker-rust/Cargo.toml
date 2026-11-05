@@ -13,7 +13,7 @@ required-features = ["sandbox-supervisor"]
 
 [features]
 # Container access belongs to the dedicated supervisor, never the default worker.
-sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util", "dep:bollard"]
+sandbox-supervisor = ["dep:adk-sandbox", "dep:elitea-browser-tools", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util", "dep:bollard"]
 # Benchmark entry points only; never enabled in an image and never a gate.
 graph-shaping-bench = []
 
@@ -28,6 +28,9 @@ async-trait = "=0.1.92"
 base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
+# ADR-0049: the browser tool names the supervisor's `browser` profile
+# admits (libs/rust/browser-tools; no engine, no transport). Supervisor only.
+elitea-browser-tools = { path = "../../libs/rust/browser-tools", optional = true }
 # The /llm caller contract shared with the engines' model client (routes,
 # headers, refusal codes, the SSE splitter, chunk and tool-call readers).
 # It enables no serde_json feature: the worker's own `arbitrary_precision`

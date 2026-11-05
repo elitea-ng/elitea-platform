@@ -11,7 +11,9 @@
 #
 # Ingress
 #   {{ $e.service.port }} (proxy)  only the workspace-run sandbox pods, in the
-#                 execution namespace, that carry egressProxy.networkPolicy.clientPodLabels.
+#                 execution namespace, that carry egressProxy.networkPolicy.clientPodLabels,
+#                 and the cloud browser's session pods (ADR-0049) when
+#                 sandboxKubernetes.browserSessions is on.
 #   {{ $e.adminPort }} (admin)  only egressProxy.networkPolicy.adminFrom (a metrics
 #                 scraper) and networkPolicies.probeFrom.
 #
@@ -44,6 +46,17 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml $n.clientPodLabels | nindent 14 }}
+        {{- $sk := .Values.sandboxKubernetes }}
+        {{- if and $sk.enabled $sk.browserSessions.enabled }}
+        # ADR-0049: the cloud browser's session pods (browser-egress.yaml
+        # gives them this one route out).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $sk.executionNamespace }}
+          podSelector:
+            matchLabels:
+              sandbox.elitea.ai/kind: browser-session
+        {{- end }}
     {{- $adminPeers := concat ($n.adminFrom | default list) (.Values.networkPolicies.probeFrom | default list) }}
     {{- if $adminPeers }}
     - ports:

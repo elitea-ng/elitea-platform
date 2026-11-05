@@ -24,6 +24,10 @@ spec:
         - port: {{ $s.workspaceRuns.profile.port }}
           protocol: TCP
         {{- end }}
+        {{- if $s.browserSessions.enabled }}
+        - port: {{ $s.browserSessions.profile.port }}
+          protocol: TCP
+        {{- end }}
       from:
         {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
         {{- include "elitea.netpol.mainPeer" . | nindent 8 }}

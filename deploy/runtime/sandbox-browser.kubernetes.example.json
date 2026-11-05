@@ -1,0 +1,37 @@
+{
+  "audience": "dns:elitea-sandbox-browser",
+  "backend": {
+    "kind": "kubernetes",
+    "namespace": "code-execution",
+    "node_selector": {
+      "elitea.ai/browser": "true"
+    },
+    "runtime_class": "gvisor",
+    "tolerations": [
+      {
+        "effect": "NoSchedule",
+        "key": "elitea.ai/browser",
+        "operator": "Equal",
+        "value": "true"
+      }
+    ]
+  },
+  "ca_path": "/run/elitea-sandbox/browser-client-ca.pem",
+  "certificate_path": "/run/elitea-sandbox/browser-server.crt",
+  "concurrency": 100,
+  "engine_sandbox": false,
+  "full": {
+    "max_cpu_millis": 2000,
+    "max_memory_bytes": 2147483648
+  },
+  "image": "registry/browser-session@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "listen_address": "0.0.0.0:9471",
+  "max_pages": 3,
+  "max_wall_seconds": 3600,
+  "owner": "browser-sessions",
+  "private_key_path": "/run/elitea-sandbox/browser-server.key",
+  "purpose": "browser",
+  "revision": 1,
+  "sessions_per_run": 3,
+  "verification_keyring_path": "/run/elitea-sandbox/browser-grant-keyring.json"
+}

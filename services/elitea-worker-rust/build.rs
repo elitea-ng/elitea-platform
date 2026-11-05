@@ -15,6 +15,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let protos = [
         "elitea/config/v1/capability_manifest.proto",
         "elitea/runtime/v1/agent.proto",
+        // ADR-0049: the supervisor's `browser` profile.
+        "elitea/runtime/v1/browser_session.proto",
         "elitea/runtime/v1/command.proto",
         "elitea/runtime/v1/common.proto",
         "elitea/runtime/v1/control.proto",
