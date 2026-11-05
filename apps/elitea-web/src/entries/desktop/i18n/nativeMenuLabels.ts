@@ -43,6 +43,7 @@ export function nativeMenuLabels(): Record<string, string> {
     open_in_chat: t('desktop.nativeMenu.openInChat', 'Open in Chat'),
     toggle_plan: t('desktop.nativeMenu.togglePlan', 'Plan Mode'),
     choose_agent: t('desktop.nativeMenu.chooseAgent', 'Choose Agent…'),
+    toggle_browser: t('desktop.nativeMenu.toggleBrowser', 'Browser'),
     folder: t('desktop.nativeMenu.folder', 'Folder'),
     index_settings: t('desktop.nativeMenu.indexSettings', 'Index Settings…'),
     handoff_settings: t('desktop.nativeMenu.handoffSettings', 'Handoff Settings…'),

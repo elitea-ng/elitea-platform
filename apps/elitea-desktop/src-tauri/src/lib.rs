@@ -10,6 +10,7 @@ mod activity;
 mod app_events;
 mod attention;
 mod auth;
+mod browser_pane;
 mod commands;
 mod compaction_settings;
 mod context_menu;
@@ -170,6 +171,8 @@ pub fn run() {
             );
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
+            let config_dir_for_browser = config_dir.clone();
+            let data_dir_for_browser = data_dir.clone();
             // What no local tool reads (commands, host git, file tools, the
             // index): every directory the app keeps data in, as resolved
             // here (XDG overrides and Windows included), and its identifier.
@@ -451,6 +454,18 @@ pub fn run() {
                 index,
                 handoff: Some(handoff),
             });
+            // The browser pane (ADR-0048): its stores and its downloads folder.
+            let downloads = app
+                .path()
+                .download_dir()
+                .unwrap_or_else(|_| data_dir_for_browser.join("downloads"))
+                .join("Elitea");
+            app.manage(Arc::new(browser_pane::BrowserPanes::new(
+                config_dir_for_browser,
+                &data_dir_for_browser,
+                downloads,
+            )));
+            browser_pane::clean_up_at_launch(app.handle().clone());
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));
             app.manage(Arc::new(activity::Activity::new(app.handle().clone())));
@@ -578,6 +593,12 @@ pub fn run() {
             handoff::handoff_settings_get,
             handoff::handoff_settings_set,
             handoff::handoff_run_finished,
+            browser_pane::browser_open,
+            browser_pane::browser_set_rect,
+            browser_pane::browser_go,
+            browser_pane::browser_close,
+            browser_pane::browser_forget,
+            browser_pane::browser_reveal_download,
         ])
         .build(tauri::generate_context!());
     let app = match built {

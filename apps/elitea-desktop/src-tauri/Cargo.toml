@@ -15,7 +15,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+# `unstable`: `Window::add_child`, the browser pane's child webview
+# (src/browser_pane.rs, ADR-0048). With it the main window's own webview is
+# a child of its window too, so the window is no longer a `WebviewWindow`
+# once a browser pane is open: the host reaches it by label
+# (`window::main_window`, `window::main_webview`), never through
+# `get_webview_window("main")`.
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "unstable"] }
 tauri-plugin-opener = "2.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -66,6 +72,9 @@ elitea-local-index = { path = "../../../libs/rust/local-index" }
 # and candle running the chosen model (Metal on Apple silicon).
 elitea-local-embed = { path = "../../../libs/rust/local-embed", features = ["candle", "download"] }
 elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
+# The browser pane's navigation guard judges an address literal as the
+# agent's web fetch does (src/browser_pane.rs, ADR-0048 decision 2).
+elitea-egress-guard = { path = "../../../libs/rust/egress-guard" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.
 adk-agent = { version = "~2.3.0", default-features = false }
@@ -100,7 +109,9 @@ keepawake = { version = "=0.6.1", default-features = false }
 # The app's own preferences domain (src/window.rs: the input-source
 # indicator). Already in the tree through tauri/tao; safe bindings only.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults"] }
+# `NSProcessInfo`: the macOS version, which picks the browser pane's data
+# store (src/browser_pane.rs).
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSProcessInfo"] }
 
 # The credentials file's owner check (geteuid) and O_NOFOLLOW, without
 # `unsafe` (src/credentials_file.rs). Already in the tree through tauri.

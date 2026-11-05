@@ -68,11 +68,14 @@ impl crate::doctor::DoctorHooks for AppDoctorHooks {
 
     fn signed_out(&self) {
         crate::doctor::DoctorHooks::signed_out(self.agents.as_ref());
-        if let Some(window) = self.app.get_webview_window("main")
+        if let Some(window) = crate::window::main_webview(&self.app)
             && let Err(error) = window.clear_all_browsing_data()
         {
             log::warn!("could not clear the webview's data: {error}");
         }
+        // Every browser pane's store goes with the session (ADR-0048).
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move { crate::browser_pane::forget_all(&app).await });
         crate::app_events::emit_live(&self.app, "signed_out");
     }
 

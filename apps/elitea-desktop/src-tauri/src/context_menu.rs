@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use tauri::menu::{ContextMenu as _, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Emitter as _, Manager as _, State, WebviewWindow, Wry};
+use tauri::{AppHandle, Emitter as _, Manager as _, State, Webview, Wry};
 
 /// The event the outcome is delivered on.
 pub const CHANNEL: &str = "app://context-menu";
@@ -196,7 +196,7 @@ fn emit_outcome(app: &AppHandle, request_id: &str, id: Option<&str>) {
 pub fn context_menu_show(
     app: AppHandle,
     pending: State<'_, Pending>,
-    window: WebviewWindow,
+    window: Webview,
     request_id: String,
     items: Vec<ContextItem>,
 ) -> Result<(), String> {
@@ -207,9 +207,7 @@ pub fn context_menu_show(
     let menu = Menu::new(&app).map_err(|e| e.to_string())?;
     append_items(&app, &menu, &request_id, &items).map_err(|e| e.to_string())?;
     pending.lock().insert(request_id.clone());
-    let shown = menu
-        .popup(window.as_ref().window())
-        .map_err(|e| e.to_string());
+    let shown = menu.popup(window.window()).map_err(|e| e.to_string());
     // Closed (or refused): if no choice claims the request in the grace
     // period, say it was dismissed.
     let app = app.clone();

@@ -276,7 +276,7 @@ impl Attention {
                 attention.external.load(Ordering::Acquire),
                 attention.platform_unread.load(Ordering::Acquire),
             );
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = crate::window::main_window(&app) {
                 // Windows has no badge count (unsupported, ignored).
                 let _ = window
                     .set_badge_count((count > 0).then(|| i64::try_from(count).unwrap_or(i64::MAX)));
@@ -297,8 +297,7 @@ impl Attention {
 
     /// The main window is in front, where the person sees what happened.
     fn main_window_focused(&self) -> bool {
-        self.app
-            .get_webview_window("main")
+        crate::window::main_window(&self.app)
             .is_some_and(|w| w.is_focused().unwrap_or(false) && w.is_visible().unwrap_or(true))
     }
 

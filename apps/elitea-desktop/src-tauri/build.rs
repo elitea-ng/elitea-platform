@@ -117,6 +117,12 @@ fn main() {
             "handoff_settings_get",
             "handoff_settings_set",
             "handoff_run_finished",
+            "browser_open",
+            "browser_set_rect",
+            "browser_go",
+            "browser_close",
+            "browser_forget",
+            "browser_reveal_download",
         ]),
     ))
     .expect("tauri build configuration is valid");

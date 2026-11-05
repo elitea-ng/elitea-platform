@@ -2,8 +2,9 @@
 
 The contract between the bundled elitea-web desktop build and the Tauri
 host (ADR-0029). Every command is listed in `build.rs` and allowed in
-`capabilities/default.json` for the `main` window only; no remote origin
-gets IPC. Nothing here ever returns a refresh token, a toolkit secret or an
+`capabilities/default.json` for the `main` webview only (by webview
+label, so the browser pane's child webviews in the same window get
+nothing; see **Browser pane**); no remote origin gets IPC. Nothing here ever returns a refresh token, a toolkit secret or an
 MCP OAuth token.
 
 Call commands with `invoke(name, args)`. **Argument keys are snake_case,
@@ -2420,6 +2421,7 @@ type AppCommand = { id: string; args?: object };
 | `open_in_chat` | — | Thread ▸ Open in Chat: open the thread on screen in the web chat. |
 | `toggle_plan` | — | Thread ▸ Plan Mode (⇧⌘P): switch the composer between Act and Plan. |
 | `choose_agent` | — | Thread ▸ Choose Agent… (⌘L): open the composer's agent picker. |
+| `toggle_browser` | — | Thread ▸ Browser (⇧⌘B): open or close the thread's browser pane. A menu accelerator, so it works while the page has focus. |
 | `index_settings` | — | Folder ▸ Index Settings…: open the folder's index settings (inspector, Index). |
 | `handoff_settings` | — | Folder ▸ Handoff Settings…: open the folder's cloud handoff settings. |
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
@@ -2561,9 +2563,71 @@ type LspEvent = {
 };
 ```
 
+## Browser pane (`src/browser_pane.rs`, ADR-0048 decisions 1–2, #1588)
+
+One page per Local work thread, shown in the thread's inspector tab
+Browser (⇧⌘B). The page is a native **child webview** of the main window
+(`Window::add_child`, tauri `unstable`), labelled `browser-<thread_id>`,
+that the host lays over the rectangle the UI reports. It is in no
+capability file, so the page has **no IPC** (the capability names the
+`main` webview by label, not the window); every control is the bundled
+UI's, outside the page rectangle. At most four pages live at once (the
+least recently used is closed, `closed` event); the site data stays.
+
+**Navigation guard** (top level, frames, redirects and new windows):
+`https:` always; `http:` only with the host setting `browser_allow_http`
+(default false; replaced by the policy key `local_work_browser_http` in
+#1590); `about:blank`/`about:srcdoc`; `blob:` judged by its origin.
+Refused: every other scheme (`file:`, `tauri:`, `asset:`, `javascript:`,
+`data:`, …), user info in the URL, `localhost`/`*.localhost`/`*.local`/
+`*.internal`/`*.home.arpa`, and IP literals the egress guard classes as
+private or forbidden (`libs/rust/egress-guard`). A new window
+(`target=_blank`, `window.open`) is not opened: the page navigates there,
+the opener kept in history.
+
+**Site data.** Each thread has its own store. macOS 14+: a persistent
+`WKWebsiteDataStore(forIdentifier:)`, its UUID kept in
+`<data>/browser/stores.json`. macOS 12–13 (and other systems for now): a
+non-persistent store (`incognito`), gone when the page closes. Deleted on
+Forget site data (`browser_forget`), thread delete or archive (the UI calls
+`browser_forget`), and sign-out (`host_sign_out`, `host_wipe`, the Doctor's
+sign-out: all threads). A store still in use is retried at the next launch,
+which also deletes stores the registry no longer names. Every permission
+request (camera, microphone, location, notifications, …) is denied; no
+autofill, no link preview, no drag-and-drop into the page.
+
+**Downloads** go to `~/Downloads/Elitea/<thread_id>/` (a clash becomes
+`name (2).ext`), never prompting; each one is a transcript card.
+
+`rect` is `{x, y, width, height}` in the main page's CSS pixels (the host
+scales it by the app's zoom).
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `browser_open` | `{thread_id, address, rect}` | `{url}` — opens the thread's page (or re-points it) at `address` (`example.com` means `https://example.com/`). Rejects `browser_invalid` (bad thread id or address), `browser_refused` (the guard; `message` says why), `browser_unavailable` (no main window) |
+| `browser_set_rect` | `{thread_id, rect, visible}` | `null` — moves the page; `visible: false` hides it (another tab, a modal sheet, the tab in its own window). No page: no-op |
+| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed` |
+| `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
+| `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
+| `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |
+
+`browser://event`, emitted to the `main` webview:
+
+```ts
+type BrowserEvent = { thread_id: string } & (
+  | { kind: "loading" | "loaded"; url: string }
+  | { kind: "title"; title: string }
+  | { kind: "refused"; url: string; reason: "scheme" | "http" | "private_network" | "forbidden" | "credentials"; message: string }
+  | { kind: "download_started"; name: string }
+  | { kind: "download_finished"; name: string; size: number | null; success: boolean }
+  | { kind: "closed" } // the host closed the page (four live at most)
+);
+```
+
 ## Events
 
-Ten event names, all emitted to the `main` window only: `app://command`
+Eleven event names, all emitted to the `main` window only: `browser://event`
+(Browser pane, above), `app://command`
 (above), `app://context-menu` (`{request_id, id}`, the outcome of `context_menu_show`),
 `agent://event`, `index://event`, `handoff://event` (Cloud handoff, above),
 `process://event` (Background processes, above), `mcp://event` (Local MCP

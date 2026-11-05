@@ -1670,6 +1670,7 @@ dependencies = [
  "chrono",
  "dirs",
  "elitea-agent-runtime",
+ "elitea-egress-guard",
  "elitea-llm-wire",
  "elitea-local-embed",
  "elitea-local-index",

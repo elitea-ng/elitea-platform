@@ -21,6 +21,14 @@ describe('actionForShortcut', () => {
     expect(actionForShortcut(key({ key: ',', metaKey: true }))).toEqual({ type: 'settings' });
     expect(actionForShortcut(key({ key: '\\', code: 'Backslash', metaKey: true }))).toEqual({ type: 'toggle_sidebar' });
     expect(actionForShortcut(key({ key: '«', code: 'Backslash', metaKey: true, altKey: true }))).toEqual({ type: 'toggle_changes' });
+    expect(actionForShortcut(key({ key: 'B', metaKey: true, shiftKey: true }))).toEqual({ type: 'toggle_browser' });
+    expect(actionForShortcut(key({ key: 'b', ctrlKey: true, shiftKey: true }))).toEqual({ type: 'toggle_browser' });
+  });
+
+  it('⌘⇧B only: no ⌥, and plain ⌘B is the page’s', () => {
+    expect(actionForShortcut(key({ key: 'b', metaKey: true }))).toBeUndefined();
+    expect(actionForShortcut(key({ key: 'b', metaKey: true, shiftKey: true, altKey: true }))).toBeUndefined();
+    expect(actionForShortcut(key({ key: 'b', shiftKey: true }))).toBeUndefined();
   });
 
   it('leaves everything else to the page', () => {
@@ -59,7 +67,7 @@ describe('filterEntries', () => {
 
 describe('the Thread and Folder menu commands', () => {
   it('are plain shell actions the session on screen answers', () => {
-    for (const id of ['send_to_cloud', 'open_in_chat', 'toggle_plan', 'choose_agent', 'index_settings', 'handoff_settings'] as const) {
+    for (const id of ['send_to_cloud', 'open_in_chat', 'toggle_plan', 'toggle_browser', 'choose_agent', 'index_settings', 'handoff_settings'] as const) {
       expect(actionForAppCommand({ id })).toEqual({ type: id });
     }
   });

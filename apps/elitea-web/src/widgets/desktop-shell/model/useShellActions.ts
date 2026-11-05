@@ -61,6 +61,7 @@ export function useShellActions(projectId?: string): (action: ShellAction) => vo
         toggle_sidebar: () => layout.setSidebarOpen(!layout.sidebarOpen),
         toggle_changes: () => layout.toggleInspector(),
         toggle_plan: () => layout.session?.togglePlanMode(),
+        toggle_browser: () => layout.session?.toggleBrowser?.(),
         send_to_cloud: () => layout.session?.sendToCloud?.(),
         open_in_chat: () => layout.session?.openInChat?.(),
         choose_agent: () => layout.session?.chooseAgent?.(),

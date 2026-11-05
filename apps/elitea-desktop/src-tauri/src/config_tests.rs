@@ -137,8 +137,67 @@ fn the_webview_gets_only_the_window_and_log_permissions_it_needs() {
         assert!(!p.ends_with(":default"), "{p}: no default sets");
     }
     let capability = json("capabilities/default.json");
-    assert_eq!(capability["windows"], serde_json::json!(["main"]));
+    assert_eq!(capability["webviews"], serde_json::json!(["main"]));
     assert!(capability.get("remote").is_none());
+}
+
+/// The browser pane's pages (`browser-<thread>`, ADR-0048) get no IPC: the
+/// one capability names the main WEBVIEW, never the main WINDOW (a window
+/// entry would grant every child webview inside it), and no capability file
+/// names a browser pane or a glob that could match one.
+#[test]
+fn no_capability_reaches_a_browser_pane() {
+    let dir = format!("{}/capabilities", env!("CARGO_MANIFEST_DIR"));
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "one capability file: {files:?}");
+    for path in files {
+        let capability: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            capability.get("windows").is_none(),
+            "{}: by webview label only",
+            path.display()
+        );
+        for label in capability["webviews"].as_array().unwrap() {
+            let label = label.as_str().unwrap();
+            assert!(
+                !label.contains('*') && !label.contains('?'),
+                "{label}: no globs"
+            );
+            assert!(!label.starts_with("browser"), "{label}");
+        }
+    }
+    assert_eq!(
+        crate::browser_pane::pane_label("t1").as_deref(),
+        Some("browser-t1")
+    );
+}
+
+/// With Tauri's `unstable` feature the main window stops being a
+/// `WebviewWindow` once a pane is added, so nothing may look it up as one
+/// (it would silently find nothing): `window::main_window` / `main_webview`.
+#[test]
+fn the_main_window_is_never_looked_up_as_a_webview_window() {
+    let dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+    let mut stack = vec![std::path::PathBuf::from(dir)];
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            stack.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+            continue;
+        }
+        if path.extension().is_none_or(|ext| ext != "rs") || path.ends_with("config_tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("get_webview_window(\"main\")"),
+            "{}: use window::main_window",
+            path.display()
+        );
+    }
 }
 
 /// Every host command build.rs generates a permission for is granted, and
@@ -154,7 +213,13 @@ fn every_host_command_is_granted_once() {
         .step_by(2)
         .map(|c| format!("allow-{}", c.replace('_', "-")))
         .collect();
-    for native in ["allow-app-platform", "allow-reveal-path", "allow-open-path"] {
+    for native in [
+        "allow-app-platform",
+        "allow-reveal-path",
+        "allow-open-path",
+        "allow-browser-open",
+        "allow-browser-set-rect",
+    ] {
         assert!(commands.iter().any(|c| c == native), "{native}");
     }
     let own: Vec<String> = granted()

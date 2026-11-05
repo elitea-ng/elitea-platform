@@ -51,6 +51,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("open_in_chat", "Open in Chat"),
     ("toggle_plan", "Plan Mode"),
     ("choose_agent", "Choose Agent…"),
+    ("toggle_browser", "Browser"),
     ("folder", "Folder"),
     ("index_settings", "Index Settings…"),
     ("handoff_settings", "Handoff Settings…"),

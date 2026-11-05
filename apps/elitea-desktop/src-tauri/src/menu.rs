@@ -32,6 +32,9 @@ pub const FORWARDED: &[(&str, Option<&str>)] = &[
     ("open_in_chat", None),
     ("toggle_plan", Some("CmdOrCtrl+Shift+P")),
     ("choose_agent", Some("CmdOrCtrl+L")),
+    // The thread's browser pane (ADR-0048). A menu accelerator, so it works
+    // while the page (a child webview the UI cannot hear keys from) has focus.
+    ("toggle_browser", Some("CmdOrCtrl+Shift+B")),
     // Folder menu: the folder of the thread on screen.
     ("index_settings", None),
     ("handoff_settings", None),
@@ -51,6 +54,18 @@ const ZOOM_STEPS: &[f64] = &[0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.7
 /// The webview's zoom factor (the menu's zoom items).
 #[derive(Default)]
 pub struct Zoom(Mutex<Option<f64>>);
+
+impl Zoom {
+    /// The main page's zoom now (1.0 until the person zoomed): the browser
+    /// pane scales the page rectangle the UI reports by it.
+    #[must_use]
+    pub fn factor(&self) -> f64 {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or(1.0)
+    }
+}
 
 /// The next zoom step up (`up`) or down from `current`.
 #[must_use]
@@ -187,6 +202,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&separator()?)
         .item(&forwarded(app, "toggle_plan")?)
         .item(&forwarded(app, "choose_agent")?)
+        .item(&forwarded(app, "toggle_browser")?)
         .build()?;
     let folder = SubmenuBuilder::new(app, text("folder"))
         .item(&forwarded(app, "index_settings")?)
@@ -271,7 +287,7 @@ pub fn on_event(app: &AppHandle, event: &MenuEvent) {
     match id {
         OPEN_FOLDER => app_events::open_folder_dialog(app),
         RELOAD => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = crate::window::main_webview(app) {
                 let _ = window.reload();
             }
         }
@@ -287,7 +303,7 @@ pub fn on_event(app: &AppHandle, event: &MenuEvent) {
 }
 
 fn zoom(app: &AppHandle, id: &str) {
-    let Some(window) = app.get_webview_window("main") else {
+    let Some(window) = crate::window::main_webview(app) else {
         return;
     };
     let state = app.state::<Zoom>();
@@ -366,6 +382,7 @@ mod tests {
                 "open_in_chat",
                 "toggle_plan",
                 "choose_agent",
+                "toggle_browser",
                 "index_settings",
                 "handoff_settings"
             ]

@@ -4,6 +4,27 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Desktop: browser pane and the `browser_allow_http` setting (#1588, ADR-0048 decisions 1 and 2)
+
+Desktop app only; no server change. Local work threads get a Browser tab
+(⇧⌘B) whose page is a child webview with no IPC and its own cookies and
+site data per thread (macOS 14+: a persistent store per thread; macOS
+12–13: a private store, gone when the page closes).
+
+- New optional key `browser_allow_http` (default `false`) in the app's
+  `settings.json` (`~/Library/Application Support/ai.elitea.desktop/`).
+  Plain `http` pages load only when it is `true`; loopback and private
+  addresses stay refused. The client policy key `local_work_browser_http`
+  (#1590) replaces it; until then, a managed rollout that needs `http`
+  pages sets the key on each machine.
+- The capability `capabilities/default.json` now grants by webview label
+  (`"webviews": ["main"]`) instead of by window (`"windows": ["main"]`).
+  A fork that adds its own capability file must do the same: a `windows`
+  entry would grant every browser page in the main window.
+- Downloads from the pane are saved to `~/Downloads/Elitea/<thread>/`
+  without a prompt.
+- Signing out now also deletes every thread's browser site data.
+
 ## Desktop control driver library (#1581, ADR-0047)
 
 Nothing to do. `libs/rust/desktop-control` (`elitea-desktop-control`) is a

@@ -34,6 +34,11 @@ pub struct Settings {
     /// the default (90 days). `0`: keep forever (retention off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_retention_days: Option<u32>,
+    /// The browser pane (ADR-0048) may load plain `http` pages. Off unless
+    /// set to `true` here; the client policy key `local_work_browser_http`
+    /// (#1590) replaces it. Loopback and private addresses stay refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_allow_http: Option<bool>,
 }
 
 /// The default thread-history retention, in days (the Doctor's
@@ -152,6 +157,7 @@ mod tests {
             display_name: Some("Acme".into()),
             client_id: None,
             history_retention_days: None,
+            browser_allow_http: None,
         };
         files.save_settings(&settings).unwrap();
         assert_eq!(files.settings().unwrap(), settings);

@@ -645,7 +645,7 @@ fn apply(
             let _ = tray.set_menu(Some(menu));
         }
     }
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = crate::window::main_window(app) {
         let state = match dock {
             Dock::None => ProgressBarState {
                 status: Some(ProgressBarStatus::None),

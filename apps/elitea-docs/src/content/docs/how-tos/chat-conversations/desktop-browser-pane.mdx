@@ -1,0 +1,64 @@
+---
+title: "Browse the web in a thread (desktop)"
+description: "How the Elitea desktop app opens web pages beside a Local work thread, keeps each thread's cookies and site data apart, and what it refuses to load."
+---
+
+The Elitea desktop app can show a web page beside a **Local work** thread, in the thread's **Browser** tab. Each thread has its own page and its own cookies and site data: signing in to a site in one thread does not sign you in to it in another thread, and nothing the page stores reaches the rest of the app.
+
+## Open the browser
+
+<Steps>
+1. Open a thread in **Local work**. A new thread gets a browser after its first message.
+2. Press **⌘⇧B**, or choose **Thread ▸ Browser** in the menu bar, or **Toggle browser** in the command palette (⌘K).
+3. Type an address in the field at the top of the tab and press Return. `example.com` opens `https://example.com/`.
+</Steps>
+
+The toolbar has **Back**, **Forward**, **Reload** (or **Stop** while a page loads), **Open in browser** (the page's address in your usual browser), and **⋯ ▸ Forget site data**. The × closes the page; its site data stays until you forget it.
+
+The page itself cannot open the app's menus or reach any app function. While a dialog or sheet is open, the page is hidden, and it shows again when the dialog closes.
+
+## What the browser opens
+
+- **`https` pages.** Always.
+- **`http` pages.** Only when the app's `browser_allow_http` setting is on (off by default; see below).
+- **Refused:** `file:`, `data:`, `javascript:` and other non-web addresses; `localhost` and other names on your own network (`.local`, `.internal`, `.home.arpa`); private and loopback IP addresses (`10.x`, `192.168.x`, `127.0.0.1`, …); and addresses with a user name or password in them. The tab says why a page was refused.
+- **Links that open a new window** open in the same tab instead. **Back** returns to the page that opened them.
+
+The page cannot use your camera, microphone, location or notifications: every request is denied. Password and form autofill are off.
+
+## Where cookies and site data are kept
+
+| macOS | Site data |
+| --- | --- |
+| 14 (Sonoma) or later | A store of its own per thread, kept between launches. |
+| 12 or 13 | A private store per page, deleted when the page closes. You sign in again after a restart. |
+
+A thread's site data is deleted when you:
+
+- choose **⋯ ▸ Forget site data** in the Browser tab;
+- delete or archive the thread;
+- sign out of the app (every thread's site data goes).
+
+## Downloads
+
+A file the page downloads is saved, without asking, to `~/Downloads/Elitea/<thread>/`. A file with the same name as one already there gets a number (`report (2).pdf`). Each download shows as a card in the thread, with **Show in Finder** once it has finished.
+
+## Allow plain `http` pages
+
+Plain `http` pages are refused unless the app's settings file says otherwise. To allow them, quit the app, add the key below to `~/Library/Application Support/ai.elitea.desktop/settings.json`, and start the app again:
+
+```json
+{ "browser_allow_http": true }
+```
+
+Private and loopback addresses stay refused either way. A later release replaces this setting with an organisation policy.
+
+## Check that threads are kept apart
+
+<Steps>
+1. In thread A, open the browser and sign in to a site (for example, GitHub).
+2. In thread B, open the browser and go to the same site. You are not signed in.
+3. In thread A, choose **⋯ ▸ Forget site data**, then open the site again. You are signed out.
+4. Type `file:///etc/hosts`, then `http://127.0.0.1/`. Both are refused, and the tab says why.
+5. On a page with a `target="_blank"` link, select the link. It opens in the same tab, and **Back** returns.
+</Steps>
