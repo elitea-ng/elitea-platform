@@ -679,31 +679,26 @@ test.describe('J20 artifacts lifecycle', () => {
       // No reload between here and the upload.
       await expect.poll(async () => (await footerSize.textContent())?.trim(), { timeout: 20_000 }).not.toBe(sizeBefore);
 
-      // …and the value shown is one the SERVER reported since the upload, not
-      // merely a different one. The total is project-wide, so a bucket another
-      // spec writes in this window moves it AFTER the page read it (a webkit
-      // run saw footer 400.1 KB, server 400.3 KB), and the page has no reason
-      // to read it again: every total seen since the upload counts here, and
-      // the reload below holds the page to the server's current one.
-      const seen = new Set<string>();
+      // The footer total is PROJECT-WIDE, and other artifacts specs write to
+      // this project on parallel workers. Before a reload the page has no
+      // reason to read that total again, so comparing it with the server here
+      // is a race the test does not own (a webkit run saw footer 400.4 KB,
+      // server 6.4 MB: another spec had written 6 MB meanwhile). The claim
+      // before the reload is only that the footer FOLLOWED the upload; the
+      // reload below holds it to the server's own total.
+
+      // The reload makes the page read the total once; another spec may
+      // write between that read and our poll, so every server total seen
+      // from just before the reload counts.
+      const seen = new Set<string>([await serverTotalSize(request, projectId)]);
+      await page.reload();
+      await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
       await expect
         .poll(
           async () => {
             seen.add(await serverTotalSize(request, projectId));
             const shown = (await footerSize.textContent())?.trim() ?? '';
             return seen.has(shown) ? 'equal' : `footer ${shown}, server ${[...seen].join(' / ')}`;
-          },
-          { timeout: 20_000 },
-        )
-        .toBe('equal');
-
-      await page.reload();
-      await expect(page.getByRole('row').filter({ hasText: extraName })).toBeVisible({ timeout: 30_000 });
-      await expect
-        .poll(
-          async () => {
-            const [shown, server] = [(await footerSize.textContent())?.trim(), await serverTotalSize(request, projectId)];
-            return shown === server ? 'equal' : `footer ${shown}, server ${server}`;
           },
           { timeout: 20_000 },
         )
