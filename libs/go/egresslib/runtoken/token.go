@@ -82,6 +82,13 @@ type Claims struct {
 	ProjectID int64
 	// Allowlist is the run's host allowlist, in the grammar of Allowlist.
 	Allowlist []string
+	// Open admits every public host: the cloud browser's `browser_egress:
+	// open` mode (ADR-0049 decision 5). The proxy still refuses every
+	// private, loopback, link-local, metadata and denied address. An open
+	// token carries no allowlist. A proxy built before this field refuses
+	// the token (the decoder refuses unknown fields), so an old proxy fails
+	// closed.
+	Open      bool
 	IssuedAt  time.Time
 	NotBefore time.Time
 	ExpiresAt time.Time
@@ -100,6 +107,7 @@ type wireClaims struct {
 	ExecutionID string   `json:"eid"`
 	ProjectID   int64    `json:"pid"`
 	Allowlist   []string `json:"allow"`
+	Open        bool     `json:"open,omitempty"`
 	IssuedAt    int64    `json:"iat"`
 	NotBefore   int64    `json:"nbf"`
 	ExpiresAt   int64    `json:"exp"`
@@ -110,6 +118,16 @@ type wireClaims struct {
 type Verified struct {
 	Claims    Claims
 	Allowlist *Allowlist
+}
+
+// AllowsTarget reports whether the token admits the target by name: every
+// target for an open token, else the allowlist's rules. The address checks
+// after resolution apply to both.
+func (v *Verified) AllowsTarget(t Target) bool {
+	if v == nil {
+		return false
+	}
+	return v.Claims.Open || v.Allowlist.Allows(t)
 }
 
 var b64 = base64.RawURLEncoding
@@ -168,6 +186,9 @@ func (s *Signer) Sign(c Claims) (string, error) {
 	if _, err := ParseAllowlist(c.Allowlist); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidClaims, err)
 	}
+	if c.Open && len(c.Allowlist) != 0 {
+		return "", fmt.Errorf("%w: an open token carries no allowlist", ErrInvalidClaims)
+	}
 	allow := c.Allowlist
 	if allow == nil {
 		allow = []string{}
@@ -178,6 +199,7 @@ func (s *Signer) Sign(c Claims) (string, error) {
 		ExecutionID: c.ExecutionID,
 		ProjectID:   c.ProjectID,
 		Allowlist:   allow,
+		Open:        c.Open,
 		IssuedAt:    c.IssuedAt.Unix(),
 		NotBefore:   c.NotBefore.Unix(),
 		ExpiresAt:   c.ExpiresAt.Unix(),
@@ -326,6 +348,7 @@ func (ks *KeySet) Verify(token string, now time.Time) (*Verified, error) {
 		ExecutionID: w.ExecutionID,
 		ProjectID:   w.ProjectID,
 		Allowlist:   w.Allowlist,
+		Open:        w.Open,
 		IssuedAt:    time.Unix(w.IssuedAt, 0),
 		NotBefore:   time.Unix(w.NotBefore, 0),
 		ExpiresAt:   time.Unix(w.ExpiresAt, 0),
@@ -347,6 +370,9 @@ func (ks *KeySet) Verify(token string, now time.Time) (*Verified, error) {
 	allow, err := ParseAllowlist(c.Allowlist)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidClaims, err)
+	}
+	if c.Open && allow.Len() != 0 {
+		return nil, fmt.Errorf("%w: an open token carries no allowlist", ErrInvalidClaims)
 	}
 	return &Verified{Claims: c, Allowlist: allow}, nil
 }
