@@ -356,13 +356,15 @@ the database.
 
 **Images.** Cases 1, 2 and 4: Main `map-b2cd3c031` (`sha256:2122304f…`), Worker `map-bf94753dc` (`sha256:378c2300…`),
 Web `map-c6af819cb` (`sha256:ac5e6201…`). Case 3 stop, cases 5–7 and the re-confirms of 1 and 2: Main and Worker
-`map-a6b1ac96c` (`sha256:23749b28…`, `sha256:02ba042a…`), the same Web. verify-profile 50/50 on each. Each binary was
+`map-a6b1ac96c` (`sha256:23749b28…`, `sha256:02ba042a…`), the same Web. Case 2 again on the review images
+(R1–R3 and the merge with main): Main, Worker and Web `map-2d2359328` (`sha256:b77e818b…`, `sha256:7d269323…`,
+`sha256:b4a18306…`). verify-profile 50/50 on each. Each binary was
 extracted and checked for strings unique to this branch.
 
 | Case | Result |
 |---|---|
 | 1. 64-item State Modifier Map | PASS. Live status groups ("Running (3)", "Completed (47)"), never 64 rows; after a reload 64 ordered entries, all succeeded. Re-confirmed on the final images. |
-| 2. Saved-Agent Map, 3 items ask | PASS. 3 cards "(1)–(3)", answered out of order across two tabs, each dropped live in the other tab; reload keeps open cards; ledger 3 CONSUMED, no duplicate card; ordered answers. Re-confirmed on the final images. |
+| 2. Saved-Agent Map, 3 items ask | PASS. 3 cards "(1)–(3)", answered out of order across two tabs, each dropped live in the other tab; reload keeps open cards; ledger 3 CONSUMED, no duplicate card; ordered answers. Re-confirmed on the final images and again on the review images (`map-2d2359328`). |
 | 3. On Error and Join | PASS. `continue` + Router branches on the typed failed entry ("PARTIAL: 2 failed"); keyed join read by index; `stop` drains, then the chat shows the registered text (FU-288 fixed here) and the run settles `PIPELINE_TOOL_FAILED`. |
 | 4. Worker kill (on `map-bf94753dc`, which has the per-item invocation) | PASS. At the park: still 3 cards, none duplicated. At the decision seam: resumed after lease expiry, decision CONSUMED once. Mid-Map (8 LLM items): completed items never re-admitted, in-flight read-only items re-run, one ordered answer. |
 | 5. Map in a saved child pipeline; Map and Parallel as siblings | PASS. "CHILD MAP SAID: ALPHA-0 BETA-1 GAMMA-2"; "MAP ONE,TWO,THREE,FOUR \| PARALLEL succeeded,succeeded". |
