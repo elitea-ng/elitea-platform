@@ -1,0 +1,24 @@
+{
+  "checks": [
+    { "path": "servings", "op": "eq", "value": 6 },
+    { "path": "ingredients", "op": "len", "value": 10 },
+    { "path": "ingredients.0.quantity", "op": "num", "value": 285 },
+    { "path": "ingredients.0.unit", "op": "eq", "value": "g" },
+    { "path": "ingredients.1.quantity", "op": "num", "value": 225 },
+    { "path": "ingredients.2.quantity", "op": "num", "value": 3 },
+    { "path": "ingredients.2.unit", "op": "eq", "value": "piece" },
+    { "path": "ingredients.3.quantity", "op": "num", "value": 0.75 },
+    { "path": "ingredients.4.quantity", "op": "num", "value": 1.875 },
+    { "path": "ingredients.4.unit", "op": "eq", "value": "tsp" },
+    { "path": "ingredients.5.quantity", "op": "num", "value": 360 },
+    { "path": "ingredients.5.unit", "op": "eq", "value": "ml" },
+    { "path": "ingredients.6.quantity", "op": "num", "value": 172.5 },
+    { "path": "ingredients.7.quantity", "op": "num", "value": 1 },
+    { "path": "ingredients.7.unit", "op": "eq", "value": "cup" },
+    { "path": "ingredients.8.section", "op": "eq", "value": "topping" },
+    { "path": "ingredients.8.quantity", "op": "num", "value": 3 },
+    { "path": "ingredients.9.optional", "op": "eq", "value": true },
+    { "path": "total_minutes", "op": "eq", "value": 100 },
+    { "path": "oven_temp_c", "op": "eq", "value": 180 }
+  ]
+}

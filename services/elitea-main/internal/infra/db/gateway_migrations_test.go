@@ -46,6 +46,9 @@ func TestGatewayMigrationCutoverColumns(t *testing.T) {
 		"output_cost_per_1m_seconds",
 		"input_cost_per_1m_characters",
 		"output_cost_per_1m_characters",
+		// From 0225: pins the last term, whose ledger column the Usage read
+		// selects.
+		"ADD COLUMN IF NOT EXISTS reasoning_tokens",
 	} {
 		if !strings.Contains(sql, col) {
 			t.Errorf("gateway migration missing cutover-critical column %q", col)

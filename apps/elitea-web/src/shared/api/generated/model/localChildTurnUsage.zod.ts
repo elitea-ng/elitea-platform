@@ -47,6 +47,12 @@ export const LocalChildTurnUsage = zod
     llm_calls: zod.int(),
     prompt_tokens: zod.int(),
     completion_tokens: zod.int(),
+    reasoning_tokens: zod
+      .int()
+      .optional()
+      .describe(
+        "The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition.\n",
+      ),
   })
   .describe("The model calls the gateway recorded for the child's executions.");
 

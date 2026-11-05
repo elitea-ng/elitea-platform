@@ -82,6 +82,7 @@ fn summary_model_admission_keeps_limits_separate_and_rejects_authored_controls()
                 max_output_fallback: false,
                 max_input_tokens: None,
             },
+            model_reasoning: None,
         };
         request.payload.summary_model = Some(snapshot.clone());
         let profile = OrdinaryNoToolProfile::validate(&request).unwrap();
@@ -201,6 +202,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             model_context_limits: None,
             summary_model: None,
             platform_preamble: None,
+            model_reasoning: None,
         },
     }
 }

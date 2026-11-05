@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "에이전트의 모델",
   "workspace.model.choose": "모델: {{label}}",
   "workspace.model.effort": "추론 강도",
+  "workspace.model.effort.auto": "자동",
   "workspace.model.effort.high": "높음",
   "workspace.model.effort.low": "낮음",
   "workspace.model.effort.medium": "중간",

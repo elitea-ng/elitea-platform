@@ -23,7 +23,10 @@
 //! * [`reasoning`] — the worker's rule for reasoning a model wrote into an
 //!   answer's text (`<think>` blocks, Qwen's bare `</think>`); the model
 //!   client and the proposal chunker keep their own rules, for the reasons
-//!   given there.
+//!   given there;
+//! * [`thinking`] — the canonical thinking setting, the model's control
+//!   kind, and the one table that turns them into a request body
+//!   (ADR-0038).
 //!
 //! Nothing here performs I/O, holds a credential, or formats provider text
 //! into an error. Each client maps these results onto its own error
@@ -64,4 +67,5 @@ pub mod reasoning;
 pub mod refusal;
 pub mod route;
 pub mod sse;
+pub mod thinking;
 pub mod tool_calls;

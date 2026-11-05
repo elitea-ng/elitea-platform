@@ -1,0 +1,2 @@
+# The append log is a resume aid; <out>.json holds the same records.
+*.jsonl

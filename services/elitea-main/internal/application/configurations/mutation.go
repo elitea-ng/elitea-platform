@@ -179,6 +179,11 @@ func (CurrentPoVDataNormalizer) Normalize(
 					return CurrentConfigurationNormalizationResult{},
 						currentLocalConfigurationFieldError("data." + DialProtocolField)
 				}
+				// ADR-0038 decision 3, for the same reason.
+				if err := ValidateLLMModelReasoning(request.Data); err != nil {
+					return CurrentConfigurationNormalizationResult{},
+						currentLocalReasoningFieldError(request.Data)
+				}
 			}
 			return CurrentConfigurationNormalizationResult{
 				Data:     normalizeCurrentShallowUpdateData(request.Data),

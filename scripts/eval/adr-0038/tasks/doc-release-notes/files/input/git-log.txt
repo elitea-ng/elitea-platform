@@ -1,0 +1,146 @@
+$ git log v2.7.0..v2.8.0
+
+commit 9d1e4a7c0b2f6e8a1d3c5b7a9e0f2d4c6b8a0e1f (tag: v2.8.0)
+Author: Release Bot <release-bot@quill.example>
+Date:   Fri Oct 30 14:02:11 2026 +0000
+
+    chore(release): v2.8.0 (#455)
+
+commit 3c5e7a9b1d0f2e4c6a8b0d2f4e6a8c0b2d4f6a8c
+Author: Mei Lin <mei@quill.example>
+Date:   Thu Oct 29 17:40:03 2026 +0000
+
+    fix(deps): bump markdown-it to 14.1.1 for CVE-2026-40021 (#453)
+
+    markdown-it < 14.1.1 allowed a crafted link reference to cause
+    catastrophic backtracking (ReDoS).
+
+commit 7a2c4e6b8d0f1a3c5e7b9d1f3a5c7e9b1d3f5a7c
+Author: Sam Okafor <sam@quill.example>
+Date:   Thu Oct 29 09:12:45 2026 +0000
+
+    fix(cli): exit non-zero when any file fails to render (#452)
+
+    Previously `quill build` exited 0 if at least one file rendered.
+
+    BREAKING CHANGE: scripts that relied on exit code 0 for partial
+    failures must now handle exit code 2.
+
+commit e1f3a5c7b9d2e4f6a8c0b2d4e6f8a0c2b4d6e8f0
+Author: dependabot[bot] <support@github.com>
+Date:   Wed Oct 28 06:01:00 2026 +0000
+
+    ci: bump actions/setup-node from 4 to 5 (#451)
+
+commit b4d6f8a0c2e4a6c8e0b2d4f6a8c0e2b4d6f8a0c2
+Author: Ana Ruiz <ana@quill.example>
+Date:   Tue Oct 27 15:55:19 2026 +0000
+
+    feat(theme): support custom fonts via the `fonts:` theme key (#450)
+
+commit 5f7a9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a
+Author: Sam Okafor <sam@quill.example>
+Date:   Tue Oct 27 11:20:40 2026 +0000
+
+    Revert "feat(export): add CSV export for tables" (#449)
+
+    This reverts commit 0c2e4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4a6c8e.
+    CSV export corrupted cells that contain line breaks; it will come back
+    in a later release.
+
+commit d8f0b2d4f6a8c0e2a4c6e8a0c2e4b6d8f0a2c4e6
+Author: Mei Lin <mei@quill.example>
+Date:   Mon Oct 26 13:07:58 2026 +0000
+
+    Merge branch 'main' into feat/pdf-export
+
+commit a1c3e5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9
+Author: Mei Lin <mei@quill.example>
+Date:   Mon Oct 26 10:44:02 2026 +0000
+
+    test: add golden tests for PDF export (#447)
+
+commit 2b4d6f8a0c2e4f6a8c0e2b4d6f8a0c2e4a6c8e0b
+Author: Ana Ruiz <ana@quill.example>
+Date:   Fri Oct 23 16:31:27 2026 +0000
+
+    build(node)!: require Node.js 22 or later (#446)
+
+    Node 20 reaches end of life; we now use the built-in glob API.
+
+commit 6e8a0c2e4b6d8f0a2c4e6a8c0e2b4d6f8a0c2e4b
+Author: Sam Okafor <sam@quill.example>
+Date:   Thu Oct 22 09:58:13 2026 +0000
+
+    fix(watch): debounce file events on macOS (#445)
+
+    Saving a file in some editors triggered three rebuilds.
+
+commit f0a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6a8
+Author: Mei Lin <mei@quill.example>
+Date:   Wed Oct 21 14:15:36 2026 +0000
+
+    perf(render): cache compiled templates between builds (#443)
+
+    Incremental builds of the docs site went from 4.1 s to 1.3 s.
+
+commit 8c0e2a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2a4c6e
+Author: Ana Ruiz <ana@quill.example>
+Date:   Tue Oct 20 12:00:51 2026 +0000
+
+    refactor(core): split the renderer into smaller modules (#442)
+
+commit 4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4a6c8e0b2d
+Author: Jo Becker <jo@quill.example>
+Date:   Mon Oct 19 08:23:09 2026 +0000
+
+    docs: fix typo in the README install section (#441)
+
+commit 0c2e4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4a6c8e
+Author: Ana Ruiz <ana@quill.example>
+Date:   Fri Oct 16 17:48:30 2026 +0000
+
+    feat(export): add CSV export for tables (#440)
+
+commit c6e8a0c2e4b6d8f0a2c4e6b8d0f2a4c6e8a0c2e4
+Author: Mei Lin <mei@quill.example>
+Date:   Thu Oct 15 10:37:14 2026 +0000
+
+    fix(render): escape HTML in code block titles (#438)
+
+    A title like `<img onerror=...>` was injected into the page unescaped.
+
+commit e4a6c8e0b2d4f6a8c0e2a4c6e8b0d2f4a6c8e0b2
+Author: dependabot[bot] <support@github.com>
+Date:   Wed Oct 14 06:02:00 2026 +0000
+
+    ci: cache the pnpm store between jobs (#437)
+
+commit 1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f
+Author: Sam Okafor <sam@quill.example>
+Date:   Tue Oct 13 15:26:44 2026 +0000
+
+    feat(cli)!: rename `--config` to `--config-file` (#436)
+
+    The short form `-c` still works.
+
+commit 9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c3e5b7d
+Author: dependabot[bot] <support@github.com>
+Date:   Mon Oct 12 06:00:00 2026 +0000
+
+    chore(deps-dev): bump eslint from 9.12.0 to 9.14.0 (#434)
+
+commit 7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a
+Author: Jo Becker <jo@quill.example>
+Date:   Fri Oct 09 11:11:11 2026 +0000
+
+    fix(parser): handle CRLF line endings in front matter (#433)
+
+commit 5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f
+Author: Mei Lin <mei@quill.example>
+Date:   Thu Oct 08 16:20:05 2026 +0000
+
+    feat(export): add PDF export (#431)
+
+    `quill build --format pdf` renders each page to PDF via the bundled
+    print stylesheet.

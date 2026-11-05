@@ -142,6 +142,18 @@ func normalizeCurrentLocalAIModel(typeName string, data map[string]any) (map[str
 		if present {
 			normalized[DialProtocolField] = protocol
 		}
+
+		// ADR-0038 decision 3. Like the description, the create keeps only
+		// declared fields, and each key is written only when sent, so a row
+		// created without them takes the family default.
+		if err := ValidateLLMModelReasoning(data); err != nil {
+			return nil, currentLocalReasoningFieldError(data)
+		}
+		for _, field := range [...]string{ReasoningControlField, ReasoningToolStepsField, ReasoningOffWithToolsField} {
+			if raw, sent := data[field]; sent && raw != nil {
+				normalized[field] = raw
+			}
+		}
 	}
 
 	credentials, err := normalizeCurrentLocalAICredentials(data)
@@ -536,6 +548,26 @@ func currentLocalIdentifier(value string) bool {
 		return false
 	}
 	return true
+}
+
+// currentLocalReasoningFieldError names the reasoning key that
+// ValidateLLMModelReasoning refused.
+func currentLocalReasoningFieldError(data map[string]any) error {
+	if raw, sent := data[ReasoningControlField]; sent && raw != nil {
+		value, isString := raw.(string)
+		if !isString || !IsReasoningControl(value) {
+			return currentLocalConfigurationFieldError("data." + ReasoningControlField)
+		}
+		if supports, declared := data["supports_reasoning"].(bool); declared && !supports && value != ReasoningControlFixedOff {
+			return currentLocalConfigurationFieldError("data." + ReasoningControlField)
+		}
+	}
+	if raw, sent := data[ReasoningOffWithToolsField]; sent && raw != nil {
+		if _, isBool := raw.(bool); !isBool {
+			return currentLocalConfigurationFieldError("data." + ReasoningOffWithToolsField)
+		}
+	}
+	return currentLocalConfigurationFieldError("data." + ReasoningToolStepsField)
 }
 
 func currentLocalConfigurationFieldError(field string) error {

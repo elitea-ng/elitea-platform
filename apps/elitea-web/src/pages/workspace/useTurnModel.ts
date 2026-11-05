@@ -31,7 +31,7 @@ import { composer, type WorkspaceTurn } from '@/features/workspace';
 import { useGetApplicationVersionDetail } from '@/shared/api/generated/applications/applications';
 import { useListConfigurationModels } from '@/shared/api/generated/configurations/configurations';
 import { unwrapBody } from '@/shared/api/unwrap';
-import { isReasoningEffort, modelOverrideAllowed, type ReasoningEffort, type TurnModel, type TurnModelChoice } from '@/shared/desktop/turnModel';
+import { modelOverrideAllowed, toReasoningEffort, type ReasoningEffort, type TurnModel, type TurnModelChoice } from '@/shared/desktop/turnModel';
 
 /** One chat model the chip offers. */
 type ModelOption = ComponentProps<typeof composer.ModelChip>['models'][number];
@@ -102,7 +102,7 @@ export function agentModel(body: unknown): AgentModel {
   const settings = (unwrapBody(body) as { llm_settings?: Record<string, unknown> } | undefined)?.llm_settings ?? {};
   const name = settings['model_name'];
   const effort = settings['reasoning_effort'];
-  return { name: typeof name === 'string' && name !== '' ? name : null, effort: isReasoningEffort(effort) ? effort : undefined, pinned: settings['pin_model'] === true };
+  return { name: typeof name === 'string' && name !== '' ? name : null, effort: toReasoningEffort(effort), pinned: settings['pin_model'] === true };
 }
 
 const positiveId = (value: string): number => {
@@ -113,7 +113,7 @@ const positiveId = (value: string): number => {
 /** The chip's model: the choice made here, else the thread's kept choice, else the agent's own. */
 export function shownModel(choice: TurnModelChoice | undefined, latest: TurnModel | undefined, own: AgentModel): Pick<TurnModelControl, 'current' | 'effort'> {
   if (choice !== undefined) return { current: choice.name, effort: choice.reasoning_effort };
-  if (latest?.chosen === true) return { current: latest.name, effort: latest.reasoning_effort };
+  if (latest?.chosen === true) return { current: latest.name, effort: toReasoningEffort(latest.reasoning_effort) };
   return { current: own.name, effort: own.effort };
 }
 

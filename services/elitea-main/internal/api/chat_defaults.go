@@ -26,22 +26,35 @@ func (d chatDefaults) ContextManagementEnabled(ctx context.Context, projectID st
 	}
 	return strings.ToLower(value) == "true", nil
 }
-func (d chatDefaults) SupportsReasoning(ctx context.Context, projectID, name string) (bool, error) {
+
+// ModelReasoning is the model's reasoning data (supports_reasoning, the
+// resolved control form and the tool-step rule) from ONE catalogue read
+// (ADR-0038 decision 3). A model the catalogue does not know is not Found.
+func (d chatDefaults) ModelReasoning(ctx context.Context, projectID, name string) (configurationapp.ModelReasoningInfo, error) {
+	item, found, err := d.model(ctx, projectID, name)
+	if err != nil || !found {
+		return configurationapp.ModelReasoningInfo{}, err
+	}
+	return configurationapp.ModelItemReasoningInfo(&item), nil
+}
+
+// model is the first catalogue row of the project with this name.
+func (d chatDefaults) model(ctx context.Context, projectID, name string) (configurationapp.CurrentModelCatalogItem, bool, error) {
 	if d.models == nil {
-		return false, nil
+		return configurationapp.CurrentModelCatalogItem{}, false, nil
 	}
 	id, err := strconv.ParseInt(projectID, 10, 32)
 	if err != nil {
-		return false, err
+		return configurationapp.CurrentModelCatalogItem{}, false, err
 	}
 	items, err := d.models.List(ctx, int32(id), configurationapp.CurrentModelSectionLLM, false)
 	if err != nil {
-		return false, err
+		return configurationapp.CurrentModelCatalogItem{}, false, err
 	}
 	for _, item := range items {
-		if item.Name == name && item.SupportsReasoning != nil {
-			return *item.SupportsReasoning, nil
+		if item.Name == name {
+			return item, true, nil
 		}
 	}
-	return false, nil
+	return configurationapp.CurrentModelCatalogItem{}, false, nil
 }

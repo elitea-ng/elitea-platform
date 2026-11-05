@@ -1,0 +1,7 @@
+{
+  "id": "extract-lease",
+  "group": "extraction",
+  "title": "Extract lease terms, applying addenda that override the main contract",
+  "prompt": "User request: read input/lease.txt and write output.json in the workspace root that conforms to schema.json. Rules: landlord is the legal party (not the managing agent); tenants as full names in normal capitalisation; dates as YYYY-MM-DD, with end_date computed as the last day of the term; money as plain numbers and currency as an ISO 4217 code; addenda override the main contract, so use the values in effect after the addenda; rent_due_day is the day of the month rent is due; late_fee.grace_days is the number of days after the due date before the late charge applies; annual_increase_percent as a number (3% means 3); notice_period_days in days (convert weeks or months, 1 week = 7 days); included_utilities lists only utilities the landlord pays for, using the schema enum values only (ignore anything with no enum value); parking_spaces is the total number of spaces granted; pets_allowed is false unless ordinary pets are permitted.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

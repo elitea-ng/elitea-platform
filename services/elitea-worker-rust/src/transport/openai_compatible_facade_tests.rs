@@ -1002,46 +1002,239 @@ async fn skipped_internal_tools_notice_reaches_a_valid_openai_tool_message() {
     assert_eq!(body["messages"][2]["role"], "user");
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn gpt_56_tools_default_to_no_reasoning_when_main_omits_an_effort() {
+/// The request bodies one bound model sends for `requests`, in order. Each
+/// request takes the generation config the facade admits for `invocation`
+/// (as the agent runtime builds it from the bound model), so it passes the
+/// real admission.
+async fn thinking_bodies(
+    invocation: super::openai_compatible_facade::ModelFacadeInvocation,
+    mut requests: Vec<LlmRequest>,
+) -> Vec<serde_json::Value> {
+    // A tool-call answer to a request that declares `double`: it completes
+    // no turn, so the binding takes the next request. A request without
+    // tools gets a text answer: a tool call there is outside the admitted
+    // toolset.
     let tool_sse = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"double\",\"arguments\":\"{\\\"value\\\":21}\"}}]},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
         "data: [DONE]\n\n",
     );
+    let text_sse = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    for request in &mut requests {
+        request.config = Some(super::openai_compatible_facade::admitted_generation_config(
+            &invocation,
+        ));
+    }
     let (client, captured) = test_model_gateway_client(
-        vec![TestModelGatewayOutcome::Response(
-            test_model_gateway_response(Body::new(Full::new(Bytes::from(tool_sse)))),
-        )],
+        requests
+            .iter()
+            .map(|request| {
+                let answer = if request.tools.is_empty() {
+                    text_sse
+                } else {
+                    tool_sse
+                };
+                TestModelGatewayOutcome::Response(test_model_gateway_response(Body::new(
+                    Full::new(Bytes::from(answer)),
+                )))
+            })
+            .collect(),
         test_model_gateway_config(),
     )
     .expect("model gateway client");
-    let mut invocation = test_model_facade_invocation();
-    invocation.model_name = "gpt-5.6-terra".to_owned();
-    invocation.reasoning_effort = None;
     let bound = client
         .bind_ordinary(
             &ClaimScopedEliteaContext::fixture(17, TOKEN),
             17,
             invocation,
         )
-        .expect("bound GPT-5.6 model");
+        .expect("bound model");
+    for request in requests {
+        drain(bound.generate_for_test(request).await.expect("stream"))
+            .await
+            .expect("response");
+    }
+    let captured = captured.lock().expect("captured requests");
+    captured
+        .iter()
+        .map(|request| serde_json::from_slice(&request.body).expect("model request JSON"))
+        .collect()
+}
+
+/// A turn that called `double` and got `response` back.
+fn after_tool(response: serde_json::Value) -> LlmRequest {
+    tool_request(vec![
+        Content::new("user").with_text("double 21"),
+        Content {
+            role: "model".to_owned(),
+            parts: vec![Part::FunctionCall {
+                name: "double".to_owned(),
+                args: serde_json::json!({"value": 21}),
+                id: Some("call_1".to_owned()),
+                thought_signature: None,
+            }],
+        },
+        Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new("double", response),
+                id: Some("call_1".to_owned()),
+                annotations: None,
+            }],
+        },
+    ])
+}
+
+/// ADR-0038: the `gpt-5.6` rule that sent `reasoning_effort: none` on every
+/// tool request is gone (ADK 2.3 dropped the same rule). With no setting,
+/// nothing is sent and the model's own default applies.
+#[tokio::test(flavor = "current_thread")]
+async fn no_setting_sends_no_thinking_form_even_with_tools() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.model_name = "gpt-5.6-terra".to_owned();
+    invocation.reasoning_effort = None;
     let mut request = tool_request(vec![Content::new("user").with_text("double 21")]);
     request.model = "gpt-5.6-terra".to_owned();
+    let bodies = thinking_bodies(invocation, vec![request]).await;
+    assert!(bodies[0].get("reasoning_effort").is_none());
+    assert!(bodies[0].get("chat_template_kwargs").is_none());
+}
 
-    drain(
-        bound
-            .generate_for_test(request)
-            .await
-            .expect("tool-call stream"),
+/// ADR-0038 (#1574 review): GPT-5.6 refuses thinking beside chat-completions
+/// tool calls. The catalogue says so as data (`reasoning_off_with_tools`, the
+/// gpt-5.6 family default), not as a model-name rule: `auto` sends `none` on
+/// the planning step of a tool request, and a request without tools still
+/// thinks.
+#[tokio::test(flavor = "current_thread")]
+async fn off_with_tools_sends_none_beside_tools_and_thinks_without() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("effort", false)
+        .map(|reasoning| reasoning.with_off_with_tools(true));
+    let bodies = thinking_bodies(
+        invocation.clone(),
+        vec![tool_request(vec![
+            Content::new("user").with_text("double 21"),
+        ])],
     )
-    .await
-    .expect("tool-call response");
+    .await;
+    assert_eq!(bodies[0]["reasoning_effort"], "none");
 
-    let captured = captured.lock().expect("captured requests");
-    let body: serde_json::Value =
-        serde_json::from_slice(&captured[0].body).expect("model request JSON");
-    assert_eq!(body["reasoning_effort"], "none");
+    let mut plain = tool_request(vec![Content::new("user").with_text("say hi")]);
+    plain.tools.clear();
+    let bodies = thinking_bodies(invocation, vec![plain]).await;
+    assert_eq!(bodies[0]["reasoning_effort"], "medium");
+    assert!(bodies[0].get("tools").is_none());
+}
+
+/// ADR-0038 (#1574 review): a `budget` model keeps ONE thinking state through
+/// its tool loop under `auto`. Anthropic refuses a thinking request whose last
+/// assistant tool-use turn has no thinking block, so off on a tool step and
+/// on again at recovery must never happen.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_on_a_budget_model_never_switches_thinking_inside_the_loop() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("budget", false);
+    let bodies = thinking_bodies(
+        invocation,
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+            after_tool(serde_json::json!({"error": "Tool 'double' execution denied"})),
+        ],
+    )
+    .await;
+    for body in &bodies {
+        assert_eq!(body["reasoning_effort"], "medium", "{body}");
+    }
+}
+
+/// ADR-0038 decisions 2 and 4 on a `toggle` model (Qwen on vLLM): `auto`
+/// thinks on the first step and not on a routine tool follow-up, and the
+/// form is `enable_thinking`, never `reasoning_effort`.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_on_a_toggle_model_thinks_on_planning_and_not_after_a_tool_result() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("toggle", false);
+    // A toggle model takes a temperature beside thinking.
+    invocation.temperature = Some(0.6);
+    let bodies = thinking_bodies(
+        invocation,
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+            after_tool(serde_json::json!({"error": "Tool 'double' execution denied"})),
+        ],
+    )
+    .await;
+    let enable = |body: &serde_json::Value| body["chat_template_kwargs"]["enable_thinking"].clone();
+    assert_eq!(enable(&bodies[0]), serde_json::json!(true));
+    assert_eq!(enable(&bodies[1]), serde_json::json!(false));
+    assert_eq!(
+        enable(&bodies[2]),
+        serde_json::json!(true),
+        "recovery thinks"
+    );
+    for body in &bodies {
+        assert!(body.get("reasoning_effort").is_none());
+        assert_eq!(body["temperature"], serde_json::json!(0.6_f32));
+    }
+}
+
+/// `auto` on an `effort` model: `none` after a successful tool result, the
+/// default level on planning, and an explicit level on every step.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_and_explicit_levels_on_an_effort_model() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = crate::agents::request::ModelReasoning::parse("effort", false);
+    let bodies = thinking_bodies(
+        invocation.clone(),
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+        ],
+    )
+    .await;
+    assert_eq!(bodies[0]["reasoning_effort"], "medium");
+    assert_eq!(bodies[1]["reasoning_effort"], "none");
+
+    invocation.reasoning_effort = Some(ModelReasoningEffort::High);
+    let bodies = thinking_bodies(
+        invocation,
+        vec![after_tool(serde_json::json!({"value": 42}))],
+    )
+    .await;
+    assert_eq!(
+        bodies[0]["reasoning_effort"], "high",
+        "an explicit value wins"
+    );
+}
+
+/// `auto` on a model whose row declares no control form never sends the off
+/// form: an o-series model refuses `reasoning_effort: none`.
+#[tokio::test(flavor = "current_thread")]
+async fn auto_on_an_undeclared_model_thinks_on_every_step() {
+    let mut invocation = test_model_facade_invocation();
+    invocation.reasoning_effort = Some(ModelReasoningEffort::Auto);
+    invocation.reasoning = None;
+    let bodies = thinking_bodies(
+        invocation,
+        vec![
+            tool_request(vec![Content::new("user").with_text("double 21")]),
+            after_tool(serde_json::json!({"value": 42})),
+        ],
+    )
+    .await;
+    for body in &bodies {
+        assert_eq!(body["reasoning_effort"], "medium");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

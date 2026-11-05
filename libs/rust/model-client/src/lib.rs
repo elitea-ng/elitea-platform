@@ -33,7 +33,8 @@ pub use chat::{
 };
 pub use embeddings::{EmbeddingClient, EmbeddingOptions};
 pub use settings::{
-    ModelSettings, Provider, ReasoningEffort, embedding_model_name, valid_execution_id,
+    ModelSettings, Provider, ReasoningControl, ReasoningEffort, embedding_model_name,
+    valid_execution_id,
 };
 pub use tokens::count_tokens;
 pub use transport::{

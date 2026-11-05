@@ -133,7 +133,13 @@ impl ModelFacade {
                     model_name: summary.model_name.clone(),
                     system_instruction: super::summary_model::INSTRUCTION.to_owned(),
                     max_tokens: Some(summary.max_tokens),
-                    reasoning_effort: None,
+                    // A summary call thinks off where the model can be
+                    // switched (ADR-0038 decision 4); else nothing is sent.
+                    reasoning_effort: summary
+                        .model_reasoning
+                        .filter(|reasoning| reasoning.control.is_switchable())
+                        .map(|_| ModelReasoningEffort::None),
+                    reasoning: summary.model_reasoning,
                     temperature: summary.temperature,
                     max_model_turns: turns,
                     run_caps: None,

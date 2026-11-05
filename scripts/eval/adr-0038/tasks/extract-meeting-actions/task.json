@@ -1,0 +1,7 @@
+{
+  "id": "extract-meeting-actions",
+  "group": "extraction",
+  "title": "Extract action items, owners and due dates from meeting notes",
+  "prompt": "User request: read input/notes.md and write output.json in the workspace root that conforms to schema.json. Rules: attendees are the people present (not apologies), with full names as written; action_items has one entry per line marked ACTION, in the order they appear in the notes; owner is the person's full name as listed under Present, or null if no owner is assigned; resolve relative due dates against the meeting date and write them as YYYY-MM-DD, or null if no date is set; apply the corrections added after the meeting (a reassigned item gets the new owner, a dropped item keeps its entry with status \"cancelled\"; all others are \"open\"); decisions has one entry per line marked DECISION (deferred proposals are not decisions); next_meeting_utc is the next sync converted to UTC in the exact form YYYY-MM-DDTHH:MM:SSZ.",
+  "verifier": { "kind": "schema", "schema": "schema.json", "output": "output.json" }
+}

@@ -49,6 +49,12 @@ export const AnalyticsRunModel = zod
     llm_calls: zod.int(),
     prompt_tokens: zod.int(),
     completion_tokens: zod.int(),
+    reasoning_tokens: zod
+      .int()
+      .optional()
+      .describe(
+        "The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a provider that reports none and for a call logged before shared migration 0225.\n",
+      ),
     total_tokens: zod.int(),
     errors: zod
       .int()

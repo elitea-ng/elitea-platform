@@ -1133,9 +1133,24 @@ async fn the_key_never_reaches_errors_or_logs() {
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
     // Another test's thread can register the retry callsite while no
-    // subscriber wants it and cache that interest; recompute it now that
-    // this thread has one, or the retry line is never written here.
+    // subscriber wants it and cache that interest. Hit the callsites once
+    // here, so their registration is finished, THEN recompute the interest
+    // now that this thread has a subscriber; otherwise a registration that
+    // races the rebuild drops the retry line (about one run in four).
+    let warm_up = ChatClient::new(
+        transport(&fast()),
+        settings(&base, json!({"streaming": false})),
+    );
+    let _ = warm_up
+        .complete(
+            &ChatRequest::new(vec![ChatMessage::User("q".to_owned())]),
+            &StopSignal::default(),
+        )
+        .await;
     tracing::callsite::rebuild_interest_cache();
+    if let Ok(mut buffer) = logs.lock() {
+        buffer.clear();
+    }
 
     let client = ChatClient::new(
         transport(&fast()),

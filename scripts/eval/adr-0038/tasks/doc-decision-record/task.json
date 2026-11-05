@@ -1,0 +1,7 @@
+{
+  "id": "doc-decision-record",
+  "group": "doc",
+  "title": "Write an architecture decision record from a meeting transcript",
+  "prompt": "User request: write DECISION.md in the workspace root, an architecture decision record of the event-bus decision in input/transcript.txt. Use Markdown headings for these sections: Status, Context, Decision, Alternatives considered, Consequences, Follow-ups. Requirements: Status is the status agreed in the meeting; give the meeting date in YYYY-MM-DD form and the participants; Decision states the chosen option and its agreed configuration and the condition under which it will be revisited; Alternatives considered lists every rejected option, each with the reason it was rejected; Follow-ups lists each follow-up with its owner and, where given, its date in YYYY-MM-DD form. Only cover the event-bus decision: leave out the unrelated small talk (party planning, staffing news). At most 600 words.",
+  "verifier": { "kind": "review", "output": "DECISION.md" }
+}

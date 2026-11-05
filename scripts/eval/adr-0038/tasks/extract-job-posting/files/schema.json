@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "company", "location", "remote_policy", "office_days_per_week", "employment_type", "hours_per_week", "salary", "min_years_experience", "required_skills", "nice_to_have_skills", "visa_sponsorship", "application_deadline", "reports_to"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "company": { "type": "string", "minLength": 1 },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["city", "country"],
+      "properties": {
+        "city": { "type": "string", "minLength": 1 },
+        "country": { "type": "string", "pattern": "^[A-Z]{2}$" }
+      }
+    },
+    "remote_policy": { "type": "string", "enum": ["onsite", "hybrid", "remote"] },
+    "office_days_per_week": { "type": ["integer", "null"], "minimum": 0, "maximum": 7 },
+    "employment_type": { "type": "string", "enum": ["full_time", "part_time", "contract", "internship"] },
+    "hours_per_week": { "type": ["number", "null"], "minimum": 0 },
+    "salary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "min", "max", "period"],
+      "properties": {
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "period": { "type": "string", "enum": ["year", "month", "hour"] }
+      }
+    },
+    "min_years_experience": { "type": ["integer", "null"], "minimum": 0 },
+    "required_skills": { "type": "array", "items": { "type": "string" } },
+    "nice_to_have_skills": { "type": "array", "items": { "type": "string" } },
+    "visa_sponsorship": { "type": "boolean" },
+    "application_deadline": { "type": "string", "format": "date" },
+    "reports_to": { "type": ["string", "null"] }
+  }
+}

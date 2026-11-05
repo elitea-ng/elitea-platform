@@ -1828,6 +1828,7 @@ impl PipelineLlmAgentFactory for NativePipelineLlmAgentFactory {
             system_instruction,
             max_tokens: self.profile.max_tokens(),
             reasoning_effort: self.profile.reasoning_effort().map(model_reasoning_effort),
+            reasoning: self.profile.model_reasoning(),
             temperature: self.profile.temperature(),
             max_model_turns: self.profile.step_limit()
                 + crate::agents::request::MAX_OUTPUT_CONTINUATION_CALLS,
@@ -2970,6 +2971,7 @@ const fn model_reasoning_effort(effort: ReasoningEffort) -> ModelReasoningEffort
         ReasoningEffort::Medium => ModelReasoningEffort::Medium,
         ReasoningEffort::High => ModelReasoningEffort::High,
         ReasoningEffort::None => ModelReasoningEffort::None,
+        ReasoningEffort::Auto => ModelReasoningEffort::Auto,
     }
 }
 

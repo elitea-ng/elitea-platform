@@ -1,0 +1,11 @@
+{
+  "id": "code-semver-prerelease",
+  "group": "coding",
+  "title": "Fix SemVer 2.0.0 precedence and validation",
+  "prompt": "Our release tooling sorts versions with src/semver.mjs and it gets SemVer 2.0.0 precedence wrong: 1.0.0-rc.1 sorts after 1.0.0, beta.11 sorts before beta.2, and two versions that differ only in build metadata compare as different. parse() is also too lenient: it accepts leading zeros in the numeric parts and in numeric prerelease identifiers, and empty identifiers like `1.0.0-alpha..1`. sort() must return a new sorted array without touching its input. Please fix this so it follows semver.org section 11 (precedence) and section 9/10 (syntax). Tests: `node --test \"test/*.test.mjs\"`.",
+  "verifier": {
+    "kind": "command",
+    "command": "node --test \"test/*.test.mjs\"",
+    "check_files": ["test/semver.test.mjs"]
+  }
+}

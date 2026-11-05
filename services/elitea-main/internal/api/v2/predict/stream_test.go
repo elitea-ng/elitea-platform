@@ -109,7 +109,9 @@ func TestCompleteStreamMapsANonOKStatusToAnError(t *testing.T) {
 
 type blockingOnly struct{ content string }
 
-func (b blockingOnly) Complete(context.Context, CompletionRequest) (string, error) { return b.content, nil }
+func (b blockingOnly) Complete(context.Context, CompletionRequest) (string, error) {
+	return b.content, nil
+}
 
 func TestStreamFallsBackToOneDeltaForABlockingCompleter(t *testing.T) {
 	t.Parallel()

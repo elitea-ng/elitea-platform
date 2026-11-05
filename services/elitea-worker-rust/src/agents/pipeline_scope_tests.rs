@@ -19,6 +19,7 @@ fn enable_compaction(request: &mut super::super::request::AgentExecutionRequest)
     request.payload.summary_model = Some(crate::agents::request::SummaryModelSnapshot {
         llm_settings: json!({"model_name":"dedicated-summary","model_project_id":17,"max_tokens":1024,"temperature":null,"openai_compatible":true}).as_object().unwrap().clone(),
         model_context_limits: ModelContextLimits { context_window_tokens:32_000, max_output_tokens:4_000, context_window_fallback:false, max_output_fallback:false, max_input_tokens:None },
+        model_reasoning: None,
     });
 }
 

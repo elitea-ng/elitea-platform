@@ -106,6 +106,10 @@ type ToolkitTypeSchemaSource interface {
 }
 
 type Handler struct {
+	// reasoningModels reads a model's reasoning data for the save-time
+	// thinking rule (reasoning.go). Nil skips it.
+	reasoningModels ReasoningModelCatalog
+
 	repo                Repository
 	pool                *pgxpool.Pool
 	argumentSchemas     ToolkitArgumentSchemaSource
@@ -1255,6 +1259,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	if settings, ok := body["settings"].(map[string]any); ok && h.refuseToolkitReasoning(w, r, projectID, settings) {
+		return
+	}
 	dropRetiredToolkitSettings(body)
 
 	createdType, _ := body["type"].(string)
@@ -1417,6 +1424,9 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	// it. The type comes from the body when it restates one and from the stored
 	// row otherwise; a failed read degrades to the unvalidated save rather than
 	// making the toolkit uneditable.
+	if settings, ok := body["settings"].(map[string]any); ok && h.refuseToolkitReasoning(w, r, projectID, settings) {
+		return
+	}
 	if settings, ok := body["settings"].(map[string]any); ok {
 		if updatedType == "" {
 			updatedType = h.storedToolkitType(r.Context(), projectID, toolkitID)

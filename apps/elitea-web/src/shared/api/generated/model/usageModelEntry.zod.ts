@@ -71,6 +71,12 @@ export const UsageModelEntry = zod.object({
     ),
   prompt_tokens: zod.int(),
   completion_tokens: zod.int(),
+  reasoning_tokens: zod
+    .int()
+    .optional()
+    .describe(
+      "The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.\n",
+    ),
   total_tokens: zod.int(),
   api_requests: zod.int(),
 });

@@ -32,6 +32,9 @@ type Handler struct {
 	// runCaps refuses an author's meta.run_caps above the agent's tier caps
 	// (run_caps.go); nil accepts them.
 	runCaps *workerruncaps.Checker
+	// reasoningModels reads the catalogue for the save-time thinking rules
+	// (reasoning.go); nil applies the value check only.
+	reasoningModels ReasoningModelCatalog
 }
 
 func NewHandler(repo applications.Repository, pool ...*pgxpool.Pool) *Handler {
@@ -572,6 +575,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !checkOutputContracts(w, vBody, bodyAgentType(vBody, "")) {
+				return
+			}
+			llm, _ := vBody["llm_settings"].(map[string]any)
+			if !h.checkReasoningSetting(w, r, projectID, llm, true) {
 				return
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
@@ -1219,6 +1226,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if llm, _ := body["llm_settings"].(map[string]any); !h.checkReasoningSetting(w, r, projectID, llm, false) {
+		return
+	}
 	input := versionFromBody(body, ownerID)
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
@@ -1347,6 +1357,9 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 		v.Present.AgentType = true
 	}
 	if llm, ok := body["llm_settings"].(map[string]any); ok {
+		if !h.checkReasoningSetting(w, r, projectID, llm, false) {
+			return
+		}
 		v.LLMSettings = llm
 	}
 	if _, ok := body["conversation_starters"].([]any); ok {

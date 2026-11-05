@@ -21,6 +21,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 )
 
 func newChatAuthorityPool(t *testing.T) *pgxpool.Pool {
@@ -521,8 +523,8 @@ func (g chatContextGate) ContextManagementEnabled(context.Context, string) (bool
 
 type chatReasoningModel bool
 
-func (g chatReasoningModel) SupportsReasoning(context.Context, string, string) (bool, error) {
-	return bool(g), nil
+func (g chatReasoningModel) ModelReasoning(context.Context, string, string) (configurationapp.ModelReasoningInfo, error) {
+	return configurationapp.ModelReasoningInfo{Found: true, SupportsReasoning: bool(g)}, nil
 }
 
 func TestChatAuthorityPersonalizationContextAndParticipantMutations(t *testing.T) {

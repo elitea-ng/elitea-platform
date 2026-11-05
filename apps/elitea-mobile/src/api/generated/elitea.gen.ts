@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.34
+ * client contract:    1.35
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -2063,8 +2063,11 @@ export interface components {
             llm_settings?: {
                 max_tokens?: number;
                 model_name?: string;
-                /** @enum {string} */
-                reasoning_effort?: "low" | "medium" | "high";
+                /**
+                 * @description ADR-0038 decision 1. auto lets the runtime choose per step; off asks for no thinking. Absent means auto on a model whose catalogue row declares a reasoning_control.
+                 * @enum {string}
+                 */
+                reasoning_effort?: "auto" | "off" | "low" | "medium" | "high";
                 temperature?: number;
             };
             /** @description A short, specific name. */
@@ -2743,6 +2746,22 @@ export interface components {
             output_cost_per_1m_tokens?: number | null;
             /** @description BOTH, and a NUMBER on both, for the reason ConfigurationRow gives. */
             project_id: number;
+            /**
+             * @description `reviewed` only, and section=llm only (ADR-0038 decision 3). How the runtime controls the model's thinking: effort sends reasoning_effort, budget sends a thinking budget or adaptive thinking, toggle sends chat_template_kwargs.enable_thinking, fixed_on and fixed_off send nothing. The model's own data.reasoning_control wins; else the first family default of elitea_runtime.model_reasoning_defaults that matches the name, for a model with supports_reasoning true (shared migration 0225). ABSENT when neither declares a form: the runtime then keeps its previous form.
+             * @example toggle
+             * @enum {string}
+             */
+            reasoning_control?: "effort" | "budget" | "toggle" | "fixed_on" | "fixed_off";
+            /**
+             * @description `reviewed` only, and section=llm only. True: on a request that carries tools, reasoning_effort auto (or no setting) sends thinking off on every step, planning included; a request without tools still thinks, and an explicit level is sent as chosen (the GPT-5.6 family default). Resolved like reasoning_control. ABSENT when undeclared.
+             * @example false
+             */
+            reasoning_off_with_tools?: boolean;
+            /**
+             * @description `reviewed` only, and section=llm only. True: reasoning_effort auto keeps thinking on routine tool steps. Resolved like reasoning_control. ABSENT when undeclared.
+             * @example false
+             */
+            reasoning_tool_steps?: boolean;
             /** @description `compat` only. */
             section?: string;
             /** @description `reviewed` only. */
@@ -3226,7 +3245,10 @@ export interface components {
         DraftLlmSettings: {
             max_tokens?: number;
             model_name?: string;
-            /** @description One of low, medium or high, for reasoning models. */
+            /**
+             * @description The thinking setting (ADR-0038 decision 1): auto, off, low, medium or high. A stored none reads as off. Not an enum in this schema, because the field was a free string in client contract 1 and an enum would narrow it. The model's catalogue reasoning_control translates it: reasoning_effort for effort and budget, chat_template_kwargs.enable_thinking for toggle, nothing for a fixed form. auto thinks at the medium level, as one call has no steps. 400 for any other value, for off on a model that always thinks, and for a level on a model that cannot think (internal/api/v2/predict/reasoning.go). Absent sends nothing.
+             * @example auto
+             */
             reasoning_effort?: string;
             temperature?: number;
         };
@@ -3385,7 +3407,7 @@ export interface components {
             model_name?: string;
             /** @description Stored as string or number depending on writer; ExportImportGet normalizes float64 to a numeric string (internal/api/v2/eliteacore/handler.go:2590-2597). */
             model_project_id?: string | number;
-            /** @description One of none, low, medium or high. Mutually exclusive with temperature on the runtime profile: the native worker refuses a profile carrying both (services/elitea-worker-rust/src/agents/ assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps/elitea-web/src/shared/api/ agentLlmSettings.ts, selectEffortAndTemperature). */
+            /** @description One of auto, off, low, medium or high (ADR-0038 decision 1). A stored none reads as off. auto lets the runtime choose per step from the model's reasoning_control. A save refuses off on a fixed_on model and a level on a fixed_off model. A model whose reasoning_control is effort, budget or undeclared takes no temperature beside a thinking setting (anything other than off): the native worker refuses a profile carrying both (services/ elitea-worker-rust/src/agents/assembly.rs, parse_reasoning_effort), and the web write path encodes the same rule (apps/elitea-web/src/ shared/api/agentLlmSettings.ts, selectEffortAndTemperature). A toggle or fixed model takes both. */
             reasoning_effort?: string;
             temperature?: number;
             top_p?: number;
@@ -4171,6 +4193,12 @@ export interface components {
             /** Format: int64 */
             prompt_tokens: number;
             /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
+            /**
              * @description USD for the day. REMOVED for a caller who may not see amounts, like
              *     every other money field.
              */
@@ -4209,6 +4237,12 @@ export interface components {
              * @description Provider-reported prompt tokens for the period. Never estimated.
              */
             prompt_tokens?: number;
+            /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
             /** Format: int64 */
             total_tokens?: number;
             /**
@@ -4236,6 +4270,12 @@ export interface components {
             prompt_tokens: number;
             /** @description The model provider, or for a tool row the vendor (`tavily`). */
             provider: string;
+            /**
+             * Format: int64
+             * @description The part of completion_tokens the providers reported as reasoning (ADR-0038 decision 5). A subset, not an addition. 0 for a request whose provider reports none, and for a request billed before shared migration 0225.
+             * @example 600
+             */
+            reasoning_tokens?: number;
             /** @description USD for the model. REMOVED for a caller who may not see amounts. */
             spend?: number | null;
             /** Format: int64 */

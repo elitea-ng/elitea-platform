@@ -99,6 +99,24 @@ export const ConfigurationModelItem = zod
         "Optional provider input-only ceiling, inside the combined context window.",
       ),
     supports_reasoning: zod.boolean().nullish().describe("`reviewed` only."),
+    reasoning_control: zod
+      .enum(["effort", "budget", "toggle", "fixed_on", "fixed_off"])
+      .optional()
+      .describe(
+        "`reviewed` only, and section=llm only (ADR-0038 decision 3). How the runtime controls the model's thinking: effort sends reasoning_effort, budget sends a thinking budget or adaptive thinking, toggle sends chat_template_kwargs.enable_thinking, fixed_on and fixed_off send nothing. The model's own data.reasoning_control wins; else the first family default of elitea_runtime.model_reasoning_defaults that matches the name, for a model with supports_reasoning true (shared migration 0225). ABSENT when neither declares a form: the runtime then keeps its previous form.\n",
+      ),
+    reasoning_tool_steps: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`reviewed` only, and section=llm only. True: reasoning_effort auto keeps thinking on routine tool steps. Resolved like reasoning_control. ABSENT when undeclared.\n",
+      ),
+    reasoning_off_with_tools: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`reviewed` only, and section=llm only. True: on a request that carries tools, reasoning_effort auto (or no setting) sends thinking off on every step, planning included; a request without tools still thinks, and an explicit level is sent as chosen (the GPT-5.6 family default). Resolved like reasoning_control. ABSENT when undeclared.\n",
+      ),
     supports_vision: zod.boolean().nullish().describe("`reviewed` only."),
     low_tier: zod.boolean().nullish().describe("`reviewed` only."),
     high_tier: zod.boolean().nullish().describe("`reviewed` only."),

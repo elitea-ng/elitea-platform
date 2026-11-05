@@ -41,6 +41,10 @@ type Store struct {
 	// metered tool row is written WITHOUT the shared migration 0174 columns.
 	// Zero means "write them". See WriteBatch.
 	meteredUntil atomic.Int64
+	// reasoningUntil is the unix-nano time before which the full column list
+	// is written WITHOUT reasoning_tokens (shared migration 0225). Zero
+	// means "write it". See execWithReasoning.
+	reasoningUntil atomic.Int64
 	// verdictsUntil is the unix-nano time before which the guardrail
 	// verdicts are not written, because the database has no
 	// gateway.guardrail_verdicts table yet (shared 0214). See writeVerdicts.
@@ -59,21 +63,33 @@ func NewStore(db execer) *Store {
 // insertColumns is the column list, declared once so the placeholder count and
 // the argument order cannot drift from it.
 //
-// The last three columns come from shared migration 0139. legacyInsertColumns
-// is the same list without them, for a database that has not run 0139 yet.
-const insertColumns = `(occurred_at, project_id, user_id, route, method, status,
+// credential_owner and the two cache columns come from shared migration 0139,
+// and reasoning_tokens from shared migration 0225. pre0225InsertColumns is the
+// list without reasoning_tokens, for a database that has not run 0225 yet;
+// legacyInsertColumns is the list without all four, for one that has not run
+// 0139 yet.
+const insertColumnsUpTo0139 = `(occurred_at, project_id, user_id, route, method, status,
 	duration_ms, provider, model, streaming, error_code, prompt_tokens, completion_tokens,
-	execution_id, credential_owner, cache_read_tokens, cache_write_tokens)`
+	execution_id, credential_owner, cache_read_tokens, cache_write_tokens`
+
+const insertColumns = insertColumnsUpTo0139 + `, reasoning_tokens)`
+
+const pre0225InsertColumns = insertColumnsUpTo0139 + `)`
 
 const legacyInsertColumns = `(occurred_at, project_id, user_id, route, method, status,
 	duration_ms, provider, model, streaming, error_code, prompt_tokens, completion_tokens,
 	execution_id)`
 
+// reasoningColumn is the shared migration 0225 column (ADR-0038 decision 5),
+// the last of insertColumns.
+const reasoningColumn = `reasoning_tokens`
+
 // meteredColumns are the shared migration 0174 columns, appended to
 // insertColumns for a batch that holds a metered tool row (#1238).
 const meteredColumns = `operation, units, unit, cost_usd`
 
-// meteredColumnsPerRow is columnsPerRow plus the four meteredColumns.
+// meteredColumnsPerRow is columnsPerRow plus the four meteredColumns. A
+// statement of another shape binds its own count plus the same four.
 const meteredColumnsPerRow = columnsPerRow + 4
 
 // operationLLM and operationTool are the two values of the operation column.
@@ -87,9 +103,32 @@ const (
 // each row's values into the wrong columns — which for this table means a
 // status landing in duration_ms and every latency reading as nonsense.
 const (
-	columnsPerRow       = 17
-	legacyColumnsPerRow = 14
+	columnsPerRow        = 18
+	pre0225ColumnsPerRow = 17
+	legacyColumnsPerRow  = 14
 )
+
+// columnShape is the column list a statement binds: the full list, the list
+// before 0225, or the list before 0139.
+type columnShape int
+
+const (
+	shapeFull columnShape = iota
+	shapePre0225
+	shapeLegacy
+)
+
+// columns is the shape's column list and its count.
+func (shape columnShape) columns() (string, int) {
+	switch shape {
+	case shapePre0225:
+		return pre0225InsertColumns, pre0225ColumnsPerRow
+	case shapeLegacy:
+		return legacyInsertColumns, legacyColumnsPerRow
+	default:
+		return insertColumns, columnsPerRow
+	}
+}
 
 // legacyColumnsRetry is how long WriteBatch keeps the pre-0139 column list
 // after the database refused the full one. It expires, so the gateway heals by
@@ -171,30 +210,68 @@ func hasMetered(records []Record) bool {
 // cost; the column default would say the same, but one statement binds one
 // shape.
 func (s *Store) writeMeteredBatch(ctx context.Context, records []Record) error {
-	placeholders := make([]string, 0, len(records))
-	args := make([]any, 0, len(records)*meteredColumnsPerRow)
-	for index, record := range records {
-		base := index * meteredColumnsPerRow
-		slots := make([]string, meteredColumnsPerRow)
-		for column := range slots {
-			slots[column] = "$" + strconv.Itoa(base+column+1)
+	return s.execWithReasoning(ctx, func(shape columnShape) (string, []any) {
+		columns, perRow := shape.columns()
+		perRow += meteredColumnsPerRow - columnsPerRow
+		columns = strings.TrimSuffix(columns, ")") + ", " + meteredColumns + ")"
+		placeholders := make([]string, 0, len(records))
+		args := make([]any, 0, len(records)*perRow)
+		for index, record := range records {
+			placeholders = append(placeholders, rowPlaceholders(index*perRow, perRow))
+			args = append(args, recordArgs(record, shape)...)
+			if record.Metered == nil {
+				args = append(args, operationLLM, nil, nil, nil)
+				continue
+			}
+			args = append(args, operationTool, record.Metered.Units,
+				truncate(record.Metered.Unit, 16), nanoNumeric(record.Metered.CostNanoUSD))
 		}
-		placeholders = append(placeholders, "("+strings.Join(slots, ",")+")")
-		args = append(args, recordArgs(record, false)...)
-		if record.Metered == nil {
-			args = append(args, operationLLM, nil, nil, nil)
-			continue
-		}
-		args = append(args, operationTool, record.Metered.Units,
-			truncate(record.Metered.Unit, 16), nanoNumeric(record.Metered.CostNanoUSD))
+		return fmt.Sprintf(`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
+			columns, strings.Join(placeholders, ",")), args
+	})
+}
+
+// rowPlaceholders is one row's "($n,...)" group, numbered from base+1.
+func rowPlaceholders(base, perRow int) string {
+	slots := make([]string, perRow)
+	for column := range slots {
+		slots[column] = "$" + strconv.Itoa(base+column+1)
 	}
-	columns := strings.TrimSuffix(insertColumns, ")") + ", " + meteredColumns + ")"
-	statement := fmt.Sprintf(`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
-		columns, strings.Join(placeholders, ","))
-	if _, err := s.db.Exec(ctx, statement, args...); err != nil {
+	return "(" + strings.Join(slots, ",") + ")"
+}
+
+// execWithReasoning runs a statement built with the reasoning_tokens column
+// while the database has it (shared migration 0225), else without it.
+//
+// A gateway pod can roll out before elitea-migrate applies 0225. Postgres then
+// refuses the column with 42703, and the error names the column. Only THAT
+// refusal latches reasoningUntil and writes the same batch again without the
+// column, so a refusal of a 0139 or 0174 column still reaches the latch that
+// owns it. The count is enrichment: losing it for one retry interval loses
+// no row.
+func (s *Store) execWithReasoning(ctx context.Context, build func(shape columnShape) (string, []any)) error {
+	shape := shapeFull
+	if s.latched(&s.reasoningUntil) {
+		shape = shapePre0225
+	}
+	statement, args := build(shape)
+	_, err := s.db.Exec(ctx, statement, args...)
+	if err != nil && shape == shapeFull && isMissingColumn(err, reasoningColumn) {
+		s.reasoningUntil.Store(s.now().Add(legacyColumnsRetry).UnixNano())
+		statement, args = build(shapePre0225)
+		_, err = s.db.Exec(ctx, statement, args...)
+	}
+	if err != nil {
 		return fmt.Errorf("write request log batch: %w", err)
 	}
 	return nil
+}
+
+// isMissingColumn reports a 42703 whose message names column.
+func isMissingColumn(err error, column string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703" &&
+		strings.Contains(pgErr.Message, `"`+column+`"`)
 }
 
 // nanoNumeric is a nano-USD amount as an exact NUMERIC in USD: the integer
@@ -210,31 +287,25 @@ func isUndefinedColumn(err error) bool {
 }
 
 func (s *Store) writeBatch(ctx context.Context, records []Record, legacy bool) error {
-	columns, perRow := insertColumns, columnsPerRow
-	if legacy {
-		columns, perRow = legacyInsertColumns, legacyColumnsPerRow
-	}
-
-	placeholders := make([]string, 0, len(records))
-	args := make([]any, 0, len(records)*perRow)
-	for index, record := range records {
-		base := index * perRow
-		slots := make([]string, perRow)
-		for column := range slots {
-			slots[column] = "$" + strconv.Itoa(base+column+1)
+	build := func(shape columnShape) (string, []any) {
+		columns, perRow := shape.columns()
+		placeholders := make([]string, 0, len(records))
+		args := make([]any, 0, len(records)*perRow)
+		for index, record := range records {
+			placeholders = append(placeholders, rowPlaceholders(index*perRow, perRow))
+			args = append(args, recordArgs(record, shape)...)
 		}
-		placeholders = append(placeholders, "("+strings.Join(slots, ",")+")")
-
-		args = append(args, recordArgs(record, legacy)...)
+		return fmt.Sprintf(`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
+			columns, strings.Join(placeholders, ",")), args
 	}
-
-	statement := fmt.Sprintf(
-		`INSERT INTO gateway.llm_request_logs %s VALUES %s`,
-		columns, strings.Join(placeholders, ","))
-	if _, err := s.db.Exec(ctx, statement, args...); err != nil {
-		return fmt.Errorf("write request log batch: %w", err)
+	if legacy {
+		statement, args := build(shapeLegacy)
+		if _, err := s.db.Exec(ctx, statement, args...); err != nil {
+			return fmt.Errorf("write request log batch: %w", err)
+		}
+		return nil
 	}
-	return nil
+	return s.execWithReasoning(ctx, build)
 }
 
 // rowQuerier is the optional read half of the pool, used only for the
@@ -403,9 +474,8 @@ func nonNegative(value int64) int64 {
 	return value
 }
 
-// recordArgs is one record's bind values for insertColumns, or for
-// legacyInsertColumns when legacy is set.
-func recordArgs(record Record, legacy bool) []any {
+// recordArgs is one record's bind values for the shape's column list.
+func recordArgs(record Record, shape columnShape) []any {
 	args := make([]any, 0, columnsPerRow)
 	args = append(args,
 		record.OccurredAt,
@@ -427,12 +497,15 @@ func recordArgs(record Record, legacy bool) []any {
 		// carrying every un-attributed request in the project.
 		nullableExecutionID(record.ExecutionID),
 	)
-	if !legacy {
+	if shape != shapeLegacy {
 		args = append(args,
 			truncate(record.CredentialOwner, 16),
 			nonNegative(record.CacheReadToks),
 			nonNegative(record.CacheWriteToks),
 		)
+	}
+	if shape == shapeFull {
+		args = append(args, nonNegative(record.ReasoningToks))
 	}
 	return args
 }

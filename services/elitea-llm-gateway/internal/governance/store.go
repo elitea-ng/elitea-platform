@@ -370,6 +370,10 @@ type usageDimsPayload struct {
 	Operation string `json:"operation,omitempty"`
 	Units     *int64 `json:"units,omitempty"`
 	Unit      string `json:"unit,omitempty"`
+	// ReasoningTokens is the part of CompletionTokens the provider reported
+	// as reasoning (ADR-0038 decision 5). omitempty: absent for most calls,
+	// and an older consumer ignores the key.
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // usageDimsFor converts the internal dimensions to the wire form, preserving
@@ -386,6 +390,7 @@ func usageDimsFor(dims *failmode.UsageDimensions) *usageDimsPayload {
 		CompletionTokens: dims.CompletionTokens,
 		OccurredAtUnix:   dims.OccurredAtUnix,
 		ExecutionID:      dims.ExecutionID,
+		ReasoningTokens:  dims.ReasoningTokens,
 	}
 	if dims.Operation == failmode.UsageOperationTool {
 		units := dims.Units

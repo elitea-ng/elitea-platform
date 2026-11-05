@@ -81,6 +81,10 @@ libs/rust/repo-ingest/Cargo.toml member of the libs/rust workspace: the /libs/ru
 libs/rust/vector-index/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/model-rpc/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/platform-rpc/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+scripts/eval/adr-0038/tasks/code-go-cron/files/go.mod ADR-0038 eval task start state: a dependency-free module the model edits in a throwaway copy; it ships in nothing
+scripts/eval/adr-0038/tasks/code-go-intervals/files/go.mod ADR-0038 eval task start state: a dependency-free module the model edits in a throwaway copy; it ships in nothing
+scripts/eval/adr-0038/tasks/code-go-roman/files/go.mod ADR-0038 eval task start state: a dependency-free module the model edits in a throwaway copy; it ships in nothing
+scripts/eval/adr-0038/tasks/code-go-wrap/files/go.mod ADR-0038 eval task start state: a dependency-free module the model edits in a throwaway copy; it ships in nothing
 scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies
 EXEMPTIONS
 )

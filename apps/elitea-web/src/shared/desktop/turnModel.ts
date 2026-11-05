@@ -11,13 +11,26 @@
  */
 import { tauriInvoke } from './hostBridge';
 
-/** What `llm_settings.reasoning_effort` and the host accept. */
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high';
+/**
+ * The canonical reasoning setting (ADR-0038 decision 1): what
+ * `llm_settings.reasoning_effort` stores and the host accepts.
+ */
+export type ReasoningEffort = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
-export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high'];
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['auto', 'off', 'low', 'medium', 'high'];
 
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return typeof value === 'string' && (REASONING_EFFORTS as readonly string[]).includes(value);
+}
+
+/**
+ * A stored or reported effort as the canonical value: `none` (an agent saved
+ * before ADR-0038, and the host's name for off in a `running` event) reads as
+ * `off`. `undefined` for anything else, so an unknown value is never sent.
+ */
+export function toReasoningEffort(value: unknown): ReasoningEffort | undefined {
+  if (value === 'none') return 'off';
+  return isReasoningEffort(value) ? value : undefined;
 }
 
 /** `agent_turn_start`'s `model`: another chat model of the project for this turn (and the thread's next ones). */
@@ -29,7 +42,8 @@ export interface TurnModelChoice {
 /** The `status` `running` event's `model`: what the turn runs on. */
 export interface TurnModel {
   name: string;
-  reasoning_effort?: ReasoningEffort;
+  /** The host names off `none` here; read it with {@link toReasoningEffort}. */
+  reasoning_effort?: ReasoningEffort | 'none';
   /** The person's choice, over the agent's own model. */
   chosen: boolean;
   /** The agent pins its model: no choice is offered. */

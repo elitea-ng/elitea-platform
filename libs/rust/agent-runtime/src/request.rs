@@ -112,6 +112,77 @@ pub struct AgentExecutionPayload {
     /// at admission. The command's content controls name its revision and
     /// digest; the text travels only here, in the input bundle.
     pub platform_preamble: Option<PlatformPreambleSnapshot>,
+    /// The task model's thinking control (ADR-0038 decision 3), frozen at
+    /// admission. `None` keeps the form the worker used before the
+    /// catalogue declared one.
+    pub model_reasoning: Option<ModelReasoning>,
+}
+
+/// The catalogue's thinking data for one model (ADR-0038 decisions 3 and
+/// 4): its control kind and the `auto` default for tool steps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelReasoning {
+    pub control: crate::thinking::ReasoningControl,
+    pub tool_steps: bool,
+    /// `reasoning_off_with_tools`: `auto` does not think on a request that
+    /// carries tools (the provider refuses thinking beside tool calls).
+    pub off_with_tools: bool,
+}
+
+impl ModelReasoning {
+    /// The data from its wire form (`ModelReasoningV1`, or the same JSON
+    /// shape on a nested version). An unknown control kind is `None`: the
+    /// caller refuses the input, because a newer catalogue value that this
+    /// runtime cannot translate must never be sent as another form.
+    #[must_use]
+    pub fn parse(control: &str, tool_steps: bool) -> Option<Self> {
+        crate::thinking::ReasoningControl::parse(control).map(|control| Self {
+            control,
+            tool_steps,
+            off_with_tools: false,
+        })
+    }
+
+    /// The same data with `reasoning_off_with_tools` set.
+    #[must_use]
+    pub const fn with_off_with_tools(self, off_with_tools: bool) -> Self {
+        Self {
+            off_with_tools,
+            ..self
+        }
+    }
+
+    /// The data from a nested version's `model_reasoning` JSON object:
+    /// `{"control": <kind>, "tool_steps": <bool>, "off_with_tools": <bool>}`.
+    /// Other members are refused.
+    #[must_use]
+    pub fn from_json(value: &Value) -> Option<Self> {
+        let fields = value.as_object()?;
+        if fields
+            .keys()
+            .any(|key| key != "control" && key != "tool_steps" && key != "off_with_tools")
+        {
+            return None;
+        }
+        let flag = |name: &str| match fields.get(name) {
+            None | Some(Value::Null) => Some(false),
+            Some(Value::Bool(flag)) => Some(*flag),
+            Some(_) => None,
+        };
+        let tool_steps = flag("tool_steps")?;
+        let off_with_tools = flag("off_with_tools")?;
+        Self::parse(fields.get("control")?.as_str()?, tool_steps)
+            .map(|reasoning| reasoning.with_off_with_tools(off_with_tools))
+    }
+
+    /// The `auto` policy this data sets.
+    #[must_use]
+    pub const fn auto_policy(self) -> crate::thinking::AutoPolicy {
+        crate::thinking::AutoPolicy {
+            tool_steps: self.tool_steps,
+            off_with_tools: self.off_with_tools,
+        }
+    }
 }
 
 /// One revision of the platform preamble, as admission froze it.
@@ -128,6 +199,9 @@ pub struct PlatformPreambleSnapshot {
 pub struct SummaryModelSnapshot {
     pub llm_settings: Map<String, Value>,
     pub model_context_limits: ModelContextLimits,
+    /// The summary model's thinking control: a summary call sends thinking
+    /// off where the model can be switched. `None` sends nothing.
+    pub model_reasoning: Option<ModelReasoning>,
 }
 
 /// Authorized model limits from the language-neutral runtime contract.

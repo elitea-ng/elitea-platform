@@ -55,6 +55,17 @@ describe('useTurnModel helpers', () => {
     expect(agentModel(undefined)).toEqual({ name: null, effort: undefined, pinned: false });
   });
 
+  it('keeps a stored auto and off, and reads none as off (ADR-0038)', () => {
+    expect(agentModel({ llm_settings: { model_name: 'qwen3.5', reasoning_effort: 'auto' } }).effort).toBe('auto');
+    expect(agentModel({ llm_settings: { model_name: 'qwen3.5', reasoning_effort: 'off' } }).effort).toBe('off');
+    expect(agentModel({ llm_settings: { model_name: 'qwen3.5', reasoning_effort: 'none' } }).effort).toBe('off');
+    const own = { name: 'agent-model', effort: 'auto' as const, pinned: false };
+    const keptOff: TurnModel = { name: 'chosen-model', reasoning_effort: 'none', chosen: true, pinned: false };
+    expect(shownModel(undefined, keptOff, own)).toEqual({ current: 'chosen-model', effort: 'off' });
+    expect(shownModel(undefined, undefined, own)).toEqual({ current: 'agent-model', effort: 'auto' });
+    expect(shownModel({ name: 'picked', reasoning_effort: 'auto' }, keptOff, own)).toEqual({ current: 'picked', effort: 'auto' });
+  });
+
   it('takes the latest turn’s model: this session’s first, else the newest recorded one', () => {
     const recorded = { kind: 'local' as const, turns: [stored([running(1, 'old')]), stored([running(1, 'newer'), running(5, 'newest')]), stored([])] };
     expect(latestTurnModel({ view: EMPTY, earlier: [] }, recorded)?.name).toBe('newest');

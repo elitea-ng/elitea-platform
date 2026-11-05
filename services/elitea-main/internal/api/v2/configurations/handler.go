@@ -1205,6 +1205,10 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		failure.write(w)
 		return
 	}
+	if failure := refuseInvalidReasoningControl(strVal(body, "type"), body); failure != nil {
+		failure.write(w)
+		return
+	}
 	if !applyLLMModelDescriptionRule(w, strVal(body, "type"), dataMap) {
 		return
 	}
@@ -1521,6 +1525,9 @@ func (h *Handler) applyConfigurationUpdate(
 		return c, failure, nil
 	}
 	if failure := refuseInvalidDialProtocol(configType, body); failure != nil {
+		return c, failure, nil
+	}
+	if failure := refuseInvalidReasoningControl(configType, body); failure != nil {
 		return c, failure, nil
 	}
 	// A switch to the keyless mode clears the stored key fields here, before

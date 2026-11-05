@@ -156,6 +156,11 @@ type UsageDimensions struct {
 	Operation string `json:"operation,omitempty"`
 	Units     *int64 `json:"units,omitempty"`
 	Unit      string `json:"unit,omitempty"`
+	// ReasoningTokens is the part of CompletionTokens the provider reported
+	// as reasoning (ADR-0038 decision 5): a subset, never an addition.
+	// omitempty on both sides: absent from an older gateway, and zero for a
+	// provider that reports none.
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
 }
 
 // deltaKey is the coalescing / upsert key: one accumulator row per

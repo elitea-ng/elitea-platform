@@ -1650,7 +1650,7 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 			}
 			delete(body, "llm_settings")
 		} else {
-			if h.reasoningModels != nil && (settings["temperature"] != nil || settings["reasoning_effort"] == nil) {
+			if h.reasoningModels != nil {
 				name, _ := settings["model_name"].(string)
 				modelProject := projectID
 				if value := settings["model_project_id"]; value != nil {
@@ -1661,8 +1661,8 @@ func (h *Handler) UpdateEntitySettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if name != "" {
-					if reasoning, err := h.reasoningModels.SupportsReasoning(r.Context(), modelProject, name); err == nil && reasoning {
-						apierr.Write(w, apierr.BadRequest("a reasoning-capable model requires a reasoning_effort (low/medium/high) and no temperature"))
+					if message := h.refuseParticipantReasoning(r.Context(), modelProject, name, settings); message != "" {
+						apierr.Write(w, apierr.BadRequest(message))
 						return
 					}
 				}

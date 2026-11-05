@@ -110,6 +110,20 @@ jobs:
         run: |
           bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
 
+      - name: Free runner disk for the engine build
+        # The engine build on top of the restored target/ ran the runner out
+        # of disk (PR #1574: a shared-crate change rebuilds most of the graph
+        # beside the cached copy). Copied from ci-rust.yml: bounded and
+        # NON-FATAL; a refused rm only warns, and the build then fails
+        # honestly on ENOSPC.
+        working-directory: .
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+            || echo "::warning::could not remove every preinstalled toolchain; continuing"
+          df -h / | tail -1
+
       # Read everywhere, write on main only: a pull request's target
       # directory duplicated per branch would crowd the 10 GB Actions cache.
       #

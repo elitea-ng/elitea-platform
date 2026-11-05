@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "Modello dell’agente",
   "workspace.model.choose": "Modello: {{label}}",
   "workspace.model.effort": "Impegno di ragionamento",
+  "workspace.model.effort.auto": "Automatico",
   "workspace.model.effort.high": "Alto",
   "workspace.model.effort.low": "Basso",
   "workspace.model.effort.medium": "Medio",

@@ -1,0 +1,11 @@
+{
+  "id": "code-go-wrap",
+  "group": "coding",
+  "title": "Fix the greedy word wrapper (runes, paragraphs, long words) (Go)",
+  "prompt": "wrap.Wrap(text, width) in wrap.go produces bad output for our CLI help text. It should: return an error when width < 1; keep paragraphs (separated by one or more blank or whitespace-only lines) and emit them separated by exactly one empty line, dropping leading/trailing blank lines; inside a paragraph collapse all whitespace (including newlines and tabs) to single spaces and fill lines greedily so that every line is at most `width` characters, where characters are Unicode code points (runes), not bytes — a line of exactly `width` is fine; never leave trailing spaces; and break a word longer than `width` into width-sized pieces, starting it on a new line, with the last piece continuing as the current line (later words may join it if they fit). Whitespace-only input gives \"\". Currently lines come out too short, non-ASCII text wraps too early, paragraphs are merged and long words overflow. Run `go test ./...`.",
+  "verifier": {
+    "kind": "command",
+    "command": "go test ./...",
+    "check_files": ["wrap_test.go", "go.mod"]
+  }
+}

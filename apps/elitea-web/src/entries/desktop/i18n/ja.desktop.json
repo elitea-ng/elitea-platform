@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "エージェントのモデル",
   "workspace.model.choose": "モデル: {{label}}",
   "workspace.model.effort": "推論の強度",
+  "workspace.model.effort.auto": "自動",
   "workspace.model.effort.high": "高",
   "workspace.model.effort.low": "低",
   "workspace.model.effort.medium": "中",

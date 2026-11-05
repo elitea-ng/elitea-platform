@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "המודל של הסוכן",
   "workspace.model.choose": "מודל: {{label}}",
   "workspace.model.effort": "מאמץ הנמקה",
+  "workspace.model.effort.auto": "אוטומטי",
   "workspace.model.effort.high": "גבוה",
   "workspace.model.effort.low": "נמוך",
   "workspace.model.effort.medium": "בינוני",

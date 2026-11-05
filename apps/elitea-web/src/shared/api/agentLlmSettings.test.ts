@@ -128,6 +128,29 @@ describe('toAgentLlmSettings', () => {
     expect(settings?.temperature).toBe(0.6);
     expect(settings?.reasoning_effort).toBe('none');
   });
+
+  it('keeps auto, which the server gives a new agent, through a read and a save (ADR-0038)', () => {
+    const settings = toAgentLlmSettings({
+      model_name: 'qwen3.5',
+      model_project_id: 17,
+      temperature: 0.6,
+      reasoning_effort: 'auto',
+    });
+    expect(settings?.reasoning_effort).toBe('auto');
+    expect(Object.hasOwn(settings ?? {}, 'temperature')).toBe(false);
+    expect(settings ? toLlmSettingsBody(settings).reasoning_effort : undefined).toBe('auto');
+  });
+
+  it('keeps temperature alongside reasoning_effort "off", like "none"', () => {
+    const settings = toAgentLlmSettings({
+      model_name: 'qwen3.5',
+      model_project_id: 17,
+      temperature: 0.6,
+      reasoning_effort: 'off',
+    });
+    expect(settings?.temperature).toBe(0.6);
+    expect(settings?.reasoning_effort).toBe('off');
+  });
 });
 
 describe('toLlmSettingsBody', () => {

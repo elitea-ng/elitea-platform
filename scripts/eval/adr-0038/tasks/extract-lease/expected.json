@@ -1,0 +1,21 @@
+{
+  "checks": [
+    { "path": "landlord", "op": "str_ci", "value": "Harbor View Properties LLC" },
+    { "path": "tenants", "op": "set", "value": ["Maria Elena Ruiz", "Kwame Mensah"] },
+    { "path": "start_date", "op": "eq", "value": "2027-02-01" },
+    { "path": "end_date", "op": "eq", "value": "2028-07-31" },
+    { "path": "term_months", "op": "eq", "value": 18 },
+    { "path": "currency", "op": "eq", "value": "USD" },
+    { "path": "monthly_rent", "op": "num", "value": 2395 },
+    { "path": "security_deposit", "op": "num", "value": 4900 },
+    { "path": "rent_due_day", "op": "eq", "value": 1 },
+    { "path": "late_fee.amount", "op": "num", "value": 75 },
+    { "path": "late_fee.grace_days", "op": "eq", "value": 5 },
+    { "path": "annual_increase_percent", "op": "num", "value": 3.5 },
+    { "path": "first_increase_date", "op": "eq", "value": "2028-02-01" },
+    { "path": "notice_period_days", "op": "eq", "value": 56 },
+    { "path": "included_utilities", "op": "set", "value": ["water", "trash"] },
+    { "path": "parking_spaces", "op": "eq", "value": 2 },
+    { "path": "pets_allowed", "op": "eq", "value": false }
+  ]
+}

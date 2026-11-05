@@ -72,11 +72,14 @@ const maxUsageRows = 25
 
 // UsageTotals is the window's whole.
 type UsageTotals struct {
-	Requests         int64   `json:"requests"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	TotalTokens      int64   `json:"total_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
+	Requests         int64 `json:"requests"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+	// ReasoningTokens is the part of CompletionTokens the providers reported
+	// as reasoning (ADR-0038 decision 5), shown apart, never added on top.
+	ReasoningTokens int64   `json:"reasoning_tokens"`
+	CostUSD         float64 `json:"cost_usd"`
 	// Models is the number of DISTINCT (provider, model) pairs called in the
 	// window, which is not derivable from the capped breakdown below.
 	Models int64 `json:"models"`
@@ -91,10 +94,11 @@ type UsageTotals struct {
 // 0084's note on `occurred_at`), and a chart bucketed in the viewer's zone would
 // put spend in a different day from the period that billed it.
 type UsageDay struct {
-	Day         string  `json:"day"`
-	Requests    int64   `json:"requests"`
-	TotalTokens int64   `json:"total_tokens"`
-	CostUSD     float64 `json:"cost_usd"`
+	Day             string  `json:"day"`
+	Requests        int64   `json:"requests"`
+	TotalTokens     int64   `json:"total_tokens"`
+	ReasoningTokens int64   `json:"reasoning_tokens"`
+	CostUSD         float64 `json:"cost_usd"`
 }
 
 // UsageSlice is one row of a breakdown — by model, by project or by member.
@@ -113,6 +117,7 @@ type UsageSlice struct {
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
 	TotalTokens      int64   `json:"total_tokens"`
+	ReasoningTokens  int64   `json:"reasoning_tokens"`
 	CostUSD          float64 `json:"cost_usd"`
 	// Operation, Units and Unit are set on a model slice only. A metered tool
 	// operation (#1238) is a "model" row whose provider is the vendor and
@@ -137,7 +142,8 @@ const usageTotalsSQL = `
 	       COALESCE(SUM(total_tokens), 0),
 	       COALESCE(SUM(cost_usd), 0),
 	       COUNT(DISTINCT (provider, model)),
-	       COUNT(DISTINCT project_id)
+	       COUNT(DISTINCT project_id),
+	       COALESCE(SUM(reasoning_tokens), 0)
 	  FROM gateway.llm_usage_events
 	 WHERE occurred_at >= now() - $1::interval`
 
@@ -151,7 +157,8 @@ const usageDailySQL = `
 	SELECT to_char(date_trunc('day', occurred_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD'),
 	       COALESCE(SUM(api_requests), 0),
 	       COALESCE(SUM(total_tokens), 0),
-	       COALESCE(SUM(cost_usd), 0)
+	       COALESCE(SUM(cost_usd), 0),
+	       COALESCE(SUM(reasoning_tokens), 0)
 	  FROM gateway.llm_usage_events
 	 WHERE occurred_at >= now() - $1::interval
 	 GROUP BY 1
@@ -172,7 +179,8 @@ const usageModelsSQL = `
 	       COALESCE(SUM(cost_usd), 0),
 	       operation,
 	       COALESCE(SUM(units), 0),
-	       COALESCE(unit, '')
+	       COALESCE(unit, ''),
+	       COALESCE(SUM(reasoning_tokens), 0)
 	  FROM gateway.llm_usage_events
 	 WHERE occurred_at >= now() - $1::interval
 	 GROUP BY provider, model, operation, unit
@@ -191,7 +199,8 @@ const usageProjectsSQL = `
 	       COALESCE(SUM(e.prompt_tokens), 0),
 	       COALESCE(SUM(e.completion_tokens), 0),
 	       COALESCE(SUM(e.total_tokens), 0),
-	       COALESCE(SUM(e.cost_usd), 0)
+	       COALESCE(SUM(e.cost_usd), 0),
+	       COALESCE(SUM(e.reasoning_tokens), 0)
 	  FROM gateway.llm_usage_events e
 	  LEFT JOIN centry.project p ON p.id = e.project_id
 	 WHERE e.occurred_at >= now() - $1::interval
@@ -213,7 +222,8 @@ const usageMembersSQL = `
 	       COALESCE(SUM(e.prompt_tokens), 0),
 	       COALESCE(SUM(e.completion_tokens), 0),
 	       COALESCE(SUM(e.total_tokens), 0),
-	       COALESCE(SUM(e.cost_usd), 0)
+	       COALESCE(SUM(e.cost_usd), 0),
+	       COALESCE(SUM(e.reasoning_tokens), 0)
 	  FROM gateway.llm_usage_events e
 	  LEFT JOIN public.auth_core__user u ON u.id = e.user_id
 	 WHERE e.occurred_at >= now() - $1::interval
@@ -324,6 +334,7 @@ func (h *LLMProxyHandler) queryUsageTotals(ctx context.Context, pgInterval strin
 	err := h.db.QueryRow(ctx, usageTotalsSQL, pgInterval).Scan(
 		&totals.Requests, &totals.PromptTokens, &totals.CompletionTokens,
 		&totals.TotalTokens, &totals.CostUSD, &totals.Models, &totals.Projects,
+		&totals.ReasoningTokens,
 	)
 	if err != nil {
 		return UsageTotals{}, fmt.Errorf("read usage totals: %w", err)
@@ -341,7 +352,7 @@ func (h *LLMProxyHandler) queryUsageDaily(ctx context.Context, pgInterval string
 
 	for rows.Next() {
 		var day UsageDay
-		if scanErr := rows.Scan(&day.Day, &day.Requests, &day.TotalTokens, &day.CostUSD); scanErr != nil {
+		if scanErr := rows.Scan(&day.Day, &day.Requests, &day.TotalTokens, &day.CostUSD, &day.ReasoningTokens); scanErr != nil {
 			return days, fmt.Errorf("read the usage series: %w", scanErr)
 		}
 		days = append(days, day)
@@ -391,7 +402,7 @@ func scanUsageModel(scan func(...any) error) (UsageSlice, error) {
 	var slice UsageSlice
 	if err := scan(&provider, &model, &slice.Requests, &slice.PromptTokens,
 		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD,
-		&operation, &units, &unit); err != nil {
+		&operation, &units, &unit, &slice.ReasoningTokens); err != nil {
 		return UsageSlice{}, err
 	}
 	slice.Operation = operation
@@ -413,7 +424,8 @@ func scanUsageProject(scan func(...any) error) (UsageSlice, error) {
 	var name string
 	var slice UsageSlice
 	if err := scan(&projectID, &name, &slice.Requests, &slice.PromptTokens,
-		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD); err != nil {
+		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD,
+		&slice.ReasoningTokens); err != nil {
 		return UsageSlice{}, err
 	}
 	id := strconv.FormatInt(projectID, 10)
@@ -434,7 +446,8 @@ func scanUsageMember(scan func(...any) error) (UsageSlice, error) {
 	var name string
 	var slice UsageSlice
 	if err := scan(&userID, &name, &slice.Requests, &slice.PromptTokens,
-		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD); err != nil {
+		&slice.CompletionTokens, &slice.TotalTokens, &slice.CostUSD,
+		&slice.ReasoningTokens); err != nil {
 		return UsageSlice{}, err
 	}
 	id := strconv.FormatInt(userID, 10)

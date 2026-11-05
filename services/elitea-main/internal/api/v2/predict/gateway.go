@@ -69,9 +69,19 @@ type CompletionRequest struct {
 	Messages []Message
 	// Temperature and MaxTokens are pointers so "absent" and "explicitly 0"
 	// stay distinguishable — 0 temperature is a legitimate, meaningful value.
-	Temperature     *float64
-	MaxTokens       *int
+	Temperature *float64
+	MaxTokens   *int
+	// ReasoningEffort is the caller's thinking setting: auto, off, low,
+	// medium or high, or "" for none (ADR-0038 decision 1). A stored none
+	// reads as off. PrepareReasoning checks it against the model before
+	// dispatch; the completer translates it with the model's control form.
 	ReasoningEffort string
+	// ReasoningControl is the model's catalogue reasoning_control, set by
+	// the default-model resolver. "" keeps the form from before ADR-0038.
+	ReasoningControl string
+	// reasoningResolved marks a request whose model and control were already
+	// resolved, so a decorator does not read the catalogue twice.
+	reasoningResolved bool
 	// AttributionID names the work this call belongs to, for the analytics
 	// reads. It is signed into the identity headers as the execution id
 	// (X-Elitea-Execution-Id, signature v2), and the gateway writes it to
@@ -156,6 +166,9 @@ type chatCompletionsRequest struct {
 	Temperature     *float64  `json:"temperature,omitempty"`
 	MaxTokens       *int      `json:"max_tokens,omitempty"`
 	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	// ChatTemplateKwargs carries enable_thinking for a toggle model (vLLM,
+	// SGLang); the gateway forwards that one key.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 	// Stream is false for Complete (the blocking mode) and true for
 	// CompleteStream (stream.go).
 	Stream bool `json:"stream"`
@@ -175,15 +188,9 @@ type chatCompletionsResponse struct {
 // completion is ErrNoContent, so no caller can mistake a silent upstream for a
 // successful empty answer.
 func (c *GatewayCompleter) Complete(ctx context.Context, req CompletionRequest) (string, error) {
-	raw, err := json.Marshal(chatCompletionsRequest{
-		Model:           req.Model,
-		Messages:        req.Messages,
-		Temperature:     req.Temperature,
-		MaxTokens:       req.MaxTokens,
-		ReasoningEffort: req.ReasoningEffort,
-	})
+	raw, err := encodeChatCompletions(req, false)
 	if err != nil {
-		return "", fmt.Errorf("predict: encode request: %w", err)
+		return "", err
 	}
 
 	// A browser's turn carries no attribution id, so the identity tuple signs

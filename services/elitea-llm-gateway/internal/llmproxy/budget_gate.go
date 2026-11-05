@@ -690,6 +690,9 @@ func recordLoggedCacheTokens(ctx context.Context, usage *schemas.BifrostLLMUsage
 	if read, write, ok := cacheTokensFromLLMUsage(usage); ok {
 		requestlog.FromContext(ctx).SetCacheTokens(read, write)
 	}
+	if reasoning, ok := reasoningTokensFromLLMUsage(usage); ok {
+		requestlog.FromContext(ctx).SetReasoningTokens(reasoning)
+	}
 }
 
 // recordLoggedResponsesCacheTokens is recordLoggedCacheTokens for the
@@ -698,6 +701,35 @@ func recordLoggedResponsesCacheTokens(ctx context.Context, usage *schemas.Respon
 	if read, write, ok := cacheTokensFromResponsesUsage(usage); ok {
 		requestlog.FromContext(ctx).SetCacheTokens(read, write)
 	}
+	if reasoning, ok := reasoningTokensFromResponsesUsage(usage); ok {
+		requestlog.FromContext(ctx).SetReasoningTokens(reasoning)
+	}
+}
+
+// reasoningTokensFromLLMUsage reads the reasoning count of a chat usage block
+// (ADR-0038 decision 5): completion_tokens_details.reasoning_tokens, or the
+// top-level reasoning_tokens SGLang sends. ok is false when the block reports
+// none, so a provider that does not report the count records 0.
+func reasoningTokensFromLLMUsage(usage *schemas.BifrostLLMUsage) (int64, bool) {
+	if usage == nil {
+		return 0, false
+	}
+	if details := usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+		return int64(details.ReasoningTokens), true
+	}
+	if usage.ReasoningTokens > 0 {
+		return int64(usage.ReasoningTokens), true
+	}
+	return 0, false
+}
+
+// reasoningTokensFromResponsesUsage is reasoningTokensFromLLMUsage for the
+// Responses-API usage block: output_tokens_details.reasoning_tokens.
+func reasoningTokensFromResponsesUsage(usage *schemas.ResponsesResponseUsage) (int64, bool) {
+	if usage == nil || usage.OutputTokensDetails == nil || usage.OutputTokensDetails.ReasoningTokens <= 0 {
+		return 0, false
+	}
+	return int64(usage.OutputTokensDetails.ReasoningTokens), true
 }
 
 // cacheTokensFromLLMUsage reads the cache-read and cache-write counts from a
@@ -885,6 +917,9 @@ func (h *Handler) updateUsageUnits(
 		// grouped by agent the same way the request log can. Empty for every
 		// caller that is not a runtime execution, which is most of them.
 		ExecutionID: identityExecutionFromCtx(ctx),
+		// The part of CompletionTokens the provider reported as reasoning
+		// (ADR-0038 decision 5): the count the request log recorded.
+		ReasoningTokens: ledgerReasoningTokens(ctx),
 	}
 
 	if h.spawnBillingGoroutine(bp, pid, userIDStr, periodStart, periodEnd, actualCost.TotalNanoUSD, dims, unpin, "") {
@@ -892,6 +927,24 @@ func (h *Handler) updateUsageUnits(
 		return billBilled
 	}
 	return billRefused
+}
+
+// ledgerReasoningKey carries a streamed request's reasoning count on the
+// detached billing context, which has no request log of its own.
+type ledgerReasoningKey struct{}
+
+func withLedgerReasoningTokens(ctx context.Context, reasoning int64) context.Context {
+	return context.WithValue(ctx, ledgerReasoningKey{}, reasoning)
+}
+
+// ledgerReasoningTokens is the reasoning count for the usage ledger row: the
+// streamed request's settled count, else the one the request log recorded
+// for a unary answer, else 0.
+func ledgerReasoningTokens(ctx context.Context) int64 {
+	if reasoning, ok := ctx.Value(ledgerReasoningKey{}).(int64); ok {
+		return reasoning
+	}
+	return requestlog.FromContext(ctx).ReasoningTokens()
 }
 
 // optionalUserID renders the identity header's member id as a *int for the

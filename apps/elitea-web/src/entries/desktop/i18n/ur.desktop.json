@@ -675,6 +675,7 @@
   "workspace.model.agentDefault": "ایجنٹ کا ماڈل",
   "workspace.model.choose": "ماڈل: {{label}}",
   "workspace.model.effort": "استدلال کی کوشش",
+  "workspace.model.effort.auto": "خودکار",
   "workspace.model.effort.high": "اعلیٰ",
   "workspace.model.effort.low": "ادنیٰ",
   "workspace.model.effort.medium": "درمیانہ",

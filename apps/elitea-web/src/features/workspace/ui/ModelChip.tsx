@@ -40,7 +40,9 @@ export interface ModelChipProps {
 
 function effortLabel(effort: ReasoningEffort): string {
   switch (effort) {
-    case 'none':
+    case 'auto':
+      return t('workspace.model.effort.auto', 'Auto');
+    case 'off':
       return t('workspace.model.effort.none', 'No reasoning');
     case 'low':
       return t('workspace.model.effort.low', 'Low');

@@ -172,14 +172,16 @@ func (e *Envelope) toolkitReasoningEffort() string {
 }
 
 // validReasoningEffort returns the value when it is one the Rust model client
-// and the gateway accept (libs/rust/model-client ReasoningEffort), else "".
+// accepts (libs/rust/model-client ReasoningEffort: the ADR-0038 canonical
+// values and the stored none), else "". The model client sends auto at the
+// default level, one call being its own first step.
 func validReasoningEffort(raw json.RawMessage) string {
 	var value string
 	if json.Unmarshal(raw, &value) != nil {
 		return ""
 	}
 	switch value {
-	case "none", "low", "medium", "high":
+	case "auto", "off", "none", "low", "medium", "high":
 		return value
 	}
 	return ""

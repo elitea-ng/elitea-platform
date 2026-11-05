@@ -389,8 +389,16 @@ type streamSettler struct {
 	// that set in/out. They feed the request log only, never the bill.
 	cacheRead, cacheWrite int64
 	gotCache              bool
-	observedOutBytes      int64
-	settled               bool
+	// reasoning is the reasoning count of the same usage block (ADR-0038
+	// decision 5). It feeds the request log only, never the bill.
+	reasoning    int64
+	gotReasoning bool
+	// billedReasoning is the reasoning count report settled on
+	// (settleBilledReasoning); the detached billing context carries it to the
+	// usage ledger row.
+	billedReasoning  int64
+	observedOutBytes int64
+	settled          bool
 	// promptEstimate, seenPrompt, relayedChunks and relayedBytes feed the
 	// estimate billed when the CALLER disconnects (stream_disconnect.go,
 	// issue #1201). They reach the money path only there.
@@ -479,6 +487,7 @@ func (s *streamSettler) observe(c *schemas.BifrostStreamChunk) {
 		// same chunk the extractor accepted — for the Responses dialect that is
 		// the terminal event, never message_start.
 		s.cacheRead, s.cacheWrite, s.gotCache = cacheTokensFromChunk(c)
+		s.reasoning, s.gotReasoning = reasoningTokensFromChunk(c)
 	}
 	if p := chunkPromptTokens(c); p > s.seenPrompt {
 		s.seenPrompt = p
@@ -543,10 +552,12 @@ func (s *streamSettler) accumulatedUsage() (int64, int64, bool) {
 func (s *streamSettler) recordLogTokens() {
 	in, out, ok := s.in, s.out, s.gotUsage
 	cacheRead, cacheWrite, gotCache := s.cacheRead, s.cacheWrite, s.gotCache
+	reasoning, gotReasoning := s.reasoning, s.gotReasoning
 	if !ok {
 		in, out, ok = s.accumulatedUsage()
 		if ok {
 			cacheRead, cacheWrite, gotCache = s.accumulatedCacheTokens()
+			reasoning, gotReasoning = s.accumulatedReasoningTokens()
 		}
 	}
 	if ok {
@@ -554,11 +565,31 @@ func (s *streamSettler) recordLogTokens() {
 		if gotCache {
 			s.logUsage.SetCacheTokens(cacheRead, cacheWrite)
 		}
+		if gotReasoning {
+			s.logUsage.SetReasoningTokens(reasoning)
+		}
 	}
 	// The key bifrost selected is on the request's own BifrostContext, which
 	// this settler holds; billingContext() is detached and carries none.
 	if s.ctx != nil {
 		s.logUsage.SetCredentialOwner(account.SelectedCredentialOwner(s.ctx))
+	}
+}
+
+// settleBilledReasoning takes the reasoning count the ledger row carries
+// (ADR-0038 decision 5) from the same evidence report bills: the trailer,
+// which may have arrived during the grace drain, after recordLogTokens ran;
+// else, on the accumulated-usage path, the provider's handle. It runs in
+// report, after the drain, so a trailer the drain recovered is never lost to
+// the ledger. An estimate (caller disconnect) carries none.
+func (s *streamSettler) settleBilledReasoning(partial bool) {
+	switch {
+	case partial:
+		if reasoning, ok := s.accumulatedReasoningTokens(); ok {
+			s.billedReasoning = reasoning
+		}
+	case s.gotReasoning && !s.estimated:
+		s.billedReasoning = s.reasoning
 	}
 }
 
@@ -571,6 +602,31 @@ func (s *streamSettler) accumulatedCacheTokens() (read, write int64, ok bool) {
 	}
 	u, _ := s.ctx.Value(schemas.BifrostContextKeyStreamAccumulatedUsage).(*schemas.BifrostLLMUsage)
 	return cacheTokensFromLLMUsage(u)
+}
+
+// accumulatedReasoningTokens is accumulatedCacheTokens for the reasoning
+// count, under the same rule.
+func (s *streamSettler) accumulatedReasoningTokens() (int64, bool) {
+	if !s.chanClosed || s.ctx == nil {
+		return 0, false
+	}
+	u, _ := s.ctx.Value(schemas.BifrostContextKeyStreamAccumulatedUsage).(*schemas.BifrostLLMUsage)
+	return reasoningTokensFromLLMUsage(u)
+}
+
+// reasoningTokensFromChunk reads the reasoning count from a usage-carrying
+// stream chunk of either dialect.
+func reasoningTokensFromChunk(c *schemas.BifrostStreamChunk) (int64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	if chat := c.BifrostChatResponse; chat != nil {
+		return reasoningTokensFromLLMUsage(chat.Usage)
+	}
+	if sr := c.BifrostResponsesStreamResponse; sr != nil && sr.Response != nil {
+		return reasoningTokensFromResponsesUsage(sr.Response.Usage)
+	}
+	return 0, false
 }
 
 // cacheTokensFromChunk reads the prompt-cache counts from a usage-carrying
@@ -828,6 +884,7 @@ func (s *streamSettler) report(reason, outcome string) {
 				"input_tokens", s.in, "output_tokens", s.out)
 		}
 	}
+	s.settleBilledReasoning(partial)
 	if s.gotUsage {
 		// We recovered the authoritative numbers — but the increment can still
 		// be refused (graceful shutdown already set billingClosing). If that
@@ -1107,6 +1164,9 @@ func (s *streamSettler) billingContext() context.Context {
 	// besides the execution id.
 	if s.holds != nil {
 		base = failmode.WithHolds(base, s.holds)
+	}
+	if s.billedReasoning > 0 {
+		base = withLedgerReasoningTokens(base, s.billedReasoning)
 	}
 	if s.executionID == "" {
 		return base

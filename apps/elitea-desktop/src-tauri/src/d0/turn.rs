@@ -4048,6 +4048,7 @@ impl AgentHost {
             replay,
             vision,
             prompt_cache,
+            reasoning,
             ..
         } = model_facts;
         // `read_file` returns an image part only to a model that sees images
@@ -4198,6 +4199,7 @@ impl AgentHost {
             max_tokens,
             temperature: admitted.model.temperature,
             reasoning_effort: admitted.model.reasoning_effort,
+            reasoning,
             response_schema: None,
             allow_text_continuation: false,
             max_model_turns: admitted.step_limit,
@@ -6095,6 +6097,7 @@ fn execution_request(
             model_context_limits: None,
             summary_model: None,
             platform_preamble: None,
+            model_reasoning: None,
         },
     }
 }

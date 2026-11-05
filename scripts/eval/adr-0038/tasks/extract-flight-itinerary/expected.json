@@ -1,0 +1,21 @@
+{
+  "checks": [
+    { "path": "booking_reference", "op": "eq", "value": "9FJ3LM" },
+    { "path": "passengers", "op": "set", "value": ["Oluwaseun Adeyemi", "Claire Adeyemi"] },
+    { "path": "segments", "op": "len", "value": 4 },
+    { "path": "segments.0.departure_utc", "op": "eq", "value": "2026-12-03T06:45:00Z" },
+    { "path": "segments.0.arrival_utc", "op": "eq", "value": "2026-12-03T08:30:00Z" },
+    { "path": "segments.1.flight_number", "op": "eq", "value": "LH760" },
+    { "path": "segments.1.departure_utc", "op": "eq", "value": "2026-12-03T13:05:00Z" },
+    { "path": "segments.1.arrival_utc", "op": "eq", "value": "2026-12-03T20:10:00Z" },
+    { "path": "segments.1.duration_minutes", "op": "eq", "value": 425 },
+    { "path": "segments.2.origin", "op": "eq", "value": "DEL" },
+    { "path": "segments.2.departure_utc", "op": "eq", "value": "2026-12-12T08:15:00Z" },
+    { "path": "segments.2.duration_minutes", "op": "eq", "value": 560 },
+    { "path": "segments.2.cabin", "op": "eq", "value": "business" },
+    { "path": "segments.3.departure_utc", "op": "eq", "value": "2026-12-12T19:55:00Z" },
+    { "path": "segments.3.duration_minutes", "op": "eq", "value": 105 },
+    { "path": "total_fare.amount", "op": "num", "value": 1284.60 },
+    { "path": "total_fare.currency", "op": "eq", "value": "GBP" }
+  ]
+}

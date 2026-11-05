@@ -839,6 +839,7 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
       faker.number.int(),
       undefined,
     ]),
+    reasoning_tokens: 600,
     total_tokens: faker.helpers.arrayElement([faker.number.int(), undefined]),
     api_requests: faker.helpers.arrayElement([faker.number.int(), undefined]),
     daily: faker.helpers.arrayElement([
@@ -856,6 +857,7 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
         ]),
         prompt_tokens: faker.number.int(),
         completion_tokens: faker.number.int(),
+        reasoning_tokens: 600,
         total_tokens: faker.number.int(),
         api_requests: faker.number.int(),
       })),
@@ -886,6 +888,7 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
         ]),
         prompt_tokens: faker.number.int(),
         completion_tokens: faker.number.int(),
+        reasoning_tokens: 600,
         total_tokens: faker.number.int(),
         api_requests: faker.number.int(),
       })),
