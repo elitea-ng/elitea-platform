@@ -1156,6 +1156,10 @@ const applicationCompositionInvalidSafeMessage = applicationcomposition.RuntimeM
 
 const childInputTypeSafeMessage = "The pipeline stopped because a mapped child input has the wrong type. Compare the Agent node's input mapping with the child pipeline's state types. The child and later nodes did not run. Review earlier completed actions before restarting."
 
+// fanoutMemberFailedSafeMessage is the Worker's registered text for a fan-out
+// (Map item or Parallel branch) that failed under On Error `stop` (FU-288).
+const fanoutMemberFailedSafeMessage = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details for the failed item, and share the support reference with your administrator."
+
 // The budget scope that refused a model call (#6732). The gateway names the
 // scope in its 402 refusal (error.code insufficient_quota for the project
 // ceiling, member_budget_exceeded for the member ceiling). A worker that read it
@@ -1187,6 +1191,9 @@ func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFai
 			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.":
 			return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: payload.GetSafeMessage()}, true
 		}
+	}
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_TOOL_FAILED && payload.GetSafeMessage() == fanoutMemberFailedSafeMessage {
+		return runtimeFailurePolicy{Code: "PIPELINE_TOOL_FAILED", SafeMessage: fanoutMemberFailedSafeMessage}, true
 	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true

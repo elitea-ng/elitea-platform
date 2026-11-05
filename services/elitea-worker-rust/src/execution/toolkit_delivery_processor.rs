@@ -2295,6 +2295,7 @@ const fn runtime_failure_code(failure: RuntimeFailureKind) -> &'static str {
         RuntimeFailureKind::PipelineInputLimit => "pipeline.input_limit",
         RuntimeFailureKind::PipelineToolUnavailable => "pipeline.tool_unavailable",
         RuntimeFailureKind::PipelineToolFailed => "pipeline.tool_failed",
+        RuntimeFailureKind::FanoutMemberFailed => "graph.fanout.member_failed",
         RuntimeFailureKind::PipelineResultInvalid => "pipeline.result_invalid",
         RuntimeFailureKind::PipelineResultLimit => "pipeline.result_limit",
         RuntimeFailureKind::PipelineCodeFailed => "pipeline.code_failed",

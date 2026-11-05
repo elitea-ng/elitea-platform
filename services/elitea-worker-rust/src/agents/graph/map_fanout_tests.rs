@@ -723,7 +723,7 @@ async fn a_compiled_map_runs_its_state_modifier_worker_on_the_adapter() {
 
 /// The owning invocation a run's member frames name (the runner reads only
 /// its id and run config).
-struct FrameInvocation(adk_rust::Content, adk_rust::RunConfig);
+pub(super) struct FrameInvocation(pub(super) adk_rust::Content, pub(super) adk_rust::RunConfig);
 
 struct FrameSession;
 
@@ -1344,4 +1344,95 @@ async fn items_blocked_on_a_full_channel_end_typed_at_the_deadline() {
     assert!(error.to_string().contains("deadline_exceeded"), "{error}");
     assert_eq!(blocked.load(Ordering::SeqCst), 3);
     drop(receiver);
+}
+
+/// A context whose run has an owning invocation, so a node with the run's
+/// event stream can raise its member frames.
+pub(super) fn framed_context(state: State, thread: &str) -> NodeContext {
+    NodeContext::new(
+        state,
+        ExecutionConfig::new(thread).with_parent_context(Arc::new(FrameInvocation(
+            adk_rust::Content::new("user"),
+            adk_rust::RunConfig::default(),
+        ))),
+        0,
+    )
+}
+
+/// Every registered failure code a node sent on the run's event stream,
+/// collected until the stream closes (the node and its sender dropped).
+pub(super) fn failure_codes(
+    receiver: crate::agents::graph::node_events::PipelineNodeEventReceiver,
+) -> tokio::task::JoinHandle<Vec<&'static str>> {
+    tokio::spawn(async move {
+        let mut drain = receiver
+            .drain("root", "agent", "fanout")
+            .await
+            .expect("drain");
+        let mut codes = Vec::new();
+        while let Some(event) = drain.recv().await {
+            if let Err(error) = event {
+                codes.push(error.code);
+            }
+        }
+        codes
+    })
+}
+
+/// FU-288: the chat-visible text of the registered fan-out failure.
+pub(super) fn assert_fanout_stop_reaches_the_chat_readably(codes: &[&'static str]) {
+    use crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1;
+    use crate::protocol::output::{
+        FANOUT_MEMBER_FAILED_MESSAGE, FANOUT_MEMBER_FAILED_UPSTREAM_CODE, RuntimeFailureKind,
+        model_failure, runtime_error,
+    };
+    assert_eq!(codes, [FANOUT_MEMBER_FAILED_UPSTREAM_CODE]);
+    let kind = model_failure(Some(codes[0]));
+    assert_eq!(kind, RuntimeFailureKind::FanoutMemberFailed);
+    let error = runtime_error(kind);
+    assert_eq!(error.code, RuntimeErrorCodeV1::PipelineToolFailed as i32);
+    assert_eq!(error.safe_message, FANOUT_MEMBER_FAILED_MESSAGE);
+    assert!(
+        error
+            .safe_message
+            .contains("Map item or Parallel branch failed")
+    );
+    assert!(!error.retryable);
+}
+
+/// FU-288: a Map under On Error `stop` whose item fails ends the run with the
+/// registered fan-out failure, so the chat names the failed Map item instead
+/// of the generic runtime text.
+#[tokio::test]
+async fn a_map_stopped_by_a_failed_item_ends_the_run_with_readable_chat_text() {
+    let behavior: ItemBehavior = Arc::new(|index, entity| {
+        Box::pin(async move {
+            if index == 1 {
+                Err(GraphError::Other("item 1 failed".to_owned()))
+            } else {
+                Ok(entity)
+            }
+        })
+    });
+    let stop = Some(MapPolicy {
+        on_error: MapOnError::Stop,
+        join: MapJoin::Append,
+    });
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let codes = failure_codes(receiver);
+    let node = map_node(map_definition(8, 2, stop), behavior).with_node_events(Some(sender));
+    let context = framed_context(
+        HashMap::from([
+            ("items".to_owned(), json!(["a", "b", "c"])),
+            ("prefix".to_owned(), json!("frozen")),
+        ]),
+        "root-map-stop-text",
+    );
+    let error = node.execute(&context).await.err().expect("the Map stops");
+    assert!(
+        matches!(error, GraphError::NodeExecutionFailed { .. }),
+        "{error}"
+    );
+    drop(node);
+    assert_fanout_stop_reaches_the_chat_readably(&codes.await.expect("codes"));
 }

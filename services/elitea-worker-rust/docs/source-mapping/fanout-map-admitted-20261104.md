@@ -61,6 +61,9 @@ binds a Map as a fan-out node (`bind_map_node`, `:460`).
   `ui/settings/graph-extensions/{MapSettings,MapWorkerInputs}.tsx`, `lib/flow-editor/constants/runtimeContract.constants.ts`,
   `features/chat-messages/ui/chat-box/ApplicationAnswerThinking.tsx` (status grouping, `:238`), `shared/i18n/en.json`.
 - Contract: `libs/proto/contracts/pipeline-node-admission-v1.json` (`map` admitted, drift record removed).
+- FU-288 (On Error `stop` text): Worker `src/protocol/output.rs` (`FanoutMemberFailed`, registered message),
+  `src/agents/graph/parallel.rs` (the join-stop branch sends it), `src/execution/toolkit_delivery_processor.rs`;
+  Main `internal/transport/runtimegrpc/output/server.go` (`fanoutMemberFailedSafeMessage`).
 
 ## Tests
 
@@ -184,6 +187,24 @@ by stubs: the frame kind, concurrent saved-agent items with the wake's resume in
   (`a_joined_result_over_its_bound_fails_typed`).
 - On Error: v1 stops on the first failed item and names it (`a_failed_item_under_v1_stop_fails_the_map_by_its_index`);
   v2 continue lands typed failed entries (Parallel's join).
+- **On Error `stop` is readable in the chat (FU-288, fixed in this PR, Map and Parallel both).**
+  - Before, the node's typed failure (`graph.map.item_failed` / `graph.parallel.branch_failed`) reached the native
+    lifecycle as `native_agent.event_failed`, so the chat showed the generic "The runtime operation failed."
+    (browser case 3, chat 63).
+  - The cause was a mapping table without fan-out codes: the join-stop branch sent no registered failure.
+  - Now it sends `graph.fanout.member_failed` (`W/agents/graph/parallel.rs`, `JoinOutcome::Failed`), which the
+    registry maps to `PIPELINE_TOOL_FAILED` with a fixed, non-retryable message
+    (`W/protocol/output.rs`, `FANOUT_MEMBER_FAILED_MESSAGE`). Main admits exactly that message for that code
+    (`M/internal/transport/runtimegrpc/output/server.go`, `fanoutMemberFailedSafeMessage`); any other text under
+    the code is still replaced by the generic tool-failure text.
+  - The message is fixed, so it does not name the item: Main admits registered text only. The item and its error
+    code are in Execution details.
+  - No contract or envelope change. A failure inside a fan-out member stays its branch outcome
+    (`send_execution_failure` is a no-op for members), and the "may have started" stop keeps its own code.
+  - Proven by `a_map_stopped_by_a_failed_item_ends_the_run_with_readable_chat_text`,
+    `a_parallel_stopped_by_a_failed_branch_ends_the_run_with_readable_chat_text`,
+    `fanout_member_failure_restores_its_actionable_message` (Worker) and
+    `TestFanoutMemberFailureShowsItsReadableText` (Main: exact text admitted; extra text or another code refused).
 - Cancellation, deadline and lease loss are the shared node's (Parallel tests cited in the coverage table).
 - A join that cannot land is refused at save time, by name (`a_map_join_is_checked_against_its_destination_reducer_at_save_time`).
 - **Concurrent saved-agent items (found by the fanpar browser pass, fixed in this PR).**

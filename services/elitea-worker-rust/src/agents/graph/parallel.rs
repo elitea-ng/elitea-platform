@@ -2178,6 +2178,15 @@ impl DurableParallelNode {
                 {
                     return Err(stop);
                 }
+                // FU-288: the run ends with the registered fan-out failure, so
+                // the chat says a member failed under Stop, not "runtime failed".
+                if let Some(events) = &self.node_events {
+                    let _ = events
+                        .send_execution_failure(
+                            crate::protocol::output::FANOUT_MEMBER_FAILED_UPSTREAM_CODE,
+                        )
+                        .await;
+                }
                 return Err(GraphError::NodeExecutionFailed {
                     node: self.source.id().to_owned(),
                     message: self.source.child_failure(&key, &failure.code),

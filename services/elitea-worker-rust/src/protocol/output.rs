@@ -102,6 +102,9 @@ pub enum RuntimeFailureKind {
     PipelineInputLimit,
     PipelineToolUnavailable,
     PipelineToolFailed,
+    /// FU-288: a fan-out (Map item or Parallel branch) failed under On Error
+    /// `stop`; the node failed after the other members drained.
+    FanoutMemberFailed,
     PipelineResultInvalid,
     PipelineResultLimit,
     PipelineCodeFailed,
@@ -742,6 +745,7 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
         Some("pipeline.input_limit") => RuntimeFailureKind::PipelineInputLimit,
         Some("pipeline.tool_unavailable") => RuntimeFailureKind::PipelineToolUnavailable,
         Some("pipeline.tool_failed") => RuntimeFailureKind::PipelineToolFailed,
+        Some(FANOUT_MEMBER_FAILED_UPSTREAM_CODE) => RuntimeFailureKind::FanoutMemberFailed,
         Some("pipeline.result_invalid") => RuntimeFailureKind::PipelineResultInvalid,
         Some("pipeline.result_limit") => RuntimeFailureKind::PipelineResultLimit,
         Some("pipeline.code_failed") => RuntimeFailureKind::PipelineCodeFailed,
@@ -837,6 +841,14 @@ pub(crate) const PIPELINE_NODE_TYPE_NOT_AVAILABLE_MESSAGE: &str = "This pipeline
 /// The upstream code a typed "may have started" refusal carries through the
 /// runtime (nested agents, pipeline nodes, root assembly causes).
 pub(crate) const RECOVERY_REFUSED_UPSTREAM_CODE: &str = "agent.recovery_refused";
+
+/// FU-288: the registered failure a fan-out node sends when a member fails under
+/// On Error `stop` (Map and Parallel alike).
+pub(crate) const FANOUT_MEMBER_FAILED_UPSTREAM_CODE: &str = "graph.fanout.member_failed";
+
+/// FU-288: the chat-visible text for [`RuntimeFailureKind::FanoutMemberFailed`].
+/// Main recognizes this exact text on `PIPELINE_TOOL_FAILED`.
+pub(crate) const FANOUT_MEMBER_FAILED_MESSAGE: &str = "The pipeline stopped because a Map item or Parallel branch failed and its On Error setting is Stop. The other items finished first; later nodes did not run. Open Execution details for the failed item, and share the support reference with your administrator.";
 
 /// The internal (never user-facing) detail every "may have started" refusal
 /// carries; the user sees [`RECOVERY_REFUSED_MESSAGE`].
@@ -945,6 +957,11 @@ pub(crate) fn runtime_error_policy(
         RuntimeFailureKind::PipelineToolFailed => (
             RuntimeErrorCodeV1::PipelineToolFailed,
             "A pipeline tool call failed. Later nodes did not run. Review the support reference and completed actions before retrying; the tool may have started work.",
+            false,
+        ),
+        RuntimeFailureKind::FanoutMemberFailed => (
+            RuntimeErrorCodeV1::PipelineToolFailed,
+            FANOUT_MEMBER_FAILED_MESSAGE,
             false,
         ),
         RuntimeFailureKind::PipelineResultInvalid => (
@@ -1136,6 +1153,7 @@ fn canonical_runtime_failure(error: &RuntimeErrorV1) -> Option<RuntimeFailureKin
         RuntimeFailureKind::PipelineInputLimit,
         RuntimeFailureKind::PipelineToolUnavailable,
         RuntimeFailureKind::PipelineToolFailed,
+        RuntimeFailureKind::FanoutMemberFailed,
         RuntimeFailureKind::PipelineResultInvalid,
         RuntimeFailureKind::PipelineResultLimit,
         RuntimeFailureKind::PipelineCodeFailed,
@@ -1825,6 +1843,18 @@ mod continuation_failure_tests {
         assert_eq!(error.code, RuntimeErrorCodeV1::PipelineInputInvalid as i32);
         assert!(!error.retryable);
         assert!(error.safe_message.contains("wrong type"));
+        assert_eq!(canonical_runtime_failure(&error), Some(kind));
+    }
+
+    /// FU-288: a fan-out stopped by a failed member keeps its readable text.
+    #[test]
+    fn fanout_member_failure_restores_its_actionable_message() {
+        let kind = model_failure(Some(FANOUT_MEMBER_FAILED_UPSTREAM_CODE));
+        assert_eq!(kind, RuntimeFailureKind::FanoutMemberFailed);
+        let error = runtime_error(kind);
+        assert_eq!(error.code, RuntimeErrorCodeV1::PipelineToolFailed as i32);
+        assert_eq!(error.safe_message, FANOUT_MEMBER_FAILED_MESSAGE);
+        assert!(!error.retryable);
         assert_eq!(canonical_runtime_failure(&error), Some(kind));
     }
 
