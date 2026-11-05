@@ -1,0 +1,4 @@
+- heading "Shadow" [level=1]
+- heading "Card title" [level=2]
+- link "Light link" [ref=e1]
+- button "Shadow action" [ref=e2]

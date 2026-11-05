@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shadow DOM</title>
+</head>
+<body>
+  <h1>Shadow</h1>
+  <fancy-card>
+    <template shadowrootmode="open">
+      <h2>Card title</h2>
+      <slot></slot>
+      <button>Shadow action</button>
+    </template>
+    <a href="#light">Light link</a>
+  </fancy-card>
+</body>
+</html>

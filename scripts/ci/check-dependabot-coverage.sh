@@ -51,6 +51,7 @@ libs/rust/vendor/zavora-xlsx/Cargo.toml vendored zavora-xlsx 0.1.2 with the Elit
 libs/rust/vendor/leiden-rs/Cargo.toml vendored leiden-rs 0.8.1, the crates.io archive minus its Cargo.lock, pinned by digest (libs/rust/vendor/README.md): each consuming service Cargo.lock scans its dependency closure; it moves by re-vendoring, never one pin at a time
 libs/rust/adk-gateway/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/agent-runtime/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/browser-tools/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/code-parsers/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-sidecar/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member

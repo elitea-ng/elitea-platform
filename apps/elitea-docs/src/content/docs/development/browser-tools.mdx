@@ -1,0 +1,83 @@
+---
+title: "The browser tool contract"
+description: "How libs/rust/browser-tools defines the agent's browser tools once for the desktop webview driver and the cloud CDP driver: tool names and schemas, the snapshot grammar and its refs, the untrusted-content frame, typed errors, the BrowserDriver trait and the conformance kit."
+---
+
+The agent's browser tools (ADR-0048 and ADR-0049) run on two hosts. On the desktop, a system webview runs the page. In the cloud, a headless browser in a sandbox pod runs it. The agent must see the same tools on both. `libs/rust/browser-tools` (crate `elitea-browser-tools`) is that contract. It links no browser engine and no transport, so both drivers can depend on it without pulling in each other's dependencies.
+
+## What the crate defines
+
+| Module | Holds |
+| --- | --- |
+| `spec` | `TOOLS`: the 13 `browser_*` tools with their kind, description and JSON schema |
+| `call` | `BrowserCall::parse`: model arguments become a typed call; refs, keys and URLs are checked here |
+| `snapshot` | The snapshot grammar: `Snapshot::build`, `render`, `parse`, and `SnapshotSlot`, which binds refs to the latest snapshot |
+| `frame` | The nonce frame around everything the page controls |
+| `error` | `ErrorCode` and `BrowserError` |
+| `driver` | The `BrowserDriver` trait and `dispatch`, which turns a tool call into its result |
+| `rate` | `ActRate`: at most 10 `BrowserAct` calls per second per pane |
+| `conformance` | Fixture pages, golden snapshots and the parity run a driver's tests call |
+
+## The tools
+
+| Tool | Kind |
+| --- | --- |
+| `browser_open`, `browser_back`, `browser_forward`, `browser_reload` | `BrowserNavigate` |
+| `browser_snapshot` (`mode: "tree"` or `"text"`), `browser_screenshot`, `browser_wait` | `BrowserRead` |
+| `browser_click`, `browser_type`, `browser_select`, `browser_scroll`, `browser_press` | `BrowserAct` |
+| `browser_request_user` | `Question` |
+
+Every schema is a closed object (`additionalProperties: false`), and the call parser refuses any argument the schema does not list. `tests/golden/schemas.json` pins every tool's name, kind, description and schema. A change to the contract shows up as a diff of that file. Regenerate it with `UPDATE_GOLDEN=1 cargo test -p elitea-browser-tools`. A host proves it registered exactly these tools with `conformance::check_exposed`.
+
+There is no `browser_evaluate`. The model never supplies JavaScript.
+
+## The snapshot grammar
+
+```text
+# snapshot s3
+# url "https://example.test/sign-in"
+# title "Sign in"
+- heading "Sign in" [level=1]
+- form "Sign in":
+  - textbox "Email" [required] [ref=e1]: "ada@example.test"
+  - textbox "Password" [secure] [ref=e2]
+  - button "Sign in" [ref=e3]
+# omitted 12
+```
+
+- Each node is one line: role, then the name as a JSON string, then the state flags, then `[ref=eN]`, then `: "<value>"`. Children are indented two spaces. Every string the page controls is JSON-quoted, and a role that is not a plain token becomes `generic`, so a page cannot write grammar.
+- Only interactive roles get refs, or nodes the driver marks actionable. Refs are numbered `e1…eN` in document order.
+- A ref belongs to its snapshot. The model can pin a ref as `@s3:e2`. A ref from an older snapshot, or any ref after the page has changed, fails with `stale_ref`.
+- Password fields, `autocomplete=current-password` and `new-password` fields, and card number and security code fields (`cc-number`, `cc-csc`) are `[secure]` and never show a value. Typing into them fails with `secure_field_refused`. Both drivers decide what is secure with `snapshot::is_secure_field`.
+- `Snapshot::build` normalises what the two engines read differently. It removes unnamed wrappers, joins split text runs, drops label text that repeats a field's name, and names a node after its only text child. It then applies the node budget and gives out the refs. Drivers hand it raw trees and never render a snapshot themselves.
+
+## Untrusted content
+
+`dispatch` puts every page-controlled string (URL, title, snapshot, page text) into one `content` field framed as `<browser_content nonce="N">…</browser_content nonce="N">`. A fresh 128-bit nonce is generated for every call. If the closing tag appears inside the page text, it is escaped. If the system RNG fails, the call fails rather than using a guessable nonce.
+
+## Errors
+
+The codes are the same on both hosts: `invalid_argument`, `unknown_tool`, `stale_ref`, `secure_field_refused`, `scheme_refused`, `user_active`, `user_in_control`, `egress_refused`, `no_person`, `declined`, `browser_capacity`, `rate_limited`, `navigation_failed`, `timeout`, `unsupported` and `internal`. A failure reaches the model as `{"status": "error", "code": …, "message": …}`.
+
+## Writing a driver
+
+Implement `BrowserDriver` and route every call through `dispatch`. The driver is responsible for:
+
+- keeping a `SnapshotSlot`: build each snapshot under `next_id()`, `install` it, resolve refs through it (`resolve_for_input` for typing), and `invalidate` it on every navigation, reporting `refs_stale`;
+- running `call::check_url` on navigations the page starts itself, such as links, redirects and `window.open`, because `browser_open` URLs are already checked by the parser;
+- applying the domain policy and egress allowlist (`egress_refused`), the control rules (`user_active`, `user_in_control`) and `ActRate` for every `BrowserAct`;
+- mapping engine roles to ARIA role names and inlining iframe and shadow-root content in place.
+
+Approvals, plan mode (`ToolKind::allowed_in_plan_mode`) and audit records are the host's job, before and after `dispatch`.
+
+## The conformance kit
+
+A driver's own test serves `conformance/fixtures/*.html` over loopback HTTP and calls `conformance::run(&driver, &config)`. The run opens each fixture: forms, ARIA widgets, an iframe, shadow DOM, and password and card fields. For each one it compares the first snapshot with `conformance/golden/<name>.snapshot` and checks that no secret value appears in any result. It then runs scripted steps: typing, refused secure fields, checkboxes, selects, submit-and-wait, tabs, a disclosure, refs going stale after a reload, and a refused `file:` URL. Steps find their targets by role and name in the snapshot they just took, never by a fixed `eN`. Assert that `report.failures()` is empty.
+
+If a driver's engine legitimately differs from a golden on an edge case, list it as a `conformance::Difference` in that driver's `Config`, with the tree the driver gives and the reason. Any difference that is not listed fails the run. The crate's own tests run the kit against an in-memory reference driver, and against a deliberately broken one to prove the kit catches it.
+
+```bash
+cd libs/rust
+cargo clippy -p elitea-browser-tools --all-targets -- -D warnings
+cargo test -p elitea-browser-tools
+```

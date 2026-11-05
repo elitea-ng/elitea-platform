@@ -1,0 +1,22 @@
+[package]
+name = "elitea-browser-tools"
+description = "The browser tool contract both browser drivers implement (ADR-0048 decision 3, ADR-0049 decision 3): tool names and schemas, typed calls, results and errors, the snapshot grammar with snapshot-bound refs, the nonce-framed untrusted-content boundary, the BrowserDriver trait and a conformance kit. No browser engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No engine, no transport, no runtime: the desktop webview driver (#1589)
+# and the in-pod CDP driver (#1594) both link this, and neither may pull the
+# other's dependencies in through it.
+[dependencies]
+async-trait = "0.1.92"
+# The untrusted-content frame's per-call nonce, from the system RNG.
+getrandom = "0.3.4"
+serde_json = "1.0.154"
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

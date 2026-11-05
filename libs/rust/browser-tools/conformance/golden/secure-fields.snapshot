@@ -1,0 +1,8 @@
+- heading "Checkout" [level=1]
+- form "Payment":
+  - textbox "Name on card" [ref=e1]: "Ada Lovelace"
+  - textbox "Card number" [secure] [ref=e2]
+  - textbox "Security code" [secure] [ref=e3]
+  - textbox "New password" [secure] [ref=e4]
+  - textbox "Password" [secure] [ref=e5]
+  - button "Pay now" [ref=e6]
