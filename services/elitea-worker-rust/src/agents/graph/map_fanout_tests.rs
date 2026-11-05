@@ -721,6 +721,142 @@ async fn a_compiled_map_runs_its_state_modifier_worker_on_the_adapter() {
     assert_eq!(authority.children.issued.lock().await.len(), 2);
 }
 
+/// The owning invocation a run's member frames name (the runner reads only
+/// its id and run config).
+struct FrameInvocation(adk_rust::Content, adk_rust::RunConfig);
+
+struct FrameSession;
+
+struct FrameState;
+
+impl adk_rust::State for FrameState {
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _key: String, _value: Value) {}
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
+}
+
+#[allow(clippy::unnecessary_literal_bound)] // Fixed by the foreign trait signature.
+impl adk_rust::Session for FrameSession {
+    fn id(&self) -> &str {
+        "session"
+    }
+    fn app_name(&self) -> &str {
+        "app"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn state(&self) -> &dyn adk_rust::State {
+        &FrameState
+    }
+    fn conversation_history(&self) -> Vec<adk_rust::Content> {
+        Vec::new()
+    }
+}
+
+#[async_trait]
+#[allow(clippy::unnecessary_literal_bound)] // Fixed by the foreign trait signature.
+impl adk_rust::ReadonlyContext for FrameInvocation {
+    fn invocation_id(&self) -> &str {
+        "inv"
+    }
+    fn agent_name(&self) -> &str {
+        "agent"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn app_name(&self) -> &str {
+        "app"
+    }
+    fn session_id(&self) -> &str {
+        "session"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &adk_rust::Content {
+        &self.0
+    }
+}
+
+#[async_trait]
+impl adk_rust::CallbackContext for FrameInvocation {
+    fn artifacts(&self) -> Option<Arc<dyn adk_rust::Artifacts>> {
+        None
+    }
+}
+
+#[async_trait]
+impl adk_rust::InvocationContext for FrameInvocation {
+    fn agent(&self) -> Arc<dyn adk_rust::Agent> {
+        unreachable!("the fan-out runner never reads the parent agent")
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_rust::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn adk_rust::Session {
+        &FrameSession
+    }
+    fn run_config(&self) -> &adk_rust::RunConfig {
+        &self.1
+    }
+    fn end_invocation(&self) {}
+    fn ended(&self) -> bool {
+        false
+    }
+}
+
+/// A run with an event channel streams one member frame per item. A Map's
+/// members are `map` members (up to 64), never `parallel` ones, which Main's
+/// fan-out member schema bounds at 16: a 17-item Map runs to its join.
+#[tokio::test]
+async fn a_map_of_more_than_sixteen_items_streams_map_member_frames() {
+    let definition = PipelineDefinition::from_yaml(PIPELINE).unwrap();
+    let authority = Arc::new(MemoryAuthority::default());
+    let (checkpointer, runtimes) = bound(&authority);
+    let (sender, receiver) = crate::agents::graph::node_events::pipeline_node_event_channel();
+    let frames = tokio::spawn(async move {
+        let mut drain = receiver.drain("root", "agent", "map").await.expect("drain");
+        let mut events = Vec::new();
+        while let Some(event) = drain.recv().await {
+            events.push(serde_json::to_string(&event.expect("event")).expect("json"));
+        }
+        events
+    });
+    let graph = definition
+        .compile_subgraph_with_runtime(checkpointer, &runtimes.with_events(sender))
+        .expect("the Map compiles on the adapter");
+    let items = (0..17).map(|index| format!("e{index}")).collect::<Vec<_>>();
+    let state = graph
+        .invoke(
+            HashMap::from([("entities".to_owned(), json!(items))]),
+            ExecutionConfig::new("root-frames").with_parent_context(Arc::new(FrameInvocation(
+                adk_rust::Content::new("user"),
+                adk_rust::RunConfig::default(),
+            ))),
+        )
+        .await
+        .expect("a 17-item Map runs to its join");
+    drop(graph);
+    assert_eq!(state["mapped"].as_array().map(Vec::len), Some(17));
+    assert_eq!(
+        state["mapped"][16]["outputs"]["item_result"],
+        json!("e16-16")
+    );
+    let events = frames.await.expect("frames");
+    let kind = |event: &String, kind: &str| {
+        event.contains(&format!(r#""kind":"{kind}""#))
+            || event.contains(&format!(r#"\"kind\":\"{kind}\""#))
+    };
+    assert!(events.iter().any(|event| kind(event, "map")));
+    assert!(!events.iter().any(|event| kind(event, "parallel")));
+}
+
 /// Without the fan-out binding (a run that did not compose one) a Map is
 /// refused readably at compile time, never run.
 #[test]

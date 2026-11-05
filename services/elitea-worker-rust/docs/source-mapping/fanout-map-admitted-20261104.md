@@ -134,6 +134,21 @@ origin/main HEAD` is empty for each); none is new here:
   v2 continue lands typed failed entries (Parallel's join).
 - Cancellation, deadline and lease loss are the shared node's (Parallel tests cited in the coverage table).
 - A join that cannot land is refused at save time, by name (`a_map_join_is_checked_against_its_destination_reducer_at_save_time`).
+- **Frame kind per family (found by the fanpar browser pass, fixed in this PR).**
+  - Each member frame carries its family's kind. `W/agents/graph/parallel_frames.rs:71` sets `map` when the activation
+    has a Map identity and `parallel` otherwise. The frame check caps members per kind: `parallel` at 16 and `map`
+    at 64 (`W/agents/graph/fanout_frames.rs:310-313`), matching Main's `fanout-member.schema.json`.
+  - Before the fix, every Map member frame said `parallel`, so a Map of 17 or more items failed at activation with
+    `graph.parallel.frame_undelivered`. That showed in the chat as INTERNAL. On fanpar, 2 and 16 items ran and
+    17, 32 and 64 failed.
+  - **Why the earlier tests missed it:** frames exist only when the run binds a node-event channel. Every Map test
+    compiled without one, and the real-PostgreSQL tests used 2–3 items.
+  - **Proof:** `a_map_of_more_than_sixteen_items_streams_map_member_frames` runs a 17-item Map with the channel
+    bound. It fails without the fix with `frame_undelivered` and passes with it.
+  - Parallel frames keep `parallel`: the shared-adapter golden test is green and unchanged.
+  - **Web:** it parses any member kind with ordinals up to 64 (`fanoutFrames.ts:40,56`).
+    `ApplicationAnswerThinking.mapFrames.test.tsx` streams 17 and 64 `map` member frames through the reducer into
+    the status groups.
 
 ## Security
 

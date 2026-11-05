@@ -67,6 +67,12 @@ impl ParallelFrames {
         }
         outer.reverse();
         let total = members.len();
+        // Main bounds `parallel` members at 16 and `map` members at 64.
+        let kind = if activation.map.is_some() {
+            "map"
+        } else {
+            "parallel"
+        };
         let members = members
             .iter()
             .enumerate()
@@ -80,7 +86,7 @@ impl ParallelFrames {
                 Member {
                     fanout: FanoutMemberV1 {
                         activation: label.clone(),
-                        kind: "parallel",
+                        kind,
                         member: member.branch_id.to_owned(),
                         node: activation.node_id.clone(),
                         ordinal: index + 1,
