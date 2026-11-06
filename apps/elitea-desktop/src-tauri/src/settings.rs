@@ -34,11 +34,6 @@ pub struct Settings {
     /// the default (90 days). `0`: keep forever (retention off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_retention_days: Option<u32>,
-    /// The browser pane (ADR-0048) may load plain `http` pages. Off unless
-    /// set to `true` here; the client policy key `local_work_browser_http`
-    /// (#1590) replaces it. Loopback and private addresses stay refused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser_allow_http: Option<bool>,
     /// The person's device switch for computer use (ADR-0047 decision 3):
     /// the agent may see and operate other applications. Off unless set to
     /// `true` here, and only where the client policy's
@@ -163,7 +158,6 @@ mod tests {
             display_name: Some("Acme".into()),
             client_id: None,
             history_retention_days: None,
-            browser_allow_http: None,
             computer_use: Some(true),
         };
         files.save_settings(&settings).unwrap();

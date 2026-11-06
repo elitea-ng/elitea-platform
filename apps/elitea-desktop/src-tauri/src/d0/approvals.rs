@@ -614,6 +614,31 @@ fn describe(request: &ApprovalRequest) -> Value {
         if call.keep_alive {
             payload["keep_alive"] = json!(true);
         }
+        // A browser pane call (ADR-0048 decision 8): the page and control,
+        // and "Allow for this site in this thread" when it may be kept.
+        if let Some(target) = &call.browser {
+            let mut detail = target
+                .url
+                .clone()
+                .or_else(|| target.host.clone())
+                .unwrap_or_default();
+            if let Some(name) = target
+                .control
+                .as_ref()
+                .and_then(|control| control.name.as_deref())
+                .filter(|name| !name.trim().is_empty())
+            {
+                detail = format!("{}: {detail}", clipped(name, 200));
+            }
+            payload["detail"] = json!(cut(&detail, 4096));
+            payload["tool"] = json!(target.tool);
+            // Never "always": "Allow for this site in this thread"
+            // (`can_remember_thread`, answered `allow_thread`) names the site.
+            payload["can_remember"] = json!(false);
+            if let Some(host) = &target.host {
+                payload["site"] = json!(host);
+            }
+        }
         // A local MCP server's start or tool (#1230): which server and tool,
         // and for a start whether it gets the network or runs unconfined.
         if let Some(target) = &call.mcp {
@@ -949,6 +974,43 @@ mod tests {
         assert_eq!(described["justification"], "Deletes go through review.");
         let plain = describe(&command_request(&["approve", "reject"]));
         assert!(plain.get("rule").is_none() && plain.get("justification").is_none());
+    }
+
+    /// A browser submit's card (ADR-0048 decision 8): the page and control,
+    /// and "Allow for this site in this thread" when the rules offer it.
+    #[test]
+    fn a_browser_question_names_the_site_and_offers_the_thread_scope() {
+        use elitea_local_tools::approvals::{BrowserEffect, BrowserTarget, ComputerControl};
+        let call = ToolCall {
+            browser: Some(BrowserTarget {
+                tool: "browser_click".into(),
+                host: Some("shop.example.com".into()),
+                url: Some("https://shop.example.com/cart".into()),
+                control: Some(ComputerControl {
+                    role: Some("button".into()),
+                    name: Some("Continue".into()),
+                    ..ComputerControl::default()
+                }),
+                effect: Some(BrowserEffect::Submit),
+                ..BrowserTarget::default()
+            }),
+            ..ToolCall::new(ToolKind::BrowserAct)
+        };
+        let request = |actions: &[&str]| ApprovalRequest {
+            subject: "call-1".into(),
+            message: "Let the agent submit a form on shop.example.com?".into(),
+            available_actions: actions.iter().map(|a| (*a).to_owned()).collect(),
+            payload: json!({ PAYLOAD_KEY: call }),
+        };
+        let thread = describe(&request(&["approve", APPROVE_THREAD, "reject"]));
+        assert_eq!(thread["tool"], "browser_click");
+        assert_eq!(thread["detail"], "Continue: https://shop.example.com/cart");
+        assert_eq!(thread["can_remember"], false, "never always");
+        assert_eq!(thread["can_remember_thread"], true);
+        assert_eq!(thread["site"], "shop.example.com");
+        let once = describe(&request(&["approve", "reject"]));
+        assert_eq!(once["can_remember"], false);
+        assert!(once.get("can_remember_thread").is_none());
     }
 
     fn remote_request() -> ApprovalRequest {

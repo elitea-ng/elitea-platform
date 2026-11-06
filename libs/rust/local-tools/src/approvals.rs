@@ -630,6 +630,24 @@ impl ComputerTarget {
     }
 }
 
+/// [`is_consequential`] for a page's control (ADR-0048 decision 8): the same
+/// words, except `submit`. A form submit is its own row (asked, and
+/// remembered for the site in the thread); only a buy, pay, delete, send or
+/// sign control is asked every time.
+#[must_use]
+pub fn is_consequential_browser(control: &ComputerControl) -> bool {
+    control.destructive
+        || control.name.as_deref().is_some_and(|name| {
+            name.split(|c: char| !c.is_alphanumeric())
+                .flat_map(camel_words)
+                .any(|word| {
+                    CONSEQUENTIAL_WORDS.iter().any(|consequential| {
+                        *consequential != "submit" && word.eq_ignore_ascii_case(consequential)
+                    })
+                })
+        })
+}
+
 /// What a browser act would start beyond the page itself (ADR-0048
 /// decision 8), as the driver reads the target before running it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -672,6 +690,11 @@ pub struct BrowserTarget {
     /// The control an act targets: its role and accessible name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<ComputerControl>,
+    /// The host found the act consequential itself (a buy or pay word its
+    /// classifier knows, or a control it could not resolve): asked every
+    /// time, as [`is_consequential_browser`] would. It only adds asks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub consequential: bool,
     /// What the act starts beyond the page: a submit, an upload, a download.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<BrowserEffect>,
@@ -710,7 +733,7 @@ impl BrowserTarget {
     }
 
     fn consequential(&self) -> bool {
-        self.control.as_ref().is_some_and(is_consequential)
+        self.consequential || self.control.as_ref().is_some_and(is_consequential_browser)
     }
 }
 
@@ -1556,7 +1579,7 @@ impl RulesEngine {
     pub fn with_unattended_hook_ask(
         decision: Decision,
         hook: &str,
-        unattended: Unattended,
+        unattended: &Unattended,
     ) -> Decision {
         if unattended.hook_asks && decision.verdict == Verdict::Allow {
             let mut granted = Decision::new(
@@ -2347,30 +2370,36 @@ fn compound_refusal() -> ToolError {
 }
 
 impl RulesEngine {
+    /// [`Self::never_remembered`] for a browser call: only a submit, an
+    /// upload or a download on a named host is kept, for the site in the
+    /// thread; a consequential control never is.
+    fn browser_never_remembered(call: &ToolCall) -> Option<ToolError> {
+        let target = call.browser.as_ref();
+        if call.tool != ToolKind::BrowserAct || target.is_none_or(|target| target.effect.is_none())
+        {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "only a browser submit, upload or download is approved for a site",
+            ));
+        }
+        if target.is_some_and(BrowserTarget::consequential) {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                CONSEQUENTIAL_NEVER_REMEMBERED,
+            ));
+        }
+        if target.and_then(BrowserTarget::key).is_none() {
+            return Some(ToolError::invalid("a browser act names its page's host"));
+        }
+        None
+    }
+
     /// Why `call` can never be remembered, whatever its scope: a commit, a
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
         if call.tool.is_browser() {
-            let target = call.browser.as_ref();
-            if call.tool != ToolKind::BrowserAct
-                || target.is_none_or(|target| target.effect.is_none())
-            {
-                return Some(ToolError::new(
-                    ErrorCode::Denied,
-                    "only a browser submit, upload or download is approved for a site",
-                ));
-            }
-            if target.is_some_and(BrowserTarget::consequential) {
-                return Some(ToolError::new(
-                    ErrorCode::Denied,
-                    CONSEQUENTIAL_NEVER_REMEMBERED,
-                ));
-            }
-            if target.and_then(BrowserTarget::key).is_none() {
-                return Some(ToolError::invalid("a browser act names its page's host"));
-            }
-            return None;
+            return Self::browser_never_remembered(call);
         }
         if call.tool.is_computer() {
             let target = call.computer.as_ref();
@@ -3123,7 +3152,7 @@ impl ApprovalChannel for RuleApprovals {
                 // No grant answers acting on another app (ADR-0047
                 // decision 8): the hook's ask goes to the person.
                 Some(unattended) if call.tool != ToolKind::ComputerAct => {
-                    RulesEngine::with_unattended_hook_ask(decision, hook, unattended)
+                    RulesEngine::with_unattended_hook_ask(decision, hook, &unattended)
                 }
                 _ => RulesEngine::with_hook_ask(decision, hook),
             };

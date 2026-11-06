@@ -377,6 +377,24 @@ async fn consequential_controls_are_asked_every_time_and_never_remembered() {
             assert!(fx.engine.remember_for_thread(&call).is_err(), "{name}");
         }
     }
+    // A plain "Submit" is a submit, not a consequential control.
+    let plain = click(SHOP, "Submit", Some(BrowserEffect::Submit));
+    assert_eq!(
+        verdict(&fx.engine, &plain),
+        (Verdict::Allow, Source::Remembered)
+    );
+    // The host's own flag (a classifier word, an unresolved control) is
+    // consequential too.
+    let mut flagged = click(SHOP, "Next", Some(BrowserEffect::Submit));
+    if let Some(target) = &mut flagged.browser {
+        target.consequential = true;
+    }
+    assert_eq!(
+        verdict(&fx.engine, &flagged),
+        (Verdict::Ask, Source::Default)
+    );
+    assert!(!fx.engine.can_remember(&flagged));
+
     let buy = click(SHOP, "Buy now", Some(BrowserEffect::Submit));
     let script = Script::new(&[Some(APPROVE_THREAD), Some("approve")]);
     let channel = RuleApprovals::new(fx.engine.clone(), script.clone());

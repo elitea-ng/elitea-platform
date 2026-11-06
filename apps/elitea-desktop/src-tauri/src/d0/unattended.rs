@@ -4,7 +4,8 @@
 //! The grant answers at once only the questions it names, with `source`
 //! `grant`: "Continue?" at the step limit (`continue_step_limit`), a
 //! `PreToolUse` hook's ask (`hook_asks`) and a remote toolkit confirmation
-//! (`remote_confirmations`). Every other question goes to the person as in
+//! (`remote_confirmations`), and a browser form submit or upload on a host
+//! that `browser_submits` names (ADR-0048 decision 8). Every other question goes to the person as in
 //! a turn without a grant, and takes its default past its wait. The grant
 //! does not imply bypass mode: the local rules' asks follow the turn's own
 //! `bypass` (the person's Bypass mode), as in every other turn.
@@ -155,6 +156,22 @@ pub struct UnattendedGrant {
     /// absent is on.
     #[serde(default)]
     pub goal_check: Option<bool>,
+    /// The hosts on which a browser pane form submit or upload is allowed
+    /// (ADR-0048 decision 8, client contract 1.38). A buy, pay, delete,
+    /// send or sign control and a download are never the grant's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_submits: Vec<String>,
+}
+
+/// The most hosts a grant's `browser_submits` names (the platform's
+/// `unattended.MaxBrowserSubmits`).
+pub const MAX_BROWSER_SUBMITS: usize = 32;
+
+/// Whether `host` may be named by `browser_submits`: a lowercase DNS host
+/// name of at least two labels, no scheme, port, wildcard or address (the
+/// platform's `unattended.ValidBrowserSubmitHost`).
+fn valid_submit_host(host: &str) -> bool {
+    !host.starts_with("*.") && elitea_local_tools::policy::valid_browser_domain(host)
 }
 
 fn refused(message: &str) -> TurnError {
@@ -194,6 +211,24 @@ impl UnattendedGrant {
         if self.chain.as_ref().is_some_and(ChainLimits::is_empty) {
             self.chain = None;
         }
+        let mut hosts: Vec<String> = Vec::with_capacity(self.browser_submits.len());
+        for host in std::mem::take(&mut self.browser_submits) {
+            let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+            if !valid_submit_host(&host) {
+                return Err(refused(
+                    "An unattended grant's browser_submits names host names only (example.com).",
+                ));
+            }
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+        }
+        if hosts.len() > MAX_BROWSER_SUBMITS {
+            return Err(refused(
+                "An unattended grant's browser_submits names at most 32 hosts.",
+            ));
+        }
+        self.browser_submits = hosts;
         Ok(self)
     }
 
@@ -205,9 +240,10 @@ impl UnattendedGrant {
 
     /// What the rules engine applies ([`Unattended`]).
     #[must_use]
-    pub const fn rule_answers(&self) -> Unattended {
+    pub fn rule_answers(&self) -> Unattended {
         Unattended {
             hook_asks: self.hook_asks,
+            browser_submits: self.browser_submits.clone(),
         }
     }
 
@@ -238,6 +274,7 @@ impl UnattendedGrant {
             "hook_asks": self.hook_asks,
             "remote_confirmations": self.remote_confirmations,
             "goal_check": self.goal_check(),
+            "browser_submits": self.browser_submits,
         })
     }
 }
@@ -339,6 +376,9 @@ impl UnattendedTurn {
             "remote_confirmations": grant.remote_confirmations,
             "goal_check": grant.goal_check(),
         });
+        if !grant.browser_submits.is_empty() {
+            wire["browser_submits"] = json!(grant.browser_submits);
+        }
         if let Some(root) = &self.chain_root_execution_id {
             wire["chain_root_execution_id"] = json!(root);
             if let Some(kind) = self.kind {
@@ -682,6 +722,46 @@ mod tests {
         serde_json::from_value::<UnattendedGrant>(value)
             .map_err(|e| TurnError::new("invalid_request", e.to_string()))?
             .admit()
+    }
+
+    #[test]
+    fn browser_submits_are_host_names_deduplicated_and_bounded() {
+        let made = grant(json!({
+            "browser_submits": ["Shop.Example.com.", "shop.example.com", "docs.example.org"]
+        }))
+        .expect("grant");
+        assert_eq!(
+            made.browser_submits,
+            ["shop.example.com", "docs.example.org"]
+        );
+        assert_eq!(made.rule_answers().browser_submits, made.browser_submits);
+        assert_eq!(made.shown()["browser_submits"], json!(made.browser_submits));
+        let wire = UnattendedTurn::root(made).wire();
+        assert_eq!(
+            wire["browser_submits"],
+            json!(["shop.example.com", "docs.example.org"])
+        );
+        assert!(
+            UnattendedTurn::root(grant(json!({})).expect("grant"))
+                .wire()
+                .get("browser_submits")
+                .is_none(),
+            "absent stays absent on the wire"
+        );
+        for bad in [
+            json!({ "browser_submits": ["*.example.com"] }),
+            json!({ "browser_submits": ["https://example.com"] }),
+            json!({ "browser_submits": ["example.com:443"] }),
+            json!({ "browser_submits": ["10.0.0.1"] }),
+            json!({ "browser_submits": ["localhost"] }),
+            json!({ "browser_submits": "example.com" }),
+        ] {
+            assert!(grant(bad.clone()).is_err(), "{bad}");
+        }
+        let many: Vec<String> = (0..=MAX_BROWSER_SUBMITS)
+            .map(|i| format!("h{i}.example.com"))
+            .collect();
+        assert!(grant(json!({ "browser_submits": many })).is_err());
     }
 
     #[test]

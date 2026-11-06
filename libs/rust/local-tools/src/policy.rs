@@ -410,26 +410,35 @@ impl LocalWorkPolicy {
     /// named by no domain entry, so an allow list refuses it.
     #[must_use]
     pub fn browser_domain_refusal(&self, host: &str) -> Option<String> {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        if self
-            .browser_deny_domains
+        browser_domains_refusal(
+            &self.browser_allow_domains,
+            &self.browser_deny_domains,
+            host,
+        )
+    }
+}
+
+/// [`LocalWorkPolicy::browser_domain_refusal`] over the two lists as the
+/// browser pane's guard holds them.
+#[must_use]
+pub fn browser_domains_refusal(allow: &[String], deny: &[String], host: &str) -> Option<String> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if deny
+        .iter()
+        .any(|entry| browser_domain_matches(entry, &host))
+    {
+        return Some(format!("the policy never loads `{host}`"));
+    }
+    if !allow.is_empty()
+        && !allow
             .iter()
             .any(|entry| browser_domain_matches(entry, &host))
-        {
-            return Some(format!("the policy never loads `{host}`"));
-        }
-        if !self.browser_allow_domains.is_empty()
-            && !self
-                .browser_allow_domains
-                .iter()
-                .any(|entry| browser_domain_matches(entry, &host))
-        {
-            return Some(format!(
-                "`{host}` is not in the policy's browser_allow_domains"
-            ));
-        }
-        None
+    {
+        return Some(format!(
+            "`{host}` is not in the policy's browser_allow_domains"
+        ));
     }
+    None
 }
 
 #[cfg(test)]
