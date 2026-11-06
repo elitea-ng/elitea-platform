@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// The participant stamp and the `agent_state` frame (client contract 1.37,
+// The participant stamp and the `agent_state` frame (client contract 1.38,
 // ADR-0050 decision 7b and 7e).
 //
 // Each node event of an agent run is served with `participant_id` (the chat
