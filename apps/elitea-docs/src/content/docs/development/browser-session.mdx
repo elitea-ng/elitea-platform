@@ -44,7 +44,7 @@ The engine starts with these settings:
 | Refs | Bound to the snapshot they came from. A new document, DOM churn or the person's input invalidates them, and later calls report `stale_ref` with `refs_stale`. |
 | Hard limits | `call::check_url` runs on every main-frame navigation. A page-started navigation to a refused scheme goes back to `about:blank`, and the call returns `scheme_refused`. Secure fields are refused on the snapshot flag and on the live element, and `browser_press` checks the focused element through frames and shadow roots. `ActRate` applies to every act. |
 | View | `Page.startScreencast` as JPEG starts with the first viewer and stops with the last. Only the newest frame is kept, and acks are paced to `max_fps` (at most 10). |
-| Control | **Take over** and the person's own input pause the agent. While the person drives, acts return `user_in_control`, but `browser_snapshot` and `browser_screenshot` still answer. If the person used the page during a call, the call returns `user_active`. `browser_request_user` waits up to 80 s, under the supervisor's 90 s, for a hand back or a decline. |
+| Control | **Take over** and the person's own input pause the agent. While the person drives, acts return `user_in_control`, but `browser_snapshot` and `browser_screenshot` still answer. If the person used the page during a call, the call returns `user_active`. `browser_request_user` waits up to 80 s, under the supervisor's 90 s, for a hand back or a decline. A run with nobody to ask (the `start` line's optional `attended: false`, for a schedule or webhook run) answers `no_person` at once. |
 
 ## The image
 

@@ -47,6 +47,10 @@ pub struct Start {
     /// The egress proxy (`http://<ip>:<port>`) and the run token; `None` is
     /// no network at all.
     pub proxy: Option<(String, String)>,
+    /// A person can be asked (`browser_request_user`); `false` for a
+    /// schedule or webhook run (ADR-0049 decision 7), whose question then
+    /// answers `no_person` at once. Absent: `true` (revision 1's default).
+    pub attended: bool,
 }
 
 impl Start {
@@ -90,6 +94,10 @@ impl Start {
             width: size("width", crate::engine::DEFAULT_WIDTH).ok_or("protocol")?,
             height: size("height", crate::engine::DEFAULT_HEIGHT).ok_or("protocol")?,
             proxy,
+            attended: match &line["attended"] {
+                Value::Null => true,
+                value => value.as_bool().ok_or("protocol")?,
+            },
         })
     }
 }
@@ -552,6 +560,16 @@ mod tests {
         assert_eq!(replies.last().unwrap(), &json!({"op": "bye"}));
         assert_eq!(seen.last().map(String::as_str), Some("stop"));
         assert!(!seen.iter().any(|line| line.contains("never")));
+    }
+
+    #[test]
+    fn attended_defaults_to_true_and_must_be_a_bool() {
+        let mut line = start(true);
+        assert!(Start::parse(&line).unwrap().attended);
+        line["attended"] = json!(false);
+        assert!(!Start::parse(&line).unwrap().attended);
+        line["attended"] = json!("no");
+        assert_eq!(Start::parse(&line), Err("protocol"));
     }
 
     #[tokio::test]

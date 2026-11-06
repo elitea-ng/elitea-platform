@@ -214,6 +214,10 @@ pub struct Watch {
 
 /// Start the event task. Subscribe before the first command whose events
 /// matter: pass the receiver taken before it.
+/// Proxy-auth request ids remembered (one answer per request) before the
+/// set is cleared.
+const MAX_ANSWERED_AUTH: usize = 4096;
+
 pub fn spawn(watch: Watch, tracker: Tracker, mut events: broadcast::Receiver<Arc<Event>>) {
     tokio::spawn(async move {
         let mut answered_auth: HashSet<String> = HashSet::new();
@@ -365,6 +369,11 @@ fn handle(
                 return;
             };
             let from_proxy = params["authChallenge"]["source"] == "Proxy";
+            // Bounded: a request is challenged once per proxy connection,
+            // and an id is never reused within a session.
+            if answered_auth.len() >= MAX_ANSWERED_AUTH {
+                answered_auth.clear();
+            }
             // One answer per request: a refused token is not retried, and a
             // site's own sign-in is the person's (there is no credential
             // vault, ADR-0049 decision 8).

@@ -1431,6 +1431,7 @@ impl BrowserDriver for CdpDriver {
                         && !state.loading)
                         || (state.url != before_url && !state.loading)
                         || state.scheme_refusals > before.scheme_refusals
+                        || state.egress_refusals > before.egress_refusals
                 })
                 .await;
             if !moved {

@@ -43,7 +43,6 @@ pub struct Session {
     engine_log: bool,
     /// Whether to trust `engine_sandbox: false` without gVisor (tests only).
     gvisor: fn() -> bool,
-    control: Arc<Control>,
     driver: Mutex<Option<Arc<CdpDriver>>>,
 }
 
@@ -54,7 +53,6 @@ impl Session {
             engine,
             engine_log,
             gvisor: under_gvisor,
-            control: Arc::new(Control::new(true, REQUEST_USER_TIMEOUT)),
             driver: Mutex::new(None),
         }
     }
@@ -89,7 +87,9 @@ impl Backend for Session {
             engine_log: self.engine_log,
             offline: start.proxy.is_none(),
         };
-        let driver = CdpDriver::start(&config, Arc::clone(&self.control))
+        // Whether a person can be asked comes with the run's `start`.
+        let control = Arc::new(Control::new(start.attended, REQUEST_USER_TIMEOUT));
+        let driver = CdpDriver::start(&config, control)
             .await
             .map_err(|_| StartError::EngineStartFailed)?;
         let version = driver
@@ -166,6 +166,7 @@ mod tests {
             width: 1280,
             height: 800,
             proxy: None,
+            attended: true,
         }
     }
 
