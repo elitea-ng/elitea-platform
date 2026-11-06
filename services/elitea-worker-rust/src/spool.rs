@@ -434,6 +434,37 @@ impl EncryptedOutputSpool {
         expected: &[u8],
         replacement: &[u8],
     ) -> Result<(), SpoolError> {
+        self.replace_exact_inner(sequence, expected, replacement, None)
+    }
+
+    /// [`Self::replace_exact`], but the replaced frame first becomes a durable
+    /// encrypted `.retired` record, and only then is the replacement swapped in
+    /// with the same single compare-and-swap rename. The live sequence is never
+    /// empty: a crash after the record leaves it beside the same pending frame
+    /// (a retry finds it and redoes the swap), a crash after the swap leaves
+    /// the replacement pending.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::replace_exact`], and when a different record already holds
+    /// the retired name.
+    pub fn replace_exact_retiring(
+        &mut self,
+        sequence: NonZeroU64,
+        expected: &[u8],
+        replacement: &[u8],
+        tag: RetiredFrameTag,
+    ) -> Result<(), SpoolError> {
+        self.replace_exact_inner(sequence, expected, replacement, Some(tag))
+    }
+
+    fn replace_exact_inner(
+        &mut self,
+        sequence: NonZeroU64,
+        expected: &[u8],
+        replacement: &[u8],
+        retire: Option<RetiredFrameTag>,
+    ) -> Result<(), SpoolError> {
         self.validate_frame_length(replacement.len(), true)?;
         let Some((current, current_size)) = self.read_entry(sequence)? else {
             return Err(SpoolError::InvalidInput(
@@ -472,6 +503,10 @@ impl EncryptedOutputSpool {
             ));
         }
 
+        if let Some(tag) = retire {
+            self.set_aside_record(sequence, tag)?;
+            sync_directory(&self.directory)?;
+        }
         let temporary = self.write_temporary(&body)?;
         let final_name = frame_name(sequence);
         let result = renameat(
@@ -517,6 +552,22 @@ impl EncryptedOutputSpool {
                 "the output spool changed before retirement",
             ));
         }
+        self.set_aside_record(sequence, tag)?;
+        let frame = frame_name(sequence);
+        unlinkat(&self.directory, frame.as_str(), AtFlags::empty())
+            .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
+        sync_directory(&self.directory)?;
+        self.entries(false).map(|_| ())
+    }
+
+    /// Make the live frame at `sequence` also a durable `.retired` record (a
+    /// hard link: one inode, two names). Idempotent for a record that already
+    /// names this same inode; a record on a different inode is never touched.
+    fn set_aside_record(
+        &mut self,
+        sequence: NonZeroU64,
+        tag: RetiredFrameTag,
+    ) -> Result<(), SpoolError> {
         let retired = retired_name(sequence, tag);
         let frame = frame_name(sequence);
         let live = statat(&self.directory, frame.as_str(), AtFlags::SYMLINK_NOFOLLOW)
@@ -564,10 +615,7 @@ impl EncryptedOutputSpool {
             )
             .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
         }
-        unlinkat(&self.directory, frame.as_str(), AtFlags::empty())
-            .map_err(|error| unavailable_errno("the output frame cannot be retired", error))?;
-        sync_directory(&self.directory)?;
-        self.entries(false).map(|_| ())
+        Ok(())
     }
 
     /// Delete every retired record. The execution settled: its retired frames

@@ -88,7 +88,7 @@ impl NodeRecoveryInspection {
     pub(crate) fn supersedes_output_fence(&self, frame: &super::ExecutionOutputFrameV1) -> bool {
         self.claim.supersedes_output_fence(frame)
     }
-    fn parse(
+    pub(crate) fn parse(
         verified: &VerifiedAgentCommand,
         response: ClaimCommandResponseV1,
         session: &str,

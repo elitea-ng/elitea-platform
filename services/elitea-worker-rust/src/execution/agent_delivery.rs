@@ -207,6 +207,15 @@ impl FreshAgentDelivery {
         )
     }
 
+    /// A failure terminal which differs from this build's canonical frame only
+    /// in its text (an older build wrote it). Tampered or mis-bound frames are not.
+    pub(crate) fn is_unrecognised_failure_terminal(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> bool {
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame).is_ok()
+    }
+
     pub(crate) fn validate_output_frame(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
@@ -297,6 +306,44 @@ impl OutputRecoveryAgentDelivery {
     pub(crate) fn into_parts(self) -> (CommandDelivery, VerifiedAgentCommand, AgentOutputRecovery) {
         (self.delivery, self.verified, self.recovery)
     }
+
+    /// Semantic kind of a spooled frame, after the claim's command binding.
+    pub(crate) fn validate_output(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<ValidatedAgentOutputFrameKind, ProtocolError> {
+        validate_restored_agent_output_frame(&self.verified, frame)
+    }
+
+    pub(crate) fn terminal_replacement(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
+        self.recovery.terminal_replacement(frame)
+    }
+
+    /// The kind to keep when a pending failure terminal differs from this
+    /// build's canonical frame only in its text.
+    pub(crate) fn unrecognised_failure_kind(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<crate::protocol::output::RuntimeFailureKind, ProtocolError> {
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame)
+    }
+
+    pub(crate) fn into_terminal_parts(
+        self,
+    ) -> (
+        CommandDelivery,
+        VerifiedAgentCommand,
+        AcceptedTerminalClaimRecovery,
+    ) {
+        (
+            self.delivery,
+            self.verified,
+            self.recovery.into_terminal_recovery(),
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -384,6 +431,22 @@ impl NodeRecoveryAgentDelivery {
             producer_id: self.inspection.producer_id().to_owned(),
         }
     }
+    /// A terminal frame which validates fully under this claim: canonical, or
+    /// different only in an old build's unregistered failure text.
+    pub(crate) fn validated_terminal(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> bool {
+        self.inspection.matches_output_identity(frame)
+            && (validate_restored_agent_output_frame(&self.verified, frame)
+                == Ok(ValidatedAgentOutputFrameKind::Terminal)
+                || crate::protocol::output::unrecognised_failure_terminal_kind(
+                    &self.verified,
+                    frame,
+                )
+                .is_ok())
+    }
+
     pub(crate) fn covered_progress(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
@@ -486,14 +549,36 @@ impl CheckpointAgentDelivery {
         )
     }
 
-    /// The canonical failure that replaces a pending nonterminal frame.
+    /// The kind to keep when the one pending frame is a failure terminal which
+    /// differs from this build's canonical frame only in its text, and sits at
+    /// the sequence right after Main's watermark. Any other frame is `None`.
+    pub(crate) fn unrecognised_replaceable(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Option<crate::protocol::output::RuntimeFailureKind> {
+        if !self.inspection.matches_output_identity(frame)
+            || self.inspection.output_watermark().checked_add(1) != Some(frame.sequence)
+        {
+            return None;
+        }
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame).ok()
+    }
+
+    pub(crate) fn deadline_unix_millis(&self) -> i64 {
+        self.verified.command().deadline_unix_millis
+    }
+
+    /// The canonical failure that replaces a pending nonterminal frame, or an
+    /// unrecognised failure terminal.
     pub(crate) fn failure_replacement(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
         failure: crate::protocol::output::RuntimeFailureKind,
         occurred_at_unix_millis: i64,
     ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
-        if self.validate_output(frame)? != ValidatedAgentOutputFrameKind::Progress {
+        if self.unrecognised_replaceable(frame).is_none()
+            && self.validate_output(frame)? != ValidatedAgentOutputFrameKind::Progress
+        {
             return Err(ProtocolError::AuthorizationFailed(
                 "only a nonterminal frame is replaced by a failure",
             ));
@@ -546,6 +631,19 @@ pub(crate) fn test_checkpoint_delivery(
     inspection: crate::protocol::control::ModelCheckpointInspection,
 ) -> CheckpointAgentDelivery {
     CheckpointAgentDelivery {
+        delivery,
+        verified,
+        inspection,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_node_recovery_delivery(
+    delivery: CommandDelivery,
+    verified: VerifiedAgentCommand,
+    inspection: crate::protocol::control::NodeRecoveryInspection,
+) -> NodeRecoveryAgentDelivery {
+    NodeRecoveryAgentDelivery {
         delivery,
         verified,
         inspection,

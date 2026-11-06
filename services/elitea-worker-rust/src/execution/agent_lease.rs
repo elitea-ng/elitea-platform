@@ -695,7 +695,6 @@ impl ClaimLeaseMonitor {
     /// The recovery value contains no fresh-input or Begin authority. The
     /// periodic actor still renews the accepted claim while output settlement
     /// is in progress, matching the Python recovery boundary.
-    #[allow(dead_code)] // Called by the disabled terminal-recovery coordinator.
     pub(crate) fn start_recovery<R, K>(
         control: Arc<AgentControlClient<R>>,
         recovery: AcceptedTerminalClaimRecovery,
@@ -723,6 +722,12 @@ impl ClaimLeaseMonitor {
         K: UnixMillisClock,
     {
         Self::start_inner(control, lease, clock, config, None)
+    }
+
+    /// The monitor's wall clock, so a terminal route applies the deadline rule
+    /// against the same time source as its lease checks.
+    pub(crate) fn now_unix_millis(&self) -> i64 {
+        self.clock.now_unix_millis()
     }
 
     fn start_inner<R, K>(

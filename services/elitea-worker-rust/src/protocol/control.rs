@@ -741,7 +741,6 @@ struct RecoveryClaimBinding {
 /// Unlike [`AcceptedAgentClaim`], this type has no Begin or input path. The
 /// next recovery coordinator may consume it only into supervised lease and
 /// terminal-output operations.
-#[allow(dead_code)] // Consumed by the disabled terminal-recovery coordinator.
 pub(crate) struct AcceptedTerminalClaimRecovery {
     binding: RecoveryClaimBinding,
 }
@@ -749,7 +748,6 @@ pub(crate) struct AcceptedTerminalClaimRecovery {
 impl AcceptedTerminalClaimRecovery {
     /// Consume terminal-only recovery authority into the unique lease handle
     /// used while the exact durable frame is replayed and settled.
-    #[allow(dead_code)] // Consumed by the disabled terminal-recovery coordinator.
     pub(crate) fn into_lease_handle(self) -> ClaimLeaseHandle {
         ClaimLeaseHandle {
             identity: self.binding.identity,
@@ -769,6 +767,35 @@ pub struct AgentOutputRecovery {
 }
 
 impl AgentOutputRecovery {
+    /// Bind a terminal frame an earlier claim spooled, and Main never accepted,
+    /// to this recovery claim. Only the terminal Main's handoff watermark makes
+    /// next qualifies; its payload is untouched, only the fence and watermark
+    /// move. The recovery claim stays input-free.
+    pub(crate) fn terminal_replacement(
+        &self,
+        frame: &ExecutionOutputFrameV1,
+    ) -> Result<ExecutionOutputFrameV1, ProtocolError> {
+        if frame.identity.as_ref() != Some(&self.binding.identity)
+            || !frame.terminal
+            || self.binding.claim_handoff_watermark.checked_add(1) != Some(frame.sequence)
+        {
+            return Err(ProtocolError::AuthorizationFailed(
+                "the pending terminal does not match the output recovery authority",
+            ));
+        }
+        let mut replacement = frame.clone();
+        replacement.fence = Some(self.binding.fence.clone());
+        replacement.claim_handoff_watermark = self.binding.claim_handoff_watermark;
+        Ok(replacement)
+    }
+
+    /// Reuse this claim's exact lease for terminal-only replay and settlement.
+    pub(crate) fn into_terminal_recovery(self) -> AcceptedTerminalClaimRecovery {
+        AcceptedTerminalClaimRecovery {
+            binding: self.binding,
+        }
+    }
+
     #[must_use]
     pub const fn kind(&self) -> AgentOutputRecoveryKind {
         self.kind

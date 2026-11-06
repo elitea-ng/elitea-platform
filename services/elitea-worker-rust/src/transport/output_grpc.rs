@@ -448,6 +448,61 @@ impl PreparedOutputSpool {
         Ok(())
     }
 
+    /// Replace the one pending terminal whose failure text this build does not
+    /// recognise by the canonical failure at the same sequence, keeping the
+    /// replaced frame as an encrypted `.retired` record. The record is made
+    /// durable first, then the replacement is swapped in by one compare-and-swap
+    /// rename, so the sequence is never empty and a crash between the two steps
+    /// is redone by the next claim (same frame, same record).
+    ///
+    /// # Errors
+    ///
+    /// Returns authorization failure unless exactly one byte-identical terminal
+    /// frame is pending and the replacement is a terminal runtime failure at its
+    /// sequence.
+    pub(crate) fn replace_pending_unrecognised_terminal(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+        replacement: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
+        if !expected.terminal
+            || !replacement.terminal
+            || replacement.sequence != expected.sequence
+            || !matches!(
+                replacement.payload,
+                Some(execution_output_frame_v1::Payload::RuntimeError(_))
+            )
+        {
+            return Err(recovery_binding_error(RecoveryKind::Rejected));
+        }
+        if replacement.encoded_len() > self.config.max_frame_bytes {
+            return Err(OutputGrpcError::Protocol(
+                OutputSessionError::ResourceExhausted(
+                    "the replacement output frame exceeds the transport limit",
+                ),
+            ));
+        }
+        let sequence = NonZeroU64::new(expected.sequence).ok_or(OutputGrpcError::Protocol(
+            OutputSessionError::InvalidInput("the replacement output sequence is malformed"),
+        ))?;
+        let fence = expected.fence.as_ref();
+        let tag = crate::spool::RetiredFrameTag {
+            claim_attempt: fence.map_or(0, |fence| fence.claim_attempt),
+            lease_epoch: fence.map_or(0, |fence| fence.lease_epoch),
+        };
+        let (state, pending) = self.restore_replacement(replacement)?;
+        self.spool.replace_exact_retiring(
+            sequence,
+            &expected.encode_to_vec(),
+            &replacement.encode_to_vec(),
+            tag,
+        )?;
+        self.state = state;
+        self.pending = pending;
+        Ok(())
+    }
+
     /// Rebind a validated agent terminal while preserving every result byte.
     pub(crate) fn replace_pending_agent_terminal_recovery(
         &mut self,

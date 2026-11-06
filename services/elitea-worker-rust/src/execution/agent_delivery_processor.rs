@@ -32,8 +32,9 @@ use super::output_delivery::{
     AgentFailureTerminalError, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind, AgentProgressConnector,
     AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay,
-    publish_pre_invocation_terminal, reconcile_empty_agent_output_recovery,
-    recover_accepted_terminal,
+    FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE, NodeRecoveryOutput, OutputRecovery,
+    UNRECOVERABLE_TERMINAL_CODE, publish_pre_invocation_terminal,
+    reconcile_empty_agent_output_recovery, recover_accepted_terminal,
 };
 use crate::agents::runtime::NativeAgentAssembler;
 use crate::diagnostics::attach_command_trace_parent;
@@ -44,10 +45,10 @@ use crate::protocol::control::{
     AgentControlClient, AgentOutputRecoveryKind, DesiredExecutionState,
 };
 use crate::protocol::output::RuntimeFailureKind;
-use crate::transport::ControlRpc;
 use crate::transport::command_bus::{
-    CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict,
+    CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict, PoisonReason,
 };
+use crate::transport::{ControlRpc, OutputGrpcError, OutputProtocolError};
 
 /// Complete application/ad-hoc command processor behind one command delivery
 /// worker. Every field is an immutable process-owned dependency; no execution
@@ -205,8 +206,9 @@ where
         &self,
         delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
-    ) {
+    ) -> DeliveryVerdict {
         let command = verified.command();
+        let delivery_token = delivery.delivery_token().to_owned();
         let span = tracing::info_span!(
             parent: None,
             "agent.delivery",
@@ -237,7 +239,11 @@ where
             async move {
                 tracing::info!(event = "agent_delivery_started");
                 match Box::pin(self.process_owned(delivery, verified)).await {
-                    Ok(outcome) => outcome.record(),
+                    Ok(outcome) => {
+                        let verdict = outcome.verdict(&delivery_token);
+                        outcome.record();
+                        verdict
+                    }
                     Err(error) => {
                         tracing::Span::current().record("outcome", "failed_no_ack");
                         tracing::Span::current().record("error_code", error.code());
@@ -247,12 +253,28 @@ where
                             error_code = error.code(),
                             retryable = error.retryable(),
                         );
+                        if error.terminal_frame_refused() {
+                            // FU-290: one exact replay and one replacement are
+                            // spent and Main still refuses the terminal. A NAK
+                            // would redeliver it every retry delay forever, so
+                            // the delivery is terminated and dead-lettered.
+                            tracing::error!(
+                                event = "agent_failure_terminal.canonical_refused",
+                                error_code = error.code(),
+                            );
+                            DeliveryVerdict::Poison {
+                                reason: PoisonReason::TerminalRefused,
+                                delivery_token: Some(delivery_token),
+                            }
+                        } else {
+                            DeliveryVerdict::Processed
+                        }
                     }
                 }
             }
             .instrument(span),
         )
-        .await;
+        .await
     }
 
     async fn process_checkpoint_delivery(
@@ -302,31 +324,20 @@ where
                             // Main refused this exact frame (a stop, the deadline,
                             // or the frame itself). Retrying cannot change that:
                             // settle the failure it selected, once, and retire.
-                            let terminal = self
-                                .output
-                                .settle_rejected_checkpoint_progress(
-                                    *recovery,
-                                    failure,
-                                    self.clock.now_unix_millis(),
-                                )
-                                .await
-                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                            recover_accepted_terminal(
-                                self.control.clone(),
-                                self.retirer.as_ref(),
-                                self.replay.as_ref(),
-                                terminal,
-                                self.clock.clone(),
-                                self.preparation.lease_config(),
-                                self.terminal_recovery,
-                            )
-                            .await
-                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                            self.settle_replacement(*recovery, failure).await?;
                             return Ok(AgentDeliveryProcessOutcome::completed(
                                 "agent_delivery.rejected_progress_settled",
                             ));
                         }
                     }
+                }
+                CheckpointPendingOutput::Unrecognised { recovery, failure } => {
+                    // The pending terminal's text is one this build does not
+                    // recognise: set it aside, settle one canonical failure.
+                    self.settle_replacement(*recovery, failure).await?;
+                    return Ok(AgentDeliveryProcessOutcome::completed(
+                        "agent_delivery.unrecognised_terminal_settled",
+                    ));
                 }
                 CheckpointPendingOutput::Terminal(terminal) => {
                     recover_accepted_terminal(
@@ -363,6 +374,32 @@ where
         Self::finish_invocation(completion)
     }
 
+    /// Replace the one pending frame with `failure`, then replay, settle and
+    /// retire that exact canonical terminal.
+    async fn settle_replacement(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        failure: RuntimeFailureKind,
+    ) -> Result<(), AgentDeliveryProcessError> {
+        let terminal = self
+            .output
+            .settle_rejected_checkpoint_progress(recovery, failure, self.clock.now_unix_millis())
+            .await
+            .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+        recover_accepted_terminal(
+            self.control.clone(),
+            self.retirer.as_ref(),
+            self.replay.as_ref(),
+            terminal,
+            self.clock.clone(),
+            self.preparation.lease_config(),
+            self.terminal_recovery,
+        )
+        .await
+        .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+        Ok(())
+    }
+
     async fn process_node_recovery_verified(
         &self,
         delivery: CommandDelivery,
@@ -392,16 +429,19 @@ where
                         ));
                     }
                 };
-                let output = self
+                let output = match self
                     .output
                     .prepare_node_recovery(&recovery)
                     .await
-                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                let Some(output) = output else {
-                    return Ok(AgentDeliveryProcessOutcome::retained(
-                        "node_recovery.output_replay_required",
-                        true,
-                    ));
+                    .map_err(AgentDeliveryProcessError::OutputPreflight)?
+                {
+                    NodeRecoveryOutput::Ready(output) => *output,
+                    other => {
+                        let code = other
+                            .retained_code()
+                            .unwrap_or("node_recovery.output_replay_required");
+                        return Ok(AgentDeliveryProcessOutcome::retained(code, true));
+                    }
                 };
                 let waiter = self
                     .coordinator
@@ -460,22 +500,54 @@ where
                 ));
             }
         }
-        let Some(recovery) = self
+        let recovery = match self
             .output
-            .prepare_empty_recovery(recovery, true)
+            .prepare_output_recovery(recovery, true)
             .await
             .map_err(AgentDeliveryProcessError::OutputPreflight)?
-        else {
-            return Ok(AgentDeliveryProcessOutcome::retained(
-                "agent_delivery.output_recovery_pending",
-                true,
-            ));
+        {
+            OutputRecovery::Retained(code) => {
+                return Ok(AgentDeliveryProcessOutcome::retained(code, true));
+            }
+            OutputRecovery::CommittedTerminalUnvalidated => {
+                // Main answered an output recovery for a frame its watermark
+                // covers: it was just authenticated for this delivery, and the
+                // verdict names this delivery's own token (like B).
+                return Ok(AgentDeliveryProcessOutcome::DeadLettered {
+                    code: UNRECOVERABLE_TERMINAL_CODE,
+                    reason: PoisonReason::CommittedTerminalUnvalidated,
+                });
+            }
+            OutputRecovery::Empty(recovery) => recovery,
+            OutputRecovery::Terminal(terminal) => {
+                // A terminal is already pending: replay that exact frame (a
+                // refused one is replaced once, never joined by a second).
+                recover_accepted_terminal(
+                    Arc::clone(&self.control),
+                    self.retirer.as_ref(),
+                    self.replay.as_ref(),
+                    *terminal,
+                    Arc::clone(&self.clock),
+                    self.preparation.lease_config(),
+                    self.terminal_recovery,
+                )
+                .await
+                .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                return Ok(AgentDeliveryProcessOutcome::completed(
+                    "agent_delivery.output_recovery_terminal_retired",
+                ));
+            }
         };
+        // A stop wins; otherwise an unrecognised pending failure keeps its kind.
+        let failure = recovery
+            .kept_failure()
+            .filter(|_| failure != RuntimeFailureKind::Cancelled)
+            .unwrap_or(failure);
         reconcile_empty_agent_output_recovery(
             Arc::clone(&self.control),
             self.retirer.as_ref(),
             self.replay.as_ref(),
-            recovery,
+            *recovery,
             failure,
             Arc::clone(&self.clock),
             self.preparation.lease_config(),
@@ -699,8 +771,7 @@ where
             });
             return verdict;
         }
-        self.process_verified_delivery(delivery, verified).await;
-        DeliveryVerdict::Processed
+        self.process_verified_delivery(delivery, verified).await
     }
 }
 
@@ -757,8 +828,18 @@ where
 
 #[derive(Clone, Copy)]
 pub(super) enum AgentDeliveryProcessOutcome {
-    Completed { code: &'static str },
-    RetainedNoAck { code: &'static str, retryable: bool },
+    Completed {
+        code: &'static str,
+    },
+    RetainedNoAck {
+        code: &'static str,
+        retryable: bool,
+    },
+    /// Dead-lettered: redelivery cannot change the outcome.
+    DeadLettered {
+        code: &'static str,
+        reason: PoisonReason,
+    },
 }
 
 impl AgentDeliveryProcessOutcome {
@@ -770,8 +851,28 @@ impl AgentDeliveryProcessOutcome {
         Self::RetainedNoAck { code, retryable }
     }
 
+    fn verdict(&self, delivery_token: &str) -> DeliveryVerdict {
+        match self {
+            Self::DeadLettered { reason, .. } => DeliveryVerdict::Poison {
+                reason: *reason,
+                delivery_token: Some(delivery_token.to_owned()),
+            },
+            Self::Completed { .. } | Self::RetainedNoAck { .. } => DeliveryVerdict::Processed,
+        }
+    }
+
     fn record(self) {
         match self {
+            Self::DeadLettered { code, reason } => {
+                tracing::Span::current().record("outcome", "dead_lettered");
+                tracing::Span::current().record("result_code", code);
+                tracing::Span::current().record("retryable", false);
+                tracing::error!(
+                    event = "agent_delivery_dead_lettered",
+                    result_code = code,
+                    reason = reason.code(),
+                );
+            }
             Self::Completed { code } => {
                 tracing::Span::current().record("outcome", "completed");
                 tracing::Span::current().record("result_code", code);
@@ -804,6 +905,18 @@ pub(super) enum AgentDeliveryProcessError {
 }
 
 impl AgentDeliveryProcessError {
+    /// Main refused the terminal output frame itself (bound, nonretryable).
+    const fn terminal_frame_refused(&self) -> bool {
+        matches!(
+            self,
+            Self::TerminalRecovery(AgentTerminalRecoveryError::Output(
+                OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
+            )) | Self::FailureTerminal(AgentFailureTerminalError::Output(
+                OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
+            ))
+        )
+    }
+
     const fn code(&self) -> &'static str {
         match self {
             Self::Delivery(error) => error.code(),
@@ -847,8 +960,9 @@ const fn output_recovery_code(kind: AgentOutputRecoveryKind) -> &'static str {
     }
 }
 
-const fn preflight_recovery_code(kind: AgentOutputRecoveryRequiredKind) -> &'static str {
+pub(super) const fn preflight_recovery_code(kind: AgentOutputRecoveryRequiredKind) -> &'static str {
     match kind {
+        AgentOutputRecoveryRequiredKind::UnexpectedTerminal => FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE,
         AgentOutputRecoveryRequiredKind::PendingProgress => {
             "agent_delivery.pending_progress_recovery"
         }

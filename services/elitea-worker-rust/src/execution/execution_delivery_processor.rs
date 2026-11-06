@@ -110,7 +110,8 @@ where
                     tracing::warn!(event = "execution_delivery_subject_mismatch");
                     return verdict;
                 }
-                self.agent
+                return self
+                    .agent
                     .process_verified_delivery(delivery, verified)
                     .await;
             }
