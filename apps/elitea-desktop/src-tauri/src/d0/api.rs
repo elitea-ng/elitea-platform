@@ -477,6 +477,7 @@ impl PlatformApi {
         let id = participant_for(&detail, application_id, version_id)?;
         Ok(AnsweringParticipant {
             id,
+            application_id,
             conversation_uuid,
             numeric_id: number_of(detail.get("id")),
             message_count: number_of(detail.get("message_count")),
@@ -487,7 +488,8 @@ impl PlatformApi {
     /// (`messages_limit`, the route `answering_participant` reads), and the
     /// tool steps of their answers: the transcript a desktop session is
     /// rebuilt from (`seed.rs`). The third value is the detail's
-    /// `forked_from` (a rewind's branch summary rides on it).
+    /// `forked_from` (a rewind's branch summary rides on it); the fourth its
+    /// `participants`, which name each answer's author (issue 1603).
     ///
     /// The tool steps come from the trace routes (`message_traces` lists them,
     /// `message_trace` gives a step's input and output); a deployment
@@ -509,6 +511,7 @@ impl PlatformApi {
             Vec<Value>,
             std::collections::HashMap<i64, Vec<crate::seed::ToolStep>>,
             Option<Value>,
+            Vec<Value>,
         ),
         ApiError,
     > {
@@ -534,6 +537,11 @@ impl PlatformApi {
         groups.sort_by_key(|group| group.get("id").and_then(Value::as_i64).unwrap_or(i64::MAX));
         let mut steps = std::collections::HashMap::new();
         let forked_from = detail.get("forked_from").filter(|v| v.is_object()).cloned();
+        let participants: Vec<Value> = detail
+            .get("participants")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let numeric = numeric_id.or_else(|| number_of(detail.get("id")));
         let answers: Vec<i64> = groups
             .iter()
@@ -541,7 +549,7 @@ impl PlatformApi {
             .filter_map(|group| group.get("id").and_then(Value::as_i64))
             .collect();
         let (Some(numeric), false) = (numeric, answers.is_empty()) else {
-            return Ok((groups, steps, forked_from));
+            return Ok((groups, steps, forked_from, participants));
         };
         let ids = answers
             .iter()
@@ -572,7 +580,7 @@ impl PlatformApi {
                 log::warn!(
                     "the conversation's tool steps could not be listed; seeding messages only"
                 );
-                return Ok((groups, steps, forked_from));
+                return Ok((groups, steps, forked_from, participants));
             }
         };
         let rows = if total.is_some_and(|total| total > rows.len() as u64) {
@@ -643,7 +651,7 @@ impl PlatformApi {
         for step in fetched.into_iter().flatten() {
             steps.entry(step.message_group_id).or_default().push(step);
         }
-        Ok((groups, steps, forked_from))
+        Ok((groups, steps, forked_from, participants))
     }
 
     /// # Errors
@@ -922,6 +930,9 @@ fn path_segment(value: &str) -> Result<String, ApiError> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnsweringParticipant {
     pub id: i64,
+    /// The application the participant names: another participant row of
+    /// the same application is still the same agent (issue 1603).
+    pub application_id: i64,
     /// Lowercase canonical form, the only one the local turn route accepts.
     pub conversation_uuid: String,
     /// The conversation's numeric id (the traces routes take only it).

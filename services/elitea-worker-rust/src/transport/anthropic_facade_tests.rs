@@ -308,21 +308,31 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
     .await
     .expect("valid native stream");
 
-    assert_eq!(responses.len(), 4);
+    assert_eq!(responses.len(), 5);
     assert!(matches!(
         responses[0]
             .content
             .as_ref()
             .and_then(|content| content.parts.first()),
-        Some(Part::Thinking { thinking, .. }) if thinking == "check"
+        Some(Part::Thinking { thinking, signature: None }) if thinking == "check"
     ));
-    assert!(responses[3].turn_complete);
+    // Issue 1603: the block's signature follows its deltas as one empty,
+    // signed thinking part, so the block can be replayed within the loop.
+    assert!(matches!(
+        responses[1]
+            .content
+            .as_ref()
+            .map(|content| content.parts.as_slice()),
+        Some([Part::Thinking { thinking, signature: Some(signature) }])
+            if thinking.is_empty() && signature == "opaque"
+    ));
+    assert!(responses[4].turn_complete);
     assert_eq!(
-        responses[3].finish_reason,
+        responses[4].finish_reason,
         Some(adk_rust::FinishReason::Stop)
     );
-    assert!(responses[3].content.is_none());
-    let usage = responses[3]
+    assert!(responses[4].content.is_none());
+    let usage = responses[4]
         .usage_metadata
         .as_ref()
         .expect("native usage metadata");
@@ -1539,4 +1549,211 @@ async fn native_budget_refusal_names_the_refusing_scope() {
         assert!(!diagnostic.contains("secret"));
         assert!(!diagnostic.contains(TOKEN));
     }
+}
+
+/// Issue 1603 (ADR-0050 decision 9a): a signed thinking run goes back as one
+/// native thinking block; an unsigned one is dropped, never sent as text.
+#[test]
+fn signed_thinking_is_one_block_and_unsigned_thinking_is_dropped() {
+    let content = Content {
+        role: "model".to_owned(),
+        parts: vec![
+            Part::Thinking {
+                thinking: "check ".to_owned(),
+                signature: None,
+            },
+            Part::Thinking {
+                thinking: "twice".to_owned(),
+                signature: None,
+            },
+            Part::Thinking {
+                thinking: String::new(),
+                signature: Some("opaque".to_owned()),
+            },
+            Part::Text {
+                text: "calling".to_owned(),
+            },
+            Part::Thinking {
+                thinking: "unsigned musing".to_owned(),
+                signature: None,
+            },
+            Part::FunctionCall {
+                name: "double".to_owned(),
+                args: serde_json::json!({"value": 2}),
+                id: Some("tool_1".to_owned()),
+                thought_signature: None,
+            },
+        ],
+    };
+    let message = anthropic_message_for_test(&content, false).expect("a model message");
+    let rendered = serde_json::to_value(&message).expect("serializable message");
+    let blocks = rendered["content"].as_array().expect("block array");
+    assert_eq!(blocks.len(), 3, "{rendered}");
+    assert_eq!(blocks[0]["type"], "thinking");
+    assert_eq!(blocks[0]["thinking"], "check twice");
+    assert_eq!(blocks[0]["signature"], "opaque");
+    assert_eq!(blocks[1]["type"], "text");
+    assert_eq!(blocks[1]["text"], "calling");
+    assert_eq!(blocks[2]["type"], "tool_use");
+    assert!(!rendered.to_string().contains("unsigned musing"));
+}
+
+/// Issue 1603: thinking from an earlier turn never reaches the provider; the
+/// signed block of this turn's tool loop does.
+#[tokio::test(flavor = "current_thread")]
+async fn an_earlier_turns_thinking_is_not_replayed_but_the_loops_is() {
+    let response =
+        test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation(MODEL, None),
+        )
+        .expect("native Anthropic model");
+    let signed = |thinking: &str, signature: &str| {
+        vec![
+            Part::Thinking {
+                thinking: thinking.to_owned(),
+                signature: None,
+            },
+            Part::Thinking {
+                thinking: String::new(),
+                signature: Some(signature.to_owned()),
+            },
+        ]
+    };
+    let mut earlier = signed("old reasoning", "old-signature");
+    earlier.push(Part::Text {
+        text: "earlier answer".to_owned(),
+    });
+    let mut current = signed("new reasoning", "new-signature");
+    current.push(Part::FunctionCall {
+        name: "double".to_owned(),
+        args: serde_json::json!({"value": 2}),
+        id: Some("tool_1".to_owned()),
+        thought_signature: None,
+    });
+    let request = tool_request(vec![
+        Content::new("user").with_text("earlier question"),
+        Content {
+            role: "model".to_owned(),
+            parts: earlier,
+        },
+        Content::new("user").with_text("double two"),
+        Content {
+            role: "model".to_owned(),
+            parts: current,
+        },
+        Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    "double",
+                    serde_json::json!({"result": 4}),
+                ),
+                id: Some("tool_1".to_owned()),
+                annotations: None,
+            }],
+        },
+    ]);
+    drain(bound.generate_for_test(request).await.expect("stream"))
+        .await
+        .expect("valid stream");
+    let captured = captured.lock().expect("captured request");
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).expect("body");
+    let wire = body.to_string();
+    assert!(
+        !wire.contains("old reasoning") && !wire.contains("old-signature"),
+        "{wire}"
+    );
+    assert_eq!(body["messages"][1]["content"][0]["type"], "text");
+    assert_eq!(body["messages"][3]["content"][0]["type"], "thinking");
+    assert_eq!(
+        body["messages"][3]["content"][0]["thinking"],
+        "new reasoning"
+    );
+    assert_eq!(
+        body["messages"][3]["content"][0]["signature"],
+        "new-signature"
+    );
+}
+
+/// Review of PR 1636: a steering message after a tool result is inside the
+/// loop, so the signed thinking before the open call still goes back; a
+/// thinking-only step with no signature is skipped, not refused.
+#[tokio::test(flavor = "current_thread")]
+async fn a_steering_message_keeps_the_loops_signed_thinking() {
+    let response =
+        test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
+    let (client, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(response)],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation(MODEL, None),
+        )
+        .expect("native Anthropic model");
+    let request = tool_request(vec![
+        Content::new("user").with_text("double two"),
+        Content {
+            role: "model".to_owned(),
+            parts: vec![Part::Thinking {
+                thinking: "cut short".to_owned(),
+                signature: None,
+            }],
+        },
+        Content::new("user").with_text("go on"),
+        Content {
+            role: "model".to_owned(),
+            parts: vec![
+                Part::Thinking {
+                    thinking: "loop reasoning".to_owned(),
+                    signature: Some("loop-signature".to_owned()),
+                },
+                Part::FunctionCall {
+                    name: "double".to_owned(),
+                    args: serde_json::json!({"value": 2}),
+                    id: Some("tool_1".to_owned()),
+                    thought_signature: None,
+                },
+            ],
+        },
+        Content {
+            role: "function".to_owned(),
+            parts: vec![Part::FunctionResponse {
+                function_response: FunctionResponseData::new(
+                    "double",
+                    serde_json::json!({"result": 4}),
+                ),
+                id: Some("tool_1".to_owned()),
+                annotations: None,
+            }],
+        },
+        Content::new("user").with_text("steering: use base ten"),
+    ]);
+    drain(bound.generate_for_test(request).await.expect("stream"))
+        .await
+        .expect("valid stream");
+    let captured = captured.lock().expect("captured request");
+    let body: serde_json::Value = serde_json::from_slice(&captured[0].body).expect("body");
+    let wire = body.to_string();
+    assert!(!wire.contains("cut short"), "{wire}");
+    let thinking = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .find(|block| block["type"] == "thinking")
+        .expect("the loop's signed thinking block");
+    assert_eq!(thinking["signature"], "loop-signature");
 }

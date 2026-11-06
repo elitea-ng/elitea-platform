@@ -749,26 +749,30 @@ fn current_text_history(history: &[Value]) -> Result<Vec<Content>, NativeAgentAs
 
 fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAssemblyError> {
     let message = value.as_object().ok_or_else(invalid_profile)?;
-    if message.len() != 3
-        || !message
-            .get("additional_kwargs")
-            .and_then(Value::as_object)
-            .is_some_and(Map::is_empty)
-    {
+    let additional = message
+        .get("additional_kwargs")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid_profile)?;
+    if message.len() != 3 {
         return Err(invalid_profile());
     }
-    let role = match message.get("role").and_then(Value::as_str) {
-        Some("user") => "user",
-        Some("assistant") => "model",
-        Some(_) => return Err(unsupported_profile()),
-        None => return Err(invalid_profile()),
+    // ADR-0050 decision 9a (issue 1603): a message by another agent, or by a
+    // person other than the one asking, carries its author. It reaches the
+    // model as a user-role, labelled, untrusted message, never as an unnamed
+    // `assistant`; only the reader's own answers are `model`.
+    let author = history_author(additional)?;
+    let role = match (message.get("role").and_then(Value::as_str), author) {
+        (Some("user"), _) => "user",
+        (Some("assistant"), None) => "model",
+        (Some("assistant"), Some(_)) | (None, _) => return Err(invalid_profile()),
+        (Some(_), _) => return Err(unsupported_profile()),
     };
     let parts = message
         .get("content")
         .and_then(Value::as_array)
         .filter(|parts| !parts.is_empty())
         .ok_or_else(invalid_profile)?;
-    let mut content = Content::new(role);
+    let mut texts = Vec::with_capacity(parts.len());
     for part in parts {
         let part = part.as_object().ok_or_else(invalid_profile)?;
         // Demo issue 2: an earlier turn's attachment reaches history as its
@@ -793,9 +797,57 @@ fn current_text_history_message(value: &Value) -> Result<Content, NativeAgentAss
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty() && !text.contains('\0'))
             .ok_or_else(invalid_profile)?;
-        content = content.with_text(text);
+        texts.push(text);
+    }
+    let mut content = Content::new(role);
+    match author {
+        // One envelope per message: the parts are one author's words.
+        Some((kind, name)) => {
+            content = content.with_text(elitea_agent_runtime::untrusted::message_envelope(
+                kind,
+                name,
+                &texts.join("\n\n"),
+            ));
+        }
+        None => {
+            for text in texts {
+                content = content.with_text(text);
+            }
+        }
     }
     Ok(content)
+}
+
+/// The `elitea_author` of a history message, when it names one; the only
+/// key `additional_kwargs` may hold.
+fn history_author(
+    additional: &Map<String, Value>,
+) -> Result<
+    Option<(elitea_agent_runtime::untrusted::MessageAuthorKind, &str)>,
+    NativeAgentAssemblyError,
+> {
+    use elitea_agent_runtime::untrusted::MessageAuthorKind;
+    match additional.len() {
+        0 => return Ok(None),
+        1 => {}
+        _ => return Err(invalid_profile()),
+    }
+    let author = additional
+        .get("elitea_author")
+        .and_then(Value::as_object)
+        .filter(|author| author.len() == 2)
+        .ok_or_else(invalid_profile)?;
+    let kind = match author.get("kind").and_then(Value::as_str) {
+        Some("agent") => MessageAuthorKind::Agent,
+        Some("person") => MessageAuthorKind::Person,
+        _ => return Err(invalid_profile()),
+    };
+    let name = author
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.contains('\0'))
+        .ok_or_else(invalid_profile)?;
+    Ok(Some((kind, name)))
 }
 
 fn application_model(
