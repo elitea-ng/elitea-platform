@@ -331,12 +331,15 @@ login password on every launch of a re-signed build. After upgrading:
 
 ```sh
 npm ci                      # the Tauri CLI
-npm --prefix ../elitea-web ci
+npm --prefix ../elitea-web ci   # also the tsc the browser driver's build.rs runs
 npm run dev                 # vite dev server + the host
 npm run build:debug         # a debug .app bundle
 ```
 
-Rust checks (`rust-toolchain.toml` pins the toolchain):
+Rust checks (`rust-toolchain.toml` pins the toolchain). A build that compiles the browser
+driver (every host build on macOS, and `--workspace` anywhere) needs
+`apps/elitea-web/node_modules` or `ELITEA_TSC`: the driver's `build.rs` compiles its page
+script from `browser-driver-macos/js/driver.ts`.
 
 ```sh
 cd src-tauri
