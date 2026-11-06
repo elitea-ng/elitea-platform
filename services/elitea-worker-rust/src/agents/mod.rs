@@ -33,6 +33,7 @@ mod replay_history;
 pub use elitea_agent_runtime::request;
 pub mod result;
 mod runner_history;
+pub(crate) mod runner_view;
 pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
@@ -73,7 +74,11 @@ mod pause_frames_tests;
 #[cfg(test)]
 pub(crate) mod pipeline_tests;
 #[cfg(test)]
+mod runner_view_pg_tests;
+#[cfg(test)]
 mod runtime_tests;
+#[cfg(test)]
+mod session_capacity_pg_tests;
 #[cfg(test)]
 mod session_tests;
 #[cfg(test)]

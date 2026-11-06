@@ -435,6 +435,10 @@ impl UiPrompt {
 /// tool result bounds it the same way).
 const FEEDBACK_BYTES: usize = elitea_local_tools::session::MAX_FEEDBACK_BYTES;
 
+/// The exchange kind of a browser pane submit or upload answered by the
+/// unattended grant's `browser_submits` (ADR-0048 decision 8).
+pub const BROWSER_SUBMIT_KIND: &str = "browser_submit";
+
 /// The answer of a remote confirmation that the unattended grant covers
 /// (`remote_confirmations`): approved, `source: "grant"`.
 fn granted_confirmation(
@@ -491,14 +495,32 @@ impl AnswerSink for UiPrompt {
         } else {
             TIMEOUT_ACTION
         };
-        binding.recorder.hitl_exchange(exchange_of(
+        // A browser submit the grant's `browser_submits` answered has a kind
+        // of its own: the platform's ledger checks it against that part.
+        let kind = if call.browser.is_some() && decision.source == Source::Grant {
+            BROWSER_SUBMIT_KIND
+        } else {
+            "command_approval"
+        };
+        let mut exchange = exchange_of(
             &request,
             &uuid::Uuid::new_v4().to_string(),
-            "command_approval",
+            kind,
             &clean(&title),
             action,
             source,
-        ));
+        );
+        // The host the grant answered for: the platform's ledger checks it
+        // against the stored grant's `browser_submits` (contract 1.38).
+        if kind == BROWSER_SUBMIT_KIND
+            && let Some(host) = call
+                .browser
+                .as_ref()
+                .and_then(|target| target.host.as_deref())
+        {
+            exchange["host"] = json!(host.trim_end_matches('.').to_ascii_lowercase());
+        }
+        binding.recorder.hitl_exchange(exchange);
     }
 }
 
@@ -613,6 +635,31 @@ fn describe(request: &ApprovalRequest) -> Value {
         }
         if call.keep_alive {
             payload["keep_alive"] = json!(true);
+        }
+        // A browser pane call (ADR-0048 decision 8): the page and control,
+        // and "Allow for this site in this thread" when it may be kept.
+        if let Some(target) = &call.browser {
+            let mut detail = target
+                .url
+                .clone()
+                .or_else(|| target.host.clone())
+                .unwrap_or_default();
+            if let Some(name) = target
+                .control
+                .as_ref()
+                .and_then(|control| control.name.as_deref())
+                .filter(|name| !name.trim().is_empty())
+            {
+                detail = format!("{}: {detail}", clipped(name, 200));
+            }
+            payload["detail"] = json!(cut(&detail, 4096));
+            payload["tool"] = json!(target.tool);
+            // Never "always": "Allow for this site in this thread"
+            // (`can_remember_thread`, answered `allow_thread`) names the site.
+            payload["can_remember"] = json!(false);
+            if let Some(host) = &target.host {
+                payload["site"] = json!(host);
+            }
         }
         // A local MCP server's start or tool (#1230): which server and tool,
         // and for a start whether it gets the network or runs unconfined.
@@ -951,6 +998,43 @@ mod tests {
         assert!(plain.get("rule").is_none() && plain.get("justification").is_none());
     }
 
+    /// A browser submit's card (ADR-0048 decision 8): the page and control,
+    /// and "Allow for this site in this thread" when the rules offer it.
+    #[test]
+    fn a_browser_question_names_the_site_and_offers_the_thread_scope() {
+        use elitea_local_tools::approvals::{BrowserEffect, BrowserTarget, ComputerControl};
+        let call = ToolCall {
+            browser: Some(BrowserTarget {
+                tool: "browser_click".into(),
+                host: Some("shop.example.com".into()),
+                url: Some("https://shop.example.com/cart".into()),
+                control: Some(ComputerControl {
+                    role: Some("button".into()),
+                    name: Some("Continue".into()),
+                    ..ComputerControl::default()
+                }),
+                effect: Some(BrowserEffect::Submit),
+                ..BrowserTarget::default()
+            }),
+            ..ToolCall::new(ToolKind::BrowserAct)
+        };
+        let request = |actions: &[&str]| ApprovalRequest {
+            subject: "call-1".into(),
+            message: "Let the agent submit a form on shop.example.com?".into(),
+            available_actions: actions.iter().map(|a| (*a).to_owned()).collect(),
+            payload: json!({ PAYLOAD_KEY: call }),
+        };
+        let thread = describe(&request(&["approve", APPROVE_THREAD, "reject"]));
+        assert_eq!(thread["tool"], "browser_click");
+        assert_eq!(thread["detail"], "Continue: https://shop.example.com/cart");
+        assert_eq!(thread["can_remember"], false, "never always");
+        assert_eq!(thread["can_remember_thread"], true);
+        assert_eq!(thread["site"], "shop.example.com");
+        let once = describe(&request(&["approve", "reject"]));
+        assert_eq!(once["can_remember"], false);
+        assert!(once.get("can_remember_thread").is_none());
+    }
+
     fn remote_request() -> ApprovalRequest {
         ApprovalRequest {
             subject: "call-r".into(),
@@ -1189,6 +1273,25 @@ mod tests {
         );
         assert_eq!(exchanges[0]["kind"], "command_approval");
         assert_eq!(exchanges[0]["prompt"], "run_command: git reset --hard");
+
+        // A browser submit the grant answered is a `browser_submit`.
+        let submit = ToolCall {
+            browser: Some(elitea_local_tools::approvals::BrowserTarget {
+                tool: "browser_click".into(),
+                host: Some("shop.example.com".into()),
+                ..Default::default()
+            }),
+            ..ToolCall::new(ToolKind::BrowserAct)
+        };
+        prompt.answered("c5", &submit, &decision(Verdict::Allow, Source::Grant));
+        let exchanges = binding.recorder.hitl_exchanges();
+        assert_eq!(exchanges[2]["kind"], BROWSER_SUBMIT_KIND);
+        assert_eq!(exchanges[2]["source"], SOURCE_GRANT);
+        assert_eq!(
+            exchanges[2]["host"], "shop.example.com",
+            "the ledger checks the answered host"
+        );
+        assert!(exchanges[0].get("host").is_none(), "only a browser submit");
     }
 
     /// A question with a wait that nobody answers is closed: the card goes

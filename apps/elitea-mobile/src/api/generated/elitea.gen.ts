@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.38
+ * client contract:    1.39
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -3513,6 +3513,18 @@ export interface components {
         LocalWorkPolicy: {
             /** @description Local work is permitted. Default false. */
             allowed: boolean;
+            /** @description Client contract 1.39 (ADR-0048 decision 8). The desktop browser pane and its toolset exist for local threads. Default true. Only with `allowed`. */
+            browser?: boolean;
+            /** @description Client contract 1.39. The agent may drive the browser pane; off, the person can still browse. Default true. Only with `browser`. */
+            browser_agent?: boolean;
+            /** @description Client contract 1.39. When non-empty, the only hosts the pane loads: `example.com` (it and every host under it) or `*.example.com` (only the hosts under it), lowercase, no scheme, port or address. A ceiling, not an approval. A stored list whose every entry is invalid is sent as `["no-host.elitea.invalid"]`, never as no ceiling. */
+            browser_allow_domains?: string[];
+            /** @description Client contract 1.39. Hosts the pane never loads, in the same form. A deny wins over an allow. */
+            browser_deny_domains?: string[];
+            /** @description Client contract 1.39. Plain `http` pages may load. Default false. */
+            browser_http?: boolean;
+            /** @description Client contract 1.39. Loopback and private addresses (and the names private by definition, `localhost`, `.local`, ...) may load. Link-local and the other forbidden ranges never do. Default false. */
+            browser_private_network?: boolean;
             /** @description Client contract 1.8 (ADR-0034 decision 11). A Local work thread may be sent to the cloud executor. Default false. The server refuses a send while it is false; the platform and project settings narrow it further. */
             cloud_handoff: boolean;
             /** @description A workspace folder may be synced to an artifact bucket. Default false. */

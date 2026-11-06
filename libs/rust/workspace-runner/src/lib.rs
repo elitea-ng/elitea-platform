@@ -224,6 +224,14 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             computer_use: false,
             computer_use_apps_allow: Vec::new(),
             computer_use_apps_deny: Vec::new(),
+            // The browser pane is the desktop's (ADR-0048); the cloud browser
+            // is ADR-0049's own session, never a workspace tool.
+            browser: false,
+            browser_agent: false,
+            browser_allow_domains: Vec::new(),
+            browser_deny_domains: Vec::new(),
+            browser_http: false,
+            browser_private_network: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

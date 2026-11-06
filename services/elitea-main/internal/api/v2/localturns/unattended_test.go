@@ -53,11 +53,15 @@ func TestUnattendedStartBodyAndAnswer(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"question_id":"q","user_input":"u","unattended":{
 		"grant_id":"0b7d1f6a-3c2e-4f8a-9d10-2a3b4c5d6e7f","chain_root_execution_id":"0123456789abcdef0123456789abcdef",
 		"continue_step_limit":true,"continue_tool_call_cap":true,"hook_asks":true,"remote_confirmations":true,
+		"browser_submits":["shop.example.com"],
 		"chain":{"max_continuations":3,"max_spend":1.5,"deadline_seconds":600}}}`), &body); err != nil {
 		t.Fatal(err)
 	}
 	request := body.Unattended.request()
-	if request == nil || !request.ContinueStepLimit || !request.ContinueToolCallCap || !request.HookAsks ||
+	if request == nil || len(request.BrowserSubmits) != 1 || request.BrowserSubmits[0] != "shop.example.com" {
+		t.Fatalf("browser_submits = %+v", request)
+	}
+	if !request.ContinueStepLimit || !request.ContinueToolCallCap || !request.HookAsks ||
 		!request.RemoteConfirmations || *request.Chain.MaxContinuations != 3 || *request.Chain.MaxSpendUSD != 1.5 ||
 		*request.Chain.DeadlineSeconds != 600 || request.ChainRootExecutionID != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("request = %+v", request)

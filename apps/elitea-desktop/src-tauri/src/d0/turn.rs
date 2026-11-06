@@ -4335,11 +4335,11 @@ impl AgentHost {
             )));
         }
         // The browser pane's tools (ADR-0048 decision 3): a toolset of
-        // their own, never workspace tools. Plan mode and unattended turns
-        // only read the page (`crate::browser_tools::gate`). TODO(#1590):
-        // offered only while the `local_work_browser` and
-        // `local_work_browser_agent` policy keys allow it.
-        if let Some(drivers) = self.browser.get()
+        // their own, never workspace tools, offered only while the policy's
+        // `local_work_browser` and `local_work_browser_agent` allow it. The
+        // rules engine decides each call (decision 8).
+        if workspace.policy.browser_tools()
+            && let Some(drivers) = self.browser.get()
             && let Ok(thread) = conversation_key(&request.conversation_id)
         {
             provider = provider.with(Arc::new(crate::browser_tools::BrowserToolProvider::new(

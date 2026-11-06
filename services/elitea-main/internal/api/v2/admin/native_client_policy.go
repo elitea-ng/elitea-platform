@@ -369,6 +369,68 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 				"built-in list (Elitea, password managers, terminals, Screen Time, the login window and "+
 				"the security settings), which cannot be removed. A deny wins over an allow. At most %d entries.",
 				platformconfig.MaxBundleIDPatterns), section, visible),
+		{
+			"key":   platformconfig.KeyNativeLocalWorkBrowser,
+			"type":  "boolean",
+			"title": "Allow the Browser Pane",
+			"description": "Whether the desktop app shows its browser pane beside a local thread, and offers the " +
+				"agent the browser tools. Off, neither the person nor the agent can open a page in the app.",
+			"section":      section,
+			"default":      defaults.Browser,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkBrowserAgent,
+			"type":  "boolean",
+			"title": "Let the Agent Drive the Browser Pane",
+			"description": "Whether the agent may open, read and act on pages in the browser pane. Off, the person " +
+				"can still browse there. Form submits, uploads and downloads are asked; buying, paying, deleting, " +
+				"sending and signing are asked every time.",
+			"section":      section,
+			"default":      defaults.BrowserAgent,
+			"visible_when": visible,
+		},
+		browserDomainList(platformconfig.KeyNativeLocalWorkBrowserAllowDomains, "Browser Pane: Allowed Domains",
+			fmt.Sprintf("When not empty, the only hosts the browser pane loads. example.com covers it and every "+
+				"host under it; *.example.com only the hosts under it. At most %d entries.",
+				platformconfig.MaxBrowserDomains), section, visible),
+		browserDomainList(platformconfig.KeyNativeLocalWorkBrowserDenyDomains, "Browser Pane: Denied Domains",
+			fmt.Sprintf("Hosts the browser pane never loads, written as for the allowed domains. A deny wins over "+
+				"an allow. At most %d entries.", platformconfig.MaxBrowserDomains), section, visible),
+		{
+			"key":          platformconfig.KeyNativeLocalWorkBrowserHTTP,
+			"type":         "boolean",
+			"title":        "Browser Pane: Allow Plain HTTP",
+			"description":  "Whether the browser pane may load plain http pages. Off, https only.",
+			"section":      section,
+			"default":      defaults.BrowserHTTP,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkBrowserPrivateNetwork,
+			"type":  "boolean",
+			"title": "Browser Pane: Allow Local and Private Addresses",
+			"description": "Whether the browser pane may load localhost, loopback and private network addresses (for " +
+				"developers testing a local app). Link-local and metadata addresses stay refused.",
+			"section":      section,
+			"default":      defaults.BrowserPrivateNetwork,
+			"visible_when": visible,
+		},
+	}
+}
+
+// browserDomainList is a browser pane domain list field (ADR-0048 decision 8).
+func browserDomainList(key, title, description, section string, visible map[string]any) map[string]any {
+	return map[string]any{
+		"key":          key,
+		"type":         "array",
+		"items":        map[string]any{"type": "string"},
+		"title":        title,
+		"description":  description,
+		"section":      section,
+		"default":      []any{},
+		"maxItems":     platformconfig.MaxBrowserDomains,
+		"visible_when": visible,
 	}
 }
 
@@ -470,6 +532,30 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 				return fmt.Sprintf("%q[%d] must be a bundle id such as com.apple.mail, or a prefix such as "+
 					"com.example.* (letters, digits and -, in dot-separated parts, at most %d bytes)",
 					key, index, platformconfig.MaxBundleIDBytes)
+			}
+		}
+	}
+	for _, key := range []string{
+		platformconfig.KeyNativeLocalWorkBrowserAllowDomains,
+		platformconfig.KeyNativeLocalWorkBrowserDenyDomains,
+	} {
+		raw, present := values[key]
+		if !present {
+			continue
+		}
+		entries, ok := raw.([]any)
+		if !ok {
+			return fmt.Sprintf("%q must be an array of domains", key)
+		}
+		if len(entries) > platformconfig.MaxBrowserDomains {
+			return fmt.Sprintf("%q has too many entries (limit %d)", key, platformconfig.MaxBrowserDomains)
+		}
+		for index, entry := range entries {
+			domain, _ := entry.(string)
+			if !platformconfig.ValidBrowserDomain(strings.ToLower(strings.TrimSpace(domain))) {
+				return fmt.Sprintf("%q[%d] must be a host name such as example.com, or *.example.com for the "+
+					"hosts under it (no scheme, port, path or IP address, at most %d bytes)",
+					key, index, platformconfig.MaxBrowserDomainBytes)
 			}
 		}
 	}

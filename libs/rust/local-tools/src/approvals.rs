@@ -80,6 +80,13 @@
 //! | a consequential action ([`is_consequential`]: Send, Delete, Buy, Pay, Sign, Submit, Confirm and their kin, CamelCase names included; a destructive role) | asked every time; never remembered |
 //! | any `computer` call in plan mode but `ComputerRead` | denied |
 //! | `ComputerAct` in an unattended turn ([`RulesEngine::set_unattended`]) | asked every time: no thread or "always" approval answers it, and no grant answers the ask (a hook's ask included). It waits for the person, and anything but an approval declines it (ADR-0047 decision 8: every `ComputerAct` of an unattended turn waits for the person) |
+//! | `BrowserRead` ([`ToolKind::BrowserRead`], ADR-0048: `browser_snapshot`, `browser_screenshot`, `browser_wait`) | allowed; kept in plan mode and in an unattended turn |
+//! | `BrowserNavigate` ([`ToolKind::BrowserNavigate`]: `browser_open`, back, forward, reload) | allowed and shown in the transcript; denied when the policy's domain lists refuse the host ([`ToolCall::browser`]) |
+//! | `BrowserAct` ([`ToolKind::BrowserAct`]: click, type, select, scroll, press) | allowed, except the two rows below |
+//! | `BrowserAct` that submits a form or starts an upload ([`BrowserTarget::effect`]) | asked; "allow for this site in this thread" ([`APPROVE_THREAD`], offered once the host set the turn's thread) remembers that effect for the page's host and thread only (a submit approval does not cover an upload); never "always". Bypass mode allows it in an attended turn. In an unattended turn bypass does not answer it: only a grant's `browser_submits` ([`Unattended::browser_submits`]) does, on a host it names ([`Source::Grant`]); every other one waits for the person and is declined past the wait |
+//! | `BrowserAct` that starts a download | asked every time; never remembered, not for the site either. Bypass mode allows it in an attended turn; in an unattended turn neither bypass nor a grant answers it: it waits for the person and is declined past the wait |
+//! | `BrowserAct` on a control the page names as buying, paying, deleting, sending or signing ([`is_consequential`], the same words as the `computer` rows) | asked every time; never remembered; bypass mode and no grant answer it |
+//! | any `BrowserAct` or `BrowserNavigate` in plan mode | denied |
 //! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
 //!
 //! The policy ceiling for both MCP rows is `local_mcp`: off (or absent),
@@ -99,6 +106,15 @@
 //! not answer their asks. The ask names the bundle id, the window title and
 //! the action; an approval is for the bundle id. The tools are local-only:
 //! never in the workspace runner's `TOOLS`.
+//!
+//! The browser rows' ceiling is `browser` and `browser_agent` (both on, and
+//! local work): off, every browser call is denied and the host does not
+//! offer the tools. A page whose host `browser_deny_domains` names, or one
+//! outside a non-empty `browser_allow_domains`, is denied
+//! ([`LocalWorkPolicy::browser_domain_refusal`]); the pane's own navigation
+//! guard refuses its load as well. Only these rows apply to the browser
+//! tools (no workspace rule names a page). They are the desktop's: never in
+//! the workspace runner's `TOOLS`.
 //!
 //! The web rows' ceilings are `web` and `host_intel`: off (or absent),
 //! every call is denied and the host does not offer the tools. They run on
@@ -283,6 +299,15 @@ pub enum ToolKind {
     /// `computer_open_app`: acting on another application. Never answered
     /// by an unattended grant (ADR-0047 decision 8).
     ComputerAct,
+    /// `browser_snapshot`, `browser_screenshot`, `browser_wait` (ADR-0048
+    /// decision 3): reading the browser pane's page. Kept in plan mode.
+    BrowserRead,
+    /// `browser_open`, `browser_back`, `browser_forward`, `browser_reload`:
+    /// moving the pane's page ([`ToolCall::browser`]).
+    BrowserNavigate,
+    /// `browser_click`, `browser_type`, `browser_select`, `browser_scroll`,
+    /// `browser_press`: acting on the page.
+    BrowserAct,
 }
 
 impl ToolKind {
@@ -304,6 +329,7 @@ impl ToolKind {
                 | Self::WebRead
                 | Self::HostIntel
                 | Self::ComputerRead
+                | Self::BrowserRead
         )
     }
 
@@ -311,6 +337,15 @@ impl ToolKind {
     #[must_use]
     pub const fn is_computer(self) -> bool {
         matches!(self, Self::ComputerRead | Self::ComputerAct)
+    }
+
+    /// Whether it is one of the browser pane's tools (ADR-0048).
+    #[must_use]
+    pub const fn is_browser(self) -> bool {
+        matches!(
+            self,
+            Self::BrowserRead | Self::BrowserNavigate | Self::BrowserAct
+        )
     }
 
     /// Whether it is a remote web or host-intel tool.
@@ -596,13 +631,125 @@ impl ComputerTarget {
     }
 }
 
+/// [`is_consequential`] for a page's control (ADR-0048 decision 8): the same
+/// words, except `submit`. A form submit is its own row (asked, and
+/// remembered for the site in the thread); only a buy, pay, delete, send or
+/// sign control is asked every time.
+#[must_use]
+pub fn is_consequential_browser(control: &ComputerControl) -> bool {
+    control.destructive
+        || control.name.as_deref().is_some_and(|name| {
+            name.split(|c: char| !c.is_alphanumeric())
+                .flat_map(camel_words)
+                .any(|word| {
+                    CONSEQUENTIAL_WORDS.iter().any(|consequential| {
+                        *consequential != "submit" && word.eq_ignore_ascii_case(consequential)
+                    })
+                })
+        })
+}
+
+/// What a browser act would start beyond the page itself (ADR-0048
+/// decision 8), as the driver reads the target before running it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserEffect {
+    /// A form submit: a click on a submit control, Enter in a form field,
+    /// `browser_type` with `submit`.
+    Submit,
+    /// A click that opens a file chooser (a file input or its label).
+    Upload,
+    /// A click on a link that downloads.
+    Download,
+}
+
+impl BrowserEffect {
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Submit => "submit a form",
+            Self::Upload => "upload a file",
+            Self::Download => "download a file",
+        }
+    }
+}
+
+/// Which page (and which control of it) a browser call is about (ADR-0048
+/// decision 8). An approval is for the page's host in one thread.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BrowserTarget {
+    /// The tool (`browser_click`, …), as the ask shows it.
+    #[serde(default)]
+    pub tool: String,
+    /// The host of the page the call acts on, or of the URL it opens,
+    /// lowercased. `None` when the host cannot tell (a history step).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The page's (or the target's) URL without query or fragment, as the
+    /// ask shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The control an act targets: its role and accessible name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<ComputerControl>,
+    /// The host found the act consequential itself (a buy or pay word its
+    /// classifier knows, or a control it could not resolve): asked every
+    /// time, as [`is_consequential_browser`] would. It only adds asks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub consequential: bool,
+    /// What the act starts beyond the page: a submit, an upload, a download.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect: Option<BrowserEffect>,
+}
+
+impl BrowserTarget {
+    /// The host as approvals key it.
+    fn key(&self) -> Option<String> {
+        self.host
+            .as_deref()
+            .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
+            .filter(|host| !host.is_empty())
+    }
+
+    fn site(&self) -> String {
+        self.key().unwrap_or_else(|| "this page".to_owned())
+    }
+
+    /// What the ask says beyond the site: the tool and the control.
+    fn detail(&self) -> String {
+        use std::fmt::Write as _;
+        let mut detail = String::new();
+        if !self.tool.is_empty() {
+            let _ = write!(detail, " (`{}`", self.tool);
+            if let Some(name) = self
+                .control
+                .as_ref()
+                .and_then(|control| control.name.as_deref())
+                .filter(|name| !name.trim().is_empty())
+            {
+                let _ = write!(detail, " on \u{201c}{name}\u{201d}");
+            }
+            detail.push(')');
+        }
+        detail
+    }
+
+    fn consequential(&self) -> bool {
+        self.consequential || self.control.as_ref().is_some_and(is_consequential_browser)
+    }
+}
+
 /// What one thread approved of the `computer` tools ("allow for this
-/// thread", and the apps `computer_open_app` opened), by bundle id key.
+/// thread", and the apps `computer_open_app` opened), by bundle id key, and
+/// of the browser tools ("allow for this site in this thread"), by host.
 #[derive(Debug, Default)]
 struct ThreadComputer {
     see: HashSet<String>,
     act: HashSet<String>,
     opened: HashSet<String>,
+    /// `(host, effect)` pairs whose submits or uploads the person allowed
+    /// for the site in the thread: a submit approval never covers an
+    /// upload. A download is never kept.
+    sites: HashSet<(String, BrowserEffect)>,
 }
 
 /// One tool call, as the rules see it.
@@ -654,6 +801,10 @@ pub struct ToolCall {
     /// application, window, action and control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computer: Option<ComputerTarget>,
+    /// For [`ToolKind::BrowserRead`], [`ToolKind::BrowserNavigate`] and
+    /// [`ToolKind::BrowserAct`]: the page, control and effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserTarget>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -677,6 +828,7 @@ impl ToolCall {
             mcp: None,
             argv: None,
             computer: None,
+            browser: None,
         }
     }
 
@@ -727,12 +879,27 @@ pub enum Source {
 /// the rules engine applies. A grant does not set
 /// [`PermissionProfile::Bypass`]: the rules' own asks go to the person as
 /// in every other turn, unless the person also chose bypass mode.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Unattended {
     /// The grant answers a `PreToolUse` hook's ask with "allow". Without
     /// it, a hook's ask goes to the person, who has the ask's wait to
     /// answer.
     pub hook_asks: bool,
+    /// `browser_submits` (ADR-0048 decision 8): the hosts on which the
+    /// grant answers a browser form submit or upload ask with "allow".
+    /// Exact host names, lowercase. A consequential control, a download
+    /// and every other host still wait for the person.
+    pub browser_submits: Vec<String>,
+}
+
+impl Unattended {
+    /// Whether the grant answers a submit or an upload on `host`.
+    #[must_use]
+    pub fn submits_on(&self, host: &str) -> bool {
+        self.browser_submits
+            .iter()
+            .any(|granted| granted.eq_ignore_ascii_case(host))
+    }
 }
 
 /// Told of every question the engine answered inline for the person: an
@@ -1219,7 +1386,10 @@ impl RulesEngine {
     /// The running turn's unattended grant, if any.
     #[must_use]
     pub fn unattended(&self) -> Option<Unattended> {
-        self.unattended.read().ok().and_then(|current| *current)
+        self.unattended
+            .read()
+            .ok()
+            .and_then(|current| current.clone())
     }
 
     /// Set the thread the running turn belongs to (`None`: the session is
@@ -1246,6 +1416,19 @@ impl RulesEngine {
 
     /// Whether the running thread holds `pick`'s set for `key` (never, with
     /// no thread set).
+    /// Whether the person allowed `effect` on `host` for the running
+    /// turn's thread.
+    fn thread_has_site(&self, host: &str, effect: BrowserEffect) -> bool {
+        let Some(thread) = self.thread_key() else {
+            return false;
+        };
+        self.computer_threads.lock().is_ok_and(|threads| {
+            threads
+                .get(&thread)
+                .is_some_and(|approved| approved.sites.contains(&(host.to_owned(), effect)))
+        })
+    }
+
     fn thread_has(&self, key: &str, pick: fn(&ThreadComputer) -> &HashSet<String>) -> bool {
         let Some(thread) = self.thread_key() else {
             return false;
@@ -1269,6 +1452,9 @@ impl RulesEngine {
     /// (asked every time), and a turn with no thread set
     /// ([`Self::set_thread`]).
     pub fn remember_for_thread(&self, call: &ToolCall) -> ToolResult<()> {
+        if call.tool.is_browser() {
+            return self.remember_site_for_thread(call);
+        }
         let target = call
             .computer
             .as_ref()
@@ -1308,8 +1494,39 @@ impl RulesEngine {
         Ok(())
     }
 
-    /// Forget a thread's `computer` approvals (the thread was deleted or
-    /// handed off).
+    /// "Allow for this site in this thread" for a browser act that submits
+    /// or uploads: the page's host and that effect, until the thread ends.
+    fn remember_site_for_thread(&self, call: &ToolCall) -> ToolResult<()> {
+        if let Some(refusal) = self.never_remembered(call) {
+            return Err(refusal);
+        }
+        let target = call.browser.as_ref();
+        let key = target
+            .and_then(BrowserTarget::key)
+            .ok_or_else(|| ToolError::invalid("a browser act names its page's host"))?;
+        let effect = target
+            .and_then(|target| target.effect)
+            .ok_or_else(|| ToolError::invalid("a browser act names its effect"))?;
+        let thread = self.thread_key().ok_or_else(|| {
+            ToolError::new(
+                ErrorCode::Denied,
+                "no thread is set; the call is approved once",
+            )
+        })?;
+        let mut threads = self
+            .computer_threads
+            .lock()
+            .map_err(|_| ToolError::new(ErrorCode::Io, "the thread approvals are unavailable"))?;
+        threads
+            .entry(thread)
+            .or_default()
+            .sites
+            .insert((key, effect));
+        Ok(())
+    }
+
+    /// Forget a thread's `computer` and browser approvals (the thread was
+    /// deleted or handed off).
     pub fn forget_thread(&self, thread: &str) {
         if let Ok(mut threads) = self.computer_threads.lock() {
             threads.remove(thread);
@@ -1384,7 +1601,7 @@ impl RulesEngine {
     pub fn with_unattended_hook_ask(
         decision: Decision,
         hook: &str,
-        unattended: Unattended,
+        unattended: &Unattended,
     ) -> Decision {
         if unattended.hook_asks && decision.verdict == Verdict::Allow {
             let mut granted = Decision::new(
@@ -1409,6 +1626,8 @@ impl RulesEngine {
         if decision.verdict == Verdict::Ask
             && self.profile() == PermissionProfile::Bypass
             && !call.tool.is_computer()
+            && !Self::browser_consequential(call)
+            && !self.unattended_browser_effect(call)
         {
             return Decision {
                 rule: decision.rule,
@@ -1607,7 +1826,7 @@ impl RulesEngine {
                 return deny(error.message().to_owned());
             }
         }
-        if call.tool.is_web() || call.tool.is_computer() {
+        if call.tool.is_web() || call.tool.is_computer() || call.tool.is_browser() {
             return self.service_ceiling(call);
         }
         if call.tool.is_memory() {
@@ -2016,6 +2235,12 @@ impl RulesEngine {
                 ..RememberedChoice::of(ToolKind::McpCall)
             });
         }
+        if call.tool.is_browser() {
+            return Err(ToolError::new(
+                ErrorCode::Denied,
+                "a site is approved for one thread only; it is never remembered",
+            ));
+        }
         if call.tool.is_computer() {
             // The application, in the choice store: seeing and acting apart.
             return self.choices.remember(RememberedChoice {
@@ -2168,10 +2393,44 @@ fn compound_refusal() -> ToolError {
 }
 
 impl RulesEngine {
+    /// [`Self::never_remembered`] for a browser call: only a submit or an
+    /// upload on a named host is kept, for that effect on the site in the
+    /// thread; a download and a consequential control never are (each
+    /// download is asked: a file lands on the device).
+    fn browser_never_remembered(call: &ToolCall) -> Option<ToolError> {
+        let target = call.browser.as_ref();
+        if call.tool != ToolKind::BrowserAct || target.is_none_or(|target| target.effect.is_none())
+        {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "only a browser submit or upload is approved for a site",
+            ));
+        }
+        if target.is_some_and(|target| target.effect == Some(BrowserEffect::Download)) {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "a download is asked every time; it is never approved for a site",
+            ));
+        }
+        if target.is_some_and(BrowserTarget::consequential) {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                CONSEQUENTIAL_NEVER_REMEMBERED,
+            ));
+        }
+        if target.and_then(BrowserTarget::key).is_none() {
+            return Some(ToolError::invalid("a browser act names its page's host"));
+        }
+        None
+    }
+
     /// Why `call` can never be remembered, whatever its scope: a commit, a
     /// compound command, or a command that would run unconfined. The one precondition [`Self::can_remember`] and
     /// [`Self::remember`] share.
     fn never_remembered(&self, call: &ToolCall) -> Option<ToolError> {
+        if call.tool.is_browser() {
+            return Self::browser_never_remembered(call);
+        }
         if call.tool.is_computer() {
             let target = call.computer.as_ref();
             if target.and_then(ComputerTarget::key).is_none() {
@@ -2294,6 +2553,8 @@ impl RulesEngine {
             Some(self.decide_memory(call))
         } else if call.tool.is_computer() {
             Some(self.decide_computer(call))
+        } else if call.tool.is_browser() {
+            Some(self.decide_browser(call))
         } else if call.tool.is_web() {
             Some(self.decide_web(call))
         } else {
@@ -2305,9 +2566,116 @@ impl RulesEngine {
     fn service_ceiling(&self, call: &ToolCall) -> Option<Decision> {
         if call.tool.is_computer() {
             self.computer_ceiling(call)
+        } else if call.tool.is_browser() {
+            self.browser_ceiling(call)
         } else {
             self.web_ceiling(call)
         }
+    }
+
+    /// The browser rows' policy ceiling (ADR-0048 decision 8): the pane and
+    /// the agent's toolset (`browser`, `browser_agent`) off deny every call;
+    /// a host the domain lists refuse is denied whatever else allows it.
+    fn browser_ceiling(&self, call: &ToolCall) -> Option<Decision> {
+        let deny = |reason: String| Some(Decision::new(Verdict::Deny, Source::Policy, reason));
+        if !self.policy.browser_tools() {
+            return deny("the browser tools are disabled by policy".to_owned());
+        }
+        let host = call.browser.as_ref().and_then(BrowserTarget::key)?;
+        self.policy.browser_domain_refusal(&host).and_then(deny)
+    }
+
+    /// Whether `call` is a browser submit, upload or download in an
+    /// unattended turn: bypass mode does not answer it there; only the
+    /// grant's `browser_submits` hosts do (a submit or an upload), as no
+    /// bypass answers a `ComputerAct` (ADR-0047 decision 8).
+    fn unattended_browser_effect(&self, call: &ToolCall) -> bool {
+        call.tool == ToolKind::BrowserAct
+            && call
+                .browser
+                .as_ref()
+                .is_some_and(|target| target.effect.is_some())
+            && self.unattended().is_some()
+    }
+
+    /// Whether `call` is a browser act on a consequential control.
+    fn browser_consequential(call: &ToolCall) -> bool {
+        call.tool == ToolKind::BrowserAct
+            && call
+                .browser
+                .as_ref()
+                .is_some_and(BrowserTarget::consequential)
+    }
+
+    /// The browser rows of the default table (ADR-0048 decision 8), under
+    /// the policy ceiling. Only these rows apply: workspace rules name paths
+    /// and commands, never a page.
+    fn decide_browser(&self, call: &ToolCall) -> Decision {
+        let ask = |reason: String| Decision::new(Verdict::Ask, Source::Default, reason);
+        if call.tool == ToolKind::BrowserRead {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "reading the page changes nothing",
+            );
+        }
+        if self.plan_mode() {
+            return Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "plan mode only reads the page: navigate and act once the plan is accepted",
+            );
+        }
+        if call.tool == ToolKind::BrowserNavigate {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "a navigation is shown in the transcript",
+            );
+        }
+        let target = call.browser.clone().unwrap_or_default();
+        let site = target.site();
+        let detail = target.detail();
+        if target.consequential() {
+            // Asked every time, whatever was approved or granted.
+            return ask(format!(
+                "This action on {site} may buy, pay, delete, send or sign{detail}. Allow it?"
+            ));
+        }
+        let Some(effect) = target.effect else {
+            return Decision::new(
+                Verdict::Allow,
+                Source::Default,
+                "an action on the page is shown in the transcript",
+            );
+        };
+        if let Some(key) = target.key() {
+            if effect != BrowserEffect::Download && self.thread_has_site(&key, effect) {
+                return Decision::new(
+                    Verdict::Allow,
+                    Source::Remembered,
+                    "you allowed this site in this thread",
+                );
+            }
+            if effect != BrowserEffect::Download
+                && self
+                    .unattended()
+                    .is_some_and(|unattended| unattended.submits_on(&key))
+            {
+                return Decision::new(
+                    Verdict::Allow,
+                    Source::Grant,
+                    format!(
+                        "the unattended grant lets the agent {} on {key}",
+                        effect.noun()
+                    ),
+                );
+            }
+        }
+        ask(format!(
+            "Let the agent {} on {site}?{detail}",
+            effect.noun()
+        ))
     }
 
     /// The `computer` rows' policy ceiling (ADR-0047 decision 3):
@@ -2701,6 +3069,73 @@ impl RuleApprovals {
     }
 }
 
+impl RuleApprovals {
+    /// A browser ask (ADR-0048 decision 8): approve or reject, and "allow
+    /// for this site in this thread" ([`APPROVE_THREAD`]) for a submit, an
+    /// upload or a download once the host set the turn's thread. A
+    /// consequential control is approve or reject, every time.
+    async fn ask_browser(
+        &self,
+        mut request: ApprovalRequest,
+        call: &ToolCall,
+        decision: &Decision,
+    ) -> Result<ApprovalOutcome, HostError> {
+        let for_thread = self.engine.can_remember(call) && self.engine.has_thread();
+        let mut actions = vec!["approve".to_owned()];
+        if for_thread {
+            actions.push(APPROVE_THREAD.to_owned());
+        }
+        actions.push("reject".to_owned());
+        request.available_actions = actions;
+        // Unattended, an ask the grant did not answer waits for the person
+        // and declines past the wait (ADR-0045, ADR-0048 decision 8).
+        let attended_only = self.engine.unattended().is_some();
+        request.message.clone_from(&decision.reason);
+        if let Value::Object(payload) = &mut request.payload {
+            payload.insert("reason".to_owned(), Value::String(decision.reason.clone()));
+            payload.insert("source".to_owned(), json!(decision.source));
+            if attended_only {
+                payload.insert("attended_only".to_owned(), Value::Bool(true));
+            }
+        }
+        let approved = |value: Value| ApprovalOutcome::Decided {
+            action: "approve".to_owned(),
+            value,
+        };
+        match self.prompt.request(request).await? {
+            ApprovalOutcome::Decided { action, value } if action == APPROVE_THREAD => {
+                if for_thread && let Err(error) = self.engine.remember_for_thread(call) {
+                    tracing::warn!(reason = error.message(), "the site is approved once");
+                }
+                Ok(approved(value))
+            }
+            // "Always" is never offered for a page: approved once.
+            ApprovalOutcome::Decided { action, value }
+                if action == "approve" || action == APPROVE_ALWAYS =>
+            {
+                Ok(approved(value))
+            }
+            other if attended_only => {
+                let reason = if matches!(other, ApprovalOutcome::Deferred) {
+                    "nobody at the machine answered"
+                } else {
+                    "not approved by the person"
+                };
+                Ok(ApprovalOutcome::Decided {
+                    action: "reject".to_owned(),
+                    value: json!({
+                        "source": Source::Default,
+                        "reason": format!(
+                            "this browser action needs a person at the machine: {reason}"
+                        ),
+                    }),
+                })
+            }
+            other => Ok(other),
+        }
+    }
+}
+
 /// A runtime memory tool's request ([`elitea_agent_runtime::memory_tools`]),
 /// as the rules see it: its [`ToolKind`], also put under [`PAYLOAD_KEY`] so
 /// the host's prompt describes it like any local call.
@@ -2760,7 +3195,7 @@ impl ApprovalChannel for RuleApprovals {
                 // No grant answers acting on another app (ADR-0047
                 // decision 8): the hook's ask goes to the person.
                 Some(unattended) if call.tool != ToolKind::ComputerAct => {
-                    RulesEngine::with_unattended_hook_ask(decision, hook, unattended)
+                    RulesEngine::with_unattended_hook_ask(decision, hook, &unattended)
                 }
                 _ => RulesEngine::with_hook_ask(decision, hook),
             };
@@ -2784,6 +3219,9 @@ impl ApprovalChannel for RuleApprovals {
                     }),
                     ApprovalOutcome::Deferred => Ok(ApprovalOutcome::Deferred),
                 }
+            }
+            Verdict::Ask if call.tool.is_browser() => {
+                self.ask_browser(request, &call, &decision).await
             }
             Verdict::Ask if call.tool.is_computer() => {
                 self.ask_computer(request, &call, &decision, hook_ask.is_none())
@@ -2848,6 +3286,9 @@ impl ApprovalChannel for RuleApprovals {
 }
 
 #[cfg(test)]
+mod browser_tests;
+
+#[cfg(test)]
 mod computer_tests;
 
 #[cfg(test)]
@@ -2888,6 +3329,12 @@ mod tests {
             computer_use: true,
             computer_use_apps_allow: Vec::new(),
             computer_use_apps_deny: Vec::new(),
+            browser: false,
+            browser_agent: false,
+            browser_allow_domains: Vec::new(),
+            browser_deny_domains: Vec::new(),
+            browser_http: false,
+            browser_private_network: false,
         }
     }
 
@@ -4139,10 +4586,16 @@ mod tests {
     #[tokio::test]
     async fn an_unattended_grant_answers_only_a_hooks_ask_and_the_person_answers_the_rest() {
         let (_dir, engine, answers, prompt, channel) = unattended_channel(approved_by_person());
-        engine.set_unattended(Some(super::Unattended { hook_asks: true }));
+        engine.set_unattended(Some(super::Unattended {
+            hook_asks: true,
+            ..super::Unattended::default()
+        }));
         assert_eq!(
             engine.unattended(),
-            Some(super::Unattended { hook_asks: true })
+            Some(super::Unattended {
+                hook_asks: true,
+                ..super::Unattended::default()
+            })
         );
         assert_eq!(engine.profile(), PermissionProfile::Build);
         let granted = channel
@@ -4188,7 +4641,10 @@ mod tests {
     #[tokio::test]
     async fn an_unattended_grant_without_hook_asks_sends_a_hooks_ask_to_the_person() {
         let (_dir, engine, answers, prompt, channel) = unattended_channel(approved_by_person());
-        engine.set_unattended(Some(super::Unattended { hook_asks: false }));
+        engine.set_unattended(Some(super::Unattended {
+            hook_asks: false,
+            ..super::Unattended::default()
+        }));
         let answered = channel
             .request(hook_asked(&file(ToolKind::WriteFile, "a")))
             .await
@@ -4210,7 +4666,10 @@ mod tests {
         let (_dir, engine, answers, prompt, channel) =
             unattended_channel(ApprovalOutcome::Deferred);
         engine.set_profile(PermissionProfile::Bypass);
-        engine.set_unattended(Some(super::Unattended { hook_asks: false }));
+        engine.set_unattended(Some(super::Unattended {
+            hook_asks: false,
+            ..super::Unattended::default()
+        }));
         let bypassed = channel
             .request(request(&shell("git reset --hard")))
             .await

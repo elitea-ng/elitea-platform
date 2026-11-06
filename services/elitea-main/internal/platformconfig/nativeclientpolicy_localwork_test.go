@@ -2,6 +2,7 @@ package platformconfig
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -46,6 +47,7 @@ func TestLocalWorkPolicyOverlay(t *testing.T) {
 		IndexLocalEmbeddings: false, IndexRemoteEmbeddings: true,
 		IndexModelMirrorURL:  "https://mirror.example.com/hf",
 		ComputerUseAppsAllow: []string{}, ComputerUseAppsDeny: []string{},
+		Browser: true, BrowserAgent: true, BrowserAllowDomains: []string{}, BrowserDenyDomains: []string{},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("overlay = %+v\nwant %+v", got, want)
@@ -222,6 +224,104 @@ func TestValidBundleIDPattern(t *testing.T) {
 	} {
 		if got := ValidBundleIDPattern(pattern); got != want {
 			t.Errorf("ValidBundleIDPattern(%q) = %v, want %v", pattern, got, want)
+		}
+	}
+}
+
+// TestLocalWorkBrowserDefaults pins ADR-0048 decision 8 and owner decision 1
+// at acceptance: the pane and the agent's toolset are on, plain http and
+// private addresses are off, and both domain lists are empty arrays.
+func TestLocalWorkBrowserDefaults(t *testing.T) {
+	got := NativeClientPolicyFromValues(Values{}).LocalWork
+	if !got.Browser || !got.BrowserAgent || got.BrowserHTTP || got.BrowserPrivateNetwork {
+		t.Errorf("browser defaults = %+v", got)
+	}
+	if got.BrowserAllowDomains == nil || got.BrowserDenyDomains == nil ||
+		len(got.BrowserAllowDomains) != 0 || len(got.BrowserDenyDomains) != 0 {
+		t.Errorf("domain lists must be empty arrays: %#v %#v", got.BrowserAllowDomains, got.BrowserDenyDomains)
+	}
+}
+
+// TestLocalWorkBrowserOverlay: every key is read; entries are lowercased and
+// deduplicated, invalid ones dropped; a wrong type keeps the default; a list
+// is cut at the bound.
+func TestLocalWorkBrowserOverlay(t *testing.T) {
+	var values Values
+	if err := json.Unmarshal([]byte(`{
+		"local_work_browser": false, "local_work_browser_agent": false,
+		"local_work_browser_http": true, "local_work_browser_private_network": true,
+		"local_work_browser_allow_domains": ["Example.com", "*.docs.example.org", "example.com",
+			"https://x.example", "10.0.0.1", "localhost", "bad host", 7],
+		"local_work_browser_deny_domains": ["ads.example.com", "*"]}`), &values); err != nil {
+		t.Fatal(err)
+	}
+	got := NativeClientPolicyFromValues(values).LocalWork
+	if got.Browser || got.BrowserAgent || !got.BrowserHTTP || !got.BrowserPrivateNetwork {
+		t.Errorf("switches = %+v", got)
+	}
+	if !reflect.DeepEqual(got.BrowserAllowDomains, []string{"example.com", "*.docs.example.org"}) {
+		t.Errorf("browser_allow_domains = %q", got.BrowserAllowDomains)
+	}
+	if !reflect.DeepEqual(got.BrowserDenyDomains, []string{"ads.example.com"}) {
+		t.Errorf("browser_deny_domains = %q", got.BrowserDenyDomains)
+	}
+	junk := NativeClientPolicyFromValues(Values{
+		KeyNativeLocalWorkBrowser:             "no",
+		KeyNativeLocalWorkBrowserAllowDomains: "example.com",
+	}).LocalWork
+	if !junk.Browser || len(junk.BrowserAllowDomains) != 0 {
+		t.Errorf("junk must keep defaults, got %+v", junk)
+	}
+	many := make([]any, MaxBrowserDomains+5)
+	for i := range many {
+		many[i] = fmt.Sprintf("host%d.example.com", i)
+	}
+	cut := NativeClientPolicyFromValues(Values{KeyNativeLocalWorkBrowserDenyDomains: many}).LocalWork
+	if len(cut.BrowserDenyDomains) != MaxBrowserDomains {
+		t.Errorf("browser_deny_domains kept %d entries, want %d", len(cut.BrowserDenyDomains), MaxBrowserDomains)
+	}
+}
+
+// TestLocalWorkBrowserAllowListFailsClosed: a stored allow list whose every
+// entry is invalid loads as one host nobody has, never as "no ceiling".
+func TestLocalWorkBrowserAllowListFailsClosed(t *testing.T) {
+	got := NativeClientPolicyFromValues(Values{
+		KeyNativeLocalWorkBrowserAllowDomains: []any{"bad host", "127.0.0.1"},
+	}).LocalWork
+	if !reflect.DeepEqual(got.BrowserAllowDomains, []string{NoBrowserHost}) {
+		t.Fatalf("browser_allow_domains = %q, want [%s]", got.BrowserAllowDomains, NoBrowserHost)
+	}
+	if !ValidBrowserDomain(NoBrowserHost) {
+		t.Fatal("NoBrowserHost must itself be a valid domain")
+	}
+	deny := NativeClientPolicyFromValues(Values{KeyNativeLocalWorkBrowserDenyDomains: []any{"bad host"}}).LocalWork
+	if len(deny.BrowserDenyDomains) != 0 {
+		t.Errorf("browser_deny_domains = %q, want empty", deny.BrowserDenyDomains)
+	}
+}
+
+func TestValidBrowserDomain(t *testing.T) {
+	long := strings.Repeat("a", 60) + "." + strings.Repeat("b", 60) + "." + strings.Repeat("c", 60) + "." +
+		strings.Repeat("d", 60) + "." + strings.Repeat("e", 60) + ".com"
+	for entry, want := range map[string]bool{
+		"example.com":         true,
+		"*.example.com":       true,
+		"a-b.example.co.uk":   true,
+		"example":             false,
+		"localhost":           false,
+		"*":                   false,
+		"*.com.":              false,
+		"Example.com":         false,
+		"example.com:443":     false,
+		"https://example.com": false,
+		"10.0.0.1":            false,
+		"1.2.3.4.5":           false,
+		"exa mple.com":        false,
+		"-x.example.com":      false,
+		long:                  false,
+	} {
+		if got := ValidBrowserDomain(entry); got != want {
+			t.Errorf("ValidBrowserDomain(%q) = %v, want %v", entry, got, want)
 		}
 	}
 }

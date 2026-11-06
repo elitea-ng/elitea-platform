@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -32,17 +33,48 @@ const (
 	// unattended turn a rule's ask takes its default (source timeout); only
 	// a hook's ask is a grant answer (hook_asks).
 	exchangeKindCommandApproval = "command_approval"
+	// exchangeKindBrowserSubmit is a browser pane submit or upload the
+	// grant's browser_submits answered (ADR-0048 decision 8).
+	exchangeKindBrowserSubmit = "browser_submit"
 )
 
-// grantCoversExchange reports whether the stored grant answers an exchange
-// of kind: hook asks need hook_asks and "Continue?" needs
-// continue_step_limit. No other kind is a grant answer.
-func grantCoversExchange(grant unattended.Grant, kind string) bool {
-	switch kind {
+// grantCoversExchange reports whether the stored grant answers the
+// exchange: hook asks need hook_asks, "Continue?" needs continue_step_limit
+// and a browser submit needs its host among the grant's browser_submits. No
+// other kind is a grant answer.
+func grantCoversExchange(grant unattended.Grant, exchange localturn.HITLExchange) bool {
+	switch exchange.Kind {
 	case exchangeKindCommandApproval:
 		return grant.HookAsks
 	case exchangeKindContinue:
 		return grant.ContinueStepLimit
+	case exchangeKindBrowserSubmit:
+		return browserSubmitsCover(grant.BrowserSubmits, exchange.Host)
+	}
+	return false
+}
+
+// browserSubmitsCover reports whether host is one the grant's
+// browser_submits names. The entries are exact host names (no wildcard is
+// stored, ValidateBrowserSubmits refuses one); an entry written `*.name`
+// would cover the hosts under name only. Compared ignoring ASCII case and a
+// final dot. An absent host is never covered.
+func browserSubmitsCover(hosts []string, host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" {
+		return false
+	}
+	for _, entry := range hosts {
+		entry = strings.ToLower(strings.TrimSuffix(entry, "."))
+		if suffix, ok := strings.CutPrefix(entry, "*."); ok {
+			if suffix != "" && strings.HasSuffix(host, "."+suffix) {
+				return true
+			}
+			continue
+		}
+		if entry != "" && entry == host {
+			return true
+		}
 	}
 	return false
 }
@@ -94,7 +126,7 @@ func recordLocalTurnExchanges(
 		case localturn.SourceGrant:
 			// A grant answer needs the turn's grant, and the grant must
 			// cover the exchange's kind.
-			if !found || !grantCoversExchange(chain.Grant, exchange.Kind) {
+			if !found || !grantCoversExchange(chain.Grant, exchange) {
 				slog.WarnContext(ctx, "local turn: a grant answer that the turn's grant does not cover; no ledger row",
 					"execution_id", record.ExecutionID, "interrupt_id", exchange.InterruptID, "kind", exchange.Kind,
 					"has_grant", found)

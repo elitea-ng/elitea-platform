@@ -1345,7 +1345,11 @@ impl LocalSession {
             // The `computer` toolset is the desktop host's (ADR-0047),
             // never a workspace tool.
             | ToolKind::ComputerRead
-            | ToolKind::ComputerAct => Err(ToolError::new(
+            | ToolKind::ComputerAct
+            // So is the browser pane's (ADR-0048).
+            | ToolKind::BrowserRead
+            | ToolKind::BrowserNavigate
+            | ToolKind::BrowserAct => Err(ToolError::new(
                 ErrorCode::Denied,
                 format!("`{tool}` is not available"),
             )),
@@ -1870,6 +1874,7 @@ impl LocalSession {
             mcp: None,
             argv: None,
             computer: None,
+            browser: None,
         };
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",

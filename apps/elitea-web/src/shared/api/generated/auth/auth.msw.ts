@@ -136,6 +136,36 @@ export const getExchangeNativeTokenResponseMock = (
             ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
             undefined,
           ]),
+          browser: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          browser_agent: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          browser_allow_domains: faker.helpers.arrayElement([
+            Array.from(
+              { length: faker.number.int({ min: 1, max: 200 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 253 } })),
+            undefined,
+          ]),
+          browser_deny_domains: faker.helpers.arrayElement([
+            Array.from(
+              { length: faker.number.int({ min: 1, max: 200 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 253 } })),
+            undefined,
+          ]),
+          browser_http: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          browser_private_network: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
         },
       },
     },
