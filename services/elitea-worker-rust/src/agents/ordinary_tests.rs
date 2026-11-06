@@ -6566,3 +6566,60 @@ async fn drain_browser(
     }
     browser
 }
+
+/// ADR-0050 decision 1a: the system message reads preamble (platform text
+/// and guardrails), then the soul, then the instructions. The soul never
+/// comes before the platform's rules.
+#[tokio::test(flavor = "current_thread")]
+async fn the_soul_sits_below_the_preamble_in_the_system_message() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("application version")
+        .insert(
+            "soul".to_owned(),
+            serde_json::json!({"schema": "elitea.soul/v1", "display_name": "Mira"}),
+        );
+    let (runtime_context, _calls) = runtime_context_client();
+    let (model_gateway, captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(model_response())],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway fixture client");
+    let assembler = OrdinaryNativeAgentAssembler::new(
+        platform_client(runtime_context),
+        Arc::new(ModelFacade::from_gateway(model_gateway)),
+        empty_tool_policy(),
+    );
+    let assembly = AuthorizedNativeAssembly::new(
+        &request,
+        test_runtime_context_authority(),
+        AuthorizedNativeCommandBinding::fixture(),
+    );
+    let mut invocation = assembler.assemble(assembly).await.expect("assembly");
+    invocation.project_start(chrono::Utc::now()).unwrap();
+    let (mut native, mut projector, completion) = invocation.start().expect("native start");
+    while let Some(event) = native.next_event().await.expect("native event") {
+        let _batch = projector.project(&event).expect("projected native event");
+    }
+    let _ = completion.select().await.expect("completion");
+    let captured = captured.lock().expect("captured model request");
+    let body: serde_json::Value =
+        serde_json::from_slice(&captured[0].body).expect("model request JSON");
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    let preamble = system
+        .find(elitea_agent_runtime::preamble::BUILTIN_PREAMBLE)
+        .expect("the preamble");
+    let soul = system
+        .find("## Persona\n\nYou are Mira.")
+        .expect("the soul");
+    let instructions = system.find("review carefully").expect("the instructions");
+    assert!(preamble < soul && soul < instructions, "{system}");
+    assert_eq!(
+        crate::test_content::without_preamble(system),
+        "## Persona\n\nYou are Mira.\n\nreview carefully"
+    );
+}

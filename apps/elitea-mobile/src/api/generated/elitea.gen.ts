@@ -2042,7 +2042,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. Self-contained on purpose: no $ref and no `nullable`, so it is valid JSON Schema as written.
+         * @description ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. No `nullable`, so it is valid JSON Schema as written; its one $ref (`soul`, to the self-contained AgentSoulV1) is inlined by the schema route.
          * @example {
          *       "name": "Incident Triager",
          *       "description": "Sorts new incidents by severity and names the owning team.",
@@ -2077,6 +2077,8 @@ export interface components {
                 id: string;
                 name?: string;
             }[];
+            /** @description The agent's persona (ADR-0050 decision 1a). The schema route serves it inlined, so the served schema stays self-contained. */
+            soul?: components["schemas"]["AgentSoulV1"];
             /** @description References to existing project toolkits. Attaching them is a human step in review. */
             tools?: {
                 id: string;
@@ -2088,6 +2090,63 @@ export interface components {
                 value?: string;
             }[];
             welcome_message?: string;
+        };
+        /**
+         * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
+         * @example {
+         *       "schema": "elitea.soul/v1",
+         *       "display_name": "Mira",
+         *       "pronouns": "they/them",
+         *       "role": "Release coordinator",
+         *       "voice": [
+         *         "concise",
+         *         "warm",
+         *         "direct"
+         *       ],
+         *       "values": [
+         *         "safety before speed",
+         *         "cite sources"
+         *       ],
+         *       "boundaries": [
+         *         "never merges without a green CI"
+         *       ],
+         *       "relationships": [
+         *         {
+         *           "agent": "ci-doctor",
+         *           "stance": "delegate failing builds"
+         *         }
+         *       ],
+         *       "proactive_goals": [
+         *         "watch release branches for red CI"
+         *       ],
+         *       "body": "Mira has run release trains for years. Short sentences; no exclamation marks."
+         *     }
+         */
+        AgentSoulV1: {
+            /** @description Free-form markdown, the text after the front matter of SOUL.md. The whole soul's 16384-byte text bound (every string value, `schema` included) is the tighter limit in practice. */
+            body?: string;
+            /** @description What the agent declines or always escalates. */
+            boundaries?: string[];
+            /** @description The name shown in chat; it may differ from the agent's name. */
+            display_name?: string;
+            /** @description Read only by the heartbeat (ADR-0050 decision 2); not part of the prompt. */
+            proactive_goals?: string[];
+            pronouns?: string;
+            /** @description How the agent treats other agents and people. */
+            relationships?: {
+                /** @description A registry id or a name. */
+                agent: string;
+                stance: string;
+            }[];
+            /** @description One line, shown in the participant list. */
+            role?: string;
+            /**
+             * @description The document version. Always `elitea.soul/v1`.
+             * @enum {string}
+             */
+            schema: "elitea.soul/v1";
+            values?: string[];
+            voice?: string[];
         };
         /** @description NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued). */
         Application: {
@@ -2207,6 +2266,8 @@ export interface components {
             /** @description NOTE(#898): `meta.notes`, surfaced beside `meta` as the legacy runtime's `hydrate_notes_from_meta` surfaces it. Always a string on the version-detail read and on the two write echoes ("" when the version carries no notes); absent from the other version maps (import, fork, the public catalogue detail), which do not build their response through these two helpers. */
             notes?: string;
             pipeline_settings?: components["schemas"]["PipelineSettings"];
+            /** @description ADR-0050 decision 1a: the version's soul document, or null when it has none. Served by the version-detail read and both write echoes. */
+            soul?: components["schemas"]["AgentSoulV1"] | null;
             status: string;
             tags?: components["schemas"]["VersionTag"][];
             tools?: components["schemas"]["VersionToolRef"][];
@@ -4392,6 +4453,8 @@ export interface components {
             notes?: string;
             /** @description Pipeline flow-graph layout ({nodes, edges, orientation, layout_version}). Written verbatim to the application_versions.pipeline_settings jsonb column by create and update operations. On update, omit the key to leave the stored value untouched. */
             pipeline_settings?: components["schemas"]["PipelineSettings"];
+            /** @description ADR-0050 decision 1a. Omit the key to leave the stored soul alone; null clears it; an object replaces it whole. An object that fails AgentSoulV1 is REFUSED with a 400 before anything is written: `soul_capability_key` names a key that would read as a grant (tools, credentials, permissions and the like), `soul_too_large` a document over 16384 bytes of text, `soul_invalid` anything else. */
+            soul?: components["schemas"]["AgentSoulV1"] | null;
             /** @description NOTE(#345): the version's topical tags. Send the key to replace the stored set; an empty array removes every association row. Omit the key to leave the stored set alone. Each entry is matched by `name`: an existing `tags` row is reused, a new name creates one. The application and version create paths persist supplied tags and return the stored set. PUT persists the supplied set and leaves existing tags unchanged when the key is absent. */
             tags?: components["schemas"]["VersionTag"][];
             variables?: components["schemas"]["VersionVariable"][];

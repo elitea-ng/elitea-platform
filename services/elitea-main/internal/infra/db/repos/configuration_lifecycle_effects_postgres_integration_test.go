@@ -309,6 +309,7 @@ CREATE TABLE p_1.application_versions (
     agent_type VARCHAR NOT NULL,
     meta JSONB NOT NULL,
     pipeline_settings JSONB NOT NULL,
+    soul JSONB,
     UNIQUE (application_id, name),
     UNIQUE (shared_owner_id, shared_id)
 );

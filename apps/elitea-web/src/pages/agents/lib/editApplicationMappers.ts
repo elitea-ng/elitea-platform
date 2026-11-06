@@ -8,6 +8,7 @@ import type {
   VersionWriteRequest,
 } from '@/shared/api/generated/model';
 
+import { soulWriteField } from './agentSoulDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 
 /**
@@ -119,30 +120,6 @@ export function toVersionOptions(
 }
 
 /**
- * The active version's own fields, as the body a "Save As Version" POST
- * clones onto the new version (`name` excluded — `SaveNewVersionButton`'s
- * dialog supplies it). Old app: `SaveNewVersionButton.jsx` sends
- * `{...values.version_details, id: undefined, name: newVersion}` — i.e. the
- * CURRENTLY EDITED form state, not the server's last-saved copy, which is
- * why `conversationStarters` is threaded in from the live form here rather
- * than read off `version`.
- *
- * #307: `edits` threads the OTHER live version fields in for exactly the
- * same reason. While those fields were routed nowhere they could not
- * diverge from the server's copy, so reading them off `version` was
- * harmless; now that they are editable, a "Save As Version" taken after
- * typing new instructions would have cloned the STORED instructions and
- * dropped the edit without saying so. Optional, so a caller with no live
- * editor state still gets the stored values.
- *
- * Only the keys the Go `CreateVersion` handler actually reads are sent
- * (`agent_type`/`instructions`/`welcome_message`/`llm_settings`/
- * `conversation_starters`/`variables`, handler.go:723-747) — see
- * `features/agents/model/useSaveNewVersion.ts`'s doc comment for the full
- * trace, including why `meta`/`tags`/`tools` are deliberately omitted
- * (the handler discards them).
- */
-/**
  * The `llm_settings` key of the write body, or nothing at all — a separate
  * function both to keep `toVersionWriteBody`'s own cyclomatic complexity
  * under this codebase's oxlint gate and because the choice needs explaining.
@@ -181,7 +158,7 @@ function selectLlmSettings(
 function toVersionMetaBody(
   version: ApplicationVersionDetail,
   edits?: EditApplicationVersionFields,
-): Pick<VersionWriteRequest, 'meta'> {
+): Pick<VersionWriteRequest, 'meta' | 'soul'> {
   // `variables` is DROPPED from the stored blob, and this is load-bearing.
   //
   // Both handlers fold the body's TOP-LEVEL `variables` list into `meta`
@@ -200,8 +177,10 @@ function toVersionMetaBody(
   // The update path folds on key PRESENCE and so was never exposed; dropping
   // the key is correct for both, because both rebuild it from the list.
   const { variables: _storedVariables, ...storedMeta } = (version.meta ?? {}) as Record<string, unknown>;
-  if (edits === undefined) return { meta: { ...storedMeta } };
+  const soul = soulWriteField(version.soul, edits?.soul);
+  if (edits === undefined) return { meta: { ...storedMeta }, ...soul };
   return {
+    ...soul,
     meta: {
       ...storedMeta,
       ...(edits.stepLimit === undefined ? {} : { step_limit: edits.stepLimit }),
@@ -229,6 +208,27 @@ function toVersionMetaBody(
   };
 }
 
+/**
+ * The active version's own fields, as the body a "Save As Version" POST
+ * clones onto the new version (`name` excluded — `SaveNewVersionButton`'s
+ * dialog supplies it). Old app: `SaveNewVersionButton.jsx` sends
+ * `{...values.version_details, id: undefined, name: newVersion}` — i.e. the
+ * CURRENTLY EDITED form state, not the server's last-saved copy, which is
+ * why `conversationStarters` is threaded in from the live form here rather
+ * than read off `version`.
+ *
+ * #307: `edits` threads the OTHER live version fields in for exactly the
+ * same reason. While those fields were routed nowhere they could not
+ * diverge from the server's copy, so reading them off `version` was
+ * harmless; now that they are editable, a "Save As Version" taken after
+ * typing new instructions would have cloned the STORED instructions and
+ * dropped the edit without saying so. Optional, so a caller with no live
+ * editor state still gets the stored values.
+ *
+ * Only keys the Go `CreateVersion` handler reads are sent; `tags`/`tools` are
+ * omitted (see `features/agents/model/useSaveNewVersion.ts`). `meta` and the
+ * ADR-0050 `soul` are read there, so both are sent.
+ */
 export function toVersionWriteBody(
   version: ApplicationVersionDetail,
   conversationStarters: readonly string[],

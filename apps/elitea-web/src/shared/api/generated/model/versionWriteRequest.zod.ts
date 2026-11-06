@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { ConversationStarters } from "./conversationStarters.zod";
 import { LlmSettings } from "./llmSettings.zod";
 import { PipelineSettings } from "./pipelineSettings.zod";
@@ -81,6 +82,12 @@ export const VersionWriteRequest = zod.object({
     .optional()
     .describe(
       "NOTE(#898): the editor's free-text notes, accepted at the top level the way the legacy runtime accepts them and folded into `meta.notes` by every write path (create, create-version and the PUT). Omit the key to leave the stored value alone; an explicit empty string clears it. Longer than 1000 characters is REFUSED with a 400 — the legacy runtime's own ceiling (models/pd/version.py:116). The agent editor sends the value inside `meta` instead, which is the same store; both spellings are accepted so a client written against the legacy runtime keeps working.\n",
+    ),
+  soul: zod
+    .union([AgentSoulV1, zod.null()])
+    .optional()
+    .describe(
+      "ADR-0050 decision 1a. Omit the key to leave the stored soul alone; null clears it; an object replaces it whole. An object that fails AgentSoulV1 is REFUSED with a 400 before anything is written: `soul_capability_key` names a key that would read as a grant (tools, credentials, permissions and the like), `soul_too_large` a document over 16384 bytes of text, `soul_invalid` anything else.\n",
     ),
   llm_settings: LlmSettings.optional(),
   conversation_starters: ConversationStarters.optional(),

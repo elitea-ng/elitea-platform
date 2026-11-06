@@ -41,10 +41,14 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { ResolvedApplicationTool } from "./resolvedApplicationTool.zod";
 
 export const ResolvedApplicationVersionDetails = zod.object({
   instructions: zod.string().optional(),
+  soul: AgentSoulV1.optional().describe(
+    "ADR-0050 decision 1a: present only when the version has a soul, so a version without one keeps its release digest.\n",
+  ),
   agent_type: zod.string().optional(),
   tools: zod.array(ResolvedApplicationTool),
 });

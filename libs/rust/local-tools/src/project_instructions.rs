@@ -38,6 +38,18 @@ pub struct ProjectInstructions {
     pub files: Vec<InstructionFile>,
     /// Found but not read, with why (denied, a symlink, past the cap).
     pub skipped: Vec<(String, String)>,
+    /// The root `SOUL.md` (ADR-0050 decision 1a): the local agent's
+    /// persona, next to the root `AGENTS.md`, in the `AgentSoulV1` schema.
+    /// `None` when there is none or it was refused (then in `skipped`).
+    pub soul: Option<LocalSoul>,
+}
+
+/// The workspace's root `SOUL.md`, admitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalSoul {
+    /// Workspace-relative path.
+    pub path: String,
+    pub soul: elitea_agent_runtime::soul::Soul,
 }
 
 impl ProjectInstructions {
@@ -52,6 +64,11 @@ impl ProjectInstructions {
 /// first other spelling by name. `None` when `dir` is reached through a
 /// symlink (its listing could be another folder's).
 fn agents_file_in(workspace: &Workspace, dir: &WsPath) -> Option<String> {
+    named_file_in(workspace, dir, FILE_NAME)
+}
+
+/// The file of `dir` named `file_name` in any case, exact spelling first.
+fn named_file_in(workspace: &Workspace, dir: &WsPath, file_name: &str) -> Option<String> {
     if workspace.final_target(dir).ok()? != *dir {
         return None;
     }
@@ -59,11 +76,11 @@ fn agents_file_in(workspace: &Workspace, dir: &WsPath) -> Option<String> {
         .ok()?
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.eq_ignore_ascii_case(FILE_NAME))
+        .filter(|name| name.eq_ignore_ascii_case(file_name))
         .collect();
     names.sort();
-    if names.iter().any(|name| name == FILE_NAME) {
-        return Some(FILE_NAME.to_owned());
+    if names.iter().any(|name| name == file_name) {
+        return Some(file_name.to_owned());
     }
     names.into_iter().next()
 }
@@ -165,7 +182,65 @@ pub fn load(workspace: &Workspace, mentions: &[String]) -> ProjectInstructions {
             truncated,
         });
     }
+    load_soul(workspace, &mut out);
     out
+}
+
+/// Read the root `SOUL.md` into `out.soul`, through the same confined view
+/// as `AGENTS.md`: a symlink or a denied path is not read. A file over the
+/// size bound or not in the schema is skipped with the reason, never used
+/// in part: a soul is read whole or not at all.
+fn load_soul(workspace: &Workspace, out: &mut ProjectInstructions) {
+    use elitea_agent_runtime::soul::{FILE_NAME as SOUL_FILE, MAX_TEXT_BYTES, Soul};
+    let root = WsPath::root();
+    let Some(name) = named_file_in(workspace, &root, SOUL_FILE) else {
+        return;
+    };
+    let Some(path) = join(&root, &name) else {
+        return;
+    };
+    let shown = path.display_string();
+    if let Some(rule) = workspace.denied_by(&path, Intent::Read) {
+        out.skipped.push((shown, format!("denied by {rule}")));
+        return;
+    }
+    match workspace.stat(&path) {
+        Ok(Some(EntryKind::File)) => {}
+        Ok(Some(EntryKind::Symlink)) => {
+            out.skipped.push((shown, "a symlink".to_owned()));
+            return;
+        }
+        _ => return,
+    }
+    let Ok((file, resolved)) = workspace.open_file(&path) else {
+        return;
+    };
+    if resolved != path {
+        out.skipped.push((shown, "a symlink".to_owned()));
+        return;
+    }
+    // Front matter and escaping take room beyond the text bound.
+    let cap = MAX_TEXT_BYTES * 4;
+    let mut bytes = Vec::new();
+    if file
+        .take(u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return;
+    }
+    if bytes.len() > cap {
+        out.skipped.push((shown, "past the size cap".to_owned()));
+        return;
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
+        out.skipped.push((shown, "not UTF-8".to_owned()));
+        return;
+    };
+    match Soul::from_markdown(&text) {
+        Ok(soul) => out.soul = Some(LocalSoul { path: shown, soul }),
+        Err(error) => out.skipped.push((shown, error.to_string())),
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +253,41 @@ mod tests {
     fn open(dir: &tempfile::TempDir, deny: &[&str]) -> Workspace {
         let deny: Vec<String> = deny.iter().map(|s| (*s).to_owned()).collect();
         Workspace::open(dir.path(), &deny).unwrap()
+    }
+
+    #[test]
+    fn the_root_soul_is_read_with_the_agents_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("SOUL.md"),
+            "---\nschema: elitea.soul/v1\ndisplay_name: Mira\n---\n\nTerse.\n",
+        )
+        .unwrap();
+        let found = load(&open(&dir, &[]), &[]);
+        let soul = found.soul.expect("the soul");
+        assert_eq!(soul.path, "SOUL.md");
+        assert_eq!(soul.soul.display_name.as_deref(), Some("Mira"));
+        assert_eq!(soul.soul.body, "Terse.");
+    }
+
+    #[test]
+    fn a_soul_that_grants_or_is_denied_is_skipped_with_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("SOUL.md"),
+            "---\nschema: elitea.soul/v1\ntools: [shell]\n---\n",
+        )
+        .unwrap();
+        let found = load(&open(&dir, &[]), &[]);
+        assert_eq!(found.soul, None);
+        assert_eq!(found.skipped.len(), 1, "{:?}", found.skipped);
+        let denied = load(&open(&dir, &["SOUL.md"]), &[]);
+        assert_eq!(denied.soul, None);
+        assert!(
+            denied.skipped[0].1.starts_with("denied by"),
+            "{:?}",
+            denied.skipped
+        );
     }
 
     #[test]

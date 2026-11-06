@@ -1806,3 +1806,72 @@ fn a_peer_agents_history_message_is_a_labelled_untrusted_user_message() {
     };
     assert!(text.starts_with("<untrusted source=\"message\" from=\"Sam\" kind=\"person\">"));
 }
+
+// ── Soul (ADR-0050 decision 1a, issue 1604) ─────────────────────────────────
+
+/// The soul sits before the instructions, and the memory Main appended to
+/// the instructions stays after both: soul, instructions, memory. The
+/// preamble (platform text, guardrails) is put before all of it by the model
+/// facade (`ordinary_tests::the_soul_sits_below_the_preamble_in_the_system_message`).
+#[test]
+fn the_soul_goes_before_the_instructions_and_their_memory() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(
+        &mut request,
+        "review carefully\n\n<memories>\nprefers tables\n</memories>",
+    );
+    application_version_mut(&mut request).insert(
+        "soul".to_owned(),
+        json!({"schema": "elitea.soul/v1", "display_name": "Mira", "voice": ["terse"], "body": "Never guesses."}),
+    );
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("an agent with a soul");
+    let text = profile.instructions();
+    let soul = text.find("You are Mira.").expect("the soul is rendered");
+    let instructions = text.find("review carefully").unwrap();
+    let memory = text.find("prefers tables").unwrap();
+    assert!(soul < instructions && instructions < memory, "{text}");
+    assert!(text.starts_with("## Persona\n\n"), "{text}");
+
+    // A nested agent carries its own soul the same way.
+    let version = request.payload.application["version_details"]
+        .as_object()
+        .unwrap()
+        .clone();
+    let nested =
+        OrdinaryNoToolProfile::from_nested_version(&version, &profile).expect("nested soul");
+    assert!(
+        nested
+            .instructions()
+            .starts_with("## Persona\n\nYou are Mira.")
+    );
+}
+
+#[test]
+fn a_version_without_a_soul_keeps_its_instructions_byte_for_byte() {
+    let mut request = ordinary_request(AgentExecutionKind::Application);
+    set_application_instructions(&mut request, "review carefully");
+    let profile = OrdinaryNoToolProfile::validate(&request).unwrap();
+    assert_eq!(profile.instructions(), "review carefully");
+    application_version_mut(&mut request).insert("soul".to_owned(), Value::Null);
+    assert_eq!(
+        OrdinaryNoToolProfile::validate(&request)
+            .unwrap()
+            .instructions(),
+        "review carefully"
+    );
+}
+
+/// A soul that would read as a grant never reaches a model: the profile is
+/// refused, so Main's schema is not the only gate.
+#[test]
+fn a_soul_with_a_capability_key_is_refused() {
+    for soul in [
+        json!({"schema": "elitea.soul/v1", "tools": ["github"]}),
+        json!({"schema": "elitea.soul/v2"}),
+        json!("a string"),
+    ] {
+        let mut request = ordinary_request(AgentExecutionKind::Application);
+        application_version_mut(&mut request).insert("soul".to_owned(), soul.clone());
+        assert!(OrdinaryNoToolProfile::validate(&request).is_err(), "{soul}");
+    }
+}

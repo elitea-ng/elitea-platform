@@ -50,6 +50,9 @@ func TestTheSchemaRouteServesTheContractComponents(t *testing.T) {
 		var wantValue, gotValue any
 		_ = json.Unmarshal(want, &wantValue)
 		_ = json.Unmarshal(raw, &gotValue)
+		// The route inlines component refs (AgentSoulV1); the spec side does
+		// the same with the soul component kin-openapi decoded.
+		wantValue = inlineSpecRefs(t, doc, wantValue)
 		wantJSON, _ := json.Marshal(wantValue)
 		gotJSON, _ := json.Marshal(gotValue)
 		if !bytes.Equal(wantJSON, gotJSON) {
@@ -151,4 +154,34 @@ func TestTheSchemaRouteAnswers304ForAMatchingETag(t *testing.T) {
 	if recorder.Code != http.StatusOK || recorder.Body.Len() == 0 {
 		t.Errorf("a stale tag: status = %d, want 200 with the schemas", recorder.Code)
 	}
+}
+
+// inlineSpecRefs replaces each {"$ref": "#/components/schemas/X"} in value
+// with component X as kin-openapi decodes it.
+func inlineSpecRefs(t *testing.T, doc *openapi3.T, value any) any {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		if ref, ok := typed["$ref"].(string); ok && len(typed) == 1 {
+			target := doc.Components.Schemas[strings.TrimPrefix(ref, componentRefPrefix)]
+			if target == nil || target.Value == nil {
+				t.Fatalf("unresolvable $ref %q", ref)
+			}
+			encoded, err := json.Marshal(target.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded any
+			_ = json.Unmarshal(encoded, &decoded)
+			return decoded
+		}
+		for key, item := range typed {
+			typed[key] = inlineSpecRefs(t, doc, item)
+		}
+	case []any:
+		for index, item := range typed {
+			typed[index] = inlineSpecRefs(t, doc, item)
+		}
+	}
+	return value
 }

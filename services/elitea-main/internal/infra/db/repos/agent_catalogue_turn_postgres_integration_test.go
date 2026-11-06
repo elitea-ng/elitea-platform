@@ -317,7 +317,8 @@ CREATE TABLE p_%[1]d.application_versions (
     welcome_message VARCHAR NOT NULL DEFAULT '',
     agent_type VARCHAR NOT NULL,
     meta JSONB NOT NULL DEFAULT '{}'::jsonb,
-    pipeline_settings JSONB NOT NULL DEFAULT '{}'::jsonb
+    pipeline_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    soul JSONB
 );
 CREATE TABLE p_%[1]d.application_variables (
     id SERIAL PRIMARY KEY,

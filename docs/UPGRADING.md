@@ -4,6 +4,29 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent personas: the version's soul (#1604, ADR-0050 decision 1a)
+
+Upgrade the workers (`elitea-worker-rust`) before Main. Tenant migration
+0160 adds the nullable `application_versions.soul` (jsonb) column. It is
+empty for every existing version, so there is nothing to backfill.
+
+A version can now carry a soul (`AgentSoulV1`): the agent's display name,
+voice, values, boundaries and relationships, and a free-form body. The
+agent editor's new Persona tab edits it. Main sends it in the version
+details, and the worker puts it into the prompt after the platform text and
+the guardrails, before the instructions. A worker from an earlier release
+ignores the soul, so an agent with a soul would answer without it.
+
+Release digests do not change for a version without a soul. Adding,
+editing or removing a soul changes the version's digest, as any other
+configuration edit does. A write that names a capability (tools,
+credentials, permissions and the like) is refused with 400
+`soul_capability_key`, and a soul over 16384 bytes of text with 400
+`soul_too_large`.
+
+The desktop app reads a `SOUL.md` next to a Local work folder's
+`AGENTS.md`.
+
 ## An agent sees messages written since its last turn (#1603, ADR-0050 decision 9c)
 
 Upgrade the workers (`elitea-worker-rust`) before Main. Main now sends
@@ -22,9 +45,6 @@ message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
 
-||||||| 221a5f002
-||||||| 2e4e7c6fe
-||||||| 72ca1c414
 ## Cloud browser: the supervisor's `browser` profile (#1595, ADR-0049 decisions 1 and 10)
 
 Nothing changes unless you turn it on. `sandboxKubernetes.browserSessions`
@@ -89,7 +109,6 @@ The release scan reports this image but does not block on its findings,
 as with `elitea-workspace-runner`. Most of what it finds is in the Debian
 libraries the engine links (`.github/image-scan-exempt.txt`).
 
-||||||| parent of 72658b444 (feat(sandbox): supervisor browser profile and BrowserSessionService (ADR-0049, #1595))
 ## Desktop: the agent drives the browser pane on macOS (#1589, ADR-0048 decisions 5 and 6)
 
 Desktop app only; no server change, no new setting. On macOS, the agent of

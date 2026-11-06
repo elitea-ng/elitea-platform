@@ -28,7 +28,7 @@ import (
 
 // versionRevisionStateColumns is the snapshot of one version row. `v` is the
 // version alias.
-const versionRevisionStateColumns = `jsonb_build_object(
+const versionRevisionStateColumns = `(jsonb_build_object(
 	'name', v.name,
 	'status', v.status,
 	'agent_type', COALESCE(v.agent_type, ''),
@@ -38,7 +38,13 @@ const versionRevisionStateColumns = `jsonb_build_object(
 	'conversation_starters', COALESCE(NULLIF(v.conversation_starters::jsonb, 'null'::jsonb), '[]'::jsonb),
 	'meta', COALESCE(NULLIF(v.meta::jsonb, 'null'::jsonb), '{}'::jsonb),
 	'pipeline_settings', COALESCE(NULLIF(v.pipeline_settings::jsonb, 'null'::jsonb), '{}'::jsonb)
-)::text`
+) || CASE
+	-- ADR-0050 decision 1a: the soul joins the snapshot only when the
+	-- version has one, so a revision recorded before tenant migration 0160
+	-- diffs against an unchanged version as no change.
+	WHEN jsonb_typeof(v.soul) = 'object' THEN jsonb_build_object('soul', v.soul)
+	ELSE '{}'::jsonb
+END)::text`
 
 // errVersionRevisionStateMissing is a version the revision read found no row
 // for.

@@ -1374,7 +1374,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, q relationQuerier
 		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, llm_settings, instructions,
-				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, created_at)
 			SELECT $1, name, 'embedded', author_id, llm_settings, instructions,
 				   conversation_starters, welcome_message, agent_type,
 				   COALESCE(meta, '{}'::jsonb) || jsonb_build_object(
@@ -1384,7 +1384,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, q relationQuerier
 					   'parent_published_app_id', $6::text,
 					   'parent_published_version_id', $7::text
 				   ),
-				   pipeline_settings,
+				   pipeline_settings, soul,
 				   now() AT TIME ZONE 'UTC'
 			FROM %s.application_versions WHERE id = $2
 			RETURNING id`, schema, schema),
@@ -3296,7 +3296,8 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			llmJSON, llmErr := importedJSONObject(v, "llm_settings")
 			startersJSON, startersErr := importedJSONArray(v, "conversation_starters")
 			metaJSON, metaErr := importedJSONObject(v, "meta")
-			if columnErr := errors.Join(llmErr, startersErr, metaErr); columnErr != nil {
+			soulJSON, soulErr := importedSoul(v)
+			if columnErr := errors.Join(llmErr, startersErr, metaErr, soulErr); columnErr != nil {
 				errorAgents = append(errorAgents, map[string]any{
 					"index": ae.entityIdx,
 					"name":  name,
@@ -3307,9 +3308,9 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 			var vID int
 			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, created_at)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID)
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON).Scan(&vID)
 			if err != nil {
 				// Sibling of the tool-link defect below (#420). The bare
 				// `continue` dropped the version and told nobody. The insert
@@ -4189,6 +4190,14 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 				})
 				continue
 			}
+			soulJSON, err := importedSoul(v)
+			if err != nil {
+				errorAgents = append(errorAgents, map[string]any{
+					"index": entityIdx, "name": name,
+					"msg": "Fork function has been failed: unable to fork version " + vName + ": " + err.Error(),
+				})
+				continue
+			}
 
 			var vID int
 			// The bare `continue` this replaces dropped the version and told
@@ -4196,9 +4205,9 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			// every version failed answered 201 and produced an agent with no
 			// version at all.
 			if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
-				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, created_at)
-				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
-				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON).Scan(&vID); err != nil {
+				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, created_at)
+				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
+				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON).Scan(&vID); err != nil {
 				slog.ErrorContext(ctx, "fork: application version insert failed",
 					"schema", s, "application_id", appID, "version_name", vName, "error", err)
 				errorAgents = append(errorAgents, map[string]any{

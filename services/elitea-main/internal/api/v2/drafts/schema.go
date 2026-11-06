@@ -124,13 +124,20 @@ func compileSchemas(spec []byte) (*compiledSchemas, error) {
 }
 
 // componentJSON returns one component as JSON. encoding/json sorts map keys,
-// so the bytes are canonical for the same YAML.
+// so the bytes are canonical for the same YAML. A `$ref` to another
+// component is inlined (AgentSoulV1, ADR-0050 decision 1a), one level deep:
+// the referenced component must itself be self-contained, so the served
+// schema always is.
 func componentJSON(components map[string]any, name string) ([]byte, error) {
 	component, ok := components[name]
 	if !ok {
 		return nil, fmt.Errorf("drafts: v2.yaml has no %s component", name)
 	}
-	encoded, err := json.Marshal(component)
+	inlined, err := inlineComponentRefs(components, component)
+	if err != nil {
+		return nil, fmt.Errorf("drafts: %s: %w", name, err)
+	}
+	encoded, err := json.Marshal(inlined)
 	if err != nil {
 		return nil, fmt.Errorf("drafts: encode %s: %w", name, err)
 	}
@@ -138,6 +145,44 @@ func componentJSON(components map[string]any, name string) ([]byte, error) {
 		return nil, fmt.Errorf("drafts: %s must be self-contained (no $ref)", name)
 	}
 	return encoded, nil
+}
+
+const componentRefPrefix = "#/components/schemas/"
+
+// inlineComponentRefs answers a copy of node with every `{"$ref":
+// "#/components/schemas/X"}` replaced by component X. X may not hold a $ref
+// of its own (componentJSON then refuses the result).
+func inlineComponentRefs(components map[string]any, node any) (any, error) {
+	switch typed := node.(type) {
+	case map[string]any:
+		if ref, ok := typed["$ref"].(string); ok && len(typed) == 1 {
+			target, found := components[strings.TrimPrefix(ref, componentRefPrefix)]
+			if !strings.HasPrefix(ref, componentRefPrefix) || !found {
+				return nil, fmt.Errorf("unresolvable $ref %q", ref)
+			}
+			return target, nil
+		}
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			inlined, err := inlineComponentRefs(components, value)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = inlined
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(typed))
+		for index, value := range typed {
+			inlined, err := inlineComponentRefs(components, value)
+			if err != nil {
+				return nil, err
+			}
+			out[index] = inlined
+		}
+		return out, nil
+	}
+	return node, nil
 }
 
 // definitionOf projects a draft onto AgentDefinition: the fields the model

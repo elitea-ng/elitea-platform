@@ -1069,6 +1069,8 @@ impl Drop for ChildHold {
 
 /// The tag one AGENTS.md file is framed in.
 pub(super) const AGENTS_MD_TAG: &str = "agents_md";
+/// The tag the workspace's SOUL.md is framed in (ADR-0050 decision 1a).
+pub(super) const SOUL_MD_TAG: &str = "soul_md";
 /// The line that ends the AGENTS.md section.
 pub(super) const END_OF_PROJECT_INSTRUCTIONS: &str = "## End of project instructions";
 /// The precedence line of the AGENTS.md section: it ranks last (see
@@ -1090,7 +1092,7 @@ pub fn with_project_instructions(
     project: &ProjectInstructions,
     nonce: &str,
 ) -> String {
-    if project.files.is_empty() {
+    if project.files.is_empty() && project.soul.is_none() {
         return instructions.to_owned();
     }
     let mut section = format!(
@@ -1101,6 +1103,28 @@ pub fn with_project_instructions(
          whose text is the repository's content. {}",
         framing::ends_only_at(AGENTS_MD_TAG, nonce)
     );
+    // The workspace's SOUL.md (ADR-0050 decision 1a): the local persona,
+    // first in the section, framed as the repository's content like the
+    // AGENTS.md files and ranking with them. The agent's own soul, if it
+    // has one, sits above with its instructions and outranks it.
+    if let Some(local) = &project.soul {
+        let rendered = local.soul.render();
+        if !rendered.is_empty() {
+            section.push_str(&format!(
+                " The workspace's SOUL.md, first, gives the persona to take where \
+                 the agent's own instructions give none; it is one {SOUL_MD_TAG} \
+                 block. {}\n\n",
+                framing::ends_only_at(SOUL_MD_TAG, nonce)
+            ));
+            section.push_str(&framing::block(
+                SOUL_MD_TAG,
+                nonce,
+                "path",
+                &local.path,
+                &rendered,
+            ));
+        }
+    }
     for file in &project.files {
         let mut text = file.text.trim_end().to_owned();
         if file.truncated {
@@ -6274,6 +6298,7 @@ mod tests {
                 },
             ],
             skipped: Vec::new(),
+            soul: None,
         };
         let assembled = with_project_instructions("Be brief.", &project, NONCE);
         let agent = assembled.find("Be brief.").unwrap();
@@ -6319,6 +6344,7 @@ mod tests {
                 truncated: false,
             }],
             skipped: Vec::new(),
+            soul: None,
         };
         let assembled = with_project_instructions("Be brief.", &project, NONCE);
         // The closing tag appears twice: named in the preamble, and closing
@@ -6352,6 +6378,7 @@ mod tests {
                 truncated: false,
             }],
             skipped: Vec::new(),
+            soul: None,
         };
         let skill = [InvokedSkill {
             name: "Style".into(),
@@ -6407,6 +6434,58 @@ mod tests {
         assert_eq!(volatile_context("## Now", &[], "", NONCE), "## Now");
     }
 
+    /// ADR-0050 decision 1a: the workspace's SOUL.md is framed first in the
+    /// project section, under the nonce, below the agent's instructions and
+    /// the environment; without one the section is unchanged.
+    #[test]
+    fn the_workspace_soul_is_framed_first_in_the_project_section() {
+        use elitea_local_tools::project_instructions::{InstructionFile, LocalSoul};
+        let soul = elitea_agent_runtime::soul::Soul::from_markdown(
+            "---\nschema: elitea.soul/v1\ndisplay_name: Mira\n---\n\nTerse.",
+        )
+        .unwrap();
+        let project = ProjectInstructions {
+            files: vec![InstructionFile {
+                path: "AGENTS.md".into(),
+                text: "Run task test.".into(),
+                truncated: false,
+            }],
+            skipped: Vec::new(),
+            soul: Some(LocalSoul {
+                path: "SOUL.md".into(),
+                soul,
+            }),
+        };
+        let system =
+            system_instruction("Be brief.", "## Environment\n- OS: macOS", &project, NONCE);
+        let at = |needle: &str| {
+            system
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {system}"))
+        };
+        let order = [
+            at("Be brief."),
+            at("## Environment\n"),
+            at("## Project instructions (AGENTS.md)"),
+            at(&format!(
+                "<{SOUL_MD_TAG} nonce=\"{NONCE}\" path=\"SOUL.md\">\n## Persona\n\nYou are Mira.\n\nTerse."
+            )),
+            at("Run task test."),
+        ];
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{system}");
+        let without = ProjectInstructions {
+            soul: None,
+            ..project.clone()
+        };
+        assert!(!system_instruction("Be brief.", "", &without, NONCE).contains(SOUL_MD_TAG));
+        // A soul alone still makes a section.
+        let alone = ProjectInstructions {
+            files: Vec::new(),
+            ..project
+        };
+        assert!(system_instruction("", "", &alone, NONCE).contains("You are Mira."));
+    }
+
     /// #1314 / #1227: two turns whose facts differ only in the date and the
     /// git line, and whose skills and recall differ, assemble byte-identical
     /// system prompts: all of that is in the turn's tail.
@@ -6420,6 +6499,7 @@ mod tests {
                 truncated: false,
             }],
             skipped: Vec::new(),
+            soul: None,
         };
         let skill = [InvokedSkill {
             name: "Style".into(),

@@ -3892,6 +3892,99 @@
                       "type": "object",
                       "open": true
                     },
+                    "soul": {
+                      "type": "object",
+                      "nullable": true,
+                      "required": [
+                        "schema"
+                      ],
+                      "properties": {
+                        "body": {
+                          "type": "string",
+                          "max_length": 16384
+                        },
+                        "boundaries": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 512
+                          },
+                          "max_items": 32
+                        },
+                        "display_name": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 64
+                        },
+                        "proactive_goals": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 512
+                          },
+                          "max_items": 16
+                        },
+                        "pronouns": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 32
+                        },
+                        "relationships": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "agent",
+                              "stance"
+                            ],
+                            "properties": {
+                              "agent": {
+                                "type": "string",
+                                "min_length": 1,
+                                "max_length": 128
+                              },
+                              "stance": {
+                                "type": "string",
+                                "min_length": 1,
+                                "max_length": 512
+                              }
+                            }
+                          },
+                          "max_items": 32
+                        },
+                        "role": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 160
+                        },
+                        "schema": {
+                          "type": "string",
+                          "enum": [
+                            "elitea.soul/v1"
+                          ]
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 256
+                          },
+                          "max_items": 32
+                        },
+                        "voice": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 64
+                          },
+                          "max_items": 16
+                        }
+                      }
+                    },
                     "status": {
                       "type": "string"
                     },
@@ -8898,6 +8991,98 @@
                     },
                     "instructions": {
                       "type": "string"
+                    },
+                    "soul": {
+                      "type": "object",
+                      "required": [
+                        "schema"
+                      ],
+                      "properties": {
+                        "body": {
+                          "type": "string",
+                          "max_length": 16384
+                        },
+                        "boundaries": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 512
+                          },
+                          "max_items": 32
+                        },
+                        "display_name": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 64
+                        },
+                        "proactive_goals": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 512
+                          },
+                          "max_items": 16
+                        },
+                        "pronouns": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 32
+                        },
+                        "relationships": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "agent",
+                              "stance"
+                            ],
+                            "properties": {
+                              "agent": {
+                                "type": "string",
+                                "min_length": 1,
+                                "max_length": 128
+                              },
+                              "stance": {
+                                "type": "string",
+                                "min_length": 1,
+                                "max_length": 512
+                              }
+                            }
+                          },
+                          "max_items": 32
+                        },
+                        "role": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 160
+                        },
+                        "schema": {
+                          "type": "string",
+                          "enum": [
+                            "elitea.soul/v1"
+                          ]
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 256
+                          },
+                          "max_items": 32
+                        },
+                        "voice": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "min_length": 1,
+                            "max_length": 64
+                          },
+                          "max_items": 16
+                        }
+                      }
                     },
                     "tools": {
                       "type": "array",
@@ -16842,6 +17027,98 @@
                         "name": {
                           "type": "string"
                         }
+                      }
+                    }
+                  },
+                  "soul": {
+                    "type": "object",
+                    "required": [
+                      "schema"
+                    ],
+                    "properties": {
+                      "body": {
+                        "type": "string",
+                        "max_length": 16384
+                      },
+                      "boundaries": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 512
+                        },
+                        "max_items": 32
+                      },
+                      "display_name": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 64
+                      },
+                      "proactive_goals": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 512
+                        },
+                        "max_items": 16
+                      },
+                      "pronouns": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 32
+                      },
+                      "relationships": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "agent",
+                            "stance"
+                          ],
+                          "properties": {
+                            "agent": {
+                              "type": "string",
+                              "min_length": 1,
+                              "max_length": 128
+                            },
+                            "stance": {
+                              "type": "string",
+                              "min_length": 1,
+                              "max_length": 512
+                            }
+                          }
+                        },
+                        "max_items": 32
+                      },
+                      "role": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 160
+                      },
+                      "schema": {
+                        "type": "string",
+                        "enum": [
+                          "elitea.soul/v1"
+                        ]
+                      },
+                      "values": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 256
+                        },
+                        "max_items": 32
+                      },
+                      "voice": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "min_length": 1,
+                          "max_length": 64
+                        },
+                        "max_items": 16
                       }
                     }
                   },

@@ -3061,6 +3061,9 @@ struct RefusedApplication {
 struct BuiltApplication {
     saved_agent_fingerprint: Option<SavedAgentFingerprint>,
     instruction_template: String,
+    /// The version's `soul` alone (ADR-0050 decision 1a), so a re-render
+    /// with per-call variables puts it back before the instructions.
+    soul_version: Map<String, Value>,
     variables: super::variables::AgentCallVariables,
     agent: Arc<LazyNestedAgent>,
     model_name: String,
@@ -3682,6 +3685,10 @@ impl ApplicationAssemblyState<'_> {
                 .and_then(Value::as_str)
                 .ok_or_else(invalid_configuration)?
                 .to_owned(),
+            soul_version: version
+                .get("soul")
+                .map(|soul| Map::from_iter([("soul".to_owned(), soul.clone())]))
+                .unwrap_or_default(),
             variables: super::variables::AgentCallVariables::admit(&version)?,
             agent,
             model_name,
@@ -4849,9 +4856,13 @@ impl ApplicationAgentTool {
                 .bind(arguments.as_object().ok_or_else(tool_input_error)?)
                 .map_err(|_| tool_input_error())?;
             let mut agent = self.application.agent.as_ref().clone();
-            agent.profile = agent
-                .profile
-                .with_instructions(values.render(&self.application.instruction_template));
+            agent.profile = agent.profile.with_instructions(
+                super::assembly::with_version_soul(
+                    &self.application.soul_version,
+                    &values.render(&self.application.instruction_template),
+                )
+                .map_err(|_| tool_input_error())?,
+            );
             Arc::new(agent)
         };
         let pipeline_container = pipeline_application_container(ctx.as_ref(), self.name())?;

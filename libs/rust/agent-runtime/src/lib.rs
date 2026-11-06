@@ -90,6 +90,7 @@ pub mod preamble;
 pub mod remote_assertion;
 pub mod request;
 pub mod run_caps;
+pub mod soul;
 pub mod step_limit;
 pub mod subagents;
 pub mod text;

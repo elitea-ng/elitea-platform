@@ -42,6 +42,7 @@ type ApplicationVersion struct {
 	AgentType            string           `db:"agent_type" json:"agent_type"`
 	Meta                 []byte           `db:"meta" json:"meta"`
 	PipelineSettings     []byte           `db:"pipeline_settings" json:"pipeline_settings"`
+	Soul                 []byte           `db:"soul" json:"soul"`
 }
 
 type AuthCoreGroup struct {

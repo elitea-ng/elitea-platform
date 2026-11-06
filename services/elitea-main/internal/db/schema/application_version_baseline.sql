@@ -30,6 +30,8 @@ CREATE TABLE application_versions (
     agent_type varchar NOT NULL,
     meta jsonb NOT NULL,
     pipeline_settings jsonb NOT NULL,
+    -- tenant migration 0160 (ADR-0050 decision 1a): AgentSoulV1, NULL for none.
+    soul jsonb,
     UNIQUE (application_id, name),
     UNIQUE (shared_owner_id, shared_id)
 );
