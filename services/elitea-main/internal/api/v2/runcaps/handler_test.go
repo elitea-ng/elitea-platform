@@ -76,6 +76,7 @@ func TestGrantRefusals(t *testing.T) {
 		{workerruncaps.ErrOverrideAlreadyGranted, http.StatusConflict, "already_granted"},
 		{workerruncaps.ErrOverrideOpenGrant, http.StatusConflict, "open_grant"},
 		{workerruncaps.ErrOverrideNeedsTierCaps, http.StatusUnprocessableEntity, "tier_caps_not_saved"},
+		{workerruncaps.ErrOverrideNotOverridable, http.StatusUnprocessableEntity, "cap_not_overridable"},
 		{fmt.Errorf("wrapped: %w", workerruncaps.ErrOverrideOpenGrant), http.StatusConflict, "open_grant"},
 	} {
 		recorder, _ := do(t, &granterStub{err: tc.err}, `{"message_id":"`+message+`"}`)

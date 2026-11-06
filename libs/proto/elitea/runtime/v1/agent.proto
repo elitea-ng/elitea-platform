@@ -215,6 +215,14 @@ message UnattendedGrantV1 {
   UnattendedChainLimitsV1 chain = 7;
   // 0 on the chain's first run, then 1, 2 and so on.
   uint32 continuation_index = 8;
+  // The hosts whose cloud browser submits and uploads the grant answers
+  // (ADR-0048 decision 8, ADR-0049 decision 7): lowercase host names, at
+  // most 32. At a browser submit or upload ask on one of these hosts the
+  // worker approves the call itself, as for a named sensitive tool. A
+  // consequential control (send, delete, sign, buy, pay and their kin) is
+  // never answered by a grant. Empty: no browser ask is answered.
+  // 9 to 15 stay reserved: a reserved range is never narrowed.
+  repeated string browser_submits = 16;
   reserved 9 to 15;
 }
 

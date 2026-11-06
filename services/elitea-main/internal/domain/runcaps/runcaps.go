@@ -22,10 +22,14 @@ const (
 	MaxModelTurns  = "max_model_turns"
 	MaxSpend       = "max_spend"
 	MaxRecordsRead = "max_records_read"
+	// The cloud browser's engine seconds (ADR-0049 decision 8): per run, and
+	// the project's monthly quota. The worker counts both.
+	MaxBrowserSeconds   = "max_browser_seconds"
+	BrowserMonthlyQuota = "browser_monthly_quota"
 )
 
 // All lists every cap.
-var All = []string{MaxWallSeconds, MaxToolCalls, MaxModelTurns, MaxSpend, MaxRecordsRead}
+var All = []string{MaxWallSeconds, MaxToolCalls, MaxModelTurns, MaxSpend, MaxRecordsRead, MaxBrowserSeconds, BrowserMonthlyQuota}
 
 // Valid reports whether name is a cap.
 func Valid(name string) bool {
@@ -51,6 +55,10 @@ const (
 		"The task may be incomplete. Check what it completed before you continue."
 	messageRecords = "The run stopped because it reached the maximum number of records read an administrator set. " +
 		"The task may be incomplete. Check what it completed before you continue."
+	messageBrowserSeconds = "The run stopped because it reached the maximum cloud browser time an administrator set. " +
+		"The task may be incomplete. Check what it completed before you continue."
+	messageBrowserQuota = "The run stopped because the project used its monthly cloud browser time. " +
+		"The task may be incomplete. Check what it completed before you continue."
 )
 
 // Message is the registered message of a cap; "" for an unknown name.
@@ -66,13 +74,17 @@ func Message(cap string) string {
 		return messageSpend
 	case MaxRecordsRead:
 		return messageRecords
+	case MaxBrowserSeconds:
+		return messageBrowserSeconds
+	case BrowserMonthlyQuota:
+		return messageBrowserQuota
 	default:
 		return ""
 	}
 }
 
 // WorkerCap answers the cap a worker's registered message names: one of
-// the three caps the worker counts. ok is false for any other message.
+// the caps the worker counts. ok is false for any other message.
 func WorkerCap(message string) (string, bool) {
 	switch message {
 	case messageToolCalls:
@@ -81,6 +93,10 @@ func WorkerCap(message string) (string, bool) {
 		return MaxModelTurns, true
 	case messageRecords:
 		return MaxRecordsRead, true
+	case messageBrowserSeconds:
+		return MaxBrowserSeconds, true
+	case messageBrowserQuota:
+		return BrowserMonthlyQuota, true
 	default:
 		return "", false
 	}

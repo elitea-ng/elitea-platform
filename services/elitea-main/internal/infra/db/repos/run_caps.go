@@ -293,8 +293,14 @@ WHERE message_group.uuid::text = $1
 			// A wall cap response written before the cap name was stored.
 			cap = runcaps.MaxWallSeconds
 		}
+		// The cloud browser caps are not overridden here: the run cap is
+		// the project's browser setting, and a monthly quota is not doubled
+		// for one run (ADR-0049 decision 8).
 		if !runcaps.Valid(cap) {
 			return workerruncaps.ErrOverrideNotCapped
+		}
+		if cap == runcaps.MaxBrowserSeconds || cap == runcaps.BrowserMonthlyQuota {
+			return workerruncaps.ErrOverrideNotOverridable
 		}
 		if workerruncaps.WorkerCap(cap) && !request.AllowWorkerCaps {
 			return workerruncaps.ErrOverrideNeedsTierCaps

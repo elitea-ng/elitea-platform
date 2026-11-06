@@ -296,6 +296,21 @@ impl RunEgress {
         self.check(host, port)
     }
 
+    /// Count one refusal that another enforcer made: the egress proxy
+    /// refused a host the run's cloud browser asked for (ADR-0049 decision
+    /// 5). It is in the run's egress summary as any refusal is, and the
+    /// tool call in progress keeps its own result (the browser contract's
+    /// typed `egress_refused`).
+    pub fn record_refused(&self, host: &str, port: u16) {
+        let host = ledger_host(host);
+        let host = if host.is_empty() {
+            INVALID_HOST.to_owned()
+        } else {
+            host
+        };
+        self.count(true, host, port);
+    }
+
     /// Count one request to `url` that got a response.
     pub fn record_reached(&self, url: &reqwest::Url) {
         if let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) {

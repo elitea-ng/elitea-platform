@@ -1900,6 +1900,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct runtime worker client-token context: %w", err)
 		}
 		runtimeToken.WithWorkspaceContext(newWorkspaceContextResolver(dependencies))
+		browserContext, browserErr := newBrowserContextResolver(dependencies)
+		if browserErr != nil {
+			return nil, fmt.Errorf("construct runtime browser context: %w", browserErr)
+		}
+		runtimeToken.WithBrowserContext(browserContext)
 		if dependencies.RunTokens != nil {
 			runtimeToken.WithRunTokens(dependencies.RunTokens)
 		}

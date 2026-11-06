@@ -1034,10 +1034,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_runtime.model_reasoning_defaults with their seeds, and
 	// gateway.llm_request_logs.reasoning_tokens. No permission.
 	//
-	// 226: shared/0227_agent_execution_participant.sql, the participant a
+	// 226: shared/0226_browser_engine_seconds.sql, the cloud browser's engine
+	// seconds (ADR-0049 decision 8, #1596): the metered unit `second` and the
+	// `browser/engine_seconds` price row at 0. No permission.
+	//
+	// 227: shared/0227_agent_execution_participant.sql, the participant a
 	// chat run speaks as and its answer's addressees on agent_execution_jobs
 	// (ADR-0050 decision 7b and 7e, #1605). No data, no permission.
-	require.EqualValues(t, 226, Head(shared))
+	require.EqualValues(t, 227, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

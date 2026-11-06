@@ -31,7 +31,8 @@ func TestContractCopyIsCurrent(t *testing.T) {
 	}
 }
 
-// Every declared tool is a tool of the SDK catalogue the platform serves,
+// Every declared tool is a tool of the SDK catalogue the platform serves
+// (or of a type only the Rust worker serves),
 // so a declaration cannot name a tool that does not exist (a typo would
 // leave the real tool `write`).
 func TestEveryDeclarationNamesAKnownTool(t *testing.T) {
@@ -53,6 +54,24 @@ func TestEveryDeclarationNamesAKnownTool(t *testing.T) {
 			tools[CanonicalKey(name)] = true
 		}
 		known[CanonicalKey(entry.Type)] = tools
+	}
+	// A type only the Rust worker serves (no SDK entry) is known from the
+	// document its family generates.
+	var rustOnly struct {
+		NewTypes map[string]struct {
+			ArgsSchemas map[string]json.RawMessage `json:"args_schemas"`
+		} `json:"new_types"`
+	}
+	rawRustOnly := repoFile(t, "services", "elitea-main", "internal", "rustonly", "rust_only_toolkit_tools.json")
+	if err := json.Unmarshal(rawRustOnly, &rustOnly); err != nil {
+		t.Fatal(err)
+	}
+	for toolkitType, entry := range rustOnly.NewTypes {
+		tools := map[string]bool{}
+		for name := range entry.ArgsSchemas {
+			tools[CanonicalKey(name)] = true
+		}
+		known[CanonicalKey(toolkitType)] = tools
 	}
 	for toolkit, tools := range declared {
 		for tool := range tools {

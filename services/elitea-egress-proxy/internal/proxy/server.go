@@ -353,7 +353,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, rec, status, reason, msg)
 	}
 
-	if !verified.Allowlist.Allows(target) {
+	if !verified.AllowsTarget(target) {
 		switch {
 		case target.IP != nil:
 			refuseRun(http.StatusForbidden, ReasonIPLiteralNotAllowed, "an IP literal is allowed only when the project's allowlist names it")

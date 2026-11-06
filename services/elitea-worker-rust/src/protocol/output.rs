@@ -871,6 +871,8 @@ pub(crate) const RECOVERY_FRONTIER_UNSUPPORTED_MESSAGE: &str = "This run stopped
 pub(crate) const CAP_REACHED_MAX_TOOL_CALLS_MESSAGE: &str = "The run stopped because it reached the maximum number of tool calls an administrator set. The task may be incomplete. Check what it completed before you continue.";
 pub(crate) const CAP_REACHED_MAX_MODEL_TURNS_MESSAGE: &str = "The run stopped because it reached the maximum number of model turns an administrator set. The task may be incomplete. Check what it completed before you continue.";
 pub(crate) const CAP_REACHED_MAX_RECORDS_READ_MESSAGE: &str = "The run stopped because it reached the maximum number of records read an administrator set. The task may be incomplete. Check what it completed before you continue.";
+pub(crate) const CAP_REACHED_MAX_BROWSER_SECONDS_MESSAGE: &str = "The run stopped because it reached the maximum cloud browser time an administrator set. The task may be incomplete. Check what it completed before you continue.";
+pub(crate) const CAP_REACHED_BROWSER_MONTHLY_QUOTA_MESSAGE: &str = "The run stopped because the project used its monthly cloud browser time. The task may be incomplete. Check what it completed before you continue.";
 
 /// The registered text of a run stopped at `cap`.
 pub(crate) const fn cap_reached_message(cap: RunCap) -> &'static str {
@@ -878,6 +880,8 @@ pub(crate) const fn cap_reached_message(cap: RunCap) -> &'static str {
         RunCap::MaxToolCalls => CAP_REACHED_MAX_TOOL_CALLS_MESSAGE,
         RunCap::MaxModelTurns => CAP_REACHED_MAX_MODEL_TURNS_MESSAGE,
         RunCap::MaxRecordsRead => CAP_REACHED_MAX_RECORDS_READ_MESSAGE,
+        RunCap::MaxBrowserSeconds => CAP_REACHED_MAX_BROWSER_SECONDS_MESSAGE,
+        RunCap::BrowserMonthlyQuota => CAP_REACHED_BROWSER_MONTHLY_QUOTA_MESSAGE,
     }
 }
 
@@ -1190,6 +1194,8 @@ const REGISTERED_RUNTIME_FAILURES: &[RuntimeFailureKind] = &[
     RuntimeFailureKind::CapReached(RunCap::MaxToolCalls),
     RuntimeFailureKind::CapReached(RunCap::MaxModelTurns),
     RuntimeFailureKind::CapReached(RunCap::MaxRecordsRead),
+    RuntimeFailureKind::CapReached(RunCap::MaxBrowserSeconds),
+    RuntimeFailureKind::CapReached(RunCap::BrowserMonthlyQuota),
     RuntimeFailureKind::OutputContractViolation,
     RuntimeFailureKind::OutputContinuationExhausted,
     RuntimeFailureKind::ModelTimeout,
@@ -1933,6 +1939,16 @@ mod continuation_failure_tests {
                 "run_caps.max_records_read",
                 RunCap::MaxRecordsRead,
                 "records read",
+            ),
+            (
+                "run_caps.max_browser_seconds",
+                RunCap::MaxBrowserSeconds,
+                "cloud browser time",
+            ),
+            (
+                "run_caps.browser_monthly_quota",
+                RunCap::BrowserMonthlyQuota,
+                "monthly cloud browser time",
             ),
         ] {
             let kind = model_failure(Some(code));

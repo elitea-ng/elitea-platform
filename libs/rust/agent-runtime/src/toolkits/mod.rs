@@ -223,6 +223,15 @@ pub use elitea_egress_guard::{
     Allowlist as WebEgressAllowlist, AllowlistError as WebEgressAllowlistError,
 };
 pub use families::artifact::ArtifactToolAuthority;
+pub use families::browser::{
+    BrowserBudget, BrowserLimits, BrowserRun, BrowserSession, BrowserToolHost, BrowserToolsetError,
+    Classified, ENGINE_FULL as BROWSER_ENGINE_FULL, Escalation as BrowserEscalation,
+    MAX_SUBMIT_HOSTS, METERED_OPERATION as BROWSER_METERED_OPERATION,
+    METERED_PROVIDER as BROWSER_METERED_PROVIDER, RunOrigin, SessionAnswer, SessionError,
+    SessionImage, TOOLKIT_TYPE as BROWSER_TOOLKIT_TYPE, browser_tool_names,
+    classify as classify_browser_call, contract_name as browser_contract_name,
+    offered_browser_toolset,
+};
 #[cfg(feature = "toolkit-data-analysis")]
 pub use families::data_analysis::code::{
     AnalysisCodeError, AnalysisCodeFailure, AnalysisCodeRequest, AnalysisCodeRunner,

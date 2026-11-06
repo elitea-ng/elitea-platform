@@ -122,6 +122,8 @@ func writeError(r *http.Request, w http.ResponseWriter, err error) {
 		status, code = http.StatusConflict, "already_granted"
 	case errors.Is(err, workerruncaps.ErrOverrideOpenGrant):
 		status, code = http.StatusConflict, "open_grant"
+	case errors.Is(err, workerruncaps.ErrOverrideNotOverridable):
+		status, code = http.StatusUnprocessableEntity, "cap_not_overridable"
 	case errors.Is(err, workerruncaps.ErrOverrideNeedsTierCaps):
 		status, code = http.StatusUnprocessableEntity, "tier_caps_not_saved"
 	}

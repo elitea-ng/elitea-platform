@@ -142,6 +142,7 @@ var knownTypeMetadata = map[string]TypeMetadata{
 	"application":  {Label: "Application", Category: CategoryInternal},
 
 	// Other.
+	"browser":       {Label: "Cloud Browser", Category: CategoryOther},
 	"figma":         {Label: "Figma", Category: CategoryOther},
 	"google_places": {Label: "Google Places", Category: CategoryOther},
 	"host_intel":    {Label: "Host Intelligence", Category: CategoryOther},

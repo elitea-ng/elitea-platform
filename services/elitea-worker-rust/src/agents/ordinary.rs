@@ -95,6 +95,9 @@ pub(crate) struct OrdinaryNativeAgentAssembler {
     /// The cloud executor (ADR-0034): `None` on a worker that cannot run a
     /// handed-off thread's turn, which then fails such a turn.
     workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    /// The cloud browser's sessions (ADR-0049): `None` leaves every browser
+    /// tool answering `browser_unavailable`.
+    browser_sessions: Option<Arc<crate::browser_run::BrowserSessions>>,
 }
 
 /// Shared provider/session dependencies; constructing them never starts Runner.
@@ -107,6 +110,8 @@ struct OrdinaryRunnerInputs {
     start: AdmittedNativeStart,
     /// The hydrated workspace of a cloud-executor turn.
     workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
+    /// The run's cloud browser session (ADR-0049), ended with the run.
+    browser: Option<Arc<dyn elitea_agent_runtime::toolkits::BrowserSession>>,
 }
 
 impl OrdinaryNativeAgentAssembler {
@@ -136,7 +141,18 @@ impl OrdinaryNativeAgentAssembler {
             office_runtime: None,
             web_runtime: None,
             workspace_runs: None,
+            browser_sessions: None,
         }
+    }
+
+    /// Lend the cloud browser's sessions (ADR-0049).
+    #[must_use]
+    pub(crate) fn with_browser_sessions(
+        mut self,
+        browser_sessions: Option<Arc<crate::browser_run::BrowserSessions>>,
+    ) -> Self {
+        self.browser_sessions = browser_sessions;
+        self
     }
 
     /// Lend the cloud executor's workspace runs (ADR-0034).
@@ -230,6 +246,7 @@ impl OrdinaryNativeAgentAssembler {
             sessions,
             start,
             workspace,
+            browser,
         } = self
             .prepare_runner_inputs(redeemed, tool_policy, false)
             .await?;
@@ -273,7 +290,9 @@ impl OrdinaryNativeAgentAssembler {
                 .await
             }
         }?;
-        Ok(assembled.map_completion(|completion| completion.with_workspace(workspace)))
+        Ok(assembled.map_completion(|completion| {
+            completion.with_workspace(workspace).with_browser(browser)
+        }))
     }
 
     #[allow(
@@ -371,6 +390,28 @@ impl OrdinaryNativeAgentAssembler {
             profile.kind(),
             &tool_snapshot,
         );
+        // ADR-0049: the run's cloud browser, when the deployment has the
+        // supervisor's browser profile and the run has a `browser` toolkit,
+        // or is a handed-off thread whose project allows the browser.
+        let configured_browser = snapshot_carries_browser_family(&tool_snapshot);
+        let offered_browser =
+            !configured_browser && context.workspace().is_some() && context.browser().is_some();
+        let browser_host = match self.browser_sessions.as_ref() {
+            Some(sessions) if configured_browser || offered_browser => Some(
+                sessions
+                    .host(crate::browser_run::BrowserClaim {
+                        execution_id: context.execution_id(),
+                        field: context.browser(),
+                        sandbox: sandbox_authority.clone(),
+                        meter: Arc::new(self.model_facade.meter(&context, None)),
+                        approval: Arc::clone(tool_policy.approval_policy()),
+                        caps: Arc::clone(tool_policy.run_caps()),
+                        submit_hosts: crate::browser_run::submit_hosts(profile.unattended_grant()),
+                    })
+                    .await,
+            ),
+            _ => None,
+        };
         tracing::Span::current().record("stage", "toolsets");
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
@@ -388,6 +429,7 @@ impl OrdinaryNativeAgentAssembler {
                     .zip(sandbox_authority)
                     .map(|(factory, authority)| factory.bind(authority)),
                 attachment_library,
+                browser_host.as_ref(),
             )
             .await?;
         let runtime = runtime.with_steering(steering);
@@ -474,6 +516,33 @@ impl OrdinaryNativeAgentAssembler {
             }
             _ => runtime,
         };
+        // ADR-0049 decision 3: a handed-off thread whose project allows the
+        // browser is offered the browser tools without a configured toolkit,
+        // and every browser call passes the argument-aware gate. The gate is
+        // composed last, so it wraps the workspace command's.
+        let runtime = match &browser_host {
+            Some(host) => {
+                let runtime = if offered_browser {
+                    let toolset = elitea_agent_runtime::toolkits::offered_browser_toolset(
+                        crate::browser_run::OFFERED_TOOLKIT_NAME,
+                        &tool_policy,
+                        host,
+                    )
+                    .map_err(|_| invalid_browser_toolset())?;
+                    runtime.with_workspace_toolset(toolset).with_browser_tools(
+                        elitea_agent_runtime::toolkits::browser_tool_names()
+                            .map(|name| (crate::browser_run::OFFERED_TOOLKIT_NAME, name)),
+                    )?
+                } else {
+                    runtime
+                };
+                let run = Arc::clone(host.run());
+                runtime
+                    .with_browser_gate(|next| crate::browser_run::BrowserGate::compose(run, next))
+            }
+            None => runtime,
+        };
+        let browser = browser_host.map(|host| Arc::clone(host.session()));
         let output_continuation = matches!(&start, AdmittedNativeStart::OutputContinuation);
         tracing::Span::current().record("output_continuation", output_continuation);
         // The read-only sub-agents (#1226): on the toggle, and on every
@@ -520,6 +589,7 @@ impl OrdinaryNativeAgentAssembler {
             sessions,
             start,
             workspace,
+            browser,
         })
     }
 
@@ -553,6 +623,7 @@ impl OrdinaryNativeAgentAssembler {
         conversation_id: String,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
         attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+        browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -630,6 +701,19 @@ impl OrdinaryNativeAgentAssembler {
             artifact_authority =
                 artifact_authority.with_web(web.host(&self.model_facade, &context, None));
         }
+        // The cloud browser (ADR-0049): without a host the configured browser
+        // tools answer `browser_unavailable`.
+        if let Some(host) = browser_host {
+            artifact_authority = artifact_authority.with_browser(host.clone());
+        }
+        let browser_toolkits: BTreeSet<String> = tool_snapshot
+            .iter()
+            .filter(|reference| {
+                reference.kind() == FrozenToolKind::Configured
+                    && reference.tool_type() == elitea_agent_runtime::toolkits::BROWSER_TOOLKIT_TYPE
+            })
+            .map(|reference| reference.toolkit_name().to_owned())
+            .collect();
         // The index tools (ADR-0030 I1) act under the same claim: its vector
         // token, its redeemed context for the query embedding, and a chat
         // model bound on the agent's own model for the step-back tools. The
@@ -762,7 +846,10 @@ impl OrdinaryNativeAgentAssembler {
                 frozen,
                 |toolset| configured_toolsets.contains(toolset),
                 |toolset, tool| {
-                    sensitive_tools.policy_for_scoped(toolset, tool).is_some()
+                    // A browser call is gated by its arguments: it stays
+                    // bound directly, as a confirmed tool does.
+                    browser_toolkits.contains(toolset)
+                        || sensitive_tools.policy_for_scoped(toolset, tool).is_some()
                         || delegated_authorization
                             .requirement_for_direct(toolset, tool)
                             .is_some()
@@ -803,9 +890,26 @@ impl OrdinaryNativeAgentAssembler {
         };
         let binding =
             bind_frozen_toolsets(&frozen, &reserved_toolsets).map_err(tool_binding_error)?;
+        // The model-visible name of each browser tool, for the gate and the
+        // catalog (a binding may rename a tool).
+        let browser_tools: Vec<(String, String)> = binding
+            .bindings()
+            .filter(|(toolkit, _, _)| browser_toolkits.contains(*toolkit))
+            .map(|(toolkit, original, exposed)| {
+                if let Some(host) = browser_host {
+                    host.run().bind_name(exposed, original);
+                }
+                (toolkit.to_owned(), exposed.to_owned())
+            })
+            .collect();
         let sensitive_tools = sensitive_tools
             .with_unattended_grant(profile.unattended_grant())
-            .bind_provider_names(&binding)?;
+            .bind_provider_names(&binding)?
+            .with_browser_tools(
+                browser_tools
+                    .iter()
+                    .map(|(toolkit, tool)| (toolkit.as_str(), tool.as_str())),
+            )?;
         let delegated_authorization = delegated_authorization
             .bind_provider_names(&binding)
             .map_err(|()| invalid_tool_authorization_catalog())?;
@@ -1303,6 +1407,22 @@ struct DirectToolsets {
 /// host (`imagegen`; `sharepoint`, whose `upload_file` reads artifacts and
 /// whose readers turn documents into text).
 /// Whether a configured `web` or `host_intel` toolkit is in the snapshot.
+pub(super) fn snapshot_carries_browser_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
+    snapshot.iter().any(|reference| {
+        reference.kind() == FrozenToolKind::Configured
+            && reference.tool_type() == elitea_agent_runtime::toolkits::BROWSER_TOOLKIT_TYPE
+    })
+}
+
+/// The offered browser toolset was refused by the run's tool policy.
+fn invalid_browser_toolset() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidInput,
+        "the cloud browser tools could not be offered on this thread",
+    )
+    .with_cause("browser.offered_toolset", None)
+}
+
 pub(super) fn snapshot_carries_web_family(snapshot: &AdmittedToolSnapshot<'_>) -> bool {
     snapshot.iter().any(|reference| {
         reference.kind() == FrozenToolKind::Configured

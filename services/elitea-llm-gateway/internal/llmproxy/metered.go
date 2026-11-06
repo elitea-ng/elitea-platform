@@ -400,12 +400,19 @@ func (h *Handler) MeteredSettle(w http.ResponseWriter, r *http.Request) {
 		// No budget gate on this deployment: the operation was admitted
 		// ungoverned, exactly like a model call there, and nothing was billed.
 		h.meteredSettled.mark(eventID.String(), time.Now())
-		enrichment.SetMetered(billed.Units, price.Unit, 0)
+		if !duplicate {
+			enrichment.SetMetered(billed.Units, price.Unit, 0)
+		}
 		writeJSON(w, http.StatusOK, meteredSettleResponse{Duplicate: duplicate})
 		return
 	}
 	h.meteredSettled.mark(eventID.String(), time.Now())
-	enrichment.SetMetered(billed.Units, price.Unit, billed.TotalNanoUSD)
+	// A retried settle is billed once (the ledger dedups on the event id),
+	// and its request-log row carries no units: a reader that sums the log
+	// would otherwise count the retry twice.
+	if !duplicate {
+		enrichment.SetMetered(billed.Units, price.Unit, billed.TotalNanoUSD)
+	}
 	writeJSON(w, http.StatusOK, meteredSettleResponse{BilledNanoUSD: billed.TotalNanoUSD, Duplicate: duplicate})
 }
 
@@ -439,7 +446,7 @@ func (h *Handler) meteredEventSettled(ctx context.Context, eventID string) bool 
 // failure, a timeout, or a call the provider refused (401, 429) bills nothing.
 func billableMeteredUnits(req meteredSettleRequest) cost.MeteredUnits {
 	units := req.Units
-	reported := units.Requests > 0 || units.Credits > 0 || units.Pages > 0
+	reported := units.Requests > 0 || units.Credits > 0 || units.Pages > 0 || units.Seconds > 0
 	if req.Outcome == meteredOutcomeProviderError && !reported &&
 		req.Failure == meteredFailureTargetFailed &&
 		req.Provider == "firecrawl" && req.Operation == "web_fetch" {

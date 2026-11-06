@@ -16,7 +16,8 @@ import (
 // configuration route's own: the setting decides whether a project's agents
 // get a shell and the network, which is the project admin's decision. The
 // worker egress project setting (ADR-0044 decision 2) widens the hosts a
-// project's runs reach, and takes the same gate.
+// project's runs reach, and takes the same gate. So does the cloud browser
+// project setting (ADR-0049): it lets a project's runs drive a browser.
 const ProjectSettingsEditPermission = "models.project_settings.edit"
 
 // projectSettingsWriteForbidden reports a write of a type that needs the
@@ -26,7 +27,7 @@ func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID s
 	for _, name := range typeNames {
 		switch strings.TrimSpace(name) {
 		case configurationapp.CloudExecutorConfigurationType, configurationapp.WorkerEgressConfigurationType,
-			configurationapp.AIDisclosureConfigurationType:
+			configurationapp.AIDisclosureConfigurationType, configurationapp.BrowserConfigurationType:
 			guarded = true
 		}
 	}

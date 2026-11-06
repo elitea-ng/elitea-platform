@@ -109,6 +109,22 @@ assert {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'co
 print('browser sessions: rendered as expected')
 PY
 
+# The worker's side (#1596): browser_sessions in runtime.json when set, and
+# absent by default.
+helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" \
+  --show-only templates/worker/configmap-runtime.yaml > "$work/worker-on.yaml"
+helm template sandbox "$chart" "${base[@]}" "${executor[@]}" \
+  --show-only templates/worker/configmap-runtime.yaml > "$work/worker-off.yaml"
+python3 - "$work/worker-on.yaml" "$work/worker-off.yaml" <<'PY'
+import json, sys, yaml
+on = json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
+assert on['browser_sessions'] == {'target': 'elitea-sandbox-browser:9471',
+    'audience': 'dns:elitea-sandbox-browser', 'cpu_millis': 2000,
+    'memory_bytes': 2147483648, 'wall_seconds': 3600, 'max_pages': 3}, on['browser_sessions']
+off = json.loads(yaml.safe_load(open(sys.argv[2]))['data']['runtime.json'])
+assert 'browser_sessions' not in off, off
+PY
+
 refuse() {
   local why=$1; shift
   if helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" "$@" > "$work/refused" 2>&1; then
@@ -125,4 +141,6 @@ refuse 'requires sandboxKubernetes.supervisor.enabled' --set sandboxKubernetes.s
 refuse 'engineSandbox must be true or false' --set-string sandboxKubernetes.browserSessions.profile.engineSandbox=maybe
 refuse 'maxPages must be a positive integer' --set sandboxKubernetes.browserSessions.profile.maxPages=0
 refuse 'lite.maxCpuMillis must be a positive integer' --set sandboxKubernetes.browserSessions.profile.lite.maxMemoryBytes=536870912
+refuse 'worker.runtime.browserSessions.audience must be in main.runtime.sandboxAudiences' --set worker.runtime.browserSessions.audience=dns:other
+refuse 'worker.runtime.browserSessions.max_pages is required' --set worker.runtime.browserSessions.max_pages=null
 echo "render-browser-sessions: ok"

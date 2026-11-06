@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.37"
+  x-elitea-client-contract: "1.38"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -1326,8 +1326,8 @@ components:
           description: Units a tool row consumed. Absent on an llm row.
         unit:
           type: string
-          enum: [request, credit, page]
-          description: What `units` counts. Absent on an llm row.
+          enum: [request, credit, page, second]
+          description: What `units` counts (`second` is cloud browser engine time). Absent on an llm row.
         spend:
           type: number
           nullable: true
@@ -3005,7 +3005,7 @@ components:
           type: string
           enum: [human, agent, ephemeral_agent, system]
           description: >-
-            Client contract 1.37: what the participant is. Absent for an
+            Client contract 1.38: what the participant is. Absent for an
             attachment (a toolkit, a prompt), which is in the conversation but
             never speaks. Read it instead of inferring from `entity_name`.
         persona:
@@ -3014,7 +3014,7 @@ components:
     ConversationParticipantPersona:
       type: object
       description: >-
-        Client contract 1.37: the agent's persona in this conversation, from
+        Client contract 1.38: the agent's persona in this conversation, from
         the soul of the version the conversation runs, refreshed on every
         turn. Absent when the agent has none. Show `display_name` instead of
         the agent's name when it is set.
@@ -3063,20 +3063,20 @@ components:
         participant_id:
           type: integer
           description: >-
-            Client contract 1.37: the chat participant the run answers as;
+            Client contract 1.38: the chat participant the run answers as;
             the persisted answer's `author_participant_id`. Absent for a run
             that is not a chat turn and for one admitted before 1.37.
         addressed_to:
           type: array
           items: { type: integer }
           description: >-
-            Client contract 1.37: the answer's addressees, as the persisted
+            Client contract 1.38: the answer's addressees, as the persisted
             message's `addressed_to`. Empty is everyone. Present with
             `participant_id`.
 
     ClientFrameAgentState:
       description: >-
-        Client contract 1.37: the participant moved to a new state. The
+        Client contract 1.38: the participant moved to a new state. The
         server derives it from the frame before it and writes it only on a
         change; it carries that frame's SSE id, so a client that resumes
         after it gets the state again with the next change. `idle` is the
@@ -3821,14 +3821,14 @@ components:
         sent_to_id:
           type: integer
           description: >-
-            Deprecated in client contract 1.37: read `addressed_to`. Kept for
+            Deprecated in client contract 1.38: read `addressed_to`. Kept for
             one release; it is the single addressee when there is one.
         reply_to_id: { type: integer }
         author_kind:
           type: string
           enum: [human, agent, ephemeral_agent, system]
           description: >-
-            Client contract 1.37: the author participant's kind when the
+            Client contract 1.38: the author participant's kind when the
             message was written. A message an attachment wrote (a toolkit
             answer) is `agent`.
         addressed_to:
@@ -3836,20 +3836,20 @@ components:
           maxItems: 64
           items: { type: integer }
           description: >-
-            Client contract 1.37: the participant ids the message is for.
+            Client contract 1.38: the participant ids the message is for.
             Empty is everyone. The frames of the run that writes an answer
             carry the same list.
         visibility:
           type: string
           enum: [all, side]
           description: >-
-            Client contract 1.37: `side` is agent-to-agent talk, shown
+            Client contract 1.38: `side` is agent-to-agent talk, shown
             collapsed.
         cause:
           type: string
           enum: [human_message, agent_mention, heartbeat, delegation, system]
           description: >-
-            Client contract 1.37: what started the message. Absent when
+            Client contract 1.38: what started the message. Absent when
             unknown.
         metadata:
           type: object
@@ -4127,6 +4127,21 @@ components:
             properties:
               toolkit_name: { type: string, minLength: 1 }
               tool_name: { type: string, minLength: 1 }
+        browser_submits:
+          type: array
+          maxItems: 32
+          description: >-
+            Client contract 1.37 (ADR-0049 decision 7). The hosts on which
+            the cloud browser of a schedule's or a webhook's run may submit
+            a form or upload a file without asking. Each entry is a
+            lowercase DNS host name with no scheme, port, path or wildcard.
+            A consequential or payment control always asks. A bad host
+            refuses the grant with 422 `unattended_grant_refused` (`field`
+            `browser_submits`).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
         continue_step_limit:
           type: boolean
           description: Continue the run with a new turn when it stops at its step limit.
@@ -27497,7 +27512,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet
+          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet, or (code cap_not_overridable) the cap is the cloud browser's run cap or monthly quota, which no override passes
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

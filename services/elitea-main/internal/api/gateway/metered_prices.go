@@ -38,9 +38,9 @@ import (
 // outside them would never be read, so a typo is refused rather than stored
 // as a price nothing consults while the real operation stays unpriced.
 var (
-	meteredProviders  = map[string]bool{"tavily": true, "firecrawl": true, "brave": true, "ddg_instant": true, "direct": true, "shodan": true}
-	meteredOperations = map[string]bool{"web_search": true, "web_search_advanced": true, "web_fetch": true, "host_search": true, "host_lookup": true}
-	meteredUnits      = map[string]bool{"request": true, "credit": true, "page": true}
+	meteredProviders  = map[string]bool{"tavily": true, "firecrawl": true, "brave": true, "ddg_instant": true, "direct": true, "shodan": true, "browser": true}
+	meteredOperations = map[string]bool{"web_search": true, "web_search_advanced": true, "web_fetch": true, "host_search": true, "host_lookup": true, "engine_seconds": true}
+	meteredUnits      = map[string]bool{"request": true, "credit": true, "page": true, "second": true}
 )
 
 // maxMeteredPricePerUnit bounds one unit's price. The dearest seeded unit is

@@ -156,6 +156,15 @@ impl SensitiveToolEntry {
     }
 }
 
+impl SensitiveToolEntry {
+    /// A cloud browser tool (ADR-0049): its effect is on a page outside the
+    /// run, so an approved call that may have started is never run again (a
+    /// second submit).
+    fn is_browser(&self) -> bool {
+        self.policy.toolkit_type() == elitea_agent_runtime::toolkits::BROWSER_TOOLKIT_TYPE
+    }
+}
+
 impl SensitiveToolCatalog {
     /// The provider names of the "read untrusted, then act" candidates.
     pub(crate) fn untrusted_act_tool_names(&self) -> impl Iterator<Item = &str> {
@@ -244,7 +253,10 @@ impl SensitiveToolCatalog {
     pub(crate) fn reruns_after_dispatch(&self, tool_name: &str) -> Option<bool> {
         self.provider_entries
             .get(tool_name)
-            .map(|entry| entry.read_only || (entry.conditional && !entry.is_untrusted_act()))
+            .map(|entry| {
+                entry.read_only
+                    || (entry.conditional && !entry.is_untrusted_act() && !entry.is_browser())
+            })
             .or_else(|| {
                 self.read_only_provider_names
                     .contains(tool_name)
@@ -282,6 +294,49 @@ impl SensitiveToolCatalog {
         }
         self.scoped_entries.insert(identity, entry.clone());
         self.provider_entries.insert(TOOL.into(), entry);
+        Ok(self)
+    }
+
+    /// Add the run's cloud browser tools (ADR-0049 decision 3) as
+    /// conditional entries: the browser gate asks for a call by its
+    /// arguments and the page, never by name alone. `tools` is each
+    /// `(toolkit_name, model-visible name)`. A name the catalog already holds
+    /// (a sensitive tool an administrator named) keeps its entry, so it stays
+    /// confirmed on every call.
+    ///
+    /// The run's unattended grant answers a submit through the browser's own
+    /// `browser_submits`, never through `sensitive_tools`: these entries are
+    /// conditional, and a grant does not mark them.
+    ///
+    /// # Errors
+    ///
+    /// A name is not a valid tool identity.
+    pub(crate) fn with_browser_tools<'a>(
+        mut self,
+        tools: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        for (toolkit, tool) in tools {
+            if !valid_identity(toolkit) || !valid_identity(tool) {
+                return Err(invalid_configuration());
+            }
+            if self.provider_entries.contains_key(tool) {
+                continue;
+            }
+            let entry = SensitiveToolEntry {
+                policy: SensitiveToolPolicy::browser_act(toolkit, tool),
+                read_only: false,
+                conditional: true,
+                granted: None,
+            };
+            self.scoped_entries.insert(
+                SensitiveToolIdentity {
+                    toolkit_name: toolkit.into(),
+                    tool_name: tool.into(),
+                },
+                entry.clone(),
+            );
+            self.provider_entries.insert(tool.into(), entry);
+        }
         Ok(self)
     }
 
@@ -732,6 +787,27 @@ mod tests {
             policy
                 .sensitive_tool("artifact", "files", "delete_file")
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn browser_tools_are_conditional_and_never_rerun() {
+        let catalog = SensitiveToolCatalog::default()
+            .with_browser_tools([("browser", "browser_click"), ("browser", "browser_open")])
+            .expect("valid names");
+        // Conditional: the browser gate asks by the arguments, never by name.
+        assert_eq!(catalog.tool_names().count(), 0);
+        assert!(
+            catalog
+                .every_tool_name()
+                .any(|name| name == "browser_click")
+        );
+        // An approved call that may have started is not run again.
+        assert_eq!(catalog.reruns_after_dispatch("browser_click"), Some(false));
+        assert!(
+            SensitiveToolCatalog::default()
+                .with_browser_tools([("browser", "")])
+                .is_err()
         );
     }
 

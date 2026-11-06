@@ -62,6 +62,9 @@ bytes = "1.12.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
 # The `web` family's direct fetch dials through the Rust twin of Main's
 # egress guard (#1238).
+# The cloud browser tool contract (ADR-0049 decision 3): names, schemas,
+# typed calls and the snapshot grammar. No engine and no transport.
+elitea-browser-tools = { path = "../browser-tools" }
 elitea-egress-guard = { path = "../egress-guard" }
 # The canonical thinking setting and its provider forms (ADR-0038): the
 # per-step `auto` policy in `thinking` resolves to them.

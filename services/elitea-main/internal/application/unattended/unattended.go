@@ -139,7 +139,10 @@ func BriefStateAtStart(goalCheck, runBriefEnabled bool) string {
 
 // Bounds of a grant.
 const (
-	MaxSensitiveTools  = 64
+	MaxSensitiveTools = 64
+	// MaxBrowserSubmits bounds the hosts of a grant's browser_submits
+	// (ADR-0049 decision 7).
+	MaxBrowserSubmits  = 32
 	MaxToolNameBytes   = 512
 	MaxDeadlineSeconds = int64(platformconfig.MaxChainDeadlineHoursBound) * 3600
 )
@@ -174,7 +177,11 @@ type Request struct {
 	HookAsks            bool
 	RemoteConfirmations bool
 	SensitiveTools      []Tool
-	Chain               ChainRequest
+	// BrowserSubmits are the hosts on which the run's cloud browser may
+	// submit a form or upload a file without asking (ADR-0049 decision 7).
+	// A consequential or payment control always asks.
+	BrowserSubmits []string
+	Chain          ChainRequest
 	// GoalCheck asks for the run brief and the goal check (ADR-0045
 	// decision 11). The wire's absent value is true.
 	GoalCheck bool
@@ -193,7 +200,8 @@ func (r Request) IsContinuation() bool { return r.ChainRootExecutionID != "" }
 // administrator turns grants off, Main starts such a run with no grant
 // instead of refusing it, so the default never stops a send.
 func (r Request) OnlyContinues() bool {
-	return !r.IsContinuation() && !r.HookAsks && !r.RemoteConfirmations && len(r.SensitiveTools) == 0
+	return !r.IsContinuation() && !r.HookAsks && !r.RemoteConfirmations && len(r.SensitiveTools) == 0 &&
+		len(r.BrowserSubmits) == 0
 }
 
 // Limits are a chain's effective limits.
@@ -214,6 +222,10 @@ type Grant struct {
 	HookAsks            bool   `json:"hook_asks"`
 	RemoteConfirmations bool   `json:"remote_confirmations"`
 	SensitiveTools      []Tool `json:"sensitive_tools"`
+	// BrowserSubmits are the hosts on which the cloud browser submits and
+	// uploads without asking (ADR-0049 decision 7). A grant stored before
+	// it has none.
+	BrowserSubmits []string `json:"browser_submits,omitempty"`
 	// GoalCheck: the chain has a run brief and a goal check (ADR-0045
 	// decision 11). A grant stored before it has none.
 	GoalCheck bool `json:"goal_check"`
@@ -347,7 +359,67 @@ func ValidateShape(request Request) error {
 		}
 		seen[tool] = true
 	}
+	return ValidateBrowserSubmits(request.BrowserSubmits)
+}
+
+// ValidateBrowserSubmits checks a grant's browser_submits: at most
+// MaxBrowserSubmits hosts, each a lowercase DNS host name with no scheme,
+// port, path or wildcard. A repeated host is accepted;
+// NormalizeBrowserSubmits removes it.
+func ValidateBrowserSubmits(hosts []string) error {
+	if len(hosts) > MaxBrowserSubmits {
+		return Refused("browser_submits", "", RefusedOverMaximum)
+	}
+	for _, host := range hosts {
+		if !ValidBrowserSubmitHost(host) {
+			return Refused("browser_submits", "", RefusedInvalid)
+		}
+	}
 	return nil
+}
+
+// ValidBrowserSubmitHost reports whether host is a lowercase DNS host name:
+// 1 to 253 bytes, at least two labels, each label 1 to 63 bytes of a-z, 0-9
+// and '-' that does not start or end with '-', and a last label that is not
+// all digits (so an IPv4 literal is refused).
+func ValidBrowserSubmitHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	last := labels[len(labels)-1]
+	return strings.Trim(last, "0123456789") != ""
+}
+
+// NormalizeBrowserSubmits is the hosts without repeats, in their first
+// order. It answers nil for none.
+func NormalizeBrowserSubmits(hosts []string) []string {
+	if len(hosts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(hosts))
+	seen := make(map[string]bool, len(hosts))
+	for _, host := range hosts {
+		if !seen[host] {
+			seen[host] = true
+			out = append(out, host)
+		}
+	}
+	return out
 }
 
 func validName(value string) bool {
@@ -430,6 +502,7 @@ func GrantOf(request Request, start *CloudStart) Grant {
 		HookAsks:            request.HookAsks,
 		RemoteConfirmations: request.RemoteConfirmations,
 		SensitiveTools:      tools,
+		BrowserSubmits:      NormalizeBrowserSubmits(request.BrowserSubmits),
 		GoalCheck:           request.GoalCheck,
 		Start:               start,
 	}

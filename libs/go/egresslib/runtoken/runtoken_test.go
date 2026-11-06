@@ -412,3 +412,49 @@ func TestKeysPEMAndRotation(t *testing.T) {
 		t.Error("an oversize key file must be refused")
 	}
 }
+
+func TestOpenToken(t *testing.T) {
+	pub, priv := newKey(t)
+	signer, err := NewSigner(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, err := NewKeySet(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := claims(t)
+	c.Open = true
+	if _, err := signer.Sign(c); !errors.Is(err, ErrInvalidClaims) {
+		t.Fatalf("an open token with an allowlist must be refused, got %v", err)
+	}
+	c.Allowlist = nil
+	tok, err := signer.Sign(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := ks.Verify(tok, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := ParseTarget("any.example.org", 443)
+	if !v.Claims.Open || !v.AllowsTarget(target) {
+		t.Fatal("an open token must admit any host by name")
+	}
+	closed := claims(t)
+	tok, err = signer.Sign(closed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = ks.Verify(tok, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Claims.Open || v.AllowsTarget(target) {
+		t.Fatal("an allowlist token must not admit a host it does not name")
+	}
+	var none *Verified
+	if none.AllowsTarget(target) {
+		t.Fatal("a nil verification admits nothing")
+	}
+}

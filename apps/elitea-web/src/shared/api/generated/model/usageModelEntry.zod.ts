@@ -60,9 +60,11 @@ export const UsageModelEntry = zod.object({
     .optional()
     .describe("Units a tool row consumed. Absent on an llm row."),
   unit: zod
-    .enum(["request", "credit", "page"])
+    .enum(["request", "credit", "page", "second"])
     .optional()
-    .describe("What `units` counts. Absent on an llm row."),
+    .describe(
+      "What `units` counts (`second` is cloud browser engine time). Absent on an llm row.",
+    ),
   spend: zod
     .number()
     .nullish()

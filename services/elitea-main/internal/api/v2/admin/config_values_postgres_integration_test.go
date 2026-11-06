@@ -744,6 +744,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	worker_egress     → platformconfig.LoadWorkerEgressSettings, read by
 	//	                    the worker egress policy resolver whenever a worker
 	//	                    command is prepared (ADR-0044 decision 2, #1490)
+	//	browser           → platformconfig.LoadBrowserSettings, read by the
+	//	                    browser runtime-context resolver on every worker
+	//	                    redemption that accepts `browser` (ADR-0049, #1596)
 	//	catalogue         → platformconfig.LoadCatalogueSettings, read by the
 	//	                    connector gate (application/connectorapproval)
 	//	                    on the toolkit catalogue, toolkit writes, MCP
@@ -789,6 +792,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0044 decision 2 (#1490): every worker command's preparation
 		// reads it (workeregress.Resolver).
 		"worker_egress": true,
+		// ADR-0049 decisions 5 and 8 (#1596): every `browser` runtime-context
+		// field the worker redeems (browserruntime.Resolver).
+		"browser": true,
 		// ADR-0044 decision 1 (#1501): the toolkit catalogue, the toolkit and
 		// MCP write paths, the agent freeze and every worker command.
 		"catalogue": true,

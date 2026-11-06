@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
@@ -525,6 +526,7 @@ func (s *ContentServer) GetEliteaClientToken(ctx context.Context, request *runti
 	value, err := s.runtimeToken.ResolveAccepting(ctx, claim, RuntimeContextAccept{
 		SecretsHeaderValue: !governed && acceptsField(request.GetAcceptFields(), runtimeContextFieldSecretsHeader),
 		Workspace:          acceptsField(request.GetAcceptFields(), workspaceruntime.RuntimeContextField),
+		Browser:            acceptsField(request.GetAcceptFields(), browserruntime.RuntimeContextField),
 		GovernedRun:        governed,
 	})
 	if err != nil {

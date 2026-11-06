@@ -110,12 +110,15 @@ describe('EditApplication — the Persona tab', () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByTestId('edit-application-tab-persona', {}, { timeout: 5_000 }));
-    await user.type(await screen.findByTestId('persona-relationships'), 'planner without a stance');
+    // One paste, not a keystroke per character: each keystroke re-renders the
+    // whole editor, which ran past the timeout on a loaded CI shard.
+    await user.click(await screen.findByTestId('persona-relationships'));
+    await user.paste('planner without a stance');
 
     expect(screen.getByText('Each line must be "agent: stance", at most 32 lines.')).toBeInTheDocument();
     expect(screen.getByTestId('agent-save-button')).toBeDisabled();
 
-    await user.type(screen.getByTestId('persona-relationships'), ': defer');
+    await user.paste(': defer');
     await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
   }, 20_000);
 });

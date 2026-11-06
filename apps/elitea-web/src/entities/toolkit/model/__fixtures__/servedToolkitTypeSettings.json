@@ -1060,6 +1060,63 @@
     "title": "bitbucket",
     "type": "object"
   },
+  "browser": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "check_connection_supported": false,
+      "extra_categories": [
+        "browser",
+        "web",
+        "browse",
+        "automation"
+      ],
+      "has_function_validators": false,
+      "icon_url": null,
+      "label": "Cloud Browser"
+    },
+    "name_required": true,
+    "properties": {
+      "selected_tools": {
+        "args_schemas": {
+          "browser_back": {
+            "type": "object"
+          },
+          "browser_click": {
+            "type": "object"
+          },
+          "browser_forward": {
+            "type": "object"
+          },
+          "browser_open": {
+            "type": "object"
+          },
+          "browser_press": {
+            "type": "object"
+          },
+          "browser_reload": {
+            "type": "object"
+          }
+        },
+        "items": {
+          "enum": [
+            "browser_back",
+            "browser_click",
+            "browser_forward",
+            "browser_open",
+            "browser_press",
+            "browser_reload"
+          ],
+          "type": "string"
+        },
+        "title": "Selected Tools",
+        "type": "array"
+      }
+    },
+    "title": "browser",
+    "type": "object"
+  },
   "carrier": {
     "metadata": {
       "categories": [
