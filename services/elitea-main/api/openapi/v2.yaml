@@ -5337,6 +5337,14 @@ components:
             needs the turn's grant: it is recorded as the owner's approval
             with reason `unattended_grant`. A `timeout` answer is recorded as
             `timed_out`.
+        host:
+          type: string
+          maxLength: 253
+          description: >-
+            Client contract 1.38 (ADR-0048 decision 8). On a `browser_submit`
+            exchange: the page host the answer was for, a lowercase DNS host
+            name. A `grant` answer of that kind is recorded only when the
+            stored grant's `browser_submits` names this host.
     LocalTurnCommand:
       type: object
       required: [command]

@@ -91,7 +91,7 @@ use url::{Host, Url};
 use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
-use crate::browser_tools::BrowserDrivers;
+use crate::browser_tools::{BrowserDrivers, DownloadVerdict};
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
 use elitea_local_tools::policy::{LocalWorkPolicy, browser_domains_refusal};
@@ -202,6 +202,15 @@ fn host_check(host: Option<Host<&str>>, policy: &GuardPolicy) -> Result<(), Refu
         Class::Private => Err(Refusal::PrivateNetwork),
         Class::Forbidden => Err(Refusal::Forbidden),
     }
+}
+
+/// Why a page the pane committed (or finished) must not stay: the guard's
+/// refusal of its address. `about:blank` never is.
+fn committed_refusal(url: &Url, policy: &GuardPolicy) -> Option<Refusal> {
+    if url.as_str() == "about:blank" {
+        return None;
+    }
+    check(url, policy).err()
 }
 
 /// The navigation guard: may the pane load `url` (top level or a frame)?
@@ -804,6 +813,15 @@ fn on_download(
 ) -> bool {
     match event {
         DownloadEvent::Requested { url, destination } => {
+            // While an agent turn drives the pane, its downloads are the
+            // agent's (ADR-0048 decision 8): one starts only when the call
+            // that caused it was approved as a download; the person's own
+            // downloads outside a turn are theirs.
+            if panes.drivers.download_requested(thread_id) == DownloadVerdict::Refused {
+                // The agent's tool result says so (`browser_tools`).
+                log::info!(target: "browser", "refused a download nobody approved ({})", url.scheme());
+                return false;
+            }
             let dir = panes.downloads_dir(thread_id);
             if let Err(error) = std::fs::create_dir_all(&dir) {
                 log::warn!(target: "browser", "no download folder: {error}");
@@ -911,7 +929,19 @@ fn build_pane(
     {
         let app = app.clone();
         let thread = thread.clone();
-        builder = builder.on_page_load(move |_webview, payload| {
+        let policy = policy.clone();
+        builder = builder.on_page_load(move |webview, payload| {
+            // Defence in depth behind `on_navigation`: WebKit asks the
+            // navigation delegate for a server redirect's new request too,
+            // but a page that commits at an address the guard refuses (a
+            // redirect path the delegate missed) is sent to about:blank.
+            if let Some(reason) = committed_refusal(payload.url(), &policy) {
+                refused(&app, &thread, payload.url(), reason);
+                if let Err(error) = webview.navigate(blank()) {
+                    log::warn!(target: "browser", "a refused page was not left: {error}");
+                }
+                return;
+            }
             let kind = match payload.event() {
                 PageLoadEvent::Started => "loading",
                 PageLoadEvent::Finished => "loaded",
@@ -1601,6 +1631,34 @@ mod tests {
         assert_eq!(
             Refusal::Domain.message(),
             "Your organisation's policy does not allow this site."
+        );
+    }
+
+    /// A page that commits at an address the guard refuses (a redirect the
+    /// navigation delegate did not see) is refused at commit too.
+    #[test]
+    fn a_committed_page_is_checked_again() {
+        let url = |raw: &str| Url::parse(raw).unwrap();
+        assert_eq!(committed_refusal(&url("about:blank"), &strict()), None);
+        assert_eq!(
+            committed_refusal(&url("https://example.com/"), &strict()),
+            None
+        );
+        assert_eq!(
+            committed_refusal(&url("https://127.0.0.1:8080/admin"), &strict()),
+            Some(Refusal::PrivateNetwork)
+        );
+        assert_eq!(
+            committed_refusal(&url("http://example.com/"), &strict()),
+            Some(Refusal::Http)
+        );
+        let domains = GuardPolicy {
+            deny_domains: Arc::from(vec!["evil.example".to_owned()]),
+            ..strict()
+        };
+        assert_eq!(
+            committed_refusal(&url("https://evil.example/landing"), &domains),
+            Some(Refusal::Domain)
         );
     }
 

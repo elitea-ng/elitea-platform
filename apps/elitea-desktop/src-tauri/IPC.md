@@ -2588,12 +2588,26 @@ reason `domain`). With `local_work_browser` (or local work) off,
 `browser_open` rejects `browser_disabled`. The agent's browser tools are
 offered only with `local_work_browser_agent` too; each call is decided by the
 rules engine (`elitea-local-tools` approvals, `BrowserRead`,
-`BrowserNavigate`, `BrowserAct`): a submit, upload or download is an
-`approval_request` with `can_remember_thread` and `site` (answered
-`allow_thread`: allowed for that host for the rest of the thread), a buy,
-pay, delete, send or sign control is asked every time, plan mode denies
-navigating and acting. An unattended grant's `browser_submits` answers a
-submit or upload on its hosts (exchange kind `browser_submit`). A new window
+`BrowserNavigate`, `BrowserAct`), on the page the pane shows NOW (the
+driver's current address, not the agent's last snapshot; a ref act on
+another site than that snapshot's is `stale_ref`). A submit or an upload is
+an `approval_request` with `can_remember_thread` and `site` (answered
+`allow_thread`: allowed for that host AND that effect for the rest of the
+thread); a download (a link with a `download` attribute, or "download" or
+"export" in its name) is asked every time and never remembered. A buy, pay,
+delete, send or sign control is asked every time. `browser_press` is decided
+against the focused element the driver reads first (Enter or Space on "Place
+order" is a buy); when the focus cannot be read, Enter and Space (modified or
+not) are asked every time. Plan mode denies navigating and acting. While an
+agent turn drives the pane, a download starts only when the call that caused
+it was approved as a download; any other is refused (the tool result says
+so, and the same control is asked as a download next time). The person's own
+downloads outside a turn are unchanged. An unattended grant's
+`browser_submits` answers a submit or upload on its hosts (exchange kind
+`browser_submit`, with `host`); bypass mode answers no browser submit,
+upload or download in an unattended turn. A page that commits at an address
+the guard refuses (a redirect path the navigation delegate missed) is sent
+to `about:blank` with a `refused` event. A new window
 (`target=_blank`, `window.open`) is not opened: the page navigates there,
 the opener kept in history.
 

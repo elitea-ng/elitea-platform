@@ -83,7 +83,8 @@
 //! | `BrowserRead` ([`ToolKind::BrowserRead`], ADR-0048: `browser_snapshot`, `browser_screenshot`, `browser_wait`) | allowed; kept in plan mode and in an unattended turn |
 //! | `BrowserNavigate` ([`ToolKind::BrowserNavigate`]: `browser_open`, back, forward, reload) | allowed and shown in the transcript; denied when the policy's domain lists refuse the host ([`ToolCall::browser`]) |
 //! | `BrowserAct` ([`ToolKind::BrowserAct`]: click, type, select, scroll, press) | allowed, except the two rows below |
-//! | `BrowserAct` that submits a form, starts an upload or a download ([`BrowserTarget::effect`]) | asked; "allow for this site in this thread" ([`APPROVE_THREAD`], offered once the host set the turn's thread) remembers it for the page's host and thread only; never "always". Bypass mode allows it. In an unattended turn a grant's `browser_submits` ([`Unattended::browser_submits`]) answers a submit or an upload on a host it names ([`Source::Grant`]); every other one waits for the person and is declined past the wait |
+//! | `BrowserAct` that submits a form or starts an upload ([`BrowserTarget::effect`]) | asked; "allow for this site in this thread" ([`APPROVE_THREAD`], offered once the host set the turn's thread) remembers that effect for the page's host and thread only (a submit approval does not cover an upload); never "always". Bypass mode allows it in an attended turn. In an unattended turn bypass does not answer it: only a grant's `browser_submits` ([`Unattended::browser_submits`]) does, on a host it names ([`Source::Grant`]); every other one waits for the person and is declined past the wait |
+//! | `BrowserAct` that starts a download | asked every time; never remembered, not for the site either. Bypass mode allows it in an attended turn; in an unattended turn neither bypass nor a grant answers it: it waits for the person and is declined past the wait |
 //! | `BrowserAct` on a control the page names as buying, paying, deleting, sending or signing ([`is_consequential`], the same words as the `computer` rows) | asked every time; never remembered; bypass mode and no grant answer it |
 //! | any `BrowserAct` or `BrowserNavigate` in plan mode | denied |
 //! | a nested agent of the agent (#1239: a cloud child turn, `startLocalChildTurn`) | allowed and shown as a sub-agent lane. It is not a session tool, so no call reaches this engine: it runs in the cloud under the person's own grants, and the child's sensitive tools pause on the platform and are confirmed through the same approval card as a remote toolkit call; not offered in plan mode |
@@ -650,7 +651,7 @@ pub fn is_consequential_browser(control: &ComputerControl) -> bool {
 
 /// What a browser act would start beyond the page itself (ADR-0048
 /// decision 8), as the driver reads the target before running it.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrowserEffect {
     /// A form submit: a click on a submit control, Enter in a form field,
@@ -745,8 +746,10 @@ struct ThreadComputer {
     see: HashSet<String>,
     act: HashSet<String>,
     opened: HashSet<String>,
-    /// Hosts whose submits, uploads and downloads the person allowed.
-    sites: HashSet<String>,
+    /// `(host, effect)` pairs whose submits or uploads the person allowed
+    /// for the site in the thread: a submit approval never covers an
+    /// upload. A download is never kept.
+    sites: HashSet<(String, BrowserEffect)>,
 }
 
 /// One tool call, as the rules see it.
@@ -1413,6 +1416,19 @@ impl RulesEngine {
 
     /// Whether the running thread holds `pick`'s set for `key` (never, with
     /// no thread set).
+    /// Whether the person allowed `effect` on `host` for the running
+    /// turn's thread.
+    fn thread_has_site(&self, host: &str, effect: BrowserEffect) -> bool {
+        let Some(thread) = self.thread_key() else {
+            return false;
+        };
+        self.computer_threads.lock().is_ok_and(|threads| {
+            threads
+                .get(&thread)
+                .is_some_and(|approved| approved.sites.contains(&(host.to_owned(), effect)))
+        })
+    }
+
     fn thread_has(&self, key: &str, pick: fn(&ThreadComputer) -> &HashSet<String>) -> bool {
         let Some(thread) = self.thread_key() else {
             return false;
@@ -1478,17 +1494,19 @@ impl RulesEngine {
         Ok(())
     }
 
-    /// "Allow for this site in this thread" for a browser act that submits,
-    /// uploads or downloads: the page's host, until the thread ends.
+    /// "Allow for this site in this thread" for a browser act that submits
+    /// or uploads: the page's host and that effect, until the thread ends.
     fn remember_site_for_thread(&self, call: &ToolCall) -> ToolResult<()> {
         if let Some(refusal) = self.never_remembered(call) {
             return Err(refusal);
         }
-        let key = call
-            .browser
-            .as_ref()
+        let target = call.browser.as_ref();
+        let key = target
             .and_then(BrowserTarget::key)
             .ok_or_else(|| ToolError::invalid("a browser act names its page's host"))?;
+        let effect = target
+            .and_then(|target| target.effect)
+            .ok_or_else(|| ToolError::invalid("a browser act names its effect"))?;
         let thread = self.thread_key().ok_or_else(|| {
             ToolError::new(
                 ErrorCode::Denied,
@@ -1499,7 +1517,11 @@ impl RulesEngine {
             .computer_threads
             .lock()
             .map_err(|_| ToolError::new(ErrorCode::Io, "the thread approvals are unavailable"))?;
-        threads.entry(thread).or_default().sites.insert(key);
+        threads
+            .entry(thread)
+            .or_default()
+            .sites
+            .insert((key, effect));
         Ok(())
     }
 
@@ -1605,6 +1627,7 @@ impl RulesEngine {
             && self.profile() == PermissionProfile::Bypass
             && !call.tool.is_computer()
             && !Self::browser_consequential(call)
+            && !self.unattended_browser_effect(call)
         {
             return Decision {
                 rule: decision.rule,
@@ -2370,16 +2393,23 @@ fn compound_refusal() -> ToolError {
 }
 
 impl RulesEngine {
-    /// [`Self::never_remembered`] for a browser call: only a submit, an
-    /// upload or a download on a named host is kept, for the site in the
-    /// thread; a consequential control never is.
+    /// [`Self::never_remembered`] for a browser call: only a submit or an
+    /// upload on a named host is kept, for that effect on the site in the
+    /// thread; a download and a consequential control never are (each
+    /// download is asked: a file lands on the device).
     fn browser_never_remembered(call: &ToolCall) -> Option<ToolError> {
         let target = call.browser.as_ref();
         if call.tool != ToolKind::BrowserAct || target.is_none_or(|target| target.effect.is_none())
         {
             return Some(ToolError::new(
                 ErrorCode::Denied,
-                "only a browser submit, upload or download is approved for a site",
+                "only a browser submit or upload is approved for a site",
+            ));
+        }
+        if target.is_some_and(|target| target.effect == Some(BrowserEffect::Download)) {
+            return Some(ToolError::new(
+                ErrorCode::Denied,
+                "a download is asked every time; it is never approved for a site",
             ));
         }
         if target.is_some_and(BrowserTarget::consequential) {
@@ -2555,6 +2585,19 @@ impl RulesEngine {
         self.policy.browser_domain_refusal(&host).and_then(deny)
     }
 
+    /// Whether `call` is a browser submit, upload or download in an
+    /// unattended turn: bypass mode does not answer it there; only the
+    /// grant's `browser_submits` hosts do (a submit or an upload), as no
+    /// bypass answers a `ComputerAct` (ADR-0047 decision 8).
+    fn unattended_browser_effect(&self, call: &ToolCall) -> bool {
+        call.tool == ToolKind::BrowserAct
+            && call
+                .browser
+                .as_ref()
+                .is_some_and(|target| target.effect.is_some())
+            && self.unattended().is_some()
+    }
+
     /// Whether `call` is a browser act on a consequential control.
     fn browser_consequential(call: &ToolCall) -> bool {
         call.tool == ToolKind::BrowserAct
@@ -2607,7 +2650,7 @@ impl RulesEngine {
             );
         };
         if let Some(key) = target.key() {
-            if self.thread_has(&key, |approved| &approved.sites) {
+            if effect != BrowserEffect::Download && self.thread_has_site(&key, effect) {
                 return Decision::new(
                     Verdict::Allow,
                     Source::Remembered,

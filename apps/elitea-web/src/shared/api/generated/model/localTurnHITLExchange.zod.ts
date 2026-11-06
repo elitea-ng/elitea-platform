@@ -42,6 +42,8 @@
  */
 import * as zod from "zod";
 
+export const localTurnHITLExchangeHostMax = 253;
+
 export const LocalTurnHITLExchange = zod
   .object({
     interrupt_id: zod
@@ -73,6 +75,13 @@ export const LocalTurnHITLExchange = zod
       .optional()
       .describe(
         "Client contract 1.30 (ADR-0045 decision 3). Who answered. Absent means `person`. Main writes an approval ledger row (path `desktop`) for each source except `bypass`. A `grant` answer needs the turn's grant: it is recorded as the owner's approval with reason `unattended_grant`. A `timeout` answer is recorded as `timed_out`.",
+      ),
+    host: zod
+      .string()
+      .max(localTurnHITLExchangeHostMax)
+      .optional()
+      .describe(
+        "Client contract 1.38 (ADR-0048 decision 8). On a `browser_submit` exchange: the page host the answer was for, a lowercase DNS host name. A `grant` answer of that kind is recorded only when the stored grant's `browser_submits` names this host.",
       ),
   })
   .describe(

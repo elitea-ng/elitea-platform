@@ -135,6 +135,53 @@ pub trait BrowserDriver: Send + Sync {
     /// Hand control to the person and wait for them: `no_person` in a run
     /// with nobody to ask, `declined` when they decline or time out.
     async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError>;
+
+    /// The element a `browser_press` would go to (the focused one, through
+    /// shadow roots and the frames the driver can reach), for the host's
+    /// rules before the press runs. `Ok(None)`: nothing has the focus (the
+    /// body). A driver that cannot tell answers an error, and the host
+    /// treats the press as on an unknown control (ADR-0048 decision 8: fail
+    /// closed).
+    async fn focused(&self) -> Result<Option<ControlInfo>, BrowserError> {
+        Err(BrowserError::new(
+            crate::ErrorCode::Unsupported,
+            "this driver cannot read the focused element",
+        ))
+    }
+
+    /// What the element `target` names is, beyond its snapshot line (an
+    /// input's `type`, a link's `download` attribute), for the host's rules
+    /// before an act on it runs. An error: the host decides from the
+    /// snapshot alone.
+    async fn inspect(&self, _target: &ElementRef) -> Result<ControlInfo, BrowserError> {
+        Err(BrowserError::new(
+            crate::ErrorCode::Unsupported,
+            "this driver cannot inspect an element",
+        ))
+    }
+
+    /// The address the page shows now (not the agent's last view of it),
+    /// for the host's rules before a call runs.
+    async fn current_url(&self) -> Result<String, BrowserError> {
+        Err(BrowserError::new(
+            crate::ErrorCode::Unsupported,
+            "this driver cannot read the page's address",
+        ))
+    }
+}
+
+/// An element as [`BrowserDriver::focused`] and [`BrowserDriver::inspect`]
+/// read it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ControlInfo {
+    /// Its role, as a snapshot gives it (`button`, `textbox`, …).
+    pub role: String,
+    /// Its accessible name.
+    pub name: String,
+    /// The `type` attribute of an `input` (`file`, `submit`, …), lowercase.
+    pub input_type: Option<String>,
+    /// A link with a `download` attribute.
+    pub download: bool,
 }
 
 /// What a browser tool call returns to the host.

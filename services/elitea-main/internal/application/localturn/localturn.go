@@ -212,6 +212,10 @@ type HITLExchange struct {
 	// Source is who answered (ADR-0045 decision 3): person, grant, bypass
 	// or timeout. Absent is a person (a client from before the contract).
 	Source string `json:"source,omitempty"`
+	// Host is the page host a browser_submit exchange answered for
+	// (ADR-0048 decision 8, client contract 1.38): the ledger checks it
+	// against the stored grant's browser_submits.
+	Host string `json:"host,omitempty"`
 }
 
 // CommandRecord is one command the client reports it ran.
@@ -581,7 +585,8 @@ func validCommit(request CommitRequest) bool {
 			(exchange.ToolRunID != "" && !validToken(exchange.ToolRunID)) ||
 			!validText(exchange.Prompt, MaxHITLFieldBytes, true) ||
 			!validText(exchange.Value, MaxHITLFieldBytes, true) ||
-			!validExchangeSource(exchange.Source) {
+			!validExchangeSource(exchange.Source) ||
+			(exchange.Host != "" && !unattended.ValidBrowserSubmitHost(exchange.Host)) {
 			return false
 		}
 	}

@@ -18433,6 +18433,10 @@
                     "decision": {
                       "type": "string"
                     },
+                    "host": {
+                      "type": "string",
+                      "max_length": 253
+                    },
                     "interrupt_id": {
                       "type": "string"
                     },

@@ -277,7 +277,12 @@ async fn submits_uploads_and_downloads_are_asked_and_allowed_per_site_and_thread
             (Verdict::Ask, Source::Default),
             "{effect:?}"
         );
-        assert!(fx.engine.can_remember(&call));
+        // A download is asked every time: never kept for the site.
+        assert_eq!(
+            fx.engine.can_remember(&call),
+            effect != BrowserEffect::Download,
+            "{effect:?}"
+        );
     }
     let reason = fx.engine.decide(&submit(SHOP)).reason;
     assert!(
@@ -298,7 +303,7 @@ async fn submits_uploads_and_downloads_are_asked_and_allowed_per_site_and_thread
     );
     assert!(fx.choices.list().is_empty(), "nothing in the choice store");
 
-    // The same host, any of the three effects, in this thread.
+    // The same host and effect, in this thread.
     assert_eq!(
         verdict(&fx.engine, &submit(SHOP)),
         (Verdict::Allow, Source::Remembered)
@@ -306,7 +311,7 @@ async fn submits_uploads_and_downloads_are_asked_and_allowed_per_site_and_thread
     assert_eq!(
         verdict(
             &fx.engine,
-            &click("SHOP.example.com.", "Attach", Some(BrowserEffect::Upload))
+            &click("SHOP.example.com.", "Continue", Some(BrowserEffect::Submit))
         )
         .0,
         Verdict::Allow,
@@ -335,6 +340,95 @@ async fn submits_uploads_and_downloads_are_asked_and_allowed_per_site_and_thread
     assert_eq!(
         verdict(&fx.engine, &submit(SHOP)),
         (Verdict::Allow, Source::Bypass)
+    );
+}
+
+/// Finding 5: a site approval is for one effect. Approving a submit on a
+/// site does not cover an upload or a download there; an upload approval
+/// does not cover a submit; a download is never kept, so it is never
+/// offered "for this site" and every one is asked.
+#[tokio::test]
+async fn a_site_approval_covers_its_own_effect_only() {
+    let fx = fixture(policy());
+    fx.engine
+        .remember_for_thread(&submit(SHOP))
+        .expect("submit kept");
+    let upload = click(SHOP, "Choose file", Some(BrowserEffect::Upload));
+    let download = click(SHOP, "Export", Some(BrowserEffect::Download));
+    assert_eq!(
+        verdict(&fx.engine, &upload),
+        (Verdict::Ask, Source::Default)
+    );
+    assert_eq!(
+        verdict(&fx.engine, &download),
+        (Verdict::Ask, Source::Default)
+    );
+    fx.engine.remember_for_thread(&upload).expect("upload kept");
+    assert_eq!(
+        verdict(&fx.engine, &upload),
+        (Verdict::Allow, Source::Remembered)
+    );
+    assert!(fx.engine.remember_for_thread(&download).is_err());
+    assert!(!fx.engine.can_remember(&download));
+    let fresh = fixture(policy());
+    fresh
+        .engine
+        .remember_for_thread(&upload)
+        .expect("upload kept");
+    assert_eq!(verdict(&fresh.engine, &submit(SHOP)).0, Verdict::Ask);
+
+    // The card offers approve or reject only for a download, and "allow
+    // for this site" does not stick even if a stale client sends it.
+    let script = Script::new(&[Some(APPROVE_THREAD), Some("approve")]);
+    let channel = RuleApprovals::new(fx.engine.clone(), script.clone());
+    assert_eq!(action_of(&ask(&channel, &download).await), "approve");
+    assert_eq!(script.seen()[0].available_actions, ["approve", "reject"]);
+    assert_eq!(action_of(&ask(&channel, &download).await), "approve");
+    assert_eq!(script.seen().len(), 2, "every download is asked");
+}
+
+/// Finding 6: in an unattended turn bypass mode answers no browser submit,
+/// upload or download; only the grant's hosts do (a submit or an upload).
+/// Attended, bypass still allows them.
+#[tokio::test]
+async fn bypass_does_not_answer_browser_effects_in_an_unattended_turn() {
+    let fx = fixture(policy());
+    fx.engine.set_profile(PermissionProfile::Bypass);
+    let upload = click(SHOP, "Choose file", Some(BrowserEffect::Upload));
+    let download = click(SHOP, "Export", Some(BrowserEffect::Download));
+    for call in [submit(SHOP), upload.clone(), download.clone()] {
+        assert_eq!(
+            verdict(&fx.engine, &call),
+            (Verdict::Allow, Source::Bypass),
+            "attended {call:?}"
+        );
+    }
+    fx.engine.set_unattended(Some(Unattended {
+        hook_asks: true,
+        browser_submits: vec![SHOP.to_owned()],
+    }));
+    assert_eq!(
+        verdict(&fx.engine, &submit(SHOP)),
+        (Verdict::Allow, Source::Grant)
+    );
+    assert_eq!(
+        verdict(&fx.engine, &upload),
+        (Verdict::Allow, Source::Grant)
+    );
+    for call in [submit("example.org"), download.clone()] {
+        assert_eq!(
+            verdict(&fx.engine, &call),
+            (Verdict::Ask, Source::Default),
+            "unattended {call:?}"
+        );
+        let script = Script::new(&[None]);
+        let channel = RuleApprovals::new(fx.engine.clone(), script);
+        assert_eq!(action_of(&ask(&channel, &call).await), "reject", "{call:?}");
+    }
+    // A plain act still runs: bypass has nothing to answer there.
+    assert_eq!(
+        verdict(&fx.engine, &click(SHOP, "Next page", None)).0,
+        Verdict::Allow
     );
 }
 

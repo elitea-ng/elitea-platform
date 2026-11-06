@@ -9,7 +9,8 @@
 //! contract's own [`is_secure_field`], so a field the script got wrong
 //! still shows no value).
 
-use elitea_browser_tools::snapshot::{Node, State, is_secure_field};
+use elitea_browser_tools::ControlInfo;
+use elitea_browser_tools::snapshot::{MAX_NAME_CHARS, Node, State, is_secure_field};
 use elitea_browser_tools::{BrowserError, ErrorCode};
 use serde::Deserialize;
 use serde_json::Value;
@@ -120,6 +121,39 @@ pub struct RawClick {
     pub ignored: bool,
     #[serde(default)]
     pub rect: Option<RawRect>,
+}
+
+/// An element as the host's rules read it (`focused_control`, `inspect`).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct RawControl {
+    #[serde(default)]
+    pub r: String,
+    #[serde(default)]
+    pub n: String,
+    #[serde(default)]
+    pub t: Option<String>,
+    #[serde(default)]
+    pub d: bool,
+}
+
+impl RawControl {
+    /// The contract's [`ControlInfo`], its name cut as a snapshot's.
+    #[must_use]
+    pub fn into_info(self) -> ControlInfo {
+        ControlInfo {
+            role: self.r,
+            name: collapse_name(&self.n),
+            input_type: self.t.map(|t| t.to_ascii_lowercase()),
+            download: self.d,
+        }
+    }
+}
+
+/// `name` with its whitespace runs as one space, at most
+/// [`MAX_NAME_CHARS`] characters (a snapshot's rule).
+fn collapse_name(name: &str) -> String {
+    let collapsed = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(MAX_NAME_CHARS).collect()
 }
 
 /// A rectangle in the top viewport's CSS pixels.

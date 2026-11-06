@@ -70,6 +70,11 @@ func TestValidCommitRules(t *testing.T) {
 	if !validCommit(base) {
 		t.Fatal("a minimal commit is valid")
 	}
+	withHost := base
+	withHost.HITLExchanges = []HITLExchange{{InterruptID: "i", Kind: "browser_submit", Decision: "approve", Source: SourceGrant, Host: "shop.example.com"}}
+	if !validCommit(withHost) {
+		t.Fatal("a browser submit exchange with its host is valid")
+	}
 	for name, mutate := range map[string]func(*CommitRequest){
 		"upper-case id":      func(r *CommitRequest) { r.ExecutionID = strings.Repeat("A", 32) },
 		"no credential":      func(r *CommitRequest) { r.Credential = Credential{} },
@@ -97,6 +102,9 @@ func TestValidCommitRules(t *testing.T) {
 		},
 		"HITL without id": func(r *CommitRequest) {
 			r.HITLExchanges = []HITLExchange{{Kind: "k", Decision: "approve"}}
+		},
+		"HITL host that is not a host name": func(r *CommitRequest) {
+			r.HITLExchanges = []HITLExchange{{InterruptID: "i", Kind: "browser_submit", Decision: "approve", Host: "https://x.example"}}
 		},
 	} {
 		request := base

@@ -168,10 +168,16 @@ pub struct UnattendedGrant {
 pub const MAX_BROWSER_SUBMITS: usize = 32;
 
 /// Whether `host` may be named by `browser_submits`: a lowercase DNS host
-/// name of at least two labels, no scheme, port, wildcard or address (the
-/// platform's `unattended.ValidBrowserSubmitHost`).
+/// name of at least two labels, no scheme, port, wildcard or address, and a
+/// last label that is not all digits (`example.123` is refused). The
+/// platform's `unattended.ValidBrowserSubmitHost` is the same rule.
 fn valid_submit_host(host: &str) -> bool {
-    !host.starts_with("*.") && elitea_local_tools::policy::valid_browser_domain(host)
+    !host.starts_with("*.")
+        && elitea_local_tools::policy::valid_browser_domain(host)
+        && host
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| !last.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn refused(message: &str) -> TurnError {
@@ -726,6 +732,10 @@ mod tests {
 
     #[test]
     fn browser_submits_are_host_names_deduplicated_and_bounded() {
+        assert!(
+            grant(json!({ "browser_submits": ["123.example.com", "a1.example.c0m"] })).is_ok(),
+            "digits are fine in any label but the last"
+        );
         let made = grant(json!({
             "browser_submits": ["Shop.Example.com.", "shop.example.com", "docs.example.org"]
         }))
@@ -754,6 +764,10 @@ mod tests {
             json!({ "browser_submits": ["example.com:443"] }),
             json!({ "browser_submits": ["10.0.0.1"] }),
             json!({ "browser_submits": ["localhost"] }),
+            // The platform refuses a last label of digits: so does the
+            // desktop (finding 7).
+            json!({ "browser_submits": ["example.123"] }),
+            json!({ "browser_submits": ["shop.example.0"] }),
             json!({ "browser_submits": "example.com" }),
         ] {
             assert!(grant(bad.clone()).is_err(), "{bad}");

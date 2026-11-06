@@ -502,14 +502,25 @@ impl AnswerSink for UiPrompt {
         } else {
             "command_approval"
         };
-        binding.recorder.hitl_exchange(exchange_of(
+        let mut exchange = exchange_of(
             &request,
             &uuid::Uuid::new_v4().to_string(),
             kind,
             &clean(&title),
             action,
             source,
-        ));
+        );
+        // The host the grant answered for: the platform's ledger checks it
+        // against the stored grant's `browser_submits` (contract 1.38).
+        if kind == BROWSER_SUBMIT_KIND
+            && let Some(host) = call
+                .browser
+                .as_ref()
+                .and_then(|target| target.host.as_deref())
+        {
+            exchange["host"] = json!(host.trim_end_matches('.').to_ascii_lowercase());
+        }
+        binding.recorder.hitl_exchange(exchange);
     }
 }
 
@@ -1276,6 +1287,11 @@ mod tests {
         let exchanges = binding.recorder.hitl_exchanges();
         assert_eq!(exchanges[2]["kind"], BROWSER_SUBMIT_KIND);
         assert_eq!(exchanges[2]["source"], SOURCE_GRANT);
+        assert_eq!(
+            exchanges[2]["host"], "shop.example.com",
+            "the ledger checks the answered host"
+        );
+        assert!(exchanges[0].get("host").is_none(), "only a browser submit");
     }
 
     /// A question with a wait that nobody answers is closed: the card goes

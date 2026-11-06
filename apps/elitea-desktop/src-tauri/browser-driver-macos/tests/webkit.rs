@@ -78,6 +78,7 @@ mod mac {
         ("untrusted", include_str!("fixtures/untrusted.html")),
         ("history-a", include_str!("fixtures/history-a.html")),
         ("history-b", include_str!("fixtures/history-b.html")),
+        ("controls", include_str!("fixtures/controls.html")),
     ];
 
     /// The host's rules (`content_rules` in `src/browser_pane.rs`; a host
@@ -372,6 +373,7 @@ mod mac {
         ok &= cross_origin_frame(driver, port).await;
         ok &= isolation(driver, port).await;
         ok &= untrusted_input(driver, port).await;
+        ok &= rule_reads(driver, port).await;
         ok &= content_rules(views, port).await;
         ok &= native_history(views, port).await;
         ok
@@ -695,6 +697,52 @@ mod mac {
         }
         .await;
         report("page scripts cannot see or call the driver world", outcome)
+    }
+
+    /// What the host's rules read before deciding a call (ADR-0048
+    /// decision 8): the focused control, an element's input type and
+    /// download attribute, and the live address.
+    async fn rule_reads(driver: &WebDriver<WebKitEngine>, port: u16) -> bool {
+        let outcome = async {
+            let opened = call(
+                driver,
+                "browser_open",
+                json!({ "url": url(port, "controls") }),
+            )
+            .await;
+            if opened["status"] != "ok" {
+                return Err(format!("open: {opened}"));
+            }
+            let address = driver.current_url().await.map_err(|e| e.to_string())?;
+            if !address.ends_with("/controls.html") {
+                return Err(format!("current_url: {address}"));
+            }
+            let focused = driver.focused().await.map_err(|e| e.to_string())?;
+            let focused = focused.ok_or("nothing focused")?;
+            if focused.role != "button" || focused.name != "Place order" {
+                return Err(format!("focused: {focused:?}"));
+            }
+            let snapshot = tree(driver).await?;
+            let link = find_ref(&snapshot, "link", "Invoice 7")?;
+            let link = elitea_browser_tools::ElementRef::parse(&link).map_err(|e| e.to_string())?;
+            let info = driver.inspect(&link).await.map_err(|e| e.to_string())?;
+            if !info.download {
+                return Err(format!("the download attribute was not read: {info:?}"));
+            }
+            let field = find_ref(&snapshot, "textbox", "Resume")?;
+            let field =
+                elitea_browser_tools::ElementRef::parse(&field).map_err(|e| e.to_string())?;
+            let info = driver.inspect(&field).await.map_err(|e| e.to_string())?;
+            if info.input_type.as_deref() != Some("file") {
+                return Err(format!("the file input was not read: {info:?}"));
+            }
+            Ok(())
+        }
+        .await;
+        report(
+            "the rules read the focus, an element and the live address",
+            outcome,
+        )
     }
 
     async fn untrusted_input(driver: &WebDriver<WebKitEngine>, port: u16) -> bool {

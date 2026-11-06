@@ -58,6 +58,10 @@ func TestValidateBrowserSubmits(t *testing.T) {
 		{name: "path", hosts: []string{"example.com/login"}, want: RefusedInvalid},
 		{name: "one label", hosts: []string{"localhost"}, want: RefusedInvalid},
 		{name: "ipv4", hosts: []string{"10.0.0.1"}, want: RefusedInvalid},
+		// The desktop's d0/unattended.rs refuses the same: a last label of
+		// digits only.
+		{name: "digit last label", hosts: []string{"example.123"}, want: RefusedInvalid},
+		{name: "digits in other labels", hosts: []string{"123.example.com", "a1.example.c0m"}},
 		{name: "empty", hosts: []string{""}, want: RefusedInvalid},
 		{name: "space", hosts: []string{" example.com"}, want: RefusedInvalid},
 		{name: "leading hyphen", hosts: []string{"-a.example.com"}, want: RefusedInvalid},
