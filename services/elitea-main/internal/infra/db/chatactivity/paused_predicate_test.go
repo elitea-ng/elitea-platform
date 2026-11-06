@@ -8,18 +8,25 @@ import (
 )
 
 // FU-284: "needs you" counts every wait for a person, a parked fan-out
-// included, and keeps the partial index's text as its first arm.
+// included. Load's predicate is built from responsepause; Paused reads one
+// arm per partial index, each in its index's exact text.
 func TestPausedPredicateNamesEveryWaitingKey(t *testing.T) {
 	predicate := PausedPredicate()
+	if !strings.Contains(predicate, responsepause.SQL(responsepause.Group)) {
+		t.Errorf("the paused predicate is not built from responsepause: %s", predicate)
+	}
+	query := pausedQuery(`"p_1"`)
 	for _, key := range responsepause.WaitingKeys() {
-		if !strings.Contains(predicate, "g.meta ? '"+key+"'") {
-			t.Errorf("the paused predicate misses %s", key)
+		if !strings.Contains(predicate, "'"+key+"'") || !strings.Contains(query, "g.meta ? '"+key+"'") {
+			t.Errorf("%s is missing from the paused predicate or query", key)
 		}
 	}
-	const indexed = `(NOT g.is_streaming AND (g.meta ? 'hitl_interrupt' OR g.meta ? 'hitl_interrupts'
-		OR g.meta ? 'authorization_requests' OR g.meta->'output_limit_reached' = 'true'::jsonb
-		OR g.meta ? 'pipeline_static_v1' OR g.meta ? 'node_recovery_required_v1'))`
-	if !strings.Contains(predicate, indexed) {
-		t.Error("the paused predicate no longer carries chat_message_group_paused_idx's text")
+	for _, arm := range []string{pausedIndexedArm, parkedIndexedArm} {
+		if !strings.Contains(query, arm) {
+			t.Errorf("Paused does not carry the index text %s", arm)
+		}
+	}
+	if !strings.Contains(query, "UNION") {
+		t.Error("Paused does not read the two arms separately")
 	}
 }

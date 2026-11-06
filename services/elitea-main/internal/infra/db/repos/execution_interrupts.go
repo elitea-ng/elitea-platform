@@ -818,7 +818,10 @@ WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClo
 }
 
 // dropResponsePark removes fanout_parked_v1 from the response whose cards
-// just closed, in the response's own project schema.
+// just closed, in the response's own project schema. A wake of the response
+// that is queued or already admitted keeps it: that wake takes the response
+// by the marker (execution_interrupt_wakes.go, the resume UPDATE), and the
+// chain settle reads the wake's ownership while it runs.
 func dropResponsePark(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string) error {
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
@@ -827,7 +830,10 @@ func dropResponsePark(ctx context.Context, tx sqlExecutor, projectID int64, root
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`
 UPDATE %s.chat_message_group
 SET meta = meta - 'fanout_parked_v1', updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
-WHERE uuid = $1::uuid AND meta ? 'fanout_parked_v1'`, schema), rootResponseID); err != nil {
+WHERE uuid = $1::uuid AND meta ? 'fanout_parked_v1'
+  AND NOT EXISTS (
+      SELECT 1 FROM elitea_runtime.execution_interrupt_wakes AS wake
+      WHERE wake.root_response_id = $1::uuid AND wake.state IN ('QUEUED', 'ADMITTED'))`, schema), rootResponseID); err != nil {
 		return fmt.Errorf("execution interrupt close: drop the park: %w", err)
 	}
 	return nil

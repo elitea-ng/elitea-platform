@@ -23,6 +23,9 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runfinished"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattendedchain"
+	interruptdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatactivity"
+	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 // parkSettleViews adapts the repository to unattendedchain.Chains, as
@@ -324,5 +327,139 @@ AND NOT meta ? 'fanout_parked_v1' AND meta ? 'thread_id'`, parked); n != 1 {
 	if n := w.count(`SELECT count(*) FROM elitea_runtime.execution_interrupts
 WHERE root_response_id = $1::uuid AND state IN ('PENDING', 'DECIDED')`, parked); n != 0 {
 		t.Fatalf("%d cards still open", n)
+	}
+}
+
+// TestClosedCardsKeepTheParkOfARunningWake: cards that close while a wake of
+// the response is admitted (its job exists and may be starting) leave the
+// park marker: the wake takes the response by it, and the chain settle reads
+// the wake's ownership.
+func TestClosedCardsKeepTheParkOfARunningWake(t *testing.T) {
+	w := newWakeHarness(t)
+	parked := w.newResponse()
+	w.queueWake(parked)
+	w.exec(`UPDATE elitea_runtime.execution_interrupt_wakes SET state = 'ADMITTED', wake_execution_id = $2
+WHERE root_response_id = $1::uuid`, parked, strings.Repeat("d7", 16))
+	err := w.repo.projects.WithinProjectTx(t.Context(), 1, interruptWriteTx, func(tx sqlExecutor) error {
+		_, _, err := closeOpenCards(t.Context(), tx, parked, interruptdomain.StateCancelled, interruptdomain.StateSuperseded,
+			interruptdomain.Closer{ActorUserID: interruptAsker})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM p_1.chat_message_group WHERE uuid = $1::uuid AND meta ? 'fanout_parked_v1'`, parked); n != 1 {
+		t.Fatal("closing the cards dropped the park of an admitted wake")
+	}
+}
+
+// TestPausedReadsBothPartialIndexes: "needs you" for many conversations reads
+// the paused and the parked groups through their partial indexes
+// (tenant/0153, tenant/0161), never a scan of every message group, and
+// answers a paused and a parked conversation.
+func TestPausedReadsBothPartialIndexes(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	var paused, parked int64
+	for i, meta := range []string{`{"hitl_interrupt": {"id": "i1"}}`, `{"thread_id": "t1", "fanout_parked_v1": {"open": 1}}`} {
+		var conversation int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, created_at)
+VALUES (gen_random_uuid(), 'needs you '||$1::int, 7, now() AT TIME ZONE 'UTC') RETURNING id`, i).Scan(&conversation); err != nil {
+			t.Fatal(err)
+		}
+		if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `
+INSERT INTO p_1.chat_message_group (uuid, author_participant_id, conversation_id, meta, is_streaming, created_at)
+VALUES (gen_random_uuid(), 1, $1, $2::jsonb, FALSE, now() AT TIME ZONE 'UTC')`, conversation, meta)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			paused = conversation
+		} else {
+			parked = conversation
+		}
+	}
+	got, err := chatactivity.Paused(ctx, pool, `"p_1"`, []int64{paused, parked})
+	if err != nil || !got[paused] || !got[parked] {
+		t.Fatalf("Paused = %v, %v; want both conversations", got, err)
+	}
+	var plan []string
+	if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		// Steer away from a scan the planner may prefer on a tiny table; what
+		// this proves is that each arm's predicate implies its index's.
+		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "EXPLAIN "+chatactivity.PausedQueryForTests(`"p_1"`), []int64{paused, parked})
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return err
+			}
+			plan = append(plan, line)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(plan, "\n")
+	for _, index := range []string{"chat_message_group_paused_idx", "chat_message_group_parked_idx"} {
+		if !strings.Contains(text, index) {
+			t.Errorf("the plan does not use %s:\n%s", index, text)
+		}
+	}
+	if strings.Contains(text, "Seq Scan on chat_message_group g") {
+		t.Errorf("the plan scans every message group:\n%s", text)
+	}
+}
+
+// TestParkedIndexMigrationIsANoOpTwice: 0161 applied again to a migrated
+// tenant changes nothing (IF NOT EXISTS, CREATE OR REPLACE), and its function
+// reads the park.
+func TestParkedIndexMigrationIsANoOpTwice(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	body, err := platformmigrations.Files.ReadFile("tenant/0161_chat_message_group_parked_index.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes
+WHERE schemaname = 'p_1' AND indexname = 'chat_message_group_parked_idx'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if count() != 1 {
+		t.Fatal("the migrated tenant has no parked index")
+	}
+	for range 2 {
+		if err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `SET LOCAL search_path = p_1`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, string(body))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var parks bool
+	if err := pool.QueryRow(ctx, `SELECT p_1.chat_group_meta_paused('{"fanout_parked_v1": {}}'::jsonb)`).Scan(&parks); err != nil {
+		t.Fatal(err)
+	}
+	if count() != 1 || !parks {
+		t.Fatalf("indexes %d, the function reads the park %v", count(), parks)
 	}
 }

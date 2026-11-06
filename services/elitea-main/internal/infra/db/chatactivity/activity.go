@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/responsepause"
 )
 
 // The values of `activity.state`. The wire field is a string, not an
@@ -30,18 +32,26 @@ const (
 	StateIdle = "idle"
 )
 
-// PausedPredicate is the SQL test, for the message group aliased g, that the
-// group paused for the user. Its first arm is the same text as the partial
-// index chat_message_group_paused_idx (tenant/0153), so the planner can use
-// the index. The second arm is a parked fan-out (responsepause, FU-284), which
-// that index predates; the readers already filter on conversation_id, which
-// chat_message_group_conversation_newest_idx serves. Every responsepause.WaitingKeys
-// member is in this text (TestPausedPredicateNamesEveryWaitingKey).
-func PausedPredicate() string {
-	return `((NOT g.is_streaming AND (g.meta ? 'hitl_interrupt' OR g.meta ? 'hitl_interrupts'
+// pausedIndexedArm is the text of the partial index chat_message_group_paused_idx
+// (tenant/0153) for the group aliased g: a root pause, a static pipeline
+// input, a recovery decision or "continue" after the output limit.
+const pausedIndexedArm = `(NOT g.is_streaming AND (g.meta ? 'hitl_interrupt' OR g.meta ? 'hitl_interrupts'
 		OR g.meta ? 'authorization_requests' OR g.meta->'output_limit_reached' = 'true'::jsonb
-		OR g.meta ? 'pipeline_static_v1' OR g.meta ? 'node_recovery_required_v1'))
-		OR (NOT g.is_streaming AND g.meta ? 'fanout_parked_v1'))`
+		OR g.meta ? 'pipeline_static_v1' OR g.meta ? 'node_recovery_required_v1'))`
+
+// parkedIndexedArm is the text of the partial index chat_message_group_parked_idx
+// (tenant/0161): a fan-out parked on its cards (FU-284).
+const parkedIndexedArm = `(NOT g.is_streaming AND g.meta ? 'fanout_parked_v1')`
+
+// PausedPredicate is the SQL test, for the message group aliased g, that the
+// group paused for the user: it waits for a person (responsepause, a parked
+// fan-out included) or for another input (a static pipeline input, a
+// recovery decision, "continue" after the output limit). Load evaluates it on
+// one newest row per conversation; Paused reads the two indexed arms instead.
+func PausedPredicate() string {
+	return `(NOT g.is_streaming AND (` + responsepause.SQL(responsepause.Group) + `
+		OR g.meta->'output_limit_reached' = 'true'::jsonb
+		OR g.meta ? 'pipeline_static_v1' OR g.meta ? 'node_recovery_required_v1'))`
 }
 
 // Activity is one conversation's status for one reader.
@@ -168,9 +178,26 @@ func Load(ctx context.Context, q Querier, s string, reader int64, ids []int64) (
 	return out, nil
 }
 
+// pausedQuery is Paused's statement for the quoted tenant schema s: one arm
+// per partial index, each in its index's exact text so the planner can use it.
+func pausedQuery(s string) string {
+	arm := func(predicate string) string {
+		return fmt.Sprintf(`
+		SELECT g.conversation_id
+		FROM %[1]s.chat_message_group g
+		WHERE g.conversation_id = ANY($1::bigint[]) AND %[2]s
+		  AND NOT EXISTS (
+		      SELECT 1 FROM %[1]s.chat_message_group newer
+		      WHERE newer.conversation_id = g.conversation_id
+		        AND (newer.created_at, newer.id) > (g.created_at, g.id))`, s, predicate)
+	}
+	return arm(pausedIndexedArm) + "\n\t\tUNION" + arm(parkedIndexedArm)
+}
+
 // Paused answers which of ids have a newest message group that paused for
-// the user (StateNeedsYou). It reads only the paused groups, through the
-// partial index chat_message_group_paused_idx, so it is cheap for every
+// the user (StateNeedsYou). It reads only the paused and the parked groups,
+// through the partial indexes chat_message_group_paused_idx (tenant/0153) and
+// chat_message_group_parked_idx (tenant/0161), so it is cheap for every
 // conversation of a project: the folder sidebar counts "needs you" per group
 // over rows it does not page in.
 func Paused(ctx context.Context, q Querier, s string, ids []int64) (map[int64]bool, error) {
@@ -178,14 +205,7 @@ func Paused(ctx context.Context, q Querier, s string, ids []int64) (map[int64]bo
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := q.Query(ctx, fmt.Sprintf(`
-		SELECT DISTINCT g.conversation_id
-		FROM %[1]s.chat_message_group g
-		WHERE g.conversation_id = ANY($1::bigint[]) AND %[2]s
-		  AND NOT EXISTS (
-		      SELECT 1 FROM %[1]s.chat_message_group newer
-		      WHERE newer.conversation_id = g.conversation_id
-		        AND (newer.created_at, newer.id) > (g.created_at, g.id))`, s, PausedPredicate()), ids)
+	rows, err := q.Query(ctx, pausedQuery(s), ids)
 	if err != nil {
 		return nil, fmt.Errorf("chat activity: paused: %w", err)
 	}
@@ -202,3 +222,6 @@ func Paused(ctx context.Context, q Querier, s string, ids []int64) (map[int64]bo
 	}
 	return out, nil
 }
+
+// PausedQueryForTests is Paused's statement, for a plan check.
+func PausedQueryForTests(s string) string { return pausedQuery(s) }
