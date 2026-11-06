@@ -604,6 +604,30 @@ fn describe(request: &ApprovalRequest) -> Value {
                 payload["unconfined"] = json!(call.unconfined);
             }
         }
+        // A `computer` call (ADR-0047): the app, window and action the
+        // rules named, and whether only the person at the machine can
+        // answer it (an unattended act).
+        if let Some(target) = &call.computer {
+            if let Some(bundle) = &target.bundle_id {
+                payload["detail"] = json!(cut(
+                    &[
+                        Some(bundle.as_str()),
+                        target.window_title.as_deref(),
+                        target.action.as_deref()
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+                    1024
+                ));
+            }
+            payload["computer"] = serde_json::to_value(target).unwrap_or(Value::Null);
+            if request.payload.get("attended_only") == Some(&Value::Bool(true)) {
+                payload["attended_only"] = json!(true);
+            }
+        }
         // Which layer asks (`workspace`, `user`, `default`, …) and, for a
         // rule, which one and its justification (the card shows them).
         for key in ["source", "rule", "justification"] {
@@ -649,6 +673,27 @@ fn describe(request: &ApprovalRequest) -> Value {
             payload["authorize_path"] = json!(text("authorize_path"));
         }
         return payload;
+    }
+    if let Some(hand_over) = request
+        .payload
+        .get(crate::computer_tools::REQUEST_USER_PAYLOAD_KEY)
+    {
+        // `computer_request_user` (ADR-0047): what the agent needs the
+        // person to do; approve means "done", anything else declines.
+        let text = |key: &str| {
+            hand_over
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        };
+        return json!({
+            "tool": crate::computer_tools::COMPUTER_REQUEST_USER,
+            "title": request.message,
+            "detail": cut(text("reason"), 1024),
+            "bundle_id": text("bundle_id"),
+            "reason": "",
+            "can_remember": false,
+        });
     }
     if let Some(remote) = request.payload.get(REMOTE_PAYLOAD_KEY) {
         let text = |key: &str| remote.get(key).and_then(Value::as_str).unwrap_or_default();

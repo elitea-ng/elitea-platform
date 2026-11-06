@@ -2648,6 +2648,29 @@ type BrowserEvent = { thread_id: string } & (
 );
 ```
 
+## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
+
+No new command or event. A Local turn gets the `computer` toolset
+(`computer_apps`, `computer_snapshot`, `computer_screenshot`,
+`computer_act`, `computer_type`, `computer_key`, `computer_click_at`,
+`computer_open_app`, `computer_wait`, `computer_request_user`) only while the
+client policy's `local_work_computer_use` and `settings.json`
+`"computer_use": true` are both on. Sub-agents never get it. Its calls show
+as ordinary `tool_call` / `tool_result` events.
+
+A computer call's `approval_request` is a `command_approval` with
+`tool: "computer_read" | "computer_act"`, `detail: "<bundle id> · <window
+title> · <action>"`, `computer: {bundle_id, app_name?, window_title?, action,
+open_app, list_apps, control?: {role, name, destructive}}`, and
+`attended_only: true` for an act in an unattended run (only the person at
+the machine answers it; no answer declines). Its actions are `approve`,
+`approve_thread` (when the turn has a thread), `approve_always` and `reject`.
+
+`computer_request_user` raises a `command_approval` with
+`tool: "computer_request_user"`, `title: "The agent hands control to you"`,
+`detail: <the reason>`, `bundle_id`, and a 15-minute wait: `approve` means
+"done", and anything else, an `approval_closed` timeout included, declines.
+
 ## Events
 
 Eleven event names, all emitted to the `main` window only: `browser://event`

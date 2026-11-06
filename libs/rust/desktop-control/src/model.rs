@@ -420,6 +420,81 @@ impl KeyChord {
     }
 }
 
+/// The pointer button of a coordinate click (`computer_click_at`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerButton {
+    #[default]
+    Left,
+    Right,
+}
+
+/// The most clicks one `click_at` sends (a triple click selects a line).
+pub const MAX_CLICK_COUNT: u32 = 3;
+
+/// One coordinate click (ADR-0047 decision 2, `computer_click_at`): the
+/// fallback for an application with no accessible tree. The point is in
+/// global screen points, inside the window `window_id` names, and that
+/// window must be the topmost one at the point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClickAt {
+    /// The window, by [`WindowInfo::id`].
+    pub window_id: String,
+    pub point: Point,
+    pub button: PointerButton,
+    /// 1 to [`MAX_CLICK_COUNT`].
+    pub count: u32,
+}
+
+impl ClickAt {
+    /// Checks the click's own arguments before anything is read or sent.
+    ///
+    /// # Errors
+    /// [`DesktopError::InvalidArgs`](crate::DesktopError::InvalidArgs) for a
+    /// point that is not finite or a count outside 1 to [`MAX_CLICK_COUNT`].
+    pub fn validate(&self) -> Result<(), crate::DesktopError> {
+        if !(self.point.x.is_finite() && self.point.y.is_finite()) {
+            return Err(crate::DesktopError::InvalidArgs(
+                "the point is not finite".into(),
+            ));
+        }
+        if !(1..=MAX_CLICK_COUNT).contains(&self.count) {
+            return Err(crate::DesktopError::InvalidArgs(format!(
+                "count must be 1 to {MAX_CLICK_COUNT}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Whether `point` is inside `rect` (the far edges excluded).
+#[must_use]
+pub fn rect_contains(rect: &Rect, point: &Point) -> bool {
+    point.x >= rect.x
+        && point.y >= rect.y
+        && point.x < rect.x + rect.width
+        && point.y < rect.y + rect.height
+}
+
+/// The window topmost at `point`, from windows listed front to back: the
+/// first one, not minimized, whose bounds hold the point.
+#[must_use]
+pub fn topmost_at<'a>(front_to_back: &'a [WindowInfo], point: &Point) -> Option<&'a WindowInfo> {
+    front_to_back
+        .iter()
+        .find(|w| !w.minimized && w.bounds.as_ref().is_some_and(|b| rect_contains(b, point)))
+}
+
+/// What `open_app` did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenedApp {
+    pub name: String,
+    pub pid: u32,
+    pub bundle_id: String,
+    /// The window the app presented, when it presented one in time.
+    pub window: Option<WindowInfo>,
+}
+
 /// A captured image.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Capture {
@@ -497,6 +572,54 @@ mod tests {
                 .code(),
             "invalid_args"
         );
+    }
+
+    fn window(id: &str, x: f64, minimized: bool) -> WindowInfo {
+        WindowInfo {
+            id: id.into(),
+            title: String::new(),
+            app_name: String::new(),
+            pid: 1,
+            bundle_id: None,
+            bounds: Some(Rect {
+                x,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            }),
+            focused: false,
+            minimized,
+        }
+    }
+
+    #[test]
+    fn the_topmost_window_is_the_first_that_holds_the_point() {
+        let windows = [
+            window("front", 50.0, false),
+            window("hidden", 0.0, true),
+            window("back", 0.0, false),
+        ];
+        let p = |x| Point { x, y: 10.0 };
+        assert_eq!(topmost_at(&windows, &p(60.0)).unwrap().id, "front");
+        // A minimized window covers nothing.
+        assert_eq!(topmost_at(&windows, &p(10.0)).unwrap().id, "back");
+        // The far edge is outside.
+        assert!(topmost_at(&windows, &p(150.0)).is_none());
+    }
+
+    #[test]
+    fn a_click_needs_a_finite_point_and_one_to_three_clicks() {
+        let click = |x: f64, count| ClickAt {
+            window_id: "w".into(),
+            point: Point { x, y: 1.0 },
+            button: PointerButton::Left,
+            count,
+        };
+        assert_eq!(click(1.0, 1).validate(), Ok(()));
+        assert_eq!(click(1.0, 3).validate(), Ok(()));
+        for bad in [click(f64::NAN, 1), click(1.0, 0), click(1.0, 4)] {
+            assert_eq!(bad.validate().unwrap_err().code(), "invalid_args");
+        }
     }
 
     #[test]

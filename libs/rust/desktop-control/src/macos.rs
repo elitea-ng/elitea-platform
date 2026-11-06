@@ -18,15 +18,15 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use agent_desktop_core as ad;
-use agent_desktop_core::{ObservationOps, RefEntry, SystemOps};
+use agent_desktop_core::{InputOps, ObservationOps, RefEntry, SystemOps};
 
 use crate::guard::{self, HostState};
 use crate::snapshot::{Binding, RawNode, RefRegistry, build_tree};
 use crate::{
-    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, Delivery, DesktopDriver, DesktopError,
-    ElementRef, Grant, KeyChord, Modifier, Node, OwnApps, Permissions, Rect, ScreenStatus,
-    ScrollDirection, Snapshot, SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo,
-    WindowTarget,
+    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, Delivery, DesktopDriver,
+    DesktopError, ElementRef, Grant, KeyChord, Modifier, Node, OpenedApp, OwnApps, Permissions,
+    PointerButton, Rect, ScreenStatus, ScrollDirection, Snapshot, SnapshotBudget, SyntheticMarker,
+    WaitCondition, WindowInfo, WindowTarget, rect_contains, topmost_at,
 };
 
 /// How many snapshots the driver keeps refs for.
@@ -35,6 +35,8 @@ const HELD_SNAPSHOTS: usize = 8;
 const SNAPSHOT_TIMEOUT_MS: u64 = 5_000;
 /// The deadline of one action, key or capture.
 const ACTION_TIMEOUT_MS: u64 = 5_000;
+/// The deadline of `open_app`: the launch and the first window.
+const LAUNCH_TIMEOUT_MS: u64 = 10_000;
 /// The deadline of the frontmost-app read behind the screensaver check.
 const SCREEN_CHECK_TIMEOUT_MS: u64 = 1_000;
 /// The poll interval of `wait`.
@@ -441,6 +443,14 @@ impl HostState for MacDriver {
 }
 
 impl DesktopDriver for MacDriver {
+    fn screen(&self) -> ScreenStatus {
+        HostState::screen(self)
+    }
+
+    fn secure_input(&self) -> bool {
+        HostState::secure_input(self)
+    }
+
     fn permissions(&self) -> Permissions {
         let Ok(deadline) = deadline(ACTION_TIMEOUT_MS) else {
             return Permissions {
@@ -615,6 +625,123 @@ impl DesktopDriver for MacDriver {
             .press_key_for_window(&window, &combo, ad::InteractionPolicy::headless(), &lease)
             .map_err(map_err)?;
         Ok(outcome("key", &result))
+    }
+
+    fn click_at(&self, click: &ClickAt) -> Result<ActionOutcome, DesktopError> {
+        click.validate()?;
+        guard::before_act(self)?;
+        let deadline = deadline(ACTION_TIMEOUT_MS)?;
+        let window = self.resolve_window(&WindowTarget::Window(click.window_id.clone()))?;
+        let bounds = window
+            .bounds
+            .map(rect)
+            .ok_or_else(|| DesktopError::WindowNotFound("the window has no frame".into()))?;
+        if !rect_contains(&bounds, &click.point) {
+            return Err(DesktopError::InvalidArgs(
+                "the point is outside the window".into(),
+            ));
+        }
+        // The click lands on whatever window is on top at the point: refused
+        // unless it is the approved one. CoreGraphics lists the windows front
+        // to back, so the first that holds the point is on top.
+        let own = self.own_pids(deadline)?;
+        let windows: Vec<WindowInfo> = self
+            .vendor_windows(None, deadline)?
+            .iter()
+            .filter(|w| w.state.visible != Some(false))
+            .map(|w| WindowInfo {
+                id: w.id.clone(),
+                title: String::new(),
+                app_name: String::new(),
+                pid: w.pid.get(),
+                bundle_id: None,
+                bounds: w.bounds.map(rect),
+                focused: w.state.is_focused,
+                minimized: w.state.minimized.unwrap_or(false),
+            })
+            .collect();
+        match topmost_at(&windows, &click.point) {
+            Some(top) if top.id == window.id => {}
+            Some(top)
+                if own.iter().any(|p| p.get() == top.pid) || self.own.is_own(top.pid, None) =>
+            {
+                return Err(DesktopError::OwnWindowRefused(
+                    "an Elitea window covers the point".into(),
+                ));
+            }
+            _ => {
+                return Err(DesktopError::OwnWindowRefused(
+                    "another window covers the point: bring the window forward first".into(),
+                ));
+            }
+        }
+        let lease = Self::lease(deadline)?;
+        self.adapter
+            .mouse_event(
+                ad::MouseEvent {
+                    kind: ad::MouseEventKind::Click { count: click.count },
+                    point: ad::Point {
+                        x: click.point.x,
+                        y: click.point.y,
+                    },
+                    button: match click.button {
+                        PointerButton::Left => ad::MouseButton::Left,
+                        PointerButton::Right => ad::MouseButton::Right,
+                    },
+                    modifiers: Vec::new(),
+                },
+                &lease,
+            )
+            .map_err(map_err)?;
+        Ok(ActionOutcome {
+            action: "click_at".to_owned(),
+            delivery: Delivery::Physical,
+            verified: false,
+        })
+    }
+
+    fn open_app(&self, bundle_id: &str) -> Result<OpenedApp, DesktopError> {
+        if self.own.is_own_bundle(bundle_id) {
+            return Err(DesktopError::OwnWindowRefused(bundle_id.to_owned()));
+        }
+        // A bundle id, never a path or a bare name the vendor would resolve
+        // through Launch Services to some other app.
+        let valid = bundle_id.contains('.')
+            && !bundle_id.starts_with('.')
+            && !bundle_id.ends_with('.')
+            && !bundle_id.contains("..")
+            && bundle_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        if !valid {
+            return Err(DesktopError::InvalidArgs(format!(
+                "`{bundle_id}` is not a bundle id"
+            )));
+        }
+        guard::before_act(self)?;
+        let deadline = deadline(LAUNCH_TIMEOUT_MS)?;
+        let lease = Self::lease(deadline)?;
+        let options = ad::system::launch_options::LaunchOptions {
+            timeout_ms: LAUNCH_TIMEOUT_MS,
+            activate: true,
+            ..ad::system::launch_options::LaunchOptions::default()
+        };
+        let launched = self
+            .adapter
+            .launch_app(bundle_id, &options, &lease)
+            .map_err(map_err)?;
+        // A pid reused, or a bundle that resolves to Elitea after all.
+        self.refuse_own_pid(launched.pid, deadline, "Elitea")?;
+        let window = launched
+            .window
+            .as_ref()
+            .map(|w| self.to_window(w, deadline));
+        Ok(OpenedApp {
+            name: launched.app,
+            pid: launched.pid.get(),
+            bundle_id: bundle_id.to_owned(),
+            window,
+        })
     }
 
     fn capture(&self, target: &CaptureTarget) -> Result<Capture, DesktopError> {

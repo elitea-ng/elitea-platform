@@ -24,7 +24,9 @@
 //! [`SyntheticMarker`], so the user-active guard can tell the person's input
 //! from the driver's ([`DesktopDriver::is_synthetic_event`]).
 //!
-//! Nothing calls this crate yet; #1583 wires the toolset.
+//! The desktop host's `computer` toolset (#1583) is its caller. It also
+//! calls [`DesktopDriver::screen`] before every tool call, so a locked
+//! screen refuses the whole call.
 
 mod driver;
 mod error;
@@ -42,9 +44,10 @@ pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlap
 #[cfg(target_os = "macos")]
 pub use macos::MacDriver;
 pub use model::{
-    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, Delivery, ElementRef, Grant, KeyChord,
-    MAX_TYPED_CHARS, Modifier, Node, Permissions, Point, Rect, ScrollDirection, Snapshot,
-    SnapshotBudget, SnapshotId, WaitCondition, WindowInfo, WindowTarget, validate_text_write,
+    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, Delivery, ElementRef, Grant,
+    KeyChord, MAX_CLICK_COUNT, MAX_TYPED_CHARS, Modifier, Node, OpenedApp, Permissions, Point,
+    PointerButton, Rect, ScrollDirection, Snapshot, SnapshotBudget, SnapshotId, WaitCondition,
+    WindowInfo, WindowTarget, rect_contains, topmost_at, validate_text_write,
 };
 pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord};
 

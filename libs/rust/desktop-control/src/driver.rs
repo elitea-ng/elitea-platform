@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use crate::{
-    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, DesktopError, ElementRef, InputOrigin,
-    KeyChord, Permissions, Snapshot, SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo,
-    WindowTarget,
+    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, DesktopError, ElementRef,
+    InputOrigin, KeyChord, OpenedApp, Permissions, ScreenStatus, Snapshot, SnapshotBudget,
+    SyntheticMarker, WaitCondition, WindowInfo, WindowTarget,
 };
 
 /// Control of the person's other applications (ADR-0047 decision 1).
@@ -27,6 +27,17 @@ use crate::{
 pub trait DesktopDriver: Send + Sync {
     /// The OS privacy grants, read live.
     fn permissions(&self) -> Permissions;
+
+    /// The screen as the OS reports it now: locked, screensaver, display
+    /// asleep, session off the console. Every other call checks it itself;
+    /// a caller reads it to refuse a call before it does anything else.
+    /// The Unsupported driver reports no session.
+    fn screen(&self) -> ScreenStatus;
+
+    /// Whether macOS secure input is on now (a password prompt anywhere).
+    /// Every act checks it itself; a caller reads it to refuse an act
+    /// before it asks the person about it.
+    fn secure_input(&self) -> bool;
 
     /// Running applications with a user interface.
     ///
@@ -93,6 +104,28 @@ pub trait DesktopDriver: Send + Sync {
     /// app, is Elitea; [`DesktopError::WindowNotFound`].
     fn key(&self, target: &WindowTarget, chord: &KeyChord) -> Result<ActionOutcome, DesktopError>;
 
+    /// A coordinate click inside one window (the fallback for apps with no
+    /// accessible tree). Physical input, tagged with the marker.
+    ///
+    /// # Errors
+    /// [`DesktopError::InvalidArgs`] for a bad point or count, or a point
+    /// outside the window; [`DesktopError::WindowNotFound`];
+    /// [`DesktopError::OwnWindowRefused`] for an Elitea window, or when the
+    /// window topmost at the point is not this one (another window,
+    /// Elitea's included, covers it); [`DesktopError::SecureFieldRefused`]
+    /// while macOS secure input is on.
+    fn click_at(&self, click: &ClickAt) -> Result<ActionOutcome, DesktopError>;
+
+    /// Launches the application with this bundle id, or brings it forward,
+    /// and waits a short time for a window.
+    ///
+    /// # Errors
+    /// [`DesktopError::OwnWindowRefused`] for Elitea;
+    /// [`DesktopError::InvalidArgs`] for a value that is not a bundle id;
+    /// [`DesktopError::AppNotFound`]; [`DesktopError::SecureFieldRefused`]
+    /// while macOS secure input is on.
+    fn open_app(&self, bundle_id: &str) -> Result<OpenedApp, DesktopError>;
+
     /// A window or a screen region as PNG.
     ///
     /// # Errors
@@ -141,7 +174,23 @@ impl DesktopDriver for Unsupported {
         }
     }
 
+    fn screen(&self) -> ScreenStatus {
+        ScreenStatus::default()
+    }
+
+    fn secure_input(&self) -> bool {
+        false
+    }
+
     fn list_apps(&self) -> Result<Vec<AppInfo>, DesktopError> {
+        Err(DesktopError::PlatformNotSupported)
+    }
+
+    fn click_at(&self, _click: &ClickAt) -> Result<ActionOutcome, DesktopError> {
+        Err(DesktopError::PlatformNotSupported)
+    }
+
+    fn open_app(&self, _bundle_id: &str) -> Result<OpenedApp, DesktopError> {
         Err(DesktopError::PlatformNotSupported)
     }
 
