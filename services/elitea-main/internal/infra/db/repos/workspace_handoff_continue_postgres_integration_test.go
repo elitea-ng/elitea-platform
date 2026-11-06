@@ -41,7 +41,7 @@ func newHandoffContinueFixture(t *testing.T, pool *pgxpool.Pool, owner int64) ha
 	t.Helper()
 	ctx := context.Background()
 	h := newHandoffHarness(t, pool)
-	thread :=seedLocalWorkThread(t, pool, owner, "local_work")
+	thread := seedLocalWorkThread(t, pool, owner, "local_work")
 	var model int64
 	if err := pool.QueryRow(ctx, `
 SELECT p.id FROM p_1.chat_participants p
@@ -259,7 +259,15 @@ UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED', settled_at = $2 WH
 		run.ExecutionID != outcome.ExecutionID || !run.FinishedAt.Equal(settled) {
 		t.Fatalf("last cloud run = %+v, %v", run, err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET meta = meta || '{"is_error": true}' WHERE uuid = $1::uuid`,
+	// FU-284: an answer parked on fan-out cards is waiting, not completed.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET meta = meta || '{"fanout_parked_v1": {"open": 1}}' WHERE uuid = $1::uuid`,
+		response); err != nil {
+		t.Fatal(err)
+	}
+	if run, err := repo.LastCloudRun(ctx, got); err != nil || run == nil || run.Outcome != workspacehandoff.CloudRunWaiting {
+		t.Fatalf("last cloud run of a parked answer = %+v, %v", run, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_message_group SET meta = (meta - 'fanout_parked_v1') || '{"is_error": true}' WHERE uuid = $1::uuid`,
 		response); err != nil {
 		t.Fatal(err)
 	}

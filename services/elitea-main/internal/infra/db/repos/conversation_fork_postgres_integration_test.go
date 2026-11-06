@@ -430,6 +430,15 @@ func TestForkPointMustBeSettled(t *testing.T) {
 	if code, decoded, _ := f.do(t, http.MethodPost, "7", "/fork/1/"+f.sourceUUID, ""); code != http.StatusConflict || decoded["error"] != "fork_point_unsettled" {
 		t.Fatalf("a paused fork point answered %d %v", code, decoded)
 	}
+	// FU-284: a fan-out parked on its cards is unsettled too (its cards
+	// belong to the source response's ledger).
+	if _, err := f.pool.Exec(ctx, `UPDATE p_1.chat_message_group SET is_streaming = FALSE,
+		meta = '{"thread_id": "t1", "fanout_parked_v1": {"open": 1}}'::jsonb WHERE uuid = $1::uuid`, f.groups[3]); err != nil {
+		t.Fatal(err)
+	}
+	if code, decoded, _ := f.do(t, http.MethodPost, "7", "/fork/1/"+f.sourceUUID, ""); code != http.StatusConflict || decoded["error"] != "fork_point_unsettled" {
+		t.Fatalf("a parked fork point answered %d %v", code, decoded)
+	}
 	var forks int
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM p_1.chat_conversations WHERE meta ? 'forked_from' AND name LIKE '%(fork)'`).Scan(&forks); err != nil {
 		t.Fatal(err)
