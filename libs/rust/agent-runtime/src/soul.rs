@@ -298,7 +298,9 @@ impl Soul {
             .strip_prefix("\r\n")
             .or_else(|| after.strip_prefix('\n'))
             .unwrap_or(after);
-        body.strip_suffix('\n').unwrap_or(body).clone_into(&mut soul.body);
+        body.strip_suffix('\n')
+            .unwrap_or(body)
+            .clone_into(&mut soul.body);
         soul.check()?;
         Ok(soul)
     }
