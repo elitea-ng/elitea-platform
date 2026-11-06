@@ -130,7 +130,8 @@ async function openConversation(page: Page): Promise<void> {
   await shellSettled(page);
   // Landmarks that exist only once the served transcript rendered: the
   // persona role is read off participant 2, the markers off rows 4 and 5.
-  await expect(page.getByTestId('chat-message-author-role').first()).toHaveText('Release manager', { timeout: 20_000 });
+  // The caption draws the role after a separator (`· Release manager`), so match the role itself.
+  await expect(page.getByTestId('chat-message-author-role').first()).toContainText('Release manager', { timeout: 20_000 });
   const markers = page.getByTestId('chat-message-author-marker');
   await expect(markers.filter({ hasText: 'temporary' })).toHaveCount(1);
   await expect(markers.filter({ hasText: 'woke up' })).toHaveCount(1);
