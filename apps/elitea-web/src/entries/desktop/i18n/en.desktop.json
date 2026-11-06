@@ -1090,5 +1090,7 @@
   "workspace.browser.reload": "Reload",
   "workspace.browser.revealDownload": "Show in Finder",
   "workspace.browser.stop": "Stop",
-  "workspace.panel.browser": "Browser"
+  "workspace.panel.browser": "Browser",
+  "workspace.approval.allowThread": "Allow for this thread",
+  "workspace.panel.allowedThread": "Allowed for this thread"
 }
