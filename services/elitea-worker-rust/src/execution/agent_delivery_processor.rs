@@ -481,18 +481,15 @@ where
                 ));
             }
         }
-        let Some(recovery) = self
+        let recovery = match self
             .output
             .prepare_output_recovery(recovery, true)
             .await
             .map_err(AgentDeliveryProcessError::OutputPreflight)?
-        else {
-            return Ok(AgentDeliveryProcessOutcome::retained(
-                "agent_delivery.output_recovery_pending",
-                true,
-            ));
-        };
-        let recovery = match recovery {
+        {
+            OutputRecovery::Retained(code) => {
+                return Ok(AgentDeliveryProcessOutcome::retained(code, true));
+            }
             OutputRecovery::Empty(recovery) => recovery,
             OutputRecovery::Terminal(terminal) => {
                 // A terminal is already pending: replay that exact frame (a
@@ -513,6 +510,11 @@ where
                 ));
             }
         };
+        // A stop wins; otherwise an unrecognised pending failure keeps its kind.
+        let failure = recovery
+            .kept_failure()
+            .filter(|_| failure != RuntimeFailureKind::Cancelled)
+            .unwrap_or(failure);
         reconcile_empty_agent_output_recovery(
             Arc::clone(&self.control),
             self.retirer.as_ref(),

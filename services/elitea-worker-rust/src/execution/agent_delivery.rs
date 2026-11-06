@@ -313,6 +313,15 @@ impl OutputRecoveryAgentDelivery {
         self.recovery.terminal_replacement(frame)
     }
 
+    /// The kind to keep when a pending failure terminal differs from this
+    /// build's canonical frame only in its text.
+    pub(crate) fn unrecognised_failure_kind(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<crate::protocol::output::RuntimeFailureKind, ProtocolError> {
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame)
+    }
+
     pub(crate) fn into_terminal_parts(
         self,
     ) -> (

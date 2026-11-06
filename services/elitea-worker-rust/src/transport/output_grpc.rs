@@ -427,12 +427,40 @@ impl PreparedOutputSpool {
         &mut self,
         expected: &ExecutionOutputFrameV1,
     ) -> Result<(), OutputGrpcError> {
-        self.require_single_expected(expected)?;
         if expected.terminal {
             return Err(OutputGrpcError::Protocol(OutputSessionError::InvalidInput(
                 "a terminal frame cannot be retired as superseded progress",
             )));
         }
+        self.retire_pending_frame(expected)
+    }
+
+    /// Set aside the one pending terminal whose failure text this build does
+    /// not recognise, so a canonical failure can take its sequence. Same
+    /// encrypted `.retired` record as [`Self::retire_superseded_progress`]; the
+    /// frame is never replayed and there is never a second pending terminal.
+    ///
+    /// # Errors
+    ///
+    /// Returns authorization failure unless exactly one byte-identical
+    /// terminal frame is pending.
+    pub(crate) fn retire_unrecognised_terminal(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        if !expected.terminal {
+            return Err(OutputGrpcError::Protocol(OutputSessionError::InvalidInput(
+                "only a terminal frame is retired as an unrecognised terminal",
+            )));
+        }
+        self.retire_pending_frame(expected)
+    }
+
+    fn retire_pending_frame(
+        &mut self,
+        expected: &ExecutionOutputFrameV1,
+    ) -> Result<(), OutputGrpcError> {
+        self.require_single_expected(expected)?;
         let sequence = NonZeroU64::new(expected.sequence).ok_or(OutputGrpcError::Protocol(
             OutputSessionError::InvalidInput("the retired output sequence is malformed"),
         ))?;

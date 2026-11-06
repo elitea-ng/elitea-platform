@@ -298,6 +298,45 @@ pub(crate) fn restored_terminal_failure_kind(
     canonical_runtime_failure(error)
 }
 
+/// A restored failure terminal which differs from this build's canonical frames
+/// only in its runtime-error text (an older build spooled it).
+///
+/// Everything else must validate as for any restored frame: identity, fence,
+/// stream, sequence shape, event type, logical output and the payload digest.
+/// Returns the failure kind to keep: the one registered kind that has the same
+/// code and retryable flag, else `Internal`. A canonical frame is not accepted
+/// here; it replays exactly.
+///
+/// # Errors
+///
+/// Returns a bounded [`ProtocolError`] when anything but the text is invalid.
+pub(crate) fn unrecognised_failure_terminal_kind(
+    verified: &VerifiedAgentCommand,
+    frame: &ExecutionOutputFrameV1,
+) -> Result<RuntimeFailureKind, ProtocolError> {
+    validate_restored_frame_identity(verified, frame)?;
+    let Some(execution_output_frame_v1::Payload::RuntimeError(error)) = frame.payload.as_ref()
+    else {
+        return Err(malformed_restored_output());
+    };
+    if !frame.terminal
+        || frame.event_type != ExecutionOutputEventTypeV1::RuntimeError as i32
+        || frame.logical_output_id != format!("agent-execution:{}", verified.command().execution_id)
+        || canonical_runtime_failure(error).is_some()
+        || frame.payload_digest.as_ref() != Some(&sha256(&error.encode_to_vec()))
+    {
+        return Err(malformed_restored_output());
+    }
+    let mut same_code = REGISTERED_RUNTIME_FAILURES.iter().copied().filter(|kind| {
+        let registered = runtime_error(*kind);
+        registered.code == error.code && registered.retryable == error.retryable
+    });
+    Ok(match (same_code.next(), same_code.next()) {
+        (Some(kind), None) => kind,
+        _ => RuntimeFailureKind::Internal,
+    })
+}
+
 fn validate_restored_frame_identity(
     verified: &impl VerifiedExecutionCommand,
     frame: &ExecutionOutputFrameV1,
