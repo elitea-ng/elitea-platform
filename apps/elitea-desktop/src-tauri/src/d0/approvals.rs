@@ -35,8 +35,8 @@ use elitea_agent_runtime::host::{
 };
 use elitea_agent_runtime::step_limit::{CONTINUE_KIND, CONTINUE_PAYLOAD_KEY};
 use elitea_local_tools::approvals::{
-    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, AnswerSink, DECLINE, Decision, PAYLOAD_KEY,
-    PLAN_PAYLOAD_KEY, Source, ToolCall, Verdict,
+    ACCEPT, APPROVE_ALWAYS, APPROVE_SESSION, APPROVE_THREAD, AnswerSink, DECLINE, Decision,
+    PAYLOAD_KEY, PLAN_PAYLOAD_KEY, Source, ToolCall, Verdict,
 };
 use elitea_local_tools::session::{BY_PERSON, DECIDED_BY};
 use serde_json::{Value, json};
@@ -83,6 +83,10 @@ pub const PLAN_KIND: &str = "plan_approval";
 pub enum UiDecision {
     AllowOnce,
     AllowAlways,
+    /// "Allow for this thread" (a `computer` ask, ADR-0047 decision 4):
+    /// the rules' `approve_thread`. Where the question offers no thread
+    /// scope it is an approval once.
+    AllowThread,
     Deny,
     /// Accept a proposed plan. On any other card it is a denial.
     Accept,
@@ -107,6 +111,7 @@ impl UiDecision {
         match value {
             "allow_once" | "continue" => Some(Self::AllowOnce),
             "allow_always" => Some(Self::AllowAlways),
+            "allow_thread" => Some(Self::AllowThread),
             "deny" | "cancel" => Some(Self::Deny),
             "accept" => Some(Self::Accept),
             "decline" => Some(Self::Decline(feedback)),
@@ -222,6 +227,7 @@ impl ApprovalChannel for UiPrompt {
         }
         let described = describe(&request);
         let can_remember = described["can_remember"] == Value::Bool(true);
+        let for_thread = described["can_remember_thread"] == Value::Bool(true);
         // A host-intel question (#1238) remembers for the app session only.
         let remember_action = if request
             .available_actions
@@ -300,7 +306,10 @@ impl ApprovalChannel for UiPrompt {
                 }
             }
         };
-        let approved = matches!(decision, UiDecision::AllowOnce | UiDecision::AllowAlways);
+        let approved = matches!(
+            decision,
+            UiDecision::AllowOnce | UiDecision::AllowAlways | UiDecision::AllowThread
+        );
         let feedback = decision.feedback();
         let mut exchange = exchange_of(
             &request,
@@ -319,10 +328,16 @@ impl ApprovalChannel for UiPrompt {
                 action: remember_action.to_owned(),
                 value: json!({}),
             },
-            UiDecision::AllowOnce | UiDecision::AllowAlways => ApprovalOutcome::Decided {
-                action: "approve".to_owned(),
+            UiDecision::AllowThread if for_thread => ApprovalOutcome::Decided {
+                action: APPROVE_THREAD.to_owned(),
                 value: json!({}),
             },
+            UiDecision::AllowOnce | UiDecision::AllowAlways | UiDecision::AllowThread => {
+                ApprovalOutcome::Decided {
+                    action: "approve".to_owned(),
+                    value: json!({}),
+                }
+            }
             // `accept` and `decline` belong to plan cards: here they deny.
             UiDecision::Deny
             | UiDecision::Accept
@@ -579,6 +594,14 @@ fn describe(request: &ApprovalRequest) -> Value {
             "reason": reason,
             "can_remember": request.available_actions.iter().any(|a| a == APPROVE_ALWAYS),
         });
+        // "Allow for this thread" (a `computer` ask with a thread).
+        if request
+            .available_actions
+            .iter()
+            .any(|a| a == APPROVE_THREAD)
+        {
+            payload["can_remember_thread"] = json!(true);
+        }
         if let Some(command) = &call.command {
             payload["command"] =
                 json!(shlex::split(command).unwrap_or_else(|| vec![command.clone()]));
@@ -797,6 +820,58 @@ mod tests {
         let exchanges = binding.recorder.hitl_exchanges();
         assert_eq!(exchanges[0]["decision"], "approve");
         assert_eq!(exchanges[0]["tool_run_id"], "call-1");
+    }
+
+    /// Answers every card with `decision`; returns the outcome and the card.
+    async fn answer(actions: &[&str], decision: UiDecision) -> (ApprovalOutcome, Value) {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        prompt.bind(Some(binding(&emitter)));
+        emitter.on_event.lock().unwrap().replace(Box::new({
+            let broker = broker.clone();
+            move |event| {
+                let id = event.payload["request_id"].as_str().unwrap().to_owned();
+                broker.respond(&id, decision.clone());
+            }
+        }));
+        let outcome = prompt.request(command_request(actions)).await.unwrap();
+        (outcome, emitter.all()[0].payload.clone())
+    }
+
+    #[tokio::test]
+    async fn allow_for_this_thread_answers_approve_thread_where_offered() {
+        assert_eq!(
+            UiDecision::parse("allow_thread", None),
+            Some(UiDecision::AllowThread)
+        );
+        let (outcome, card) = answer(
+            &["approve", APPROVE_THREAD, APPROVE_ALWAYS, "reject"],
+            UiDecision::AllowThread,
+        )
+        .await;
+        assert_eq!(card["can_remember_thread"], true);
+        assert_eq!(
+            outcome,
+            ApprovalOutcome::Decided {
+                action: APPROVE_THREAD.into(),
+                value: json!({})
+            }
+        );
+        // Not offered: an approval once, and the card has no thread button.
+        let (outcome, card) = answer(
+            &["approve", APPROVE_ALWAYS, "reject"],
+            UiDecision::AllowThread,
+        )
+        .await;
+        assert!(card.get("can_remember_thread").is_none(), "{card}");
+        assert_eq!(
+            outcome,
+            ApprovalOutcome::Decided {
+                action: "approve".into(),
+                value: json!({})
+            }
+        );
     }
 
     #[tokio::test]

@@ -4356,10 +4356,22 @@ impl AgentHost {
         if let Some(computer) = self.computer.get()
             && crate::computer_tools::offered(&workspace.policy, computer.device_switch())
         {
+            // Both switches are read again at every call (`computer_use_off`):
+            // turning either off stops a running turn's next call.
+            let policy_source = self.deps.policy.clone();
+            let device_switch = computer.device_switch_reader();
+            let enabled: crate::computer_tools::Switch = Arc::new(move || {
+                let policy: LocalWorkPolicy = policy_source
+                    .local_work()
+                    .and_then(|section| serde_json::from_value(section).ok())
+                    .unwrap_or_default();
+                policy.allowed && crate::computer_tools::offered(&policy, device_switch())
+            });
             provider = provider.with(Arc::new(crate::computer_tools::ComputerToolProvider::new(
                 computer.host(),
                 &workspace.session,
                 workspace.session.vision(),
+                enabled,
             )));
         }
         // The nested agents, as cloud child turns of this one (#1239).

@@ -27,6 +27,16 @@ pub enum DesktopError {
     /// except `permissions` fails with it.
     #[error("screen unavailable: {0}")]
     ScreenUnavailable(String),
+    /// Input with no element target (untargeted typing, a key chord, a
+    /// coordinate click) would land in the frontmost application, and that
+    /// is not the application the call names (`not_frontmost`).
+    #[error("not the frontmost application: {0}")]
+    NotFrontmost(String),
+    /// The element is a menu item that quits, logs out, shuts down,
+    /// restarts, sleeps, locks the screen, force quits or switches user:
+    /// the menu path to a denied chord (`menu_item_refused`).
+    #[error("menu item refused: {0}")]
+    MenuItemRefused(String),
     #[error("application not found: {0}")]
     AppNotFound(String),
     #[error("window not found: {0}")]
@@ -61,6 +71,8 @@ impl DesktopError {
             Self::ChordRefused(_) => "chord_refused",
             Self::OwnWindowRefused(_) => "own_window_refused",
             Self::ScreenUnavailable(_) => "screen_unavailable",
+            Self::NotFrontmost(_) => "not_frontmost",
+            Self::MenuItemRefused(_) => "menu_item_refused",
             Self::AppNotFound(_) => "app_not_found",
             Self::WindowNotFound(_) => "window_not_found",
             Self::PermissionDenied(_) => "permission_denied",
@@ -101,6 +113,11 @@ mod tests {
             (
                 DesktopError::ScreenUnavailable(String::new()),
                 "screen_unavailable",
+            ),
+            (DesktopError::NotFrontmost(String::new()), "not_frontmost"),
+            (
+                DesktopError::MenuItemRefused(String::new()),
+                "menu_item_refused",
             ),
             (DesktopError::AppNotFound(String::new()), "app_not_found"),
             (

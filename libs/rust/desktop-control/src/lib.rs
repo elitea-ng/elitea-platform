@@ -47,9 +47,10 @@ pub use model::{
     Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, Delivery, ElementRef, Grant,
     KeyChord, MAX_CLICK_COUNT, MAX_TYPED_CHARS, Modifier, Node, OpenedApp, Permissions, Point,
     PointerButton, Rect, ScrollDirection, Snapshot, SnapshotBudget, SnapshotId, WaitCondition,
-    WindowInfo, WindowTarget, rect_contains, topmost_at, validate_text_write,
+    WindowInfo, WindowTarget, bundle_matches, rect_contains, region_pixels, topmost_at,
+    validate_text_write,
 };
-pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord};
+pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord, is_denied_menu_item};
 
 /// The driver of this OS: `MacDriver` on macOS, [`Unsupported`] elsewhere.
 #[must_use]

@@ -65,38 +65,56 @@ pub trait DesktopDriver: Send + Sync {
         budget: &SnapshotBudget,
     ) -> Result<Snapshot, DesktopError>;
 
-    /// One action on the element `element_ref` names. Semantic first (no
-    /// pointer move, no focus taken); the outcome says how it was delivered.
+    /// One action on the element `element_ref` names, in the application
+    /// with bundle id `bundle_id`. Semantic first (no pointer move, no focus
+    /// taken); the outcome says how it was delivered.
     ///
     /// # Errors
-    /// [`DesktopError::StaleRef`] when the snapshot is gone or the element
-    /// changed; [`DesktopError::SecureFieldRefused`] for any action while
+    /// [`DesktopError::StaleRef`] when the snapshot is gone, the element
+    /// changed, or the snapshot was not taken of `bundle_id` (an unknown
+    /// bundle never matches); [`DesktopError::MenuItemRefused`] for a menu
+    /// item that quits, logs out, shuts down, restarts, sleeps, locks,
+    /// force quits or switches user
+    /// ([`is_denied_menu_item`](crate::is_denied_menu_item));
+    /// [`DesktopError::SecureFieldRefused`] for any action while
     /// macOS secure input is on, and for a text write into a secure field;
     /// [`DesktopError::InvalidArgs`] for a `SetValue` longer than
     /// [`MAX_TYPED_CHARS`](crate::MAX_TYPED_CHARS); [`DesktopError::ActionNotSupported`] /
     /// [`DesktopError::ActionFailed`].
-    fn act(&self, element_ref: &ElementRef, action: &Action)
-    -> Result<ActionOutcome, DesktopError>;
+    fn act(
+        &self,
+        bundle_id: &str,
+        element_ref: &ElementRef,
+        action: &Action,
+    ) -> Result<ActionOutcome, DesktopError>;
 
     /// Types `text` into the element `element_ref` names, or, with `None`,
-    /// into the focused element of the frontmost app.
+    /// into the focused element of the frontmost app, which must be the
+    /// application `bundle_id`.
     ///
     /// # Errors
     /// [`DesktopError::SecureFieldRefused`] when macOS secure input is on, or
     /// the target is a secure field (with `None`, the focused element);
     /// [`DesktopError::OwnWindowRefused`] when, with `None`, Elitea is the
-    /// frontmost app; [`DesktopError::InvalidArgs`] past
+    /// frontmost app; [`DesktopError::NotFrontmost`] when, with `None`, the
+    /// frontmost app is not `bundle_id` (or cannot be told);
+    /// [`DesktopError::InvalidArgs`] past
     /// [`MAX_TYPED_CHARS`](crate::MAX_TYPED_CHARS); otherwise as
     /// [`DesktopDriver::act`].
     fn type_text(
         &self,
+        bundle_id: &str,
         element_ref: Option<&ElementRef>,
         text: &str,
     ) -> Result<ActionOutcome, DesktopError>;
 
-    /// One key chord into a window.
+    /// One key chord into a window of the application `target` names. The
+    /// chord lands in the frontmost app, so that app must be the named one.
     ///
     /// # Errors
+    /// [`DesktopError::InvalidArgs`] for a target that names no application
+    /// ([`WindowTarget::Focused`]); [`DesktopError::NotFrontmost`] when the
+    /// frontmost app is not the named one;
     /// [`DesktopError::ChordRefused`] for a denied chord (quit, log out,
     /// lock, Spotlight, ...); [`DesktopError::SecureFieldRefused`] when macOS
     /// secure input is on or the window's focused element is secure;
@@ -104,12 +122,14 @@ pub trait DesktopDriver: Send + Sync {
     /// app, is Elitea; [`DesktopError::WindowNotFound`].
     fn key(&self, target: &WindowTarget, chord: &KeyChord) -> Result<ActionOutcome, DesktopError>;
 
-    /// A coordinate click inside one window (the fallback for apps with no
-    /// accessible tree). Physical input, tagged with the marker.
+    /// A coordinate click inside one window of the application
+    /// [`ClickAt::bundle_id`] names, which must be frontmost (the fallback for
+    /// apps with no accessible tree). Physical input, tagged with the marker.
     ///
     /// # Errors
     /// [`DesktopError::InvalidArgs`] for a bad point or count, or a point
-    /// outside the window; [`DesktopError::WindowNotFound`];
+    /// outside the window; [`DesktopError::WindowNotFound`] (a window of
+    /// another app included); [`DesktopError::NotFrontmost`];
     /// [`DesktopError::OwnWindowRefused`] for an Elitea window, or when the
     /// window topmost at the point is not this one (another window,
     /// Elitea's included, covers it); [`DesktopError::SecureFieldRefused`]
@@ -126,14 +146,15 @@ pub trait DesktopDriver: Send + Sync {
     /// while macOS secure input is on.
     fn open_app(&self, bundle_id: &str) -> Result<OpenedApp, DesktopError>;
 
-    /// A window or a screen region as PNG.
+    /// A window, or a region of one window, as PNG. The window is captured
+    /// alone and without its shadow, so no other window shows in the image
+    /// and its pixels map 1:1 onto the window's frame times the scale.
     ///
     /// # Errors
     /// [`DesktopError::PermissionDenied`] without the Screen Recording
-    /// grant; [`DesktopError::WindowNotFound`]; [`DesktopError::InvalidArgs`]
-    /// for a region outside every display; [`DesktopError::OwnWindowRefused`]
-    /// for an Elitea window, or a region that overlaps one (refused, not
-    /// masked).
+    /// grant; [`DesktopError::WindowNotFound`] (a window of another app
+    /// included); [`DesktopError::InvalidArgs`] for a region outside the
+    /// window; [`DesktopError::OwnWindowRefused`] for an Elitea window.
     fn capture(&self, target: &CaptureTarget) -> Result<Capture, DesktopError>;
 
     /// Polls until `condition` holds or `timeout` passes.
@@ -208,6 +229,7 @@ impl DesktopDriver for Unsupported {
 
     fn act(
         &self,
+        _bundle_id: &str,
         _element_ref: &ElementRef,
         _action: &Action,
     ) -> Result<ActionOutcome, DesktopError> {
@@ -216,6 +238,7 @@ impl DesktopDriver for Unsupported {
 
     fn type_text(
         &self,
+        _bundle_id: &str,
         _element_ref: Option<&ElementRef>,
         _text: &str,
     ) -> Result<ActionOutcome, DesktopError> {

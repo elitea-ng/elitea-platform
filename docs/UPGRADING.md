@@ -17,10 +17,14 @@ switches must both be on:
   `settings.json` (off unless it is `true`).
 
 With either one off, a turn has no `computer` tools, and the rules deny a
-forged call. The hard limits (locked screen, secure input and password
-fields, denied chords, Elitea's own windows, 10 acts and 2 screenshots a
-second) hold in every mode, bypass included. See the how-to page "Let the
+forged call, and turning either off stops a running turn's next call
+(`computer_use_off`). The hard limits (locked screen, secure input and
+password fields, denied chords and the Quit, Log Out, Shut Down, Restart,
+Sleep, Lock Screen, Force Quit and Switch User menu items, Elitea's own
+windows, input only into the named app while it is frontmost, 10 acts and
+2 screenshots a second) hold in every mode, bypass included. See the how-to page "Let the
 agent use your other apps (desktop)".
+
 
 ## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
 

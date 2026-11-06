@@ -12,12 +12,16 @@
 //!
 //! Every call goes through, in this order:
 //!
+//! 0. **The switches** (decisions 3 and 7): the client policy's
+//!    `local_work_computer_use` and the person's device switch, read again
+//!    at every call (`computer_use_off`): turning either off stops the very
+//!    next call of a running turn.
 //! 1. **The screen** (decision 5): `screen_unavailable` while the screen is
 //!    locked, the screensaver is up, the display sleeps or the session is
 //!    off the console. Nothing is asked or read.
 //! 2. **The rate** (decision 5): at most [`MAX_ACTS_PER_SECOND`] acts and
 //!    [`MAX_SCREENSHOTS_PER_SECOND`] screenshots in any rolling second, per
-//!    session (`rate_limited`).
+//!    session (`rate_limited`). A call the later gates refuse still counts.
 //! 3. **Secure input** (decision 5): every `ComputerAct` is refused
 //!    (`secure_field_refused`) while macOS secure input is on, before the
 //!    person is asked.
@@ -26,8 +30,12 @@
 //!    `ComputerRead`; an unattended turn's `ComputerAct` waits for the
 //!    person (decision 8); bypass mode never answers a computer ask.
 //! 5. **The driver**, which holds the same hard limits again (secure
-//!    fields, denied chords, Elitea's own windows, the screen) whoever
-//!    calls it.
+//!    fields, denied chords and menu items, Elitea's own windows, the
+//!    screen, input only into the named frontmost app) whoever calls it.
+//!
+//! Every window id and every ref is bound to the call's `bundle_id`: a
+//! window of another app is not found, and a ref is honoured only from a
+//! snapshot this turn took of that app (`stale_ref` otherwise).
 //!
 //! These hold in bypass mode too: bypass only answers the rules' asks.
 //!
@@ -53,7 +61,8 @@ use elitea_agent_runtime::image_result::{IMAGE_FIELD, IMAGE_KIND};
 use elitea_desktop_control::{
     Action, AppInfo, CaptureTarget, ClickAt, DesktopDriver, DesktopError, ElementRef, KeyChord,
     MAX_TYPED_CHARS, Node, OwnApps, Point, PointerButton, Rect, ScrollDirection, Snapshot,
-    SnapshotBudget, WaitCondition, WindowInfo, WindowTarget, is_denied_chord,
+    SnapshotBudget, WaitCondition, WindowInfo, WindowTarget, bundle_matches, is_denied_chord,
+    is_denied_menu_item,
 };
 use elitea_local_tools::approvals::{
     ComputerControl, ComputerTarget, PAYLOAD_KEY, RulesEngine, ToolCall, ToolKind,
@@ -195,7 +204,7 @@ pub const TOOLS: &[Spec] = &[
         kind: Kind::Act,
         screenshot: false,
         needs_capture: false,
-        description: "Do one action on a ref from the latest computer_snapshot: press, set_value, focus, select, scroll, expand, collapse or toggle. The action goes through accessibility (no pointer move, no focus taken) unless the app refuses it; the result says how it was delivered. An action on a control that sends, deletes, buys, pays, signs or submits is asked every time. set_value into a secure field is refused.",
+        description: "Do one action on a ref from the latest computer_snapshot: press, set_value, focus, select, scroll, expand, collapse or toggle. The action goes through accessibility (no pointer move, no focus taken) unless the app refuses it; the result says how it was delivered. An action on a control that sends, deletes, buys, pays, signs or submits is asked every time. set_value into a secure field is refused, and so is any action on a Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit or Switch User menu item (menu_item_refused).",
         parameters: || {
             object(
                 json!({
@@ -215,7 +224,7 @@ pub const TOOLS: &[Spec] = &[
         kind: Kind::Act,
         screenshot: false,
         needs_capture: false,
-        description: "Type text into an element of an application (a ref from computer_snapshot), or into its focused element when ref is left out (the app must be frontmost). At most 10000 characters. Refused for a secure (password) field and while macOS secure input is on: ask the person to type it (computer_request_user).",
+        description: "Type text into an element of an application (a ref from computer_snapshot), or into its focused element when ref is left out (then the app must be frontmost, or the call is refused with not_frontmost). At most 10000 characters. Refused for a secure (password) field and while macOS secure input is on: ask the person to type it (computer_request_user).",
         parameters: || {
             object(
                 json!({
@@ -232,7 +241,7 @@ pub const TOOLS: &[Spec] = &[
         kind: Kind::Act,
         screenshot: false,
         needs_capture: false,
-        description: "Send one key chord, such as cmd+s, return or shift+tab, into a window of an application. Quit, force quit, log out, lock, shut down, Spotlight and Siri chords are refused (chord_refused), with any extra modifier too.",
+        description: "Send one key chord, such as cmd+s, return or shift+tab, into a window of an application; the app must be frontmost (not_frontmost). Quit, force quit, log out, lock, shut down, Spotlight and Siri chords are refused (chord_refused), with any extra modifier too.",
         parameters: || {
             object(
                 json!({
@@ -249,11 +258,12 @@ pub const TOOLS: &[Spec] = &[
         kind: Kind::Act,
         screenshot: false,
         needs_capture: true,
-        description: "Click at a point of a window, for apps with no accessible tree: x and y are pixels of the last computer_screenshot of that window (its width and height), and the click lands where that screenshot showed them. Physical input: it moves the pointer. Refused when another window covers the point. Prefer computer_act.",
+        description: "Click at a point of a window, for apps with no accessible tree: x and y are pixels of the last whole-window computer_screenshot of that window (its width and height), and the click lands where that screenshot showed them. window_id defaults to the window of this app's latest screenshot. The app must be frontmost. Refused when another window covers the point, or when the window moved or resized since the screenshot (take a new one). Physical input: it moves the pointer. Prefer computer_act.",
         parameters: || {
             object(
                 json!({
                     "bundle_id": { "type": "string", "description": APP_HELP },
+                    "window_id": { "type": "string", "description": "The window_id of the computer_screenshot the pixels are of; default: this app's latest screenshot." },
                     "x": { "type": "number", "minimum": 0 },
                     "y": { "type": "number", "minimum": 0 },
                     "button": { "type": "string", "enum": ["left", "right"] },
@@ -281,7 +291,7 @@ pub const TOOLS: &[Spec] = &[
         kind: Kind::Read,
         screenshot: false,
         needs_capture: false,
-        description: "Wait until a condition holds in an application, at most timeout_ms (default 10000, at most 60000): a window whose title contains window_title, a ref with (or, present false, without) a state, a text in the window, or the window's tree being stable. Exactly one of window_title, ref, text or stable.",
+        description: "Wait until a condition holds in an application, at most timeout_ms (default 10000, at most 60000): a window whose title contains window_title, a ref with (or, present false, without) a state, a text in the window, or the window's tree being stable. Exactly one of window_title, ref, text or stable. What it matches against is untrusted screen content.",
         parameters: || {
             object(
                 json!({
@@ -331,19 +341,20 @@ pub fn offered(policy: &LocalWorkPolicy, device_switch: bool) -> bool {
     policy.computer_use && device_switch
 }
 
+/// A live read of a switch: the device switch, or the toolset's whole
+/// gate (the client policy and the device switch).
+pub type Switch = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// What the host sets up once: the driver's state and where the person's
-/// device switch is read (live, at each turn).
+/// device switch is read (live, at each turn and each call).
 pub struct ComputerSetup {
     host: Arc<ComputerHost>,
-    device_switch: Box<dyn Fn() -> bool + Send + Sync>,
+    device_switch: Switch,
 }
 
 impl ComputerSetup {
     #[must_use]
-    pub fn new(
-        driver: Arc<dyn DesktopDriver>,
-        device_switch: Box<dyn Fn() -> bool + Send + Sync>,
-    ) -> Self {
+    pub fn new(driver: Arc<dyn DesktopDriver>, device_switch: Switch) -> Self {
         Self {
             host: Arc::new(ComputerHost::new(driver)),
             device_switch,
@@ -357,7 +368,7 @@ impl ComputerSetup {
         let files = crate::settings::SettingsFiles::new(config_dir);
         Self::new(
             driver,
-            Box::new(move || {
+            Arc::new(move || {
                 files
                     .settings()
                     .ok()
@@ -376,6 +387,12 @@ impl ComputerSetup {
     #[must_use]
     pub fn device_switch(&self) -> bool {
         (self.device_switch)()
+    }
+
+    /// The device switch, to read again later (at each call).
+    #[must_use]
+    pub fn device_switch_reader(&self) -> Switch {
+        self.device_switch.clone()
     }
 }
 
@@ -425,7 +442,9 @@ impl From<DesktopError> for CallError {
 }
 
 /// The rolling-second limits of one session (ADR-0047 decision 5): acts
-/// and screenshots apart. A refused call does not count.
+/// and screenshots apart. The rate is checked before the secure-input
+/// gate, the hard limits and the approvals, so a call they refuse still
+/// counts: a burst of refused calls is held to the same rate.
 #[derive(Debug, Default)]
 pub struct Rate {
     acts: VecDeque<Instant>,
@@ -471,9 +490,11 @@ impl Rate {
     }
 }
 
-/// The last screenshot of each window: its region in screen points and its
-/// size in pixels, so `computer_click_at` maps the model's pixel to a
-/// screen point (decision 2: "relative to the last screenshot").
+/// The last whole-window screenshot of one window: the window's frame in
+/// screen points when it was taken and the image's size in pixels, so
+/// `computer_click_at` maps the model's pixel to a screen point (decision
+/// 2: "relative to the last screenshot"). The capture has no shadow, so
+/// the image is exactly the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Shot {
     region: Rect,
@@ -481,15 +502,24 @@ struct Shot {
     height: u32,
 }
 
+/// What one turn's calls share: the snapshots and screenshots this turn
+/// handed to the model. A ref is honoured only from a snapshot in here,
+/// taken of the call's app; a click maps only through a screenshot in here.
+#[derive(Default)]
+struct TurnState {
+    seen: SeenSnapshots,
+    /// The last whole-window screenshot, by (bundle id, window id).
+    shots: HashMap<(String, String), Shot>,
+    /// The window of each app's latest screenshot, by bundle id.
+    latest_shot: HashMap<String, String>,
+}
+
 /// The state one desktop session (the app's lifetime) shares across turns:
-/// the driver, the rate and the last screenshots. The driver is not
-/// thread-safe across calls of one turn by contract, so calls run one at a
-/// time.
+/// the driver and the rate. The driver is not thread-safe across calls of
+/// one turn by contract, so calls run one at a time.
 pub struct ComputerHost {
     driver: Arc<dyn DesktopDriver>,
     rate: Mutex<Rate>,
-    shots: Mutex<HashMap<String, Shot>>,
-    seen: Mutex<SeenSnapshots>,
     /// One call at a time, whichever thread makes it.
     serial: tokio::sync::Mutex<()>,
 }
@@ -500,26 +530,12 @@ impl ComputerHost {
         Self {
             driver,
             rate: Mutex::new(Rate::default()),
-            shots: Mutex::new(HashMap::new()),
-            seen: Mutex::new(SeenSnapshots::default()),
             serial: tokio::sync::Mutex::new(()),
         }
     }
 
-    fn seen(&self) -> std::sync::MutexGuard<'_, SeenSnapshots> {
-        self.seen
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
     fn rate(&self) -> std::sync::MutexGuard<'_, Rate> {
         self.rate
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    fn shots(&self) -> std::sync::MutexGuard<'_, HashMap<String, Shot>> {
-        self.shots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -538,9 +554,18 @@ pub struct CallContext {
     /// The session's approvals: its rules engine over the person's prompt.
     pub approvals: Arc<dyn ApprovalChannel>,
     pub rules: Arc<RulesEngine>,
+    /// The client policy and the device switch, read again at every call.
+    pub enabled: Switch,
+    turn: Arc<Mutex<TurnState>>,
 }
 
 impl CallContext {
+    fn turn(&self) -> std::sync::MutexGuard<'_, TurnState> {
+        self.turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn plan(&self) -> bool {
         self.rules.plan_mode()
     }
@@ -623,6 +648,7 @@ enum Call {
     },
     ClickAt {
         bundle_id: String,
+        window: Option<String>,
         x: f64,
         y: f64,
         button: PointerButton,
@@ -815,6 +841,7 @@ impl Call {
             },
             COMPUTER_CLICK_AT => Self::ClickAt {
                 bundle_id: required(args, "bundle_id")?,
+                window: text(args, "window_id").filter(|w| !w.trim().is_empty()),
                 x: number(args, "x")?.ok_or_else(|| CallError::invalid("`x` is required"))?,
                 y: number(args, "y")?.ok_or_else(|| CallError::invalid("`y` is required"))?,
                 button: match text(args, "button").as_deref().unwrap_or("left") {
@@ -945,11 +972,15 @@ fn chord_text(chord: &KeyChord) -> String {
     parts.join("+")
 }
 
-/// The window a call targets: the one it names, else the app's.
+/// The window a call targets: the one it names, of the app it names, else
+/// the app's.
 fn window_target(bundle_id: &str, window: Option<&String>) -> WindowTarget {
     window.map_or_else(
         || WindowTarget::App(bundle_id.to_owned()),
-        |id| WindowTarget::Window(id.clone()),
+        |id| WindowTarget::Window {
+            bundle_id: bundle_id.to_owned(),
+            id: id.clone(),
+        },
     )
 }
 
@@ -980,27 +1011,39 @@ impl SeenSnapshots {
         }
         self.held.push_back((
             snapshot.id.to_string(),
-            bundle_id.to_ascii_lowercase(),
+            bundle_id.trim().to_ascii_lowercase(),
             snapshot,
         ));
     }
 
     /// The snapshot `element_ref` belongs to, if it was taken of `bundle_id`.
     fn of(&self, element_ref: &ElementRef, bundle_id: &str) -> Option<&Snapshot> {
-        let bundle = bundle_id.to_ascii_lowercase();
+        let bundle = bundle_id.trim().to_ascii_lowercase();
         self.held
             .iter()
             .find(|(id, owner, _)| id == element_ref.snapshot().as_str() && *owner == bundle)
             .map(|(.., snapshot)| snapshot)
     }
 
-    /// Whether `element_ref`'s snapshot was taken of another app than
-    /// `bundle_id` (a ref used against the wrong app).
-    fn other_app(&self, element_ref: &ElementRef, bundle_id: &str) -> bool {
-        let bundle = bundle_id.to_ascii_lowercase();
-        self.held
-            .iter()
-            .any(|(id, owner, _)| id == element_ref.snapshot().as_str() && *owner != bundle)
+    /// The node `element_ref` names, from a snapshot this turn took of
+    /// `bundle_id`: `stale_ref` for a ref of another app's snapshot, of a
+    /// snapshot this turn never handed out (a guessed or an old id), or of
+    /// no node of it.
+    fn node(&self, element_ref: &ElementRef, bundle_id: &str) -> Result<&Node, CallError> {
+        let snapshot = self.of(element_ref, bundle_id).ok_or_else(|| {
+            CallError::new(
+                "stale_ref",
+                format!(
+                    "{element_ref} is not from a computer_snapshot of {bundle_id} in this turn: snapshot it and use its refs"
+                ),
+            )
+        })?;
+        find_ref(&snapshot.root, element_ref).ok_or_else(|| {
+            CallError::new(
+                "stale_ref",
+                format!("{element_ref} names no element of that snapshot: snapshot again"),
+            )
+        })
     }
 }
 
@@ -1024,6 +1067,15 @@ impl ComputerTool {
 
     async fn run_inner(&self, call_id: &str, args: &Value) -> Result<Value, Refusal> {
         let call = Call::parse(self.spec.name, args)?;
+        // 0. The switches, read now: the person or the organisation may
+        // have turned computer use off since the turn started.
+        if !(self.context.enabled)() {
+            return Err(CallError::new(
+                "computer_use_off",
+                "computer use is turned off (the device switch or the organisation's policy): do not try again in this turn",
+            )
+            .into());
+        }
         // 1. The screen, before anything is asked or read: no call runs,
         // a hand-over included, while it is locked or asleep.
         if let Some(why) = self.host.driver.screen().unavailable_reason() {
@@ -1041,16 +1093,11 @@ impl ComputerTool {
         // The hard limits the host can see, before the person is asked
         // (the driver holds them again): Elitea itself, a denied chord, a
         // text write into a field the snapshot showed as secure.
-        refuse_hard_limits(&call, &self.host.seen())?;
-        // A ref taken of one app is never used against another.
-        if let (Some(element), Some(bundle_id)) = (call.element(), call.bundle_id())
-            && self.host.seen().other_app(element, bundle_id)
-        {
-            return Err(CallError::new(
-                "stale_ref",
-                "this ref belongs to a snapshot of another application: snapshot this one",
-            )
-            .into());
+        refuse_hard_limits(&call, &self.context.turn().seen)?;
+        // A ref is honoured only from a snapshot this turn took of the
+        // call's app, so its control is always known to the approvals.
+        if let (Some(element), Some(bundle_id)) = (call.element(), call.bundle_id()) {
+            self.context.turn().seen.node(element, bundle_id)?;
         }
         // 4. The approvals: the rules engine decides, the person answers.
         let target = self.target(&call);
@@ -1058,13 +1105,15 @@ impl ComputerTool {
         // 5. The driver, one call at a time.
         let _one = self.host.serial.lock().await;
         let host = self.host.clone();
+        let turn = self.context.turn.clone();
         let driver_call = call;
         let vision = self.vision;
         let policy = self.context.rules.policy().clone();
-        let outcome =
-            tokio::task::spawn_blocking(move || execute(&host, &driver_call, vision, &policy))
-                .await
-                .map_err(|_| CallError::new("internal", "the computer call stopped"))??;
+        let outcome = tokio::task::spawn_blocking(move || {
+            execute(&host, &turn, &driver_call, vision, &policy)
+        })
+        .await
+        .map_err(|_| CallError::new("internal", "the computer call stopped"))??;
         Ok(match outcome {
             Outcome::Json(mut value) => {
                 if let Some(text) = value.get("content").and_then(Value::as_str) {
@@ -1092,8 +1141,8 @@ impl ComputerTool {
             ..ComputerTarget::default()
         };
         if let (Some(element), Some(bundle_id)) = (call.element(), call.bundle_id()) {
-            let seen = self.host.seen();
-            if let Some(snapshot) = seen.of(element, bundle_id) {
+            let turn = self.context.turn();
+            if let Some(snapshot) = turn.seen.of(element, bundle_id) {
                 target.app_name = Some(snapshot.window.app_name.clone());
                 target.window_title = Some(snapshot.window.title.clone());
                 if let Some(node) = find_ref(&snapshot.root, element) {
@@ -1224,9 +1273,11 @@ impl ComputerTool {
 
 /// The hard limits of ADR-0047 decision 5 the host checks itself, in every
 /// permission mode: Elitea is never a target (`own_window_refused`), a
-/// denied chord is never sent (`chord_refused`), and no text is written
-/// into a field the call's snapshot showed as secure
-/// (`secure_field_refused`).
+/// denied chord is never sent (`chord_refused`), no menu item that quits,
+/// logs out, shuts down, restarts, sleeps, locks, force quits or switches
+/// user is acted on (`menu_item_refused`, the menu path to those chords, in
+/// any app's menus, the Apple menu's included), and no text is written into
+/// a field the call's snapshot showed as secure (`secure_field_refused`).
 fn refuse_hard_limits(call: &Call, seen: &SeenSnapshots) -> Result<(), DesktopError> {
     if let Some(bundle_id) = call.bundle_id()
         && OwnApps::default().is_own_bundle(bundle_id.trim())
@@ -1239,6 +1290,17 @@ fn refuse_hard_limits(call: &Call, seen: &SeenSnapshots) -> Result<(), DesktopEr
         && is_denied_chord(chord)
     {
         return Err(DesktopError::ChordRefused(chord_text(chord)));
+    }
+    if let Call::Act {
+        bundle_id, element, ..
+    } = call
+        && let Some(snapshot) = seen.of(element, bundle_id)
+        && let Some(node) = find_ref(&snapshot.root, element)
+        && is_denied_menu_item(&node.role, node.name.as_deref())
+    {
+        return Err(DesktopError::MenuItemRefused(
+            node.name.clone().unwrap_or_default(),
+        ));
     }
     let writes = matches!(
         call,
@@ -1366,13 +1428,39 @@ fn resolve_window(
     }
 }
 
+/// `not_frontmost` unless `bundle_id` is the frontmost app, as the driver
+/// lists it (Elitea is never listed, so Elitea frontmost refuses too).
+/// Input with no element target lands in the frontmost app; the driver
+/// checks it again just before it sends.
+fn require_frontmost(driver: &dyn DesktopDriver, bundle_id: &str) -> Result<(), CallError> {
+    let apps = driver.list_apps()?;
+    let front = apps.iter().find(|app| app.focused);
+    if front.is_some_and(|app| bundle_matches(app.bundle_id.as_deref(), bundle_id)) {
+        return Ok(());
+    }
+    Err(CallError::new(
+        "not_frontmost",
+        format!(
+            "{} is frontmost, not {bundle_id}: bring it forward first (computer_open_app)",
+            front
+                .and_then(|app| app.bundle_id.as_deref())
+                .unwrap_or("another application")
+        ),
+    ))
+}
+
 fn execute(
     host: &ComputerHost,
+    turn: &Mutex<TurnState>,
     call: &Call,
     vision: bool,
     policy: &LocalWorkPolicy,
 ) -> Result<Outcome, CallError> {
     let driver = host.driver.as_ref();
+    let turn = || {
+        turn.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     match call {
         Call::Apps => {
             let apps = listed(driver.list_apps()?, policy);
@@ -1415,12 +1503,8 @@ fn execute(
             budget,
         } => {
             let snapshot = driver.snapshot(&window_target(bundle_id, window.as_ref()), budget)?;
-            if snapshot
-                .window
-                .bundle_id
-                .as_deref()
-                .is_some_and(|b| !b.eq_ignore_ascii_case(bundle_id))
-            {
+            // The window must be the named app's; an unknown bundle id is not.
+            if !bundle_matches(snapshot.window.bundle_id.as_deref(), bundle_id) {
                 return Err(CallError::new(
                     "window_not_found",
                     "that window belongs to another application",
@@ -1434,7 +1518,7 @@ fn execute(
                 "truncated": snapshot.truncated,
                 "content": content,
             });
-            host.seen().put(bundle_id, snapshot);
+            turn().seen.put(bundle_id, snapshot);
             Ok(Outcome::Json(result))
         }
         Call::Screenshot {
@@ -1443,20 +1527,21 @@ fn execute(
             zoom,
         } => {
             let window = resolve_window(driver, bundle_id, window.as_ref())?;
+            // A zoom is a crop of the window's own capture: whatever other
+            // window overlaps the region does not show.
             let target = match (zoom, window.bounds) {
                 (None, _) => CaptureTarget::Window {
+                    bundle_id: bundle_id.clone(),
                     id: window.id.clone(),
                 },
                 (Some(zoom), Some(bounds)) => {
                     if zoom.x + zoom.width > bounds.width || zoom.y + zoom.height > bounds.height {
                         return Err(CallError::invalid("`zoom` is outside the window"));
                     }
-                    CaptureTarget::Region {
-                        rect: Rect {
-                            x: bounds.x + zoom.x,
-                            y: bounds.y + zoom.y,
-                            ..*zoom
-                        },
+                    CaptureTarget::WindowRegion {
+                        bundle_id: bundle_id.clone(),
+                        id: window.id.clone(),
+                        region: *zoom,
                     }
                 }
                 (Some(_), None) => {
@@ -1471,14 +1556,17 @@ fn execute(
                 .map_err(|e| CallError::new("internal", e.message()))?;
             // A zoom keeps the last whole-window screenshot for click_at.
             if zoom.is_none() {
-                host.shots().insert(
-                    window.id.clone(),
+                let mut turn = turn();
+                let key = bundle_id.trim().to_ascii_lowercase();
+                turn.shots.insert(
+                    (key.clone(), window.id.clone()),
                     Shot {
                         region: capture.region,
                         width: picture.width,
                         height: picture.height,
                     },
                 );
+                turn.latest_shot.insert(key, window.id.clone());
             }
             let mut result = json!({
                 "kind": IMAGE_KIND,
@@ -1499,17 +1587,27 @@ fn execute(
             Ok(Outcome::Image(result))
         }
         Call::Act {
-            element, action, ..
+            bundle_id,
+            element,
+            action,
         } => {
-            let outcome = driver.act(element, action)?;
+            let outcome = driver.act(bundle_id, element, action)?;
             Ok(Outcome::Json(json!({
                 "action": outcome.action,
                 "delivery": outcome.delivery,
                 "verified": outcome.verified,
             })))
         }
-        Call::Type { element, text, .. } => {
-            let outcome = driver.type_text(element.as_ref(), text)?;
+        Call::Type {
+            bundle_id,
+            element,
+            text,
+        } => {
+            // Untargeted text lands in the frontmost app: only the named one.
+            if element.is_none() {
+                require_frontmost(driver, bundle_id)?;
+            }
+            let outcome = driver.type_text(bundle_id, element.as_ref(), text)?;
             Ok(Outcome::Json(json!({
                 "action": outcome.action,
                 "delivery": outcome.delivery,
@@ -1522,6 +1620,12 @@ fn execute(
             window,
             chord,
         } => {
+            // A named window must be the app's; the chord lands in the
+            // frontmost app, so that must be the named one.
+            if window.is_some() {
+                resolve_window(driver, bundle_id, window.as_ref())?;
+            }
+            require_frontmost(driver, bundle_id)?;
             let outcome = driver.key(&window_target(bundle_id, window.as_ref()), chord)?;
             Ok(Outcome::Json(json!({
                 "action": outcome.action,
@@ -1531,19 +1635,50 @@ fn execute(
         }
         Call::ClickAt {
             bundle_id,
+            window,
             x,
             y,
             button,
             count,
         } => {
-            let window = resolve_window(driver, bundle_id, None)?;
-            let shot = host.shots().get(&window.id).copied().ok_or_else(|| {
-                CallError::invalid(
-                    "take a computer_screenshot of this window first: x and y are pixels of it",
-                )
-            })?;
+            // The window whose screenshot the pixels are of: the one named,
+            // else the one of this app's latest screenshot in this turn.
+            let key = bundle_id.trim().to_ascii_lowercase();
+            let (window_id, shot) = {
+                let turn = turn();
+                let window_id = window
+                    .clone()
+                    .or_else(|| turn.latest_shot.get(&key).cloned())
+                    .ok_or_else(|| {
+                        CallError::invalid(
+                            "take a computer_screenshot of the window first: x and y are pixels of it",
+                        )
+                    })?;
+                let shot = turn
+                    .shots
+                    .get(&(key, window_id.clone()))
+                    .copied()
+                    .ok_or_else(|| {
+                        CallError::invalid(format!(
+                            "take a computer_screenshot of window {window_id} first: x and y are pixels of it"
+                        ))
+                    })?;
+                (window_id, shot)
+            };
+            let window = resolve_window(driver, bundle_id, Some(&window_id))?;
+            // The pixels map through the frame the screenshot showed: a
+            // window that moved or resized since then would take the click
+            // somewhere else.
+            if window.bounds != Some(shot.region) {
+                return Err(CallError::new(
+                    "window_changed",
+                    "the window moved or resized since its last screenshot: take a new computer_screenshot",
+                ));
+            }
             let point = map_point(&shot, *x, *y)?;
+            require_frontmost(driver, bundle_id)?;
             let outcome = driver.click_at(&ClickAt {
+                bundle_id: bundle_id.clone(),
                 window_id: window.id.clone(),
                 point,
                 button: *button,
@@ -1587,6 +1722,7 @@ fn execute(
                     state,
                     present,
                 } => WaitCondition::RefState {
+                    bundle_id: bundle_id.clone(),
                     element_ref: element.clone(),
                     state: state.clone(),
                     present: *present,
@@ -1665,15 +1801,24 @@ pub struct ComputerToolProvider {
 
 impl ComputerToolProvider {
     /// The toolset of a turn over `session`, whose policy the host checked
-    /// with [`offered`].
+    /// with [`offered`]. `enabled` is read again at every call (the client
+    /// policy and the device switch, live). Each turn's toolset is new, so
+    /// refs and screenshots of an earlier turn are not honoured.
     #[must_use]
-    pub fn new(host: Arc<ComputerHost>, session: &LocalSession, vision: bool) -> Self {
+    pub fn new(
+        host: Arc<ComputerHost>,
+        session: &LocalSession,
+        vision: bool,
+        enabled: Switch,
+    ) -> Self {
         Self {
             toolset: Arc::new(ComputerToolset {
                 host,
                 context: CallContext {
                     approvals: session.approvals(),
                     rules: session.rules().clone(),
+                    enabled,
+                    turn: Arc::default(),
                 },
                 vision,
             }),

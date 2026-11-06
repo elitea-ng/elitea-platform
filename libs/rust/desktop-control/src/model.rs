@@ -88,8 +88,29 @@ pub enum WindowTarget {
     Focused,
     /// The focused (or only) window of the application with this bundle id.
     App(String),
-    /// One window, by the id [`WindowInfo::id`] reported.
-    Window(String),
+    /// One window, by the id [`WindowInfo::id`] reported, of the
+    /// application with this bundle id: a window of any other app is not
+    /// found.
+    Window { bundle_id: String, id: String },
+}
+
+impl WindowTarget {
+    /// The application the target names, if it names one.
+    #[must_use]
+    pub fn bundle_id(&self) -> Option<&str> {
+        match self {
+            Self::Focused => None,
+            Self::App(bundle_id) | Self::Window { bundle_id, .. } => Some(bundle_id),
+        }
+    }
+}
+
+/// Whether a process's bundle id (`actual`, as the OS reports it) is the
+/// application a call names. An unknown bundle id never matches: a window
+/// or element whose application cannot be told is not the named one's.
+#[must_use]
+pub fn bundle_matches(actual: Option<&str>, named: &str) -> bool {
+    actual.is_some_and(|actual| actual.eq_ignore_ascii_case(named.trim()))
 }
 
 /// The limits of one snapshot.
@@ -438,6 +459,8 @@ pub const MAX_CLICK_COUNT: u32 = 3;
 /// window must be the topmost one at the point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClickAt {
+    /// The application the window belongs to; it must be frontmost.
+    pub bundle_id: String,
     /// The window, by [`WindowInfo::id`].
     pub window_id: String,
     pub point: Point,
@@ -512,10 +535,65 @@ pub struct Capture {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum CaptureTarget {
-    /// One window, by [`WindowInfo::id`].
-    Window { id: String },
-    /// A region in global screen points, inside one display.
-    Region { rect: Rect },
+    /// One window of the app with this bundle id, by [`WindowInfo::id`]:
+    /// the window alone, without its shadow, so the image maps 1:1 onto
+    /// the window's frame.
+    Window { bundle_id: String, id: String },
+    /// A region of one window, in points from the window's top-left
+    /// corner: the window is captured alone and cropped, so no other
+    /// window that overlaps the region shows in the image.
+    WindowRegion {
+        bundle_id: String,
+        id: String,
+        region: Rect,
+    },
+}
+
+/// The pixel box (x, y, width, height) of `region` (window points from
+/// its top-left corner) in a capture of the whole window that is
+/// `image_width` x `image_height` pixels for a frame of `frame_width` x
+/// `frame_height` points. The capture has no shadow, so pixels map onto
+/// the frame linearly.
+///
+/// # Errors
+/// [`DesktopError::InvalidArgs`](crate::DesktopError::InvalidArgs) for an
+/// empty frame or image, or a region not inside the frame.
+pub fn region_pixels(
+    frame_width: f64,
+    frame_height: f64,
+    region: &Rect,
+    image_width: u32,
+    image_height: u32,
+) -> Result<(u32, u32, u32, u32), crate::DesktopError> {
+    let bad = |why: &str| crate::DesktopError::InvalidArgs(why.to_owned());
+    if !(frame_width.is_finite() && frame_height.is_finite())
+        || frame_width <= 0.0
+        || frame_height <= 0.0
+        || image_width == 0
+        || image_height == 0
+    {
+        return Err(bad("the window has no frame"));
+    }
+    if !region.is_valid()
+        || region.x < 0.0
+        || region.y < 0.0
+        || region.width <= 0.0
+        || region.height <= 0.0
+        || region.x + region.width > frame_width
+        || region.y + region.height > frame_height
+    {
+        return Err(bad("the region is outside the window"));
+    }
+    let sx = f64::from(image_width) / frame_width;
+    let sy = f64::from(image_height) / frame_height;
+    // Inside the frame, so every value is in 0..=image size.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let px = |v: f64, max: u32| -> u32 { (v.round().max(0.0) as u32).min(max) };
+    let x = px(region.x * sx, image_width - 1);
+    let y = px(region.y * sy, image_height - 1);
+    let w = px(region.width * sx, image_width - x).max(1);
+    let h = px(region.height * sy, image_height - y).max(1);
+    Ok((x, y, w, h))
 }
 
 /// A condition [`DesktopDriver::wait`](crate::DesktopDriver::wait) waits for.
@@ -530,6 +608,8 @@ pub enum WaitCondition {
     },
     /// The element a ref names has (or, `present: false`, lacks) the state.
     RefState {
+        /// The application the ref's snapshot was taken of.
+        bundle_id: String,
         element_ref: ElementRef,
         state: String,
         present: bool,
@@ -610,6 +690,7 @@ mod tests {
     #[test]
     fn a_click_needs_a_finite_point_and_one_to_three_clicks() {
         let click = |x: f64, count| ClickAt {
+            bundle_id: "com.apple.TextEdit".into(),
             window_id: "w".into(),
             point: Point { x, y: 1.0 },
             button: PointerButton::Left,
@@ -620,6 +701,67 @@ mod tests {
         for bad in [click(f64::NAN, 1), click(1.0, 0), click(1.0, 4)] {
             assert_eq!(bad.validate().unwrap_err().code(), "invalid_args");
         }
+    }
+
+    #[test]
+    fn an_unknown_bundle_is_never_the_named_one() {
+        assert!(bundle_matches(
+            Some("com.apple.TextEdit"),
+            "com.apple.textedit"
+        ));
+        assert!(!bundle_matches(
+            Some("com.apple.Notes"),
+            "com.apple.TextEdit"
+        ));
+        assert!(!bundle_matches(None, "com.apple.TextEdit"));
+        assert_eq!(
+            WindowTarget::Window {
+                bundle_id: "a.b".into(),
+                id: "1".into()
+            }
+            .bundle_id(),
+            Some("a.b")
+        );
+        assert_eq!(WindowTarget::Focused.bundle_id(), None);
+    }
+
+    #[test]
+    fn a_region_maps_onto_a_shadowless_window_capture() {
+        let r = |x, y, width, height| Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        // A 400 x 300 point window captured at 2x: 800 x 600 pixels.
+        assert_eq!(
+            region_pixels(400.0, 300.0, &r(100.0, 50.0, 40.0, 20.0), 800, 600),
+            Ok((200, 100, 80, 40))
+        );
+        // The whole frame is the whole image.
+        assert_eq!(
+            region_pixels(400.0, 300.0, &r(0.0, 0.0, 400.0, 300.0), 800, 600),
+            Ok((0, 0, 800, 600))
+        );
+        // At 1x the pixels are the points.
+        assert_eq!(
+            region_pixels(400.0, 300.0, &r(10.0, 10.0, 5.0, 5.0), 400, 300),
+            Ok((10, 10, 5, 5))
+        );
+        for bad in [
+            r(390.0, 0.0, 20.0, 10.0),
+            r(-1.0, 0.0, 10.0, 10.0),
+            r(0.0, 0.0, 0.0, 10.0),
+        ] {
+            assert_eq!(
+                region_pixels(400.0, 300.0, &bad, 800, 600)
+                    .unwrap_err()
+                    .code(),
+                "invalid_args",
+                "{bad:?}"
+            );
+        }
+        assert!(region_pixels(0.0, 300.0, &r(0.0, 0.0, 1.0, 1.0), 800, 600).is_err());
     }
 
     #[test]

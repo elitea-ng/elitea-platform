@@ -31,7 +31,9 @@ description: "The elitea-desktop-control crate (ADR-0047): the DesktopDriver tra
 
 A snapshot keeps visible, on-screen nodes. Under `actionable_only`, the default, it keeps only the nodes you can act on, text nodes, and their ancestors, and it collapses inert wrappers that have a single child. `SnapshotBudget` caps the depth (12), the node count (400) and the text length (200). When a cap cuts the tree, or the platform stops early, the snapshot says `truncated: true`.
 
-Refs have the form `@<snapshot>:eN`, for example `@s3:e12`. A ref is valid only while its snapshot is held. The driver keeps the most recent snapshots and evicts the oldest. A ref to an evicted snapshot, to a forgotten one, or to an element that no longer matches what the snapshot recorded fails with `stale_ref`. The caller then takes a new snapshot.
+Refs have the form `@<snapshot>:eN`, for example `@s3:e12`. A ref is valid only while its snapshot is held, and only for the application the snapshot was taken of: `act`, `type_text` and a `RefState` wait name a `bundle_id`, and a ref whose snapshot was of another app, or of an app whose bundle id could not be read, fails with `stale_ref`. The driver keeps the most recent snapshots and evicts the oldest. The polls of `wait` take snapshots that are not stored, so a wait never evicts a held ref. A ref to an evicted snapshot, to a forgotten one, or to an element that no longer matches what the snapshot recorded fails with `stale_ref`. The caller then takes a new snapshot.
+
+A window target names its application too (`WindowTarget::Window { bundle_id, id }`, `CaptureTarget::Window { bundle_id, id }`): a window id of another app fails with `window_not_found`. An unknown bundle id never matches.
 
 ## Hard limits
 
@@ -40,8 +42,11 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 - **Locked or idle screen.** Every call except `permissions()` fails with `screen_unavailable` while the screen is locked, the screensaver is up, the main display sleeps, or this login session is not on the console (another user is switched in). On macOS the driver reads `CGSessionCopyCurrentDictionary` (`CGSSessionScreenIsLocked`, `kCGSSessionOnConsoleKey`), `CGDisplayIsAsleep(CGMainDisplayID())`, and whether the frontmost app is `ScreenSaverEngine`. `wait` checks again on every poll.
 - **Secure input.** While macOS secure input is on (a password prompt anywhere), every act fails with `secure_field_refused`: `act` of any kind, `type_text`, `key`, `click_at` and `open_app`. Reads still run.
 - **Secure fields.** A secure text field (`AXSecureTextField`) appears with `secure: true` and no value. Writing into one, with `type_text` or `act set_value`, fails with `secure_field_refused`. So does `type_text` with no ref or `key` while the focused element is secure.
-- **No Elitea control.** Elitea's own windows are never read, acted on or captured. A process is Elitea when its pid is the driver's own process or its bundle id is `ai.elitea.desktop`; the host adds its helper processes with `MacDriver::with_own_apps(OwnApps::with_extra(pids, bundle_ids))`. Elitea is left out of `list_apps` and `list_windows`. A snapshot, `act`, `key`, `click_at`, `open_app`, `wait` or window capture that targets it fails with `own_window_refused`, and so does a `click_at` whose point another window covers, and so do `type_text` with no ref and `key` while Elitea is the frontmost app. A region capture that overlaps any Elitea window is refused, not masked.
+- **No Elitea control.** Elitea's own windows are never read, acted on or captured. A process is Elitea when its pid is the driver's own process or its bundle id is `ai.elitea.desktop`; the host adds its helper processes with `MacDriver::with_own_apps(OwnApps::with_extra(pids, bundle_ids))`. Elitea is left out of `list_apps` and `list_windows`. A snapshot, `act`, `key`, `click_at`, `open_app`, `wait` or window capture that targets it fails with `own_window_refused`, and so does a `click_at` whose point another window covers, and so do `type_text` with no ref, `key` and `click_at` while Elitea is the frontmost app.
+- **Only the named app.** Input with no element target lands in the frontmost app. `type_text` with no ref, `key` and `click_at` go only into the app the call names, while it is frontmost; otherwise they fail with `not_frontmost`, also when the frontmost app's bundle id cannot be read.
+- **Window-only capture.** A capture is always of one window alone, without its shadow (`screencapture -o -l`, the vendor's frame capture): no other window that overlaps it shows, and its pixels map 1:1 onto the window's frame times the display scale. A zoom (`CaptureTarget::WindowRegion`) is a crop of that capture; there is no screen-region capture.
 - **Text length.** `type_text` and `act set_value` write at most 10,000 characters (`MAX_TYPED_CHARS`). Longer text fails with `invalid_args` before anything is sent.
+- **Denied menu items.** `act` on a menu item titled Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit or Switch User (case ignored, with or without the ellipsis and any trailing app or user name) fails with `menu_item_refused`, in any app's menus, the Apple menu's included: the menu path to the denied chords.
 - **Denied chords.** They fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through. Switch user has no entry: macOS has no default fast-user-switching chord, only the menu-bar and Control Centre item. A switched-out session fails every call with `screen_unavailable`.
 - Every event the driver posts carries its marker in `kCGEventSourceUserData`. A physical event carries 0 there, so an event tap can classify each event with `is_synthetic_event`.
 
@@ -54,7 +59,9 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 | `stale_ref` | The ref's snapshot is gone, or the element changed. Take a new snapshot |
 | `secure_field_refused` | A write into a secure field, or any act while macOS secure input is on |
 | `chord_refused` | A denied key chord |
-| `own_window_refused` | The target is Elitea's own app, window or a region over one |
+| `menu_item_refused` | A Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit or Switch User menu item |
+| `not_frontmost` | Input with no element target, and the named app is not the frontmost one |
+| `own_window_refused` | The target is Elitea's own app or window, or Elitea is frontmost |
 | `screen_unavailable` | The screen is locked, the screensaver is up, the display sleeps, or the session is not on the console |
 | `app_not_found`, `window_not_found` | No such application or window |
 | `permission_denied` | The Accessibility or Screen Recording grant is missing |
