@@ -1,3 +1,4 @@
+from elitea.runtime.v1 import browser_session_pb2 as _browser_session_pb2
 from elitea.runtime.v1 import common_pb2 as _common_pb2
 from elitea.runtime.v1 import compiled_code_pb2 as _compiled_code_pb2
 from elitea.runtime.v1 import egress_audit_pb2 as _egress_audit_pb2
@@ -58,6 +59,13 @@ class DelegationAssertionDispositionV1(int, metaclass=_enum_type_wrapper.EnumTyp
     DELEGATION_ASSERTION_DISPOSITION_V1_UNSPECIFIED: _ClassVar[DelegationAssertionDispositionV1]
     DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED: _ClassVar[DelegationAssertionDispositionV1]
     DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED: _ClassVar[DelegationAssertionDispositionV1]
+
+class BrowserSessionReportStateV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    BROWSER_SESSION_REPORT_STATE_V1_UNSPECIFIED: _ClassVar[BrowserSessionReportStateV1]
+    BROWSER_SESSION_REPORT_STATE_V1_LIVE: _ClassVar[BrowserSessionReportStateV1]
+    BROWSER_SESSION_REPORT_STATE_V1_LINGERING: _ClassVar[BrowserSessionReportStateV1]
+    BROWSER_SESSION_REPORT_STATE_V1_ENDED: _ClassVar[BrowserSessionReportStateV1]
 CLAIM_DISPOSITION_V1_UNSPECIFIED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_ACCEPTED: ClaimDispositionV1
 CLAIM_DISPOSITION_V1_RECOVER_TERMINAL_ACK: ClaimDispositionV1
@@ -86,6 +94,10 @@ REMOVE_INDEX_DISPOSITION_V1_SHARED_WRITE_REFUSED: RemoveIndexDispositionV1
 DELEGATION_ASSERTION_DISPOSITION_V1_UNSPECIFIED: DelegationAssertionDispositionV1
 DELEGATION_ASSERTION_DISPOSITION_V1_ISSUED: DelegationAssertionDispositionV1
 DELEGATION_ASSERTION_DISPOSITION_V1_DISABLED: DelegationAssertionDispositionV1
+BROWSER_SESSION_REPORT_STATE_V1_UNSPECIFIED: BrowserSessionReportStateV1
+BROWSER_SESSION_REPORT_STATE_V1_LIVE: BrowserSessionReportStateV1
+BROWSER_SESSION_REPORT_STATE_V1_LINGERING: BrowserSessionReportStateV1
+BROWSER_SESSION_REPORT_STATE_V1_ENDED: BrowserSessionReportStateV1
 
 class ClaimCommandRequestV1(_message.Message):
     __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials")
@@ -394,3 +406,25 @@ class MintDelegationAssertionResponseV1(_message.Message):
     required: bool
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, disposition: _Optional[_Union[DelegationAssertionDispositionV1, str]] = ..., assertion: _Optional[str] = ..., expires_at_unix_millis: _Optional[int] = ..., required: _Optional[bool] = ..., rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class ReportBrowserSessionRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "spec", "audience", "state", "linger_until_unix_seconds")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    SPEC_FIELD_NUMBER: _ClassVar[int]
+    AUDIENCE_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    LINGER_UNTIL_UNIX_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    spec: _browser_session_pb2.BrowserSessionSpecV1
+    audience: str
+    state: BrowserSessionReportStateV1
+    linger_until_unix_seconds: int
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., spec: _Optional[_Union[_browser_session_pb2.BrowserSessionSpecV1, _Mapping]] = ..., audience: _Optional[str] = ..., state: _Optional[_Union[BrowserSessionReportStateV1, str]] = ..., linger_until_unix_seconds: _Optional[int] = ...) -> None: ...
+
+class ReportBrowserSessionResponseV1(_message.Message):
+    __slots__ = ("rejection",)
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

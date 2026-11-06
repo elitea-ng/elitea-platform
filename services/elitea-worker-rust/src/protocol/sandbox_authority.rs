@@ -275,6 +275,34 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await
     }
 
+    /// Tell Main the run's cloud browser session changed state (ADR-0049
+    /// decision 6, #1597), under this claim's identity and fence. Main keeps
+    /// the session row a viewer's relay reads. Returns whether Main stored it.
+    pub(crate) async fn report_browser_session(
+        &self,
+        authority: &ClaimBoundSandboxAuthority,
+        audience: &str,
+        spec: &crate::protocol::elitea::runtime::v1::BrowserSessionSpecV1,
+        state: crate::protocol::elitea::runtime::v1::BrowserSessionReportStateV1,
+        linger_until_unix_seconds: u64,
+    ) -> bool {
+        if self.require_sandbox_authority(authority).is_err() {
+            return false;
+        }
+        let request = crate::protocol::elitea::runtime::v1::ReportBrowserSessionRequestV1 {
+            identity: Some(authority.claim.identity.clone()),
+            fence: Some(authority.claim.fence.clone()),
+            spec: Some(spec.clone()),
+            audience: audience.to_owned(),
+            state: state as i32,
+            linger_until_unix_seconds,
+        };
+        match self.control.report_browser_session(request).await {
+            Ok(response) => response.rejection.is_none(),
+            Err(_) => false,
+        }
+    }
+
     /// Main's grant for one cloud-executor workspace run (ADR-0034): the
     /// same claim-bound `AuthorizeSandboxJob`, its digest the run spec's and
     /// its activation the run's name, for the workspace profile's audience.

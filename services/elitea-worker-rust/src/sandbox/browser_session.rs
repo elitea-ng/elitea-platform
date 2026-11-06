@@ -454,6 +454,37 @@ pub struct DockerBrowserPlan {
 pub(crate) mod tests {
     use super::*;
 
+    /// Main computes the view grant's digest from its session row
+    /// (internal/domain/browsersession, #1597). These vectors are pinned on
+    /// both sides: a drift refuses every view.
+    #[test]
+    fn the_digests_match_mains_vectors() {
+        let name = crate::browser_run::session::session_name("0123456789abcdef0123456789abcdef");
+        assert_eq!(name, "elitea-br-86b40f0fcfcf8dcc546fcf51");
+        let spec = BrowserSessionSpecV1 {
+            revision: 1,
+            name,
+            engine: BrowserEngineV1::Full as i32,
+            cpu_millis: 1000,
+            memory_bytes: 1 << 30,
+            wall_seconds: 600,
+            max_pages: 3,
+        };
+        let hex = |bytes: [u8; 32]| crate::sandbox::workspace_run::hex(&bytes);
+        assert_eq!(
+            hex(spec_digest(&spec)),
+            "6a3b67da63b9c3426d70c3de912d6697a7537b4bbd5eb2bbe9375ef1bb4f667e"
+        );
+        assert_eq!(
+            hex(view_digest(&spec, false)),
+            "a8380436929e55a5975f12fd62f73d709ae5ccd2e39acbd5456ac0ea16a9b93f"
+        );
+        assert_eq!(
+            hex(view_digest(&spec, true)),
+            "a86dce642c3645438769b87f6d7e9d5074d667b9933649151d45437c4a2584ff"
+        );
+    }
+
     pub(crate) fn session(engine: Engine) -> BrowserSessionContainer {
         BrowserSessionContainer {
             name: "elitea-br-0123456789abcdef01234567".into(),

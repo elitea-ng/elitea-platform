@@ -33,6 +33,7 @@ const (
 	RuntimeControlService_ReportEgressSummary_FullMethodName           = "/elitea.runtime.v1.RuntimeControlService/ReportEgressSummary"
 	RuntimeControlService_ReportRunSteps_FullMethodName                = "/elitea.runtime.v1.RuntimeControlService/ReportRunSteps"
 	RuntimeControlService_MintDelegationAssertion_FullMethodName       = "/elitea.runtime.v1.RuntimeControlService/MintDelegationAssertion"
+	RuntimeControlService_ReportBrowserSession_FullMethodName          = "/elitea.runtime.v1.RuntimeControlService/ReportBrowserSession"
 )
 
 // RuntimeControlServiceClient is the client API for RuntimeControlService service.
@@ -53,6 +54,7 @@ type RuntimeControlServiceClient interface {
 	ReportEgressSummary(ctx context.Context, in *ReportEgressSummaryRequestV1, opts ...grpc.CallOption) (*ReportEgressSummaryResponseV1, error)
 	ReportRunSteps(ctx context.Context, in *ReportRunStepsRequestV1, opts ...grpc.CallOption) (*ReportRunStepsResponseV1, error)
 	MintDelegationAssertion(ctx context.Context, in *MintDelegationAssertionRequestV1, opts ...grpc.CallOption) (*MintDelegationAssertionResponseV1, error)
+	ReportBrowserSession(ctx context.Context, in *ReportBrowserSessionRequestV1, opts ...grpc.CallOption) (*ReportBrowserSessionResponseV1, error)
 }
 
 type runtimeControlServiceClient struct {
@@ -203,6 +205,16 @@ func (c *runtimeControlServiceClient) MintDelegationAssertion(ctx context.Contex
 	return out, nil
 }
 
+func (c *runtimeControlServiceClient) ReportBrowserSession(ctx context.Context, in *ReportBrowserSessionRequestV1, opts ...grpc.CallOption) (*ReportBrowserSessionResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportBrowserSessionResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeControlService_ReportBrowserSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeControlServiceServer is the server API for RuntimeControlService service.
 // All implementations must embed UnimplementedRuntimeControlServiceServer
 // for forward compatibility.
@@ -221,6 +233,7 @@ type RuntimeControlServiceServer interface {
 	ReportEgressSummary(context.Context, *ReportEgressSummaryRequestV1) (*ReportEgressSummaryResponseV1, error)
 	ReportRunSteps(context.Context, *ReportRunStepsRequestV1) (*ReportRunStepsResponseV1, error)
 	MintDelegationAssertion(context.Context, *MintDelegationAssertionRequestV1) (*MintDelegationAssertionResponseV1, error)
+	ReportBrowserSession(context.Context, *ReportBrowserSessionRequestV1) (*ReportBrowserSessionResponseV1, error)
 	mustEmbedUnimplementedRuntimeControlServiceServer()
 }
 
@@ -272,6 +285,9 @@ func (UnimplementedRuntimeControlServiceServer) ReportRunSteps(context.Context, 
 }
 func (UnimplementedRuntimeControlServiceServer) MintDelegationAssertion(context.Context, *MintDelegationAssertionRequestV1) (*MintDelegationAssertionResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method MintDelegationAssertion not implemented")
+}
+func (UnimplementedRuntimeControlServiceServer) ReportBrowserSession(context.Context, *ReportBrowserSessionRequestV1) (*ReportBrowserSessionResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportBrowserSession not implemented")
 }
 func (UnimplementedRuntimeControlServiceServer) mustEmbedUnimplementedRuntimeControlServiceServer() {}
 func (UnimplementedRuntimeControlServiceServer) testEmbeddedByValue()                               {}
@@ -546,6 +562,24 @@ func _RuntimeControlService_MintDelegationAssertion_Handler(srv interface{}, ctx
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeControlService_ReportBrowserSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportBrowserSessionRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeControlServiceServer).ReportBrowserSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeControlService_ReportBrowserSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeControlServiceServer).ReportBrowserSession(ctx, req.(*ReportBrowserSessionRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeControlService_ServiceDesc is the grpc.ServiceDesc for RuntimeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -608,6 +642,10 @@ var RuntimeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MintDelegationAssertion",
 			Handler:    _RuntimeControlService_MintDelegationAssertion_Handler,
+		},
+		{
+			MethodName: "ReportBrowserSession",
+			Handler:    _RuntimeControlService_ReportBrowserSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

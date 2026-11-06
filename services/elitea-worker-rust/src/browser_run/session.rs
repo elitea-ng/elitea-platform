@@ -26,8 +26,9 @@ use zeroize::Zeroizing;
 
 use crate::protocol::elitea::runtime::v1::{
     BrowserCallRequestV1, BrowserEngineV1, BrowserSessionEgressV1, BrowserSessionEndV1,
-    BrowserSessionSpecV1, DestroyBrowserSessionRequestV1, SignedSandboxJobGrantV1,
-    StartBrowserSessionRequestV1, browser_session_service_client::BrowserSessionServiceClient,
+    BrowserSessionReportStateV1, BrowserSessionSpecV1, DestroyBrowserSessionRequestV1,
+    SignedSandboxJobGrantV1, StartBrowserSessionRequestV1,
+    browser_session_service_client::BrowserSessionServiceClient,
 };
 use crate::sandbox::browser_session::spec_digest;
 
@@ -54,6 +55,17 @@ pub(crate) trait BrowserGrants: Send + Sync {
         activation_id: &str,
         digest: [u8; 32],
     ) -> Result<SignedSandboxJobGrantV1, SessionError>;
+
+    /// Tell Main the session's state (ADR-0049 decision 6), so any
+    /// elitea-main replica can relay a viewer to it. Best effort: a refused
+    /// report leaves the session without a viewer and the run unchanged.
+    async fn report(
+        &self,
+        _spec: &BrowserSessionSpecV1,
+        _state: BrowserSessionReportStateV1,
+        _linger_until_unix_seconds: u64,
+    ) {
+    }
 }
 
 /// Main's grants over the claim's sandbox authority (production).
@@ -78,6 +90,32 @@ impl BrowserGrants for ClaimBrowserGrants {
             .authorize_workspace_run(&self.authority, &self.audience, activation_id, &digest)
             .await
             .map_err(|_| SessionError::Refused)
+    }
+
+    async fn report(
+        &self,
+        spec: &BrowserSessionSpecV1,
+        state: BrowserSessionReportStateV1,
+        linger_until_unix_seconds: u64,
+    ) {
+        let stored = self
+            .control
+            .report_browser_session(
+                &self.authority,
+                &self.audience,
+                spec,
+                state,
+                linger_until_unix_seconds,
+            )
+            .await;
+        if !stored {
+            tracing::warn!(
+                event = "browser_session_report_refused",
+                session = spec.name.as_str(),
+                state = ?state,
+                "Main did not store the browser session report; the session has no viewer"
+            );
+        }
     }
 }
 
@@ -194,6 +232,10 @@ impl GrpcBrowserSession {
         // The request (with its token copy) is gone; the answer has none.
         answer.map_err(|status| status_error(&status))?;
         *started = true;
+        // A viewer finds the session through Main's row (decision 6).
+        self.grants
+            .report(&self.spec, BrowserSessionReportStateV1::Live, 0)
+            .await;
         Ok(())
     }
 }
@@ -263,14 +305,34 @@ impl BrowserSession for GrpcBrowserSession {
             end: end as i32,
         });
         request.set_timeout(END_DEADLINE);
-        if let Err(status) = self.client.clone().destroy_browser_session(request).await {
-            tracing::warn!(
-                event = "browser_session_end_failed",
-                session = self.spec.name.as_str(),
-                code = ?status.code(),
-                "the browser session end failed; the supervisor sweep ends it"
-            );
+        match self.client.clone().destroy_browser_session(request).await {
+            Ok(answer) => {
+                let (state, linger) = end_report(now, answer.get_ref().linger_until_unix_seconds);
+                self.grants.report(&self.spec, state, linger).await;
+            }
+            Err(status) => {
+                tracing::warn!(
+                    event = "browser_session_end_failed",
+                    session = self.spec.name.as_str(),
+                    code = ?status.code(),
+                    "the browser session end failed; the supervisor sweep ends it"
+                );
+            }
         }
+    }
+}
+
+/// The state Main records after a destroy: `NOW` ended the session; a
+/// `RUN_ENDED` that lingers keeps it watchable until the linger ends, and
+/// one already gone (no linger time) is ended too.
+fn end_report(now: bool, linger_until_unix_seconds: u64) -> (BrowserSessionReportStateV1, u64) {
+    if now || linger_until_unix_seconds == 0 {
+        (BrowserSessionReportStateV1::Ended, 0)
+    } else {
+        (
+            BrowserSessionReportStateV1::Lingering,
+            linger_until_unix_seconds,
+        )
     }
 }
 
@@ -383,6 +445,24 @@ mod tests {
         );
         assert_eq!(name, session_name("0123456789abcdef0123456789abcdef"));
         assert_ne!(name, session_name("fedcba9876543210fedcba9876543210"));
+    }
+
+    #[test]
+    fn a_destroy_reports_ended_or_lingering() {
+        assert_eq!(
+            end_report(true, 1_900_000_000),
+            (BrowserSessionReportStateV1::Ended, 0),
+            "NOW ends it, whatever the supervisor answers"
+        );
+        assert_eq!(
+            end_report(false, 1_900_000_000),
+            (BrowserSessionReportStateV1::Lingering, 1_900_000_000)
+        );
+        assert_eq!(
+            end_report(false, 0),
+            (BrowserSessionReportStateV1::Ended, 0),
+            "a RUN_ENDED on a session already gone has no linger"
+        );
     }
 
     #[test]

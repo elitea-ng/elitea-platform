@@ -24,8 +24,9 @@ use crate::protocol::elitea::runtime::v1::{
     MintDelegationAssertionRequestV1, MintDelegationAssertionResponseV1,
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
     PrepareSettlementResponseV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
-    RenewLeaseResponseV1, ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1,
-    ReportRunStepsRequestV1, ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
+    RenewLeaseResponseV1, ReportBrowserSessionRequestV1, ReportBrowserSessionResponseV1,
+    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
+    ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
     runtime_control_service_client::RuntimeControlServiceClient,
 };
 
@@ -45,6 +46,9 @@ const RUN_STEPS_DEADLINE: Duration = Duration::from_secs(10);
 /// A delegation assertion is minted before a remote MCP call: it never waits
 /// long.
 const DELEGATION_ASSERTION_DEADLINE: Duration = Duration::from_secs(5);
+/// A browser session report rides a tool call (the start) or the run's end:
+/// it never waits long.
+const BROWSER_SESSION_REPORT_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_METADATA_BYTES: usize = 256;
 
 /// Immutable transport identity and deadline for every control call.
@@ -192,6 +196,19 @@ pub trait ControlRpc: Send + Sync {
         ))
     }
 
+    /// `ReportBrowserSession` (ADR-0049 decision 6, #1597): the run's cloud
+    /// browser session started or ended, under the live claim. A transport
+    /// that does not serve it answers `Unimplemented`; the session then has
+    /// no viewer, and the run is not affected.
+    async fn report_browser_session(
+        &self,
+        _request: Request<ReportBrowserSessionRequestV1>,
+    ) -> Result<Response<ReportBrowserSessionResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "browser session reports are unavailable",
+        ))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -307,6 +324,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<MintDelegationAssertionRequestV1>,
     ) -> Result<Response<MintDelegationAssertionResponseV1>, Status> {
         self.client.clone().mint_delegation_assertion(request).await
+    }
+
+    async fn report_browser_session(
+        &self,
+        request: Request<ReportBrowserSessionRequestV1>,
+    ) -> Result<Response<ReportBrowserSessionResponseV1>, Status> {
+        self.client.clone().report_browser_session(request).await
     }
 
     async fn renew_lease(
@@ -708,6 +732,35 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|status| match status.code() {
                 tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
                     "Main does not serve delegation assertions on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Report the run's cloud browser session state (ADR-0049 decision 6),
+    /// once, with a short deadline. The caller treats every failure as best
+    /// effort.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a
+    /// transport that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn report_browser_session(
+        &self,
+        message: ReportBrowserSessionRequestV1,
+    ) -> Result<ReportBrowserSessionResponseV1, ControlGrpcError> {
+        let deadline = self.config.deadline.min(BROWSER_SESSION_REPORT_DEADLINE);
+        let mut request = self.request(message)?;
+        request.set_timeout(deadline);
+        let response = timeout(deadline, self.rpc.report_browser_session(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve browser session reports on its control plane",
                 ),
                 _ => unavailable(),
             })?
