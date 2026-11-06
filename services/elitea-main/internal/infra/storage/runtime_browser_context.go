@@ -2,11 +2,13 @@ package storage
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserruntime"
 )
 
-// runtimeContextStageBrowser labels a failed `browser` field resolution.
+// runtimeContextStageBrowser labels a `browser` field that could not be
+// built, in the log line.
 const runtimeContextStageBrowser = "browser_context"
 
 // BrowserContextResolver builds the runtime-context `browser` field for a
@@ -30,9 +32,13 @@ func (s *EliteaClientTokenService) WithBrowserContext(resolver BrowserContextRes
 }
 
 // resolveBrowser adds the `browser` field to value when the worker accepted
-// it and the project enables the cloud browser. A resolution failure fails
-// the whole redemption, as the workspace field does: a run that the
-// project lets use the browser must not start without its caps.
+// it and the project enables the cloud browser. A browser failure never
+// fails the redemption: the resolver degrades a source it cannot read to
+// egress `unavailable` (the run starts, and the browser tools answer
+// `browser_unavailable`), and an error it still answers (the project setting
+// could not be read) serves no field, so the run has no browser at all. The
+// log line names the execution and the error, never a token. A cancelled
+// redemption still fails.
 func (s *EliteaClientTokenService) resolveBrowser(
 	ctx context.Context,
 	claim ContentClaim,
@@ -52,7 +58,10 @@ func (s *EliteaClientTokenService) resolveBrowser(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
 		}
-		return runtimeContextUnavailable(runtimeContextStageBrowser)
+		slog.WarnContext(ctx, "browser context: the field could not be built; the run has no cloud browser",
+			"stage", runtimeContextStageBrowser, "execution_id", claim.ExecutionID,
+			"project_id", authorization.ResourceProjectID, "error", err.Error())
+		return nil
 	}
 	value.Browser = browser
 	return nil

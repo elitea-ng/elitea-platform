@@ -119,6 +119,16 @@ impl BrowserSessions {
             }
             _ => None,
         };
+        // Why there is no route out, for the model: only the allowlist size
+        // is the project's to fix; every other reason is the deployment's.
+        let no_route = if field.is_some_and(|field| {
+            field.egress.mode == BrowserEgressMode::Unavailable
+                && field.egress.reason == context::BROWSER_ALLOWLIST_TOO_LARGE
+        }) {
+            elitea_agent_runtime::toolkits::SessionError::AllowlistTooLarge
+        } else {
+            elitea_agent_runtime::toolkits::SessionError::Unavailable
+        };
         let grants: Arc<dyn BrowserGrants> = match claim.sandbox {
             Some(authority) => Arc::new(ClaimBrowserGrants {
                 control: Arc::clone(&self.control),
@@ -137,7 +147,8 @@ impl BrowserSessions {
             self.shape,
             egress,
             unattended,
-        );
+        )
+        .with_no_route(no_route);
         let limits = field.map_or_else(BrowserLimits::default, |field| BrowserLimits {
             max_run_seconds: field.max_run_seconds,
             monthly_quota_seconds: field.monthly_quota_seconds,
@@ -212,6 +223,63 @@ impl adk_rust::agent::ToolCallConfirmation for BrowserGate {
     }
 }
 
+/// The end of a run's browser session on every exit (ADR-0049 decision 8).
+///
+/// A completed run ends it with [`Self::end`]`(false)` (`RUN_ENDED`: a viewer
+/// may still look). A paused run keeps it for the resume ([`Self::keep`]).
+/// Any other exit (a failure, a cap, a cancellation, a lost lease) drops the
+/// guard, and the drop ends the session at once (`NOW`). The session is
+/// ended at most once.
+pub(crate) struct BrowserRunEnd {
+    session: Option<Arc<dyn BrowserSession>>,
+}
+
+impl BrowserRunEnd {
+    #[must_use]
+    pub(crate) fn new(session: Option<Arc<dyn BrowserSession>>) -> Self {
+        Self { session }
+    }
+
+    /// End the session now (`now`) or as a finished run. Idempotent.
+    pub(crate) async fn end(&mut self, now: bool) {
+        if let Some(session) = self.session.take() {
+            session.end(now).await;
+        }
+    }
+
+    /// The run paused for a person: keep the session for the resume.
+    pub(crate) fn keep(&mut self) {
+        self.session = None;
+    }
+}
+
+impl Drop for BrowserRunEnd {
+    fn drop(&mut self) {
+        let Some(session) = self.session.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            drop(runtime.spawn(async move { session.end(true).await }));
+        } else {
+            // No runtime to end it on: the supervisor's idle and wall
+            // sweeps end it.
+            tracing::warn!(
+                event = "browser_session_end_no_runtime",
+                "the run ended outside a runtime; the supervisor sweep ends its browser session"
+            );
+        }
+    }
+}
+
+impl std::fmt::Debug for BrowserRunEnd {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserRunEnd")
+            .field("armed", &self.session.is_some())
+            .finish()
+    }
+}
+
 /// The hosts of an unattended grant's `browser_submits`, as the run uses
 /// them (lowercase, at most [`elitea_agent_runtime::toolkits::MAX_SUBMIT_HOSTS`]).
 #[must_use]
@@ -263,6 +331,73 @@ mod tests {
         assert!(gate.requires_confirmation("run_command", &json!({})).await);
         let alone = BrowserGate::compose(run, None);
         assert!(!alone.requires_confirmation("run_command", &json!({})).await);
+    }
+
+    /// A session that records its ends.
+    #[derive(Default)]
+    struct EndRecorder {
+        ended: std::sync::Mutex<Vec<bool>>,
+    }
+
+    #[async_trait]
+    impl BrowserSession for EndRecorder {
+        async fn call(
+            &self,
+            _call_id: &str,
+            _name: &str,
+            _arguments: &Value,
+        ) -> Result<
+            elitea_agent_runtime::toolkits::SessionAnswer,
+            elitea_agent_runtime::toolkits::SessionError,
+        > {
+            Err(elitea_agent_runtime::toolkits::SessionError::Unavailable)
+        }
+
+        async fn end(&self, now: bool) {
+            self.ended.lock().expect("ended").push(now);
+        }
+    }
+
+    impl EndRecorder {
+        async fn ends(&self) -> Vec<bool> {
+            for _ in 0..200 {
+                if !self.ended.lock().expect("ended").is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            self.ended.lock().expect("ended").clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dropped_run_end_ends_the_session_now() {
+        let session = Arc::new(EndRecorder::default());
+        drop(BrowserRunEnd::new(Some(
+            Arc::clone(&session) as Arc<dyn BrowserSession>
+        )));
+        assert_eq!(session.ends().await, [true]);
+    }
+
+    #[tokio::test]
+    async fn a_run_end_ends_once_and_a_pause_keeps_the_session() {
+        let session = Arc::new(EndRecorder::default());
+        let mut end = BrowserRunEnd::new(Some(Arc::clone(&session) as Arc<dyn BrowserSession>));
+        end.end(false).await;
+        end.end(true).await;
+        drop(end);
+        assert_eq!(
+            session.ends().await,
+            [false],
+            "ended once, as a finished run"
+        );
+
+        let kept = Arc::new(EndRecorder::default());
+        let mut end = BrowserRunEnd::new(Some(Arc::clone(&kept) as Arc<dyn BrowserSession>));
+        end.keep();
+        drop(end);
+        tokio::task::yield_now().await;
+        assert!(kept.ended.lock().expect("ended").is_empty());
     }
 
     #[test]

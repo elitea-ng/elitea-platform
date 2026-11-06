@@ -27,6 +27,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/cost"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/failmode"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/policy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/requestlog"
 )
 
 // fakeMeteredPricer prices from a fixed table and counts lookups.
@@ -46,6 +47,7 @@ func defaultMeteredPrices() *fakeMeteredPricer {
 		"tavily/web_search":      {Unit: cost.MeteredUnitCredit, NanoUSDPerUnit: 8_000_000},
 		"firecrawl/web_fetch":    {Unit: cost.MeteredUnitPage, NanoUSDPerUnit: 3_800_000},
 		"ddg_instant/web_search": {Unit: cost.MeteredUnitRequest, NanoUSDPerUnit: 0},
+		"browser/engine_seconds": {Unit: cost.MeteredUnitSecond, NanoUSDPerUnit: 5_000_000},
 	}}
 }
 
@@ -391,6 +393,10 @@ func TestMeteredSettleBillsTheDocumentedFailureCharge(t *testing.T) {
 		"firecrawl fetch, failed":        {"firecrawl", "web_fetch", "failed", 0},
 		"firecrawl fetch, no class":      {"firecrawl", "web_fetch", "", 0},
 		"tavily search, target failed":   {"tavily", "web_search", "target_failed", 0},
+		// A cloud browser call refused before the engine settles 0 seconds:
+		// nothing is billed for it, whatever the failure class.
+		"browser, not reached": {"browser", "engine_seconds", "not_reached", 0},
+		"browser, failed":      {"browser", "engine_seconds", "failed", 0},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -568,5 +574,35 @@ func TestMeteredSettleRefusesANonUUIDEventID(t *testing.T) {
 		settleBody(admission, "not-a-uuid", "tavily", "web_search", "ok", map[string]any{"credits": 1}))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "event_id") {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A retried settle writes no units on its request-log row: only the first
+// settle of an event id carries them, so the log never counts a retry twice.
+func TestMeteredSettleLogsUnitsOnlyForTheFirstSettle(t *testing.T) {
+	gate := newScopedChecker(allow(), allow())
+	h := newMeteredHandler(gate, defaultMeteredPrices())
+	admission := admissionID(t, admit(t, h, "tavily", "web_search"))
+	body := settleBody(admission, uuid.NewString(), "tavily", "web_search", "ok", map[string]any{"credits": 1})
+	sink := &verdictSink{}
+	recorder := requestlog.New(sink, nil)
+	for range 2 {
+		requestlog.Middleware(recorder)(http.HandlerFunc(h.MeteredSettle)).ServeHTTP(httptest.NewRecorder(),
+			meteredRequest(t, "/llm/v1/metered/settle", "42", "7", "exec-1", body))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recorder.Stop(ctx)
+	h.DrainBilling()
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.records) != 2 {
+		t.Fatalf("records = %d, want 2", len(sink.records))
+	}
+	if sink.records[0].Metered == nil || sink.records[0].Metered.Units != 1 {
+		t.Fatalf("first settle metered = %+v, want 1 unit", sink.records[0].Metered)
+	}
+	if sink.records[1].Metered != nil {
+		t.Fatalf("retried settle metered = %+v, want none", sink.records[1].Metered)
 	}
 }

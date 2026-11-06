@@ -11,37 +11,51 @@ import (
 	"time"
 )
 
-func TestBrowserSecondsSinceSumsTheProjectsSettledBrowserRows(t *testing.T) {
+func TestBrowserSecondsSinceSumsTheProjectsLedgerRows(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `DELETE FROM gateway.llm_request_logs WHERE project_id IN (41, 42)`); err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"gateway.llm_usage_events", "gateway.llm_request_logs"} {
+		if _, err := pool.Exec(ctx, `DELETE FROM `+table+` WHERE project_id IN (41, 42)`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	monthStart := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
 	for _, row := range []struct {
-		project       int
-		at            time.Time
-		provider      string
-		model         string
-		operation     string
-		units         any
-		countedForP41 bool
+		project   int
+		at        time.Time
+		provider  string
+		model     string
+		operation string
+		units     any
 	}{
-		{41, monthStart.Add(time.Hour), "browser", "engine_seconds", "tool", 120, true},
-		{41, monthStart.Add(2 * time.Hour), "browser", "engine_seconds", "tool", 30, true},
-		// Last month, another provider, an llm row, another project: not counted.
-		{41, monthStart.Add(-time.Minute), "browser", "engine_seconds", "tool", 999, false},
-		{41, monthStart.Add(time.Hour), "firecrawl", "scrape", "tool", 5, false},
-		{41, monthStart.Add(time.Hour), "browser", "engine_seconds", "llm", nil, false},
-		{42, monthStart.Add(time.Hour), "browser", "engine_seconds", "tool", 7, false},
+		{41, monthStart.Add(time.Hour), "browser", "engine_seconds", "tool", 120},
+		{41, monthStart.Add(2 * time.Hour), "browser", "engine_seconds", "tool", 30},
+		// Last month, another provider, an llm row, another project, a
+		// zero-second refusal: not counted.
+		{41, monthStart.Add(-time.Minute), "browser", "engine_seconds", "tool", 999},
+		{41, monthStart.Add(time.Hour), "firecrawl", "scrape", "tool", 5},
+		{41, monthStart.Add(time.Hour), "browser", "engine_seconds", "llm", nil},
+		{42, monthStart.Add(time.Hour), "browser", "engine_seconds", "tool", 7},
+		{41, monthStart.Add(time.Hour), "browser", "engine_seconds", "tool", 0},
 	} {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO gateway.llm_request_logs
-    (occurred_at, project_id, user_id, route, method, status, duration_ms, provider, model, operation, units, unit)
-VALUES ($1, $2, 7, '/llm/v1/metered/settle', 'POST', 200, 10, $3, $4, $5, $6, CASE WHEN $6::bigint IS NULL THEN NULL ELSE 'second' END)`,
-			row.at, row.project, row.provider, row.model, row.operation, row.units); err != nil {
+INSERT INTO gateway.llm_usage_events
+    (event_id, project_id, user_id, provider, model, cost_usd, period_start, period_end, occurred_at,
+     operation, units, unit)
+VALUES (gen_random_uuid(), $1, 7, $2, $3, 0, $4, $4 + interval '1 month', $5, $6, $7,
+        CASE WHEN $7::bigint IS NULL THEN NULL ELSE 'second' END)`,
+			row.project, row.provider, row.model, monthStart, row.at, row.operation, row.units); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
+	}
+	// The request log is not the source: a row there (a duplicate settle,
+	// or a sampled one) adds nothing.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO gateway.llm_request_logs
+    (occurred_at, project_id, user_id, route, method, status, duration_ms, provider, model, operation, units, unit)
+VALUES ($1, 41, 7, '/llm/v1/metered/settle', 'POST', 200, 10, 'browser', 'engine_seconds', 'tool', 500, 'second')`,
+		monthStart.Add(time.Hour)); err != nil {
+		t.Fatalf("seed the request log: %v", err)
 	}
 	sources, err := NewBrowserRuntimeSources(pool)
 	if err != nil {
@@ -53,6 +67,38 @@ VALUES ($1, $2, 7, '/llm/v1/metered/settle', 'POST', 200, 10, $3, $4, $5, $6, CA
 	}
 	if used, err := sources.BrowserSecondsSince(ctx, 43, monthStart); err != nil || used != 0 {
 		t.Fatalf("an empty project used=%d err=%v", used, err)
+	}
+}
+
+func TestBrowserUnattendedGrantReadsTheRunChain(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	root := "aaaaaaaaaaaaaaaaaaaaaaaaaaaa1596"
+	if _, err := pool.Exec(ctx, `DELETE FROM elitea_runtime.run_chains WHERE root_execution_id = $1`, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.run_chains (
+    root_execution_id, project_id, owner_user_id, conversation_uuid, origin, trigger_origin,
+    grant_id, grant_json, max_continuations, max_spend_usd, deadline, last_execution_id)
+VALUES ($1, 9, 7, gen_random_uuid(), 'cloud', 'manual', gen_random_uuid(), '{}'::jsonb, 3, 0,
+        clock_timestamp() + interval '1 hour', $1)`, root); err != nil {
+		t.Fatalf("seed the chain: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.run_chain_links (execution_id, root_execution_id, continuation_index, kind)
+VALUES ($1, $1, 0, 'root')`, root); err != nil {
+		t.Fatalf("seed the link: %v", err)
+	}
+	sources, err := NewBrowserRuntimeSources(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted, err := sources.UnattendedGrant(ctx, root); err != nil || !granted {
+		t.Fatalf("granted=%v err=%v", granted, err)
+	}
+	if granted, err := sources.UnattendedGrant(ctx, "bbbbbbbbbbbbbbbbbbbbbbbbbbbb1596"); err != nil || granted {
+		t.Fatalf("an execution without a chain: granted=%v err=%v", granted, err)
 	}
 }
 

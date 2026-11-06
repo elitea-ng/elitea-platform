@@ -2529,9 +2529,11 @@ pub(crate) struct OrdinaryAgentCompletion<M> {
     /// at the step limit.
     step_limit: Option<Arc<super::unattended::StepLimitStop>>,
     /// ADR-0049 decision 8: the run's cloud browser session. A completed
-    /// run ends it with `RUN_ENDED` (a viewer may still look), a failed one
-    /// at once, and a paused one (`PAUSED_HITL`) keeps it for the resume.
-    browser: Option<Arc<dyn elitea_agent_runtime::toolkits::BrowserSession>>,
+    /// run ends it with `RUN_ENDED` (a viewer may still look), and a paused
+    /// one (`PAUSED_HITL`) keeps it for the resume. Every other exit drops
+    /// the selector (a failure, a cap, a cancellation, a lost lease), and
+    /// the guard ends the session at once.
+    browser: crate::browser_run::BrowserRunEnd,
 }
 
 impl<M> OrdinaryAgentCompletion<M> {
@@ -2549,7 +2551,7 @@ impl<M> OrdinaryAgentCompletion<M> {
         mut self,
         browser: Option<Arc<dyn elitea_agent_runtime::toolkits::BrowserSession>>,
     ) -> Self {
-        self.browser = browser;
+        self.browser = crate::browser_run::BrowserRunEnd::new(browser);
         self
     }
 }
@@ -2559,7 +2561,7 @@ impl<M> NativeAgentCompletionSelector for OrdinaryAgentCompletion<M>
 where
     M: BoundOrdinaryAgentModel,
 {
-    async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+    async fn select(mut self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
         // A turn wrapped up for a take back was stopped cooperatively: it may
         // have no final text of its own, and it still completes (its work is
         // published) with the take-back note. A turn that finished on its own
@@ -2580,15 +2582,11 @@ where
                         .finish(crate::workspace_run::turn::TurnEnd::Failed)
                         .await;
                 }
-                if let Some(browser) = &self.browser {
-                    browser.end(true).await;
-                }
+                self.browser.end(true).await;
                 return Err(error);
             }
         };
-        if let Some(browser) = &self.browser {
-            browser.end(false).await;
-        }
+        self.browser.end(false).await;
         if let Some(workspace) = &self.workspace {
             let stamp = workspace
                 .finish(crate::workspace_run::turn::TurnEnd::Completed)
@@ -2633,6 +2631,8 @@ where
                 .await
                 .map_err(|error| super::workspace::publish_error(&error))?;
         }
+        // The pause keeps the browser session for the person and the resume.
+        self.browser.keep();
         Ok(())
     }
 
@@ -3708,7 +3708,7 @@ where
                 thread_id,
                 workspace: None,
                 step_limit: step_limit_stop,
-                browser: None,
+                browser: crate::browser_run::BrowserRunEnd::new(None),
             },
         ),
         evidence,
@@ -4192,7 +4192,7 @@ where
             thread_id,
             workspace: None,
             step_limit: step_limit_stop,
-            browser: None,
+            browser: crate::browser_run::BrowserRunEnd::new(None),
         },
     ))
 }

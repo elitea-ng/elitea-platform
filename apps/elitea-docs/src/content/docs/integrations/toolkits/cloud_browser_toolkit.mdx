@@ -45,6 +45,9 @@ The category in the table is the lowest one. The category of an act is decided a
 | A submit or an upload (Submit, Save, Apply, Continue, Choose file, Enter in a form) | `external_send` | Yes, unless an unattended grant names the host |
 | A consequential control (Send, Post, Delete, Sign, Confirm and similar) | `external_send` | Yes, always |
 | A payment control (Buy, Pay, Checkout, Order and similar) | `payment` | Yes, always |
+| A control the agent has not seen in a snapshot since the page last changed | `external_send` | Yes, always |
+
+After any click, type, select or navigation, the platform forgets the page's labels. An act on an element then asks until the agent takes a new snapshot, even when the browser still knows the element. This way a click on "Place order" never runs without a question because the label was not known.
 
 When the agent asks, the run pauses for approval as it does for any sensitive tool. The browser session stays alive while the run waits. If the run fails after an approved call that may have started, the call is not run again.
 
@@ -54,10 +57,12 @@ The browser reaches the internet only through the platform's egress proxy, with 
 
 | `browser_egress` | The browser may reach |
 |---|---|
-| `open` (default) | Any public host |
-| `allowlist` | The run's egress allowlist, plus the project's **Allowed domains** |
+| `allowlist` (default) | The run's egress allowlist, plus the project's **Allowed domains** |
+| `open` | Any public host. An administrator must choose it. |
 
 A run under the governed credential profile always uses the allowlist. When the proxy refuses a host, the tool answers `egress_refused`. The refused host is in the run's egress summary.
+
+One run token carries at most 128 allowed hosts: the platform worker egress allowlist, the project's worker egress entries and the project's **Allowed domains** together. If the list is longer, the run still starts, but every browser tool answers `browser_allowlist_too_large`. Shorten the lists to fix it. If the platform cannot read the browser settings or the month's usage when the run starts, the browser tools answer `browser_unavailable` for that run, and the run goes on without them.
 
 ## Time limits and metering
 
@@ -68,11 +73,13 @@ Browser time is metered per engine second, through the gateway (provider `browse
 | Seconds per run | `max_run_seconds` in the Browser section | 1800 (0 is no cap) | The run stops with `max_browser_seconds` |
 | Seconds per project per month (UTC) | `monthly_quota_seconds` in the Browser section | 0 (no quota) | The run stops with `browser_monthly_quota` |
 
-Each stop is visible on the run. Budgets and rate limits of the gateway also apply, and a refused call says so.
+Each stop is visible on the run. A run stopped at a browser limit offers no **Allow the next run past this cap** action: no override raises these two limits. Budgets and rate limits of the gateway also apply, and a refused call says so.
+
+Only time with a running browser counts. A call that never reached the browser (no route out, a refused grant, the platform's browser capacity, an ended session) bills 0 seconds and does not count against either limit. The month's usage is read from the usage ledger, so a retried call counts once.
 
 ## Unattended runs
 
-A run that a schedule or a webhook starts has nobody to answer:
+A run that a schedule or a webhook starts, or one that a person starts with an unattended grant, has nobody to answer:
 
 - The agent may read, navigate and act on plain controls without asking.
 - An ask follows the run's `on_approval_required` setting, as every other ask does.

@@ -25,7 +25,9 @@
 //! * **Time.** Every call is admitted and settled through the gateway's
 //!   metered API (provider `browser`, operation `engine_seconds`, unit
 //!   `second`), and counted against the run's cap and the project's monthly
-//!   quota ([`budget`]).
+//!   quota ([`budget`]). Only a call that held a running session is charged:
+//!   a refusal before the engine ([`SessionError::reached_engine`]) settles
+//!   0 seconds.
 //! * **Images.** A screenshot reaches the model as an image result
 //!   ([`crate::image_result`]).
 //!
@@ -382,12 +384,27 @@ pub(crate) async fn run_call(
     };
     let started = std::time::Instant::now();
     let answer = host.session.call(call_id, spec.name, arguments).await;
-    let seconds = run.budget.charge(started.elapsed());
+    // Only time on a running session's engine is charged. A refusal before
+    // the engine (no egress, a refused grant or argument, the supervisor's
+    // capacity, an ended session) settles 0 seconds and counts nothing
+    // against the run's cap or the project's quota.
+    let reached = answer
+        .as_ref()
+        .map_or_else(|error| error.reached_engine(), |_| true);
+    let seconds = if reached {
+        run.budget.charge(started.elapsed())
+    } else {
+        0
+    };
     let (outcome, failure) = match &answer {
         Ok(_) => (Outcome::Ok, None),
-        Err(_) => (
+        Err(_) if reached => (
             Outcome::ProviderError,
             Some(super::web::meter::FailureClass::Failed),
+        ),
+        Err(_) => (
+            Outcome::ProviderError,
+            Some(super::web::meter::FailureClass::NotReached),
         ),
     };
     let invocation = super::web::capability::nonce();
@@ -418,7 +435,8 @@ const fn session_code(error: SessionError) -> &'static str {
         SessionError::Capacity => "browser_capacity",
         SessionError::Ended => "browser_session_ended",
         SessionError::Refused => "browser_refused",
-        SessionError::Unavailable => "browser_unavailable",
+        SessionError::Unavailable | SessionError::Lost => "browser_unavailable",
+        SessionError::AllowlistTooLarge => "browser_allowlist_too_large",
     }
 }
 
@@ -442,8 +460,10 @@ fn shape(run: &BrowserRun, spec: &ToolSpec, answer: SessionAnswer) -> Value {
                 .and_then(|(inner, _)| Snapshot::parse(inner).ok());
             run.install(snapshot);
         } else if spec.kind != ToolKind::BrowserRead && spec.kind != ToolKind::Question {
-            // A navigation or an act may change the page: its refs are
-            // stale, and so is the classifier's view of it.
+            // A navigation or an act may change the page, labels included,
+            // even where the session keeps its refs: the classifier forgets
+            // the snapshot, and a ref act asks until the next snapshot
+            // ([`Escalation::Unresolved`]).
             run.install(None);
         }
     } else if result.get("code").and_then(Value::as_str) == Some(ErrorCode::EgressRefused.as_str())

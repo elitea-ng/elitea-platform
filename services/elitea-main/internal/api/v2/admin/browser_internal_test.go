@@ -19,6 +19,11 @@ func TestBrowserSectionIsGovernanceGated(t *testing.T) {
 	if !found {
 		t.Fatal("browser is not a configuration section")
 	}
+	// Open egress must be chosen: the section advertises the allowlist.
+	fields, _ := section["fields"].([]map[string]any)
+	if len(fields) == 0 || fields[0]["key"] != "browser_egress" || fields[0]["default"] != "allowlist" {
+		t.Fatalf("browser_egress default = %v, want allowlist", fields)
+	}
 }
 
 func TestValidateBrowserValues(t *testing.T) {

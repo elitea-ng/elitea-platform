@@ -37,11 +37,21 @@ const (
 	EgressModeUnavailable = workspaceruntime.EgressModeUnavailable
 )
 
-// Why the egress is unavailable: the workspace runtime's fixed strings.
+// Why the egress is unavailable: the workspace runtime's fixed strings, and
+// the browser's own. The worker admits each one (browser_run/context.rs).
 const (
 	EgressUnavailableProxyNotEnabled = workspaceruntime.EgressUnavailableProxyNotEnabled
 	EgressUnavailableNoSigningKey    = workspaceruntime.EgressUnavailableNoSigningKey
 	EgressUnavailableMintFailed      = workspaceruntime.EgressUnavailableMintFailed
+	// EgressUnavailableAllowlistTooLarge: the merged allowlist has more
+	// entries than one run token carries.
+	EgressUnavailableAllowlistTooLarge = "browser_allowlist_too_large"
+	// EgressUnavailableAllowlistInvalid: a stored allowlist entry does not
+	// parse (a row written past the validation).
+	EgressUnavailableAllowlistInvalid = "browser_allowlist_invalid"
+	// EgressUnavailableSourceFailed: a source of the field (the platform
+	// section, the trigger origin, the month's usage) could not be read.
+	EgressUnavailableSourceFailed = "browser_context_unavailable"
 )
 
 // DefaultTokenWall is the token lifetime base when max_run_seconds is 0.
@@ -53,7 +63,10 @@ const maxTokenTTL = runtoken.MaxLifetime
 // MaxAllowlistEntries is the run token's bound on one allowlist.
 const MaxAllowlistEntries = runtoken.MaxEntries
 
-// Errors of ResolveBrowserContext. Each one fails the redemption.
+// Errors of the field's sources. ResolveBrowserContext answers only
+// ErrInvalidClaim and ErrUnavailable (the project setting could not be read);
+// every other one degrades the field to egress `unavailable` with a fixed
+// reason, so a redemption never fails for the browser.
 var (
 	ErrInvalidClaim = errors.New("browserruntime: the claim is not valid")
 	ErrUnavailable  = errors.New("browserruntime: a source of the browser field is unavailable")
@@ -63,9 +76,6 @@ var (
 	// ErrAllowlistInvalid: a stored entry does not parse in the egresslib
 	// grammar (a row written past the validation).
 	ErrAllowlistInvalid = errors.New("browserruntime: a stored browser allowlist entry is not valid")
-	// ErrSettingInvalid: the stored project setting names an engine that
-	// is not admitted.
-	ErrSettingInvalid = errors.New("browserruntime: the stored browser project setting is not valid")
 )
 
 // Claim is the claimed execution the field is built for.
@@ -103,10 +113,13 @@ type UsageReader interface {
 	BrowserSecondsSince(ctx context.Context, projectID int64, since time.Time) (int64, error)
 }
 
-// TriggerReader reads the trigger origin of an execution
-// (execution_jobs.trigger_origin).
+// TriggerReader reads who is behind an execution: its trigger origin
+// (execution_jobs.trigger_origin), and whether it runs under an ADR-0045
+// unattended grant (a run_chain_links row: the grant's root run or one of
+// its continuations).
 type TriggerReader interface {
 	TriggerOrigin(ctx context.Context, executionID string) (string, error)
+	UnattendedGrant(ctx context.Context, executionID string) (bool, error)
 }
 
 // Minter signs egress run tokens (egresstoken.Minter).
@@ -169,7 +182,12 @@ func (r *Resolver) WithClock(now func() time.Time) *Resolver {
 }
 
 // ResolveBrowserContext returns nil and no error when the project does not
-// enable the cloud browser. An error fails the redemption.
+// enable the cloud browser. It answers an error only for an invalid claim or
+// a project setting it could not read (the caller serves no field then).
+// Every later failure degrades: the field is served with egress
+// `unavailable` and a fixed reason, so the browser tools answer
+// `browser_unavailable` and the run itself still starts. The log line names
+// the execution, the project, the stage and the error, never a token.
 func (r *Resolver) ResolveBrowserContext(ctx context.Context, claim Claim) (*RuntimeContext, error) {
 	if r == nil {
 		return nil, nil
@@ -184,60 +202,110 @@ func (r *Resolver) ResolveBrowserContext(ctx context.Context, claim Claim) (*Run
 	if !setting.Enabled {
 		return nil, nil
 	}
+	domains := append([]string{}, setting.AllowDomains...)
 	if setting.Engine != "" && setting.Engine != EngineFull {
-		return nil, ErrSettingInvalid
+		// A stored engine nobody admits: the browser stays off for the run.
+		r.logger.WarnContext(ctx, "browser context: the project names an engine that is not admitted; the browser is unavailable",
+			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "engine", setting.Engine)
+		return degraded(platformconfig.DefaultBrowserSettings(), true, domains, EgressUnavailableSourceFailed), nil
 	}
 	platform, err := r.platform.BrowserSettings(ctx)
 	if err != nil {
-		return nil, errors.Join(ErrUnavailable, err)
+		return r.degrade(ctx, claim, "browser_settings", err, platform, true, domains), nil
 	}
+	// Unattended: nobody can answer. A schedule or webhook run, or a run a
+	// person started under an unattended grant (ADR-0045): either way its
+	// asks follow the grant and the run's on_approval_required, and
+	// browser_request_user answers no_person. A run whose origin cannot be
+	// read is degraded as unattended (the narrower reading).
 	origin, err := r.trigger.TriggerOrigin(ctx, claim.ExecutionID)
 	if err != nil {
-		return nil, errors.Join(ErrUnavailable, err)
+		return r.degrade(ctx, claim, "trigger_origin", err, platform, true, domains), nil
+	}
+	runUnattended := unattended.IsSystemTrigger(origin)
+	if !runUnattended {
+		granted, err := r.trigger.UnattendedGrant(ctx, claim.ExecutionID)
+		if err != nil {
+			return r.degrade(ctx, claim, "unattended_grant", err, platform, true, domains), nil
+		}
+		runUnattended = granted
 	}
 	monthStart := startOfMonthUTC(r.now())
 	used, err := r.usage.BrowserSecondsSince(ctx, claim.ProjectID, monthStart)
 	if err != nil {
-		return nil, errors.Join(ErrUnavailable, err)
+		// Without the month's usage the quota cannot be held: no browser.
+		return r.degrade(ctx, claim, "month_usage", err, platform, runUnattended, domains), nil
 	}
-	egress, err := r.egressFor(ctx, claim, platform, setting)
-	if err != nil {
-		return nil, err
-	}
-	domains := append([]string{}, setting.AllowDomains...)
+	egress := r.egressFor(ctx, claim, platform, setting)
 	return &RuntimeContext{
 		Engine:              EngineFull,
 		Egress:              egress,
 		MaxRunSeconds:       platform.MaxRunSeconds,
 		MonthlyQuotaSeconds: platform.MonthlyQuotaSeconds,
 		MonthUsedSeconds:    max(used, 0),
-		Unattended:          unattended.IsSystemTrigger(origin),
+		Unattended:          runUnattended,
 		AllowDomains:        domains,
 	}, nil
+}
+
+// degrade logs a source failure and answers the field with egress
+// `unavailable`. The error text is the source's (a database error names no
+// token).
+func (r *Resolver) degrade(ctx context.Context, claim Claim, stage string, err error, platform platformconfig.BrowserSettings, runUnattended bool, domains []string) *RuntimeContext {
+	r.logger.WarnContext(ctx, "browser context: a source could not be read; the browser is unavailable for this run",
+		"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "stage", stage,
+		"reason", EgressUnavailableSourceFailed, "error", err.Error())
+	return degraded(platform, runUnattended, domains, EgressUnavailableSourceFailed)
+}
+
+func degraded(platform platformconfig.BrowserSettings, runUnattended bool, domains []string, reason string) *RuntimeContext {
+	return &RuntimeContext{
+		Engine:              EngineFull,
+		Egress:              unavailable(reason),
+		MaxRunSeconds:       platform.MaxRunSeconds,
+		MonthlyQuotaSeconds: platform.MonthlyQuotaSeconds,
+		Unattended:          runUnattended,
+		AllowDomains:        domains,
+	}
 }
 
 // egressFor decides the egress. Open mints an open token only when the
 // platform says open and the run is not governed; else the token carries
 // the assembled allowlist.
-func (r *Resolver) egressFor(ctx context.Context, claim Claim, platform platformconfig.BrowserSettings, setting ProjectSetting) (workspaceruntime.RuntimeContextEgress, error) {
+//
+// An allowlist that cannot be assembled is egress `unavailable`, never a
+// failure: too many entries for one run token
+// (EgressUnavailableAllowlistTooLarge), a stored entry that does not parse
+// (EgressUnavailableAllowlistInvalid), or a source read error.
+func (r *Resolver) egressFor(ctx context.Context, claim Claim, platform platformconfig.BrowserSettings, setting ProjectSetting) workspaceruntime.RuntimeContextEgress {
 	open := platform.Egress == platformconfig.BrowserEgressOpen && !claim.Governed
 	var allowlist []string
 	if !open {
 		var err error
 		allowlist, err = r.allowlist(ctx, claim.ProjectID, setting)
 		if err != nil {
-			return workspaceruntime.RuntimeContextEgress{}, err
+			reason := EgressUnavailableSourceFailed
+			switch {
+			case errors.Is(err, ErrAllowlistTooLarge):
+				reason = EgressUnavailableAllowlistTooLarge
+			case errors.Is(err, ErrAllowlistInvalid):
+				reason = EgressUnavailableAllowlistInvalid
+			}
+			r.logger.WarnContext(ctx, "browser egress: the allowlist could not be assembled; the browser cannot reach the network",
+				"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "reason", reason,
+				"max_entries", MaxAllowlistEntries, "error", err.Error())
+			return unavailable(reason)
 		}
 	}
 	switch {
 	case r.egress.ProxyURL == "":
 		r.logger.WarnContext(ctx, "browser egress: no egress proxy is enabled; the browser cannot reach the network",
 			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID)
-		return unavailable(EgressUnavailableProxyNotEnabled), nil
+		return unavailable(EgressUnavailableProxyNotEnabled)
 	case r.egress.Minter == nil:
 		r.logger.WarnContext(ctx, "browser egress: no run-token signing key is configured; the browser cannot reach the network",
 			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID)
-		return unavailable(EgressUnavailableNoSigningKey), nil
+		return unavailable(EgressUnavailableNoSigningKey)
 	}
 	ttl := tokenTTL(platform.MaxRunSeconds)
 	var (
@@ -256,11 +324,11 @@ func (r *Resolver) egressFor(ctx context.Context, claim Claim, platform platform
 		// The mint error names no token material.
 		r.logger.ErrorContext(ctx, "browser egress: the run token could not be minted; the browser cannot reach the network",
 			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "error", err.Error())
-		return unavailable(EgressUnavailableMintFailed), nil
+		return unavailable(EgressUnavailableMintFailed)
 	}
 	return workspaceruntime.RuntimeContextEgress{
 		Mode: EgressModeProxy, ProxyURL: canonicalProxyURL(r.egress.ProxyURL), Token: token,
-	}, nil
+	}
 }
 
 // allowlist assembles the platform worker egress allowlist, the project's

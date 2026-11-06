@@ -27421,7 +27421,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet
+          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet, or (code cap_not_overridable) the cap is the cloud browser's run cap or monthly quota, which no override passes
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

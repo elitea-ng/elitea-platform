@@ -17,16 +17,16 @@ func browserSection() map[string]any {
 		"id":    section,
 		"title": "Cloud Browser",
 		"description": "The browser toolkit's limits. A project turns the cloud browser on in its own settings. " +
-			"The browser reaches the internet only through the egress proxy. Open lets it reach any public host. " +
-			"Allowlist limits it to the worker egress allowlist, the project's worker egress entries and the " +
-			"project's browser domains. Runs under the governed credential profile always use the allowlist.",
+			"The browser reaches the internet only through the egress proxy. Allowlist (the default) limits it to " +
+			"the worker egress allowlist, the project's worker egress entries and the project's browser domains. " +
+			"Open lets it reach any public host. Runs under the governed credential profile always use the allowlist.",
 		"order":               6,
 		"icon":                "travel_explore",
 		"always_visible":      true,
 		"required_permission": "configuration.governance",
 		"fields": []map[string]any{
 			{"key": platformconfig.KeyBrowserEgress, "type": "string", "title": "Browser Egress",
-				"description": "open (the default) or allowlist.", "section": section,
+				"description": "allowlist (the default) or open. open lets the browser reach any public host and must be chosen explicitly.", "section": section,
 				"default": string(defaults.Egress),
 				"enum":    []string{string(platformconfig.BrowserEgressOpen), string(platformconfig.BrowserEgressAllowlist)}},
 			{"key": platformconfig.KeyBrowserMaxRunSeconds, "type": "integer", "title": "Maximum Browser Seconds per Run",

@@ -400,12 +400,19 @@ func (h *Handler) MeteredSettle(w http.ResponseWriter, r *http.Request) {
 		// No budget gate on this deployment: the operation was admitted
 		// ungoverned, exactly like a model call there, and nothing was billed.
 		h.meteredSettled.mark(eventID.String(), time.Now())
-		enrichment.SetMetered(billed.Units, price.Unit, 0)
+		if !duplicate {
+			enrichment.SetMetered(billed.Units, price.Unit, 0)
+		}
 		writeJSON(w, http.StatusOK, meteredSettleResponse{Duplicate: duplicate})
 		return
 	}
 	h.meteredSettled.mark(eventID.String(), time.Now())
-	enrichment.SetMetered(billed.Units, price.Unit, billed.TotalNanoUSD)
+	// A retried settle is billed once (the ledger dedups on the event id),
+	// and its request-log row carries no units: a reader that sums the log
+	// would otherwise count the retry twice.
+	if !duplicate {
+		enrichment.SetMetered(billed.Units, price.Unit, billed.TotalNanoUSD)
+	}
 	writeJSON(w, http.StatusOK, meteredSettleResponse{BilledNanoUSD: billed.TotalNanoUSD, Duplicate: duplicate})
 }
 

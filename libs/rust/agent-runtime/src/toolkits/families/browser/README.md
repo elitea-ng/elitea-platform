@@ -37,6 +37,11 @@ action nobody approved. Add a word when in doubt, and add a test line for it.
   `no_person`. The session is not called and no time is admitted.
 - A grant's `browser_submits` answers a submit on its hosts only, never a
   consequential or a payment control.
+- An act on a ref the classifier cannot resolve (no snapshot, or the last
+  act or navigation dropped it) asks every time (`Escalation::Unresolved`).
+  The session may still hold the ref, so its label could be anything.
+- Only a call that reached a running session is charged. A refusal before
+  the engine (`SessionError::reached_engine` false) settles 0 seconds.
 - An `egress_refused` result goes to the model unchanged and is counted in
   the run's egress ledger.
 - Every message in a result is fixed text. A transport error never reaches

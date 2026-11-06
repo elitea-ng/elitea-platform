@@ -496,6 +496,95 @@ async fn a_session_failure_has_fixed_text() {
     assert_eq!(settled.len(), 1, "a failed call is settled too");
 }
 
+/// A call refused before the engine (no egress, a refused grant or
+/// argument, the supervisor's capacity, an ended session) bills nothing: it
+/// settles 0 seconds as not reached, and uses none of the run's time.
+#[tokio::test]
+async fn a_call_refused_before_the_engine_bills_nothing() {
+    for error in [
+        SessionError::Unavailable,
+        SessionError::AllowlistTooLarge,
+        SessionError::Refused,
+        SessionError::Capacity,
+        SessionError::Ended,
+    ] {
+        let rig = rig_with(
+            RunOrigin::Person,
+            &[],
+            ApprovalPolicy::none(),
+            BrowserLimits {
+                max_run_seconds: 1,
+                ..BrowserLimits::default()
+            },
+            FakeSession::answering([Err(error)]),
+            Arc::new(SecondsMeter::default()),
+        );
+        let result = call(
+            &rig,
+            spec::BROWSER_OPEN,
+            json!({"url": "https://example.com"}),
+        )
+        .await;
+        assert_eq!(result["status"], "error", "{error:?}");
+        let settled = rig.meter.settled(1).await;
+        assert_eq!(settled.len(), 1, "{error:?}: the admission is settled");
+        assert_eq!(settled[0].units.seconds, 0, "{error:?}: no seconds billed");
+        assert_eq!(
+            settled[0].failure,
+            Some(crate::toolkits::families::web::meter::FailureClass::NotReached)
+        );
+        assert_eq!(rig.host.run().budget().used_seconds(), 0, "{error:?}");
+        assert_eq!(
+            rig.caps.tripped(),
+            None,
+            "{error:?}: a 1 s cap is not reached"
+        );
+    }
+}
+
+/// An allowlist too large for a run token reaches the model as a sentence
+/// it can act on, not a bare `browser_unavailable`.
+#[tokio::test]
+async fn an_oversized_allowlist_is_a_readable_refusal() {
+    let rig = person_rig(
+        RunOrigin::Person,
+        FakeSession::answering([Err(SessionError::AllowlistTooLarge)]),
+    );
+    let result = call(
+        &rig,
+        spec::BROWSER_OPEN,
+        json!({"url": "https://example.com"}),
+    )
+    .await;
+    assert_eq!(result["code"], "browser_allowlist_too_large");
+    let message = result["message"].as_str().expect("message");
+    assert!(message.contains("allowed sites"), "{message}");
+}
+
+/// A call whose answer was lost on a running session may have run: its
+/// time is charged.
+#[tokio::test]
+async fn a_lost_answer_on_a_running_session_is_charged() {
+    let rig = person_rig(
+        RunOrigin::Person,
+        FakeSession::answering([Err(SessionError::Lost)]),
+    );
+    let result = call(
+        &rig,
+        spec::BROWSER_OPEN,
+        json!({"url": "https://example.com"}),
+    )
+    .await;
+    assert_eq!(result["code"], "browser_unavailable");
+    let settled = rig.meter.settled(1).await;
+    assert_eq!(settled[0].units.seconds, 1);
+    assert_eq!(
+        settled[0].failure,
+        Some(crate::toolkits::families::web::meter::FailureClass::Failed)
+    );
+    assert_eq!(rig.host.run().budget().used_seconds(), 1);
+}
+
 #[tokio::test]
 async fn a_screenshot_is_an_image_result() {
     let screenshot = SessionAnswer {
@@ -535,8 +624,11 @@ async fn the_gate_follows_the_latest_snapshot() {
     // Bind the names, as building the toolset does.
     drop(tools(Some(&rig.host), &Map::new()).await);
 
-    // Before a snapshot a ref resolves to nothing: a plain write.
-    assert!(!run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e2"})));
+    // Before a snapshot a ref resolves to nothing: the control is unknown,
+    // so the act asks (fail closed).
+    assert!(run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e2"})));
+    // A page scroll has no ref: a plain write, no ask without a policy.
+    assert!(!run.requires_confirmation(spec::BROWSER_SCROLL, &json!({"direction": "down"})));
 
     let result = call(&rig, spec::BROWSER_SNAPSHOT, json!({})).await;
     assert_eq!(result["status"], "ok");
@@ -558,11 +650,57 @@ async fn the_gate_follows_the_latest_snapshot() {
     assert!(!run.requires_confirmation("cloud___made_up", &json!({})));
     assert!(!run.requires_confirmation("github_create_issue", &json!({})));
 
-    // An act makes the page stale: its refs no longer classify.
+    // An act makes the classifier's view stale: a ref act on the page asks
+    // until the next snapshot, even a ref that was a plain control.
     let clicked = call(&rig, spec::BROWSER_CLICK, json!({"ref": "e5"})).await;
     assert_eq!(clicked["status"], "ok");
     assert_eq!(run.page_host(), None);
-    assert!(!run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e4"})));
+    assert!(run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e4"})));
+    assert!(run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e5"})));
+}
+
+/// The review's scenario: the model reads the cart, types into the search
+/// box (the session keeps the refs: same document, same DOM), then clicks
+/// "Place order" by its ref. The click must ask, in an attended run and in
+/// an unattended one whose grant names the host.
+#[tokio::test]
+async fn a_click_on_place_order_after_typing_asks() {
+    for (origin, hosts) in [
+        (RunOrigin::Person, &[][..]),
+        (RunOrigin::Unattended, &["shop.example"][..]),
+    ] {
+        let rig = rig_with(
+            origin,
+            hosts,
+            ApprovalPolicy::none(),
+            BrowserLimits::default(),
+            FakeSession::answering([
+                Ok(snapshot_answer()),
+                Ok(answer(json!({"status": "ok", "refs_stale": false}))),
+            ]),
+            Arc::new(SecondsMeter::default()),
+        );
+        let run = Arc::clone(rig.host.run());
+        drop(tools(Some(&rig.host), &Map::new()).await);
+        assert_eq!(
+            call(&rig, spec::BROWSER_SNAPSHOT, json!({})).await["status"],
+            "ok"
+        );
+        // Typing into the search box is a plain write.
+        let typing = json!({"ref": "e1", "text": "shoes"});
+        assert!(!run.requires_confirmation(spec::BROWSER_TYPE, &typing));
+        assert_eq!(call(&rig, spec::BROWSER_TYPE, typing).await["status"], "ok");
+        // The refs still work in the session; the click must still ask.
+        assert!(
+            run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e2"})),
+            "{origin:?}: Place order after a type must ask"
+        );
+        let classified = run.classify(spec::BROWSER_CLICK, &json!({"ref": "e2"}));
+        assert!(
+            !run.granted(&classified),
+            "no grant answers an unknown control"
+        );
+    }
 }
 
 #[tokio::test]

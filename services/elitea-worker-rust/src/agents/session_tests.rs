@@ -3711,3 +3711,87 @@ async fn a_session_seeded_without_references_is_reconciled_without_duplicates() 
         }
     }
 }
+
+/// A browser session that records its ends (ADR-0049 decision 8).
+#[derive(Default)]
+struct EndRecordingBrowser {
+    ended: Mutex<Vec<bool>>,
+}
+
+#[async_trait]
+impl elitea_agent_runtime::toolkits::BrowserSession for EndRecordingBrowser {
+    async fn call(
+        &self,
+        _call_id: &str,
+        _name: &str,
+        _arguments: &Value,
+    ) -> Result<
+        elitea_agent_runtime::toolkits::SessionAnswer,
+        elitea_agent_runtime::toolkits::SessionError,
+    > {
+        Err(elitea_agent_runtime::toolkits::SessionError::Unavailable)
+    }
+
+    async fn end(&self, now: bool) {
+        self.ended.lock().expect("ended").push(now);
+    }
+}
+
+impl EndRecordingBrowser {
+    async fn ends(&self) -> Vec<bool> {
+        for _ in 0..200 {
+            if !self.ended.lock().expect("ended").is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        self.ended.lock().expect("ended").clone()
+    }
+}
+
+/// A failed run ends its browser session at once.
+#[tokio::test]
+async fn a_failed_run_ends_its_browser_session_now() {
+    let browser = Arc::new(EndRecordingBrowser::default());
+    let (_error, _projector, completion) = run_to_step_limit(None).await;
+    let completion = completion.with_browser(Some(Arc::clone(&browser) as _));
+    assert!(completion.select().await.is_err());
+    assert_eq!(browser.ends().await, [true], "ended once, at once");
+}
+
+/// A capped, cancelled or lease-lost run never reaches `select`: the
+/// lifecycle drops the completion, and the drop ends the session at once.
+#[tokio::test]
+async fn a_capped_run_that_drops_its_completion_ends_its_browser_session() {
+    let browser = Arc::new(EndRecordingBrowser::default());
+    let (_error, _projector, completion) = run_to_step_limit(None).await;
+    drop(completion.with_browser(Some(Arc::clone(&browser) as _)));
+    assert_eq!(browser.ends().await, [true]);
+}
+
+/// A completed run ends it as a finished run (a viewer may still look), and
+/// only once; a paused run keeps it for the resume.
+#[tokio::test]
+async fn a_completed_run_ends_and_a_paused_run_keeps_its_browser_session() {
+    let browser = Arc::new(EndRecordingBrowser::default());
+    let grant = UnattendedGrant::fixture(&[], true);
+    let (_error, _projector, completion) = run_to_step_limit(Some(grant)).await;
+    completion.step_limit_stop().expect("granted stop").mark();
+    let completion = completion.with_browser(Some(Arc::clone(&browser) as _));
+    completion.select().await.expect("completed");
+    tokio::task::yield_now().await;
+    assert_eq!(browser.ends().await, [false]);
+
+    let kept = Arc::new(EndRecordingBrowser::default());
+    let (_error, _projector, completion) = run_to_step_limit(None).await;
+    let mut completion = completion.with_browser(Some(Arc::clone(&kept) as _));
+    completion.paused().await.expect("paused");
+    drop(completion);
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        kept.ended.lock().expect("ended").is_empty(),
+        "the pause keeps it"
+    );
+}

@@ -8,12 +8,14 @@
 //! | a submit: `browser_type` with `submit`, `browser_press` Enter, a click on a submit, upload or file control (a `file` role, or `file` in its name) | `external_send` | asked; a grant's `browser_submits` answers it for its hosts |
 //! | an act on a control whose name has a consequential word (send, delete, sign, confirm …) | `external_send` | asked every time; no grant answers it |
 //! | an act on a control whose name has a buying or paying word | `payment` | asked every time; no grant answers it |
+//! | a click, type or select on a ref the classifier cannot resolve (no snapshot, a stale or unknown ref) | `external_send` | asked every time; no grant answers it |
 //!
 //! The classifier is pure: it reads the call's arguments and the snapshot
-//! text, and nothing else. A ref it cannot resolve (no snapshot yet, a stale
-//! ref) classifies the act as a plain `write`: the session refuses such a
-//! call with `stale_ref`, so it cannot act on a control the classifier did
-//! not see.
+//! text, and nothing else. It fails closed: a ref it cannot resolve is a
+//! control it did not see, so the act is [`Escalation::Unresolved`] and asks,
+//! never a plain `write`. The session may still hold that ref (the driver
+//! keeps refs valid within one document), so the label the classifier lacks
+//! could be "Place order".
 //!
 //! The word lists match whole words of the control's role and name, split
 //! at non-alphanumerics and CamelCase boundaries, ignoring case. A false
@@ -85,6 +87,11 @@ pub enum Escalation {
     /// A buy or pay control. Asked every time; withheld from unattended
     /// runs by the platform default.
     Payment,
+    /// An act on a ref the classifier cannot resolve against the latest
+    /// snapshot it holds (none yet, or a stale or unknown ref). The control
+    /// is unknown, so it may be any of the above: asked every time, and no
+    /// grant answers it.
+    Unresolved,
 }
 
 /// One classified call.
@@ -115,7 +122,9 @@ impl Classified {
             kind: ToolKind::BrowserAct,
             category: match escalation {
                 Escalation::Payment => ToolCategory::Payment,
-                Escalation::Submit | Escalation::Consequential => ToolCategory::ExternalSend,
+                Escalation::Submit | Escalation::Consequential | Escalation::Unresolved => {
+                    ToolCategory::ExternalSend
+                }
             },
             escalation: Some(escalation),
         }
@@ -140,9 +149,14 @@ pub fn classify(name: &str, arguments: &Value, snapshot: Option<&Snapshot>) -> C
     if kind != ToolKind::BrowserAct {
         return Classified::plain(kind);
     }
-    let control = target(&call).and_then(|target| control(snapshot, target));
-    if let Some(escalation) = control.and_then(|(role, name)| control_escalation(role, name)) {
-        return Classified::escalated(escalation);
+    if let Some(target) = target(&call) {
+        let Some((role, name)) = control(snapshot, target) else {
+            // Fail closed: the session may still act on this ref.
+            return Classified::escalated(Escalation::Unresolved);
+        };
+        if let Some(escalation) = control_escalation(role, name) {
+            return Classified::escalated(escalation);
+        }
     }
     let submits = match &call {
         BrowserCall::Type { submit, .. } => *submit,
@@ -340,11 +354,37 @@ mod tests {
     }
 
     #[test]
-    fn an_unresolved_ref_is_a_plain_write() {
-        let classified = classify("browser_click", &json!({"ref": "e2"}), None);
-        assert_eq!(classified.category, ToolCategory::Write);
-        let stale = classify("browser_click", &json!({"ref": "@s9:e2"}), Some(&page()));
-        assert_eq!(stale.category, ToolCategory::Write);
+    fn an_unresolved_ref_fails_closed() {
+        for (arguments, snapshot) in [
+            // No snapshot yet.
+            (json!({"ref": "e2"}), None),
+            // A ref pinned to another snapshot.
+            (json!({"ref": "@s9:e2"}), Some(page())),
+            // A ref the snapshot never gave.
+            (json!({"ref": "e99"}), Some(page())),
+        ] {
+            let classified = classify("browser_click", &arguments, snapshot.as_ref());
+            assert_eq!(
+                classified.category,
+                ToolCategory::ExternalSend,
+                "{arguments}"
+            );
+            assert_eq!(classified.escalation, Some(Escalation::Unresolved));
+            assert!(
+                !classified.grantable(),
+                "no grant answers an unknown control"
+            );
+        }
+        // Typing into an unknown field asks too; a page scroll or a key has
+        // no ref and stays a plain write.
+        assert_eq!(
+            classify("browser_type", &json!({"ref": "e1", "text": "x"}), None).escalation,
+            Some(Escalation::Unresolved)
+        );
+        assert_eq!(
+            classify("browser_scroll", &json!({"direction": "down"}), None).category,
+            ToolCategory::Write
+        );
     }
 
     #[test]

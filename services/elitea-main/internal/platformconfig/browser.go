@@ -12,12 +12,12 @@ import (
 // 5 and 8, #1596). Main reads it when it serves the `browser` runtime-context
 // field to the worker.
 //
-// `browser_egress` sets the egress token of a browser run. `open` (the
-// default) mints an open token: the egress proxy refuses only private,
-// link-local and metadata addresses. `allowlist` mints a token with the
-// platform worker egress allowlist, the project's worker egress entries and
-// the project's browser `allow_domains`. A governed run always gets the
-// allowlist token.
+// `browser_egress` sets the egress token of a browser run. `allowlist` (the
+// default) mints a token with the platform worker egress allowlist, the
+// project's worker egress entries and the project's browser `allow_domains`.
+// `open`, which an administrator must choose (ADR-0049 decision 5), mints an
+// open token: the egress proxy refuses only private, link-local and metadata
+// addresses. A governed run always gets the allowlist token.
 const SectionBrowser = "browser"
 
 // Field keys of SectionBrowser.
@@ -53,9 +53,10 @@ type BrowserSettings struct {
 	MonthlyQuotaSeconds int64
 }
 
-// DefaultBrowserSettings is a deployment that never saved the section.
+// DefaultBrowserSettings is a deployment that never saved the section. Its
+// egress is the allowlist: open egress is an administrator's explicit choice.
 func DefaultBrowserSettings() BrowserSettings {
-	return BrowserSettings{Egress: BrowserEgressOpen, MaxRunSeconds: DefaultBrowserMaxRunSeconds}
+	return BrowserSettings{Egress: BrowserEgressAllowlist, MaxRunSeconds: DefaultBrowserMaxRunSeconds}
 }
 
 // LoadBrowserSettings reads the section over the defaults. A query error

@@ -106,6 +106,8 @@ pub(crate) struct GrpcBrowserSession {
     /// A schedule or webhook run: nobody can be asked, so the start says so
     /// and `browser_request_user` answers `no_person` at once.
     unattended: bool,
+    /// What a call answers when `egress` is `None`.
+    no_route: SessionError,
     started: Mutex<bool>,
 }
 
@@ -139,8 +141,18 @@ impl GrpcBrowserSession {
             },
             egress,
             unattended,
+            no_route: SessionError::Unavailable,
             started: Mutex::new(false),
         }
+    }
+
+    /// What every call answers when the session has no route out (Main's
+    /// egress `unavailable`): `Unavailable`, or `AllowlistTooLarge` when the
+    /// project's merged allowlist is over the run token's bound.
+    #[must_use]
+    pub(crate) const fn with_no_route(mut self, no_route: SessionError) -> Self {
+        self.no_route = no_route;
+        self
     }
 
     /// The start request: the grant, the spec, the egress and whether a
@@ -174,7 +186,7 @@ impl GrpcBrowserSession {
         if *started {
             return Ok(());
         }
-        let egress = self.egress.as_ref().ok_or(SessionError::Unavailable)?;
+        let egress = self.egress.as_ref().ok_or(self.no_route)?;
         let grant = self.grant().await?;
         let mut request = tonic::Request::new(self.start_request(grant, egress));
         request.set_timeout(START_DEADLINE);
@@ -213,10 +225,11 @@ impl BrowserSession for GrpcBrowserSession {
             .clone()
             .browser_call(request)
             .await
-            .map_err(|status| status_error(&status))?
+            .map_err(|status| call_status_error(&status))?
             .into_inner();
+        // The engine ran the call: an unreadable answer is a lost one.
         let result: Value =
-            serde_json::from_str(&answer.result_json).map_err(|_| SessionError::Unavailable)?;
+            serde_json::from_str(&answer.result_json).map_err(|_| SessionError::Lost)?;
         Ok(SessionAnswer {
             result,
             image: answer.image.map(|image| SessionImage {
@@ -312,6 +325,18 @@ fn status_error(status: &tonic::Status) -> SessionError {
     }
 }
 
+/// A failed `BrowserCall` on a started session. A typed refusal (capacity,
+/// a refused grant or argument, an ended session) never reached the engine.
+/// Any other failure (a deadline, a dropped stream, the session agent failing
+/// mid-call) was sent to the running session, which may have run it: its
+/// time is charged ([`SessionError::Lost`]).
+fn call_status_error(status: &tonic::Status) -> SessionError {
+    match status_error(status) {
+        SessionError::Unavailable => SessionError::Lost,
+        other => other,
+    }
+}
+
 /// The proxy URL as the session reaches it: `http://<ip literal>:<port>`.
 /// The session has no resolver, so a proxy named by host is resolved here.
 ///
@@ -402,6 +427,70 @@ mod tests {
             status_error(&tonic::Status::unavailable("x")),
             SessionError::Unavailable
         );
+    }
+
+    #[test]
+    fn only_a_lost_call_answer_reached_the_engine() {
+        let typed = |code, error: &'static str| {
+            let mut status = tonic::Status::new(code, "supervisor text");
+            status.metadata_mut().insert(
+                ERROR_METADATA,
+                tonic::metadata::MetadataValue::from_static(error),
+            );
+            call_status_error(&status)
+        };
+        // The session agent failed mid-call, or the answer was lost.
+        for lost in [
+            typed(tonic::Code::Internal, "browser_agent_failed"),
+            call_status_error(&tonic::Status::deadline_exceeded("x")),
+            call_status_error(&tonic::Status::unavailable("x")),
+        ] {
+            assert_eq!(lost, SessionError::Lost);
+            assert!(lost.reached_engine());
+        }
+        // Refusals before the engine bill nothing.
+        for refused in [
+            typed(tonic::Code::ResourceExhausted, "browser_capacity"),
+            typed(tonic::Code::FailedPrecondition, "browser_session_ended"),
+            call_status_error(&tonic::Status::permission_denied("x")),
+            call_status_error(&tonic::Status::invalid_argument("x")),
+        ] {
+            assert!(!refused.reached_engine(), "{refused:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_that_never_started_a_session_did_not_reach_the_engine() {
+        // No egress: Unavailable before anything starts.
+        let error = session(false)
+            .call(
+                "call-1",
+                "browser_open",
+                &serde_json::json!({"url": "https://a.example"}),
+            )
+            .await
+            .expect_err("no egress");
+        assert_eq!(error, SessionError::Unavailable);
+        assert!(!error.reached_engine());
+        // An allowlist too large for a run token says so.
+        let error = session(false)
+            .with_no_route(SessionError::AllowlistTooLarge)
+            .call(
+                "call-1",
+                "browser_open",
+                &serde_json::json!({"url": "https://a.example"}),
+            )
+            .await
+            .expect_err("no route");
+        assert_eq!(error, SessionError::AllowlistTooLarge);
+        assert!(!error.reached_engine());
+        // Oversized arguments: refused before the start.
+        let big = serde_json::json!({"text": "x".repeat(MAX_ARGUMENTS_BYTES + 1)});
+        let error = session(false)
+            .call("call-1", "browser_type", &big)
+            .await
+            .expect_err("too large");
+        assert!(!error.reached_engine());
     }
 
     struct RefusedGrants;

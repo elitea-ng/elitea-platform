@@ -21,7 +21,8 @@ import (
 // built from (ADR-0049, #1596, application/browserruntime): the platform
 // `browser` and `worker_egress` sections, the project's `browser` and
 // `worker_egress` configuration rows, the project's settled browser seconds
-// in gateway.llm_request_logs, and the execution's trigger origin.
+// in the usage ledger gateway.llm_usage_events, the execution's trigger
+// origin and whether it runs under an unattended grant.
 type BrowserRuntimeSources struct {
 	pool   *pgxpool.Pool
 	egress *WorkerEgressSources
@@ -86,11 +87,15 @@ SELECT data FROM %s.configuration WHERE type = $1 ORDER BY id LIMIT 1`, schema),
 }
 
 // BrowserSecondsSince sums the settled browser engine seconds of one
-// project since a time: the metered tool rows of provider `browser` and
-// operation `engine_seconds` (shared 0226). The read uses the index
-// idx_llm_request_logs_project_time (project_id, occurred_at DESC) and
-// reads only the rows of the project since that time. A database without
-// the gateway table has no usage.
+// project since a time, from the usage ledger gateway.llm_usage_events: one
+// row per billed settle, keyed by its event id (ON CONFLICT (event_id) DO
+// NOTHING in both writers), so a retried or replayed settle counts once. The
+// request log is not read: it is sampled, rate-limited and written once per
+// HTTP request, so it both drops and repeats settles. The rows are the
+// metered tool rows of provider `browser` and operation `engine_seconds`
+// (shared 0174 and 0226). The read uses idx_llm_usage_events_project_time
+// (project_id, occurred_at). A database without the ledger table has no
+// usage.
 func (s *BrowserRuntimeSources) BrowserSecondsSince(ctx context.Context, projectID int64, since time.Time) (int64, error) {
 	if projectID <= 0 || projectID > math.MaxInt32 {
 		return 0, fmt.Errorf("browser: project %d is out of range", projectID)
@@ -98,7 +103,7 @@ func (s *BrowserRuntimeSources) BrowserSecondsSince(ctx context.Context, project
 	var used int64
 	err := s.pool.QueryRow(ctx, `
 SELECT coalesce(sum(units), 0)::bigint
-FROM gateway.llm_request_logs
+FROM gateway.llm_usage_events
 WHERE project_id = $1
   AND occurred_at >= $2
   AND operation = 'tool'
@@ -112,6 +117,22 @@ WHERE project_id = $1
 		return 0, fmt.Errorf("browser: read the month's browser seconds: %w", err)
 	}
 	return used, nil
+}
+
+// UnattendedGrant reports whether the execution runs under an ADR-0045
+// unattended grant: it is a link (the root or a continuation) of a run
+// chain. A database without the chain tables has no grants.
+func (s *BrowserRuntimeSources) UnattendedGrant(ctx context.Context, executionID string) (bool, error) {
+	var granted bool
+	err := s.pool.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM elitea_runtime.run_chain_links WHERE execution_id = $1)`, executionID).Scan(&granted)
+	if undefinedColumnOrTable(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("browser: read the unattended grant: %w", err)
+	}
+	return granted, nil
 }
 
 // TriggerOrigin reads the execution's trigger origin. An execution with no

@@ -25,7 +25,11 @@ type fakeSources struct {
 	used         int64
 	since        time.Time
 	origin       string
+	granted      bool
 	err          error
+	usageErr     error
+	originErr    error
+	grantErr     error
 }
 
 func (f *fakeSources) BrowserSettings(context.Context) (platformconfig.BrowserSettings, error) {
@@ -46,10 +50,16 @@ func (f *fakeSources) WorkerEgressProjectEntries(context.Context, int64) ([]stri
 
 func (f *fakeSources) BrowserSecondsSince(_ context.Context, _ int64, since time.Time) (int64, error) {
 	f.since = since
-	return f.used, nil
+	return f.used, f.usageErr
 }
 
-func (f *fakeSources) TriggerOrigin(context.Context, string) (string, error) { return f.origin, nil }
+func (f *fakeSources) TriggerOrigin(context.Context, string) (string, error) {
+	return f.origin, f.originErr
+}
+
+func (f *fakeSources) UnattendedGrant(context.Context, string) (bool, error) {
+	return f.granted, f.grantErr
+}
 
 var testNow = time.Date(2026, time.November, 5, 14, 30, 0, 0, time.UTC)
 
@@ -97,7 +107,9 @@ func verify(t *testing.T, keys *runtoken.KeySet, token string) runtoken.Claims {
 func TestOpenEgressMintsAnOpenToken(t *testing.T) {
 	t.Parallel()
 	minter, keys := testMinter(t)
-	field, err := resolver(t, enabledSources(), Egress{ProxyURL: "http://egress.svc:3128/", Minter: minter}).
+	sources := enabledSources()
+	sources.browser.Egress = platformconfig.BrowserEgressOpen
+	field, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128/", Minter: minter}).
 		ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
 	if err != nil || field == nil {
 		t.Fatalf("field=%v err=%v", field, err)
@@ -137,10 +149,27 @@ func TestAllowlistEgressMintsTheAssembledAllowlist(t *testing.T) {
 	}
 }
 
-func TestGovernedRunForcesTheAllowlist(t *testing.T) {
+// A deployment that never saved the section gets the allowlist: open
+// egress is an administrator's explicit choice (ADR-0049 decision 5).
+func TestTheDefaultEgressIsTheAllowlist(t *testing.T) {
 	t.Parallel()
 	minter, keys := testMinter(t)
 	field, err := resolver(t, enabledSources(), Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
+		ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims := verify(t, keys, field.Egress.Token); claims.Open || len(claims.Allowlist) != 3 {
+		t.Fatalf("claims=%+v, want the allowlist", claims)
+	}
+}
+
+func TestGovernedRunForcesTheAllowlist(t *testing.T) {
+	t.Parallel()
+	minter, keys := testMinter(t)
+	open := enabledSources()
+	open.browser.Egress = platformconfig.BrowserEgressOpen
+	field, err := resolver(t, open, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
 		ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7, Governed: true})
 	if err != nil {
 		t.Fatal(err)
@@ -242,39 +271,100 @@ func TestDisabledProjectServesNoField(t *testing.T) {
 	}
 }
 
-func TestFailures(t *testing.T) {
+// A source that fails after the project setting degrades the field to
+// egress `unavailable` with a fixed reason: the redemption (and the run)
+// goes on, and only the browser tools refuse.
+func TestFailuresDegradeTheField(t *testing.T) {
 	t.Parallel()
 	minter, _ := testMinter(t)
-	many := make([]string, 129)
+	many := make([]string, MaxAllowlistEntries+1)
 	for index := range many {
 		many[index] = fmt.Sprintf("host%d.example.com", index)
 	}
 	for _, test := range []struct {
-		name string
-		edit func(*fakeSources)
-		want error
+		name       string
+		edit       func(*fakeSources)
+		reason     string
+		unattended bool
 	}{
-		{name: "source error", edit: func(s *fakeSources) { s.err = errors.New("down") }, want: ErrUnavailable},
-		{name: "over the cap", edit: func(s *fakeSources) {
-			s.browser.Egress = platformconfig.BrowserEgressAllowlist
-			s.setting.AllowDomains = many
-		}, want: ErrAllowlistTooLarge},
-		{name: "bad stored entry", edit: func(s *fakeSources) {
-			s.browser.Egress = platformconfig.BrowserEgressAllowlist
-			s.projectHosts = []string{"https://example.com/path"}
-		}, want: ErrAllowlistInvalid},
-		{name: "unknown engine", edit: func(s *fakeSources) { s.setting.Engine = "lite" }, want: ErrSettingInvalid},
+		{name: "platform section error", edit: func(s *fakeSources) { s.err = errors.New("down") },
+			reason: EgressUnavailableSourceFailed, unattended: true},
+		{name: "usage error", edit: func(s *fakeSources) { s.usageErr = errors.New("ledger down") },
+			reason: EgressUnavailableSourceFailed},
+		{name: "trigger origin error", edit: func(s *fakeSources) { s.originErr = errors.New("jobs down") },
+			reason: EgressUnavailableSourceFailed, unattended: true},
+		{name: "grant read error", edit: func(s *fakeSources) { s.grantErr = errors.New("chains down") },
+			reason: EgressUnavailableSourceFailed, unattended: true},
+		{name: "over the cap", edit: func(s *fakeSources) { s.setting.AllowDomains = many },
+			reason: EgressUnavailableAllowlistTooLarge},
+		{name: "bad stored entry", edit: func(s *fakeSources) { s.projectHosts = []string{"https://example.com/path"} },
+			reason: EgressUnavailableAllowlistInvalid},
+		{name: "unknown engine", edit: func(s *fakeSources) { s.setting.Engine = "lite" },
+			reason: EgressUnavailableSourceFailed, unattended: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			sources := enabledSources()
 			test.edit(sources)
-			_, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
+			field, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
 				ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
-			if !errors.Is(err, test.want) {
-				t.Fatalf("err=%v, want %v", err, test.want)
+			if err != nil || field == nil {
+				t.Fatalf("field=%v err=%v, want a degraded field", field, err)
+			}
+			if field.Egress.Mode != EgressModeUnavailable || field.Egress.Reason != test.reason ||
+				field.Egress.Token != "" || field.Egress.ProxyURL != "" {
+				t.Fatalf("egress=%+v, want unavailable %q", field.Egress, test.reason)
+			}
+			if field.Unattended != test.unattended || field.Engine != EngineFull {
+				t.Fatalf("field=%+v", field)
+			}
+			if encoded, _ := json.Marshal(field); strings.Contains(string(encoded), "down") {
+				t.Fatalf("a source error reached the field: %s", encoded)
 			}
 		})
 	}
+	// The project setting itself is the one source whose failure is an
+	// error: without it Main cannot tell whether the browser is on.
+	failing := &failingProject{fakeSources: enabledSources()}
+	if _, err := NewResolver(failing, failing, failing, failing, Egress{}, nil).
+		ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type failingProject struct{ *fakeSources }
+
+func (f *failingProject) BrowserProjectSetting(context.Context, int64) (ProjectSetting, error) {
+	return ProjectSetting{}, errors.New("tenant down")
+}
+
+// A manual or api run under an ADR-0045 unattended grant has nobody to
+// answer, like a schedule or webhook run.
+func TestAGrantedRunIsUnattended(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		origin  string
+		granted bool
+		want    bool
+	}{
+		{origin: "manual", want: false},
+		{origin: "api", want: false},
+		{origin: "manual", granted: true, want: true},
+		{origin: "api", granted: true, want: true},
+		{origin: "schedule", want: true},
+		{origin: "webhook", want: true},
+	} {
+		sources := enabledSources()
+		sources.origin, sources.granted = test.origin, test.granted
+		field, err := resolver(t, sources, Egress{}).
+			ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
+		if err != nil || field.Unattended != test.want {
+			t.Fatalf("%s granted=%v: field=%+v err=%v, want unattended %v", test.origin, test.granted, field, err, test.want)
+		}
+	}
+}
+
+func TestInvalidClaims(t *testing.T) {
+	t.Parallel()
 	if _, err := resolver(t, enabledSources(), Egress{}).ResolveBrowserContext(context.Background(), Claim{}); !errors.Is(err, ErrInvalidClaim) {
 		t.Fatalf("err=%v", err)
 	}

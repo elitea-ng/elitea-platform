@@ -9,6 +9,16 @@ use serde::Deserialize;
 
 use crate::workspace_run::context::{EGRESS_UNAVAILABLE_REASONS, ProxyToken, proxy_host_port};
 
+/// The browser's own reasons for egress `unavailable` (Main's
+/// browserruntime): Main degrades the field instead of failing the
+/// redemption.
+pub(crate) const BROWSER_ALLOWLIST_TOO_LARGE: &str = "browser_allowlist_too_large";
+const BROWSER_UNAVAILABLE_REASONS: [&str; 3] = [
+    BROWSER_ALLOWLIST_TOO_LARGE,
+    "browser_allowlist_invalid",
+    "browser_context_unavailable",
+];
+
 /// The accept-list name of the field.
 pub(crate) const RUNTIME_CONTEXT_FIELD: &str = "browser";
 
@@ -101,7 +111,8 @@ impl BrowserRuntimeContext {
             BrowserEgressMode::Unavailable => {
                 egress.proxy_url.is_empty()
                     && egress.token.expose().is_empty()
-                    && EGRESS_UNAVAILABLE_REASONS.contains(&egress.reason.as_str())
+                    && (EGRESS_UNAVAILABLE_REASONS.contains(&egress.reason.as_str())
+                        || BROWSER_UNAVAILABLE_REASONS.contains(&egress.reason.as_str()))
             }
         };
         if !valid {
@@ -173,6 +184,14 @@ pub(crate) mod tests {
             parse(value).expect("valid").egress.mode,
             BrowserEgressMode::Unavailable
         );
+        // Main's degraded field: the browser's own reasons parse too.
+        for reason in BROWSER_UNAVAILABLE_REASONS {
+            let mut value = field();
+            value["egress"] = json!({
+                "mode": "unavailable", "proxy_url": "", "token": "", "reason": reason,
+            });
+            assert!(parse(value).is_ok(), "{reason}");
+        }
     }
 
     #[test]

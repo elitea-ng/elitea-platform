@@ -36,8 +36,28 @@ pub enum SessionError {
     Ended,
     /// The supervisor refused the call (a grant, a fence, a ceiling).
     Refused,
-    /// The supervisor or the session agent could not be reached.
+    /// The supervisor or the session agent could not be reached, and the
+    /// call never ran on a session (no egress, no grant, no start).
     Unavailable,
+    /// Main served no route out because the project's merged allowlist has
+    /// more entries than one run token carries. The browser is not started.
+    AllowlistTooLarge,
+    /// The call was sent to the running session and its answer was lost (a
+    /// transport failure, a deadline, an unreadable answer, the session
+    /// agent failing mid-call). The engine may have run it, so its time is
+    /// charged. The model reads it as `browser_unavailable`.
+    Lost,
+}
+
+impl SessionError {
+    /// Whether the call held a running session's engine: only
+    /// [`Self::Lost`]. Every other failure is a refusal before the engine
+    /// (capacity, a refused grant or argument, an ended session, no
+    /// egress), and bills nothing.
+    #[must_use]
+    pub const fn reached_engine(self) -> bool {
+        matches!(self, Self::Lost)
+    }
 }
 
 impl fmt::Display for SessionError {
@@ -46,7 +66,10 @@ impl fmt::Display for SessionError {
             Self::Capacity => "the cloud browser is at its capacity",
             Self::Ended => "the cloud browser session ended",
             Self::Refused => "the cloud browser refused the call",
-            Self::Unavailable => "the cloud browser is unavailable",
+            Self::Unavailable | Self::Lost => "the cloud browser is unavailable",
+            Self::AllowlistTooLarge => {
+                "the cloud browser is unavailable: the project's allowed sites are more than one browser run can carry; ask an administrator to shorten the browser and worker egress allowlists"
+            }
         })
     }
 }

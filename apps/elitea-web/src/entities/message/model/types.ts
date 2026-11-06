@@ -96,6 +96,8 @@ export interface AssistantMessage extends MessageBase {
   readonly isSummarized?: boolean;
   readonly exception?: unknown;
   readonly failureCode?: string;
+  /** The run cap a CAP_REACHED answer stopped at (`meta.cap`). */
+  readonly failureCap?: string;
   readonly references?: unknown;
   readonly toolActions?: readonly ToolAction[];
   readonly hitlInterrupt?: unknown;

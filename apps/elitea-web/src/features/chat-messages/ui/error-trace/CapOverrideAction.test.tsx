@@ -34,11 +34,11 @@ function serve(granted: readonly string[], refusal?: { status: number; code: str
   );
 }
 
-function renderAction(code: string | undefined) {
+function renderAction(code: string | undefined, cap?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <CapOverrideAction projectId="7" messageId={MESSAGE} code={code} />
+      <CapOverrideAction projectId="7" messageId={MESSAGE} code={code} cap={cap} />
     </QueryClientProvider>,
   );
 }
@@ -64,6 +64,20 @@ describe('CapOverrideAction', () => {
     const { container } = renderAction('CAP_REACHED');
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it.each(['max_browser_seconds', 'browser_monthly_quota'])('offers no override for the browser cap %s', async (cap) => {
+    serve(['safety.override_cap']);
+    const { container } = renderAction('CAP_REACHED', cap);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(container).toBeEmptyDOMElement();
+    expect(grants).toEqual([]);
+  });
+
+  it('offers the override for another named cap', async () => {
+    serve(['safety.override_cap']);
+    renderAction('CAP_REACHED', 'max_tool_calls');
+    expect(await screen.findByTestId('cap-override-button')).toBeInTheDocument();
   });
 
   it('grants the override on the stopped response', async () => {

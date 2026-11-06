@@ -79,13 +79,33 @@ func TestRuntimeContextServesNoBrowserFieldForADisabledProject(t *testing.T) {
 	require.NotContains(t, responseKeys(t, response.Body), "browser")
 }
 
-func TestRuntimeContextBrowserFailureFailsTheRedemption(t *testing.T) {
+// A browser resolution error never fails the redemption: the run starts
+// without the field, and no error text reaches the worker.
+func TestRuntimeContextBrowserFailureDegradesToNoField(t *testing.T) {
 	t.Parallel()
-	server := browserTokenServer(t, &fakeBrowserResolver{err: errors.New("canary database text")})
+	resolver := &fakeBrowserResolver{err: errors.New("canary database text")}
+	server := browserTokenServer(t, resolver)
 	response := redeem(t, server, browserruntime.RuntimeContextField)
-	require.Equal(t, codes.Unavailable, response.Code)
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
+	require.NotContains(t, responseKeys(t, response.Body), "browser")
 	require.NotContains(t, string(response.Body), "canary")
-	require.Equal(t, "browser_context", runtimeContextUnavailableStage(runtimeContextUnavailable(runtimeContextStageBrowser)))
+	require.Equal(t, 1, resolver.calls)
+}
+
+// A degraded field (egress unavailable) is served as it is.
+func TestRuntimeContextServesADegradedBrowserField(t *testing.T) {
+	t.Parallel()
+	field := browserField()
+	field.Egress = workspaceruntime.RuntimeContextEgress{Mode: "unavailable", Reason: browserruntime.EgressUnavailableAllowlistTooLarge}
+	server := browserTokenServer(t, &fakeBrowserResolver{field: field})
+	response := redeem(t, server, browserruntime.RuntimeContextField)
+	require.Equal(t, codes.OK, response.Code, string(response.Body))
+	var decoded struct {
+		Browser map[string]json.RawMessage `json:"browser"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body, &decoded))
+	require.JSONEq(t, `{"mode":"unavailable","proxy_url":"","token":"","reason":"browser_allowlist_too_large"}`,
+		string(decoded.Browser["egress"]))
 }
 
 func TestWithBrowserContextIgnoresATypedNil(t *testing.T) {

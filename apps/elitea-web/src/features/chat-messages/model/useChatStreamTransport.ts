@@ -199,13 +199,13 @@ export function useChatStreamTransport(
    * the question it answers.
    */
   const failWith = useCallback(
-    (reason: string, failureCode?: string) => {
+    (reason: string, failureCode?: string, failureCap?: string) => {
       const streamContext = contextRef.current;
       const questionId = questionIdRef.current;
       const responseMessageId = cancelRef.current?.messageGroupUuid;
       detach();
       setChatHistory((prev) =>
-        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId, failureCode),
+        recordStreamFailure(prev, reason, streamContext, questionId, responseMessageId, failureCode, failureCap),
       );
       onStreamErrorRef.current?.(reason);
     },
@@ -225,7 +225,11 @@ export function useChatStreamTransport(
       refreshContext();
       const replayInto = takePendingReplay();
       if (replayInto !== undefined) setChatHistory((prev) => resetTurnForReplay(prev, replayInto));
-      failWith(reason, typeof frame['code'] === 'string' ? frame['code'] : undefined);
+      failWith(
+        reason,
+        typeof frame['code'] === 'string' ? frame['code'] : undefined,
+        typeof frame['cap'] === 'string' && frame['cap'] !== '' ? frame['cap'] : undefined,
+      );
     },
     [failWith, refreshContext, setChatHistory, takePendingReplay, ownsRun],
   );

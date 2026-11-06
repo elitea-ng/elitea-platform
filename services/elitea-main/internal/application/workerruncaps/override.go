@@ -36,6 +36,10 @@ var (
 	// ErrOverrideNotCapped is a response that did not end with CAP_REACHED,
 	// or one that is not in the conversation.
 	ErrOverrideNotCapped = errors.New("run cap override: the response did not stop at a run cap")
+	// ErrOverrideNotOverridable is a response that stopped at a cap no
+	// override passes: the cloud browser's run cap and monthly quota
+	// (ADR-0049 decision 8).
+	ErrOverrideNotOverridable = errors.New("run cap override: this cap cannot be raised for one run")
 	// ErrOverrideAlreadyGranted is a second grant on the same response.
 	ErrOverrideAlreadyGranted = errors.New("run cap override: this response was already overridden")
 	// ErrOverrideOpenGrant is a conversation that holds an unused grant.

@@ -4515,6 +4515,7 @@
   "chatMessages.capOverride.alreadyGranted": "This response was already allowed past its cap.",
   "chatMessages.capOverride.openGrant": "This conversation already has an unused allowance. Send a message to use it.",
   "chatMessages.capOverride.tierCapsNotSaved": "This cap cannot be raised until an administrator saves the run caps.",
+  "chatMessages.capOverride.notOverridable": "This cap cannot be raised for one run.",
   "chatMessages.capOverride.forbidden": "You do not have permission to override run caps.",
   "chatMessages.capOverride.failed": "Could not allow the next run past the cap. Try again.",
   "entities.author.deletedUser": "Deleted user",
