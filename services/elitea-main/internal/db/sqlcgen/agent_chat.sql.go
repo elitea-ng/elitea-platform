@@ -3530,6 +3530,7 @@ WHERE conversation.uuid = $2::uuid
   AND NOT (response.meta ? 'hitl_interrupt')
   AND NOT (response.meta ? 'hitl_interrupts')
   AND NOT (response.meta ? 'authorization_requests')
+  AND NOT (response.meta ? 'fanout_parked_v1')
   AND (
       conversation.author_id = $1::bigint
       OR (question_author.entity_meta ->> 'id')::bigint = $1::bigint
@@ -4088,6 +4089,7 @@ WITH resolved AS MATERIALIZED (
       AND NOT (response.meta ? 'hitl_interrupt')
       AND NOT (response.meta ? 'hitl_interrupts')
       AND NOT (response.meta ? 'authorization_requests')
+      AND NOT (response.meta ? 'fanout_parked_v1')
       AND (
           conversation.author_id = $10::bigint
           OR (question_author.entity_meta ->> 'id')::bigint = $10::bigint

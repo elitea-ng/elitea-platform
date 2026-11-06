@@ -38,6 +38,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacestore"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/responsepause"
 )
 
 // completeHandoffInAdmission completes the admission's send. The send must
@@ -424,8 +425,7 @@ WITH answers AS MATERIALIZED (
                WHEN bool_or(j.state = 'CANCELLED') THEN 'cancelled'
                WHEN bool_or(j.state IN ('FAILED', 'QUARANTINED')) THEN 'failed'
                WHEN COALESCE(runs.meta -> 'is_error' = 'true'::jsonb, FALSE) THEN 'failed'
-               WHEN COALESCE(runs.meta ? 'hitl_interrupt' OR runs.meta ? 'hitl_interrupts'
-                             OR runs.meta ? 'authorization_requests', FALSE) THEN 'waiting'
+               WHEN COALESCE(%[2]s, FALSE) THEN 'waiting'
                ELSE 'completed'
            END AS outcome,
            runs.execution_id, max(j.settled_at) AS finished_at
@@ -439,7 +439,7 @@ WITH answers AS MATERIALIZED (
 SELECT outcome, execution_id, finished_at
 FROM (SELECT * FROM chained UNION ALL SELECT * FROM standalone) AS finished
 ORDER BY finished_at DESC, execution_id DESC
-LIMIT 1`, schema), handoff.ConversationUUID, strconv.FormatInt(handoff.Epoch, 10), handoff.ProjectID).
+LIMIT 1`, schema, responsepause.SQL(responsepause.Runs)), handoff.ConversationUUID, strconv.FormatInt(handoff.Epoch, 10), handoff.ProjectID).
 		Scan(&run.Outcome, &run.ExecutionID, &finished)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
