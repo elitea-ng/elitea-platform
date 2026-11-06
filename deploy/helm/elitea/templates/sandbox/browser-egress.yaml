@@ -1,0 +1,40 @@
+{{- /*
+ADR-0049 decision 5: a browser session's only route out is the egress proxy.
+
+The supervisor labels every session Pod `sandbox.elitea.ai/kind:
+browser-session` (sandbox::browser_session, KIND_BROWSER_SESSION). This
+policy is the ONLY allow rule that selects it: egress to the egress proxy's
+pods on the proxy port, and nothing else. No DNS (the Pod has `dnsPolicy:
+None` and a loopback nameserver; the proxy resolves), no direct egress, no
+ingress (the supervisor reaches the session agent through the API server's
+exec, not the network). The execution namespace's deny-all policy covers
+everything else. Without the egress proxy, nothing is rendered and a session
+has no network at all.
+*/ -}}
+{{- $s := .Values.sandboxKubernetes }}
+{{- $b := $s.browserSessions }}
+{{- if and $s.enabled $b.enabled .Values.egressProxy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-browser-session-egress
+  namespace: {{ $s.executionNamespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector:
+    matchLabels:
+      sandbox.elitea.ai/kind: browser-session
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "elitea-egress-proxy.selectorLabels" . | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.egressProxy.service.port }}}
+{{- end }}

@@ -1,0 +1,15 @@
+# ADR-0049: the cloud browser's `browser` supervisor profile on Kubernetes,
+# layered on cloud-executor-values.yaml (render-browser-sessions.sh). The
+# rendered profile must equal deploy/runtime/sandbox-browser.kubernetes.example.json,
+# which the supervisor's own test parses (browser_session_profile.rs).
+main:
+  runtime:
+    sandboxAudiences: ["dns:elitea-sandbox-workspace", "dns:elitea-sandbox-browser"]
+sandboxKubernetes:
+  browserSessions:
+    enabled: true
+    nodeSelector: {elitea.ai/browser: "true"}
+    tolerations:
+      - {key: elitea.ai/browser, operator: Equal, value: "true", effect: NoSchedule}
+    profile:
+      image: registry/browser-session@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd

@@ -1,0 +1,54 @@
+{{- /*
+ADR-0049: the cloud browser's `browser` supervisor profile, rendered from
+sandboxKubernetes.browserSessions (services/elitea-worker-rust/src/sandbox/
+browser_session_profile.rs is the schema). It holds no secret: the TLS
+identity, the client CA and the grant keyring stay in the material Secret,
+and the profile names them by path. Projected into the supervisor's
+material volume beside the Secret, as the workspace profile is.
+
+Every half-enabled shape fails the render here.
+*/ -}}
+{{- $s := .Values.sandboxKubernetes }}
+{{- $b := $s.browserSessions }}
+{{- if $b.enabled }}
+{{- $p := $b.profile }}
+{{- if not $s.enabled }}{{ fail "sandboxKubernetes.browserSessions.enabled requires sandboxKubernetes.enabled" }}{{ end }}
+{{- if not $s.supervisor.enabled }}{{ fail "sandboxKubernetes.browserSessions.enabled requires sandboxKubernetes.supervisor.enabled: the supervisor runs the browser profile" }}{{ end }}
+{{- if not ($s.runtimeClass | default dict).name }}{{ fail "sandboxKubernetes.browserSessions.enabled requires sandboxKubernetes.runtimeClass.name (gvisor, ...)" }}{{ end }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" (default "" $p.image)) }}{{ fail "sandboxKubernetes.browserSessions.profile.image must be the browser session image by registry SHA-256 digest" }}{{ end }}
+{{- if not $b.nodeSelector }}{{ fail "sandboxKubernetes.browserSessions.nodeSelector must place session Pods on the browser node pool" }}{{ end }}
+{{- if gt (len ($b.tolerations | default list)) 16 }}{{ fail "sandboxKubernetes.browserSessions.tolerations admits at most 16 entries" }}{{ end }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $p.port))) (lt (int $p.port) 1024) (gt (int $p.port) 65535) }}{{ fail "sandboxKubernetes.browserSessions.profile.port must be between 1024 and 65535" }}{{ end }}
+{{- range $s.supervisor.profiles }}{{ if eq (toString .port) (toString $p.port) }}{{ fail "sandboxKubernetes.browserSessions.profile.port is taken by a supervisor profile" }}{{ end }}{{ if eq .file "browser.json" }}{{ fail "supervisor profile file browser.json is reserved for sandboxKubernetes.browserSessions" }}{{ end }}{{ end }}
+{{- if and $s.workspaceRuns.enabled (eq (toString $s.workspaceRuns.profile.port) (toString $p.port)) }}{{ fail "sandboxKubernetes.browserSessions.profile.port is taken by the workspace profile" }}{{ end }}
+{{- if and $s.workspaceRuns.enabled (eq $s.workspaceRuns.profile.owner $p.owner) }}{{ fail "sandboxKubernetes.browserSessions.profile.owner is taken by the workspace profile" }}{{ end }}
+{{- if or (not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" (default "" $p.serviceName))) (not (hasPrefix "elitea-sandbox-" $p.serviceName)) (eq $p.serviceName "elitea-sandbox-supervisor") (eq $p.serviceName $s.workspaceRuns.profile.serviceName) }}{{ fail "sandboxKubernetes.browserSessions.profile.serviceName must be its own elitea-sandbox- DNS label" }}{{ end }}
+{{- range $s.supervisor.profiles }}{{ if eq (default "" .serviceName) $p.serviceName }}{{ fail "sandboxKubernetes.browserSessions.profile.serviceName is taken by a supervisor profile" }}{{ end }}{{ end }}
+{{- if not (has $p.audience (.Values.main.runtime.sandboxAudiences | default list)) }}{{ fail "sandboxKubernetes.browserSessions.profile.audience must be in main.runtime.sandboxAudiences" }}{{ end }}
+{{- if and $s.workspaceRuns.enabled (eq $s.workspaceRuns.profile.audience $p.audience) }}{{ fail "sandboxKubernetes.browserSessions.profile.audience must differ from the workspace profile's" }}{{ end }}
+{{- range $key := list "concurrency" "sessionsPerRun" "maxPages" "maxWallSeconds" }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString (int64 (get $p $key)))) }}{{ fail (printf "sandboxKubernetes.browserSessions.profile.%s must be a positive integer" $key) }}{{ end }}
+{{- end }}
+{{- if gt (int64 $p.concurrency) (int64 $s.maxPods) }}{{ fail "sandboxKubernetes.browserSessions.profile.concurrency must not exceed sandboxKubernetes.maxPods (every session is a Pod in the execution namespace)" }}{{ end }}
+{{- if not (has (toString $p.engineSandbox) (list "true" "false")) }}{{ fail "sandboxKubernetes.browserSessions.profile.engineSandbox must be true or false" }}{{ end }}
+{{- range $engine := list "full" "lite" }}
+{{- $e := get $p $engine | default dict }}
+{{- if or (eq $engine "full") $e }}
+{{- range $key := list "maxCpuMillis" "maxMemoryBytes" }}
+{{- if not (regexMatch "^[1-9][0-9]*$" (toString (int64 (get $e $key)))) }}{{ fail (printf "sandboxKubernetes.browserSessions.profile.%s.%s must be a positive integer" $engine $key) }}{{ end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range $key := list "ca" "certificate" "privateKey" "keyring" }}
+{{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" (default "" (get $p.material $key))) }}{{ fail (printf "sandboxKubernetes.browserSessions.profile.material.%s must be a flat key name of the material Secret" $key) }}{{ end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elitea-sandbox-browser-profile
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: sandbox-supervisor
+data:
+  browser.json: {{ include "elitea-sandbox.browserProfile" . | quote }}
+{{- end }}

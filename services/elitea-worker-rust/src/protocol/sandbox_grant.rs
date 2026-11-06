@@ -31,6 +31,8 @@ struct VerifiedAuthority {
     execution_id: String,
     generation: u64,
     dispatch_activation: String,
+    /// The run (tenant, project, execution), independent of the activation.
+    run: [u8; 32],
 }
 impl AuthorizedJob {
     pub(crate) fn original_execution(&self) -> (&str, u64, &str) {
@@ -69,6 +71,19 @@ pub struct AuthorizedWorkspaceRun {
     pub request: String,
     /// The claim scope (tenant, project, execution activation), 64 hex.
     pub owner: String,
+}
+
+/// Browser-session authority (ADR-0049): what a session carries so a later
+/// call can prove the same claim owns it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedBrowserSession {
+    /// The claim scope (tenant, project, session activation), 64 hex.
+    pub owner: String,
+    /// The run the session belongs to (tenant, project, execution), 64 hex:
+    /// the key of the sessions-per-run ceiling.
+    pub run: String,
+    /// The claim's lease generation: a call under an older one is fenced.
+    pub generation: u64,
 }
 
 /// Preparation authority cannot be passed to execution admission.
@@ -240,6 +255,43 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         })
     }
 
+    /// Verify Main's revision 1 grant for one browser-session operation
+    /// (ADR-0049 decision 4): its request digest is `digest` (the session's,
+    /// [`crate::sandbox::browser_session::spec_digest`], or a view stream's,
+    /// [`crate::sandbox::browser_session::view_digest`]) and its activation
+    /// is the session's name. The binding carries the run (tenant, project,
+    /// execution) the sessions-per-run ceiling counts, and the claim's
+    /// generation, the fence a later call is held to.
+    ///
+    /// # Errors
+    /// Returns `GrantRejected` for any signature, wire, scope, peer, digest,
+    /// name or lifetime mismatch.
+    pub fn verify_browser_session(
+        &self,
+        grant: &SignedSandboxJobGrantV1,
+        peer: &str,
+        name: &str,
+        digest: [u8; 32],
+        now_unix_millis: i64,
+    ) -> Result<AuthorizedBrowserSession, GrantRejected> {
+        let authority =
+            self.verify_operation(grant, peer, Some(digest), now_unix_millis, false, false)?;
+        if authority.dispatch_activation != name {
+            return Err(GrantRejected);
+        }
+        let owner = authority
+            .scope
+            .runtime_identity()
+            .map_err(|_| GrantRejected)?
+            .job_key()
+            .to_owned();
+        Ok(AuthorizedBrowserSession {
+            owner,
+            run: crate::sandbox::workspace_run::hex(&authority.run),
+            generation: authority.generation,
+        })
+    }
+
     /// Verify a stop-only grant without receiving code or state.
     /// # Errors
     /// Returns `GrantRejected` for an invalid scope, signature, purpose, or lifetime.
@@ -359,6 +411,15 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
         }
         let mut activation = [0; 32];
         activation.copy_from_slice(hash.finish().as_ref());
+        let mut run_hash = digest::Context::new(&digest::SHA256);
+        run_hash.update(b"elitea.sandbox.run.v1\0");
+        run_hash.update(&(claims.tenant_id.len() as u64).to_be_bytes());
+        run_hash.update(claims.tenant_id.as_bytes());
+        run_hash.update(&claims.project_id.to_be_bytes());
+        run_hash.update(&(claims.execution_id.len() as u64).to_be_bytes());
+        run_hash.update(claims.execution_id.as_bytes());
+        let mut run = [0; 32];
+        run.copy_from_slice(run_hash.finish().as_ref());
         let scope = JobScope::new(claims.tenant_id, claims.project_id, activation, fingerprint)
             .map_err(|_| GrantRejected)?;
         Ok(VerifiedAuthority {
@@ -370,6 +431,7 @@ impl<R: Ed25519PublicKeyResolver> GrantVerifier<R> {
             execution_id: claims.execution_id,
             generation: claims.generation,
             dispatch_activation: claims.activation_id,
+            run,
         })
     }
 }

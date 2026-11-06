@@ -1,4 +1,17 @@
 //! Code execution transport; runtime access is exclusive to the supervisor feature.
+pub mod browser_session;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod browser_session_agent;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod browser_session_docker;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod browser_session_lifetime;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod browser_session_profile;
+#[cfg(feature = "sandbox-supervisor")]
+pub mod browser_session_service;
+#[cfg(all(test, feature = "sandbox-supervisor"))]
+mod browser_session_service_tests;
 pub(crate) mod cargo_dependency_bundle;
 pub mod client;
 pub(crate) mod code_platform_owner;

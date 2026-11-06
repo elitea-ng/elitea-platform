@@ -10,7 +10,12 @@ rendered by the chart and counts toward the eight. */}}
 {{- $workspace := and $s.workspaceRuns.enabled $s.supervisor.enabled }}
 {{- $wp := $s.workspaceRuns.profile }}
 {{- $workspaceIndex := len $s.supervisor.profiles }}
-{{- $profileCount := add (len $s.supervisor.profiles) (ternary 1 0 $workspace) }}
+{{- /* The cloud browser's profile (browser-profile.yaml, ADR-0049) is
+rendered by the chart too, after the workspace profile. */}}
+{{- $browser := and $s.browserSessions.enabled $s.supervisor.enabled }}
+{{- $bp := $s.browserSessions.profile }}
+{{- $browserIndex := add $workspaceIndex (ternary 1 0 $workspace) }}
+{{- $profileCount := add (len $s.supervisor.profiles) (ternary 1 0 $workspace) (ternary 1 0 $browser) }}
 {{- if or (lt $profileCount 1) (gt $profileCount 8) }}
 {{- fail "Kubernetes supervisor requires one to eight profiles" }}{{ end }}
 {{- $ports := dict }}{{- $files := dict }}{{- $services := dict }}
@@ -50,11 +55,16 @@ spec:
     metadata:
       labels:
         {{- include "elitea-sandbox-supervisor.selectorLabels" . | nindent 8 }}
-      {{- if $workspace }}
+      {{- if or $workspace $browser }}
       annotations:
-        # The profile is copied into private material at start: a change
+        # A profile is copied into private material at start: a change
         # must restart the supervisor.
+        {{- if $workspace }}
         checksum/workspace-profile: {{ include "elitea-sandbox.workspaceProfile" . | sha256sum }}
+        {{- end }}
+        {{- if $browser }}
+        checksum/browser-profile: {{ include "elitea-sandbox.browserProfile" . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ $s.supervisorServiceAccount }}
@@ -124,6 +134,10 @@ spec:
             - --config
             - "/run/elitea-sandbox/workspace.json"
             {{- end }}
+            {{- if $browser }}
+            - --config
+            - "/run/elitea-sandbox/browser.json"
+            {{- end }}
           ports:
             {{- range $index, $profile := $s.supervisor.profiles }}
             - name: profile-{{ $index }}
@@ -132,6 +146,10 @@ spec:
             {{- if $workspace }}
             - name: profile-{{ $workspaceIndex }}
               containerPort: {{ $wp.port }}
+            {{- end }}
+            {{- if $browser }}
+            - name: profile-{{ $browserIndex }}
+              containerPort: {{ $bp.port }}
             {{- end }}
           readinessProbe:
             tcpSocket:
@@ -153,16 +171,22 @@ spec:
             {{- end }}
       volumes:
         - name: projected-material
-          {{- if $workspace }}
+          {{- if or $workspace $browser }}
           # One projected revision: the material Secret and the rendered
-          # workspace profile (it holds no secret).
+          # workspace and browser profiles (they hold no secret).
           projected:
             defaultMode: 0440
             sources:
               - secret:
                   name: {{ $s.supervisor.materialSecret }}
+              {{- if $workspace }}
               - configMap:
                   name: elitea-sandbox-workspace-profile
+              {{- end }}
+              {{- if $browser }}
+              - configMap:
+                  name: elitea-sandbox-browser-profile
+              {{- end }}
           {{- else }}
           secret:
             secretName: {{ $s.supervisor.materialSecret }}
@@ -200,6 +224,28 @@ spec:
       port: {{ $wp.port }}
       targetPort: profile-{{ $workspaceIndex }}
     {{- end }}
+    {{- if $browser }}
+    - name: profile-{{ $browserIndex }}
+      port: {{ $bp.port }}
+      targetPort: profile-{{ $browserIndex }}
+    {{- end }}
+{{- if $browser }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $bp.serviceName }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/component: sandbox-supervisor
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  ports:
+    - name: profile-{{ $browserIndex }}
+      port: {{ $bp.port }}
+      targetPort: profile-{{ $browserIndex }}
+{{- end }}
 {{- if $workspace }}
 ---
 apiVersion: v1

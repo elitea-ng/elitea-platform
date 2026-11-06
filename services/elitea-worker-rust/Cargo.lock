@@ -1273,6 +1273,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-browser-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.3.4",
+ "serde_json",
+]
+
+[[package]]
 name = "elitea-code-parsers"
 version = "0.1.0"
 dependencies = [
@@ -1460,6 +1469,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elitea-agent-runtime",
+ "elitea-browser-tools",
  "elitea-connectors",
  "elitea-content-source",
  "elitea-doc-chunk",
