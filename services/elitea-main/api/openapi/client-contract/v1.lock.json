@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.39",
+  "client_contract": "1.40",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -3193,6 +3193,126 @@
         "304": {
           "headers": {
             "etag": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /browser_sessions/{session_id}/view": {
+      "operation_id": "viewBrowserSession",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:session_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^elitea-br-[0-9a-f]{24}$"
+          }
+        }
+      },
+      "responses": {
+        "101": {},
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "error_description"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "429": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        },
+        "502": {
+          "content": {
+            "text/plain": {
+              "type": "string"
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "text/plain": {
               "type": "string"
             }
           }

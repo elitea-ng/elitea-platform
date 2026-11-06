@@ -28,6 +28,7 @@ type privateServerRunner interface {
 // Close after Run returns.
 type Runtime struct {
 	codeOwnerClient        interface{ Close() }
+	browserViewClient      interface{ Close() }
 	publisher              publisherRunner
 	private                privateServerRunner
 	runtimeNATS            *nats.Conn
@@ -210,6 +211,9 @@ func (r *Runtime) Close() error {
 		}
 		if r.codeOwnerClient != nil {
 			r.codeOwnerClient.Close()
+		}
+		if r.browserViewClient != nil {
+			r.browserViewClient.Close()
 		}
 		if r.runtimeNATS != nil {
 			// Drain flushes queued publishes (replay wakes) and ends the

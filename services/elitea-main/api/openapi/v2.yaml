@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.39"
+  x-elitea-client-contract: "1.40"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -32443,6 +32443,103 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NotificationErrorResponse'
+
+  /browser_sessions/{session_id}/view:
+    parameters:
+      - name: session_id
+        in: path
+        required: true
+        description: The run's cloud browser session, `elitea-br-` and 24 lowercase hex digits.
+        schema:
+          type: string
+          pattern: '^elitea-br-[0-9a-f]{24}$'
+    get:
+      operationId: viewBrowserSession
+      summary: Watch, and take over, a run's cloud browser (WebSocket)
+      description: |
+        Client contract 1.40 (ADR-0049 decision 6). A WebSocket upgrade:
+        any replica relays it to the browser supervisor, and the session
+        screencasts only while at least one viewer is attached.
+
+        Who may open it: the run's owner, or a principal who may read the
+        run's conversation. Who may drive: the owner, or such a viewer who
+        also holds `models.chat.messages.create` in the project. A
+        lingering session (the run ended; the browser stays up for its
+        linger) opens watch-only for everyone. A browser page must send an
+        `Origin` of the deployment's own host.
+
+        Down, one JSON text message per event:
+        `{"type":"hello","session_id","can_control","lingering"}` first;
+        `{"type":"frame","seq","width","height","bytes","url","title","control"}`
+        (`control` is `agent` or `user`), followed by exactly ONE binary
+        message holding that frame's JPEG of `bytes` bytes;
+        `{"type":"notice","code"}` (`input_refused`, `session_lingering`);
+        `{"type":"refused","code"}` for one up message that was not
+        relayed (`input_refused` from a watch-only viewer, `malformed`);
+        and `{"type":"end","code"}` (`session_destroyed`, `idle`, `wall`,
+        `linger_elapsed`, `agent_failed`) before the close.
+
+        Up, JSON text messages of at most 4 KiB:
+        `{"type":"ack","seq"}` after showing a frame (the next frame is sent
+        only after it, always the latest);
+        `{"type":"pointer","kind":"move|down|up","x","y","button","click_count","modifiers"}`;
+        `{"type":"wheel","x","y","delta_x","delta_y","modifiers"}`;
+        `{"type":"key","kind":"down|up|char","key","code","text","modifiers"}`
+        (each string at most 32 bytes);
+        `{"type":"take_over"}`; and `{"type":"hand_back","note"}` (the note
+        at most 2 KiB, given to the agent). Input other than an ack needs
+        `can_control`. While the person holds control, the agent's browser
+        tools other than a snapshot or a screenshot answer `user_in_control`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '101':
+          description: Switching Protocols; the view stream follows.
+        '400':
+          description: An invalid `X-Client-Version`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvalidClientVersionError' }
+        '401':
+          description: No authenticated principal.
+          content:
+            text/plain:
+              schema: { type: string }
+        '403':
+          description: The `Origin` is not the deployment's.
+          content:
+            text/plain:
+              schema: { type: string }
+        '404':
+          description: No such session, or one the caller may not watch.
+          content:
+            text/plain:
+              schema: { type: string }
+        '410':
+          description: The session ended.
+          content:
+            text/plain:
+              schema: { type: string }
+        '429':
+          description: Too many open views on this replica or for this user.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            text/plain:
+              schema: { type: string }
+        '502':
+          description: The browser supervisor did not open the stream; retry.
+          content:
+            text/plain:
+              schema: { type: string }
+        '503':
+          description: The session could not be read; retry.
+          content:
+            text/plain:
+              schema: { type: string }
 
   /notifications/events/prompt_lib/{project_id}:
     parameters:

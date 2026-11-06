@@ -163,9 +163,12 @@ type Config struct {
 	NATSMaterial natsconn.Material
 
 	// Empty keeps sandbox grant issuance disabled. Values are exact identities.
-	SandboxAudiences        []string
-	RustCompiledSnapshots   *CompiledSnapshotConfig
-	CodeOwnerRecovery       *CodeOwnerConfig
+	SandboxAudiences      []string
+	RustCompiledSnapshots *CompiledSnapshotConfig
+	CodeOwnerRecovery     *CodeOwnerConfig
+	// BrowserView is the cloud browser view relay's supervisor client
+	// (ADR-0049 decision 6); nil keeps the relay off.
+	BrowserView             *BrowserViewConfig
 	CodeWorkspace           *CodeWorkspaceConfig
 	CodePlatform            *CodePlatformDeploymentConfig
 	CodeDebugArtifacts      *CodeDebugArtifactsConfig
@@ -403,6 +406,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	if config.CodeOwnerRecovery, err = codeOwnerConfigFromEnv(lookup, config.Enabled, config.AgentExecutionDispatchEnabled, config.SandboxAudiences); err != nil {
 		return Config{}, err
 	}
+	if config.BrowserView, err = browserViewConfigFromEnv(lookup, config.Enabled, config.AgentExecutionDispatchEnabled, config.SandboxAudiences); err != nil {
+		return Config{}, err
+	}
 	if config.CodeWorkspace, config.CodePlatform, config.CodeDebugArtifacts, err = codeConsumerConfigFromEnv(lookup, config.CodeOwnerRecovery); err != nil {
 		return Config{}, err
 	}
@@ -475,6 +481,9 @@ func (c Config) RustIndexing() bool {
 
 func (c Config) Validate() error {
 	if err := validateCodeOwnerConfig(c.CodeOwnerRecovery, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
+		return err
+	}
+	if err := validateBrowserViewConfig(c.BrowserView, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
 		return err
 	}
 	if err := validateCodeConsumerConfig(c); err != nil {

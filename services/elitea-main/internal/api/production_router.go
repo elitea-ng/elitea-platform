@@ -9,6 +9,7 @@ import (
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	agentexecutionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	applicationskillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/browsersessions"
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	deepwikiapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
@@ -299,6 +300,9 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 		r.Method(http.MethodGet, notificationsapi.CurrentNotificationPath, cfg.CurrentNotifications)
 		r.Method(http.MethodPut, notificationsapi.CurrentNotificationPath, cfg.CurrentNotifications)
 		r.Method(http.MethodDelete, notificationsapi.CurrentNotificationPath, cfg.CurrentNotifications)
+	}
+	if cfg.BrowserSessionView != nil {
+		r.Method(http.MethodGet, browsersessions.ViewPath, cfg.BrowserSessionView)
 	}
 	if cfg.CurrentNotificationEvents != nil {
 		r.Method(

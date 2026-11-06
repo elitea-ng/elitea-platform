@@ -248,6 +248,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// never serves a request, so an inert handler is enough.
 		CurrentAgentStart:         http.NotFoundHandler(),
 		CurrentNotificationEvents: http.NotFoundHandler(),
+		// ADR-0049 decision 6 (#1597): viewBrowserSession, mounted only
+		// when the browser view relay is composed.
+		BrowserSessionView: http.NotFoundHandler(),
 		// ADR-0045 decision 6: push_config and push_subscriptions, mounted
 		// only when web push is composed.
 		CurrentNotificationPush: http.NotFoundHandler(),

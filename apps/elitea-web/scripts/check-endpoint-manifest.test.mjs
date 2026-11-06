@@ -892,7 +892,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 469 -> 470 (FU-250): getMcpAuthorizationChallenge, the consent metadata a
 // fan-out sign-in card reads before it opens the sign-in dialog. Like the
 // other MCP sign-in calls, it is not in the manifest.
-const GENERATED_OPERATION_COUNT = 470;
+// 470 -> 471 (issue 1597, ADR-0049 decision 6): viewBrowserSession, the
+// cloud browser view WebSocket. The web viewer is a later story (issue
+// 1598), so it is not in the manifest yet.
+const GENERATED_OPERATION_COUNT = 471;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
