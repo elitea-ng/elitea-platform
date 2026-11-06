@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
+
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
@@ -111,6 +113,8 @@ type exportedVersionRow struct {
 	startersText  string
 	metaText      string
 	uuid          string
+	// soulText is the soul column (ADR-0050 decision 1a); nil for none.
+	soulText *string
 }
 
 // exportedVersions reads every version of one application, with its tools,
@@ -188,6 +192,15 @@ func (h *Handler) exportedVersions(
 		if row.uuid != "" {
 			entry["import_version_uuid"] = row.uuid
 		}
+		if row.soulText != nil {
+			var soul map[string]any
+			if err := json.Unmarshal([]byte(*row.soulText), &soul); err != nil {
+				return nil, fmt.Errorf("decode soul of version %d in %q: %w", row.id, schema, err)
+			}
+			if soul != nil {
+				entry["soul"] = soul
+			}
+		}
 		versions = append(versions, entry)
 	}
 	return versions, nil
@@ -198,7 +211,8 @@ func (h *Handler) exportedVersionRows(ctx context.Context, schema, applicationID
 		SELECT id, name, status, COALESCE(agent_type, 'openai'),
 			COALESCE(instructions, ''), COALESCE(welcome_message, ''),
 			COALESCE(llm_settings::text, '{}'), COALESCE(conversation_starters::text, '[]'),
-			COALESCE(meta::text, '{}'), COALESCE(uuid::text, ''), application_id, COALESCE(author_id, 0)
+			COALESCE(meta::text, '{}'), COALESCE(uuid::text, ''), application_id, COALESCE(author_id, 0),
+			soul::text
 		FROM %s.application_versions WHERE application_id = $1
 		ORDER BY created_at`, schema), applicationID)
 	if err != nil {
@@ -211,7 +225,7 @@ func (h *Handler) exportedVersionRows(ctx context.Context, schema, applicationID
 		var row exportedVersionRow
 		if err := rows.Scan(&row.id, &row.name, &row.status, &row.agentType,
 			&row.instructions, &row.welcomeMsg, &row.llmText, &row.startersText,
-			&row.metaText, &row.uuid, &row.applicationID, &row.authorID); err != nil {
+			&row.metaText, &row.uuid, &row.applicationID, &row.authorID, &row.soulText); err != nil {
 			return nil, fmt.Errorf("scan a version of application %q in %q: %w", applicationID, schema, err)
 		}
 		collected = append(collected, row)
@@ -917,6 +931,22 @@ func importPrincipalUserID(ctx context.Context) (ownership.UserID, bool) {
 // mean "this file says nothing about this column", so the column keeps its
 // default. A key that is present with the wrong shape, or that cannot be
 // encoded, is a fault and is reported.
+
+// importedSoul checks a version entry's `soul` (ADR-0050 decision 1a) against
+// AgentSoulV1 and answers the column's parameter: nil (SQL NULL) when the
+// entry has none, its canonical JSON otherwise. An import or a fork writes
+// back exactly the soul the export read, so the round trip is lossless; a
+// file whose soul fails the schema is refused, never stored unchecked.
+func importedSoul(source map[string]any) (any, error) {
+	soul, err := agentsoul.Normalize(source["soul"])
+	if err != nil {
+		return nil, fmt.Errorf("soul: %w", err)
+	}
+	if soul == nil {
+		return nil, nil
+	}
+	return string(soul), nil
+}
 
 // importedJSONObject encodes one key that a jsonb column holds as a JSON
 // object: `llm_settings`, `meta`, and a toolkit's `settings`.

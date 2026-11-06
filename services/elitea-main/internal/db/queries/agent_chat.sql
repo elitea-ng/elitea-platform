@@ -10,7 +10,10 @@ SELECT conversation.id AS conversation_id,
        COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
-       jsonb_build_object(
+       -- ADR-0050 decision 1a: `soul` joins the object only when the version
+       -- has one, so a version without a soul projects (and digests) the
+       -- bytes it did before tenant migration 0160.
+       (jsonb_build_object(
            'id', application_version.id,
            'application_id', application_version.application_id,
            'name', application_version.name,
@@ -235,7 +238,11 @@ SELECT conversation.id AS conversation_id,
                    ELSE '[]'::jsonb
                END
            )
-       )::text AS application_version_details_json
+       ) || CASE
+           WHEN jsonb_typeof(application_version.soul) = 'object'
+           THEN jsonb_build_object('soul', application_version.soul)
+           ELSE '{}'::jsonb
+       END)::text AS application_version_details_json
        -- END shared application_version_details_json projection
 FROM chat_conversations AS conversation
 JOIN chat_participant_mapping AS author_mapping
@@ -898,7 +905,10 @@ WHERE application_version.id = sqlc.arg(application_version_id)::integer;
 SELECT application_version.id AS application_version_id,
        application_version.application_id,
        -- BEGIN shared application_version_details_json projection
-       jsonb_build_object(
+       -- ADR-0050 decision 1a: `soul` joins the object only when the version
+       -- has one, so a version without a soul projects (and digests) the
+       -- bytes it did before tenant migration 0160.
+       (jsonb_build_object(
            'id', application_version.id,
            'application_id', application_version.application_id,
            'name', application_version.name,
@@ -1123,7 +1133,11 @@ SELECT application_version.id AS application_version_id,
                    ELSE '[]'::jsonb
                END
            )
-       )::text AS application_version_details_json
+       ) || CASE
+           WHEN jsonb_typeof(application_version.soul) = 'object'
+           THEN jsonb_build_object('soul', application_version.soul)
+           ELSE '{}'::jsonb
+       END)::text AS application_version_details_json
        -- END shared application_version_details_json projection
 -- The projection above is ResolveCurrentApplicationTurn's
 -- `application_version_details_json` block, copied verbatim rather than shared.

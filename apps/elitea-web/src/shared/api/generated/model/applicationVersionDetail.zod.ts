@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { Author } from "./author.zod";
 import { ConversationStarters } from "./conversationStarters.zod";
 import { LlmSettings } from "./llmSettings.zod";
@@ -60,6 +61,12 @@ export const ApplicationVersionDetail = zod
     agent_type: zod.string().optional(),
     instructions: zod.string().optional(),
     welcome_message: zod.string().optional(),
+    soul: zod
+      .union([AgentSoulV1, zod.null()])
+      .optional()
+      .describe(
+        "ADR-0050 decision 1a: the version's soul document, or null when it has none. Served by the version-detail read and both write echoes.\n",
+      ),
     notes: zod
       .string()
       .optional()

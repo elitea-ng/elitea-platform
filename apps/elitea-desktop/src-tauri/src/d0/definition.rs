@@ -280,12 +280,23 @@ pub fn admit(resolved: &ResolvedVersion, reserved: &[&str]) -> Result<Admitted, 
     name_children(&mut child_agents, &taken);
     let model = model_settings(details)?;
     let edit_profile = EditProfile::select(&model.model_name, agent_edit_format(details));
+    // ADR-0050 decision 1a: the agent's soul goes before its instructions,
+    // as in the cloud worker. A soul the runtime does not admit refuses the
+    // turn rather than run the agent without its persona.
+    let soul = elitea_agent_runtime::soul::Soul::admit(details.get("soul")).map_err(|_| {
+        Refusal::new(
+            "soul_invalid",
+            "This agent's persona is not one this version of the app can read; update the app or run it in the cloud.",
+        )
+    })?;
     Ok(Admitted {
-        instructions: details
-            .get("instructions")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
+        instructions: elitea_agent_runtime::soul::with_soul(
+            soul.as_ref(),
+            details
+                .get("instructions")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        ),
         model,
         remote_tools,
         child_agents,
@@ -720,6 +731,36 @@ mod tests {
         let read = ModelChoice::from_state(&kept).expect("a kept none reads");
         assert_eq!(read.reasoning_effort, Some(ReasoningEffort::None));
         assert_eq!(read.to_state()["reasoning_effort"], "off");
+    }
+
+    /// ADR-0050 decision 1a: a cloud agent's soul runs locally too, before
+    /// its instructions, as in the cloud worker; one the app cannot read
+    /// refuses the turn.
+    #[test]
+    fn a_cloud_agents_soul_goes_before_its_instructions() {
+        let admitted = admit(
+            &resolved(json!({
+                "instructions": "Be brief.",
+                "llm_settings": {"model_name": "gpt-x"},
+                "soul": {"schema": "elitea.soul/v1", "display_name": "Mira"},
+            })),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            admitted.instructions,
+            "## Persona\n\nYou are Mira.\n\nBe brief."
+        );
+        let refused = admit(
+            &resolved(json!({
+                "instructions": "Be brief.",
+                "llm_settings": {"model_name": "gpt-x"},
+                "soul": {"schema": "elitea.soul/v1", "tools": ["shell"]},
+            })),
+            &[],
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, "soul_invalid");
     }
 
     #[test]

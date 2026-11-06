@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary } from '@/shared/api/generated/model';
 import { VersionWriteRequest } from '@/shared/api/generated/model/versionWriteRequest.zod';
 
+import { EMPTY_SOUL_DRAFT, soulToDraft } from './agentSoulDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 import {
   applicationDetailDisplayName,
@@ -193,6 +194,7 @@ describe('toVersionWriteBody', () => {
       tags: [],
       notes: '',
       outputContract: null,
+      soul: EMPTY_SOUL_DRAFT,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -223,6 +225,7 @@ describe('toVersionWriteBody', () => {
       tags: [],
       notes: '',
       outputContract: null,
+      soul: EMPTY_SOUL_DRAFT,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -251,6 +254,7 @@ describe('toVersionWriteBody', () => {
       tags: [],
       notes: '',
       outputContract: null,
+      soul: EMPTY_SOUL_DRAFT,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({ model_name: 'gpt' });
@@ -293,6 +297,7 @@ describe('toVersionSaveBody', () => {
       ],
       notes: 'Ask the design team before changing the tone.',
       outputContract: null,
+      soul: EMPTY_SOUL_DRAFT,
     };
 
     const body = toVersionSaveBody(version, [], edits);
@@ -332,6 +337,7 @@ describe('toVersionSaveBody', () => {
       tags: [],
       notes: '',
       outputContract: null,
+      soul: EMPTY_SOUL_DRAFT,
     });
 
     expect(body.tags).toEqual([]);
@@ -350,6 +356,7 @@ describe('output contract on save (#1500)', () => {
     tags: [],
     notes: '',
     outputContract: null,
+    soul: EMPTY_SOUL_DRAFT,
   };
 
   it('sends the edited contract inside meta and keeps the other stored keys', () => {
@@ -542,5 +549,57 @@ describe('toVersionDraft', () => {
   it('leaves llmSettings undefined for a version that names no model', () => {
     const version = { name: 'base', llm_settings: {} } as unknown as ApplicationVersionDetail;
     expect(toVersionDraft(version, []).llmSettings).toBeUndefined();
+  });
+});
+
+describe('soul on save (ADR-0050)', () => {
+  const baseEdits: EditApplicationVersionFields = {
+    instructions: '',
+    welcomeMessage: '',
+    variables: [],
+    stepLimit: undefined,
+    internalTools: [],
+    llmSettings: undefined,
+    tags: [],
+    notes: '',
+    outputContract: null,
+    soul: EMPTY_SOUL_DRAFT,
+  };
+  const stored = { schema: 'elitea.soul/v1' as const, display_name: 'Ada', voice: ['  dry  '] };
+
+  it('forwards an unedited stored soul verbatim, so a Save cannot rewrite it', () => {
+    const version = { name: 'base', meta: {}, soul: stored } as unknown as ApplicationVersionDetail;
+
+    const body = toVersionSaveBody(version, [], { ...baseEdits, soul: soulToDraft(stored) });
+
+    expect(body.soul).toBe(stored);
+  });
+
+  it('omits the key when the version has no soul and none was typed', () => {
+    const version = { name: 'base', meta: {}, soul: null } as unknown as ApplicationVersionDetail;
+
+    expect(Object.hasOwn(toVersionSaveBody(version, [], baseEdits), 'soul')).toBe(false);
+  });
+
+  it('sends the edited soul, which passes the generated schema', () => {
+    const version = { name: 'base', meta: {} } as unknown as ApplicationVersionDetail;
+    const soul = { ...EMPTY_SOUL_DRAFT, displayName: 'Ada', relationships: 'reviewer: defer on style' };
+
+    const parsed = VersionWriteRequest.parse(toVersionSaveBody(version, [], { ...baseEdits, soul }));
+
+    expect(parsed.soul).toEqual({
+      schema: 'elitea.soul/v1',
+      display_name: 'Ada',
+      relationships: [{ agent: 'reviewer', stance: 'defer on style' }],
+    });
+  });
+
+  it('sends null when every field is emptied, so the stored soul goes', () => {
+    const version = { name: 'base', meta: {}, soul: stored } as unknown as ApplicationVersionDetail;
+
+    const body = toVersionSaveBody(version, [], baseEdits);
+
+    expect(Object.hasOwn(body, 'soul')).toBe(true);
+    expect(body.soul).toBeNull();
   });
 });

@@ -59,6 +59,22 @@ In **Advanced**, **Output contract** sets a rule for the agent's final answer: a
 
 In **Advanced**, **Require citations** tells the agent to cite the tool results that it uses, as `[1]`, `[2]`. The chat then shows under each answer how many sources the answer cites and how many statements have no citation. This is not a confidence score. A cited source does not prove that the source supports the statement. See [Grounding indicators](/admin/enterprise-controls/content-controls#grounding-indicators).
 
+## Persona
+
+The **Persona** tab holds the version's persona: how the agent speaks and behaves. Fill in what you need:
+
+- **Display name**, **Pronouns** and **Role** (one line, shown in the participant list).
+- **Voice**, **Values** and **Boundaries** (what the agent declines or always escalates), one entry per line.
+- **Relationships**: how the agent treats other agents and people, one `agent: stance` pair per line.
+- **Proactive goals**: read by the heartbeat. They are not put into the prompt.
+- **Body**: free-form markdown.
+
+The persona is saved with the version by **Save**, like the other fields. Leave every field empty to remove it. A persona grants nothing: it cannot name a tool, a toolkit, a credential, a secret, a permission or a scope, and Save refuses one that tries (`soul_capability_key`). It holds at most 16384 bytes of text; the counter under the fields shows how much is used.
+
+The model reads the persona after the platform's own text and your organization's guardrails, and before the instructions and recalled memory. A persona is part of the version: changing it changes what a release pins, and export, import and fork carry it.
+
+In the desktop app, a `SOUL.md` file at the root of a Local work folder, next to `AGENTS.md`, gives that folder's agent a persona. It has the same fields: YAML front matter for every field but the body, then the body as markdown.
+
 ## Test the agent
 
 The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.

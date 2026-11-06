@@ -2253,6 +2253,25 @@ export const getResolveApplicationVersionResponseMock = (
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
     ]),
+    soul: faker.helpers.arrayElement([
+      {
+        ...{
+          schema: "elitea.soul/v1",
+          display_name: "Mira",
+          pronouns: "they/them",
+          role: "Release coordinator",
+          voice: ["concise", "warm", "direct"],
+          values: ["safety before speed", "cite sources"],
+          boundaries: ["never merges without a green CI"],
+          relationships: [
+            { agent: "ci-doctor", stance: "delegate failing builds" },
+          ],
+          proactive_goals: ["watch release branches for red CI"],
+          body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+        },
+      },
+      undefined,
+    ]),
     agent_type: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
       undefined,
@@ -2599,6 +2618,26 @@ export const getCreateApplicationResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      soul: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: "elitea.soul/v1",
+            display_name: "Mira",
+            pronouns: "they/them",
+            role: "Release coordinator",
+            voice: ["concise", "warm", "direct"],
+            values: ["safety before speed", "cite sources"],
+            boundaries: ["never merges without a green CI"],
+            relationships: [
+              { agent: "ci-doctor", stance: "delegate failing builds" },
+            ],
+            proactive_goals: ["watch release branches for red CI"],
+            body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -2905,6 +2944,26 @@ export const getCreateApplicationResponseMock = (
       ]),
       welcome_message: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      soul: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: "elitea.soul/v1",
+            display_name: "Mira",
+            pronouns: "they/them",
+            role: "Release coordinator",
+            voice: ["concise", "warm", "direct"],
+            values: ["safety before speed", "cite sources"],
+            boundaries: ["never merges without a green CI"],
+            relationships: [
+              { agent: "ci-doctor", stance: "delegate failing builds" },
+            ],
+            proactive_goals: ["watch release branches for red CI"],
+            body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
         undefined,
       ]),
       notes: faker.helpers.arrayElement([
@@ -3563,6 +3622,26 @@ export const getGetApplicationResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      soul: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: "elitea.soul/v1",
+            display_name: "Mira",
+            pronouns: "they/them",
+            role: "Release coordinator",
+            voice: ["concise", "warm", "direct"],
+            values: ["safety before speed", "cite sources"],
+            boundaries: ["never merges without a green CI"],
+            relationships: [
+              { agent: "ci-doctor", stance: "delegate failing builds" },
+            ],
+            proactive_goals: ["watch release branches for red CI"],
+            body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -3880,6 +3959,26 @@ export const getEditApplicationResponseMock = (
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
       ]),
+      soul: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: "elitea.soul/v1",
+            display_name: "Mira",
+            pronouns: "they/them",
+            role: "Release coordinator",
+            voice: ["concise", "warm", "direct"],
+            values: ["safety before speed", "cite sources"],
+            boundaries: ["never merges without a green CI"],
+            relationships: [
+              { agent: "ci-doctor", stance: "delegate failing builds" },
+            ],
+            proactive_goals: ["watch release branches for red CI"],
+            body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
+        undefined,
+      ]),
       notes: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
         undefined,
@@ -4191,6 +4290,26 @@ export const getGetPublicApplicationResponseMock = (
     ]),
     welcome_message: faker.helpers.arrayElement([
       faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    soul: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        {
+          schema: "elitea.soul/v1",
+          display_name: "Mira",
+          pronouns: "they/them",
+          role: "Release coordinator",
+          voice: ["concise", "warm", "direct"],
+          values: ["safety before speed", "cite sources"],
+          boundaries: ["never merges without a green CI"],
+          relationships: [
+            { agent: "ci-doctor", stance: "delegate failing builds" },
+          ],
+          proactive_goals: ["watch release branches for red CI"],
+          body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+        },
+        null,
+      ]),
       undefined,
     ]),
     notes: faker.helpers.arrayElement([
@@ -4720,6 +4839,26 @@ export const getGetApplicationVersionDetailResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  soul: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: "elitea.soul/v1",
+        display_name: "Mira",
+        pronouns: "they/them",
+        role: "Release coordinator",
+        voice: ["concise", "warm", "direct"],
+        values: ["safety before speed", "cite sources"],
+        boundaries: ["never merges without a green CI"],
+        relationships: [
+          { agent: "ci-doctor", stance: "delegate failing builds" },
+        ],
+        proactive_goals: ["watch release branches for red CI"],
+        body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -5017,6 +5156,26 @@ export const getUpdateApplicationVersionResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  soul: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: "elitea.soul/v1",
+        display_name: "Mira",
+        pronouns: "they/them",
+        role: "Release coordinator",
+        voice: ["concise", "warm", "direct"],
+        values: ["safety before speed", "cite sources"],
+        boundaries: ["never merges without a green CI"],
+        relationships: [
+          { agent: "ci-doctor", stance: "delegate failing builds" },
+        ],
+        proactive_goals: ["watch release branches for red CI"],
+        body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+      null,
+    ]),
+    undefined,
+  ]),
   notes: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
@@ -5312,6 +5471,26 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
       ]),
       welcome_message: faker.helpers.arrayElement([
         faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      soul: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            schema: "elitea.soul/v1",
+            display_name: "Mira",
+            pronouns: "they/them",
+            role: "Release coordinator",
+            voice: ["concise", "warm", "direct"],
+            values: ["safety before speed", "cite sources"],
+            boundaries: ["never merges without a green CI"],
+            relationships: [
+              { agent: "ci-doctor", stance: "delegate failing builds" },
+            ],
+            proactive_goals: ["watch release branches for red CI"],
+            body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+          },
+          null,
+        ]),
         undefined,
       ]),
       notes: faker.helpers.arrayElement([
@@ -5637,6 +5816,26 @@ export const getSaveApplicationNewVersionResponseMock = (
   ]),
   welcome_message: faker.helpers.arrayElement([
     faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  soul: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      {
+        schema: "elitea.soul/v1",
+        display_name: "Mira",
+        pronouns: "they/them",
+        role: "Release coordinator",
+        voice: ["concise", "warm", "direct"],
+        values: ["safety before speed", "cite sources"],
+        boundaries: ["never merges without a green CI"],
+        relationships: [
+          { agent: "ci-doctor", stance: "delegate failing builds" },
+        ],
+        proactive_goals: ["watch release branches for red CI"],
+        body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+      },
+      null,
+    ]),
     undefined,
   ]),
   notes: faker.helpers.arrayElement([
@@ -6056,6 +6255,26 @@ export const getImportWizardResponseMock = (
                 faker.string.alpha({ length: { min: 10, max: 20 } }),
                 undefined,
               ]),
+              soul: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  {
+                    schema: "elitea.soul/v1",
+                    display_name: "Mira",
+                    pronouns: "they/them",
+                    role: "Release coordinator",
+                    voice: ["concise", "warm", "direct"],
+                    values: ["safety before speed", "cite sources"],
+                    boundaries: ["never merges without a green CI"],
+                    relationships: [
+                      { agent: "ci-doctor", stance: "delegate failing builds" },
+                    ],
+                    proactive_goals: ["watch release branches for red CI"],
+                    body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+                  },
+                  null,
+                ]),
+                undefined,
+              ]),
               notes: faker.helpers.arrayElement([
                 faker.string.alpha({ length: { min: 10, max: 20 } }),
                 undefined,
@@ -6444,6 +6663,26 @@ export const getImportWizardResponseMock = (
               ]),
               welcome_message: faker.helpers.arrayElement([
                 faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              soul: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  {
+                    schema: "elitea.soul/v1",
+                    display_name: "Mira",
+                    pronouns: "they/them",
+                    role: "Release coordinator",
+                    voice: ["concise", "warm", "direct"],
+                    values: ["safety before speed", "cite sources"],
+                    boundaries: ["never merges without a green CI"],
+                    relationships: [
+                      { agent: "ci-doctor", stance: "delegate failing builds" },
+                    ],
+                    proactive_goals: ["watch release branches for red CI"],
+                    body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+                  },
+                  null,
+                ]),
                 undefined,
               ]),
               notes: faker.helpers.arrayElement([
@@ -7010,6 +7249,26 @@ export const getForkAgentResponseMock = (
           ]),
           welcome_message: faker.helpers.arrayElement([
             faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          soul: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                schema: "elitea.soul/v1",
+                display_name: "Mira",
+                pronouns: "they/them",
+                role: "Release coordinator",
+                voice: ["concise", "warm", "direct"],
+                values: ["safety before speed", "cite sources"],
+                boundaries: ["never merges without a green CI"],
+                relationships: [
+                  { agent: "ci-doctor", stance: "delegate failing builds" },
+                ],
+                proactive_goals: ["watch release branches for red CI"],
+                body: "Mira has run release trains for years. Short sentences; no exclamation marks.",
+              },
+              null,
+            ]),
             undefined,
           ]),
           notes: faker.helpers.arrayElement([

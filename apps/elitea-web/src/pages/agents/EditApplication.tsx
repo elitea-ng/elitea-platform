@@ -30,6 +30,7 @@ import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
 import { EditApplicationConfigurationPanel } from './ui/EditApplicationConfigurationPanel';
 import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
+import { EditApplicationPersonaPanel } from './ui/EditApplicationPersonaPanel';
 import { EditApplicationSaveBar } from './ui/EditApplicationSaveBar';
 
 interface EditApplicationParams {
@@ -370,6 +371,7 @@ export function EditApplication(): ReactNode {
              */
             applicationVersionId={versionControls.activeVersionId}
             versions={versionControls.versionOptions}
+            personaPanel={<EditApplicationPersonaPanel versionFields={versionFields} disabled={isEditorDisabled} />}
             configurationPanel={
               <EditApplicationConfigurationPanel
                 projectId={projectId}

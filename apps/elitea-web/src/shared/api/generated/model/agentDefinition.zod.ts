@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 
 export const agentDefinitionNameMax = 32;
 
@@ -114,6 +115,9 @@ export const AgentDefinition = zod
       )
       .max(agentDefinitionVariablesMax)
       .optional(),
+    soul: AgentSoulV1.optional().describe(
+      "The agent's persona (ADR-0050 decision 1a). The schema route serves it inlined, so the served schema stays self-contained.\n",
+    ),
     tools: zod
       .array(
         zod.object({
@@ -137,7 +141,7 @@ export const AgentDefinition = zod
       .describe("References to existing project skills."),
   })
   .describe(
-    "ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. Self-contained on purpose: no $ref and no `nullable`, so it is valid JSON Schema as written.\n",
+    "ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. No `nullable`, so it is valid JSON Schema as written; its one $ref (`soul`, to the self-contained AgentSoulV1) is inlined by the schema route.\n",
   );
 
 export type AgentDefinition = zod.input<typeof AgentDefinition>;

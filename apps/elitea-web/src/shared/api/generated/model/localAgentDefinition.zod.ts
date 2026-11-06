@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentSoulV1 } from "./agentSoulV1.zod";
 
 export const localAgentDefinitionNameMax = 64;
 
@@ -80,6 +81,9 @@ export const LocalAgentDefinition = zod
       .describe(
         "`root` writes AGENTS.md at the workspace root. A relative folder path (no leading slash, no `..` segment, `/` separators) writes a nested AGENTS.md in that folder.\n",
       ),
+    soul: AgentSoulV1.optional().describe(
+      "ADR-0050 decision 1a: the local agent's persona, written as SOUL.md next to the AGENTS.md of the same scope (front matter, then `body`). The desktop reads the root SOUL.md with the root AGENTS.md and puts it before that text; it is workspace content, framed like AGENTS.md. Import and export with a saved agent's `soul` are lossless.\n",
+    ),
   })
   .describe(
     "ADR-0037 decision 1: a local agent is an AGENTS.md file in a desktop workspace, read by the D0 project-instructions loader (libs/rust/local-tools/src/project_instructions.rs). The loader is the authority on its caps and refusals; this schema states them so a client can check a file before it asks the approval bridge to write it. Caps the loader enforces on every read: the file name is AGENTS.md (matched case-insensitively, the exact spelling wins); all AGENTS.md text one turn reads, root and nested together, is at most 32768 bytes, and text past the cap is not read; a symlinked file or folder is not read; a path the workspace denies is not read. A nested AGENTS.md (scope other than `root`) applies to a turn that references a path under that folder, in addition to the root file.\n",

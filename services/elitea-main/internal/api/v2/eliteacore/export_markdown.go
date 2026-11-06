@@ -457,6 +457,9 @@ func applicationToMarkdown(app map[string]any, toolkits, skills []any, version m
 
 	front.set("welcome_message", version["welcome_message"])
 	front.set("conversation_starters", version["conversation_starters"])
+	// ADR-0050 decision 1a: the soul document, as one nested mapping. The
+	// import reads it back as the version entry's `soul`.
+	front.set("soul", version["soul"])
 
 	// toAnySlice, not a `.([]any)` assertion: `exportedVersions` stores this as
 	// `[]map[string]any` (export_import.go:238), which no `[]any` assertion

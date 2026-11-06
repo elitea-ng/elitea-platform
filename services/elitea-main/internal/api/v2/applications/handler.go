@@ -317,6 +317,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	var createdAt interface{}
 	var authorID *int
 	var authorEmail, authorName string
+	var soulJSON *string
 
 	// The author is JOINED here rather than left to the caller. The write
 	// echo answers an `author` object — `{id, email, name}`, built by
@@ -332,14 +333,15 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 			COALESCE(v.llm_settings::text, '{}'), COALESCE(v.meta::text, '{}'),
 			COALESCE(v.conversation_starters::text, '[]'),
 			COALESCE(v.pipeline_settings::text, '{}'),
-			v.author_id, COALESCE(u.email, ''), COALESCE(u.name, '')
+			v.author_id, COALESCE(u.email, ''), COALESCE(u.name, ''),
+			v.soul::text
 		FROM %s.application_versions v
 		LEFT JOIN public.auth_core__user u ON u.id = v.author_id
 		WHERE v.application_id = $1 AND v.id = $2`, s), applicationID, versionID).Scan(
 		&id, &appID, &name, &status, &createdAt,
 		&agentType, &instructions, &welcomeMsg,
 		&llmSettingsJSON, &metaJSON, &startersJSON, &pipelineSettingsJSON,
-		&authorID, &authorEmail, &authorName,
+		&authorID, &authorEmail, &authorName, &soulJSON,
 	)
 	if err != nil {
 		return nil
@@ -472,6 +474,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		"agent_type":            agentType,
 		"instructions":          instrVal,
 		"welcome_message":       welcomeVal,
+		"soul":                  soulValue(soulJSON),
 		"notes":                 notes,
 		"llm_settings":          llmSettings,
 		"meta":                  meta,
@@ -582,6 +585,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
+			if !applySoul(w, vBody, req.InitialVersion) {
+				return
+			}
 			initialVariables, _ = vBody["variables"].([]any)
 			initialTags, _ = vBody["tags"].([]any)
 		}
@@ -874,6 +880,7 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 		"agent_type":            ver.AgentType,
 		"instructions":          ver.Instructions,
 		"welcome_message":       ver.WelcomeMessage,
+		"soul":                  soulObject(ver.Soul),
 		"llm_settings":          llm,
 		"conversation_starters": starters,
 		"pipeline_settings":     pipelineSettings,
@@ -1230,6 +1237,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input := versionFromBody(body, ownerID)
+	if !applySoul(w, body, input) {
+		return
+	}
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
@@ -1347,6 +1357,9 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	if welcomeMessage, ok := body["welcome_message"].(string); ok {
 		v.WelcomeMessage = welcomeMessage
 		v.Present.WelcomeMessage = true
+	}
+	if !applySoul(w, body, &v) {
+		return
 	}
 	if agentType, ok := body["agent_type"].(string); ok {
 		if agentType == "" {

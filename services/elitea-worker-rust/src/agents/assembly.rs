@@ -381,7 +381,7 @@ impl OrdinaryNoToolProfile {
             .ok_or_else(invalid_profile)
             .and_then(|value| admitted_instruction(value, expected_agent_type == "agent"))?;
         let rendered = if expected_agent_type == "agent" {
-            variables.render(instructions)
+            with_version_soul(version, &variables.render(instructions))?
         } else {
             instructions.to_owned()
         };
@@ -1006,7 +1006,7 @@ fn application_model_for_agent_type(
     // calling `_resolve_jinja2_variables`. Only the react-agent path (:794)
     // renders, so only `agent` renders here.
     let rendered = if expected_agent_type == "agent" {
-        variables.render(instructions)
+        with_version_soul(version, &variables.render(instructions))?
     } else {
         instructions.to_owned()
     };
@@ -1035,6 +1035,25 @@ fn application_model_for_agent_type(
         Some(compatible),
         instructions,
     )
+}
+
+/// ADR-0050 decision 1a: an agent version's soul (`soul`, present only when
+/// the version has one) goes before its rendered instructions. The preamble
+/// (platform text and guardrails) is put before both by the model facade and
+/// recalled memory already follows the instructions, so the system prompt
+/// reads platform, guardrails, soul, instructions, memory. The soul is not
+/// a template: it is never rendered with the version's variables. A
+/// pipeline has no soul; its `instructions` are the graph.
+pub(crate) fn with_version_soul(
+    version: &Map<String, Value>,
+    rendered_instructions: &str,
+) -> Result<String, NativeAgentAssemblyError> {
+    let soul = elitea_agent_runtime::soul::Soul::admit(version.get("soul"))
+        .map_err(|_| invalid_profile())?;
+    Ok(elitea_agent_runtime::soul::with_soul(
+        soul.as_ref(),
+        rendered_instructions,
+    ))
 }
 
 fn validate_empty_feature_array(

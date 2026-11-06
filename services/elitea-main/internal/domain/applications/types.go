@@ -1,6 +1,7 @@
 package applications
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
@@ -125,6 +126,11 @@ type Version struct {
 	// caller did not send the key"; the repository then leaves the stored
 	// value alone rather than blanking it.
 	PipelineSettings map[string]any `json:"pipeline_settings,omitempty"`
+	// Soul is the version's soul document (ADR-0050 decision 1a): the
+	// canonical JSON of an AgentSoulV1 that internal/domain/agentsoul has
+	// checked, or nil for none. On an UPDATE, Present.Soul with a nil Soul
+	// clears the column; without the flag the stored soul is left alone.
+	Soul json.RawMessage `json:"soul,omitempty"`
 
 	// Present names the string-valued columns above that the caller
 	// EXPLICITLY sent. The map-valued and slice-valued fields carry their own
@@ -167,6 +173,8 @@ type VersionFieldSet struct {
 	AgentType      bool
 	Instructions   bool
 	WelcomeMessage bool
+	// Soul: the write carries `soul` (an object or null).
+	Soul bool
 }
 
 // VersionConfig is a derived projection over the application_versions columns

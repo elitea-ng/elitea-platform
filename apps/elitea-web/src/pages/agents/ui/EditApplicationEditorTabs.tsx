@@ -1,5 +1,5 @@
 /**
- * The agent editor's tab strip: Configuration, Evaluation, then History.
+ * The agent editor's tab strip: Configuration, Persona, Evaluation, then History.
  *
  * The baseline puts Evaluation SECOND on this page
  * (`apps/elitea-ui/src/pages/Applications/EditApplication.jsx:103-113`), and
@@ -50,6 +50,7 @@ import { BaseTabs } from '@/shared/ui/BaseTabs';
 
 const EDITOR_TABS = {
   configuration: 'configuration',
+  persona: 'persona',
   evaluation: 'evaluation',
   history: 'history',
 } as const;
@@ -74,12 +75,18 @@ export interface EditApplicationEditorTabsProps {
   readonly applicationVersionId: number | undefined;
   /** The existing configuration panel, passed in rather than rebuilt here. */
   readonly configurationPanel: ReactNode;
+  /**
+   * ADR-0050 — the Persona tab's panel (the version's soul). Passed in, like
+   * the configuration panel, because it edits the same unsaved version state
+   * the page's Save button writes.
+   */
+  readonly personaPanel?: ReactNode;
   /** #955 — this agent's own versions, so the History tab can name which one produced each run. */
   readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel, versions } = props;
+  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, versions } = props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
   const handleChange = (_event: SyntheticEvent, value: EditorTab): void => setTab(value);
@@ -97,6 +104,13 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
           label={t('pages.agents.editApplication.tabs.configuration', 'Configuration')}
           data-testid="edit-application-tab-configuration"
         />
+        {personaPanel !== undefined && (
+          <BaseTab
+            value={EDITOR_TABS.persona}
+            label={t('pages.agents.editApplication.tabs.persona', 'Persona')}
+            data-testid="edit-application-tab-persona"
+          />
+        )}
         <BaseTab
           value={EDITOR_TABS.evaluation}
           label={t('pages.agents.editApplication.tabs.evaluation', 'Evaluation')}
@@ -119,6 +133,8 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
         lose), so each stays gated on `tab ===` rather than mounted eagerly.
       */}
       <Box hidden={tab !== EDITOR_TABS.configuration}>{configurationPanel}</Box>
+      {/* Mounted while hidden for the same reason: it holds unsaved edits. */}
+      {personaPanel !== undefined && <Box hidden={tab !== EDITOR_TABS.persona}>{personaPanel}</Box>}
       <Box hidden={tab !== EDITOR_TABS.evaluation}>
         {tab === EDITOR_TABS.evaluation && (
           <EvaluationPanel

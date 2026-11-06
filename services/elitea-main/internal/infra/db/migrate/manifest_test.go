@@ -1272,7 +1272,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// decision 9, #1440): target_kind on the schedule, the thread, prompt
 	// and grant columns on both tables, the trigger's last_execution_id and
 	// the skip skipped_thread_busy. No data, no permission.
-	require.EqualValues(t, 159, Head(tenant))
+	// 160: tenant/0160_application_version_soul.sql, the nullable
+	// application_versions.soul jsonb column (ADR-0050 decision 1a, issue
+	// 1604). No data, no permission.
+	require.EqualValues(t, 160, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

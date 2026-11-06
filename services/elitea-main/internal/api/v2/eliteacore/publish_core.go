@@ -280,11 +280,11 @@ func (h *Handler) publishTx(ctx context.Context, tx pgx.Tx, p publishWrite) (pub
 	cloneQ := fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, created_at)
+			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, created_at)
 		SELECT application_id, $2, 'published', author_id, llm_settings, instructions,
 			   conversation_starters, welcome_message, agent_type,
 			   COALESCE(meta, '{}'::jsonb) || $3::jsonb,
-			   pipeline_settings,
+			   pipeline_settings, soul,
 			   now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions WHERE id = $1
 		RETURNING id`, s, s)

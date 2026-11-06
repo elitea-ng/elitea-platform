@@ -9,6 +9,8 @@ import {
 import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
+import { areSoulDraftsEqual, soulToDraft, type AgentSoulDraft } from './agentSoulDraft';
+
 /**
  * The version-level fields `CreateAgentForm` renders on the agent EDIT page
  * that `applicationCreationSchema` does not validate — held outside the RHF
@@ -82,6 +84,12 @@ export interface EditApplicationVersionFields {
    * save sends `null` so that unticking clears a stored value.
    */
   readonly citations?: 'required' | null | undefined;
+  /**
+   * ADR-0050 decision 1a — the Persona tab's draft of the version's soul.
+   * Held as text (see `agentSoulDraft.ts`) and turned into the wire object
+   * only by the save body, which sends it only when it was edited.
+   */
+  readonly soul: AgentSoulDraft;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -95,6 +103,8 @@ export interface EditApplicationVersionFieldsState {
   readonly applyFieldChange: (path: string, value: unknown) => boolean;
   /** Replaces the whole tag list — the shape `AgentTagEditor`'s `onChange` hands back (#345). */
   readonly setTags: (tags: readonly Tag[]) => void;
+  /** Replaces the Persona tab's soul draft (ADR-0050). */
+  readonly setSoul: (soul: AgentSoulDraft) => void;
   /** Feeds the page's `useUnsavedChangesNavBlocker` — RHF's own `isDirty` cannot see these fields (#133's create-page half made the same point). */
   readonly isDirty: boolean;
   /** Called after a successful save so the edits just persisted stop counting as unsaved (mirrors `form.reset(form.getValues())` on the RHF half). */
@@ -136,7 +146,13 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     notes: typeof metaRecord['notes'] === 'string' ? metaRecord['notes'] : '',
     outputContract: readOutputContract(metaRecord['output_contract']),
     citations: citationsOf(metaRecord['citations']),
+    soul: soulDraftOf(version),
   };
+}
+
+/** The Persona tab's draft of the version's soul (ADR-0050). */
+function soulDraftOf(version: ApplicationVersionDetail | undefined): AgentSoulDraft {
+  return soulToDraft(version?.soul);
 }
 
 /** `meta.citations` as the field holds it: `'required'` or off (`null`). */
@@ -144,9 +160,13 @@ function citationsOf(raw: unknown): 'required' | null {
   return raw === 'required' ? 'required' : null;
 }
 
-/** The ADR-0043 fields: the output contract and the citation setting. */
+/** The ADR-0043 fields (the output contract and the citation setting) and the ADR-0050 soul. */
 function areContentControlsEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFields): boolean {
-  return areOutputContractsEqual(a.outputContract, b.outputContract) && (a.citations ?? null) === (b.citations ?? null);
+  return (
+    areOutputContractsEqual(a.outputContract, b.outputContract) &&
+    (a.citations ?? null) === (b.citations ?? null) &&
+    areSoulDraftsEqual(a.soul, b.soul)
+  );
 }
 
 function areEqual(a: EditApplicationVersionFields, b: EditApplicationVersionFields): boolean {
@@ -288,9 +308,13 @@ export function useEditApplicationVersionFields(
     setFields((previous) => ({ ...previous, tags }));
   }, []);
 
+  const setSoul = useCallback((soul: AgentSoulDraft) => {
+    setFields((previous) => ({ ...previous, soul }));
+  }, []);
+
   const markSaved = useCallback(() => setBaseline(fields), [fields]);
 
   const isDirty = useMemo(() => !areEqual(fields, baseline), [fields, baseline]);
 
-  return { fields, applyFieldChange, setTags, isDirty, markSaved };
+  return { fields, applyFieldChange, setTags, setSoul, isDirty, markSaved };
 }

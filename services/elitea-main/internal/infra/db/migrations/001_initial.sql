@@ -428,6 +428,10 @@ BEGIN
             agent_type VARCHAR NOT NULL DEFAULT ''openai'',
             meta JSONB DEFAULT ''{}''::jsonb,
             pipeline_settings JSONB DEFAULT ''{}''::jsonb,
+            -- The soul document (ADR-0050 decision 1a), NULL for none.
+            -- Declared here and, for a schema this function already built,
+            -- by migrations/tenant/0160.
+            soul JSONB,
             CONSTRAINT application_version_shared_origin UNIQUE (shared_owner_id, shared_id),
             CONSTRAINT _application_version_name_uc UNIQUE (application_id, name)
         )', schema_name, schema_name);

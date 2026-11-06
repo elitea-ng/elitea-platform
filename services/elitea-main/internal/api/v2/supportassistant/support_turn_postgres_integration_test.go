@@ -171,6 +171,7 @@ CREATE TABLE p_7.application_versions (
     agent_type VARCHAR NOT NULL DEFAULT 'openai',
     meta JSONB NOT NULL DEFAULT '{}'::jsonb,
     pipeline_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+    soul JSONB,
     CONSTRAINT _application_version_name_uc UNIQUE (application_id, name)
 );
 CREATE TABLE p_7.application_variables (
