@@ -226,6 +226,12 @@ const fn rejection_failure(
 
 pub(crate) enum CheckpointPendingOutput {
     Progress(Box<super::agent_delivery::CheckpointAgentDelivery>),
+    /// The pending terminal's failure text is unrecognised: it is set aside and
+    /// replaced by this canonical failure.
+    Unrecognised {
+        recovery: Box<super::agent_delivery::CheckpointAgentDelivery>,
+        failure: RuntimeFailureKind,
+    },
     Terminal(Box<AcceptedTerminalOutputRecovery>),
 }
 
@@ -2642,6 +2648,10 @@ impl AgentOutputPreflight {
                     "the recovery spool contains multiple pending frames",
                 ));
             }
+            if recovery.unrecognised_replaceable(&frame).is_some() {
+                // Replaced through the exact pending path, never refused here.
+                return Ok(None);
+            }
             if !recovery.covered_progress(&frame).map_err(|_| {
                 AgentOutputPreflightError::InvalidDurableState(
                     "the recovery output frame is malformed",
@@ -2699,9 +2709,17 @@ impl AgentOutputPreflight {
                 "multiple pending recovery frames",
             ));
         }
-        let kind = recovery.validate_output(&frame).map_err(|_| {
-            AgentOutputPreflightError::InvalidDurableState("invalid checkpoint output frame")
-        })?;
+        let Ok(kind) = recovery.validate_output(&frame) else {
+            let Some(failure) = recovery.unrecognised_replaceable(&frame) else {
+                return Err(AgentOutputPreflightError::InvalidDurableState(
+                    "invalid checkpoint output frame",
+                ));
+            };
+            return Ok(CheckpointPendingOutput::Unrecognised {
+                recovery: Box::new(recovery),
+                failure,
+            });
+        };
         if kind == ValidatedAgentOutputFrameKind::Progress {
             return Ok(CheckpointPendingOutput::Progress(Box::new(recovery)));
         }
@@ -2813,6 +2831,15 @@ impl AgentOutputPreflight {
                 "multiple pending recovery frames",
             ));
         }
+        let unrecognised = frame.terminal && recovery.unrecognised_replaceable(&frame).is_some();
+        let failure = if unrecognised
+            && failure != RuntimeFailureKind::Cancelled
+            && recovery.past_deadline(occurred_at_unix_millis)
+        {
+            RuntimeFailureKind::DeadlineExceeded
+        } else {
+            failure
+        };
         let replacement = recovery
             .failure_replacement(&frame, failure, occurred_at_unix_millis)
             .map_err(|_| {
@@ -2820,25 +2847,41 @@ impl AgentOutputPreflight {
                     "the rejected progress has no failure replacement authority",
                 )
             })?;
-        let expected = frame.clone();
-        let rebound = replacement.clone();
-        prepared = tokio::task::spawn_blocking(move || {
-            prepared.replace_pending_with_failure(&expected, &rebound)?;
-            Ok::<_, OutputGrpcError>(prepared)
-        })
-        .await
-        .map_err(|_| {
-            AgentOutputPreflightError::Unavailable("the failure replacement did not complete")
-        })?
-        .map_err(AgentOutputPreflightError::Output)?;
-        tracing::error!(
-            event = "agent_output_rejected_frame_replaced",
-            sequence = frame.sequence,
-            frame_sha256 = %crate::sandbox::code_recovery::hex(
-                &crate::transport::output_grpc::progress_frame_sha256(&frame)
-            ),
-            "a progress frame Main refused was replaced by its canonical failure and is not resent"
-        );
+        if unrecognised {
+            // Set the old terminal aside as a record, then the canonical
+            // failure is the only terminal on an empty spool.
+            prepared = retire_superseded_frame(&factory, prepared, frame).await?;
+            let durable = replacement.clone();
+            prepared = tokio::task::spawn_blocking(move || {
+                prepared.persist(durable)?;
+                Ok::<_, OutputGrpcError>(prepared)
+            })
+            .await
+            .map_err(|_| {
+                AgentOutputPreflightError::Unavailable("the failure persistence did not complete")
+            })?
+            .map_err(AgentOutputPreflightError::Output)?;
+        } else {
+            let expected = frame.clone();
+            let rebound = replacement.clone();
+            prepared = tokio::task::spawn_blocking(move || {
+                prepared.replace_pending_with_failure(&expected, &rebound)?;
+                Ok::<_, OutputGrpcError>(prepared)
+            })
+            .await
+            .map_err(|_| {
+                AgentOutputPreflightError::Unavailable("the failure replacement did not complete")
+            })?
+            .map_err(AgentOutputPreflightError::Output)?;
+            tracing::error!(
+                event = "agent_output_rejected_frame_replaced",
+                sequence = frame.sequence,
+                frame_sha256 = %crate::sandbox::code_recovery::hex(
+                    &crate::transport::output_grpc::progress_frame_sha256(&frame)
+                ),
+                "a progress frame Main refused was replaced by its canonical failure and is not resent"
+            );
+        }
         let encoded = replacement.encode_to_vec();
         let (delivery, verified, claim) = recovery.into_terminal_parts();
         Ok(AcceptedTerminalOutputRecovery {

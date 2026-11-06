@@ -323,31 +323,20 @@ where
                             // Main refused this exact frame (a stop, the deadline,
                             // or the frame itself). Retrying cannot change that:
                             // settle the failure it selected, once, and retire.
-                            let terminal = self
-                                .output
-                                .settle_rejected_checkpoint_progress(
-                                    *recovery,
-                                    failure,
-                                    self.clock.now_unix_millis(),
-                                )
-                                .await
-                                .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                            recover_accepted_terminal(
-                                self.control.clone(),
-                                self.retirer.as_ref(),
-                                self.replay.as_ref(),
-                                terminal,
-                                self.clock.clone(),
-                                self.preparation.lease_config(),
-                                self.terminal_recovery,
-                            )
-                            .await
-                            .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                            self.settle_replacement(*recovery, failure).await?;
                             return Ok(AgentDeliveryProcessOutcome::completed(
                                 "agent_delivery.rejected_progress_settled",
                             ));
                         }
                     }
+                }
+                CheckpointPendingOutput::Unrecognised { recovery, failure } => {
+                    // The pending terminal's text is one this build does not
+                    // recognise: set it aside, settle one canonical failure.
+                    self.settle_replacement(*recovery, failure).await?;
+                    return Ok(AgentDeliveryProcessOutcome::completed(
+                        "agent_delivery.unrecognised_terminal_settled",
+                    ));
                 }
                 CheckpointPendingOutput::Terminal(terminal) => {
                     recover_accepted_terminal(
@@ -382,6 +371,32 @@ where
             .await
             .map_err(AgentDeliveryProcessError::Supervision)?;
         Self::finish_invocation(completion)
+    }
+
+    /// Replace the one pending frame with `failure`, then replay, settle and
+    /// retire that exact canonical terminal.
+    async fn settle_replacement(
+        &self,
+        recovery: super::agent_delivery::CheckpointAgentDelivery,
+        failure: RuntimeFailureKind,
+    ) -> Result<(), AgentDeliveryProcessError> {
+        let terminal = self
+            .output
+            .settle_rejected_checkpoint_progress(recovery, failure, self.clock.now_unix_millis())
+            .await
+            .map_err(AgentDeliveryProcessError::OutputPreflight)?;
+        recover_accepted_terminal(
+            self.control.clone(),
+            self.retirer.as_ref(),
+            self.replay.as_ref(),
+            terminal,
+            self.clock.clone(),
+            self.preparation.lease_config(),
+            self.terminal_recovery,
+        )
+        .await
+        .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+        Ok(())
     }
 
     async fn process_node_recovery_verified(

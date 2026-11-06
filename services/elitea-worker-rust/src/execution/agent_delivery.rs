@@ -524,14 +524,37 @@ impl CheckpointAgentDelivery {
         )
     }
 
-    /// The canonical failure that replaces a pending nonterminal frame.
+    /// The kind to keep when the one pending frame is a failure terminal which
+    /// differs from this build's canonical frame only in its text, and sits at
+    /// the sequence right after Main's watermark. Any other frame is `None`.
+    pub(crate) fn unrecognised_replaceable(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Option<crate::protocol::output::RuntimeFailureKind> {
+        if !self.inspection.matches_output_identity(frame)
+            || self.inspection.output_watermark().checked_add(1) != Some(frame.sequence)
+        {
+            return None;
+        }
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame).ok()
+    }
+
+    /// Whether `now` is at or past the signed command deadline.
+    pub(crate) fn past_deadline(&self, now_unix_millis: i64) -> bool {
+        now_unix_millis >= self.verified.command().deadline_unix_millis
+    }
+
+    /// The canonical failure that replaces a pending nonterminal frame, or an
+    /// unrecognised failure terminal.
     pub(crate) fn failure_replacement(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
         failure: crate::protocol::output::RuntimeFailureKind,
         occurred_at_unix_millis: i64,
     ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
-        if self.validate_output(frame)? != ValidatedAgentOutputFrameKind::Progress {
+        if self.unrecognised_replaceable(frame).is_none()
+            && self.validate_output(frame)? != ValidatedAgentOutputFrameKind::Progress
+        {
             return Err(ProtocolError::AuthorizationFailed(
                 "only a nonterminal frame is replaced by a failure",
             ));

@@ -6683,6 +6683,153 @@ async fn a_refused_pending_canonical_failure_on_the_output_recovery_route_is_dea
     assert_eq!(count(&events, "settlement") + count(&events, "retire"), 0);
 }
 
+/// One whole delivery on the model-checkpoint recovery route (what Main answers
+/// for a RUNNING run whose invocation may have started, with no stop requested)
+/// over a spool holding `pending`.
+async fn checkpoint_delivery_over_pending_terminal(
+    output_root: &std::path::Path,
+    replays: Vec<ReplayResult>,
+) -> (Vec<&'static str>, Vec<ExecutionOutputFrameV1>) {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let output = preflight(output_root.to_path_buf(), "worker-1");
+    let control = Arc::new(
+        AgentControlClient::new(
+            RecoveryControl {
+                trace: trace.clone(),
+                claim_fixture: "checkpoint",
+                settlement_fails: false,
+                authorize_disposition: Some(AuthorizeInvocationDispositionV1::AuthorizedNow),
+                authorize_unavailable: false,
+                renew_fail_after: None,
+                renew_fail_switch: None,
+                renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
+                observe_states: Mutex::new(VecDeque::new()),
+            },
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("control"),
+    );
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("admission"),
+    );
+    let retirer = Arc::new(recovery_retirer(trace.clone(), Ok(())));
+    let terminal = Arc::new(FakeReplay::new(replays, trace.clone()));
+    let replay = Arc::new(RefusingTerminalConnector {
+        progress: FakeProgressConnector {
+            state: FakeProgressState::new([], []),
+        },
+        terminal: terminal.clone(),
+    });
+    let lifecycle = Arc::new(GatedAuthorizedLifecycle {
+        trace: trace.clone(),
+        started: Mutex::new(None),
+        release: Arc::new(Semaphore::new(1)),
+    });
+    let clock = Arc::new(|| NOW);
+    let coordinator = super::agent_coordinator::AgentInvocationCoordinator::new(
+        admission.clone(),
+        control.clone(),
+        retirer.clone(),
+        replay.clone(),
+        clock.clone(),
+        recovery_config(2),
+        lifecycle,
+    );
+    let processor = super::agent_delivery_processor::AgentDeliveryProcessor::new(
+        Arc::new(TestOnlyConformanceHmacAuthenticator),
+        output,
+        control,
+        retirer,
+        replay,
+        Arc::new(ValidAgentInput {
+            trace: trace.clone(),
+        }),
+        clock,
+        admission.clone(),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation"),
+        recovery_config(2),
+        coordinator,
+    )
+    .with_checkpoint_recovery(true);
+    let raw = bytes("signed_command");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("verified");
+    processor
+        .process_verified_delivery(bus_delivery(raw), verified)
+        .await;
+    processor.close().await.expect("drain");
+    assert_eq!(admission.available_capacity(), 1);
+    let events = trace.lock().expect("trace").clone();
+    let sent = terminal.frames.lock().expect("frames").clone();
+    (events, sent)
+}
+
+/// The stranded run without a stop: Main answers the checkpoint-recovery claim,
+/// and the output preflight used to refuse the old build's terminal text on
+/// every redelivery. It is now set aside and one canonical failure settles.
+#[tokio::test]
+async fn a_stranded_terminal_with_unrecognised_text_settles_on_the_checkpoint_route_without_a_stop()
+{
+    let unique = crate::protocol::output::runtime_error(RuntimeFailureKind::ModelRateLimited);
+    for (code, retryable, expected) in [
+        (
+            fanout_member_failed().0,
+            fanout_member_failed().1,
+            RuntimeErrorCodeV1::Internal as i32,
+        ),
+        (unique.code, unique.retryable, unique.code),
+    ] {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |_| {
+            superseded_unrecognised_failure_terminal(code, retryable, 5)
+        })
+        .await;
+        let (events, sent) = checkpoint_delivery_over_pending_terminal(
+            &output_root,
+            vec![ReplayResult::Acknowledged],
+        )
+        .await;
+        assert_settled_once(&events);
+        assert_eq!(sent.len(), 1, "the old frame is never replayed: {events:?}");
+        assert_eq!(sent[0].sequence, 5);
+        assert_eq!(failure_code(&sent[0]), expected);
+        assert!(restored_terminal_failure_kind(&sent[0]).is_some());
+        assert_eq!(retired_records(&output_root), 1);
+    }
+}
+
+/// The checkpoint route keeps the typed refusal for a frame that fails identity
+/// or output-binding validation, and for one not at watermark+1.
+#[tokio::test]
+async fn the_checkpoint_route_still_refuses_an_unrecognised_terminal_that_fails_other_checks() {
+    let (code, retryable) = fanout_member_failed();
+    for invalid in 0..3 {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |_| {
+            let mut frame = superseded_unrecognised_failure_terminal(code, retryable, 5);
+            match invalid {
+                0 => frame.event_id = "another-command:5".to_owned(),
+                1 => frame.logical_output_id = "agent-execution:another".to_owned(),
+                _ => {
+                    frame = superseded_unrecognised_failure_terminal(code, retryable, 7);
+                }
+            }
+            frame
+        })
+        .await;
+        let (events, sent) = checkpoint_delivery_over_pending_terminal(&output_root, vec![]).await;
+        assert_eq!(sent.len(), 0, "{invalid}: {events:?}");
+        assert_eq!(count(&events, "settlement") + count(&events, "retire"), 0);
+        assert_eq!(retired_records(&output_root), 0);
+    }
+}
+
 /// Parks before its first event while holding a marker, like an agent
 /// suspended inside a session write when its claim lease is lost.
 struct ParkedAgent {
