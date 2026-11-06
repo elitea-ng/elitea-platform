@@ -258,3 +258,37 @@ func TestAdmitUnattendedWorkspaceTools(t *testing.T) {
 		t.Fatalf("another workspace tool: err = %v", err)
 	}
 }
+
+// ADR-0049 decision 7: a schedule's or webhook's grant may name the hosts
+// its cloud browser submits on; the proto carries them, deduplicated, and a
+// continuation keeps them.
+func TestAdmitUnattendedBrowserSubmits(t *testing.T) {
+	service := grantTestService("low")
+	request := unattended.Request{ContinueStepLimit: true,
+		BrowserSubmits: []string{"forms.example.com", "upload.example.org", "forms.example.com"}}
+	target := grantTestTarget(&request)
+	target.triggerOrigin = executiondomain.TriggerOriginSchedule
+	grant, admission, err := service.admitUnattended(t.Context(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grant.GetBrowserSubmits(); len(got) != 2 || got[0] != "forms.example.com" || got[1] != "upload.example.org" {
+		t.Fatalf("browser_submits=%v", got)
+	}
+	if !ValidUnattendedGrant(grant) {
+		t.Fatal("the admitted grant is not valid")
+	}
+	clone := admission.Clone()
+	clone.Start.Grant.BrowserSubmits[0] = "changed.example.com"
+	if admission.Start.Grant.BrowserSubmits[0] != "forms.example.com" {
+		t.Fatal("the clone shares the hosts")
+	}
+	bad := unattended.Request{BrowserSubmits: []string{"*.example.com"}}
+	if _, _, err := service.admitUnattended(t.Context(), grantTestTarget(&bad)); err == nil {
+		t.Fatal("a wildcard host was admitted")
+	}
+	grant.BrowserSubmits = []string{"Example.com"}
+	if ValidUnattendedGrant(grant) {
+		t.Fatal("a grant with an upper-case host is valid")
+	}
+}

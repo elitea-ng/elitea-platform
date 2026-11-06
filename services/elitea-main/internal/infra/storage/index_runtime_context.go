@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
@@ -71,7 +72,9 @@ func runtimeContextUnavailableStage(err error) string {
 		runtimeContextStageArtifactList,
 		runtimeContextStageArtifactRead,
 		runtimeContextStageArtifactWrite,
-		runtimeContextStageArtifactDelete:
+		runtimeContextStageArtifactDelete,
+		runtimeContextStageWorkspace,
+		runtimeContextStageBrowser:
 		return unavailable.stage
 	default:
 		return "unknown"
@@ -214,6 +217,10 @@ type EliteaClientTokenContext struct {
 	// only to a worker that lists it in the accept header and only for a
 	// cloud turn of a handed-off thread (runtime_workspace_context.go).
 	Workspace *workspaceruntime.RuntimeContext `json:"workspace,omitempty"`
+	// Browser is the cloud browser's field (ADR-0049, #1596), served only
+	// to a worker that lists it in the accept header and only when the
+	// project's `browser` setting is enabled (runtime_browser_context.go).
+	Browser *browserruntime.RuntimeContext `json:"browser,omitempty"`
 }
 
 // ProjectSecretsHeaderReader reads one project's `secrets_header_value` — the
@@ -238,6 +245,7 @@ type EliteaClientTokenService struct {
 	validator     ProjectTokenValidator
 	secretsHeader ProjectSecretsHeaderReader
 	workspace     WorkspaceContextResolver
+	browser       BrowserContextResolver
 	runTokens     RunTokenIssuer
 }
 

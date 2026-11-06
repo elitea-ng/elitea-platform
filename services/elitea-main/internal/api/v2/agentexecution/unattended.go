@@ -15,6 +15,9 @@ type startUnattendedBody struct {
 	// stable one from the question.
 	ContinueOutputLimit bool              `json:"continue_output_limit"`
 	SensitiveTools      []unattended.Tool `json:"sensitive_tools"`
+	// BrowserSubmits: the hosts on which the cloud browser submits and
+	// uploads without asking (ADR-0049 decision 7).
+	BrowserSubmits []string `json:"browser_submits"`
 }
 
 func (b *startUnattendedBody) request() *unattended.Request {
@@ -24,5 +27,6 @@ func (b *startUnattendedBody) request() *unattended.Request {
 	request := b.Request()
 	request.ContinueOutputLimit = b.ContinueOutputLimit
 	request.SensitiveTools = append(request.SensitiveTools, b.SensitiveTools...)
+	request.BrowserSubmits = append(request.BrowserSubmits, b.BrowserSubmits...)
 	return &request
 }

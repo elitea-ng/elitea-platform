@@ -218,5 +218,6 @@ func threadGrant(grant *unattended.Request) *unattended.Request {
 	request.HookAsks = false
 	request.RemoteConfirmations = false
 	request.SensitiveTools = append([]unattended.Tool(nil), grant.SensitiveTools...)
+	request.BrowserSubmits = append([]string(nil), grant.BrowserSubmits...)
 	return &request
 }

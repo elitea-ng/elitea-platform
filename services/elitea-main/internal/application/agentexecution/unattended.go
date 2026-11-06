@@ -145,6 +145,7 @@ func (a *UnattendedAdmission) Clone() *UnattendedAdmission {
 	if a.Start != nil {
 		start := *a.Start
 		start.Grant.SensitiveTools = append([]unattended.Tool(nil), a.Start.Grant.SensitiveTools...)
+		start.Grant.BrowserSubmits = append([]string(nil), a.Start.Grant.BrowserSubmits...)
 		clone.Start = &start
 	}
 	if a.Continue != nil {
@@ -388,6 +389,7 @@ func grantProto(
 	return &runtimev1.UnattendedGrantV1{
 		GrantId: grant.GrantID, ChainRootExecutionId: root, OwnerUserId: owner,
 		SensitiveTools: tools, ContinueStepLimit: grant.ContinueStepLimit,
+		BrowserSubmits:      append([]string(nil), grant.BrowserSubmits...),
 		ContinueOutputLimit: grant.ContinueOutputLimit,
 		Chain: &runtimev1.UnattendedChainLimitsV1{
 			MaxContinuations: uint32(limits.MaxContinuations), //nolint:gosec // bounded by the platform maximum
@@ -540,7 +542,8 @@ func markContinuedAutomatically(meta json.RawMessage) json.RawMessage {
 }
 
 // ValidUnattendedGrant reports a well-formed grant: a grant id, an owner,
-// chain limits, and at most unattended.MaxSensitiveTools distinct named
+// chain limits, at most unattended.MaxBrowserSubmits valid browser submit
+// hosts, and at most unattended.MaxSensitiveTools distinct named
 // tools.
 func ValidUnattendedGrant(grant *runtimev1.UnattendedGrantV1) bool {
 	if !unattended.ValidGrantID(grant.GetGrantId()) || grant.GetOwnerUserId() <= 0 || grant.GetChain() == nil ||
@@ -553,5 +556,7 @@ func ValidUnattendedGrant(grant *runtimev1.UnattendedGrantV1) bool {
 	for _, tool := range grant.GetSensitiveTools() {
 		tools = append(tools, unattended.Tool{ToolkitName: tool.GetToolkitName(), ToolName: tool.GetToolName()})
 	}
-	return unattended.ValidateShape(unattended.Request{GrantID: grant.GetGrantId(), SensitiveTools: tools}) == nil
+	return unattended.ValidateShape(unattended.Request{
+		GrantID: grant.GetGrantId(), SensitiveTools: tools, BrowserSubmits: grant.GetBrowserSubmits(),
+	}) == nil
 }

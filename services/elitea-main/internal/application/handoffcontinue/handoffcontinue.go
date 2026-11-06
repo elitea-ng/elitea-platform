@@ -176,6 +176,7 @@ func (s *Service) grant(
 		request.HookAsks = false
 		request.RemoteConfirmations = false
 		request.SensitiveTools = append([]unattended.Tool(nil), grant.SensitiveTools...)
+		request.BrowserSubmits = append([]string(nil), grant.BrowserSubmits...)
 		return &request, nil, nil
 	}
 	if grant.Kind != "" {
