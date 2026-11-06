@@ -439,7 +439,7 @@ func (h *Handler) meteredEventSettled(ctx context.Context, eventID string) bool 
 // failure, a timeout, or a call the provider refused (401, 429) bills nothing.
 func billableMeteredUnits(req meteredSettleRequest) cost.MeteredUnits {
 	units := req.Units
-	reported := units.Requests > 0 || units.Credits > 0 || units.Pages > 0
+	reported := units.Requests > 0 || units.Credits > 0 || units.Pages > 0 || units.Seconds > 0
 	if req.Outcome == meteredOutcomeProviderError && !reported &&
 		req.Failure == meteredFailureTargetFailed &&
 		req.Provider == "firecrawl" && req.Operation == "web_fetch" {

@@ -134,3 +134,28 @@ func (m *Minter) Mint(executionID string, projectID int64, allowlist []string, t
 		Nonce:       nonce,
 	})
 }
+
+// MintOpen signs an open token for one run (ADR-0049 decision 5, platform
+// `browser_egress: open`): the proxy admits every public host for it and
+// still refuses private, loopback, link-local and metadata addresses. It
+// carries no allowlist. The same ttl bounds and credential rules as Mint
+// apply.
+func (m *Minter) MintOpen(executionID string, projectID int64, ttl time.Duration) (string, error) {
+	if ttl < MinTTL || ttl > MaxTTL {
+		return "", fmt.Errorf("egresstoken: the ttl %s is outside %s..%s", ttl, MinTTL, MaxTTL)
+	}
+	nonce, err := m.nonce()
+	if err != nil {
+		return "", err
+	}
+	now := m.now().Truncate(time.Second)
+	return m.signer.Sign(runtoken.Claims{
+		ExecutionID: executionID,
+		ProjectID:   projectID,
+		Open:        true,
+		IssuedAt:    now,
+		NotBefore:   now,
+		ExpiresAt:   now.Add(ttl.Truncate(time.Second)),
+		Nonce:       nonce,
+	})
+}

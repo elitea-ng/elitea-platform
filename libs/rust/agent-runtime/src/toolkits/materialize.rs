@@ -51,9 +51,10 @@ use super::families::testio;
 use super::families::testrail;
 use super::families::xray_cloud;
 use super::families::{
-    aha, artifact, azure, azure_search, bitbucket, carrier, elastic, figma, gcp, github, gitlab,
-    gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally, report_portal,
-    salesforce, service_now, sharepoint, slack, sonar, web, yagmail, zephyr, zephyr_squad,
+    aha, artifact, azure, azure_search, bitbucket, browser, carrier, elastic, figma, gcp, github,
+    gitlab, gitlab_org, google_places, keycloak, kubernetes, openapi, postman, rally,
+    report_portal, salesforce, service_now, sharepoint, slack, sonar, web, yagmail, zephyr,
+    zephyr_squad,
 };
 #[cfg(feature = "toolkit-office")]
 use super::families::{docx, pptx, xlsx};
@@ -952,6 +953,7 @@ fn family_tool_catalog(tool_type: &str) -> Option<Vec<(&'static str, bool)>> {
         "zephyr_squad" => zephyr_squad::tools::tool_catalog(),
         "web" => web::web_tool_catalog(),
         "host_intel" => web::host_intel_tool_catalog(),
+        "browser" => browser::browser_tool_catalog(),
         _ => return None,
     })
 }
@@ -1312,6 +1314,12 @@ async fn materialize(
     if matches!(reference.tool_type(), "web" | "host_intel") {
         let toolset = materialize_web(reference.tool_type(), name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
+    }
+    if reference.tool_type() == browser::TOOLKIT_TYPE {
+        let host = artifacts.and_then(ArtifactToolAuthority::browser);
+        let toolset = browser::build_browser_toolset(name, settings, policy, host)
+            .map_err(|_| invalid_configuration())?;
+        return Ok((Arc::new(toolset), DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
         reference.tool_type(),

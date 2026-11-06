@@ -14,6 +14,7 @@ pub(crate) mod azure;
 pub(crate) mod azure_search;
 pub(crate) mod bigquery;
 pub(crate) mod bitbucket;
+pub mod browser;
 pub(crate) mod carrier;
 pub(crate) mod confluence;
 pub(crate) mod connector_client;
@@ -153,7 +154,7 @@ impl UnsupportedSetting {
 
 /// The Office families' tools as elitea-main's `rust_only_toolkit_tools.json`
 /// carries them (ADR-0032 P3, P4): the `pptx` tools the SDK does not declare
-/// under `types`, and the whole `docx`, `xlsx`, `web` and `host_intel` types
+/// under `types`, and the whole `docx`, `xlsx`, `web`, `host_intel` and `browser` types
 /// (they have no SDK counterpart) under `new_types`. The Go catalogue merges both into its pinned
 /// SDK snapshot; the test that compares this document with the file there
 /// (`ELITEA_WRITE_RUST_ONLY_TOOLS=1` rewrites it) is what keeps the two equal.
@@ -167,6 +168,7 @@ pub(crate) fn rust_only_catalogue_document() -> serde_json::Value {
             "xlsx": xlsx::schema::type_entry(),
             "web": web::catalogue::web_type_entry(),
             "host_intel": web::catalogue::host_intel_type_entry(),
+            "browser": browser::catalogue::browser_type_entry(),
         },
     })
 }

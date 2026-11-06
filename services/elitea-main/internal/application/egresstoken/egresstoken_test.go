@@ -118,3 +118,30 @@ func TestLoadRefusals(t *testing.T) {
 		t.Fatal("the error must not echo the file content")
 	}
 }
+
+func TestMintOpenVerifiesAsOpen(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0)
+	m, err := New(priv, WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := m.MintOpen("exec-1", 7, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, _ := runtoken.NewKeySet(pub)
+	v, err := ks.Verify(tok, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Claims.Open || len(v.Claims.Allowlist) != 0 || v.Claims.ExecutionID != "exec-1" || v.Claims.ProjectID != 7 {
+		t.Fatalf("claims: %+v", v.Claims)
+	}
+	if _, err := m.MintOpen("exec-1", 7, 0); err == nil {
+		t.Fatal("a ttl outside the bounds must be refused")
+	}
+}

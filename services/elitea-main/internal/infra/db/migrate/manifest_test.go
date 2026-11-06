@@ -1033,7 +1033,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0038 decisions 3 and 5, #1452): the family defaults
 	// elitea_runtime.model_reasoning_defaults with their seeds, and
 	// gateway.llm_request_logs.reasoning_tokens. No permission.
-	require.EqualValues(t, 225, Head(shared))
+	//
+	// 226: shared/0226_browser_engine_seconds.sql, the cloud browser's engine
+	// seconds (ADR-0049 decision 8, #1596): the metered unit `second` and the
+	// `browser/engine_seconds` price row at 0. No permission.
+	require.EqualValues(t, 226, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

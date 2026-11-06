@@ -25,6 +25,8 @@ pub struct Units {
     pub requests: u64,
     pub credits: u64,
     pub pages: u64,
+    /// Engine seconds (the cloud browser, ADR-0049 decision 8).
+    pub seconds: u64,
 }
 
 impl Units {
@@ -34,6 +36,7 @@ impl Units {
             requests,
             credits: 0,
             pages: 0,
+            seconds: 0,
         }
     }
 
@@ -43,6 +46,7 @@ impl Units {
             requests: 1,
             credits,
             pages: 0,
+            seconds: 0,
         }
     }
 
@@ -52,22 +56,40 @@ impl Units {
             requests: 1,
             credits: 0,
             pages,
+            seconds: 0,
         }
     }
 
-    /// The units as the metered wire carries them.
     #[must_use]
-    pub fn to_json(self) -> Value {
-        json!({"requests": self.requests, "credits": self.credits, "pages": self.pages})
+    pub const fn seconds(seconds: u64) -> Self {
+        Self {
+            requests: 0,
+            credits: 0,
+            pages: 0,
+            seconds,
+        }
     }
 
-    /// The count of `unit` (`request`, `credit` or `page`).
+    /// The units as the metered wire carries them. `seconds` is sent only
+    /// when set, so a web call's settle is the bytes it was before.
+    #[must_use]
+    pub fn to_json(self) -> Value {
+        let mut units =
+            json!({"requests": self.requests, "credits": self.credits, "pages": self.pages});
+        if self.seconds > 0 {
+            units["seconds"] = json!(self.seconds);
+        }
+        units
+    }
+
+    /// The count of `unit` (`request`, `credit`, `page` or `second`).
     #[must_use]
     pub fn of(self, unit: &str) -> Option<u64> {
         match unit {
             "request" => Some(self.requests),
             "credit" => Some(self.credits),
             "page" => Some(self.pages),
+            "second" => Some(self.seconds),
             _ => None,
         }
     }
@@ -86,7 +108,7 @@ pub struct MeteredOp {
 pub struct Admission {
     /// Opaque, signed by the gateway; settle presents it back.
     pub admission_id: String,
-    /// The unit the price is per (`request`, `credit`, `page`).
+    /// The unit the price is per (`request`, `credit`, `page`, `second`).
     pub unit: String,
     pub nano_usd_per_unit: i64,
 }
