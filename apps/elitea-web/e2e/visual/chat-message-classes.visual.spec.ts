@@ -44,7 +44,7 @@ const CONVERSATION_ID = '990101';
 const CONVERSATION_NAME = 'Visual baseline: message classes';
 
 const ICON_PATH = '/visual-fixtures/mira-avatar.png';
-/** A 1×1 PNG in the brand accent family, scaled into the avatar. */
+/** A 1×1 PNG, scaled into the avatar: a flat colour no font or theme change moves. */
 const ICON_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==',
   'base64',
@@ -136,10 +136,15 @@ async function openConversation(page: Page): Promise<void> {
   await expect(markers.filter({ hasText: 'temporary' })).toHaveCount(1);
   await expect(markers.filter({ hasText: 'woke up' })).toHaveCount(1);
   await expect(page.getByText(ROWS[ROWS.length - 1]?.content ?? '')).toBeVisible();
+  await expect(page.getByText(ROWS[0]?.content ?? '')).toBeInViewport();
   // Every avatar is the still: a persisted row carries no live agent_state.
   await expect(page.locator('[data-testid="chat-message-avatar"]:not([data-motion="still"])')).toHaveCount(0);
   await expect(page.getByTestId('agent-avatar-motion')).toHaveCount(0);
 }
+
+// Taller than the project's 848 so the whole transcript, the person's question
+// included, is on screen: the list pins to its newest row.
+test.use({ viewport: { width: 1602, height: 1100 } });
 
 test('@visual chat-message-classes', async ({ page }) => {
   // @covers /chat/:conversationId

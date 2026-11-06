@@ -48,9 +48,14 @@ export function getStyles(theme: ReturnType<typeof useTheme>) {
       // The pill IS the field's outline; the select inside it must not draw a
       // second one underneath. `SingleSelect` has no `disableUnderline`
       // passthrough, so the standard variant's `::before`/`::after` rules are
-      // switched off here.
+      // switched off here. The selector names `.MuiInput-underline` too, so it
+      // OUTRANKS the theme's `MuiSelect` standard variant
+      // (`&.MuiInput-underline:before`). At equal specificity the winner was
+      // whichever rule Emotion inserted last, which changed between page loads:
+      // the settings-model-configuration baseline flaked on exactly this
+      // one-pixel row (run 42273252042).
       // oxlint-disable-next-line elitea/no-mui-internal-selector -- no prop on `shared/ui`'s SingleSelect reaches the underline pseudo-elements.
-      '& .MuiInput-root::before, & .MuiInput-root::after': { borderBottom: 'none' },
+      '& .MuiInput-root.MuiInput-underline::before, & .MuiInput-root.MuiInput-underline::after': { borderBottom: 'none' },
     },
     defaultSettingSelect: {
       margin: 0,

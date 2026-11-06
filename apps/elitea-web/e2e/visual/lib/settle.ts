@@ -28,6 +28,9 @@ export function volatileRegions(page: Page): Locator[] {
   return [
     page.locator('[data-testid$="-timestamp"]'),
     page.locator('time'),
+    // A chat message's relative time ("about 10 hours ago", `CreatedTimeInfo`)
+    // moves with the clock between the fixture's fixed `created_at` and the run.
+    page.locator('[data-testid="chat-message-time"]'),
     // The analytics date-range filter renders `now-24h … now` as formatted
     // wall-clock text (`DateRangeField`, format `dd/MM/yyyy HH:mm`). It is
     // different on every run by construction: the first observed run of this
