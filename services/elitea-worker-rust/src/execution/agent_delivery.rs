@@ -431,6 +431,22 @@ impl NodeRecoveryAgentDelivery {
             producer_id: self.inspection.producer_id().to_owned(),
         }
     }
+    /// A terminal frame which validates fully under this claim: canonical, or
+    /// different only in an old build's unregistered failure text.
+    pub(crate) fn validated_terminal(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> bool {
+        self.inspection.matches_output_identity(frame)
+            && (validate_restored_agent_output_frame(&self.verified, frame)
+                == Ok(ValidatedAgentOutputFrameKind::Terminal)
+                || crate::protocol::output::unrecognised_failure_terminal_kind(
+                    &self.verified,
+                    frame,
+                )
+                .is_ok())
+    }
+
     pub(crate) fn covered_progress(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
@@ -548,9 +564,8 @@ impl CheckpointAgentDelivery {
         crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame).ok()
     }
 
-    /// Whether `now` is at or past the signed command deadline.
-    pub(crate) fn past_deadline(&self, now_unix_millis: i64) -> bool {
-        now_unix_millis >= self.verified.command().deadline_unix_millis
+    pub(crate) fn deadline_unix_millis(&self) -> i64 {
+        self.verified.command().deadline_unix_millis
     }
 
     /// The canonical failure that replaces a pending nonterminal frame, or an

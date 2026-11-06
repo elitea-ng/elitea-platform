@@ -33,8 +33,8 @@ use super::output_delivery::{
     AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind, AgentProgressConnector,
     AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay,
     FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE, NodeRecoveryOutput, OutputRecovery,
-    publish_pre_invocation_terminal, reconcile_empty_agent_output_recovery,
-    recover_accepted_terminal,
+    UNRECOVERABLE_TERMINAL_CODE, publish_pre_invocation_terminal,
+    reconcile_empty_agent_output_recovery, recover_accepted_terminal,
 };
 use crate::agents::runtime::NativeAgentAssembler;
 use crate::diagnostics::attach_command_trace_parent;
@@ -47,7 +47,6 @@ use crate::protocol::control::{
 use crate::protocol::output::RuntimeFailureKind;
 use crate::transport::command_bus::{
     CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict, PoisonReason,
-    delivery_token,
 };
 use crate::transport::{ControlRpc, OutputGrpcError, OutputProtocolError};
 
@@ -209,7 +208,7 @@ where
         verified: VerifiedAgentCommand,
     ) -> DeliveryVerdict {
         let command = verified.command();
-        let delivery_token = delivery_token(&command.idempotency_key);
+        let delivery_token = delivery.delivery_token().to_owned();
         let span = tracing::info_span!(
             parent: None,
             "agent.delivery",
@@ -241,8 +240,9 @@ where
                 tracing::info!(event = "agent_delivery_started");
                 match Box::pin(self.process_owned(delivery, verified)).await {
                     Ok(outcome) => {
+                        let verdict = outcome.verdict(&delivery_token);
                         outcome.record();
-                        DeliveryVerdict::Processed
+                        verdict
                     }
                     Err(error) => {
                         tracing::Span::current().record("outcome", "failed_no_ack");
@@ -508,6 +508,15 @@ where
         {
             OutputRecovery::Retained(code) => {
                 return Ok(AgentDeliveryProcessOutcome::retained(code, true));
+            }
+            OutputRecovery::CommittedTerminalUnvalidated => {
+                // Main answered an output recovery for a frame its watermark
+                // covers: it was just authenticated for this delivery, and the
+                // verdict names this delivery's own token (like B).
+                return Ok(AgentDeliveryProcessOutcome::DeadLettered {
+                    code: UNRECOVERABLE_TERMINAL_CODE,
+                    reason: PoisonReason::CommittedTerminalUnvalidated,
+                });
             }
             OutputRecovery::Empty(recovery) => recovery,
             OutputRecovery::Terminal(terminal) => {
@@ -819,8 +828,18 @@ where
 
 #[derive(Clone, Copy)]
 pub(super) enum AgentDeliveryProcessOutcome {
-    Completed { code: &'static str },
-    RetainedNoAck { code: &'static str, retryable: bool },
+    Completed {
+        code: &'static str,
+    },
+    RetainedNoAck {
+        code: &'static str,
+        retryable: bool,
+    },
+    /// Dead-lettered: redelivery cannot change the outcome.
+    DeadLettered {
+        code: &'static str,
+        reason: PoisonReason,
+    },
 }
 
 impl AgentDeliveryProcessOutcome {
@@ -832,8 +851,28 @@ impl AgentDeliveryProcessOutcome {
         Self::RetainedNoAck { code, retryable }
     }
 
+    fn verdict(&self, delivery_token: &str) -> DeliveryVerdict {
+        match self {
+            Self::DeadLettered { reason, .. } => DeliveryVerdict::Poison {
+                reason: *reason,
+                delivery_token: Some(delivery_token.to_owned()),
+            },
+            Self::Completed { .. } | Self::RetainedNoAck { .. } => DeliveryVerdict::Processed,
+        }
+    }
+
     fn record(self) {
         match self {
+            Self::DeadLettered { code, reason } => {
+                tracing::Span::current().record("outcome", "dead_lettered");
+                tracing::Span::current().record("result_code", code);
+                tracing::Span::current().record("retryable", false);
+                tracing::error!(
+                    event = "agent_delivery_dead_lettered",
+                    result_code = code,
+                    reason = reason.code(),
+                );
+            }
             Self::Completed { code } => {
                 tracing::Span::current().record("outcome", "completed");
                 tracing::Span::current().record("result_code", code);

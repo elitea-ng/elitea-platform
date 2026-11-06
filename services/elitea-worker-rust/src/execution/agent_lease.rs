@@ -724,6 +724,12 @@ impl ClaimLeaseMonitor {
         Self::start_inner(control, lease, clock, config, None)
     }
 
+    /// The monitor's wall clock, so a terminal route applies the deadline rule
+    /// against the same time source as its lease checks.
+    pub(crate) fn now_unix_millis(&self) -> i64 {
+        self.clock.now_unix_millis()
+    }
+
     fn start_inner<R, K>(
         control: Arc<AgentControlClient<R>>,
         lease: ClaimLeaseHandle,

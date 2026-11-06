@@ -28,7 +28,7 @@ use crate::protocol::elitea::runtime::v1::{ExecutionOutputFrameV1, NodeEventV1};
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::protocol::output::{
     AgentTerminalOutput, RuntimeFailureKind, ValidatedAgentOutputFrameKind,
-    build_agent_terminal_output_frame, restored_terminal_failure_kind,
+    build_agent_terminal_output_frame, failure_after_deadline, restored_terminal_failure_kind,
 };
 use crate::spool::{
     EncryptedOutputSpool, ExecutionSpoolBinding, SpoolError, SpoolLimits, SpoolMasterKey,
@@ -122,8 +122,8 @@ impl EmptyAgentOutput {
 
 /// Retained code: durable output is pending and needs another recovery path.
 pub(crate) const PENDING_OUTPUT_CODE: &str = "agent_delivery.output_recovery_pending";
-/// Retained code: a terminal Main covers does not validate in this build, so a
-/// later quarantine can find it.
+/// Dead-letter code: a terminal Main covers does not validate in this build, so
+/// a later quarantine can find it.
 pub(crate) const UNRECOVERABLE_TERMINAL_CODE: &str =
     "agent_delivery.output_recovery_terminal_unrecoverable";
 
@@ -135,6 +135,9 @@ pub(crate) enum OutputRecovery {
     Terminal(Box<AcceptedTerminalOutputRecovery>),
     /// Leave the delivery on the bus under this code.
     Retained(&'static str),
+    /// Main's watermark covers a pending terminal this build cannot validate:
+    /// dead-letter the delivery under [`UNRECOVERABLE_TERMINAL_CODE`].
+    CommittedTerminalUnvalidated,
 }
 
 /// Exact current-fence terminal output which must be replayed and settled.
@@ -145,6 +148,9 @@ pub struct AcceptedTerminalOutputRecovery {
     spool: PreparedOutputSpool,
     frame: ExecutionOutputFrameV1,
     reopener: AgentOutputSpoolReopener,
+    /// Main's output watermark when the claim was granted: a frame at or below
+    /// it is already committed and is never replaced.
+    main_watermark: u64,
 }
 
 impl AcceptedTerminalOutputRecovery {
@@ -326,10 +332,16 @@ impl PreparedAgentOutput {
             // it). The canonical failure replaces that exact frame.
             if let Some(pending) = prepared.pending_replay_frame()
                 && prepared.pending_frame_count() == 1
-                && !pending.terminal
                 && pending.sequence == durable.sequence
             {
-                prepared.replace_pending_with_failure(&pending, &durable)?;
+                if pending.terminal {
+                    // An old build's failure text: the same single
+                    // compare-and-swap keeps the old frame as a record.
+                    prepared.replace_pending_unrecognised_terminal(&pending, &durable)?;
+                    log_unrecognised_terminal_replaced(&pending);
+                } else {
+                    prepared.replace_pending_with_failure(&pending, &durable)?;
+                }
             } else {
                 prepared.persist(durable)?;
             }
@@ -945,6 +957,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
             )
             .await?;
 
+            let main_watermark = terminal.claim_handoff_watermark;
             let (acknowledged, frame) = replay_terminal_with_replacement(
                 &connector,
                 verified,
@@ -953,6 +966,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 reopener,
                 lease,
                 recovery_config.max_output_sessions,
+                main_watermark,
             )
             .await
             .map_err(|error| match error {
@@ -2008,11 +2022,11 @@ where
                     "the wall clock cannot publish the agent terminal",
                 ));
             }
-            if failure != RuntimeFailureKind::Cancelled
-                && occurred_at_unix_millis >= verified.command().deadline_unix_millis
-            {
-                failure = RuntimeFailureKind::DeadlineExceeded;
-            }
+            failure = failure_after_deadline(
+                failure,
+                occurred_at_unix_millis,
+                verified.command().deadline_unix_millis,
+            );
             let frame = output_authority
                 .bind_failure_terminal(&verified, failure, occurred_at_unix_millis)
                 .map_err(AgentFailureTerminalError::InvalidDurableState)?;
@@ -2022,6 +2036,7 @@ where
                 .await
                 .map_err(AgentFailureTerminalError::Output)?;
             tracing::info!(event = "agent_terminal_output_started");
+            let main_watermark = frame.claim_handoff_watermark;
             let (acknowledged, frame) = replay_terminal_with_replacement(
                 replay,
                 &verified,
@@ -2030,6 +2045,7 @@ where
                 reopener,
                 &lease,
                 recovery_config.max_output_sessions,
+                main_watermark,
             )
             .await
             .map_err(failure_replay_error)?;
@@ -2121,11 +2137,11 @@ where
                     "the wall clock cannot reconcile the agent terminal",
                 ));
             }
-            if failure != RuntimeFailureKind::Cancelled
-                && occurred_at_unix_millis >= verified.command().deadline_unix_millis
-            {
-                failure = RuntimeFailureKind::DeadlineExceeded;
-            }
+            failure = failure_after_deadline(
+                failure,
+                occurred_at_unix_millis,
+                verified.command().deadline_unix_millis,
+            );
             let frame = output_authority
                 .bind_failure_terminal(&verified, failure, occurred_at_unix_millis)
                 .map_err(AgentFailureTerminalError::InvalidDurableState)?;
@@ -2135,6 +2151,7 @@ where
                 .await
                 .map_err(AgentFailureTerminalError::Output)?;
             tracing::info!(event = "agent_output_recovery_terminal_started");
+            let main_watermark = frame.claim_handoff_watermark;
             let (acknowledged, frame) = replay_terminal_with_replacement(
                 replay,
                 &verified,
@@ -2143,6 +2160,7 @@ where
                 reopener,
                 &lease,
                 recovery_config.max_output_sessions,
+                main_watermark,
             )
             .await
             .map_err(failure_replay_error)?;
@@ -2210,6 +2228,7 @@ where
     K: UnixMillisClock,
 {
     Box::pin(async move {
+        let main_watermark = recovery.main_watermark;
         let (delivery, verified, claim, spool, frame, reopener) = recovery.into_parts();
         let execution_kind = verified.kind();
         let lease =
@@ -2225,6 +2244,7 @@ where
                 reopener,
                 &lease,
                 recovery_config.max_output_sessions,
+                main_watermark,
             )
             .await
             .map_err(recovery_replay_error)?;
@@ -2270,6 +2290,10 @@ enum ExactTerminalReplayError {
     Output(OutputGrpcError),
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Every exact-terminal replay input is explicit; Main's watermark guards replacement."
+)]
 async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
     replay: &T,
     verified: &VerifiedAgentCommand,
@@ -2278,6 +2302,7 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
     mut reopener: AgentOutputSpoolReopener,
     lease: &ClaimLeaseMonitor,
     max_output_sessions: usize,
+    main_watermark: u64,
 ) -> Result<(DurablyAckedTerminal, ExecutionOutputFrameV1), ExactTerminalReplayError> {
     let acknowledged = match replay_exact_terminal(
         replay,
@@ -2290,6 +2315,11 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
     .await
     {
         Ok(acknowledged) => acknowledged,
+        // Main already committed a frame its watermark covers: it is never
+        // replaced, whatever the answer to its replay.
+        Err(error) if frame.sequence <= main_watermark => {
+            return Err(ExactTerminalReplayError::Output(error));
+        }
         Err(error) => {
             let winner = match output_winner(&error) {
                 Some(winner) => winner,
@@ -2303,7 +2333,11 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
                 ) && restored_terminal_failure_kind(&frame).is_none() =>
                 {
                     match lease.check_now().await {
-                        Ok(()) => RuntimeFailureKind::Internal,
+                        Ok(()) => failure_after_deadline(
+                            RuntimeFailureKind::Internal,
+                            lease.now_unix_millis(),
+                            verified.command().deadline_unix_millis,
+                        ),
                         Err(ClaimLeaseError::Cancelled(_)) => RuntimeFailureKind::Cancelled,
                         Err(_) => {
                             return Err(ExactTerminalReplayError::Output(
@@ -2525,10 +2559,14 @@ impl AgentOutputPreflight {
         };
         let kind = match fresh.validate_output_frame(&frame) {
             Ok(kind) => kind,
-            // Main only hands out a plain claim before any terminal exists; an
-            // old build's unrecognised failure text is retained under its own
-            // code. A tampered or mis-bound frame still fails closed.
-            Err(_) if fresh.is_unrecognised_failure_terminal(&frame) => {
+            // Main only hands out a plain claim before any terminal exists. A
+            // frame bound to this very claim whose only problem is an old
+            // build's unregistered failure text is retained under its own
+            // code; every other unvalidated frame fails closed.
+            Err(_)
+                if fresh.matches_output_binding(&frame)
+                    && fresh.is_unrecognised_failure_terminal(&frame) =>
+            {
                 return Ok(unexpected_terminal(&frame));
             }
             Err(_) => {
@@ -2541,6 +2579,7 @@ impl AgentOutputPreflight {
             return match kind {
                 ValidatedAgentOutputFrameKind::Terminal => {
                     let expected_terminal = frame.encode_to_vec();
+                    let main_watermark = fresh.claim_handoff_watermark();
                     let (delivery, verified, claim) = fresh.into_terminal_recovery_parts();
                     Ok(AgentOutputPreflightOutcome::TerminalRecovery(Box::new(
                         AcceptedTerminalOutputRecovery {
@@ -2550,6 +2589,7 @@ impl AgentOutputPreflight {
                             spool: prepared,
                             frame,
                             reopener: factory.seal_terminal(expected_terminal),
+                            main_watermark,
                         },
                     )))
                 }
@@ -2602,9 +2642,6 @@ impl AgentOutputPreflight {
                 },
             ));
         }
-        if kind == ValidatedAgentOutputFrameKind::Terminal {
-            return Ok(unexpected_terminal(&frame));
-        }
         Err(AgentOutputPreflightError::InvalidDurableState(
             "the pending agent output does not match the accepted claim",
         ))
@@ -2638,7 +2675,9 @@ impl AgentOutputPreflight {
                     "the recovery spool contains multiple pending frames",
                 ));
             }
-            if frame.terminal {
+            // Only a fully validated terminal gets its own code; an
+            // unvalidated one falls to the checks below and fails closed.
+            if frame.terminal && recovery.validated_terminal(&frame) {
                 return Ok(NodeRecoveryOutput::TerminalUnexpected);
             }
             if !recovery.covered_progress(&frame).map_err(|_| {
@@ -2682,7 +2721,6 @@ impl AgentOutputPreflight {
     /// Prepare checkpoint output without discarding unacknowledged frames.
     /// Only structurally valid progress covered by Main's watermark is reconciled.
     /// Pending terminal or uncovered progress requires exact replay first.
-    #[allow(dead_code)]
     pub(crate) async fn prepare_checkpoint(
         &self,
         recovery: &super::agent_delivery::CheckpointAgentDelivery,
@@ -2792,6 +2830,7 @@ impl AgentOutputPreflight {
             prepared = rebind_pending_terminal(prepared, expected, replacement).await?;
         }
         let encoded = frame.encode_to_vec();
+        let main_watermark = recovery.output_watermark();
         let (delivery, verified, claim) = recovery.into_terminal_parts();
         Ok(CheckpointPendingOutput::Terminal(Box::new(
             AcceptedTerminalOutputRecovery {
@@ -2801,6 +2840,7 @@ impl AgentOutputPreflight {
                 spool: prepared,
                 frame,
                 reopener: factory.seal_terminal(encoded),
+                main_watermark,
             },
         )))
     }
@@ -2808,7 +2848,6 @@ impl AgentOutputPreflight {
     /// Replay retained progress exactly once, then require a fresh claim.
     /// Even an ACK cannot refresh the inspection's output watermark locally.
     /// This method never grants model execution or retires the command delivery.
-    #[allow(dead_code)] // Enabled with checkpoint intake after output replacement.
     pub(crate) async fn replay_checkpoint_progress<C: AgentProgressConnector>(
         &self,
         recovery: super::agent_delivery::CheckpointAgentDelivery,
@@ -2890,11 +2929,12 @@ impl AgentOutputPreflight {
             ));
         }
         let unrecognised = frame.terminal && recovery.unrecognised_replaceable(&frame).is_some();
-        let failure = if unrecognised
-            && failure != RuntimeFailureKind::Cancelled
-            && recovery.past_deadline(occurred_at_unix_millis)
-        {
-            RuntimeFailureKind::DeadlineExceeded
+        let failure = if unrecognised {
+            failure_after_deadline(
+                failure,
+                occurred_at_unix_millis,
+                recovery.deadline_unix_millis(),
+            )
         } else {
             failure
         };
@@ -2906,17 +2946,17 @@ impl AgentOutputPreflight {
                 )
             })?;
         if unrecognised {
-            // Set the old terminal aside as a record, then the canonical
-            // failure is the only terminal on an empty spool.
-            prepared = retire_superseded_frame(&factory, prepared, frame).await?;
+            // The same single compare-and-swap as the output-recovery route.
+            let expected = frame.clone();
             let durable = replacement.clone();
             prepared = tokio::task::spawn_blocking(move || {
-                prepared.persist(durable)?;
+                prepared.replace_pending_unrecognised_terminal(&expected, &durable)?;
+                log_unrecognised_terminal_replaced(&expected);
                 Ok::<_, OutputGrpcError>(prepared)
             })
             .await
             .map_err(|_| {
-                AgentOutputPreflightError::Unavailable("the failure persistence did not complete")
+                AgentOutputPreflightError::Unavailable("the failure replacement did not complete")
             })?
             .map_err(AgentOutputPreflightError::Output)?;
         } else {
@@ -2941,6 +2981,7 @@ impl AgentOutputPreflight {
             );
         }
         let encoded = replacement.encode_to_vec();
+        let main_watermark = recovery.output_watermark();
         let (delivery, verified, claim) = recovery.into_terminal_parts();
         Ok(AcceptedTerminalOutputRecovery {
             delivery,
@@ -2949,6 +2990,7 @@ impl AgentOutputPreflight {
             spool: prepared,
             frame: replacement,
             reopener: factory.seal_terminal(encoded),
+            main_watermark,
         })
     }
 
@@ -3001,7 +3043,7 @@ impl AgentOutputPreflight {
             let watermark = recovery.claim_handoff_watermark();
             if frame.terminal && frame.sequence <= watermark {
                 if recovery.validate_output(&frame).is_err() {
-                    return Ok(OutputRecovery::Retained(UNRECOVERABLE_TERMINAL_CODE));
+                    return Ok(OutputRecovery::CommittedTerminalUnvalidated);
                 }
                 return Ok(OutputRecovery::Terminal(Box::new(
                     pending_terminal_recovery(recovery, factory, prepared, frame),
@@ -3044,7 +3086,8 @@ impl AgentOutputPreflight {
                         "the pending agent output contract is malformed",
                     )
                 })?);
-                prepared = retire_superseded_frame(&factory, prepared, frame).await?;
+                // The frame stays pending until the canonical failure replaces
+                // it in one compare-and-swap (the spool is never empty).
             }
         }
         if prepared.pending_frame_count() > 1
@@ -3068,6 +3111,7 @@ fn pending_terminal_recovery(
     frame: ExecutionOutputFrameV1,
 ) -> AcceptedTerminalOutputRecovery {
     let encoded = frame.encode_to_vec();
+    let main_watermark = recovery.claim_handoff_watermark();
     let (delivery, verified, claim) = recovery.into_terminal_parts();
     AcceptedTerminalOutputRecovery {
         delivery,
@@ -3076,7 +3120,23 @@ fn pending_terminal_recovery(
         spool,
         frame,
         reopener: factory.seal_terminal(encoded),
+        main_watermark,
     }
+}
+
+/// Log a pending failure terminal this build does not recognise which a
+/// canonical failure replaced. The frame stays as an encrypted `.retired`
+/// record; only its digest is logged, never its text.
+fn log_unrecognised_terminal_replaced(frame: &ExecutionOutputFrameV1) {
+    tracing::error!(
+        event = "agent_output_unrecognised_terminal_retired",
+        sequence = frame.sequence,
+        frame_sha256 = %crate::sandbox::code_recovery::hex(
+            &crate::transport::output_grpc::progress_frame_sha256(frame)
+        ),
+        superseded_claim_attempt = frame.fence.as_ref().map_or(0, |fence| fence.claim_attempt),
+        "a pending failure terminal this build does not recognise was replaced by a canonical failure"
+    );
 }
 
 /// Move the one pending terminal onto the current claim's fence and watermark.
@@ -3107,14 +3167,9 @@ async fn retire_superseded_frame(
     let sequence = frame.sequence;
     let digest = crate::transport::output_grpc::progress_frame_sha256(&frame);
     let superseded_claim_attempt = frame.fence.as_ref().map_or(0, |fence| fence.claim_attempt);
-    let terminal = frame.terminal;
     let mut prepared = prepared;
     tokio::task::spawn_blocking(move || {
-        if frame.terminal {
-            prepared.retire_unrecognised_terminal(&frame)?;
-        } else {
-            prepared.retire_superseded_progress(&frame)?;
-        }
+        prepared.retire_superseded_progress(&frame)?;
         Ok::<_, OutputGrpcError>(())
     })
     .await
@@ -3122,23 +3177,13 @@ async fn retire_superseded_frame(
         AgentOutputPreflightError::Unavailable("the superseded frame retirement did not complete")
     })?
     .map_err(AgentOutputPreflightError::Output)?;
-    if terminal {
-        tracing::error!(
-            event = "agent_output_unrecognised_terminal_retired",
-            sequence,
-            frame_sha256 = %crate::sandbox::code_recovery::hex(&digest),
-            superseded_claim_attempt,
-            "a pending failure terminal this build does not recognise was retired and replaced by a canonical failure"
-        );
-    } else {
-        tracing::error!(
-            event = "agent_output_superseded_frame_retired",
-            sequence,
-            frame_sha256 = %crate::sandbox::code_recovery::hex(&digest),
-            superseded_claim_attempt,
-            "an unaccepted progress frame from a superseded claim was retired and is not replayed"
-        );
-    }
+    tracing::error!(
+        event = "agent_output_superseded_frame_retired",
+        sequence,
+        frame_sha256 = %crate::sandbox::code_recovery::hex(&digest),
+        superseded_claim_attempt,
+        "an unaccepted progress frame from a superseded claim was retired and is not replayed"
+    );
     factory.reopen().await
 }
 

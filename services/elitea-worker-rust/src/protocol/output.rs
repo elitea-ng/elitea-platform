@@ -280,6 +280,22 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
     validate_restored_settlement(verified, frame, payload_digest, Some(requested_outcome))
 }
 
+/// The one deadline rule every terminal route applies: a failure that is not a
+/// cancellation becomes `DeadlineExceeded` once the signed command deadline has
+/// passed.
+#[must_use]
+pub(crate) fn failure_after_deadline(
+    failure: RuntimeFailureKind,
+    now_unix_millis: i64,
+    deadline_unix_millis: i64,
+) -> RuntimeFailureKind {
+    if failure != RuntimeFailureKind::Cancelled && now_unix_millis >= deadline_unix_millis {
+        RuntimeFailureKind::DeadlineExceeded
+    } else {
+        failure
+    }
+}
+
 /// Return the registered failure carried by an already validated terminal.
 ///
 /// Callers use this only after [`validate_restored_agent_output_frame`] has
@@ -302,10 +318,11 @@ pub(crate) fn restored_terminal_failure_kind(
 /// only in its runtime-error text (an older build spooled it).
 ///
 /// Everything else must validate as for any restored frame: identity, fence,
-/// stream, sequence shape, event type, logical output and the payload digest.
-/// Returns the failure kind to keep: the one registered kind that has the same
-/// code and retryable flag, else `Internal`. A canonical frame is not accepted
-/// here; it replays exactly.
+/// stream, sequence shape, event type, logical output, the payload digest and
+/// the settlement proposal. The error's code and retryable flag must be a
+/// registered pair; only the text may be unregistered. Returns the failure kind
+/// to keep: the one registered kind with that code and flag, else `Internal`.
+/// A canonical frame is not accepted here; it replays exactly.
 ///
 /// # Errors
 ///
@@ -319,11 +336,12 @@ pub(crate) fn unrecognised_failure_terminal_kind(
     else {
         return Err(malformed_restored_output());
     };
+    let payload_digest = sha256(&error.encode_to_vec());
     if !frame.terminal
         || frame.event_type != ExecutionOutputEventTypeV1::RuntimeError as i32
-        || frame.logical_output_id != format!("agent-execution:{}", verified.command().execution_id)
+        || frame.logical_output_id != super::command::terminal_logical_output_id(verified.command())
         || canonical_runtime_failure(error).is_some()
-        || frame.payload_digest.as_ref() != Some(&sha256(&error.encode_to_vec()))
+        || frame.payload_digest.as_ref() != Some(&payload_digest)
     {
         return Err(malformed_restored_output());
     }
@@ -331,10 +349,22 @@ pub(crate) fn unrecognised_failure_terminal_kind(
         let registered = runtime_error(*kind);
         registered.code == error.code && registered.retryable == error.retryable
     });
-    Ok(match (same_code.next(), same_code.next()) {
+    let kept = match (same_code.next(), same_code.next()) {
+        (None, _) => return Err(malformed_restored_output()),
         (Some(kind), None) => kind,
         _ => RuntimeFailureKind::Internal,
-    })
+    };
+    validate_restored_settlement(
+        verified,
+        frame,
+        payload_digest,
+        Some(if error.code == RuntimeErrorCodeV1::Cancelled as i32 {
+            ExecutionOutcomeV1::Cancelled
+        } else {
+            ExecutionOutcomeV1::Failed
+        }),
+    )?;
+    Ok(kept)
 }
 
 fn validate_restored_frame_identity(

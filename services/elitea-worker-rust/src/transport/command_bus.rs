@@ -388,6 +388,11 @@ pub enum PoisonReason {
     /// Main refused even the canonical failure terminal of a verified
     /// command (version skew). Redelivery cannot change that (FU-290).
     TerminalRefused,
+    /// Main's output watermark covers a pending terminal this build cannot
+    /// validate, yet Main answered an output recovery for it (an inconsistent
+    /// state: a committed terminal settles through its stored proposal).
+    /// Redelivery cannot change that; it is dead-lettered so it can be found.
+    CommittedTerminalUnvalidated,
 }
 
 impl PoisonReason {
@@ -400,7 +405,10 @@ impl PoisonReason {
     pub const fn terminates(self) -> bool {
         matches!(
             self,
-            Self::SignatureInvalid | Self::SubjectMismatch | Self::TerminalRefused
+            Self::SignatureInvalid
+                | Self::SubjectMismatch
+                | Self::TerminalRefused
+                | Self::CommittedTerminalUnvalidated
         )
     }
 
@@ -414,6 +422,7 @@ impl PoisonReason {
             Self::SubjectMismatch => "subject_mismatch",
             Self::UnsupportedCommand => "unsupported_command",
             Self::TerminalRefused => "terminal_refused",
+            Self::CommittedTerminalUnvalidated => "committed_terminal_unvalidated",
         }
     }
 }
