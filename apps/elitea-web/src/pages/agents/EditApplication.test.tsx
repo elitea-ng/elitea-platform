@@ -16,6 +16,11 @@ import { NavBlockerDialog, useNavBlockerStore } from '@/widgets/app-shell';
 import { EditApplication } from './EditApplication';
 import { renderAgentsRoute } from './__tests__/testRouter';
 
+// Under CI's coverage shards this file runs ~5x slower than locally (241 s for
+// 36 tests on 2026-11-06), and the Persona tab (#1604) made the editor heavier;
+// 15 s per test left too little headroom. One file-wide ceiling, as AdminApp has.
+vi.setConfig({ testTimeout: 30_000 });
+
 /**
  * The agent's name is the shell's crumb (`Agents ▸ My Agent`), not a heading
  * of the page's own: the probe shows what the shell's title row would say.
@@ -216,7 +221,7 @@ describe('EditApplication', () => {
     await waitFor(() => expect(screen.getByTestId('crumbs')).toHaveTextContent('My Agent'), { timeout: 5_000 });
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
-  }, 15_000);
+  });
 
   it('renders the configuration tab panel with the real agent fields in it', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -236,7 +241,7 @@ describe('EditApplication', () => {
     expect(await screen.findByTestId('agent-name-input', {}, { timeout: 5_000 })).toBeInTheDocument();
     expect(panel).toContainElement(screen.getByTestId('agent-name-input'));
     expect(panel).toContainElement(screen.getByTestId('agent-description-input'));
-  }, 15_000);
+  });
 
   it('shows the not-found state when the URL version is not in the versions list', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -342,7 +347,7 @@ describe('EditApplication', () => {
      * gap the issue reports.
      */
     expect(screen.getByTestId('agent-version-set-default')).toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('mounts "Save As Version" for an owner and withholds it from a read-only viewer', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -361,7 +366,7 @@ describe('EditApplication', () => {
     });
     await viewer.findByTestId('version-selector-trigger', {}, { timeout: 5_000 });
     expect(viewer.queryByRole('button', { name: /save as version/i })).not.toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('clicking Cancel does not throw and keeps the page mounted', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -484,7 +489,7 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(versionBodies).toHaveLength(1));
     expect(versionBodies[0]?.['welcome_message']).toBe('Hello!');
-  }, 15_000);
+  });
 
   it('persists a renamed agent through the application PUT, which the page never called before issue 307', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -527,7 +532,7 @@ describe('EditApplication', () => {
     // A scoped budget rather than a global testTimeout bump: raising the
     // default in vitest.config.ts would hide slowness creep across the whole
     // suite. CI runs this file roughly 7x slower than a laptop.
-  }, 15_000);
+  });
 
   /*
    * #307 — the conversation-starters field was the ONE field this page
@@ -568,7 +573,7 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(versionBodies).toHaveLength(1));
     expect(versionBodies[0]?.['conversation_starters']).toEqual(['Hi there friend']);
-  }, 15_000);
+  });
 
   it('adds a new conversation starter and sends both of them', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -597,7 +602,7 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(versionBodies).toHaveLength(1));
     expect(versionBodies[0]?.['conversation_starters']).toEqual(['Hi there', 'Second']);
-  }, 15_000);
+  });
 
   /*
    * #307 — export/delete/version-delete were fully built with zero
@@ -621,7 +626,7 @@ describe('EditApplication', () => {
     // `features/agents/ui/AgentVersionControls.test.tsx`.
     await userEvent.click(screen.getByTestId('version-selector-trigger'));
     expect(screen.getByTestId('agent-version-delete')).toBeVisible();
-  }, 15_000);
+  });
 
   it('hides the export, delete and version-delete controls from a read-only viewer of a public agent', async () => {
     setPublicProjectId('42');
@@ -662,7 +667,7 @@ describe('EditApplication', () => {
     expect(screen.getByText('Github')).toBeVisible();
     expect(screen.getByTestId('edit-application-configuration-tab-panel')).toContainElement(card);
     expect(screen.getByTestId('agent-add-toolkit-button')).toBeVisible();
-  }, 15_000);
+  });
 
   /*
    * #345 — the tag control, asserted from the page's REAL composition root.
@@ -688,7 +693,7 @@ describe('EditApplication', () => {
     const chip = await screen.findByText('finance', {}, { timeout: 5_000 });
     expect(chip).toBeVisible();
     expect(panel).toContainElement(chip);
-  }, 15_000);
+  });
 
   it('sends a typed tag to the version PUT body, alongside the stored one', async () => {
     server.use(getGetApplicationMockHandler(detailWithTags()));
@@ -718,7 +723,7 @@ describe('EditApplication', () => {
     // REPLACES the association rows, so a body carrying only the new name
     // would silently delete the stored one.
     expect(versionBodies[0]?.['tags']).toEqual([{ id: 4, name: 'finance' }, { name: 'newtag' }]);
-  }, 15_000);
+  });
 
   it('exposes the agent through MCP by adding the existing exact tag contract', async () => {
     server.use(getGetApplicationMockHandler(detailWithTags()));
@@ -740,7 +745,7 @@ describe('EditApplication', () => {
 
     await waitFor(() => expect(versionBodies).toHaveLength(1));
     expect(versionBodies[0]?.['tags']).toEqual([{ id: 4, name: 'finance' }, { name: 'mcp' }]);
-  }, 15_000);
+  });
 
   it('offers a read-only viewer neither tool control (no attach menu, remove disabled)', async () => {
     setPublicProjectId('42');
@@ -753,7 +758,7 @@ describe('EditApplication', () => {
     await screen.findByTestId('agent-toolkit-card', {}, { timeout: 5_000 });
     expect(screen.queryByTestId('agent-add-toolkit-button')).not.toBeInTheDocument();
     expect(screen.getByTestId('agent-toolkit-delete-button')).toBeDisabled();
-  }, 15_000);
+  });
 
   /*
    * The picker's own behaviour lives in `widgets/agent-model-settings`; what
@@ -769,7 +774,7 @@ describe('EditApplication', () => {
     });
 
     expect(await screen.findByText('GPT-4o', {}, { timeout: 5_000 })).toBeVisible();
-  }, 15_000);
+  });
 
   it('reads a stored model back onto the picker instead of the project default', async () => {
     const base = detail();
@@ -792,7 +797,7 @@ describe('EditApplication', () => {
     });
 
     expect(await screen.findByText('Qwen 3.5', {}, { timeout: 5_000 })).toBeVisible();
-  }, 15_000);
+  });
 
   it('sends a newly picked model in the version PUT body, with a NUMERIC model_project_id', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -901,7 +906,7 @@ describe('EditApplication', () => {
     // `onUnhandledRequest: 'error'`, so one would fail this test outright).
     expect(within(information).queryByText('Trigger:')).not.toBeInTheDocument();
     expect(within(information).queryByText('Pipeline:')).not.toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('names the origin agent in the Information section when the open version was forked', async () => {
     const forked = detail();
@@ -924,7 +929,7 @@ describe('EditApplication', () => {
     const information = await screen.findByTestId('agent-information-section', {}, { timeout: 5_000 });
     expect(await within(information).findByText('Forked from:', {}, { timeout: 5_000 })).toBeInTheDocument();
     expect(await within(information).findByText('Origin Agent', {}, { timeout: 5_000 })).toBeInTheDocument();
-  }, 15_000);
+  });
 });
 
 describe('leaving the editor', () => {
@@ -952,7 +957,7 @@ describe('leaving the editor', () => {
     // #133 — the discard itself must not be prompted about: the navigation
     // happened, so the app-wide blocker was disarmed first.
     expect(useNavBlockerStore.getState().isBlockNav).toBe(false);
-  }, 15_000);
+  });
 
   it('dismissing the discard dialog stays on the edit page', async () => {
     server.use(getGetApplicationMockHandler(detail()));
@@ -971,7 +976,7 @@ describe('leaving the editor', () => {
     await user.click(cancels[cancels.length - 1] as HTMLElement);
 
     expect(router.state.location.pathname).toBe('/agents/all/42');
-  }, 15_000);
+  });
 });
 
 describe('talking to the agent', () => {
@@ -1031,7 +1036,7 @@ describe('talking to the agent', () => {
       entity_meta: { id: '42', project_id: '9' },
       entity_settings: { version_id: '1' },
     });
-  }, 15_000);
+  });
 
   it('a participant the server refuses for its composition shows the server\'s reason (FU-244)', async () => {
     const reason = 'These attachments would create a circular agent reference: "Agent" → "Flow" → "Agent". Remove the circular dependency first.';
@@ -1047,7 +1052,7 @@ describe('talking to the agent', () => {
 
     expect(await screen.findByText(reason)).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/agents/all/42');
-  }, 15_000);
+  });
 
   it('a failed conversation create surfaces an error and stays on the page', async () => {
     server.use(
@@ -1061,7 +1066,7 @@ describe('talking to the agent', () => {
 
     expect(await screen.findByText('Failed to open a chat with this agent.')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/agents/all/42');
-  }, 15_000);
+  });
 
   /**
    * Audit (handoff brief) — same finding as the pipelines twin
@@ -1116,5 +1121,5 @@ describe('talking to the agent', () => {
     // now it never will.
     await waitFor(() => expect(screen.getByTestId('chat-with-agent-button')).toBeEnabled(), { timeout: 2_000 });
     expect(screen.getByTestId('chat-with-agent-button')).toHaveTextContent('Chat');
-  }, 15_000);
+  });
 });
