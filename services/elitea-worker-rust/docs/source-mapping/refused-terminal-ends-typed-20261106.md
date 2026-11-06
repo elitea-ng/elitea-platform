@@ -104,7 +104,8 @@ variant.
 - An earlier run at cdd751fec under load about 50 had 1 failure: the lock-bound timing test, which passed 3 of 3
   alone. That is FU-296.
 - An earlier figure of 2842 came from a narrower command (`cargo test --offline` alone) and is not comparable.
-- At the PR head 68611c6ba (main with FU-287 merged in), quiet machine: **3144 passed, 0 failed, 110 ignored**; clippy `-D warnings` with `--all-targets --all-features` clean.
+- At 68611c6ba (main with FU-287 merged in), quiet machine: 3144 passed, 0 failed, 110 ignored.
+- At the final head bd0e00111 (after the review round), quiet machine: **3150 passed, 0 failed, 110 ignored**; clippy `-D warnings` with `--all-targets --all-features` and fmt clean.
 
 **Lints:**
 - clippy `-D warnings` is clean in every changed file. Pre-existing findings remain in untouched files
