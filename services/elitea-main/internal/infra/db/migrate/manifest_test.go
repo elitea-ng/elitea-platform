@@ -1041,7 +1041,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 227: shared/0227_agent_execution_participant.sql, the participant a
 	// chat run speaks as and its answer's addressees on agent_execution_jobs
 	// (ADR-0050 decision 7b and 7e, #1605). No data, no permission.
-	require.EqualValues(t, 227, Head(shared))
+	//
+	// 228: shared/0228_browser_sessions.sql, the cloud browser session table
+	// (ADR-0049 decision 6, #1597): elitea_runtime.browser_sessions, written
+	// by ReportBrowserSession and read by the view relay on any replica. No
+	// data, no permission.
+	require.EqualValues(t, 228, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -122,6 +122,11 @@ type Server struct {
 	// egressSummaries keeps the worker's egress reports (ADR-0044
 	// decision 2); nil answers ReportEgressSummary UNSUPPORTED_CAPABILITY.
 	egressSummaries EgressSummaries
+	// browserSessions keeps the cloud browser session rows (ADR-0049
+	// decision 6, #1597) for the supervisors in browserAudiences; nil
+	// answers ReportBrowserSession UNSUPPORTED_CAPABILITY.
+	browserSessions  BrowserSessionRecorder
+	browserAudiences map[string]struct{}
 	// runSteps stores the worker's step records (ADR-0042, #1499); nil
 	// answers ReportRunSteps UNSUPPORTED_CAPABILITY.
 	runSteps RunSteps
