@@ -1,0 +1,29 @@
+{
+  // The browser driver's page script (driver.ts) compiled to the driver.js
+  // that src/lib.rs embeds with include_str!. driver.js is committed; CI
+  // (ci-desktop.yml) fails when it differs from what this emits. One classic
+  // script, no imports or exports: WebKit runs it as a user script in the
+  // driver's content world, and with evaluateJavaScript.
+  "compilerOptions": {
+    // WebKit on macOS 12 and later runs ES2022.
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // A script, not a module: no `export {}` is added, and the file's own
+    // 'use strict' is the only prologue.
+    "module": "preserve",
+    "moduleDetection": "legacy",
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "removeComments": false,
+    "sourceMap": false,
+    "declaration": false,
+    "newLine": "lf"
+  },
+  "files": ["driver.ts"]
+}

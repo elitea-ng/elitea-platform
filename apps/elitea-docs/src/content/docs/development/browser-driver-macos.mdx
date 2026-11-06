@@ -11,7 +11,9 @@ The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-deskt
 
 | Part | Holds |
 | --- | --- |
-| `js/driver.js` | The driver's page script, loaded with `include_str!`. It builds the snapshot and performs the actions. |
+| `js/driver.ts` | The source of the driver's page script, in strict TypeScript. It builds the snapshot and performs the actions. Its types are the raw node and answer shapes that `src/reply.rs` reads. |
+| `js/driver.js` | Generated from `driver.ts` and committed. It is the script the crate loads with `include_str!`. Do not edit it by hand. |
+| `js/tsconfig.json` | Compiles `driver.ts` to `driver.js`: one classic script (no imports or exports), ES2022, comments kept. |
 | `src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
 | `src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
 | `src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
@@ -19,6 +21,16 @@ The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-deskt
 | `src-tauri/src/browser_tools.rs` | The host's `browser` toolset. It holds the drivers of a turn's thread, plus the `gate` seam for approvals and policy (#1590). |
 
 The host attaches a driver when it makes the pane's webview (`browser_pane.rs`, through `with_webview`). It detaches the driver when the pane closes or the person signs out. The `browser` toolset is added next to the local, index and MCP toolsets of a turn. It is never one of the workspace tools, and sub-agents do not get it. If a thread's pane is not open, every browser tool answers `unsupported` and tells the model to ask the person to open the pane.
+
+### Changing the page script
+
+Edit `js/driver.ts`, not `js/driver.js`. Then regenerate `driver.js` from the repository root with the web app's pinned TypeScript, and commit both files:
+
+```sh
+apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json
+```
+
+The `desktop` job in `ci-desktop.yml` runs the same command and fails when the committed `driver.js` differs from the output (step "Browser driver script is compiled from driver.ts"). The output must stay one self-contained classic script (the header comments, `'use strict'`, then `(function install() { … })();`), because WebKit runs it as a user script and through `evaluateJavaScript`. The crate's unit tests check the emitted file: no `eval` or `Function`, the secure-field tokens, and the error codes.
 
 ## The driver world
 

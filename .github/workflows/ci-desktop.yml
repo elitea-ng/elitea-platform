@@ -106,6 +106,17 @@ jobs:
         working-directory: apps/elitea-web
         run: npm ci
 
+      # The macOS browser driver embeds js/driver.js (include_str!), which is
+      # tsc's output from js/driver.ts and is committed: it must be exactly
+      # what the web app's pinned TypeScript emits from the source.
+      - name: Browser driver script is compiled from driver.ts
+        run: |
+          apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json
+          if ! git diff --exit-code -- apps/elitea-desktop/src-tauri/browser-driver-macos/js/driver.js; then
+            echo "::error file=apps/elitea-desktop/src-tauri/browser-driver-macos/js/driver.js::driver.js is not what tsc emits from driver.ts. Run 'apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json' from the repository root and commit driver.js."
+            exit 1
+          fi
+
       - name: Desktop transport unit tests (bearer, refresh, fetch SSE, host bridge)
         working-directory: apps/elitea-web
         run: >

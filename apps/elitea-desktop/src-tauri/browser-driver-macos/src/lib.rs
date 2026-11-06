@@ -43,7 +43,10 @@ pub use driver::{Engine, EnginePage, HandOver, NavigationCheck, NoHandOver, WebD
 #[cfg(target_os = "macos")]
 pub use webkit::{WebKitEngine, accessibility_granted};
 
-/// The driver's page script (`js/driver.js`).
+/// The driver's page script (`js/driver.js`), compiled by `tsc` from
+/// `js/driver.ts` (`js/tsconfig.json`) and committed. Edit the TypeScript
+/// and regenerate; CI (`ci-desktop.yml`) fails when the committed
+/// `driver.js` is not what `tsc` emits.
 pub const SCRIPT: &str = include_str!("../js/driver.js");
 
 /// The driver of a Tauri child webview (the pane's page): installs the
