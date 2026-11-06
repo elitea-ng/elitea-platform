@@ -19,7 +19,7 @@ export interface AgentSoulDraft {
   readonly body: string;
 }
 
-export const SOUL_SCHEMA_ID = 'elitea.soul/v1';
+const SOUL_SCHEMA_ID = 'elitea.soul/v1';
 
 /** The limit Main enforces: UTF-8 bytes of every string value, `schema` included. */
 export const SOUL_MAX_TEXT_BYTES = 16 * 1024;
