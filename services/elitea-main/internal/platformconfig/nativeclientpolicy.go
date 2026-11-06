@@ -87,7 +87,44 @@ const (
 	KeyNativeLocalWorkComputerUse          = "local_work_computer_use"
 	KeyNativeLocalWorkComputerUseAppsAllow = "local_work_computer_use_apps_allow"
 	KeyNativeLocalWorkComputerUseAppsDeny  = "local_work_computer_use_apps_deny"
+	// KeyNativeLocalWorkBrowser is the desktop's browser pane and its
+	// toolset for local threads (ADR-0048 decision 8, client contract 1.38).
+	// On by default. KeyNativeLocalWorkBrowserAgent lets the agent drive the
+	// pane (off: the person can still browse). The domain lists are a
+	// ceiling (allow, empty: no ceiling) and a deny list; a deny wins.
+	// KeyNativeLocalWorkBrowserHTTP lets plain http pages load and
+	// KeyNativeLocalWorkBrowserPrivateNetwork loopback and private
+	// addresses (both off by default).
+	KeyNativeLocalWorkBrowser               = "local_work_browser"
+	KeyNativeLocalWorkBrowserAgent          = "local_work_browser_agent"
+	KeyNativeLocalWorkBrowserAllowDomains   = "local_work_browser_allow_domains"
+	KeyNativeLocalWorkBrowserDenyDomains    = "local_work_browser_deny_domains"
+	KeyNativeLocalWorkBrowserHTTP           = "local_work_browser_http"
+	KeyNativeLocalWorkBrowserPrivateNetwork = "local_work_browser_private_network"
 )
+
+// MaxBrowserDomains and MaxBrowserDomainBytes bound the browser pane's domain
+// lists. The save path refuses a list over them; the loader keeps only valid
+// entries and at most MaxBrowserDomains of them.
+const (
+	MaxBrowserDomains     = 200
+	MaxBrowserDomainBytes = 253
+)
+
+// ValidBrowserDomain reports whether entry may be stored in a browser domain
+// list: a lowercase host name of at least two labels (example.com, which also
+// covers every host under it), or `*.` and such a name (*.example.com: only
+// the hosts under it). No scheme, port, path or IP literal. The desktop applies
+// the same rule (libs/rust/local-tools policy.rs).
+func ValidBrowserDomain(entry string) bool {
+	return len(entry) <= MaxBrowserDomainBytes && ValidCloudExecutorHost(entry) &&
+		strings.Trim(strings.TrimPrefix(entry, "*."), "0123456789.") != ""
+}
+
+// NoBrowserHost is a valid domain no host has (the reserved .invalid TLD). A
+// loaded browser allow list whose every stored entry was invalid becomes
+// [NoBrowserHost]: the ceiling stays closed rather than opening to every host.
+const NoBrowserHost = "no-host.elitea.invalid"
 
 // MaxBundleIDPatterns and MaxBundleIDBytes bound the computer-use app lists.
 // The save path refuses a list over them; the loader keeps only valid entries
@@ -254,6 +291,18 @@ type LocalWorkPolicy struct {
 	// the desktop's own platform list. A deny wins.
 	ComputerUseAppsAllow []string `json:"computer_use_apps_allow"`
 	ComputerUseAppsDeny  []string `json:"computer_use_apps_deny"`
+	// Browser: the desktop's browser pane and its toolset exist for local
+	// threads (ADR-0048). BrowserAgent: the agent may drive the pane.
+	Browser      bool `json:"browser"`
+	BrowserAgent bool `json:"browser_agent"`
+	// BrowserAllowDomains: when non-empty, the only hosts the pane loads.
+	// BrowserDenyDomains: hosts it never loads. A deny wins.
+	BrowserAllowDomains []string `json:"browser_allow_domains"`
+	BrowserDenyDomains  []string `json:"browser_deny_domains"`
+	// BrowserHTTP: plain http pages may load. BrowserPrivateNetwork:
+	// loopback and private addresses may load.
+	BrowserHTTP           bool `json:"browser_http"`
+	BrowserPrivateNetwork bool `json:"browser_private_network"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -286,6 +335,14 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		ComputerUse:          false,
 		ComputerUseAppsAllow: []string{},
 		ComputerUseAppsDeny:  []string{},
+		// The browser pane shows public https pages to the person, who
+		// sees every action (ADR-0048, owner decision at acceptance 1).
+		Browser:               true,
+		BrowserAgent:          true,
+		BrowserAllowDomains:   []string{},
+		BrowserDenyDomains:    []string{},
+		BrowserHTTP:           false,
+		BrowserPrivateNetwork: false,
 	}
 }
 
@@ -312,6 +369,12 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.ComputerUse = values.Bool(KeyNativeLocalWorkComputerUse, policy.ComputerUse)
 	policy.ComputerUseAppsAllow = bundleIDPatterns(values, KeyNativeLocalWorkComputerUseAppsAllow)
 	policy.ComputerUseAppsDeny = bundleIDPatterns(values, KeyNativeLocalWorkComputerUseAppsDeny)
+	policy.Browser = values.Bool(KeyNativeLocalWorkBrowser, policy.Browser)
+	policy.BrowserAgent = values.Bool(KeyNativeLocalWorkBrowserAgent, policy.BrowserAgent)
+	policy.BrowserAllowDomains = browserDomains(values, KeyNativeLocalWorkBrowserAllowDomains)
+	policy.BrowserDenyDomains = browserDomains(values, KeyNativeLocalWorkBrowserDenyDomains)
+	policy.BrowserHTTP = values.Bool(KeyNativeLocalWorkBrowserHTTP, policy.BrowserHTTP)
+	policy.BrowserPrivateNetwork = values.Bool(KeyNativeLocalWorkBrowserPrivateNetwork, policy.BrowserPrivateNetwork)
 	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
 		policy.IndexModelMirrorURL = mirror
 	}
@@ -354,6 +417,30 @@ func bundleIDPatterns(values Values, key string) []string {
 	}
 	if key == KeyNativeLocalWorkComputerUseAppsAllow && len(stored) > 0 && len(out) == 0 {
 		out = append(out, NoAppBundleID)
+	}
+	return out
+}
+
+// browserDomains keeps the valid entries of a stored browser domain list,
+// lowercased and deduplicated, at most MaxBrowserDomains. It never answers
+// nil. As with bundleIDPatterns, a stored non-empty allow list with no valid
+// entry loads as [NoBrowserHost], so the ceiling stays closed.
+func browserDomains(values Values, key string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	stored := values.Strings(key)
+	for _, entry := range stored {
+		if len(out) == MaxBrowserDomains {
+			break
+		}
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if ValidBrowserDomain(entry) && !seen[entry] {
+			seen[entry] = true
+			out = append(out, entry)
+		}
+	}
+	if key == KeyNativeLocalWorkBrowserAllowDomains && len(stored) > 0 && len(out) == 0 {
+		out = append(out, NoBrowserHost)
 	}
 	return out
 }

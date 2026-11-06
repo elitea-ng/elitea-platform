@@ -58,6 +58,17 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 		{"app deny inner wildcard", `{"local_work_computer_use_apps_deny":["com.*.mail"]}`, "local_work_computer_use_apps_deny"},
 		{"app deny not a string", `{"local_work_computer_use_apps_deny":[3]}`, "local_work_computer_use_apps_deny"},
 		{"app id too long", `{"local_work_computer_use_apps_deny":["` + strings.Repeat("a", 256) + `"]}`, "local_work_computer_use_apps_deny"},
+		{"browser valid", `{"local_work_browser":false,"local_work_browser_agent":false,"local_work_browser_http":true,
+			"local_work_browser_private_network":true,
+			"local_work_browser_allow_domains":["example.com","*.example.org"],
+			"local_work_browser_deny_domains":["Ads.Example.com"]}`, ""},
+		{"browser domains not a list", `{"local_work_browser_allow_domains":"example.com"}`, "local_work_browser_allow_domains"},
+		{"browser domain with a scheme", `{"local_work_browser_allow_domains":["https://example.com"]}`, "local_work_browser_allow_domains"},
+		{"browser domain with a port", `{"local_work_browser_deny_domains":["example.com:8080"]}`, "local_work_browser_deny_domains"},
+		{"browser domain an address", `{"local_work_browser_deny_domains":["10.0.0.1"]}`, "local_work_browser_deny_domains"},
+		{"browser domain one label", `{"local_work_browser_deny_domains":["localhost"]}`, "local_work_browser_deny_domains"},
+		{"browser domain not a string", `{"local_work_browser_deny_domains":[1]}`, "local_work_browser_deny_domains"},
+		{"too many browser domains", `{"local_work_browser_allow_domains":[` + strings.TrimSuffix(strings.Repeat(`"a.b",`, 201), ",") + `]}`, "local_work_browser_allow_domains"},
 		{"too many apps", `{"local_work_computer_use_apps_allow":[` + strings.TrimSuffix(strings.Repeat(`"a.b",`, 201), ",") + `]}`, "local_work_computer_use_apps_allow"},
 	}
 	for _, tc := range cases {
@@ -107,14 +118,16 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write",
 		"local_work_cloud_handoff", "local_work_index_local_embeddings", "local_work_index_remote_embeddings",
 		"local_work_index_model_mirror_url", "local_work_web", "local_work_host_intel",
-		"local_work_computer_use", "local_work_computer_use_apps_allow", "local_work_computer_use_apps_deny"} {
+		"local_work_computer_use", "local_work_computer_use_apps_allow", "local_work_computer_use_apps_deny",
+		"local_work_browser", "local_work_browser_agent", "local_work_browser_allow_domains",
+		"local_work_browser_deny_domains", "local_work_browser_http", "local_work_browser_private_network"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 33 {
+	if len(keys) != 39 {
 		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1, "+
-			"contract 1.9's 3, #1238's 2 and ADR-0047's 3", len(keys))
+			"contract 1.9's 3, #1238's 2, ADR-0047's 3 and ADR-0048's 6", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {
