@@ -7,7 +7,7 @@ vendored `adk-runner` only. No Main, proto, Helm, compose or CI change, and no m
 
 ## 1. Business behaviour taken from the current platform, and what was not ported
 
-Reference: the current platform runs agents through the same ADK runner (`elitea-sdk`, `pylon_indexer`). The current
+Reference: the current platform runs agents through the same ADK runner (`elitea-sdk` and its indexer service). The current
 platform has no incremental refresh; its behaviour is the contract this change keeps.
 
 **What the runner's refresh guarantees (unchanged).** After every persisted non-partial event the vendored runner
