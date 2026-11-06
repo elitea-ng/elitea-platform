@@ -155,39 +155,39 @@ export const LocalWorkPolicy = zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.38 (ADR-0048 decision 8). The desktop browser pane and its toolset exist for local threads. Default true. Only with `allowed`.",
+        "Client contract 1.39 (ADR-0048 decision 8). The desktop browser pane and its toolset exist for local threads. Default true. Only with `allowed`.",
       ),
     browser_agent: zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.38. The agent may drive the browser pane; off, the person can still browse. Default true. Only with `browser`.",
+        "Client contract 1.39. The agent may drive the browser pane; off, the person can still browse. Default true. Only with `browser`.",
       ),
     browser_allow_domains: zod
       .array(zod.string().max(localWorkPolicyBrowserAllowDomainsItemMax))
       .max(localWorkPolicyBrowserAllowDomainsMax)
       .optional()
       .describe(
-        'Client contract 1.38. When non-empty, the only hosts the pane loads: `example.com` (it and every host under it) or `*.example.com` (only the hosts under it), lowercase, no scheme, port or address. A ceiling, not an approval. A stored list whose every entry is invalid is sent as `["no-host.elitea.invalid"]`, never as no ceiling.',
+        'Client contract 1.39. When non-empty, the only hosts the pane loads: `example.com` (it and every host under it) or `*.example.com` (only the hosts under it), lowercase, no scheme, port or address. A ceiling, not an approval. A stored list whose every entry is invalid is sent as `["no-host.elitea.invalid"]`, never as no ceiling.',
       ),
     browser_deny_domains: zod
       .array(zod.string().max(localWorkPolicyBrowserDenyDomainsItemMax))
       .max(localWorkPolicyBrowserDenyDomainsMax)
       .optional()
       .describe(
-        "Client contract 1.38. Hosts the pane never loads, in the same form. A deny wins over an allow.",
+        "Client contract 1.39. Hosts the pane never loads, in the same form. A deny wins over an allow.",
       ),
     browser_http: zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.38. Plain `http` pages may load. Default false.",
+        "Client contract 1.39. Plain `http` pages may load. Default false.",
       ),
     browser_private_network: zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.38. Loopback and private addresses (and the names private by definition, `localhost`, `.local`, ...) may load. Link-local and the other forbidden ranges never do. Default false.",
+        "Client contract 1.39. Loopback and private addresses (and the names private by definition, `localhost`, `.local`, ...) may load. Link-local and the other forbidden ranges never do. Default false.",
       ),
   })
   .describe(

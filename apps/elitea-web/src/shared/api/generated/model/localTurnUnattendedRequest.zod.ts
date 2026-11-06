@@ -89,7 +89,7 @@ export const LocalTurnUnattendedRequest = zod
       .max(localTurnUnattendedRequestBrowserSubmitsMax)
       .optional()
       .describe(
-        "Client contract 1.38 (ADR-0048 decision 8). The hosts on which the desktop browser pane's form submits and uploads are answered by the grant (exact lowercase host names, no scheme, port, wildcard or address). A buy, pay, delete, send or sign control and a download are never the grant's. An invalid host answers 422 `unattended_grant_refused` (field `browser_submits`).",
+        "Client contract 1.39 (ADR-0048 decision 8). The hosts on which the desktop browser pane's form submits and uploads are answered by the grant (exact lowercase host names, no scheme, port, wildcard or address). A buy, pay, delete, send or sign control and a download are never the grant's. An invalid host answers 422 `unattended_grant_refused` (field `browser_submits`).",
       ),
     kind: zod
       .string()

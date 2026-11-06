@@ -81,7 +81,7 @@ export const LocalTurnHITLExchange = zod
       .max(localTurnHITLExchangeHostMax)
       .optional()
       .describe(
-        "Client contract 1.38 (ADR-0048 decision 8). On a `browser_submit` exchange: the page host the answer was for, a lowercase DNS host name. A `grant` answer of that kind is recorded only when the stored grant's `browser_submits` names this host.",
+        "Client contract 1.39 (ADR-0048 decision 8). On a `browser_submit` exchange: the page host the answer was for, a lowercase DNS host name. A `grant` answer of that kind is recorded only when the stored grant's `browser_submits` names this host.",
       ),
   })
   .describe(

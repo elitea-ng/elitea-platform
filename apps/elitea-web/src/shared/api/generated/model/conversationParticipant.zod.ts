@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ConversationParticipantPersona } from "./conversationParticipantPersona.zod";
 
 export const ConversationParticipant = zod
   .object({
@@ -95,6 +96,13 @@ export const ConversationParticipant = zod
           .describe("Every other kind's display name."),
       })
       .nullish(),
+    kind: zod
+      .enum(["human", "agent", "ephemeral_agent", "system"])
+      .optional()
+      .describe(
+        "Client contract 1.38: what the participant is. Absent for an attachment (a toolkit, a prompt), which is in the conversation but never speaks. Read it instead of inferring from `entity_name`.",
+      ),
+    persona: ConversationParticipantPersona.optional(),
   })
   .describe(
     "One participant of a conversation (a user, an agent or pipeline, a toolkit, a model). NOTE(W2): internal/api/v2/conversations/handler.go:240 (`Participant`).\n",

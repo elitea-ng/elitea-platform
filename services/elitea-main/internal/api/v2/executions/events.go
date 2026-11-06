@@ -37,11 +37,35 @@ type DurableEvent struct {
 	Cursor uint64
 	Type   string
 	Data   json.RawMessage
+	// Participant is the chat participant an agent run answers as (shared
+	// 0227); nil for any other execution and for a run admitted before it.
+	// The handler stamps it on the run's node events and derives the
+	// `agent_state` frames from them (participant_frames.go).
+	Participant *EventParticipant
+}
+
+// EventParticipant is who speaks in an agent run and whom the answer is for.
+type EventParticipant struct {
+	ID int64
+	// AddressedTo is the answer's addressees; empty is everyone.
+	AddressedTo []int64
 }
 
 type EventRepository interface {
 	Replay(ctx context.Context, projectID, executionID string, afterCursor uint64, limit int) ([]DurableEvent, error)
 }
+
+// EventStateSource is implemented by a repository that can read the events
+// at and before a cursor (newest `limit`, oldest first). A resumed stream
+// reads them to restate the participant's current state (participant_frames.go).
+type EventStateSource interface {
+	Preceding(ctx context.Context, projectID, executionID string, throughCursor uint64, limit int) ([]DurableEvent, error)
+}
+
+// maxStateSeedEvents bounds the look-back of a resumed stream for its
+// participant's state: a longer run of state-inert frames (chunks of one
+// answer) leaves the state of the frame that started them unrestated.
+const maxStateSeedEvents = 64
 
 // ReplayWaiter is only a bounded wakeup/heartbeat mechanism. A wake carries no
 // payload and is never authoritative; the handler always replays from the
@@ -201,6 +225,19 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events := initial
+	var states participantStates
+	var seed *DurableEvent
+	if source, ok := h.repository.(EventStateSource); ok && cursor > 0 {
+		// Best effort: a failed look-back only leaves the state unrestated.
+		if before, err := source.Preceding(r.Context(), projectID, executionID, cursor, maxStateSeedEvents); err == nil {
+			seed = states.seed(before)
+		}
+	}
+	if seed != nil {
+		if err := stream.writeAndFlush(func() error { return writeDerivedFrame(w, *seed) }); err != nil {
+			return
+		}
+	}
 	for {
 		if len(events) > 0 {
 			if err := stream.writeAndFlush(func() error {
@@ -208,8 +245,19 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 					if event.Cursor <= cursor || validateDurableEvent(event) != nil {
 						return ErrInvalidEventStream
 					}
-					if err := writeDurableEvent(w, event); err != nil {
+					stamped, state := states.stamp(event)
+					if err := writeDurableEvent(w, stamped); err != nil {
 						return err
+					}
+					// The derived state frame follows its cause with no SSE id,
+					// so cursors stay strictly increasing and the client's
+					// resume cursor stays at the cause: a client that resumes
+					// after it skips the state, and the next transition (or the
+					// resume seed) restates it.
+					if state != nil {
+						if err := writeDerivedFrame(w, *state); err != nil {
+							return err
+						}
 					}
 					cursor = event.Cursor
 				}
@@ -391,6 +439,23 @@ func writeDurableEvent(w http.ResponseWriter, event DurableEvent) error {
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, err := fmt.Fprint(w, "\n\n")
+	return err
+}
+
+// writeDerivedFrame writes a derived state frame with no SSE id: a derived
+// frame has no cursor of its own, and a repeated or lower id would break the
+// strictly increasing cursor order or move the client's resume cursor back.
+func writeDerivedFrame(w http.ResponseWriter, event DurableEvent) error {
+	if event.Type == "" || strings.ContainsAny(event.Type, "\r\n") || !isCompactSingleLineJSON(event.Data) {
+		return ErrInvalidEventStream
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: ", event.Type); err != nil {
+		return err
+	}
+	if _, err := w.Write(event.Data); err != nil {
 		return err
 	}
 	_, err := fmt.Fprint(w, "\n\n")

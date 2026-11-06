@@ -56,6 +56,18 @@ export const ClientFrameEnvelope = zod.object({
     .describe("The answer's message group UUID (`response_message_id`)."),
   content: zod.unknown().nullish(),
   created_at: zod.string().nullish(),
+  participant_id: zod
+    .int()
+    .optional()
+    .describe(
+      "Client contract 1.38: the chat participant the run answers as; the persisted answer's `author_participant_id`. Absent for a run that is not a chat turn and for one admitted before 1.37.",
+    ),
+  addressed_to: zod
+    .array(zod.int())
+    .optional()
+    .describe(
+      "Client contract 1.38: the answer's addressees, as the persisted message's `addressed_to`. Empty is everyone. Present with `participant_id`.",
+    ),
 });
 
 export type ClientFrameEnvelope = zod.input<typeof ClientFrameEnvelope>;

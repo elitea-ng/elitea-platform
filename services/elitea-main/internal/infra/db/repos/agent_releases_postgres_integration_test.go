@@ -593,3 +593,48 @@ DELETE FROM p_1.elitea_tools WHERE id = 55;`); err != nil {
 		t.Fatalf("refusal = %d %v %v", status, body, ok)
 	}
 }
+
+// TestAgentExecutionParticipantReachesTheReplay: the participant a run
+// answers as (shared 0227) rides every event the replay serves for it, and a
+// run without one serves none (ADR-0050 decision 7b, #1605).
+func TestAgentExecutionParticipantReachesTheReplay(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	repository, err := NewAgentExecutionJobsRepository(pool, testAgentDispatchPolicy(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := repository.AdmitAgentExecution(ctx, postgresAgentCapacityAdmission(905))
+	if err != nil || !outcome.Created {
+		t.Fatalf("admit: outcome=%+v err=%v", outcome, err)
+	}
+	seedWorkerCapFailure(t, pool, outcome.ExecutionID, 1)
+	replay, err := NewReplayEventsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := replay.Replay(ctx, "1", outcome.ExecutionID, 0, 10)
+	if err != nil || len(events) != 1 || events[0].Participant != nil {
+		t.Fatalf("a run without a participant: %+v %v", events, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.agent_execution_jobs
+SET participant_id = 26, addressed_to = '{27}' WHERE execution_id = $1`, outcome.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	events, err = replay.Replay(ctx, "1", outcome.ExecutionID, 0, 10)
+	if err != nil || len(events) != 1 || events[0].Participant == nil ||
+		events[0].Participant.ID != 26 || len(events[0].Participant.AddressedTo) != 1 || events[0].Participant.AddressedTo[0] != 27 {
+		t.Fatalf("a run with a participant: %+v %v", events, err)
+	}
+	preceding, err := replay.Preceding(ctx, "1", outcome.ExecutionID, events[0].Cursor, 10)
+	if err != nil || len(preceding) != 1 || preceding[0].Cursor != events[0].Cursor ||
+		preceding[0].Participant == nil || preceding[0].Participant.ID != 26 {
+		t.Fatalf("the look-back: %+v %v", preceding, err)
+	}
+	if events[0].Cursor > 1 {
+		if before, err := replay.Preceding(ctx, "1", outcome.ExecutionID, events[0].Cursor-1, 10); err != nil || len(before) != 0 {
+			t.Fatalf("the look-back before the first event: %+v %v", before, err)
+		}
+	}
+}

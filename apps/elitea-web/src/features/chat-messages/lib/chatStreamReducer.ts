@@ -70,7 +70,7 @@ import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
 import { isRootAnswerFrame, reduceFinalResultFrame } from './chatStreamFinalResult';
 
 import type { ChatMessage } from './convertMessagesToChatHistory';
-import type { ChatStreamFrame } from './chatStreamFrame';
+import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 
 export type { ChatStreamContext, ToolAction } from './chatStreamShared';
 export { mcpSessionFromFrame } from './chatStreamToolFrames';
@@ -88,6 +88,9 @@ export function applyChatStreamFrame(
 ): readonly ChatMessage[] {
   const type = frame.type;
   if (!type) return history;
+  // A participant state (client contract 1.38) is not part of the answer:
+  // the participant presence reads it (#1606), the transcript never does.
+  if (type === SocketMessageType.AgentState) return history;
   if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
   // Resolved ONCE, here, and handed to every family: `index === -1` means "no

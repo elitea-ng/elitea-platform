@@ -20,7 +20,7 @@ type unattendedBody struct {
 	// continue.
 	Kind string `json:"kind"`
 	// BrowserSubmits: the hosts on which the desktop browser pane submits
-	// and uploads without asking (ADR-0048 decision 8, client contract 1.38).
+	// and uploads without asking (ADR-0048 decision 8, client contract 1.39).
 	BrowserSubmits []string `json:"browser_submits"`
 }
 

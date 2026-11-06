@@ -88,7 +88,7 @@ const (
 	KeyNativeLocalWorkComputerUseAppsAllow = "local_work_computer_use_apps_allow"
 	KeyNativeLocalWorkComputerUseAppsDeny  = "local_work_computer_use_apps_deny"
 	// KeyNativeLocalWorkBrowser is the desktop's browser pane and its
-	// toolset for local threads (ADR-0048 decision 8, client contract 1.38).
+	// toolset for local threads (ADR-0048 decision 8, client contract 1.39).
 	// On by default. KeyNativeLocalWorkBrowserAgent lets the agent drive the
 	// pane (off: the person can still browse). The domain lists are a
 	// ceiling (allow, empty: no ceiling) and a deny list; a deny wins.

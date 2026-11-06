@@ -1,5 +1,6 @@
 export { DEFAULT_MAX_EVENT_CHARS, EventStreamParser, type ParserOptions, type SseEvent } from './sseParser';
 export {
+  AGENT_STATE,
   ANSWER_DELTA_TYPES,
   EXECUTION_EVENT,
   FRAME_TYPE,
@@ -10,6 +11,7 @@ export {
   TOOL_CALL_TYPES,
   TURN_FAILURE_TYPES,
   parseEventData,
+  type AgentState,
   type EventData,
   type FrameType,
   type SteeringDropReason,

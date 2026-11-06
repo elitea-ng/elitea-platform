@@ -209,6 +209,14 @@ export interface ChatStreamFrame {
   readonly uuid?: string | undefined;
   readonly author_participant_id?: string | number | undefined;
   readonly sent_to_id?: string | number | undefined;
+  /**
+   * Client contract 1.38: the participant the run answers as and the
+   * answer's addressees (empty is everyone), on every frame of a chat run,
+   * and an `agent_state` frame's `state` (`AGENT_STATE`).
+   */
+  readonly participant_id?: number | undefined;
+  readonly addressed_to?: readonly number[] | undefined;
+  readonly state?: string | undefined;
   readonly message_items?: readonly MessageItemWire[] | undefined;
   /**
    * The summary frames' own envelope. `chat_predict_summary_started` carries

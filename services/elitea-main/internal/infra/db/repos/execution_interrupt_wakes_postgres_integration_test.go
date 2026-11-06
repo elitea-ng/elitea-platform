@@ -173,6 +173,9 @@ func TestDecideVersusParkAdmitsExactlyOneWakeJob(t *testing.T) {
 	for i := range rounds {
 		response := w.newResponse()
 		w.parkable(response)
+		// shared/0227: the wake answers as the parked run's participant.
+		w.exec(`UPDATE elitea_runtime.agent_execution_jobs SET participant_id = 26, addressed_to = '{27}'
+WHERE execution_id = $1`, w.executions[response])
 		key := w.raise(response, "fanout-interrupt-card-v1.json")
 		holder, err := w.pool.Begin(t.Context())
 		if err != nil {
@@ -219,6 +222,12 @@ func TestDecideVersusParkAdmitsExactlyOneWakeJob(t *testing.T) {
 		}
 		if n := w.jobsFor(response, 1); n != 1 {
 			t.Fatalf("round %d: %d wake jobs", i, n)
+		}
+		if n := w.count(`SELECT count(*) FROM elitea_runtime.agent_execution_jobs AS binding
+JOIN elitea_runtime.execution_jobs AS job USING (execution_id, generation)
+WHERE job.idempotency_key = $1 AND binding.participant_id = 26 AND binding.addressed_to = '{27}'`,
+			agentexecutionapp.FanoutWakeIdempotencyKey(response, 1)); n != 1 {
+			t.Fatalf("round %d: the wake job did not inherit the participant", i)
 		}
 		if got := w.wakes(response); len(got) != 1 || !strings.HasPrefix(got[0], "ADMITTED:1:") {
 			t.Fatalf("round %d: wakes = %v", i, got)

@@ -44,6 +44,8 @@ import * as zod from "zod";
 import { AttachmentMessageItem } from "./attachmentMessageItem.zod";
 import { GroundingIndicator } from "./groundingIndicator.zod";
 
+export const conversationMessageAddressedToMax = 64;
+
 export const ConversationMessage = zod
   .object({
     id: zod
@@ -61,8 +63,44 @@ export const ConversationMessage = zod
     content: zod.string(),
     content_type: zod.string().optional(),
     author_participant_id: zod.int().optional(),
-    sent_to_id: zod.int().optional(),
+    sent_to_id: zod
+      .int()
+      .optional()
+      .describe(
+        "Deprecated in client contract 1.38: read `addressed_to`. Kept for one release; it is the single addressee when there is one.",
+      ),
     reply_to_id: zod.int().optional(),
+    author_kind: zod
+      .enum(["human", "agent", "ephemeral_agent", "system"])
+      .optional()
+      .describe(
+        "Client contract 1.38: the author participant's kind when the message was written. A message an attachment wrote (a toolkit answer) is `agent`.",
+      ),
+    addressed_to: zod
+      .array(zod.int())
+      .max(conversationMessageAddressedToMax)
+      .optional()
+      .describe(
+        "Client contract 1.38: the participant ids the message is for. Empty is everyone. The frames of the run that writes an answer carry the same list.",
+      ),
+    visibility: zod
+      .enum(["all", "side"])
+      .optional()
+      .describe(
+        "Client contract 1.38: `side` is agent-to-agent talk, shown collapsed.",
+      ),
+    cause: zod
+      .enum([
+        "human_message",
+        "agent_mention",
+        "heartbeat",
+        "delegation",
+        "system",
+      ])
+      .optional()
+      .describe(
+        "Client contract 1.38: what started the message. Absent when unknown.",
+      ),
     metadata: zod
       .object({
         mentioned_user_ids: zod

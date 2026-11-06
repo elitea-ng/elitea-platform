@@ -157,7 +157,7 @@ pub struct UnattendedGrant {
     #[serde(default)]
     pub goal_check: Option<bool>,
     /// The hosts on which a browser pane form submit or upload is allowed
-    /// (ADR-0048 decision 8, client contract 1.38). A buy, pay, delete,
+    /// (ADR-0048 decision 8, client contract 1.39). A buy, pay, delete,
     /// send or sign control and a download are never the grant's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_submits: Vec<String>,

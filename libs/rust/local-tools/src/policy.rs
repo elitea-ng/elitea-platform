@@ -113,7 +113,7 @@ pub struct LocalWorkPolicy {
     /// acted on, added to [`PLATFORM_APP_DENY`] (which no policy can lift).
     /// A deny wins over an allow.
     pub computer_use_apps_deny: Vec<String>,
-    /// `local_work_browser` (ADR-0048 decision 8, client contract 1.38):
+    /// `local_work_browser` (ADR-0048 decision 8, client contract 1.39):
     /// the browser pane and its toolset exist for local threads. The server
     /// sends `true` by default; off when absent, like every field here.
     pub browser: bool,

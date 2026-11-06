@@ -265,6 +265,10 @@ type ChatMessageGroup struct {
 	CreatedAt           pgtype.Timestamp `db:"created_at" json:"created_at"`
 	UpdatedAt           pgtype.Timestamp `db:"updated_at" json:"updated_at"`
 	TaskID              *string          `db:"task_id" json:"task_id"`
+	AuthorKind          *string          `db:"author_kind" json:"author_kind"`
+	AddressedTo         []int32          `db:"addressed_to" json:"addressed_to"`
+	Visibility          string           `db:"visibility" json:"visibility"`
+	Cause               *string          `db:"cause" json:"cause"`
 }
 
 type ChatMessageItem struct {
@@ -331,6 +335,7 @@ type ChatParticipant struct {
 	EntityName string      `db:"entity_name" json:"entity_name"`
 	EntityMeta []byte      `db:"entity_meta" json:"entity_meta"`
 	Meta       []byte      `db:"meta" json:"meta"`
+	Kind       *string     `db:"kind" json:"kind"`
 }
 
 type ChatParticipantMapping struct {
@@ -340,6 +345,7 @@ type ChatParticipantMapping struct {
 	EntitySettings []byte           `db:"entity_settings" json:"entity_settings"`
 	CreatedAt      pgtype.Timestamp `db:"created_at" json:"created_at"`
 	UpdatedAt      pgtype.Timestamp `db:"updated_at" json:"updated_at"`
+	Persona        []byte           `db:"persona" json:"persona"`
 }
 
 type Configuration struct {
@@ -402,6 +408,8 @@ type EliteaRuntimeAgentExecutionJob struct {
 	StopQuestionAuthorID      *int64  `db:"stop_question_author_id" json:"stop_question_author_id"`
 	PausedExecutionID         *string `db:"paused_execution_id" json:"paused_execution_id"`
 	PausedGeneration          *int64  `db:"paused_generation" json:"paused_generation"`
+	ParticipantID             *int32  `db:"participant_id" json:"participant_id"`
+	AddressedTo               []int32 `db:"addressed_to" json:"addressed_to"`
 }
 
 type EliteaRuntimeCommandOutbox struct {

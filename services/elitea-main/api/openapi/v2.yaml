@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.38"
+  x-elitea-client-contract: "1.39"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3001,6 +3001,30 @@ components:
             name:
               type: string
               description: Every other kind's display name.
+        kind:
+          type: string
+          enum: [human, agent, ephemeral_agent, system]
+          description: >-
+            Client contract 1.38: what the participant is. Absent for an
+            attachment (a toolkit, a prompt), which is in the conversation but
+            never speaks. Read it instead of inferring from `entity_name`.
+        persona:
+          $ref: '#/components/schemas/ConversationParticipantPersona'
+
+    ConversationParticipantPersona:
+      type: object
+      description: >-
+        Client contract 1.38: the agent's persona in this conversation, from
+        the soul of the version the conversation runs, refreshed on every
+        turn. Absent when the agent has none. Show `display_name` instead of
+        the agent's name when it is set.
+      properties:
+        display_name: { type: string }
+        pronouns: { type: string }
+        role: { type: string }
+        avatar_pack:
+          type: string
+          description: Reserved for the avatar pack of a later release.
 
     # --- Client frame catalogue (client contract 1.1). The `data` of an
     # `execution.node_event` SSE event, per `data.type`; see
@@ -3036,6 +3060,43 @@ components:
             chunk's slice), null for tool frames
             (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:1109).
         created_at: { type: string, nullable: true }
+        participant_id:
+          type: integer
+          description: >-
+            Client contract 1.38: the chat participant the run answers as;
+            the persisted answer's `author_participant_id`. Absent for a run
+            that is not a chat turn and for one admitted before 1.37.
+        addressed_to:
+          type: array
+          items: { type: integer }
+          description: >-
+            Client contract 1.38: the answer's addressees, as the persisted
+            message's `addressed_to`. Empty is everyone. Present with
+            `participant_id`.
+
+    ClientFrameAgentState:
+      description: >-
+        Client contract 1.38: the participant moved to a new state. The
+        server derives it from the frame before it and writes it only on a
+        change, without an SSE id, so it never moves the client's resume
+        cursor. A stream resumed with a Last-Event-ID starts with one
+        `agent_state`, the participant's state at the cursor. `idle` is the state before a
+        run's first frame. A pause of a sub-agent is `waiting`, its other
+        frames `working`. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [participant_id, addressed_to, state]
+          properties:
+            state:
+              type: string
+              enum: [idle, thinking, speaking, working, waiting, success, error, waking]
+              description: >-
+                `thinking` before the model answers or after a tool,
+                `speaking` while text streams, `working` in a tool or a
+                sub-agent, `waiting` on a person (an approval, a question, an
+                authorization), `success` and `error` at the end, `waking`
+                when a continuation resumes a paused answer.
 
     ClientFrameToolMetadata:
       type: object
@@ -3759,8 +3820,39 @@ components:
         content: { type: string }
         content_type: { type: string }
         author_participant_id: { type: integer }
-        sent_to_id: { type: integer }
+        sent_to_id:
+          type: integer
+          description: >-
+            Deprecated in client contract 1.38: read `addressed_to`. Kept for
+            one release; it is the single addressee when there is one.
         reply_to_id: { type: integer }
+        author_kind:
+          type: string
+          enum: [human, agent, ephemeral_agent, system]
+          description: >-
+            Client contract 1.38: the author participant's kind when the
+            message was written. A message an attachment wrote (a toolkit
+            answer) is `agent`.
+        addressed_to:
+          type: array
+          maxItems: 64
+          items: { type: integer }
+          description: >-
+            Client contract 1.38: the participant ids the message is for.
+            Empty is everyone. The frames of the run that writes an answer
+            carry the same list.
+        visibility:
+          type: string
+          enum: [all, side]
+          description: >-
+            Client contract 1.38: `side` is agent-to-agent talk, shown
+            collapsed.
+        cause:
+          type: string
+          enum: [human_message, agent_mention, heartbeat, delegation, system]
+          description: >-
+            Client contract 1.38: what started the message. Absent when
+            unknown.
         metadata:
           type: object
           additionalProperties: true
@@ -5061,7 +5153,7 @@ components:
           maxItems: 32
           items: { type: string, maxLength: 253 }
           description: >-
-            Client contract 1.38 (ADR-0048 decision 8). The hosts on which the
+            Client contract 1.39 (ADR-0048 decision 8). The hosts on which the
             desktop browser pane's form submits and uploads are answered by
             the grant (exact lowercase host names, no scheme, port, wildcard
             or address). A buy, pay, delete, send or sign control and a
@@ -5341,7 +5433,7 @@ components:
           type: string
           maxLength: 253
           description: >-
-            Client contract 1.38 (ADR-0048 decision 8). On a `browser_submit`
+            Client contract 1.39 (ADR-0048 decision 8). On a `browser_submit`
             exchange: the page host the answer was for, a lowercase DNS host
             name. A `grant` answer of that kind is recorded only when the
             stored grant's `browser_submits` names this host.
@@ -17670,20 +17762,20 @@ components:
         browser:
           type: boolean
           description: >-
-            Client contract 1.38 (ADR-0048 decision 8). The desktop browser
+            Client contract 1.39 (ADR-0048 decision 8). The desktop browser
             pane and its toolset exist for local threads. Default true. Only
             with `allowed`.
         browser_agent:
           type: boolean
           description: >-
-            Client contract 1.38. The agent may drive the browser pane; off,
+            Client contract 1.39. The agent may drive the browser pane; off,
             the person can still browse. Default true. Only with `browser`.
         browser_allow_domains:
           type: array
           maxItems: 200
           items: { type: string, maxLength: 253 }
           description: >-
-            Client contract 1.38. When non-empty, the only hosts the pane
+            Client contract 1.39. When non-empty, the only hosts the pane
             loads: `example.com` (it and every host under it) or
             `*.example.com` (only the hosts under it), lowercase, no scheme,
             port or address. A ceiling, not an approval. A stored list whose
@@ -17694,16 +17786,16 @@ components:
           maxItems: 200
           items: { type: string, maxLength: 253 }
           description: >-
-            Client contract 1.38. Hosts the pane never loads, in the same
+            Client contract 1.39. Hosts the pane never loads, in the same
             form. A deny wins over an allow.
         browser_http:
           type: boolean
           description: >-
-            Client contract 1.38. Plain `http` pages may load. Default false.
+            Client contract 1.39. Plain `http` pages may load. Default false.
         browser_private_network:
           type: boolean
           description: >-
-            Client contract 1.38. Loopback and private addresses (and the
+            Client contract 1.39. Loopback and private addresses (and the
             names private by definition, `localhost`, `.local`, ...) may
             load. Link-local and the other forbidden ranges never do.
             Default false.
@@ -19595,6 +19687,7 @@ x-elitea-client-frames:
   agent_hitl_interrupt: '#/components/schemas/ClientFrameHitlInterrupt'
   mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
   agent_requires_confirmation: '#/components/schemas/ClientFrameRequiresConfirmation'
+  agent_state: '#/components/schemas/ClientFrameAgentState'
 
 paths:
   /.well-known/elitea-client:

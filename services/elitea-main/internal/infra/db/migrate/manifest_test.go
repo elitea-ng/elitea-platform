@@ -1037,7 +1037,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 226: shared/0226_browser_engine_seconds.sql, the cloud browser's engine
 	// seconds (ADR-0049 decision 8, #1596): the metered unit `second` and the
 	// `browser/engine_seconds` price row at 0. No permission.
-	require.EqualValues(t, 226, Head(shared))
+	//
+	// 227: shared/0227_agent_execution_participant.sql, the participant a
+	// chat run speaks as and its answer's addressees on agent_execution_jobs
+	// (ADR-0050 decision 7b and 7e, #1605). No data, no permission.
+	require.EqualValues(t, 227, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1283,7 +1287,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of message groups parked on fan-out cards and chat_group_meta_paused
 	// with the park (FU-284), so "needs you" counts a parked fan-out. No data,
 	// no permission.
-	require.EqualValues(t, 161, Head(tenant))
+	//
+	// 162: tenant/0162_chat_participant_kinds.sql, chat_participants.kind,
+	// chat_participant_mapping.persona and chat_message_group's author_kind,
+	// addressed_to, visibility and cause, their insert triggers and a
+	// backfill from entity_name and sent_to_id (ADR-0050 decision 7a and 7b,
+	// issue 1605). No permission.
+	require.EqualValues(t, 162, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
