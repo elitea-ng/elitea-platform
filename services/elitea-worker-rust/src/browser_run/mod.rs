@@ -127,19 +127,23 @@ impl BrowserSessions {
             }),
             None => Arc::new(NoBrowserGrants),
         };
+        // A schedule or a webhook started the run: nobody can answer
+        // (ADR-0045). The same fact picks the run origin below.
+        let unattended = field.is_some_and(|field| field.unattended);
         let session = GrpcBrowserSession::new(
             self.channel.clone(),
             grants,
             claim.execution_id,
             self.shape,
             egress,
+            unattended,
         );
         let limits = field.map_or_else(BrowserLimits::default, |field| BrowserLimits {
             max_run_seconds: field.max_run_seconds,
             monthly_quota_seconds: field.monthly_quota_seconds,
             month_used_seconds: field.month_used_seconds,
         });
-        let origin = if field.is_some_and(|field| field.unattended) {
+        let origin = if unattended {
             RunOrigin::Unattended
         } else {
             RunOrigin::Person

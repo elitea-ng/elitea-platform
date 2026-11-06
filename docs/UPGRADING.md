@@ -25,7 +25,7 @@ Nothing changes unless you turn it on. Upgrade the workers before Main:
   `gateway.metered_operation_prices` and seeds the `browser` /
   `engine_seconds` price at $0. Set your own price in the Tools pricing
   tab.
-- Client contract 1.36: unattended grants take `browser_submits`, the
+- Client contract 1.37: unattended grants take `browser_submits`, the
   hosts on which a scheduled or webhook run may submit without asking.
   `UnattendedGrantV1` gains field 9 (`browser_submits`). An earlier
   worker ignores it, so it then asks for every submit.

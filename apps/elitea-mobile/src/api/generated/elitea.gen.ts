@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.36
+ * client contract:    1.37
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -2664,7 +2664,7 @@ export interface components {
         };
         /** @description Client contract 1.30 (ADR-0045). The person's unattended grant for a cloud run. Main admits each named sensitive tool against the run's own toolkits, the withheld categories and the tier hitl rule; a refused part refuses the whole send with 422 `unattended_grant_refused` (`reason`, `field`, `tool`). Schedule and webhook runs cannot name sensitive tools. Main starts each continuation itself. NOTE(W2): internal/api/v2/agentexecution/unattended.go (`startUnattendedBody`). */
         ChatUnattendedRequest: {
-            /** @description Client contract 1.36 (ADR-0049 decision 7). The hosts on which the cloud browser of a schedule's or a webhook's run may submit a form or upload a file without asking. Each entry is a lowercase DNS host name with no scheme, port, path or wildcard. A consequential or payment control always asks. A bad host refuses the grant with 422 `unattended_grant_refused` (`field` `browser_submits`). */
+            /** @description Client contract 1.37 (ADR-0049 decision 7). The hosts on which the cloud browser of a schedule's or a webhook's run may submit a form or upload a file without asking. Each entry is a lowercase DNS host name with no scheme, port, path or wildcard. A consequential or payment control always asks. A bad host refuses the grant with 422 `unattended_grant_refused` (`field` `browser_submits`). */
             browser_submits?: string[];
             chain?: components["schemas"]["UnattendedChainLimits"];
             /** @description Continue the answer when it stops at the output limit. */

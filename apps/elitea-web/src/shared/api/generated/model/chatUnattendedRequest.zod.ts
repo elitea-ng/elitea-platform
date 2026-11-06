@@ -74,7 +74,7 @@ export const ChatUnattendedRequest = zod
       .max(chatUnattendedRequestBrowserSubmitsMax)
       .optional()
       .describe(
-        "Client contract 1.36 (ADR-0049 decision 7). The hosts on which the cloud browser of a schedule's or a webhook's run may submit a form or upload a file without asking. Each entry is a lowercase DNS host name with no scheme, port, path or wildcard. A consequential or payment control always asks. A bad host refuses the grant with 422 `unattended_grant_refused` (`field` `browser_submits`).",
+        "Client contract 1.37 (ADR-0049 decision 7). The hosts on which the cloud browser of a schedule's or a webhook's run may submit a form or upload a file without asking. Each entry is a lowercase DNS host name with no scheme, port, path or wildcard. A consequential or payment control always asks. A bad host refuses the grant with 422 `unattended_grant_refused` (`field` `browser_submits`).",
       ),
     continue_step_limit: zod
       .boolean()

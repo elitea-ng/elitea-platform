@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.36"
+  x-elitea-client-contract: "1.37"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -4041,7 +4041,7 @@ components:
           type: array
           maxItems: 32
           description: >-
-            Client contract 1.36 (ADR-0049 decision 7). The hosts on which
+            Client contract 1.37 (ADR-0049 decision 7). The hosts on which
             the cloud browser of a schedule's or a webhook's run may submit
             a form or upload a file without asking. Each entry is a
             lowercase DNS host name with no scheme, port, path or wildcard.

@@ -103,13 +103,17 @@ pub(crate) struct GrpcBrowserSession {
     grants: Arc<dyn BrowserGrants>,
     spec: BrowserSessionSpecV1,
     egress: Option<SessionEgress>,
+    /// A schedule or webhook run: nobody can be asked, so the start says so
+    /// and `browser_request_user` answers `no_person` at once.
+    unattended: bool,
     started: Mutex<bool>,
 }
 
 impl GrpcBrowserSession {
     /// A session named for the run (`elitea-br-<24 hex>`). `egress` `None`:
     /// the deployment gives the session no route out, and every call answers
-    /// `browser_unavailable` without starting anything.
+    /// `browser_unavailable` without starting anything. `unattended`: the run
+    /// has nobody to ask (a schedule or a webhook started it).
     #[must_use]
     pub(crate) fn new(
         channel: Channel,
@@ -117,6 +121,7 @@ impl GrpcBrowserSession {
         execution_id: &str,
         shape: BrowserSessionShape,
         egress: Option<SessionEgress>,
+        unattended: bool,
     ) -> Self {
         Self {
             client: BrowserSessionServiceClient::new(channel)
@@ -133,7 +138,26 @@ impl GrpcBrowserSession {
                 max_pages: shape.max_pages,
             },
             egress,
+            unattended,
             started: Mutex::new(false),
+        }
+    }
+
+    /// The start request: the grant, the spec, the egress and whether a
+    /// person can be asked.
+    fn start_request(
+        &self,
+        grant: SignedSandboxJobGrantV1,
+        egress: &SessionEgress,
+    ) -> StartBrowserSessionRequestV1 {
+        StartBrowserSessionRequestV1 {
+            grant: Some(grant),
+            spec: Some(self.spec.clone()),
+            egress: Some(BrowserSessionEgressV1 {
+                proxy_url: egress.proxy_url.clone(),
+                proxy_token: egress.token.to_string(),
+            }),
+            unattended: self.unattended,
         }
     }
 
@@ -152,14 +176,7 @@ impl GrpcBrowserSession {
         }
         let egress = self.egress.as_ref().ok_or(SessionError::Unavailable)?;
         let grant = self.grant().await?;
-        let mut request = tonic::Request::new(StartBrowserSessionRequestV1 {
-            grant: Some(grant),
-            spec: Some(self.spec.clone()),
-            egress: Some(BrowserSessionEgressV1 {
-                proxy_url: egress.proxy_url.clone(),
-                proxy_token: egress.token.to_string(),
-            }),
-        });
+        let mut request = tonic::Request::new(self.start_request(grant, egress));
         request.set_timeout(START_DEADLINE);
         let answer = self.client.clone().start_browser_session(request).await;
         // The request (with its token copy) is gone; the answer has none.
@@ -384,6 +401,58 @@ mod tests {
         assert_eq!(
             status_error(&tonic::Status::unavailable("x")),
             SessionError::Unavailable
+        );
+    }
+
+    struct RefusedGrants;
+
+    #[async_trait]
+    impl BrowserGrants for RefusedGrants {
+        async fn grant(
+            &self,
+            _activation_id: &str,
+            _digest: [u8; 32],
+        ) -> Result<SignedSandboxJobGrantV1, SessionError> {
+            Err(SessionError::Refused)
+        }
+    }
+
+    fn session(unattended: bool) -> GrpcBrowserSession {
+        GrpcBrowserSession::new(
+            Channel::from_static("http://127.0.0.1:1").connect_lazy(),
+            Arc::new(RefusedGrants),
+            "0123456789abcdef0123456789abcdef",
+            BrowserSessionShape {
+                cpu_millis: 1000,
+                memory_bytes: 1 << 30,
+                wall_seconds: 600,
+                max_pages: 4,
+            },
+            None,
+            unattended,
+        )
+    }
+
+    #[tokio::test]
+    async fn the_start_says_whether_a_person_can_be_asked() {
+        let egress = SessionEgress {
+            proxy_url: "http://10.0.0.7:3128".to_owned(),
+            token: Zeroizing::new("token".to_owned()),
+        };
+        let unattended = session(true).start_request(SignedSandboxJobGrantV1::default(), &egress);
+        assert!(
+            unattended.unattended,
+            "a schedule or webhook run has nobody to ask"
+        );
+        let attended = session(false).start_request(SignedSandboxJobGrantV1::default(), &egress);
+        assert!(!attended.unattended, "a person's run may ask");
+        assert_eq!(
+            attended.spec, unattended.spec,
+            "the flag is outside the spec and its digest"
+        );
+        assert_eq!(
+            attended.egress.map(|egress| egress.proxy_url),
+            Some("http://10.0.0.7:3128".to_owned())
         );
     }
 
