@@ -1,0 +1,405 @@
+//! The worker's half of a cloud browser session (ADR-0049 decisions 1, 4
+//! and 5): a [`BrowserSession`] over the supervisor's
+//! `BrowserSessionService` (its dedicated `browser` profile), gRPC and mTLS.
+//!
+//! * **Start.** At the run's first call: a fresh Main grant for the
+//!   session's spec, then `StartBrowserSession` with the egress (the proxy
+//!   as an IP literal, and the run token). The token rides the request body
+//!   only: never a log field, an argument or the environment.
+//! * **Call.** One `BrowserCall` per tool call, each with its own grant (a
+//!   grant lives at most 30 seconds).
+//! * **End.** `DestroyBrowserSession` with `RUN_ENDED` (the session lingers
+//!   for a viewer) or `NOW`. A session that never started is not ended.
+//!
+//! A refusal maps to a fixed [`SessionError`] from the `elitea-browser-error`
+//! metadata and the status code. No transport text reaches the model.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use elitea_agent_runtime::toolkits::{BrowserSession, SessionAnswer, SessionError, SessionImage};
+use serde_json::Value;
+use tokio::sync::Mutex;
+use tonic::transport::Channel;
+use zeroize::Zeroizing;
+
+use crate::protocol::elitea::runtime::v1::{
+    BrowserCallRequestV1, BrowserEngineV1, BrowserSessionEgressV1, BrowserSessionEndV1,
+    BrowserSessionSpecV1, DestroyBrowserSessionRequestV1, SignedSandboxJobGrantV1,
+    StartBrowserSessionRequestV1, browser_session_service_client::BrowserSessionServiceClient,
+};
+use crate::sandbox::browser_session::spec_digest;
+
+/// The metadata key of a typed refusal (the supervisor's `ERROR_METADATA`).
+const ERROR_METADATA: &str = "elitea-browser-error";
+/// The deadline of a start (the supervisor waits up to 30 s for a slot,
+/// then the engine starts).
+const START_DEADLINE: Duration = Duration::from_secs(120);
+/// The deadline of one call (a `browser_wait` is bounded below this).
+const CALL_DEADLINE: Duration = Duration::from_secs(120);
+/// The deadline of a destroy.
+const END_DEADLINE: Duration = Duration::from_secs(30);
+/// The most bytes of one answer (an 8 MiB screenshot and its JSON).
+const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
+/// The longest arguments object the supervisor admits.
+const MAX_ARGUMENTS_BYTES: usize = 64 * 1024;
+
+/// Main's sandbox grants for one run's browser session.
+#[async_trait]
+pub(crate) trait BrowserGrants: Send + Sync {
+    /// A grant for `digest` with the session's name as its activation.
+    async fn grant(
+        &self,
+        activation_id: &str,
+        digest: [u8; 32],
+    ) -> Result<SignedSandboxJobGrantV1, SessionError>;
+}
+
+/// Main's grants over the claim's sandbox authority (production).
+pub(crate) struct ClaimBrowserGrants {
+    pub(crate) control: Arc<
+        crate::protocol::control::AgentControlClient<
+            crate::transport::control_grpc::TonicControlRpc,
+        >,
+    >,
+    pub(crate) authority: Arc<crate::protocol::control::ClaimBoundSandboxAuthority>,
+    pub(crate) audience: String,
+}
+
+#[async_trait]
+impl BrowserGrants for ClaimBrowserGrants {
+    async fn grant(
+        &self,
+        activation_id: &str,
+        digest: [u8; 32],
+    ) -> Result<SignedSandboxJobGrantV1, SessionError> {
+        self.control
+            .authorize_workspace_run(&self.authority, &self.audience, activation_id, &digest)
+            .await
+            .map_err(|_| SessionError::Refused)
+    }
+}
+
+/// The session's resources: the supervisor's profile bounds each one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BrowserSessionShape {
+    pub(crate) cpu_millis: u64,
+    pub(crate) memory_bytes: u64,
+    pub(crate) wall_seconds: u64,
+    pub(crate) max_pages: u32,
+}
+
+/// The route out the session gets.
+pub(crate) struct SessionEgress {
+    /// `http://<ip literal>:<port>`.
+    pub(crate) proxy_url: String,
+    pub(crate) token: Zeroizing<String>,
+}
+
+/// One run's browser session on the supervisor.
+pub(crate) struct GrpcBrowserSession {
+    client: BrowserSessionServiceClient<Channel>,
+    grants: Arc<dyn BrowserGrants>,
+    spec: BrowserSessionSpecV1,
+    egress: Option<SessionEgress>,
+    started: Mutex<bool>,
+}
+
+impl GrpcBrowserSession {
+    /// A session named for the run (`elitea-br-<24 hex>`). `egress` `None`:
+    /// the deployment gives the session no route out, and every call answers
+    /// `browser_unavailable` without starting anything.
+    #[must_use]
+    pub(crate) fn new(
+        channel: Channel,
+        grants: Arc<dyn BrowserGrants>,
+        execution_id: &str,
+        shape: BrowserSessionShape,
+        egress: Option<SessionEgress>,
+    ) -> Self {
+        Self {
+            client: BrowserSessionServiceClient::new(channel)
+                .max_encoding_message_size(MAX_ARGUMENTS_BYTES + 64 * 1024)
+                .max_decoding_message_size(MAX_MESSAGE_BYTES),
+            grants,
+            spec: BrowserSessionSpecV1 {
+                revision: 1,
+                name: session_name(execution_id),
+                engine: BrowserEngineV1::Full as i32,
+                cpu_millis: shape.cpu_millis,
+                memory_bytes: shape.memory_bytes,
+                wall_seconds: shape.wall_seconds,
+                max_pages: shape.max_pages,
+            },
+            egress,
+            started: Mutex::new(false),
+        }
+    }
+
+    async fn grant(&self) -> Result<SignedSandboxJobGrantV1, SessionError> {
+        self.grants
+            .grant(&self.spec.name, spec_digest(&self.spec))
+            .await
+    }
+
+    /// Start the session once; a lost acknowledgement retried observes the
+    /// live session (`created` false), so a repeat is safe.
+    async fn ensure_started(&self) -> Result<(), SessionError> {
+        let mut started = self.started.lock().await;
+        if *started {
+            return Ok(());
+        }
+        let egress = self.egress.as_ref().ok_or(SessionError::Unavailable)?;
+        let grant = self.grant().await?;
+        let mut request = tonic::Request::new(StartBrowserSessionRequestV1 {
+            grant: Some(grant),
+            spec: Some(self.spec.clone()),
+            egress: Some(BrowserSessionEgressV1 {
+                proxy_url: egress.proxy_url.clone(),
+                proxy_token: egress.token.to_string(),
+            }),
+        });
+        request.set_timeout(START_DEADLINE);
+        let answer = self.client.clone().start_browser_session(request).await;
+        // The request (with its token copy) is gone; the answer has none.
+        answer.map_err(|status| status_error(&status))?;
+        *started = true;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl BrowserSession for GrpcBrowserSession {
+    async fn call(
+        &self,
+        call_id: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<SessionAnswer, SessionError> {
+        let arguments_json = serde_json::to_string(arguments).map_err(|_| SessionError::Refused)?;
+        if arguments_json.len() > MAX_ARGUMENTS_BYTES {
+            return Err(SessionError::Refused);
+        }
+        self.ensure_started().await?;
+        let grant = self.grant().await?;
+        let mut request = tonic::Request::new(BrowserCallRequestV1 {
+            grant: Some(grant),
+            spec: Some(self.spec.clone()),
+            call_id: bounded_call_id(call_id),
+            name: name.to_owned(),
+            arguments_json,
+        });
+        request.set_timeout(CALL_DEADLINE);
+        let answer = self
+            .client
+            .clone()
+            .browser_call(request)
+            .await
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        let result: Value =
+            serde_json::from_str(&answer.result_json).map_err(|_| SessionError::Unavailable)?;
+        Ok(SessionAnswer {
+            result,
+            image: answer.image.map(|image| SessionImage {
+                media_type: image.media_type,
+                data: image.data,
+            }),
+        })
+    }
+
+    async fn end(&self, now: bool) {
+        if !*self.started.lock().await {
+            return;
+        }
+        let Ok(grant) = self.grant().await else {
+            // The supervisor's idle and wall sweeps end it.
+            tracing::warn!(
+                event = "browser_session_end_ungranted",
+                session = self.spec.name.as_str(),
+                "the browser session end had no grant; the supervisor sweep ends it"
+            );
+            return;
+        };
+        let end = if now {
+            BrowserSessionEndV1::Now
+        } else {
+            BrowserSessionEndV1::RunEnded
+        };
+        let mut request = tonic::Request::new(DestroyBrowserSessionRequestV1 {
+            grant: Some(grant),
+            spec: Some(self.spec.clone()),
+            end: end as i32,
+        });
+        request.set_timeout(END_DEADLINE);
+        if let Err(status) = self.client.clone().destroy_browser_session(request).await {
+            tracing::warn!(
+                event = "browser_session_end_failed",
+                session = self.spec.name.as_str(),
+                code = ?status.code(),
+                "the browser session end failed; the supervisor sweep ends it"
+            );
+        }
+    }
+}
+
+/// `elitea-br-<24 hex>` of the run: one session per execution. A session is
+/// never reused, so a continued run (a new execution) gets a new one.
+#[must_use]
+pub(crate) fn session_name(execution_id: &str) -> String {
+    let digest = crate::workspace_run::store::sha256_hex(
+        format!("elitea.browser-session\0{execution_id}").as_bytes(),
+    );
+    format!("elitea-br-{}", &digest[..24])
+}
+
+/// The call id as the supervisor admits it: at most 128 bytes of
+/// `[A-Za-z0-9_.:-]`; any other byte becomes `_`.
+fn bounded_call_id(call_id: &str) -> String {
+    let mut out: String = call_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(128)
+        .collect();
+    if out.is_empty() {
+        out.push_str("call");
+    }
+    out
+}
+
+fn status_error(status: &tonic::Status) -> SessionError {
+    let typed = status
+        .metadata()
+        .get(ERROR_METADATA)
+        .and_then(|value| value.to_str().ok());
+    match typed {
+        Some("browser_capacity" | "browser_session_limit") => SessionError::Capacity,
+        Some("browser_session_ended" | "browser_session_not_started") => SessionError::Ended,
+        Some("browser_isolation_refused") => SessionError::Refused,
+        Some("browser_agent_failed") => SessionError::Unavailable,
+        _ => match status.code() {
+            tonic::Code::ResourceExhausted => SessionError::Capacity,
+            tonic::Code::PermissionDenied
+            | tonic::Code::InvalidArgument
+            | tonic::Code::Unauthenticated
+            | tonic::Code::FailedPrecondition => SessionError::Refused,
+            _ => SessionError::Unavailable,
+        },
+    }
+}
+
+/// The proxy URL as the session reaches it: `http://<ip literal>:<port>`.
+/// The session has no resolver, so a proxy named by host is resolved here.
+///
+/// # Errors
+///
+/// The URL is malformed, or the name does not resolve.
+pub(crate) async fn proxy_ip_url(proxy_url: &str) -> Result<String, SessionError> {
+    let (host, port) = crate::workspace_run::context::proxy_host_port(proxy_url)
+        .ok_or(SessionError::Unavailable)?;
+    let address = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        ip
+    } else {
+        let resolved: Vec<std::net::SocketAddr> = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| SessionError::Unavailable)?
+        .map_err(|_| SessionError::Unavailable)?
+        .collect();
+        resolved
+            .iter()
+            .find(|address| address.is_ipv4())
+            .or_else(|| resolved.first())
+            .ok_or(SessionError::Unavailable)?
+            .ip()
+    };
+    Ok(match address {
+        std::net::IpAddr::V4(ip) => format!("http://{ip}:{port}"),
+        std::net::IpAddr::V6(ip) => format!("http://[{ip}]:{port}"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_session_name_is_a_supervisor_name() {
+        let name = session_name("0123456789abcdef0123456789abcdef");
+        assert!(
+            crate::sandbox::browser_session::session_name(&name),
+            "{name}"
+        );
+        assert_eq!(name, session_name("0123456789abcdef0123456789abcdef"));
+        assert_ne!(name, session_name("fedcba9876543210fedcba9876543210"));
+    }
+
+    #[test]
+    fn a_call_id_is_bounded() {
+        assert_eq!(bounded_call_id("call_0"), "call_0");
+        assert_eq!(bounded_call_id("a b/c"), "a_b_c");
+        assert_eq!(bounded_call_id(""), "call");
+        assert_eq!(bounded_call_id(&"x".repeat(300)).len(), 128);
+    }
+
+    #[test]
+    fn refusals_map_to_fixed_errors() {
+        let typed = |code, error: &'static str| {
+            let mut status = tonic::Status::new(code, "supervisor text");
+            status.metadata_mut().insert(
+                ERROR_METADATA,
+                tonic::metadata::MetadataValue::from_static(error),
+            );
+            status_error(&status)
+        };
+        assert_eq!(
+            typed(tonic::Code::ResourceExhausted, "browser_capacity"),
+            SessionError::Capacity
+        );
+        assert_eq!(
+            typed(tonic::Code::ResourceExhausted, "browser_session_limit"),
+            SessionError::Capacity
+        );
+        assert_eq!(
+            typed(tonic::Code::FailedPrecondition, "browser_session_ended"),
+            SessionError::Ended
+        );
+        assert_eq!(
+            typed(tonic::Code::FailedPrecondition, "browser_isolation_refused"),
+            SessionError::Refused
+        );
+        assert_eq!(
+            status_error(&tonic::Status::permission_denied("x")),
+            SessionError::Refused
+        );
+        assert_eq!(
+            status_error(&tonic::Status::unavailable("x")),
+            SessionError::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ip_proxy_needs_no_lookup() {
+        assert_eq!(
+            proxy_ip_url("http://10.0.0.7:3128").await,
+            Ok("http://10.0.0.7:3128".to_owned())
+        );
+        assert_eq!(
+            proxy_ip_url("http://localhost:3128").await,
+            Ok("http://127.0.0.1:3128".to_owned())
+        );
+        assert_eq!(
+            proxy_ip_url("http://run:x@proxy:3128").await,
+            Err(SessionError::Unavailable)
+        );
+    }
+}

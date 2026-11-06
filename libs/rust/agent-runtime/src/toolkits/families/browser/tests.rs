@@ -368,7 +368,7 @@ async fn a_refused_admission_does_not_use_the_browser() {
     )
     .await;
     assert_eq!(result["code"], "budget_exceeded");
-    assert!(rig.session.calls().is_empty());
+    assert_eq!(rig.session.calls().len(), 0);
 
     let unpriced = rig_with(
         RunOrigin::Person,
@@ -385,7 +385,7 @@ async fn a_refused_admission_does_not_use_the_browser() {
     )
     .await;
     assert_eq!(result["code"], "browser_unpriced");
-    assert!(unpriced.session.calls().is_empty());
+    assert_eq!(unpriced.session.calls().len(), 0);
 }
 
 #[tokio::test]
@@ -440,8 +440,8 @@ async fn a_used_up_monthly_quota_refuses_the_first_call() {
     .await;
     assert_eq!(result["code"], RunCap::BrowserMonthlyQuota.error_code());
     assert_eq!(rig.caps.tripped(), Some(RunCap::BrowserMonthlyQuota));
-    assert!(rig.meter.admitted().is_empty());
-    assert!(rig.session.calls().is_empty());
+    assert_eq!(rig.meter.admitted().len(), 0);
+    assert_eq!(rig.session.calls().len(), 0);
 }
 
 #[tokio::test]
@@ -549,8 +549,13 @@ async fn the_gate_follows_the_latest_snapshot() {
     // A plain act and a read do not, with no policy.
     assert!(!run.requires_confirmation(spec::BROWSER_CLICK, &json!({"ref": "e5"})));
     assert!(!run.requires_confirmation(spec::BROWSER_SNAPSHOT, &json!({})));
-    // A routed name is the same tool; another toolkit's tool is not ours.
+    // A name the binding gave the tool is the same tool once bound; another
+    // toolkit's tool, or a name nobody bound, is not ours.
+    assert!(!run.requires_confirmation("cloud___browser_click", &json!({"ref": "e4"})));
+    run.bind_name("cloud___browser_click", spec::BROWSER_CLICK);
     assert!(run.requires_confirmation("cloud___browser_click", &json!({"ref": "e4"})));
+    run.bind_name("cloud___made_up", "made_up");
+    assert!(!run.requires_confirmation("cloud___made_up", &json!({})));
     assert!(!run.requires_confirmation("github_create_issue", &json!({})));
 
     // An act makes the page stale: its refs no longer classify.

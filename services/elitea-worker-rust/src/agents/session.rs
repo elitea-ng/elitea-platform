@@ -395,6 +395,35 @@ impl OrdinaryRuntimeBindings {
         Ok(self)
     }
 
+    /// Add the offered cloud browser tools (ADR-0049) to the sensitive
+    /// catalog as conditional entries; see
+    /// [`SensitiveToolCatalog::with_browser_tools`].
+    ///
+    /// # Errors
+    ///
+    /// A name is not a valid tool identity.
+    pub(crate) fn with_browser_tools<'a>(
+        mut self,
+        tools: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        self.sensitive_tools =
+            std::mem::take(&mut self.sensitive_tools).with_browser_tools(tools)?;
+        Ok(self)
+    }
+
+    /// Wrap the turn's argument-aware gate in the cloud browser's
+    /// (ADR-0049 decision 3): `compose` gets the gate so far.
+    #[must_use]
+    pub(crate) fn with_browser_gate(
+        mut self,
+        compose: impl FnOnce(
+            Option<Arc<dyn adk_rust::agent::ToolCallConfirmation>>,
+        ) -> Arc<dyn adk_rust::agent::ToolCallConfirmation>,
+    ) -> Self {
+        self.tool_call_confirmation = Some(compose(self.tool_call_confirmation.take()));
+        self
+    }
+
     /// Ask a person before each `open_pull_request` of the cloud executor
     /// (ADR-0034 decision 10, amendment 2026-10-26): the tool joins the
     /// sensitive catalog as a name-wide entry, so its interrupt is projected,
@@ -2499,6 +2528,10 @@ pub(crate) struct OrdinaryAgentCompletion<M> {
     /// ADR-0045 decision 4: set when the run's unattended grant continues
     /// at the step limit.
     step_limit: Option<Arc<super::unattended::StepLimitStop>>,
+    /// ADR-0049 decision 8: the run's cloud browser session. A completed
+    /// run ends it with `RUN_ENDED` (a viewer may still look), a failed one
+    /// at once, and a paused one (`PAUSED_HITL`) keeps it for the resume.
+    browser: Option<Arc<dyn elitea_agent_runtime::toolkits::BrowserSession>>,
 }
 
 impl<M> OrdinaryAgentCompletion<M> {
@@ -2508,6 +2541,15 @@ impl<M> OrdinaryAgentCompletion<M> {
         workspace: Option<Arc<crate::workspace_run::turn::WorkspaceTurn>>,
     ) -> Self {
         self.workspace = workspace;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_browser(
+        mut self,
+        browser: Option<Arc<dyn elitea_agent_runtime::toolkits::BrowserSession>>,
+    ) -> Self {
+        self.browser = browser;
         self
     }
 }
@@ -2538,9 +2580,15 @@ where
                         .finish(crate::workspace_run::turn::TurnEnd::Failed)
                         .await;
                 }
+                if let Some(browser) = &self.browser {
+                    browser.end(true).await;
+                }
                 return Err(error);
             }
         };
+        if let Some(browser) = &self.browser {
+            browser.end(false).await;
+        }
         if let Some(workspace) = &self.workspace {
             let stamp = workspace
                 .finish(crate::workspace_run::turn::TurnEnd::Completed)
@@ -3660,6 +3708,7 @@ where
                 thread_id,
                 workspace: None,
                 step_limit: step_limit_stop,
+                browser: None,
             },
         ),
         evidence,
@@ -4143,6 +4192,7 @@ where
             thread_id,
             workspace: None,
             step_limit: step_limit_stop,
+            browser: None,
         },
     ))
 }

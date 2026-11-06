@@ -42,7 +42,7 @@ pub mod session;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -144,8 +144,9 @@ pub struct BrowserRun {
     approval: Arc<ApprovalPolicy>,
     budget: Arc<BrowserBudget>,
     page: Mutex<Option<Snapshot>>,
-    /// The model-visible names of this run's browser tools, for the gate.
-    names: Mutex<BTreeSet<String>>,
+    /// The model-visible names of this run's browser tools and the contract
+    /// tool each one is, for the gate.
+    names: Mutex<BTreeMap<String, &'static str>>,
 }
 
 impl BrowserRun {
@@ -167,7 +168,7 @@ impl BrowserRun {
             approval,
             budget,
             page: Mutex::new(None),
-            names: Mutex::new(BTreeSet::new()),
+            names: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -182,20 +183,24 @@ impl BrowserRun {
     }
 
     /// Bind the model-visible name of one browser tool (after the run's
-    /// tool binding may have renamed it) to its contract name.
-    pub fn bind_name(&self, exposed: &str) {
+    /// tool binding may have renamed it) to its contract name. A name that
+    /// is not a contract tool is not bound.
+    pub fn bind_name(&self, exposed: &str, contract: &str) {
+        let Some(spec) = spec::find(contract) else {
+            return;
+        };
         if let Ok(mut names) = self.names.lock() {
-            names.insert(exposed.to_owned());
+            names.insert(exposed.to_owned(), spec.name);
         }
     }
 
-    /// Whether `exposed` is one of this run's browser tools: its bound name,
-    /// or that name behind a routing prefix (`toolkit___browser_click`).
-    fn is_browser_tool(&self, exposed: &str) -> bool {
-        let bare = exposed.rsplit("___").next().unwrap_or(exposed);
+    /// The contract tool of a model-visible name of this run, if it is one.
+    #[must_use]
+    pub fn contract_tool(&self, exposed: &str) -> Option<&'static str> {
         self.names
             .lock()
-            .is_ok_and(|names| names.contains(exposed) || names.contains(bare))
+            .ok()
+            .and_then(|names| names.get(exposed).copied())
     }
 
     /// The category of a call against the latest snapshot.
@@ -234,13 +239,11 @@ impl BrowserRun {
     /// an escalated call asks unless the grant answers it; a plain call asks
     /// only when the approval policy names its category. `tool_name` is the
     /// model-visible name; a name that is not a browser tool of this run
-    /// answers `false` (another gate decides).
+    /// answers `false` (another gate decides): the host binds every name the
+    /// run exposes ([`Self::bind_name`]) before the first call.
     #[must_use]
     pub fn requires_confirmation(&self, tool_name: &str, arguments: &Value) -> bool {
-        if !self.is_browser_tool(tool_name) {
-            return false;
-        }
-        let Some(contract) = contract_name(tool_name) else {
+        let Some(contract) = self.contract_tool(tool_name) else {
             return false;
         };
         let classified = self.classify(contract, arguments);
@@ -276,7 +279,7 @@ pub fn contract_name(exposed: &str) -> Option<&'static str> {
 
 /// A browser toolset could not be built from its settings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BrowserToolsetError {
+pub enum BrowserToolsetError {
     InvalidConfiguration,
     UnsupportedSelection,
     InvalidDefinition,
@@ -544,7 +547,7 @@ pub(crate) fn build_browser_toolset(
         .filter(|spec| selected.is_empty() || selected.iter().any(|name| name == spec.name))
         .map(|spec| {
             if let Some(host) = host {
-                host.run.bind_name(spec.name);
+                host.run.bind_name(spec.name, spec.name);
             }
             Arc::new(BrowserTool {
                 spec,
@@ -555,6 +558,27 @@ pub(crate) fn build_browser_toolset(
         .collect();
     admit_materialized_toolset(toolkit_name, TOOLKIT_TYPE, policy, tools)
         .map_err(|_| BrowserToolsetError::InvalidDefinition)
+}
+
+/// The `browser` toolset a host offers without a configured toolkit (a
+/// handed-off workspace thread whose project allows the browser): every
+/// contract tool, on `host`.
+///
+/// # Errors
+///
+/// The tool policy refuses the toolset.
+pub fn offered_browser_toolset(
+    toolkit_name: &str,
+    policy: &Arc<ToolAdmissionPolicy>,
+    host: &BrowserToolHost,
+) -> Result<Arc<dyn adk_core::Toolset>, BrowserToolsetError> {
+    build_browser_toolset(toolkit_name, &Map::new(), policy, Some(host))
+        .map(|toolset| Arc::new(toolset) as Arc<dyn adk_core::Toolset>)
+}
+
+/// The contract name of every browser tool, in the contract's order.
+pub fn browser_tool_names() -> impl Iterator<Item = &'static str> {
+    TOOLS.iter().map(|spec| spec.name)
 }
 
 /// Every tool the family serves (`materialize::omitted_selection`).

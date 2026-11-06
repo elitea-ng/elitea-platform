@@ -241,6 +241,10 @@ mod tests {
         Snapshot::parse(PAGE).expect("snapshot")
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the tests pass json! literals"
+    )]
     fn of(name: &str, arguments: Value) -> Classified {
         classify(name, &arguments, Some(&page()))
     }

@@ -140,7 +140,10 @@ async fn authorized_claim_redeems_under_its_scope_and_claim_metadata() {
     assert_eq!(context.token(), TOKEN);
     assert_eq!(
         *captured.lock().expect("captured call"),
-        [expected_call("elitea-client-token", &["workspace"])]
+        [expected_call(
+            "elitea-client-token",
+            &["workspace", "browser"]
+        )]
     );
 }
 

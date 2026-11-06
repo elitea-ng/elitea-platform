@@ -128,6 +128,9 @@ pub(crate) struct ProductionTransportBundle {
     /// The cloud executor's workspace runs (ADR-0034), when the deployment
     /// names the supervisor's `workspace` profile.
     pub(crate) workspace_runs: Option<Arc<crate::workspace_run::turn::WorkspaceRunFactory>>,
+    /// The cloud browser's sessions (ADR-0049), when the deployment names
+    /// the supervisor's `browser` profile.
+    pub(crate) browser_sessions: Option<Arc<crate::browser_run::BrowserSessions>>,
     /// The mTLS channel to elitea-main's platform listener
     /// (`platform_origin`) the model calls ride: the Office host's artifact
     /// store and the internal MCP tool categories are served there too
@@ -336,6 +339,25 @@ impl ProductionTransportBundle {
                 )?))
             }
         };
+        // ADR-0049: the cloud browser's sessions on the supervisor's
+        // `browser` profile. The dial is the same mTLS identity.
+        let browser_sessions = match &deployment.browser_sessions {
+            None => None,
+            Some(sessions) => {
+                let channel = connect_private_grpc(
+                    &sessions.target,
+                    profiles.grpc_connect_timeout,
+                    trust.private_ca(),
+                    trust.client_identity(),
+                )
+                .await?;
+                Some(Arc::new(crate::browser_run::BrowserSessions::new(
+                    channel,
+                    Arc::clone(&control),
+                    sessions,
+                )))
+            }
+        };
         let platform = Arc::new(PlatformClient::new(runtime_context));
         let platform_channel = model_facade
             .platform_channel()
@@ -409,6 +431,7 @@ impl ProductionTransportBundle {
             index_runtime,
             extractor,
             workspace_runs,
+            browser_sessions,
         })
     }
 }
@@ -788,6 +811,7 @@ mod tests {
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
             workspace_runs: None,
+            browser_sessions: None,
             public_base_url: None,
             web_egress_allowlist: None,
             vector_target: None,

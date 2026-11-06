@@ -154,7 +154,7 @@ class ModelReasoningV1(_message.Message):
     def __init__(self, control: _Optional[str] = ..., tool_steps: _Optional[bool] = ..., off_with_tools: _Optional[bool] = ...) -> None: ...
 
 class UnattendedGrantV1(_message.Message):
-    __slots__ = ("grant_id", "chain_root_execution_id", "owner_user_id", "sensitive_tools", "continue_step_limit", "continue_output_limit", "chain", "continuation_index")
+    __slots__ = ("grant_id", "chain_root_execution_id", "owner_user_id", "sensitive_tools", "continue_step_limit", "continue_output_limit", "chain", "continuation_index", "browser_submits")
     GRANT_ID_FIELD_NUMBER: _ClassVar[int]
     CHAIN_ROOT_EXECUTION_ID_FIELD_NUMBER: _ClassVar[int]
     OWNER_USER_ID_FIELD_NUMBER: _ClassVar[int]
@@ -163,6 +163,7 @@ class UnattendedGrantV1(_message.Message):
     CONTINUE_OUTPUT_LIMIT_FIELD_NUMBER: _ClassVar[int]
     CHAIN_FIELD_NUMBER: _ClassVar[int]
     CONTINUATION_INDEX_FIELD_NUMBER: _ClassVar[int]
+    BROWSER_SUBMITS_FIELD_NUMBER: _ClassVar[int]
     grant_id: str
     chain_root_execution_id: str
     owner_user_id: int
@@ -171,7 +172,8 @@ class UnattendedGrantV1(_message.Message):
     continue_output_limit: bool
     chain: UnattendedChainLimitsV1
     continuation_index: int
-    def __init__(self, grant_id: _Optional[str] = ..., chain_root_execution_id: _Optional[str] = ..., owner_user_id: _Optional[int] = ..., sensitive_tools: _Optional[_Iterable[_Union[UnattendedGrantToolV1, _Mapping]]] = ..., continue_step_limit: _Optional[bool] = ..., continue_output_limit: _Optional[bool] = ..., chain: _Optional[_Union[UnattendedChainLimitsV1, _Mapping]] = ..., continuation_index: _Optional[int] = ...) -> None: ...
+    browser_submits: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, grant_id: _Optional[str] = ..., chain_root_execution_id: _Optional[str] = ..., owner_user_id: _Optional[int] = ..., sensitive_tools: _Optional[_Iterable[_Union[UnattendedGrantToolV1, _Mapping]]] = ..., continue_step_limit: _Optional[bool] = ..., continue_output_limit: _Optional[bool] = ..., chain: _Optional[_Union[UnattendedChainLimitsV1, _Mapping]] = ..., continuation_index: _Optional[int] = ..., browser_submits: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class UnattendedGrantToolV1(_message.Message):
     __slots__ = ("toolkit_name", "tool_name")

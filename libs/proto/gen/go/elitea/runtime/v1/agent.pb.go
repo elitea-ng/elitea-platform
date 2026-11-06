@@ -820,8 +820,15 @@ type UnattendedGrantV1 struct {
 	Chain *UnattendedChainLimitsV1 `protobuf:"bytes,7,opt,name=chain,proto3" json:"chain,omitempty"`
 	// 0 on the chain's first run, then 1, 2 and so on.
 	ContinuationIndex uint32 `protobuf:"varint,8,opt,name=continuation_index,json=continuationIndex,proto3" json:"continuation_index,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The hosts whose cloud browser submits and uploads the grant answers
+	// (ADR-0048 decision 8, ADR-0049 decision 7): lowercase host names, at
+	// most 32. At a browser submit or upload ask on one of these hosts the
+	// worker approves the call itself, as for a named sensitive tool. A
+	// consequential control (send, delete, sign, buy, pay and their kin) is
+	// never answered by a grant. Empty: no browser ask is answered.
+	BrowserSubmits []string `protobuf:"bytes,9,rep,name=browser_submits,json=browserSubmits,proto3" json:"browser_submits,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *UnattendedGrantV1) Reset() {
@@ -908,6 +915,13 @@ func (x *UnattendedGrantV1) GetContinuationIndex() uint32 {
 		return x.ContinuationIndex
 	}
 	return 0
+}
+
+func (x *UnattendedGrantV1) GetBrowserSubmits() []string {
+	if x != nil {
+		return x.BrowserSubmits
+	}
+	return nil
 }
 
 // One named sensitive tool: the toolkit name as the agent configures it,
@@ -1778,7 +1792,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\acontrol\x18\x01 \x01(\tR\acontrol\x12\x1d\n" +
 	"\n" +
 	"tool_steps\x18\x02 \x01(\bR\ttoolSteps\x12$\n" +
-	"\x0eoff_with_tools\x18\x03 \x01(\bR\foffWithToolsJ\x04\b\x04\x10\x10\"\xb7\x03\n" +
+	"\x0eoff_with_tools\x18\x03 \x01(\bR\foffWithToolsJ\x04\b\x04\x10\x10\"\xe0\x03\n" +
 	"\x11UnattendedGrantV1\x12\x19\n" +
 	"\bgrant_id\x18\x01 \x01(\tR\agrantId\x125\n" +
 	"\x17chain_root_execution_id\x18\x02 \x01(\tR\x14chainRootExecutionId\x12\"\n" +
@@ -1787,7 +1801,9 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x13continue_step_limit\x18\x05 \x01(\bR\x11continueStepLimit\x122\n" +
 	"\x15continue_output_limit\x18\x06 \x01(\bR\x13continueOutputLimit\x12@\n" +
 	"\x05chain\x18\a \x01(\v2*.elitea.runtime.v1.UnattendedChainLimitsV1R\x05chain\x12-\n" +
-	"\x12continuation_index\x18\b \x01(\rR\x11continuationIndexJ\x04\b\t\x10\x10\"]\n" +
+	"\x12continuation_index\x18\b \x01(\rR\x11continuationIndex\x12'\n" +
+	"\x0fbrowser_submits\x18\t \x03(\tR\x0ebrowserSubmitsJ\x04\b\n" +
+	"\x10\x10\"]\n" +
 	"\x15UnattendedGrantToolV1\x12!\n" +
 	"\ftoolkit_name\x18\x01 \x01(\tR\vtoolkitName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolNameJ\x04\b\x03\x10\b\"\xa4\x01\n" +
