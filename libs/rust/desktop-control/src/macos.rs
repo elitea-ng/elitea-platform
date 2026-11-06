@@ -6,8 +6,9 @@
 //! snapshot-scoped form and the vendor's `RefEntry` is kept as the binding
 //! handle, so resolution and stale detection are the vendor's too.
 //!
-//! Capture uses the vendor's own path (`/usr/sbin/screencapture` with a
-//! window id or a display index) rather than screencapturekit-rs: that
+//! Capture uses the vendor's own path (`/usr/sbin/screencapture -o -l`,
+//! one window without its shadow; a zoom crops it) rather than
+//! screencapturekit-rs: that
 //! crate's build script compiles a Swift package with `swift build`, which
 //! the Linux CI and this crate's build rules do not admit, and the vendor
 //! path already verifies the window identity before and after the capture.
@@ -18,15 +19,16 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use agent_desktop_core as ad;
-use agent_desktop_core::{ObservationOps, RefEntry, SystemOps};
+use agent_desktop_core::{InputOps, ObservationOps, RefEntry, SystemOps};
 
 use crate::guard::{self, HostState};
 use crate::snapshot::{Binding, RawNode, RefRegistry, build_tree};
 use crate::{
-    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, Delivery, DesktopDriver, DesktopError,
-    ElementRef, Grant, KeyChord, Modifier, Node, OwnApps, Permissions, Rect, ScreenStatus,
-    ScrollDirection, Snapshot, SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo,
-    WindowTarget,
+    Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, Delivery, DesktopDriver,
+    DesktopError, ElementRef, Grant, KeyChord, Modifier, Node, OpenedApp, OwnApps, Permissions,
+    PointerButton, Rect, ScreenStatus, ScrollDirection, Snapshot, SnapshotBudget, SyntheticMarker,
+    WaitCondition, WindowInfo, WindowTarget, bundle_matches, rect_contains, region_pixels,
+    topmost_at,
 };
 
 /// How many snapshots the driver keeps refs for.
@@ -35,13 +37,17 @@ const HELD_SNAPSHOTS: usize = 8;
 const SNAPSHOT_TIMEOUT_MS: u64 = 5_000;
 /// The deadline of one action, key or capture.
 const ACTION_TIMEOUT_MS: u64 = 5_000;
+/// The deadline of `open_app`: the launch and the first window.
+const LAUNCH_TIMEOUT_MS: u64 = 10_000;
 /// The deadline of the frontmost-app read behind the screensaver check.
 const SCREEN_CHECK_TIMEOUT_MS: u64 = 1_000;
 /// The poll interval of `wait`.
 const WAIT_POLL: Duration = Duration::from_millis(150);
 
-/// What a snapshot keeps beside its bindings: the window it read.
-type Payload = ad::WindowInfo;
+/// What a snapshot keeps beside its bindings: the window it read and the
+/// bundle id of that window's application, read when the snapshot was
+/// taken (`None` when the OS did not tell it).
+type Payload = (ad::WindowInfo, Option<String>);
 
 /// The macOS [`DesktopDriver`].
 ///
@@ -103,14 +109,24 @@ impl MacDriver {
 
     /// The window `target` names; `own_window_refused` when it is Elitea's.
     fn resolve_window(&self, target: &WindowTarget) -> Result<ad::WindowInfo, DesktopError> {
-        if let WindowTarget::App(bundle_id) = target
+        if let Some(bundle_id) = target.bundle_id()
             && self.own.is_own_bundle(bundle_id)
         {
-            return Err(DesktopError::OwnWindowRefused(bundle_id.clone()));
+            return Err(DesktopError::OwnWindowRefused(bundle_id.to_owned()));
         }
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
         let window = self.resolve_window_unchecked(target, deadline)?;
         self.refuse_own_pid(window.pid, deadline, "an Elitea window")?;
+        // The window must be the named app's: a window id of another app,
+        // or of an app whose bundle id cannot be read, is not found.
+        if let Some(bundle_id) = target.bundle_id()
+            && !bundle_matches(self.bundle_of(window.pid, deadline).as_deref(), bundle_id)
+        {
+            return Err(DesktopError::WindowNotFound(format!(
+                "{} is not a window of {bundle_id}",
+                window.id
+            )));
+        }
         Ok(window)
     }
 
@@ -125,11 +141,13 @@ impl MacDriver {
                 .focused_window(deadline)
                 .map_err(map_err)?
                 .ok_or_else(|| DesktopError::WindowNotFound("no focused window".into())),
-            WindowTarget::Window(id) => self
-                .vendor_windows(None, deadline)?
+            WindowTarget::Window { bundle_id, id } => self
+                .vendor_windows(Some(bundle_id), deadline)?
                 .into_iter()
                 .find(|w| &w.id == id)
-                .ok_or_else(|| DesktopError::WindowNotFound(id.clone())),
+                .ok_or_else(|| {
+                    DesktopError::WindowNotFound(format!("{id} is not a window of {bundle_id}"))
+                }),
             WindowTarget::App(bundle_id) => {
                 let windows = self.vendor_windows(Some(bundle_id), deadline)?;
                 windows
@@ -210,17 +228,32 @@ impl MacDriver {
             .collect())
     }
 
-    /// `own_window_refused` when the frontmost application is Elitea: input
-    /// with no element target lands there.
-    fn refuse_own_frontmost(&self, deadline: ad::Deadline) -> Result<(), DesktopError> {
-        if let Some(app) = self.adapter.focused_app(deadline).map_err(map_err)? {
+    /// The frontmost application, which must be `bundle_id`: input with no
+    /// element target (untargeted typing, a key chord, a coordinate click)
+    /// lands there. `own_window_refused` when it is Elitea, `not_frontmost`
+    /// when it is another app or none, or its bundle id cannot be read.
+    fn require_frontmost(
+        &self,
+        bundle_id: &str,
+        deadline: ad::Deadline,
+    ) -> Result<ad::AppInfo, DesktopError> {
+        let app = self.adapter.focused_app(deadline).map_err(map_err)?;
+        if let Some(app) = &app {
             self.own.refuse(
                 app.pid.get(),
                 app.bundle_id.as_deref(),
                 "Elitea is the frontmost application",
             )?;
         }
-        Ok(())
+        let frontmost = match &app {
+            None => guard::Frontmost::None,
+            Some(app) => app
+                .bundle_id
+                .as_deref()
+                .map_or(guard::Frontmost::Unknown, guard::Frontmost::Bundle),
+        };
+        guard::require_frontmost(frontmost, bundle_id)?;
+        app.ok_or_else(|| DesktopError::NotFrontmost("no frontmost application".into()))
     }
 
     fn bundle_of(&self, pid: ad::ProcessId, deadline: ad::Deadline) -> Option<String> {
@@ -236,17 +269,28 @@ impl MacDriver {
     /// handle to the live element.
     fn resolve_ref(
         &self,
+        bundle_id: &str,
         element_ref: &ElementRef,
         deadline: ad::Deadline,
     ) -> Result<(Binding<RefEntry>, ad::NativeHandle), DesktopError> {
-        let (binding, pid) = {
+        let (binding, pid, taken_of) = {
             let registry = self.registry();
-            let (binding, window) = registry.resolve(element_ref)?;
-            (binding.clone(), window.pid)
+            let (binding, (window, bundle)) = registry.resolve(element_ref)?;
+            (binding.clone(), window.pid, bundle.clone())
         };
         // A snapshot of an Elitea window is never taken; this holds even if
         // a pid was reused or the set of own apps grew since.
         self.refuse_own_pid(pid, deadline, "an Elitea window")?;
+        // The ref belongs to the named app, as the snapshot recorded it and
+        // as the process says now: an unknown bundle id is not the named one.
+        if !bundle_matches(taken_of.as_deref(), bundle_id)
+            || !bundle_matches(self.bundle_of(pid, deadline).as_deref(), bundle_id)
+        {
+            return Err(DesktopError::stale(
+                element_ref,
+                format!("the ref's snapshot was not taken of {bundle_id}"),
+            ));
+        }
         let handle = ad::refs::resolve_saved_ref::resolve_saved_ref(
             &self.adapter,
             &binding.handle,
@@ -298,6 +342,7 @@ impl MacDriver {
 
     fn run_action(
         &self,
+        bundle_id: &str,
         element_ref: &ElementRef,
         action: ad::Action,
         writes_text: bool,
@@ -305,7 +350,13 @@ impl MacDriver {
         // Every act, whatever its kind, is refused while secure input is
         // on; the caller ran `guard::before_act` before this.
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
-        let (binding, handle) = self.resolve_ref(element_ref, deadline)?;
+        let (binding, handle) = self.resolve_ref(bundle_id, element_ref, deadline)?;
+        // The menu path to a denied chord: Quit, Log Out, Shut Down, ...
+        if crate::is_denied_menu_item(&binding.role, binding.name.as_deref()) {
+            return Err(DesktopError::MenuItemRefused(
+                binding.name.clone().unwrap_or_default(),
+            ));
+        }
         if writes_text {
             if binding.secure {
                 return Err(DesktopError::SecureFieldRefused);
@@ -324,10 +375,14 @@ impl MacDriver {
         Ok(outcome(name, &result))
     }
 
+    /// One snapshot of the window `target` names. With `store`, its refs
+    /// are held (a `snapshot` call); without, nothing is stored and no held
+    /// ref is evicted (the polls of `wait`).
     fn snapshot_inner(
         &self,
         target: &WindowTarget,
         budget: &SnapshotBudget,
+        store: bool,
     ) -> Result<Snapshot, DesktopError> {
         let window = self.resolve_window(target)?;
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
@@ -348,7 +403,10 @@ impl MacDriver {
         let id = registry.next_id();
         let built = build_tree(&raw, budget, &id);
         let truncated = built.truncated || !result.complete;
-        registry.insert(id.clone(), built.bindings, window);
+        if store {
+            let bundle = window_info.bundle_id.clone();
+            registry.insert(id.clone(), built.bindings, (window, bundle));
+        }
         Ok(Snapshot {
             id,
             window: window_info,
@@ -390,12 +448,13 @@ impl MacDriver {
                 }))
             }
             WaitCondition::RefState {
+                bundle_id,
                 element_ref,
                 state,
                 present,
             } => {
                 let deadline = deadline(ACTION_TIMEOUT_MS)?;
-                let (_, handle) = self.resolve_ref(element_ref, deadline)?;
+                let (_, handle) = self.resolve_ref(bundle_id, element_ref, deadline)?;
                 let live = self
                     .adapter
                     .get_live_state(&handle, deadline)
@@ -411,6 +470,7 @@ impl MacDriver {
                         max_nodes: 2_000,
                         ..SnapshotBudget::default()
                     },
+                    false,
                 )?;
                 Ok(contains_text(&snap.root, text))
             }
@@ -441,6 +501,14 @@ impl HostState for MacDriver {
 }
 
 impl DesktopDriver for MacDriver {
+    fn screen(&self) -> ScreenStatus {
+        HostState::screen(self)
+    }
+
+    fn secure_input(&self) -> bool {
+        HostState::secure_input(self)
+    }
+
     fn permissions(&self) -> Permissions {
         let Ok(deadline) = deadline(ACTION_TIMEOUT_MS) else {
             return Permissions {
@@ -508,11 +576,12 @@ impl DesktopDriver for MacDriver {
         budget: &SnapshotBudget,
     ) -> Result<Snapshot, DesktopError> {
         guard::before_call(self)?;
-        self.snapshot_inner(target, budget)
+        self.snapshot_inner(target, budget, true)
     }
 
     fn act(
         &self,
+        bundle_id: &str,
         element_ref: &ElementRef,
         action: &Action,
     ) -> Result<ActionOutcome, DesktopError> {
@@ -536,36 +605,36 @@ impl DesktopDriver for MacDriver {
             Action::Collapse => ad::Action::Collapse,
             Action::Toggle => ad::Action::Toggle,
         };
-        let mut out = self.run_action(element_ref, vendor, action.writes_text())?;
+        let mut out = self.run_action(bundle_id, element_ref, vendor, action.writes_text())?;
         action.name().clone_into(&mut out.action);
         Ok(out)
     }
 
     fn type_text(
         &self,
+        bundle_id: &str,
         element_ref: Option<&ElementRef>,
         text: &str,
     ) -> Result<ActionOutcome, DesktopError> {
         crate::validate_text_write(text)?;
         guard::before_act(self)?;
+        if self.own.is_own_bundle(bundle_id) {
+            return Err(DesktopError::OwnWindowRefused(bundle_id.to_owned()));
+        }
         if let Some(element_ref) = element_ref {
-            let mut out =
-                self.run_action(element_ref, ad::Action::TypeText(text.to_owned()), true)?;
+            let mut out = self.run_action(
+                bundle_id,
+                element_ref,
+                ad::Action::TypeText(text.to_owned()),
+                true,
+            )?;
             "type".clone_into(&mut out.action);
             return Ok(out);
         }
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
-        let app = self
-            .adapter
-            .focused_app(deadline)
-            .map_err(map_err)?
-            .ok_or_else(|| DesktopError::AppNotFound("no frontmost application".into()))?;
+        // Untargeted text lands in the frontmost app: only the named one.
+        let app = self.require_frontmost(bundle_id, deadline)?;
         let pid = app.pid.get();
-        self.own.refuse(
-            pid,
-            app.bundle_id.as_deref(),
-            "Elitea is the frontmost application",
-        )?;
         self.refuse_if_focus_secure(pid, deadline)?;
         let focused = agent_desktop_macos::elitea_ext::focused_element(pid, deadline)
             .map_err(map_err)?
@@ -604,10 +673,16 @@ impl DesktopDriver for MacDriver {
         if self.adapter.is_blocked_combo(&combo) {
             return Err(DesktopError::ChordRefused(chord_text(chord)));
         }
+        let Some(bundle_id) = target.bundle_id() else {
+            return Err(DesktopError::InvalidArgs(
+                "a key chord names the application it is for".into(),
+            ));
+        };
         let window = self.resolve_window(target)?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
-        // A chord may land in the frontmost app rather than the window.
-        self.refuse_own_frontmost(deadline)?;
+        // A chord lands in the frontmost app rather than the window: only
+        // the named one.
+        self.require_frontmost(bundle_id, deadline)?;
         self.refuse_if_focus_secure(window.pid.get(), deadline)?;
         let lease = Self::lease(deadline)?;
         let result = self
@@ -617,64 +692,178 @@ impl DesktopDriver for MacDriver {
         Ok(outcome("key", &result))
     }
 
+    fn click_at(&self, click: &ClickAt) -> Result<ActionOutcome, DesktopError> {
+        click.validate()?;
+        guard::before_act(self)?;
+        let deadline = deadline(ACTION_TIMEOUT_MS)?;
+        let window = self.resolve_window(&WindowTarget::Window {
+            bundle_id: click.bundle_id.clone(),
+            id: click.window_id.clone(),
+        })?;
+        // Physical input goes to whatever app is frontmost: only the named one.
+        self.require_frontmost(&click.bundle_id, deadline)?;
+        let bounds = window
+            .bounds
+            .map(rect)
+            .ok_or_else(|| DesktopError::WindowNotFound("the window has no frame".into()))?;
+        if !rect_contains(&bounds, &click.point) {
+            return Err(DesktopError::InvalidArgs(
+                "the point is outside the window".into(),
+            ));
+        }
+        // The click lands on whatever window is on top at the point: refused
+        // unless it is the approved one. CoreGraphics lists the windows front
+        // to back, so the first that holds the point is on top.
+        let own = self.own_pids(deadline)?;
+        let windows: Vec<WindowInfo> = self
+            .vendor_windows(None, deadline)?
+            .iter()
+            .filter(|w| w.state.visible != Some(false))
+            .map(|w| WindowInfo {
+                id: w.id.clone(),
+                title: String::new(),
+                app_name: String::new(),
+                pid: w.pid.get(),
+                bundle_id: None,
+                bounds: w.bounds.map(rect),
+                focused: w.state.is_focused,
+                minimized: w.state.minimized.unwrap_or(false),
+            })
+            .collect();
+        match topmost_at(&windows, &click.point) {
+            Some(top) if top.id == window.id => {}
+            Some(top)
+                if own.iter().any(|p| p.get() == top.pid) || self.own.is_own(top.pid, None) =>
+            {
+                return Err(DesktopError::OwnWindowRefused(
+                    "an Elitea window covers the point".into(),
+                ));
+            }
+            _ => {
+                return Err(DesktopError::OwnWindowRefused(
+                    "another window covers the point: bring the window forward first".into(),
+                ));
+            }
+        }
+        let lease = Self::lease(deadline)?;
+        self.adapter
+            .mouse_event(
+                ad::MouseEvent {
+                    kind: ad::MouseEventKind::Click { count: click.count },
+                    point: ad::Point {
+                        x: click.point.x,
+                        y: click.point.y,
+                    },
+                    button: match click.button {
+                        PointerButton::Left => ad::MouseButton::Left,
+                        PointerButton::Right => ad::MouseButton::Right,
+                    },
+                    modifiers: Vec::new(),
+                },
+                &lease,
+            )
+            .map_err(map_err)?;
+        Ok(ActionOutcome {
+            action: "click_at".to_owned(),
+            delivery: Delivery::Physical,
+            verified: false,
+        })
+    }
+
+    fn open_app(&self, bundle_id: &str) -> Result<OpenedApp, DesktopError> {
+        if self.own.is_own_bundle(bundle_id) {
+            return Err(DesktopError::OwnWindowRefused(bundle_id.to_owned()));
+        }
+        // A bundle id, never a path or a bare name the vendor would resolve
+        // through Launch Services to some other app.
+        let valid = bundle_id.contains('.')
+            && !bundle_id.starts_with('.')
+            && !bundle_id.ends_with('.')
+            && !bundle_id.contains("..")
+            && bundle_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
+        if !valid {
+            return Err(DesktopError::InvalidArgs(format!(
+                "`{bundle_id}` is not a bundle id"
+            )));
+        }
+        guard::before_act(self)?;
+        let deadline = deadline(LAUNCH_TIMEOUT_MS)?;
+        let lease = Self::lease(deadline)?;
+        let options = ad::system::launch_options::LaunchOptions {
+            timeout_ms: LAUNCH_TIMEOUT_MS,
+            activate: true,
+            ..ad::system::launch_options::LaunchOptions::default()
+        };
+        let launched = self
+            .adapter
+            .launch_app(bundle_id, &options, &lease)
+            .map_err(map_err)?;
+        // A pid reused, or a bundle that resolves to Elitea after all.
+        self.refuse_own_pid(launched.pid, deadline, "Elitea")?;
+        let window = launched
+            .window
+            .as_ref()
+            .map(|w| self.to_window(w, deadline));
+        Ok(OpenedApp {
+            name: launched.app,
+            pid: launched.pid.get(),
+            bundle_id: bundle_id.to_owned(),
+            window,
+        })
+    }
+
     fn capture(&self, target: &CaptureTarget) -> Result<Capture, DesktopError> {
         guard::before_call(self)?;
+        let (bundle_id, id, region) = match target {
+            CaptureTarget::Window { bundle_id, id } => (bundle_id, id, None),
+            CaptureTarget::WindowRegion {
+                bundle_id,
+                id,
+                region,
+            } => (bundle_id, id, Some(region)),
+        };
+        let window = self.resolve_window(&WindowTarget::Window {
+            bundle_id: bundle_id.clone(),
+            id: id.clone(),
+        })?;
+        let frame = window
+            .bounds
+            .map(rect)
+            .ok_or_else(|| DesktopError::WindowNotFound("the window has no frame".into()))?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
-        match target {
-            CaptureTarget::Window { id } => {
-                let window = self.resolve_window(&WindowTarget::Window(id.clone()))?;
-                let image = self
-                    .adapter
-                    .screenshot(ad::ScreenshotTarget::ExactWindow(window.clone()), deadline)
-                    .map_err(map_err)?;
+        // The window alone (no other window that overlaps it shows) and
+        // without its shadow (`screencapture -o`), so the image is exactly
+        // the frame times the scale and a pixel maps back to a point.
+        let image = self
+            .adapter
+            .screenshot_window_frame(&window, deadline)
+            .map_err(map_err)?;
+        match region {
+            None => Ok(Capture {
+                width: image.width,
+                height: image.height,
+                scale: image.scale_factor,
+                region: frame,
+                png: image.data,
+            }),
+            Some(region) => {
+                let (x, y, w, h) =
+                    region_pixels(frame.width, frame.height, region, image.width, image.height)?;
+                let png = crop(&image.data, x, y, w, h)?;
                 Ok(Capture {
-                    width: image.width,
-                    height: image.height,
+                    png,
+                    width: w,
+                    height: h,
                     scale: image.scale_factor,
-                    region: window.bounds.map_or(
-                        Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 0.0,
-                            height: 0.0,
-                        },
-                        rect,
-                    ),
-                    png: image.data,
+                    region: Rect {
+                        x: frame.x + region.x,
+                        y: frame.y + region.y,
+                        width: region.width,
+                        height: region.height,
+                    },
                 })
-            }
-            CaptureTarget::Region { rect: region } => {
-                if !region.is_valid() || region.width < 1.0 || region.height < 1.0 {
-                    return Err(DesktopError::InvalidArgs("empty or invalid region".into()));
-                }
-                // Refused, not masked, when any Elitea window shows in it.
-                let own = self.own_pids(deadline)?;
-                let own_frames: Vec<Rect> = self
-                    .vendor_windows(None, deadline)?
-                    .iter()
-                    .filter(|w| own.contains(&w.pid) || self.own.is_own(w.pid.get(), None))
-                    .filter_map(|w| w.bounds.map(rect))
-                    .collect();
-                guard::refuse_region(region, &own_frames)?;
-                let displays = self.adapter.list_displays(deadline).map_err(map_err)?;
-                let (index, display) = displays
-                    .iter()
-                    .enumerate()
-                    .find(|(_, d)| contains(&rect(d.bounds), region))
-                    .ok_or_else(|| {
-                        DesktopError::InvalidArgs("the region is not inside one display".into())
-                    })?;
-                let image = self
-                    .adapter
-                    .screenshot(
-                        ad::ScreenshotTarget::Display {
-                            index,
-                            expected: display.clone(),
-                        },
-                        deadline,
-                    )
-                    .map_err(map_err)?;
-                crop(&image.data, &rect(display.bounds), region, display.scale)
             }
         }
     }
@@ -691,7 +880,8 @@ impl DesktopDriver for MacDriver {
             // The screen can lock while the wait polls.
             guard::before_call(self)?;
             let done = if let WaitCondition::Stable { target } = condition {
-                let snap = self.snapshot_inner(target, &SnapshotBudget::default())?;
+                // A poll stores nothing: the held refs stay held.
+                let snap = self.snapshot_inner(target, &SnapshotBudget::default(), false)?;
                 let same = previous.as_ref().is_some_and(|p| same_shape(p, &snap.root));
                 previous = Some(snap.root);
                 same
@@ -763,46 +953,17 @@ fn rect(r: ad::Rect) -> Rect {
     }
 }
 
-fn contains(outer: &Rect, inner: &Rect) -> bool {
-    inner.x >= outer.x
-        && inner.y >= outer.y
-        && inner.x + inner.width <= outer.x + outer.width
-        && inner.y + inner.height <= outer.y + outer.height
-}
-
-/// Crops a display capture to `region` (both in points) and re-encodes it.
-fn crop(png: &[u8], display: &Rect, region: &Rect, scale: f64) -> Result<Capture, DesktopError> {
+/// Crops a window capture to the pixel box (`x`, `y`, `w`, `h`) and
+/// re-encodes it as PNG.
+fn crop(png: &[u8], x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, DesktopError> {
     let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
         .map_err(|e| DesktopError::Internal(format!("decode capture: {e}")))?;
-    let px = |v: f64| -> u32 {
-        // Points to pixels; the display is at most a few thousand points, so
-        // the value fits and is never negative after the contains check.
-        let v = (v * scale).round().max(0.0);
-        if v >= f64::from(u32::MAX) {
-            u32::MAX
-        } else {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            {
-                v as u32
-            }
-        }
-    };
-    let x = px(region.x - display.x).min(img.width());
-    let y = px(region.y - display.y).min(img.height());
-    let w = px(region.width).min(img.width() - x).max(1);
-    let h = px(region.height).min(img.height() - y).max(1);
     let cropped = img.crop_imm(x, y, w, h);
     let mut out = std::io::Cursor::new(Vec::new());
     cropped
         .write_to(&mut out, image::ImageFormat::Png)
         .map_err(|e| DesktopError::Internal(format!("encode capture: {e}")))?;
-    Ok(Capture {
-        png: out.into_inner(),
-        width: w,
-        height: h,
-        scale,
-        region: *region,
-    })
+    Ok(out.into_inner())
 }
 
 fn contains_text(node: &Node, text: &str) -> bool {

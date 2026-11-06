@@ -39,6 +39,12 @@ pub struct Settings {
     /// (#1590) replaces it. Loopback and private addresses stay refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_allow_http: Option<bool>,
+    /// The person's device switch for computer use (ADR-0047 decision 3):
+    /// the agent may see and operate other applications. Off unless set to
+    /// `true` here, and only where the client policy's
+    /// `local_work_computer_use` is on too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_use: Option<bool>,
 }
 
 /// The default thread-history retention, in days (the Doctor's
@@ -158,6 +164,7 @@ mod tests {
             client_id: None,
             history_retention_days: None,
             browser_allow_http: None,
+            computer_use: Some(true),
         };
         files.save_settings(&settings).unwrap();
         assert_eq!(files.settings().unwrap(), settings);

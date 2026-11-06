@@ -54,6 +54,9 @@ impl<H> RawNode<H> {
 pub struct Binding<H> {
     pub handle: H,
     pub role: String,
+    /// The element's name (title) as the snapshot read it: the driver
+    /// refuses a denied menu item by it.
+    pub name: Option<String>,
     pub secure: bool,
 }
 
@@ -210,6 +213,7 @@ impl<H: Clone> Walk<'_, H> {
             self.bindings.push(Binding {
                 handle: handle.clone(),
                 role: raw.role.clone(),
+                name: raw.name.clone(),
                 secure: raw.secure,
             });
             Some(ElementRef::new(self.snapshot.clone(), index))
@@ -534,6 +538,7 @@ mod tests {
             vec![Binding {
                 handle: 11,
                 role: "button".into(),
+                name: None,
                 secure: false,
             }],
             "w1",
@@ -559,6 +564,7 @@ mod tests {
                     vec![Binding {
                         handle: 1,
                         role: "button".into(),
+                        name: None,
                         secure: false,
                     }],
                     (),

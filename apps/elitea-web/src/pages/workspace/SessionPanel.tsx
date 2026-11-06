@@ -68,6 +68,8 @@ function decisionLabel(decision: ApprovalDecision): string {
       return t('workspace.panel.allowedOnce', 'Allowed once');
     case 'allow_always':
       return t('workspace.panel.allowedAlways', 'Always allowed');
+    case 'allow_thread':
+      return t('workspace.panel.allowedThread', 'Allowed for this thread');
     case 'deny':
       return t('workspace.panel.denied', 'Denied');
     case 'deny_with_feedback':

@@ -1029,6 +1029,10 @@ pub struct AgentHost {
     /// The browser panes' drivers (ADR-0048, `crate::browser_tools`), set
     /// once at start-up; unset, no browser tools are offered.
     browser: std::sync::OnceLock<Arc<crate::browser_tools::BrowserDrivers>>,
+    /// The desktop driver of computer use (ADR-0047, `crate::computer_tools`)
+    /// and the person's device switch, set once at start-up; unset, no
+    /// computer tools are offered.
+    computer: std::sync::OnceLock<crate::computer_tools::ComputerSetup>,
     /// How long an unattended chain's next turn may take to start after
     /// the previous turn's commit lands ([`unattended::CONTINUE_WAIT`];
     /// tests shorten it), in milliseconds.
@@ -1275,6 +1279,7 @@ impl AgentHost {
             worktrees: std::sync::OnceLock::new(),
             compaction: std::sync::OnceLock::new(),
             browser: std::sync::OnceLock::new(),
+            computer: std::sync::OnceLock::new(),
             idle,
             continue_wait_ms: std::sync::atomic::AtomicU64::new(
                 u64::try_from(unattended::CONTINUE_WAIT.as_millis()).unwrap_or(u64::MAX),
@@ -1352,6 +1357,12 @@ impl AgentHost {
     /// Offer the browser tools, driving each thread's pane (ADR-0048).
     pub fn set_browser_drivers(&self, drivers: Arc<crate::browser_tools::BrowserDrivers>) {
         let _ = self.browser.set(drivers);
+    }
+
+    /// Give Local turns the `computer` toolset (ADR-0047), offered only
+    /// while the policy and the person's device switch allow it.
+    pub fn set_computer(&self, setup: crate::computer_tools::ComputerSetup) {
+        let _ = self.computer.set(setup);
     }
 
     /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
@@ -2816,6 +2827,9 @@ impl AgentHost {
         // The turn's spilled outputs are its conversation's: read_output in
         // another thread of this folder does not see them.
         session.set_conversation(Some(&conversation));
+        // The `computer` tools' "allow for this thread" answers and opened
+        // apps are this thread's (ADR-0047 decision 4).
+        session.rules().set_thread(Some(conversation.clone()));
         // The edit tools that suit the admitted model (#1214): stable for
         // the thread unless its model or meta.edit_format changes.
         session.set_edit_profile(admitted.edit_profile);
@@ -4335,6 +4349,31 @@ impl AgentHost {
                 workspace.session.clone(),
             )));
         }
+        // The `computer` tools (ADR-0047): a toolset of their own, never
+        // workspace tools, offered only while the client policy's
+        // `local_work_computer_use` and the person's device switch are
+        // both on. The rules engine denies a forged call either way.
+        if let Some(computer) = self.computer.get()
+            && crate::computer_tools::offered(&workspace.policy, computer.device_switch())
+        {
+            // Both switches are read again at every call (`computer_use_off`):
+            // turning either off stops a running turn's next call.
+            let policy_source = self.deps.policy.clone();
+            let device_switch = computer.device_switch_reader();
+            let enabled: crate::computer_tools::Switch = Arc::new(move || {
+                let policy: LocalWorkPolicy = policy_source
+                    .local_work()
+                    .and_then(|section| serde_json::from_value(section).ok())
+                    .unwrap_or_default();
+                policy.allowed && crate::computer_tools::offered(&policy, device_switch())
+            });
+            provider = provider.with(Arc::new(crate::computer_tools::ComputerToolProvider::new(
+                computer.host(),
+                &workspace.session,
+                workspace.session.vision(),
+                enabled,
+            )));
+        }
         // The nested agents, as cloud child turns of this one (#1239).
         let children_remote = Arc::new(ChildAgentContext::new(
             remote.clone(),
@@ -4405,11 +4444,12 @@ impl AgentHost {
                     toolsets
                         .iter()
                         .filter(|toolset| {
-                            // Nor the browser: a child does not drive the
-                            // person's page.
+                            // Nor the browser or the computer: a child
+                            // does not drive the person's page or apps.
                             toolset.name() != REMOTE_TOOLSET
                                 && toolset.name() != MCP_TOOLSET
                                 && toolset.name() != crate::browser_tools::TOOLSET_NAME
+                                && toolset.name() != crate::computer_tools::TOOLSET_NAME
                         })
                         .cloned()
                         .collect(),
@@ -4455,6 +4495,10 @@ impl AgentHost {
         // them whole. The window is the model's limits (`context.rs`). The
         // elision runs first (a callback before the model); the step
         // compaction wrapping the model then measures what it left.
+        // Only the last three screenshots of other apps stay in the
+        // model's context (ADR-0047 decision 9); before the elision, so it
+        // measures what is left.
+        builder = crate::computer_tools::ScreenshotRetention::bind_builder(builder);
         builder = ToolResultElision::for_limits(execution.payload.model_context_limits)
             .with_fixed_tokens(instruction_tokens)
             .bind_builder(builder);
@@ -5189,6 +5233,16 @@ impl AgentHost {
             workspace_id: workspace_id.to_owned(),
             conversation: conversation.clone(),
         });
+        // Nor do its `computer` approvals and opened apps (ADR-0047).
+        let workspace_session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(workspace_id)
+            .cloned();
+        if let Some(workspace) = workspace_session {
+            workspace.session.rules().forget_thread(&conversation);
+        }
         let Some(history) = self.deps.history.clone() else {
             return Ok(0);
         };

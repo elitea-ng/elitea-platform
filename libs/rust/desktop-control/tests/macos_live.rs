@@ -127,10 +127,10 @@ fn textedit_round_trip() {
     // Type into the document through the ref, then see it in a new snapshot.
     let marker = "elitea desktop-control live test";
     driver
-        .act(&area_ref, &Action::Focus)
+        .act(TEXTEDIT, &area_ref, &Action::Focus)
         .expect("focus the text area");
     driver
-        .type_text(Some(&area_ref), marker)
+        .type_text(TEXTEDIT, Some(&area_ref), marker)
         .expect("type into the text area");
     driver
         .wait(
@@ -153,7 +153,7 @@ fn textedit_round_trip() {
 
     // A forgotten snapshot's refs are stale.
     driver.forget_snapshots();
-    let err = driver.act(&area_ref, &Action::Focus).unwrap_err();
+    let err = driver.act(TEXTEDIT, &area_ref, &Action::Focus).unwrap_err();
     assert_eq!(err.code(), "stale_ref", "{err:?}");
 
     // The marker the driver stamps classifies as synthetic.

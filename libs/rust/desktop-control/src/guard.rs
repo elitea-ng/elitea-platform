@@ -12,6 +12,9 @@
 //! - **No Elitea control.** Elitea's own windows are never listed,
 //!   snapshotted, acted on, typed or keyed into, or captured
 //!   (`own_window_refused`).
+//! - **Only the named app.** Input with no element target (untargeted
+//!   typing, a key chord, a coordinate click) goes only into the app the
+//!   call names, and only while it is frontmost (`not_frontmost`).
 //!
 //! The OS reads sit behind [`HostState`], so the gate order is unit-tested
 //! with a stub.
@@ -173,23 +176,42 @@ impl OwnApps {
     }
 }
 
+/// The frontmost application, as far as the OS tells it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Frontmost<'a> {
+    /// No application is frontmost.
+    None,
+    /// One is, and its bundle id cannot be read.
+    Unknown,
+    /// The frontmost application's bundle id.
+    Bundle(&'a str),
+}
+
+/// `not_frontmost` unless the frontmost application is `bundle_id`. Input
+/// with no element target lands in the frontmost app, so it goes only into
+/// the app the call names; an app whose bundle id cannot be read is not it.
+pub(crate) fn require_frontmost(
+    frontmost: Frontmost<'_>,
+    bundle_id: &str,
+) -> Result<(), DesktopError> {
+    match frontmost {
+        Frontmost::Bundle(actual) if crate::bundle_matches(Some(actual), bundle_id) => Ok(()),
+        Frontmost::Bundle(actual) => Err(DesktopError::NotFrontmost(format!(
+            "{actual} is frontmost, not {bundle_id}: bring it forward first (computer_open_app)"
+        ))),
+        Frontmost::Unknown => Err(DesktopError::NotFrontmost(format!(
+            "the frontmost application cannot be told: bring {bundle_id} forward first"
+        ))),
+        Frontmost::None => Err(DesktopError::NotFrontmost(format!(
+            "no application is frontmost: bring {bundle_id} forward first"
+        ))),
+    }
+}
+
 /// Whether two rectangles share any area (touching edges do not count).
 #[must_use]
 pub fn overlaps(a: &Rect, b: &Rect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
-}
-
-/// `own_window_refused` when `region` overlaps any of Elitea's window
-/// frames. A region capture is refused rather than masked: the image would
-/// show Elitea's own asks.
-pub(crate) fn refuse_region(region: &Rect, own_frames: &[Rect]) -> Result<(), DesktopError> {
-    if own_frames.iter().any(|f| overlaps(region, f)) {
-        Err(DesktopError::OwnWindowRefused(
-            "the region overlaps an Elitea window".into(),
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -310,23 +332,22 @@ mod tests {
     }
 
     #[test]
-    fn a_region_over_an_elitea_window_is_refused() {
-        let r = |x, y, width, height| Rect {
-            x,
-            y,
-            width,
-            height,
-        };
-        let own = [r(100.0, 100.0, 200.0, 200.0)];
+    fn untargeted_input_goes_only_into_the_named_frontmost_app() {
+        let app = "com.apple.TextEdit";
         assert_eq!(
-            refuse_region(&r(250.0, 250.0, 100.0, 100.0), &own)
-                .unwrap_err()
-                .code(),
-            "own_window_refused"
+            require_frontmost(Frontmost::Bundle("com.apple.textedit"), app),
+            Ok(())
         );
-        // Touching an edge is not an overlap.
-        assert_eq!(refuse_region(&r(300.0, 100.0, 50.0, 50.0), &own), Ok(()));
-        assert_eq!(refuse_region(&r(0.0, 0.0, 50.0, 50.0), &own), Ok(()));
-        assert_eq!(refuse_region(&r(0.0, 0.0, 50.0, 50.0), &[]), Ok(()));
+        for frontmost in [
+            Frontmost::Bundle("com.apple.Notes"),
+            Frontmost::Unknown,
+            Frontmost::None,
+        ] {
+            assert_eq!(
+                require_frontmost(frontmost, app).unwrap_err().code(),
+                "not_frontmost",
+                "{frontmost:?}"
+            );
+        }
     }
 }
