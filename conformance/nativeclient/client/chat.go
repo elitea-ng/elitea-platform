@@ -59,22 +59,38 @@ type Frame struct {
 	Event  string
 	Type   string
 	Data   map[string]any
+	// Derived is a frame the server derives on the way out (client contract
+	// 1.38 `agent_state`). It has no SSE id, so it is not in the cursor
+	// sequence and never moves the resume cursor.
+	Derived bool
 }
 
+// AgentStateFrameType is the one derived frame type (client contract 1.38).
+const AgentStateFrameType = "agent_state"
+
 // DecodeFrame reads an execution event. A frame whose id is not a uint64 is
-// an error: the contract promises a strictly increasing integer cursor.
+// an error: the contract promises a strictly increasing integer cursor. The
+// one exception is the derived `agent_state` frame, served without an id.
 func DecodeFrame(event Event) (Frame, error) {
-	cursor, err := strconv.ParseUint(event.ID, 10, 64)
-	if err != nil {
-		return Frame{}, fmt.Errorf("event id %q is not a uint64 cursor", event.ID)
+	frame := Frame{Event: event.Event}
+	if event.ID == "" {
+		frame.Derived = true
+	} else {
+		cursor, err := strconv.ParseUint(event.ID, 10, 64)
+		if err != nil {
+			return Frame{}, fmt.Errorf("event id %q is not a uint64 cursor", event.ID)
+		}
+		frame.Cursor = cursor
 	}
-	frame := Frame{Cursor: cursor, Event: event.Event}
 	if err := json.Unmarshal([]byte(event.Data), &frame.Data); err != nil {
-		return Frame{}, fmt.Errorf("event %d data is not a JSON object: %w", cursor, err)
+		return Frame{}, fmt.Errorf("event %q data is not a JSON object: %w", event.ID, err)
 	}
 	frame.Type, _ = frame.Data["type"].(string)
 	if frame.Type == "" {
 		frame.Type = event.Event
+	}
+	if frame.Derived && frame.Type != AgentStateFrameType {
+		return Frame{}, fmt.Errorf("a %q frame has no id; only %q may", frame.Type, AgentStateFrameType)
 	}
 	return frame, nil
 }

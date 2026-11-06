@@ -89,6 +89,16 @@ func TestDecodeFrameRequiresAnIntegerCursor(t *testing.T) {
 	}
 }
 
+func TestDecodeFrameAcceptsOnlyAnIdlessAgentState(t *testing.T) {
+	frame, err := DecodeFrame(Event{Event: "execution.node_event", Data: `{"type":"agent_state","participant_id":3,"state":"thinking"}`})
+	if err != nil || !frame.Derived || frame.Cursor != 0 || frame.Type != AgentStateFrameType || IsTerminal(frame) {
+		t.Fatalf("frame %+v err %v", frame, err)
+	}
+	if _, err := DecodeFrame(Event{Event: "execution.node_event", Data: `{"type":"agent_llm_chunk"}`}); err == nil {
+		t.Fatal("an id-less frame other than agent_state was accepted")
+	}
+}
+
 func TestIsTerminalAppliesTheContractRules(t *testing.T) {
 	frame := func(data string) Frame {
 		decoded, err := DecodeFrame(Event{ID: "1", Event: "execution.node_event", Data: data})
