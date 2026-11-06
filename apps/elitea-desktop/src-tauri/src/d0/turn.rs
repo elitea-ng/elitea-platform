@@ -4297,9 +4297,10 @@ impl AgentHost {
             )));
         }
         // The browser pane's tools (ADR-0048 decision 3): a toolset of
-        // their own, never workspace tools. TODO(#1590): offered only while
-        // the `local_work_browser` and `local_work_browser_agent` policy
-        // keys allow it; approvals per tool kind (`crate::browser_tools`).
+        // their own, never workspace tools. Plan mode and unattended turns
+        // only read the page (`crate::browser_tools::gate`). TODO(#1590):
+        // offered only while the `local_work_browser` and
+        // `local_work_browser_agent` policy keys allow it.
         if let Some(drivers) = self.browser.get()
             && let Ok(thread) = conversation_key(&request.conversation_id)
         {
@@ -4307,6 +4308,7 @@ impl AgentHost {
                 &thread,
                 drivers.clone(),
                 workspace.session.vision(),
+                workspace.session.clone(),
             )));
         }
         // The nested agents, as cloud child turns of this one (#1239).

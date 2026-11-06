@@ -63,7 +63,7 @@ The screenshot uses `takeSnapshot(with:)` and is encoded as PNG. For an element,
 - At most 10 actions per second (`ActRate`). Any more answer `rate_limited`.
 - Secure fields are as described above.
 
-Approvals and the `local_work_browser*` policy keys are #1590's. They plug into `browser_tools::gate`. Handing the page to the person (`browser_request_user`) and the control pill are #1591's. Until then, `request_user` answers `unsupported`.
+`browser_tools::gate` already refuses navigate and act tools in plan mode and in unattended turns (`no_person`; nobody watches the page, and the `browser_submits` grant is #1590's). It reads the session's profile at each call, so a plan accepted mid-turn unlocks them. The other approvals and the `local_work_browser*` policy keys are #1590's and plug into the same function. Handing the page to the person (`browser_request_user`) and the control pill are #1591's. Until then, `request_user` answers `unsupported`.
 
 ## Content rules and native history
 

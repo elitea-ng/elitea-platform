@@ -287,9 +287,15 @@ impl<E: Engine> WebDriver<E> {
     }
 
     /// Wait for a navigation the driver started: until the top document is
-    /// a new one and loaded, or (a page restored from the back-forward
-    /// cache keeps its document) loading stopped for a moment.
-    async fn navigated(&self, before: Option<String>) -> Result<PageInfo, BrowserError> {
+    /// a new one and loaded, or loading stopped for a moment with a new
+    /// document or a new address (a page restored from the back-forward
+    /// cache keeps its document; a fragment or `pushState` step keeps the
+    /// document and changes only the address).
+    async fn navigated(
+        &self,
+        before: Option<String>,
+        before_url: Option<String>,
+    ) -> Result<PageInfo, BrowserError> {
         let started = Instant::now();
         let mut stopped_since: Option<Instant> = None;
         loop {
@@ -311,7 +317,8 @@ impl<E: Engine> WebDriver<E> {
             } else if stopped_since.get_or_insert_with(Instant::now).elapsed()
                 > Duration::from_millis(750)
             {
-                if state.is_some_and(|state| Some(state.doc) != before) {
+                let moved = before_url.as_deref() != Some(page.url.as_str());
+                if moved || state.is_some_and(|state| Some(state.doc) != before) {
                     break;
                 }
                 return Err(BrowserError::new(
@@ -519,9 +526,10 @@ impl<E: Engine> BrowserDriver for WebDriver<E> {
         check_url(url)?;
         (self.check)(url)?;
         let before = self.top_state().await.ok().map(|state| state.doc);
+        let before_url = self.engine.page().await.ok().map(|page| page.url);
         self.invalidate();
         self.engine.load(url).await?;
-        self.navigated(before).await
+        self.navigated(before, before_url).await
     }
 
     async fn snapshot(&self, max_nodes: usize) -> Result<Snapshot, BrowserError> {
@@ -649,13 +657,21 @@ impl<E: Engine> BrowserDriver for WebDriver<E> {
         let args = json!({ "key": key.key, "modifiers": modifiers });
         let answer = self.engine.call(TOP, "press", args.clone()).await?;
         if answer.get("in_frame") == Some(&Value::Bool(true)) {
-            // The focus is in a cross-origin frame: press there.
+            // The focus is in a cross-origin frame: press there. A frame the
+            // driver cannot reach is an error, never a silent no-op.
+            let mut pressed = false;
             for (frame, _) in self.engine.frames().await {
                 let focused = self.engine.call(frame, "focused", json!({})).await;
                 if focused.ok().and_then(|value| value.as_bool()) == Some(true) {
                     self.engine.call(frame, "press", args).await?;
+                    pressed = true;
                     break;
                 }
+            }
+            if !pressed {
+                return Err(BrowserError::stale_ref(
+                    "the focused frame is out of reach: snapshot, then click the field first",
+                ));
             }
         }
         self.settle(SETTLE_TIMEOUT).await
@@ -663,9 +679,10 @@ impl<E: Engine> BrowserDriver for WebDriver<E> {
 
     async fn history(&self, step: HistoryStep) -> Result<PageInfo, BrowserError> {
         let before = self.top_state().await.ok().map(|state| state.doc);
+        let before_url = self.engine.page().await.ok().map(|page| page.url);
         self.invalidate();
         self.engine.history(step).await?;
-        self.navigated(before).await
+        self.navigated(before, before_url).await
     }
 
     async fn wait(

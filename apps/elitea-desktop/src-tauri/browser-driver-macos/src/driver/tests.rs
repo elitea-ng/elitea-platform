@@ -19,6 +19,10 @@ struct Fake {
     trusted: bool,
     trusted_clicks: StdMutex<Vec<(f64, f64)>>,
     loads: StdMutex<Vec<String>>,
+    /// The address WebKit shows (`None`: `https://a.test/`).
+    url: StdMutex<Option<String>>,
+    /// A load keeps the document (a fragment or `pushState` step).
+    same_document: bool,
 }
 
 impl Fake {
@@ -28,6 +32,14 @@ impl Fake {
             page: StdMutex::new(page),
             ..Self::default()
         }
+    }
+
+    fn url(&self) -> String {
+        self.url
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "https://a.test/".to_owned())
     }
 
     fn calls(&self, op: &str) -> Vec<(FrameId, Value)> {
@@ -56,7 +68,7 @@ impl Engine for Fake {
             return Err(BrowserError::stale_ref("gone"));
         }
         Ok(match op {
-            "state" => json!({ "doc": doc, "url": "https://a.test/", "title": "A" }),
+            "state" => json!({ "doc": doc, "url": self.url(), "title": "A" }),
             "snapshot" if frame == TOP => {
                 let mut page = self.page.lock().unwrap().clone();
                 page["doc"] = json!(doc);
@@ -84,7 +96,11 @@ impl Engine for Fake {
 
     async fn load(&self, url: &str) -> Result<(), BrowserError> {
         self.loads.lock().unwrap().push(url.to_owned());
-        *self.doc.lock().unwrap() = format!("d{}", self.loads.lock().unwrap().len() + 1);
+        if self.same_document {
+            *self.url.lock().unwrap() = Some(url.to_owned());
+        } else {
+            *self.doc.lock().unwrap() = format!("d{}", self.loads.lock().unwrap().len() + 1);
+        }
         Ok(())
     }
 
@@ -95,7 +111,7 @@ impl Engine for Fake {
 
     async fn page(&self) -> Result<EnginePage, BrowserError> {
         Ok(EnginePage {
-            url: "https://a.test/".to_owned(),
+            url: self.url(),
             title: "A".to_owned(),
             loading: false,
         })
@@ -332,15 +348,47 @@ async fn request_user_waits_for_the_hand_over() {
 }
 
 #[tokio::test]
+async fn a_same_document_open_is_a_navigation_not_a_failure() {
+    let driver = driver(Fake {
+        same_document: true,
+        ..Fake::new(form_page())
+    });
+    let info = driver.open("https://a.test/#install").await.unwrap();
+    assert_eq!(info.url, "https://a.test/#install");
+    assert!(info.refs_stale);
+}
+
+#[tokio::test]
+async fn an_open_that_goes_nowhere_fails() {
+    // Neither the document nor the address changed: the load was refused.
+    let driver = driver(Fake {
+        same_document: true,
+        ..Fake::new(form_page())
+    });
+    let error = driver.open("https://a.test/").await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::NavigationFailed);
+}
+
+#[tokio::test]
 async fn press_goes_to_the_focused_cross_origin_frame() {
-    struct InFrame(Fake);
+    press_in_frame(5).await.unwrap();
+}
+
+#[tokio::test]
+async fn press_with_no_reachable_focused_frame_is_an_error() {
+    let error = press_in_frame(9).await.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::StaleRef);
+}
+
+async fn press_in_frame(focused: FrameId) -> Result<(), BrowserError> {
+    struct InFrame(Fake, FrameId);
     #[async_trait]
     impl Engine for InFrame {
         async fn call(&self, frame: FrameId, op: &str, args: Value) -> Result<Value, BrowserError> {
             let answer = self.0.call(frame, op, args).await?;
             Ok(match (frame, op) {
                 (TOP, "press") => json!({ "in_frame": true }),
-                (5, "focused") => json!(true),
+                (frame, "focused") if frame == self.1 => json!(true),
                 (_, "focused") => json!(false),
                 _ => answer,
             })
@@ -371,16 +419,17 @@ async fn press_goes_to_the_focused_cross_origin_frame() {
         }
     }
     let driver = WebDriver::new(
-        InFrame(Fake::new(form_page())),
+        InFrame(Fake::new(form_page()), focused),
         allow_all(),
         Arc::new(NoHandOver),
     );
-    driver.press(&Key::parse("Enter").unwrap()).await.unwrap();
+    driver.press(&Key::parse("Enter").unwrap()).await?;
     let presses = driver.engine().0.calls("press");
     assert_eq!(
         presses.iter().map(|(frame, _)| *frame).collect::<Vec<_>>(),
         [TOP, 5]
     );
+    Ok(())
 }
 
 #[tokio::test]

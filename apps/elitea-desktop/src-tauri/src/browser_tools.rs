@@ -23,7 +23,11 @@ use base64::Engine as _;
 use elitea_agent_runtime::host::{HostError, ToolProvider, ToolsetRequest};
 use elitea_agent_runtime::image_result::{IMAGE_FIELD, IMAGE_KIND};
 use elitea_browser_tools::driver::ToolOutput;
-use elitea_browser_tools::{BrowserDriver, BrowserError, ErrorCode, TOOLS, ToolSpec, dispatch};
+use elitea_browser_tools::{
+    BrowserDriver, BrowserError, ErrorCode, TOOLS, ToolKind, ToolSpec, dispatch,
+};
+use elitea_local_tools::approvals::PermissionProfile;
+use elitea_local_tools::session::LocalSession;
 use serde_json::{Value, json};
 
 /// The toolset's name.
@@ -68,17 +72,53 @@ impl BrowserDrivers {
     }
 }
 
-/// The approvals and policy seam (#1590).
+/// The turn's mode as the gate needs it, read live at each call (a plan
+/// the person accepts mid-turn switches the session to Build).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Mode {
+    plan: bool,
+    unattended: bool,
+}
+
+impl Mode {
+    fn of(session: Option<&LocalSession>) -> Self {
+        session.map_or(
+            Self {
+                plan: false,
+                unattended: false,
+            },
+            |session| Self {
+                plan: session.profile() == PermissionProfile::Plan,
+                unattended: session.rules().unattended().is_some(),
+            },
+        )
+    }
+}
+
+/// The approvals and policy seam (ADR-0048 decision 8; the rest is #1590).
+///
+/// Enforced now: plan mode denies `BrowserNavigate` and `BrowserAct`, and
+/// so does an unattended turn (fail closed: nobody watches the page, and
+/// the `browser_submits` grant is #1590's). Reads and the hand-over
+/// question always pass.
 ///
 /// TODO(#1590): the `local_work_browser` and `local_work_browser_agent`
-/// policy keys decide whether this toolset is offered at all; each call's
-/// [`elitea_browser_tools::ToolKind`] goes through the approval rows of
-/// ADR-0048 decision 8 here (plan mode denies `BrowserNavigate` and
-/// `BrowserAct`; a submit, an upload, a download and a consequential
-/// control are asked; unattended grants answer `browser_submits`). Until
-/// then every call runs, as the pane is the person's to open and every
-/// action shows in it.
-fn gate(_spec: &ToolSpec, _arguments: &Value) -> Result<(), BrowserError> {
+/// policy keys decide whether this toolset is offered at all, and a
+/// submit, an upload, a download and a consequential control are asked.
+fn gate(spec: &ToolSpec, mode: Mode) -> Result<(), BrowserError> {
+    let moves = matches!(spec.kind, ToolKind::BrowserNavigate | ToolKind::BrowserAct);
+    if moves && mode.plan {
+        return Err(BrowserError::new(
+            ErrorCode::Unsupported,
+            "plan mode only reads the page: navigate and act once the plan is accepted",
+        ));
+    }
+    if moves && mode.unattended {
+        return Err(BrowserError::new(
+            ErrorCode::NoPerson,
+            "an unattended run only reads the page: nobody is there to watch it act",
+        ));
+    }
     Ok(())
 }
 
@@ -89,6 +129,8 @@ struct BrowserTool {
     drivers: Arc<BrowserDrivers>,
     /// The model can see images: a screenshot carries its bytes.
     vision: bool,
+    /// The turn's session: its profile and unattended grant ([`gate`]).
+    session: Option<Arc<LocalSession>>,
 }
 
 #[async_trait]
@@ -121,13 +163,13 @@ impl Tool for BrowserTool {
 
 impl BrowserTool {
     async fn run(&self, args: &Value) -> Value {
-        if let Err(error) = gate(self.spec, args) {
+        if let Err(error) = gate(self.spec, Mode::of(self.session.as_deref())) {
             return error.to_result();
         }
         let Some(driver) = self.drivers.get(&self.thread) else {
             return BrowserError::new(
                 ErrorCode::Unsupported,
-                "the browser pane of this thread is not open: ask the person to open it (Thread > Browser)",
+                "the browser pane of this thread is not open, or the agent cannot drive it: ask the person to open it (Thread > Browser) or to reopen it",
             )
             .to_result();
         };
@@ -167,6 +209,7 @@ pub struct BrowserToolset {
     thread: String,
     drivers: Arc<BrowserDrivers>,
     vision: bool,
+    session: Option<Arc<LocalSession>>,
 }
 
 #[async_trait]
@@ -190,6 +233,7 @@ impl BrowserToolset {
                     thread: self.thread.clone(),
                     drivers: self.drivers.clone(),
                     vision: self.vision,
+                    session: self.session.clone(),
                 }) as Arc<dyn Tool>
             })
             .collect()
@@ -203,12 +247,18 @@ pub struct BrowserToolProvider {
 
 impl BrowserToolProvider {
     #[must_use]
-    pub fn new(thread: &str, drivers: Arc<BrowserDrivers>, vision: bool) -> Self {
+    pub fn new(
+        thread: &str,
+        drivers: Arc<BrowserDrivers>,
+        vision: bool,
+        session: Arc<LocalSession>,
+    ) -> Self {
         Self {
             toolset: Arc::new(BrowserToolset {
                 thread: thread.to_owned(),
                 drivers,
                 vision,
+                session: Some(session),
             }),
         }
     }
@@ -241,6 +291,7 @@ mod tests {
             thread: "t1".to_owned(),
             drivers: Arc::new(BrowserDrivers::new()),
             vision: true,
+            session: None,
         };
         let exposed: Vec<(String, String, Value)> = toolset
             .current()
@@ -272,6 +323,7 @@ mod tests {
             thread: "t1".to_owned(),
             drivers: Arc::new(BrowserDrivers::new()),
             vision: false,
+            session: None,
         };
         let result = tool.run(&json!({ "url": "https://example.com/" })).await;
         assert_eq!(result["code"], "unsupported");
@@ -341,6 +393,7 @@ mod tests {
             thread: "t1".to_owned(),
             drivers: drivers.clone(),
             vision: true,
+            session: None,
         };
         let mut result = seeing.run(&json!({})).await;
         let image = elitea_agent_runtime::image_result::take_image(&mut result).unwrap();
@@ -352,6 +405,7 @@ mod tests {
             thread: "t1".to_owned(),
             drivers: drivers.clone(),
             vision: false,
+            session: None,
         };
         let result = blind.run(&json!({})).await;
         assert!(result.get(IMAGE_FIELD).is_none());
@@ -363,5 +417,32 @@ mod tests {
         );
         drivers.detach("t1");
         assert!(drivers.get("t1").is_none());
+    }
+
+    #[test]
+    fn plan_mode_and_unattended_turns_only_read_the_page() {
+        let build = Mode {
+            plan: false,
+            unattended: false,
+        };
+        let plan = Mode {
+            plan: true,
+            unattended: false,
+        };
+        let unattended = Mode {
+            plan: false,
+            unattended: true,
+        };
+        for spec in TOOLS {
+            let moves = matches!(spec.kind, ToolKind::BrowserNavigate | ToolKind::BrowserAct);
+            assert!(gate(spec, build).is_ok(), "{}", spec.name);
+            assert_eq!(gate(spec, plan).is_err(), moves, "{}", spec.name);
+            assert_eq!(gate(spec, unattended).is_err(), moves, "{}", spec.name);
+        }
+        let open = elitea_browser_tools::spec::find("browser_open").unwrap();
+        assert_eq!(
+            gate(open, unattended).unwrap_err().code(),
+            ErrorCode::NoPerson
+        );
     }
 }
