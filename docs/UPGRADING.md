@@ -14,6 +14,12 @@ Against an earlier Main, the clients show every answer with the Elitea mark
 and no motion, as before. The shared view model is the new
 `@elitea/client-core/conversation` entry point.
 
+The Rust worker's Kubernetes client moves to kube 5 and the Kubernetes 1.33
+API (`k8s-openapi` `v1_33`, was `v1_32`). It is used only by the
+`sandbox-supervisor` feature (workspace runs and browser sessions). Pod,
+exec and attach calls are unchanged; run those features on Kubernetes 1.33
+or newer.
+
 ## Typed chat participants and message addressing (#1605, ADR-0050 decision 7)
 
 No action is needed. Workers and Main can be upgraded in any order.
