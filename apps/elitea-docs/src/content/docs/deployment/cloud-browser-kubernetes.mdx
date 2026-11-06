@@ -17,6 +17,9 @@ This page assumes the [cloud executor](/deployment/cloud-executor-kubernetes) pi
 ```mermaid
 flowchart LR
     Worker["elitea-worker"] -->|"mTLS + signed grant"| Sup["elitea-sandbox-supervisor (browser profile)"]
+    Worker -->|"ReportBrowserSession (gRPC)"| Main["elitea-main"]
+    Viewer["viewer (WebSocket)"] --> Main
+    Main -->|"BrowserView, mTLS + view grant"| Sup
     Sup -->|"reads RuntimeClass, creates Pod, exec"| API["Kubernetes API"]
     API --> Pod["browser-session Pod (gVisor) on a browser node"]
     Pod -->|"only route out"| Proxy["elitea-egress-proxy"]
@@ -121,7 +124,29 @@ With `egressProxy.enabled`, the chart adds the `elitea-browser-session-egress` N
 
 Every session Pod counts toward `sandboxKubernetes.maxPods`, so the chart refuses a `concurrency` above it. The render also fails if the profile is only partly set up: without the supervisor, without a RuntimeClass, without a digest image or a node selector, with the audience missing from `main.runtime.sandboxAudiences`, or with a port, owner, audience or Service name the workspace profile already uses.
 
-## Step 4: verify
+## Step 4: the live view
+
+A person watches a session, and takes it over, through elitea-main: `GET /api/v2/browser_sessions/{session_id}/view`, a WebSocket. Any Main replica serves any session. The worker reports each session it starts and ends to Main over its control channel, and Main keeps one row per session in `elitea_runtime.browser_sessions` (migration 0228). A viewer's replica reads that row, signs a view grant for the session's run and opens the supervisor's `BrowserView` stream over mTLS. The supervisor runs the screencast only while somebody watches.
+
+Main needs a client certificate the browser profile accepts, and the list of browser supervisors it may dial. Issue the certificate from the runtime CA (the browser profile trusts `browser-client-ca.pem`) with one DNS name, Main's workload identity (for example `elitea-main`, read as `dns:elitea-main`), and give Main the configuration as one environment variable:
+
+```yaml
+main:
+  env:
+    ELITEA_RUNTIME_BROWSER_VIEW_CONFIG: >-
+      {"main_workload_identity": "dns:elitea-main",
+       "certificate_chain_path": "/run/elitea-runtime/browser-view-client.crt",
+       "private_key_path": "/run/elitea-runtime/browser-view-client.key",
+       "server_ca_path": "/run/elitea-runtime/runtime-ca.crt",
+       "supervisors": [{"audience": "dns:elitea-sandbox-browser",
+                        "https_origin": "https://elitea-sandbox-browser:9471"}]}
+```
+
+Each `audience` must also be in `main.runtime.sandboxAudiences`, and each origin is a fixed HTTPS address: the worker never tells Main where a supervisor is. `max_fps` (at most 10, the default) is optional. Without the variable, Main records no session and does not serve the view; the browser tools still work.
+
+The session table keeps one row per session; ended rows stay for the run's history.
+
+## Step 5: verify
 
 ```bash
 kubectl -n elitea logs deploy/elitea-sandbox-supervisor | grep -E 'browser_session_(supervisor_starting|runtime_class_refused)'
@@ -150,3 +175,5 @@ To prove the `--no-sandbox` refusal, point `sandboxKubernetes.runtimeClass.name`
 | `browser_session_ended` | The session ended (idle, wall or run end); the next call in a new run starts a fresh one |
 | Session Pods stay Pending | No node matches `nodeSelector`, or the taint is not tolerated |
 | Pages do not load | `egressProxy.enabled` is off, or the run's host allowlist does not name the site |
+| The view answers 404 for a live run | `ELITEA_RUNTIME_BROWSER_VIEW_CONFIG` is unset, the worker's `browserSessions.audience` is not one of its supervisors (the worker logs `browser_session_report_refused`), or the caller may not read the conversation |
+| The view answers 502 | Main cannot reach the supervisor, or the browser profile does not accept Main's client certificate |

@@ -51,6 +51,21 @@ After any click, type, select or navigation, the platform forgets the page's lab
 
 When the agent asks, the run pauses for approval as it does for any sensitive tool. The browser session stays alive while the run waits. If the run fails after an approved call that may have started, the call is not run again.
 
+## Watch and take over
+
+A person can watch a run's browser live, and take it over, for example to sign in. The view is a stream of screenshots from the session, sent only while somebody watches it. The app's viewer is coming in a later release. A native client or an integration can open the stream now with `viewBrowserSession` (client contract 1.39).
+
+| Who | Watch | Take over |
+|---|---|---|
+| The person who started the run | Yes | Yes |
+| A participant of the run's conversation who may send messages in the project | Yes | Yes |
+| Anyone else who may read the conversation | Yes | No. Their input is refused |
+| Anyone else | No. The session reads as not found | No |
+
+While the person has control, the agent may still take snapshots and screenshots, and every other browser tool answers `user_in_control`. Input from the person while the agent drives also takes control. When the person hands back, they can leave a note for the agent, for example "signed in, continue from the inbox". After the run ends, the session stays up to 10 minutes so the last page can still be watched. In that time nobody can take over. Several people can watch the same session at once, from any replica of the platform.
+
+Treat the view like the conversation itself: whoever may read the conversation sees what the agent's browser shows, including what a person types into it.
+
 ## Egress
 
 The browser reaches the internet only through the platform's egress proxy, with a token signed for the run. An administrator sets the policy in **Admin › Configuration › Cloud Browser**:

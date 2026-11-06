@@ -4,6 +4,36 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: the live view (#1597, ADR-0049 decision 6)
+
+Nothing changes unless you turn it on. Upgrade Main before the workers:
+
+- Migration 0228 adds `elitea_runtime.browser_sessions`, one row per
+  cloud browser session (the run, its owner and conversation, the
+  supervisor audience, the spec, the state). It holds no data from before
+  the upgrade and grants nothing. Ended rows are kept.
+- The new control RPC `ReportBrowserSession`: the worker reports each
+  session it starts and ends, under its live claim. A Main without the
+  RPC, or without the view configured, answers `UNSUPPORTED_CAPABILITY`;
+  the worker logs `browser_session_report_refused` once per call and the
+  browser tools go on working. So a worker of this release on an older
+  Main loses only the view.
+- `ELITEA_RUNTIME_BROWSER_VIEW_CONFIG` (new, unset by default) turns the
+  relay on: Main's client certificate toward the browser profile, the
+  runtime CA, and the browser supervisors (`audience` and a fixed
+  `https_origin`). Every audience must be in
+  `main.runtime.sandboxAudiences`. Main refuses to start with a bad value.
+  Issue Main a client certificate from the runtime CA. See
+  [Cloud browser on Kubernetes](../apps/elitea-docs/src/content/docs/deployment/cloud-browser-kubernetes.mdx),
+  "Step 4: the live view".
+- Client contract 1.39 adds `viewBrowserSession`
+  (`GET /api/v2/browser_sessions/{session_id}/view`, a WebSocket). 1.38 is
+  left for the browser policy keys (#1590). The web app's viewer comes
+  later (#1598); nothing in the web app changes yet.
+- A WebSocket must reach Main through your ingress: allow the `Upgrade`
+  header on `/api/v2/browser_sessions/`, with an idle timeout above 30
+  seconds (Main pings an idle view every 30 seconds).
+
 ## Desktop: browser pane policy keys and approvals (#1590, ADR-0048 decision 8)
 
 Client contract 1.39. The browser pane is now governed by the client
