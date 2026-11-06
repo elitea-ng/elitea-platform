@@ -39,14 +39,14 @@ use elitea_browser_tools::call::{
     Direction, ElementRef, Key, Modifier, ScrollTarget, WaitCondition, check_url, url_matches,
 };
 use elitea_browser_tools::driver::{
-    BrowserDriver, Handback, HistoryStep, PageInfo, PageText, Screenshot,
+    BrowserDriver, ControlInfo, Handback, HistoryStep, PageInfo, PageText, Screenshot,
 };
 use elitea_browser_tools::rate::ActRate;
 use elitea_browser_tools::snapshot::{Node, Snapshot, SnapshotSlot};
 use elitea_browser_tools::{BrowserError, ErrorCode};
 use serde_json::{Value, json};
 
-use crate::reply::{self, RawClick, RawNode, RawPage, RawRect, RawState};
+use crate::reply::{self, RawClick, RawControl, RawNode, RawPage, RawRect, RawState};
 
 /// A frame the engine can run the script in: 0 is the top document.
 pub type FrameId = u32;
@@ -710,6 +710,49 @@ impl<E: Engine> BrowserDriver for WebDriver<E> {
 
     async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError> {
         self.hand_over.request_user(reason).await
+    }
+
+    /// The element a press goes to, read in the driver world: the top
+    /// document's focus, or the focused cross-origin frame's. A focused
+    /// frame the driver cannot reach is an error: the host fails closed.
+    async fn focused(&self) -> Result<Option<ControlInfo>, BrowserError> {
+        let answer = self.engine.call(TOP, "focused_control", json!({})).await?;
+        let answer = if answer.get("in_frame") == Some(&Value::Bool(true)) {
+            let mut inner = None;
+            for (frame, _) in self.engine.frames().await {
+                let focused = self.engine.call(frame, "focused", json!({})).await;
+                if focused.ok().and_then(|value| value.as_bool()) == Some(true) {
+                    inner = Some(
+                        self.engine
+                            .call(frame, "focused_control", json!({}))
+                            .await?,
+                    );
+                    break;
+                }
+            }
+            inner.ok_or_else(|| BrowserError::stale_ref("the focused frame is out of reach"))?
+        } else {
+            answer
+        };
+        if answer.is_null() {
+            return Ok(None);
+        }
+        if answer.get("in_frame").is_some() {
+            return Err(BrowserError::stale_ref("the focused frame is out of reach"));
+        }
+        Ok(Some(reply::typed::<RawControl>(answer)?.into_info()))
+    }
+
+    async fn inspect(&self, target: &ElementRef) -> Result<ControlInfo, BrowserError> {
+        let (frame, element) = self.element(target, false).await?;
+        let answer = self
+            .on_element(&frame, "inspect", element, json!({}))
+            .await?;
+        Ok(reply::typed::<RawControl>(answer)?.into_info())
+    }
+
+    async fn current_url(&self) -> Result<String, BrowserError> {
+        Ok(self.engine.page().await?.url)
     }
 }
 

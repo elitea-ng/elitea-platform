@@ -658,8 +658,10 @@ fn the_consequential_matcher_reads_names_and_roles() {
 #[tokio::test]
 async fn unattended_turns_never_answer_acting_from_a_grant() {
     let fx = fixture(policy());
-    fx.engine
-        .set_unattended(Some(Unattended { hook_asks: true }));
+    fx.engine.set_unattended(Some(Unattended {
+        hook_asks: true,
+        ..Unattended::default()
+    }));
 
     // Nobody at the machine: the host defers (its wait ran out), and the
     // act is declined.
@@ -737,8 +739,10 @@ async fn unattended_turns_never_answer_acting_from_a_grant() {
         verdict(&fx.engine, &act(MAIL, "Reply")),
         (Verdict::Allow, Source::Remembered)
     );
-    fx.engine
-        .set_unattended(Some(Unattended { hook_asks: true }));
+    fx.engine.set_unattended(Some(Unattended {
+        hook_asks: true,
+        ..Unattended::default()
+    }));
 
     // Seeing an app approved before the run still applies (decision 8
     // limits acting only).

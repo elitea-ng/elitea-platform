@@ -123,7 +123,7 @@ export interface ApprovalRequestPayload {
   /** The rule's justification, shown in place of the classifier's reason. */
   justification?: string;
   can_remember: boolean;
-  can_remember_thread?: boolean;
+  can_remember_thread?: boolean; site?: string; // site: a browser ask's host (ADR-0048)
   /** `session`: "always" lasts until the app quits (host-intel tools, #1238). */
   remember_scope?: 'session';
 }

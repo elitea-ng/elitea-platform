@@ -10,13 +10,19 @@
 //!   the bundled origin only. Tauri still injects its IPC script into every
 //!   webview; each call the page makes is refused by the ACL.
 //! - **The navigation guard** ([`check`]): `https`, `http` only with the
-//!   host setting `browser_allow_http` (#1590 replaces it with policy),
+//!   client policy key `local_work_browser_http` (ADR-0048 decision 8),
 //!   `about:blank`/`about:srcdoc` and `blob:` of an allowed origin; every
 //!   other scheme (`file:`, `tauri:`, `asset:`, `javascript:`, `data:`, …)
 //!   is refused, and so are loopback, private and forbidden addresses (the
 //!   classification of `libs/rust/egress-guard`) and the names that are
-//!   private by definition (`localhost`, `.local`, …). wry calls the guard
-//!   for frames as well as the top level, so the rule is the same for both.
+//!   private by definition (`localhost`, `.local`, …) unless
+//!   `local_work_browser_private_network` is on. A host that
+//!   `local_work_browser_deny_domains` names, or one outside a non-empty
+//!   `local_work_browser_allow_domains`, is refused too. wry calls the guard
+//!   for frames as well as the top level, so the rule is the same for both
+//!   (the domain lists judge navigations, not subresources).
+//! - **The policy switch.** `local_work_browser` off (or local work off):
+//!   `browser_open` refuses (`browser_disabled`) and no pane is made.
 //!
 //! - **Content rules** (macOS, #1634): the guard sees navigations only, so
 //!   every pane also gets a `WKContentRuleList` ([`content_rules`]) that
@@ -29,8 +35,7 @@
 //!   (`browser_unprotected`): fail closed. `browser_open` is serialised, so
 //!   a second open cannot navigate a pane still being armed. The policy
 //!   (rules and guard) is fixed when the pane is made: a change applies to
-//!   panes made after it (the private-network switch is #1590's policy
-//!   key; until then it is always off). The FFI is in
+//!   panes made after it. The FFI is in
 //!   `browser-driver-macos` (`native`), the one crate allowed `unsafe`.
 //!   Windows and Linux block navigations only until their delivery (#1593).
 //!
@@ -86,9 +91,10 @@ use url::{Host, Url};
 use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
-use crate::browser_tools::BrowserDrivers;
+use crate::browser_tools::{BrowserDrivers, DownloadVerdict};
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
+use elitea_local_tools::policy::{LocalWorkPolicy, browser_domains_refusal};
 
 /// The event every pane reports on, to the `main` webview only.
 pub const EVENT_NAME: &str = "browser://event";
@@ -103,12 +109,29 @@ const RELEASE_WAIT: std::time::Duration = std::time::Duration::from_millis(400);
 /// How long after launch the left-over stores are cleaned up.
 const LAUNCH_CLEANUP_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// What the guard lets the page load beyond public `https` (ADR-0048
-/// decision 8 makes both policy keys, #1590).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What the guard lets the page load beyond public `https`, from the
+/// client policy's `local_work_browser*` keys (ADR-0048 decision 8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GuardPolicy {
     pub allow_http: bool,
     pub allow_private_network: bool,
+    /// `local_work_browser_allow_domains`: when non-empty, the only hosts.
+    pub allow_domains: Arc<[String]>,
+    /// `local_work_browser_deny_domains`: never loaded.
+    pub deny_domains: Arc<[String]>,
+}
+
+impl GuardPolicy {
+    /// The guard's part of the client policy.
+    #[must_use]
+    pub fn of(policy: &LocalWorkPolicy) -> Self {
+        Self {
+            allow_http: policy.browser_http,
+            allow_private_network: policy.browser_private_network,
+            allow_domains: policy.browser_allow_domains.clone().into(),
+            deny_domains: policy.browser_deny_domains.clone().into(),
+        }
+    }
 }
 
 /// Why the guard refused a URL: also the `reason` of a `refused` event.
@@ -125,6 +148,8 @@ pub enum Refusal {
     Forbidden,
     /// A user name or password in the URL (`https://bank.example@evil.example`).
     Credentials,
+    /// A host the policy's domain lists refuse.
+    Domain,
 }
 
 impl Refusal {
@@ -138,6 +163,7 @@ impl Refusal {
             }
             Self::Forbidden => "That address is never opened.",
             Self::Credentials => "Addresses with a user name or password are not opened.",
+            Self::Domain => "Your organisation's policy does not allow this site.",
         }
     }
 }
@@ -145,7 +171,16 @@ impl Refusal {
 /// Host names that name this computer or a private network by definition.
 const PRIVATE_SUFFIXES: &[&str] = &[".localhost", ".local", ".internal", ".home.arpa"];
 
-fn host_check(host: Option<Host<&str>>, policy: GuardPolicy) -> Result<(), Refusal> {
+fn host_check(host: Option<Host<&str>>, policy: &GuardPolicy) -> Result<(), Refusal> {
+    if let Some(host) = &host {
+        let name = match host {
+            Host::Domain(name) => (*name).to_owned(),
+            other => other.to_string(),
+        };
+        if browser_domains_refusal(&policy.allow_domains, &policy.deny_domains, &name).is_some() {
+            return Err(Refusal::Domain);
+        }
+    }
     let address = match host {
         None => return Err(Refusal::Scheme),
         Some(Host::Ipv4(v4)) => IpAddr::V4(v4),
@@ -169,8 +204,17 @@ fn host_check(host: Option<Host<&str>>, policy: GuardPolicy) -> Result<(), Refus
     }
 }
 
+/// Why a page the pane committed (or finished) must not stay: the guard's
+/// refusal of its address. `about:blank` never is.
+fn committed_refusal(url: &Url, policy: &GuardPolicy) -> Option<Refusal> {
+    if url.as_str() == "about:blank" {
+        return None;
+    }
+    check(url, policy).err()
+}
+
 /// The navigation guard: may the pane load `url` (top level or a frame)?
-pub fn check(url: &Url, policy: GuardPolicy) -> Result<(), Refusal> {
+pub fn check(url: &Url, policy: &GuardPolicy) -> Result<(), Refusal> {
     match url.scheme() {
         "https" => {}
         "http" if policy.allow_http => {}
@@ -557,7 +601,7 @@ const RULE_ADDRESSES: &[&str] = &[
     expect(dead_code, reason = "Windows and Linux content blocking is #1593's")
 )]
 #[must_use]
-pub fn content_rules(policy: GuardPolicy) -> Option<String> {
+pub fn content_rules(policy: &GuardPolicy) -> Option<String> {
     if policy.allow_private_network {
         return None;
     }
@@ -674,17 +718,20 @@ impl BrowserPanes {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn policy(&self) -> GuardPolicy {
-        let allow_http = self
-            .settings
-            .settings()
+    /// The client policy's `local_work` section as it is stored now
+    /// (absent or unreadable: every switch off, fail closed).
+    fn local_work(&self) -> LocalWorkPolicy {
+        self.settings
+            .policy()
             .ok()
-            .and_then(|s| s.browser_allow_http)
-            .unwrap_or(false);
-        GuardPolicy {
-            allow_http,
-            allow_private_network: false,
-        }
+            .flatten()
+            .and_then(|policy| policy.get("local_work").cloned())
+            .and_then(|section| serde_json::from_value(section).ok())
+            .unwrap_or_default()
+    }
+
+    fn policy(&self) -> GuardPolicy {
+        GuardPolicy::of(&self.local_work())
     }
 
     fn downloads_dir(&self, thread_id: &str) -> PathBuf {
@@ -766,6 +813,15 @@ fn on_download(
 ) -> bool {
     match event {
         DownloadEvent::Requested { url, destination } => {
+            // While an agent turn drives the pane, its downloads are the
+            // agent's (ADR-0048 decision 8): one starts only when the call
+            // that caused it was approved as a download; the person's own
+            // downloads outside a turn are theirs.
+            if panes.drivers.download_requested(thread_id) == DownloadVerdict::Refused {
+                // The agent's tool result says so (`browser_tools`).
+                log::info!(target: "browser", "refused a download nobody approved ({})", url.scheme());
+                return false;
+            }
             let dir = panes.downloads_dir(thread_id);
             if let Err(error) = std::fs::create_dir_all(&dir) {
                 log::warn!(target: "browser", "no download folder: {error}");
@@ -823,7 +879,7 @@ fn build_pane(
     thread_id: &str,
     url: Url,
     rect: PaneRect,
-    policy: GuardPolicy,
+    policy: &GuardPolicy,
 ) -> Result<Webview, IpcError> {
     let label = thread_label(thread_id)?;
     let window = app
@@ -837,7 +893,8 @@ fn build_pane(
     {
         let app = app.clone();
         let thread = thread.clone();
-        builder = builder.on_navigation(move |url| match check(url, policy) {
+        let policy = policy.clone();
+        builder = builder.on_navigation(move |url| match check(url, &policy) {
             Ok(()) => true,
             Err(reason) => {
                 refused(&app, &thread, url, reason);
@@ -850,8 +907,9 @@ fn build_pane(
         // normal navigation, so the opener stays in back history.
         let app = app.clone();
         let thread = thread.clone();
+        let policy = policy.clone();
         builder = builder.on_new_window(move |url, _features| {
-            match check(&url, policy) {
+            match check(&url, &policy) {
                 Ok(()) => {
                     let app = app.clone();
                     let thread = thread.clone();
@@ -871,7 +929,19 @@ fn build_pane(
     {
         let app = app.clone();
         let thread = thread.clone();
-        builder = builder.on_page_load(move |_webview, payload| {
+        let policy = policy.clone();
+        builder = builder.on_page_load(move |webview, payload| {
+            // Defence in depth behind `on_navigation`: WebKit asks the
+            // navigation delegate for a server redirect's new request too,
+            // but a page that commits at an address the guard refuses (a
+            // redirect path the delegate missed) is sent to about:blank.
+            if let Some(reason) = committed_refusal(payload.url(), &policy) {
+                refused(&app, &thread, payload.url(), reason);
+                if let Err(error) = webview.navigate(blank()) {
+                    log::warn!(target: "browser", "a refused page was not left: {error}");
+                }
+                return;
+            }
             let kind = match payload.event() {
                 PageLoadEvent::Started => "loading",
                 PageLoadEvent::Finished => "loaded",
@@ -1059,11 +1129,11 @@ fn agent_check(
             .upgrade()
             .ok_or_else(|| BrowserError::new(ErrorCode::Unsupported, "the browser pane closed"))?;
         let url = Url::parse(address).map_err(|_| BrowserError::invalid("not a URL"))?;
-        check(&url, panes.policy()).map_err(|reason| {
+        check(&url, &panes.policy()).map_err(|reason| {
             let code = match reason {
                 Refusal::Scheme => ErrorCode::SchemeRefused,
                 Refusal::Credentials => ErrorCode::InvalidArgument,
-                Refusal::Http | Refusal::PrivateNetwork | Refusal::Forbidden => {
+                Refusal::Http | Refusal::PrivateNetwork | Refusal::Forbidden | Refusal::Domain => {
                     ErrorCode::EgressRefused
                 }
             };
@@ -1103,7 +1173,7 @@ fn blank() -> Url {
 /// load. Fails closed: rules WebKit refuses are an error, and the caller
 /// closes the pane.
 #[cfg(target_os = "macos")]
-async fn arm_pane(webview: &Webview, policy: GuardPolicy) -> Result<(), IpcError> {
+async fn arm_pane(webview: &Webview, policy: &GuardPolicy) -> Result<(), IpcError> {
     let Some(rules) = content_rules(policy) else {
         return Ok(());
     };
@@ -1120,7 +1190,7 @@ async fn arm_pane(webview: &Webview, policy: GuardPolicy) -> Result<(), IpcError
 
 /// Windows and Linux: navigations only (the guard) until #1593.
 #[cfg(not(target_os = "macos"))]
-async fn arm_pane(_webview: &Webview, _policy: GuardPolicy) -> Result<(), IpcError> {
+async fn arm_pane(_webview: &Webview, _policy: &GuardPolicy) -> Result<(), IpcError> {
     Ok(())
 }
 
@@ -1141,8 +1211,15 @@ pub async fn browser_open(
     let panes = panes.inner().clone();
     thread_label(&thread_id)?;
     let url = address_to_url(&address).ok_or_else(|| invalid("Type a web address."))?;
-    let policy = panes.policy();
-    check(&url, policy).map_err(|reason| IpcError::new("browser_refused", reason.message()))?;
+    let local_work = panes.local_work();
+    if !local_work.browser_pane() {
+        return Err(IpcError::new(
+            "browser_disabled",
+            "The browser pane is turned off by your organisation's policy.",
+        ));
+    }
+    let policy = GuardPolicy::of(&local_work);
+    check(&url, &policy).map_err(|reason| IpcError::new("browser_refused", reason.message()))?;
     let shown = shown_url(&url);
     let _opening = panes.opening.lock().await;
     let webview = if let Some(webview) = webview_of(&app, &thread_id) {
@@ -1152,8 +1229,8 @@ pub async fn browser_open(
     } else {
         // Made at about:blank, armed, then navigated: the rules apply to the
         // first page (module docs, "Content rules").
-        let webview = build_pane(&app, &panes, &thread_id, blank(), rect, policy)?;
-        if let Err(error) = arm_pane(&webview, policy).await {
+        let webview = build_pane(&app, &panes, &thread_id, blank(), rect, &policy)?;
+        if let Err(error) = arm_pane(&webview, &policy).await {
             close_pane(&app, &panes, &thread_id);
             return Err(error);
         }
@@ -1332,14 +1409,16 @@ pub async fn browser_reveal_download(
 mod tests {
     use super::*;
 
-    const STRICT: GuardPolicy = GuardPolicy {
-        allow_http: false,
-        allow_private_network: false,
-    };
-    const HTTP: GuardPolicy = GuardPolicy {
-        allow_http: true,
-        allow_private_network: false,
-    };
+    fn strict() -> GuardPolicy {
+        GuardPolicy::default()
+    }
+
+    fn http() -> GuardPolicy {
+        GuardPolicy {
+            allow_http: true,
+            ..GuardPolicy::default()
+        }
+    }
 
     /// A row of the guard table: the URL, its verdict with the default
     /// policy, and with http on.
@@ -1481,10 +1560,10 @@ mod tests {
                 Err(Credentials),
             ),
         ];
-        for (raw, strict, http) in table {
+        for (raw, strict_verdict, http_verdict) in table {
             let url = Url::parse(raw).unwrap_or_else(|e| panic!("{raw}: {e}"));
-            assert_eq!(check(&url, STRICT), *strict, "{raw} (default)");
-            assert_eq!(check(&url, HTTP), *http, "{raw} (http on)");
+            assert_eq!(check(&url, &strict()), *strict_verdict, "{raw} (default)");
+            assert_eq!(check(&url, &http()), *http_verdict, "{raw} (http on)");
         }
     }
 
@@ -1493,17 +1572,94 @@ mod tests {
         let open = GuardPolicy {
             allow_http: true,
             allow_private_network: true,
+            ..GuardPolicy::default()
         };
         for raw in [
             "http://localhost:3000/",
             "https://192.168.1.1/",
             "http://[::1]/",
         ] {
-            assert_eq!(check(&Url::parse(raw).unwrap(), open), Ok(()), "{raw}");
+            assert_eq!(check(&Url::parse(raw).unwrap(), &open), Ok(()), "{raw}");
         }
         for raw in ["http://169.254.169.254/latest/", "file:///etc/hosts"] {
-            assert!(check(&Url::parse(raw).unwrap(), open).is_err(), "{raw}");
+            assert!(check(&Url::parse(raw).unwrap(), &open).is_err(), "{raw}");
         }
+    }
+
+    /// ADR-0048 decision 8: the client policy decides the guard. Absent,
+    /// everything is off; the domain lists refuse a navigation the rest
+    /// allows, a deny entry winning over an allow entry.
+    #[test]
+    fn the_client_policy_is_the_guards_policy() {
+        let absent = GuardPolicy::of(&LocalWorkPolicy::default());
+        assert_eq!(absent, GuardPolicy::default());
+        let policy: LocalWorkPolicy = serde_json::from_value(json!({
+            "allowed": true, "browser": true, "browser_agent": true,
+            "browser_http": true, "browser_private_network": true,
+            "browser_allow_domains": ["example.com"],
+            "browser_deny_domains": ["*.ads.example.com"],
+        }))
+        .unwrap();
+        let guard = GuardPolicy::of(&policy);
+        assert!(guard.allow_http && guard.allow_private_network);
+        let verdict = |raw: &str| check(&Url::parse(raw).unwrap(), &guard);
+        assert_eq!(verdict("https://docs.example.com/"), Ok(()));
+        assert_eq!(verdict("http://example.com/"), Ok(()));
+        assert_eq!(verdict("https://example.org/"), Err(Refusal::Domain));
+        assert_eq!(verdict("https://x.ads.example.com/"), Err(Refusal::Domain));
+        assert_eq!(
+            verdict("blob:https://example.org/0f3c"),
+            Err(Refusal::Domain),
+            "a blob is judged by its origin"
+        );
+        // An allow list names no address literal and no private name.
+        assert_eq!(verdict("http://localhost:3000/"), Err(Refusal::Domain));
+        assert_eq!(verdict("https://10.0.0.1/"), Err(Refusal::Domain));
+        // Without an allow list a private address follows the switch.
+        let open = GuardPolicy {
+            allow_domains: Arc::from(Vec::new()),
+            ..guard.clone()
+        };
+        assert_eq!(
+            check(&Url::parse("http://localhost:3000/").unwrap(), &open),
+            Ok(())
+        );
+        assert_eq!(
+            check(&Url::parse("http://169.254.169.254/").unwrap(), &open),
+            Err(Refusal::Forbidden)
+        );
+        assert_eq!(
+            Refusal::Domain.message(),
+            "Your organisation's policy does not allow this site."
+        );
+    }
+
+    /// A page that commits at an address the guard refuses (a redirect the
+    /// navigation delegate did not see) is refused at commit too.
+    #[test]
+    fn a_committed_page_is_checked_again() {
+        let url = |raw: &str| Url::parse(raw).unwrap();
+        assert_eq!(committed_refusal(&url("about:blank"), &strict()), None);
+        assert_eq!(
+            committed_refusal(&url("https://example.com/"), &strict()),
+            None
+        );
+        assert_eq!(
+            committed_refusal(&url("https://127.0.0.1:8080/admin"), &strict()),
+            Some(Refusal::PrivateNetwork)
+        );
+        assert_eq!(
+            committed_refusal(&url("http://example.com/"), &strict()),
+            Some(Refusal::Http)
+        );
+        let domains = GuardPolicy {
+            deny_domains: Arc::from(vec!["evil.example".to_owned()]),
+            ..strict()
+        };
+        assert_eq!(
+            committed_refusal(&url("https://evil.example/landing"), &domains),
+            Some(Refusal::Domain)
+        );
     }
 
     #[test]
@@ -1540,7 +1696,7 @@ mod tests {
             "localhost:5173",
         ] {
             let parsed = address_to_url(typed).unwrap();
-            assert!(check(&parsed, STRICT).is_err(), "{typed}");
+            assert!(check(&parsed, &strict()).is_err(), "{typed}");
         }
     }
 
@@ -1790,7 +1946,7 @@ mod tests {
     fn the_webkit_tests_install_the_panes_own_rules() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("browser-driver-macos/tests/fixtures/content-rules.json");
-        let rules = content_rules(STRICT).unwrap();
+        let rules = content_rules(&strict()).unwrap();
         if std::env::var_os("UPDATE_RULES_FIXTURE").is_some() {
             std::fs::write(&path, format!("{rules}\n")).unwrap();
         }
@@ -1804,7 +1960,7 @@ mod tests {
 
     #[test]
     fn the_content_rules_block_every_private_load() {
-        let rules = content_rules(STRICT).unwrap();
+        let rules = content_rules(&strict()).unwrap();
         let parsed: Vec<Value> = serde_json::from_str(&rules).unwrap();
         for rule in &parsed {
             assert_eq!(rule["action"]["type"], "block");
@@ -1867,9 +2023,10 @@ mod tests {
             assert!(!blocked(&rules, url), "{url} must load");
         }
         assert_eq!(
-            content_rules(GuardPolicy {
+            content_rules(&GuardPolicy {
                 allow_http: true,
                 allow_private_network: true,
+                ..GuardPolicy::default()
             }),
             None
         );
@@ -1932,7 +2089,7 @@ mod tests {
     fn a_pane_is_made_at_a_page_that_loads_nothing() {
         let url = blank();
         assert_eq!(url.as_str(), "about:blank");
-        assert_eq!(check(&url, STRICT), Ok(()));
+        assert_eq!(check(&url, &strict()), Ok(()));
     }
 
     #[test]

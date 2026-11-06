@@ -23,6 +23,8 @@ struct Fake {
     url: StdMutex<Option<String>>,
     /// A load keeps the document (a fragment or `pushState` step).
     same_document: bool,
+    /// The script's `focused_control` answer.
+    focused: StdMutex<Value>,
 }
 
 impl Fake {
@@ -86,6 +88,8 @@ impl Engine for Fake {
             }),
             "rect" => json!({ "x": 10.0, "y": 20.0, "width": 40.0, "height": 10.0 }),
             "press" => json!({}),
+            "focused_control" => self.focused.lock().unwrap().clone(),
+            "inspect" => json!({ "r": "link", "n": "Invoice", "d": true }),
             _ => json!({}),
         })
     }
@@ -367,6 +371,86 @@ async fn an_open_that_goes_nowhere_fails() {
     });
     let error = driver.open("https://a.test/").await.unwrap_err();
     assert_eq!(error.code(), ErrorCode::NavigationFailed);
+}
+
+/// ADR-0048 decision 8: the host's rules read the element a press goes to,
+/// an element's input type and download attribute, and the live address.
+#[tokio::test]
+async fn the_focused_element_and_the_live_page_are_read_for_the_rules() {
+    let driver = driver(Fake::new(form_page()));
+    assert_eq!(driver.focused().await.unwrap(), None, "nothing has focus");
+    *driver.engine().focused.lock().unwrap() =
+        json!({ "r": "button", "n": "  Place\n order ", "t": "SUBMIT", "d": false });
+    let focused = driver.focused().await.unwrap().unwrap();
+    assert_eq!(focused.role, "button");
+    assert_eq!(focused.name, "Place order");
+    assert_eq!(focused.input_type.as_deref(), Some("submit"));
+    // A malformed answer is an error, never "nothing focused".
+    *driver.engine().focused.lock().unwrap() = json!({ "r": 7 });
+    assert!(driver.focused().await.is_err());
+    driver.snapshot(100).await.unwrap();
+    let inspected = driver.inspect(&latest(3)).await.unwrap();
+    assert!(inspected.download && inspected.role == "link");
+    assert_eq!(
+        driver.engine().calls("inspect")[0].1["id"],
+        json!(3),
+        "the element the ref names"
+    );
+    assert_eq!(driver.current_url().await.unwrap(), "https://a.test/");
+    *driver.engine().url.lock().unwrap() = Some("https://b.test/x".to_owned());
+    assert_eq!(driver.current_url().await.unwrap(), "https://b.test/x");
+}
+
+#[tokio::test]
+async fn the_focus_in_a_cross_origin_frame_is_read_there_or_is_an_error() {
+    struct Framed(Fake, FrameId);
+    #[async_trait]
+    impl Engine for Framed {
+        async fn call(&self, frame: FrameId, op: &str, args: Value) -> Result<Value, BrowserError> {
+            Ok(match (frame, op) {
+                (TOP, "focused_control") => json!({ "in_frame": true }),
+                (frame, "focused") => json!(frame == self.1),
+                (_, "focused_control") => json!({ "r": "button", "n": "Pay", "d": false }),
+                _ => self.0.call(frame, op, args).await?,
+            })
+        }
+        async fn frames(&self) -> Vec<(FrameId, String)> {
+            vec![(4, "https://x.test/".to_owned())]
+        }
+        async fn load(&self, url: &str) -> Result<(), BrowserError> {
+            self.0.load(url).await
+        }
+        async fn history(&self, step: HistoryStep) -> Result<(), BrowserError> {
+            self.0.history(step).await
+        }
+        async fn page(&self) -> Result<EnginePage, BrowserError> {
+            self.0.page().await
+        }
+        async fn screenshot(&self, rect: Option<RawRect>) -> Result<Screenshot, BrowserError> {
+            self.0.screenshot(rect).await
+        }
+        fn trusted_input(&self) -> bool {
+            false
+        }
+        async fn trusted_click(&self, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
+            self.0.trusted_click(at, double).await
+        }
+    }
+    let reached = WebDriver::new(
+        Framed(Fake::new(form_page()), 4),
+        allow_all(),
+        Arc::new(NoHandOver),
+    );
+    assert_eq!(reached.focused().await.unwrap().unwrap().name, "Pay");
+    let lost = WebDriver::new(
+        Framed(Fake::new(form_page()), 9),
+        allow_all(),
+        Arc::new(NoHandOver),
+    );
+    assert_eq!(
+        lost.focused().await.unwrap_err().code(),
+        ErrorCode::StaleRef
+    );
 }
 
 #[tokio::test]

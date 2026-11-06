@@ -109,7 +109,20 @@ interface InFrame {
   in_frame: true;
 }
 
-type Ok = RawState | RawPage | PageText | RawRect | RawClick | Done | InFrame | boolean | number;
+/** An element as the host's rules read it (`RawControl`): `focused_control`
+ * and `inspect`. */
+interface RawControl {
+  /** Role (empty when it has none). */
+  r: string;
+  /** Accessible name. */
+  n: string;
+  /** An `input`'s `type`, lowercase. */
+  t?: string;
+  /** A link with a `download` attribute. */
+  d: boolean;
+}
+
+type Ok = RawState | RawPage | PageText | RawRect | RawClick | RawControl | Done | InFrame | boolean | number | null;
 
 interface OkAnswer {
   ok: Ok;
@@ -856,6 +869,27 @@ interface Window {
     return {};
   }
 
+  // ---- the host's rules ----------------------------------------------------
+  //
+  // What an act would reach, read before the host decides it (ADR-0048
+  // decision 8): the focused element for `press`, an element's input type
+  // and download attribute for `click`.
+
+  function controlOf(el: Element): RawControl {
+    const role = roleOf(el) || '';
+    const control: RawControl = { r: role, n: nameOf(el, role).slice(0, MAX_TEXT), d: (el.tagName === 'A' || el.tagName === 'AREA') && el.hasAttribute('download') };
+    if (is(el, 'INPUT')) control.t = (el.getAttribute('type') || 'text').toLowerCase();
+    return control;
+  }
+
+  function focusedControl(): RawControl | InFrame | null {
+    const target = deepActive(document);
+    if (!target || target === document.body || target === document.documentElement) return null;
+    // A cross-origin frame has the focus: the host asks that frame.
+    if (target.tagName === 'IFRAME' || target.tagName === 'FRAME') return { in_frame: true };
+    return controlOf(target);
+  }
+
   // ---- the entry point -----------------------------------------------------
 
   async function run(op: string, args: unknown): Promise<Answer> {
@@ -870,6 +904,8 @@ interface Window {
         case 'text': return { ok: pageText(field(args, 'max_chars')) };
         case 'has_text': return { ok: hasText(String(field(args, 'text'))) };
         case 'focused': return { ok: document.hasFocus() && document.activeElement !== null && document.activeElement !== document.body };
+        case 'focused_control': return { ok: focusedControl() };
+        case 'inspect': return { ok: controlOf(byId(field(args, 'id'))) };
         case 'resources': return { ok: performance.getEntriesByType('resource').length };
         case 'alive': {
           const el = elements.get(field(args, 'id'));

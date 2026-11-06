@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.38",
+  "client_contract": "1.39",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -14994,6 +14994,34 @@
                         "allowed": {
                           "type": "boolean"
                         },
+                        "browser": {
+                          "type": "boolean"
+                        },
+                        "browser_agent": {
+                          "type": "boolean"
+                        },
+                        "browser_allow_domains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "max_length": 253
+                          },
+                          "max_items": 200
+                        },
+                        "browser_deny_domains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "max_length": 253
+                          },
+                          "max_items": 200
+                        },
+                        "browser_http": {
+                          "type": "boolean"
+                        },
+                        "browser_private_network": {
+                          "type": "boolean"
+                        },
                         "cloud_handoff": {
                           "type": "boolean"
                         },
@@ -17856,6 +17884,14 @@
                   "grant_id"
                 ],
                 "properties": {
+                  "browser_submits": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "max_length": 253
+                    },
+                    "max_items": 32
+                  },
                   "chain": {
                     "type": "object",
                     "properties": {
@@ -18507,6 +18543,10 @@
                   "properties": {
                     "decision": {
                       "type": "string"
+                    },
+                    "host": {
+                      "type": "string",
+                      "max_length": 253
                     },
                     "interrupt_id": {
                       "type": "string"
@@ -23927,6 +23967,14 @@
                       "grant_id"
                     ],
                     "properties": {
+                      "browser_submits": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "max_length": 253
+                        },
+                        "max_items": 32
+                      },
                       "chain": {
                         "type": "object",
                         "properties": {

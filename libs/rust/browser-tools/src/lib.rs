@@ -45,7 +45,7 @@ pub mod snapshot;
 pub mod spec;
 
 pub use call::{BrowserCall, ElementRef, SnapshotId};
-pub use driver::{BrowserDriver, ToolOutput, dispatch};
+pub use driver::{BrowserDriver, ControlInfo, ToolOutput, dispatch};
 pub use error::{BrowserError, ErrorCode};
 pub use snapshot::{Node, Snapshot};
 pub use spec::{TOOLS, ToolKind, ToolSpec};

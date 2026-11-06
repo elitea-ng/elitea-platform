@@ -228,7 +228,9 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
         </Button>
         {request.can_remember_thread === true && (
           <Button variant="outlined" onClick={() => respond('allow_thread')}>
-            {t('workspace.approval.allowThread', 'Allow for this thread')}
+            {request.site !== undefined
+              ? t('workspace.approval.allowSiteThread', 'Allow for {{site}} in this thread', { site: request.site })
+              : t('workspace.approval.allowThread', 'Allow for this thread')}
           </Button>
         )}
         {request.can_remember && (

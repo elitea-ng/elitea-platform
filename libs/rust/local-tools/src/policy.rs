@@ -113,6 +113,25 @@ pub struct LocalWorkPolicy {
     /// acted on, added to [`PLATFORM_APP_DENY`] (which no policy can lift).
     /// A deny wins over an allow.
     pub computer_use_apps_deny: Vec<String>,
+    /// `local_work_browser` (ADR-0048 decision 8, client contract 1.39):
+    /// the browser pane and its toolset exist for local threads. The server
+    /// sends `true` by default; off when absent, like every field here.
+    pub browser: bool,
+    /// `local_work_browser_agent`: the agent may drive the pane (off: the
+    /// person can still browse). Only with [`Self::browser`].
+    pub browser_agent: bool,
+    /// `local_work_browser_allow_domains`: when non-empty, the only hosts the
+    /// pane loads ([`browser_domain_matches`]). A ceiling, not an approval.
+    pub browser_allow_domains: Vec<String>,
+    /// `local_work_browser_deny_domains`: hosts the pane never loads. A deny
+    /// wins over an allow.
+    pub browser_deny_domains: Vec<String>,
+    /// `local_work_browser_http`: plain `http` pages may load.
+    pub browser_http: bool,
+    /// `local_work_browser_private_network`: loopback and private addresses
+    /// (and the names private by definition, `localhost`, `.local`, …) may
+    /// load. Link-local and the other forbidden ranges never do.
+    pub browser_private_network: bool,
 }
 
 impl Default for LocalWorkPolicy {
@@ -137,6 +156,12 @@ impl Default for LocalWorkPolicy {
             computer_use: false,
             computer_use_apps_allow: Vec::new(),
             computer_use_apps_deny: Vec::new(),
+            browser: false,
+            browser_agent: false,
+            browser_allow_domains: Vec::new(),
+            browser_deny_domains: Vec::new(),
+            browser_http: false,
+            browser_private_network: false,
         }
     }
 }
@@ -313,10 +338,114 @@ impl LocalWorkPolicy {
     }
 }
 
+/// The longest browser domain entry a policy may carry.
+pub const MAX_BROWSER_DOMAIN_BYTES: usize = 253;
+
+/// Whether `entry` is a browser domain a policy may carry: a lowercase DNS
+/// name of at least two labels (`example.com`), or `*.` and such a name
+/// (`*.example.com`); no scheme, port, path or IP address, at most
+/// [`MAX_BROWSER_DOMAIN_BYTES`]. The server's
+/// `platformconfig.ValidBrowserDomain` is the same rule.
+#[must_use]
+pub fn valid_browser_domain(entry: &str) -> bool {
+    if entry.is_empty() || entry.len() > MAX_BROWSER_DOMAIN_BYTES {
+        return false;
+    }
+    let name = entry.strip_prefix("*.").unwrap_or(entry);
+    let labels: Vec<&str> = name.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+        && !name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b'.')
+}
+
+/// Whether `host` is under the browser domain `entry`: `example.com` names
+/// it and every host under it, `*.example.com` only the hosts under it.
+/// Compared ignoring ASCII case and a final dot. An invalid entry matches
+/// nothing.
+#[must_use]
+pub fn browser_domain_matches(entry: &str, host: &str) -> bool {
+    if !valid_browser_domain(entry) {
+        return false;
+    }
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let (suffix, exact) = match entry.strip_prefix("*.") {
+        Some(suffix) => (suffix, false),
+        None => (entry, true),
+    };
+    (exact && host == suffix)
+        || host
+            .strip_suffix(suffix)
+            .is_some_and(|head| head.len() > 1 && head.ends_with('.'))
+}
+
+impl LocalWorkPolicy {
+    /// Whether the person may use the browser pane at all
+    /// (`local_work_browser`, and local work itself).
+    #[must_use]
+    pub const fn browser_pane(&self) -> bool {
+        self.allowed && self.browser
+    }
+
+    /// Whether the agent is offered the browser tools: the pane exists and
+    /// `local_work_browser_agent` is on.
+    #[must_use]
+    pub const fn browser_tools(&self) -> bool {
+        self.browser_pane() && self.browser_agent
+    }
+
+    /// Why the pane may not load a page of `host` (a name or an address
+    /// literal, as the URL gives it), or `None` when the domain lists admit
+    /// it: a deny entry naming it, whatever the allow list says; a
+    /// non-empty allow list that does not name it. An address literal is
+    /// named by no domain entry, so an allow list refuses it.
+    #[must_use]
+    pub fn browser_domain_refusal(&self, host: &str) -> Option<String> {
+        browser_domains_refusal(
+            &self.browser_allow_domains,
+            &self.browser_deny_domains,
+            host,
+        )
+    }
+}
+
+/// [`LocalWorkPolicy::browser_domain_refusal`] over the two lists as the
+/// browser pane's guard holds them.
+#[must_use]
+pub fn browser_domains_refusal(allow: &[String], deny: &[String], host: &str) -> Option<String> {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if deny
+        .iter()
+        .any(|entry| browser_domain_matches(entry, &host))
+    {
+        return Some(format!("the policy never loads `{host}`"));
+    }
+    if !allow.is_empty()
+        && !allow
+            .iter()
+            .any(|entry| browser_domain_matches(entry, &host))
+    {
+        return Some(format!(
+            "`{host}` is not in the policy's browser_allow_domains"
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalWorkPolicy, PLATFORM_APP_DENY, SandboxMode, bundle_id_matches, valid_bundle_id_pattern,
+        LocalWorkPolicy, PLATFORM_APP_DENY, SandboxMode, browser_domain_matches, bundle_id_matches,
+        valid_browser_domain, valid_bundle_id_pattern,
     };
 
     #[test]
@@ -568,5 +697,94 @@ mod tests {
             serde_json::from_value(serde_json::json!({"allowed": true, "memory_write": true}))
                 .expect("parse");
         assert!(on.memory_write);
+    }
+
+    #[test]
+    fn browser_absent_is_off_and_the_switches_need_local_work() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).expect("parse");
+        assert!(!absent.browser && !absent.browser_agent);
+        assert!(!absent.browser_http && !absent.browser_private_network);
+        assert!(absent.browser_allow_domains.is_empty() && absent.browser_deny_domains.is_empty());
+        let on: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
+            "allowed": true, "browser": true, "browser_agent": true,
+            "browser_allow_domains": ["example.com"], "browser_deny_domains": ["*.ads.example.com"],
+            "browser_http": true, "browser_private_network": true
+        }))
+        .expect("parse");
+        assert!(on.browser_pane() && on.browser_tools());
+        assert!(on.browser_http && on.browser_private_network);
+        let person_only = LocalWorkPolicy {
+            browser_agent: false,
+            ..on.clone()
+        };
+        assert!(person_only.browser_pane() && !person_only.browser_tools());
+        let no_local_work = LocalWorkPolicy {
+            allowed: false,
+            ..on
+        };
+        assert!(!no_local_work.browser_pane() && !no_local_work.browser_tools());
+    }
+
+    #[test]
+    fn browser_domains_are_names_or_wildcards() {
+        for good in ["example.com", "*.example.com", "a-b.example.co.uk", "x1.io"] {
+            assert!(valid_browser_domain(good), "{good}");
+        }
+        for bad in [
+            "",
+            "example",
+            "localhost",
+            "*",
+            "*.com.",
+            "Example.com",
+            "example.com:443",
+            "https://example.com",
+            "10.0.0.1",
+            "1.2.3.4.5",
+            "exa mple.com",
+            "-x.example.com",
+            "x-.example.com",
+            "a..b",
+            "*.*.example.com",
+        ] {
+            assert!(!valid_browser_domain(bad), "{bad}");
+        }
+        assert!(browser_domain_matches("example.com", "example.com"));
+        assert!(browser_domain_matches("example.com", "Docs.Example.COM."));
+        assert!(!browser_domain_matches("example.com", "badexample.com"));
+        assert!(!browser_domain_matches("*.example.com", "example.com"));
+        assert!(browser_domain_matches("*.example.com", "a.example.com"));
+        assert!(!browser_domain_matches("*.example.com", ".example.com"));
+        assert!(!browser_domain_matches("bad entry", "bad entry"));
+    }
+
+    #[test]
+    fn a_browser_deny_wins_and_an_allow_list_is_a_ceiling() {
+        let open = LocalWorkPolicy {
+            allowed: true,
+            browser: true,
+            browser_deny_domains: vec!["ads.example.com".to_owned()],
+            ..LocalWorkPolicy::default()
+        };
+        assert!(open.browser_domain_refusal("example.org").is_none());
+        assert!(open.browser_domain_refusal("x.ads.example.com").is_some());
+        let ceiling = LocalWorkPolicy {
+            browser_allow_domains: vec!["example.com".to_owned()],
+            browser_deny_domains: vec!["*.secret.example.com".to_owned()],
+            ..open
+        };
+        assert!(ceiling.browser_domain_refusal("docs.example.com").is_none());
+        assert!(
+            ceiling
+                .browser_domain_refusal("a.secret.example.com")
+                .is_some()
+        );
+        let outside = ceiling.browser_domain_refusal("example.org").unwrap();
+        assert!(outside.contains("browser_allow_domains"), "{outside}");
+        assert!(
+            ceiling.browser_domain_refusal("10.0.0.1").is_some(),
+            "an address literal is outside every allow list"
+        );
     }
 }

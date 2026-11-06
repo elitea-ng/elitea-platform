@@ -65,7 +65,7 @@ use super::web::meter::{
     spawn_settle,
 };
 pub use budget::{BrowserBudget, BrowserLimits};
-pub use category::{Classified, Escalation, classify};
+pub use category::{Classified, Escalation, Focus, classify, classify_with_focus};
 pub use session::{BrowserSession, SessionAnswer, SessionError, SessionImage};
 
 /// The toolkit type.
