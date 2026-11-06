@@ -4,6 +4,35 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
+
+Nothing changes unless you turn it on. Upgrade the workers before Main:
+
+- `worker.runtime.browserSessions` is new and empty by default. Set it to
+  the supervisor's `browser` profile (`target`, `audience`, `cpu_millis`,
+  `memory_bytes`, `wall_seconds`, `max_pages`) to give the worker a
+  browser. The audience must be in `main.runtime.sandboxAudiences`. See
+  [Cloud browser on Kubernetes](../apps/elitea-docs/src/content/docs/deployment/cloud-browser-kubernetes.mdx).
+- A project uses the browser only when its new `browser` project setting
+  is enabled. Main serves the runtime-context `browser` field only to a
+  worker that asks for it, so a worker of an earlier release is not
+  affected.
+- The new platform section `browser` sets `browser_egress` (`open`, the
+  default, or `allowlist`), `max_run_seconds` (default 1800) and
+  `monthly_quota_seconds` (default 0, no quota). A governed run always
+  gets an allowlist.
+- Migration `0226_browser_engine_seconds` adds the `second` unit to
+  `gateway.metered_operation_prices` and seeds the `browser` /
+  `engine_seconds` price at $0. Set your own price in the Tools pricing
+  tab.
+- Client contract 1.36: unattended grants take `browser_submits`, the
+  hosts on which a scheduled or webhook run may submit without asking.
+  `UnattendedGrantV1` gains field 9 (`browser_submits`). An earlier
+  worker ignores it, so it then asks for every submit.
+
+The admin UI has no form yet for the project setting and the platform
+section. Set them through the configuration API.
+
 ## Agent personas: the version's soul (#1604, ADR-0050 decision 1a)
 
 Upgrade the workers (`elitea-worker-rust`) before Main. Tenant migration
@@ -44,6 +73,11 @@ There is nothing else to do. A session created before this release has no
 message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
+
+||||||| 221a5f002
+||||||| 2e4e7c6fe
+||||||| 72ca1c414
+||||||| parent of 4946aae0c (docs+chart: cloud browser toolkit page, worker browserSessions value, upgrade note (#1596))
 
 ## Cloud browser: the supervisor's `browser` profile (#1595, ADR-0049 decisions 1 and 10)
 
@@ -87,8 +121,7 @@ Kata, set `engineSandbox: true`.
 Every session Pod counts toward `sandboxKubernetes.maxPods`. The chart
 refuses `profile.concurrency` above `maxPods`.
 
-The worker client (#1596) and Main's view relay (#1597) arrive separately.
-Until they land, nothing calls the profile.
+Main's view relay (#1597) arrives separately.
 
 ## New image: elitea-browser-session (#1594, ADR-0049 decisions 2 and 4)
 

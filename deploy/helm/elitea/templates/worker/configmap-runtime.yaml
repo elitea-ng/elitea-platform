@@ -98,6 +98,18 @@ data:
     {{- end }}
     {{- $_ := set $config "workspace_runs" (dict "target" .target "audience" .audience "scratch_root" .scratch_root "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "max_disk_bytes" (int64 .max_disk_bytes) "turn_wall_seconds" (int64 .turn_wall_seconds)) }}
     {{- end }}
+    {{- /* ADR-0049: the cloud browser sessions. */}}
+    {{- with ($r.browserSessions | default dict) }}
+    {{- range $key := list "target" "audience" "cpu_millis" "memory_bytes" "wall_seconds" "max_pages" }}
+    {{- if not (hasKey $.Values.worker.runtime.browserSessions $key) }}
+    {{- fail (printf "worker.runtime.browserSessions.%s is required" $key) }}
+    {{- end }}
+    {{- end }}
+    {{- if not (has .audience ($.Values.main.runtime.sandboxAudiences | default list)) }}
+    {{- fail "worker.runtime.browserSessions.audience must be in main.runtime.sandboxAudiences" }}
+    {{- end }}
+    {{- $_ := set $config "browser_sessions" (dict "target" .target "audience" .audience "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "wall_seconds" (int64 .wall_seconds) "max_pages" (int64 .max_pages)) }}
+    {{- end }}
     {{- /* The model completions one claim's toolkits may make in total (the
     step-back index tools, the Office prompts, image generation). Written
     only when set; unset, the worker's default (200) applies. Validated like

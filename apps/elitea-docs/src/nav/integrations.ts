@@ -26,6 +26,7 @@ export const integrationsTab: NavTab = {
         { kind: 'page', slug: 'integrations/toolkits/ado_wiki_toolkit', title: 'ADO wiki' },
         { kind: 'page', slug: 'integrations/toolkits/aha_toolkit', title: 'Aha!' },
         { kind: 'page', slug: 'integrations/toolkits/bitbucket_toolkit', title: 'Bitbucket' },
+        { kind: 'page', slug: 'integrations/toolkits/cloud_browser_toolkit', title: 'Cloud Browser' },
         { kind: 'page', slug: 'integrations/toolkits/confluence_toolkit', title: 'Confluence' },
         { kind: 'page', slug: 'integrations/toolkits/figma_toolkit', title: 'Figma' },
         { kind: 'page', slug: 'integrations/toolkits/github_toolkit', title: 'GitHub' },

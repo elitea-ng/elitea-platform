@@ -38,6 +38,10 @@ Blocked toolkit types (a blocked type cannot be listed or created, and is stripp
 These settings travel with every run, governed or not, and replace the worker's own `--toolkit-security-config` file for that run, even when they are empty. The file applies only to a run that carries no guardrails, so set sensitive tools here, not in the worker's file.
 </Accordion>
 
+<Accordion title="Cloud Browser (editable here)">
+The cloud browser's egress (`open` lets the browser reach any public host; `allowlist` limits it to the run's egress allowlist and the project's browser domains, and a governed run always gets the allowlist), the most browser engine seconds one run may use (default 1800), and the most one project may use in a calendar month (default 0, no quota). See [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit).
+</Accordion>
+
 <Accordion title="Banner (editable here)">
 A dismissible banner shown across the app, with its own icon, style, and message.
 </Accordion>

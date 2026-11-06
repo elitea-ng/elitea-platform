@@ -7320,6 +7320,16 @@ worker:
     # directory on the worker's disk for segments and checkouts),
     # cpu_millis, memory_bytes, max_disk_bytes, turn_wall_seconds.
     workspaceRuns: {}
+    # ADR-0049 (Rust worker only): the sandbox supervisor's `browser` profile
+    # (sandboxKubernetes.browserSessions) this worker starts cloud browser
+    # sessions on, and the size of each session. Empty: the browser tools
+    # answer browser_unavailable. The audience must also be in
+    # main.runtime.sandboxAudiences. Fields: target (host:port, mTLS, for
+    # example elitea-sandbox-browser:9471), audience, cpu_millis,
+    # memory_bytes (at least 512 MiB), wall_seconds (60 to the profile's
+    # maxWallSeconds), max_pages (at most the profile's maxPages). Each is at
+    # most the profile's `full` ceiling.
+    browserSessions: {}
     # The disk the worker gives workspaceRuns.scratch_root (segments and
     # checkouts of handed-off threads): a dedicated emptyDir of this size,
     # mounted there whenever workspaceRuns is set.

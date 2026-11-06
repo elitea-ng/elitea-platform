@@ -1,0 +1,80 @@
+---
+title: "Cloud Browser"
+description: "Let an agent open, read and act on web pages in a cloud browser: what the toolkit does, when it asks a person, egress, time limits and unattended runs."
+---
+
+The **Cloud Browser** toolkit (`browser`) gives an agent that runs on the platform a real browser. The agent opens pages, reads them, clicks, types and fills in forms. The tools are the same as the desktop app's browser pane, with the same names and arguments. Each run gets its own browser session. The session is never shared and never used again.
+
+An operator must first install the browser on the cluster. See [Cloud browser on Kubernetes](/deployment/cloud-browser-kubernetes). Without it, every browser tool answers `browser_unavailable`.
+
+## Turn it on for a project
+
+1. In the project's settings, open **Cloud browser** and set **Enabled**.
+2. Optional: add **Allowed domains**, the hosts the browser may reach when the platform limits browser egress. You can add at most 128.
+3. Add the **Cloud Browser** toolkit to an agent, or hand a thread off to the cloud. A handed-off thread gets the browser tools automatically when its project has the browser enabled.
+
+## Available tools
+
+The category of a tool decides when a run needs human approval to call it. See [Runtime safety](/admin/enterprise-controls/runtime-safety#tool-categories-and-approval-policy).
+
+| Tool | Category |
+|---|---|
+| Browser open | `read` |
+| Browser snapshot | `read` |
+| Browser screenshot | `read` |
+| Browser back | `read` |
+| Browser forward | `read` |
+| Browser reload | `read` |
+| Browser wait | `read` |
+| Browser click | `write` |
+| Browser type | `write` |
+| Browser select | `write` |
+| Browser scroll | `write` |
+| Browser press | `write` |
+| Browser request user | `read` |
+
+`browser_request_user` asks the person to do a step, for example a sign-in. A screenshot goes to the model as an image.
+
+## When the browser asks
+
+The category in the table is the lowest one. The category of an act is decided again for each call, from the call and the latest snapshot of the page:
+
+| The control is | Category | Asks a person |
+|---|---|---|
+| A plain control | `write` | Only if the approval policy names `write` |
+| A submit or an upload (Submit, Save, Apply, Continue, Choose file, Enter in a form) | `external_send` | Yes, unless an unattended grant names the host |
+| A consequential control (Send, Post, Delete, Sign, Confirm and similar) | `external_send` | Yes, always |
+| A payment control (Buy, Pay, Checkout, Order and similar) | `payment` | Yes, always |
+
+When the agent asks, the run pauses for approval as it does for any sensitive tool. The browser session stays alive while the run waits. If the run fails after an approved call that may have started, the call is not run again.
+
+## Egress
+
+The browser reaches the internet only through the platform's egress proxy, with a token signed for the run. An administrator sets the policy in **Admin › Configuration › Cloud Browser**:
+
+| `browser_egress` | The browser may reach |
+|---|---|
+| `open` (default) | Any public host |
+| `allowlist` | The run's egress allowlist, plus the project's **Allowed domains** |
+
+A run under the governed credential profile always uses the allowlist. When the proxy refuses a host, the tool answers `egress_refused`. The refused host is in the run's egress summary.
+
+## Time limits and metering
+
+Browser time is metered per engine second, through the gateway (provider `browser`, operation `engine_seconds`, unit `second`). The price starts at $0 per second. Set your own in **Admin › LLM proxy › Tools**. If an administrator removes the price, a browser call answers `browser_unpriced`.
+
+| Limit | Where | Default | At the limit |
+|---|---|---|---|
+| Seconds per run | `max_run_seconds` in the Browser section | 1800 (0 is no cap) | The run stops with `max_browser_seconds` |
+| Seconds per project per month (UTC) | `monthly_quota_seconds` in the Browser section | 0 (no quota) | The run stops with `browser_monthly_quota` |
+
+Each stop is visible on the run. Budgets and rate limits of the gateway also apply, and a refused call says so.
+
+## Unattended runs
+
+A run that a schedule or a webhook starts has nobody to answer:
+
+- The agent may read, navigate and act on plain controls without asking.
+- An ask follows the run's `on_approval_required` setting, as every other ask does.
+- `browser_request_user` fails at once with `no_person`.
+- The unattended grant may name hosts in `browser_submits`, at most 32 lowercase host names. On those hosts a submit or an upload runs without asking. A consequential or payment control always asks.
