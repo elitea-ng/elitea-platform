@@ -31,6 +31,13 @@ func seedBrowserSessionRun(t *testing.T, pool *pgxpool.Pool, executionID, actor 
 		return
 	}
 	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.input_bundle_entries (input_bundle_id, entry_id, entry_version, semantic_role, media_type,
+    content_digest, content_size, content_reference, classification, required_grant_audience, content_bytes)
+VALUES ('bundle-'||$1::text, 'request', '1', 'agent.execution_request', 'application/json', sha256('{}'::bytea), 2,
+        'inline://request', 'internal', 'worker', '{}'::bytea)`, executionID); err != nil {
+		t.Fatalf("seed the request entry: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_runtime.agent_execution_jobs (
     execution_id, generation, capability_id, input_bundle_id, request_entry_id,
     client_stream_id, client_message_id, client_execution_generation, sio_event)
