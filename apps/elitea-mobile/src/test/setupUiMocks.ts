@@ -7,9 +7,12 @@
  * - expo-symbols: a View carrying the symbol names as props, so a test can read which icon a
  *   control draws (`UNSAFE_getByProps({ symbolIos: 'bell' })`) on either platform;
  * - expo-glass-effect: no Liquid Glass (the kit draws its tinted fallback);
- * - expo-haptics: no-ops a test can assert on.
+ * - expo-haptics: no-ops a test can assert on;
+ * - react-native-reanimated: `src/test/reanimatedMock.ts` (the library's own mock loads the native
+ *   runtime and throws under jest; animated styles resolve to their first frame).
  * A test file that mocks one of these itself still wins.
  */
+jest.mock('react-native-reanimated', () => require('./reanimatedMock'));
 jest.mock('react-native-keyboard-controller', () => require('react-native-keyboard-controller/jest'));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-symbols', () => {

@@ -301,3 +301,27 @@ describe('agentsCanJoin', () => {
     expect(agentsCanJoin(undefined)).toBe(false);
   });
 });
+
+describe('contract 1.38 authors (ADR-0050)', () => {
+  const participants = [
+    { id: 1, entity_name: 'user', kind: 'human', meta: { user_name: 'Ann' } },
+    { id: 2, entity_name: 'application', kind: 'agent', meta: { name: 'release-bot' }, persona: { display_name: 'Mira', role: 'Release manager' } },
+    { id: 3, entity_name: 'application', kind: 'agent', meta: { name: 'CI Doctor' } },
+  ];
+  const answer = (over: Record<string, unknown>) => ({ id: 20, uuid: 'a', author_participant_id: 2, reply_to_id: 19, message_items: [], created_at: '2026-11-06T00:00:00Z', ...over });
+
+  it('names an agent by its persona and reads its role and class', () => {
+    const [message] = toChatMessages({ participants, message_groups: [answer({ author_kind: 'agent', cause: 'heartbeat' })] } as never);
+    expect(message).toMatchObject({ author: 'Mira', authorRole: 'Release manager', messageClass: 'heartbeat' });
+  });
+
+  it('classes agent-to-agent talk from the addressees', () => {
+    const [message] = toChatMessages({ participants, message_groups: [answer({ author_kind: 'agent', addressed_to: [3] })] } as never);
+    expect(message.messageClass).toBe('agent_to_agent');
+  });
+
+  it('a row from before 1.38 keeps the agent name and the answer class', () => {
+    const [message] = toChatMessages({ participants, message_groups: [answer({ author_participant_id: 3 })] } as never);
+    expect(message).toMatchObject({ author: 'CI Doctor', authorRole: null, messageClass: 'agent_to_humans' });
+  });
+});

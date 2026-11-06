@@ -1,6 +1,7 @@
 import type { components } from '@/api/generated/elitea.gen';
 import { budgetRefusalText, budgetScopeOf } from '@/features/usage/budgetRefusal';
 import { parseServerTime } from '@/lib/time';
+import { classifyMessage, participantKindOf, type MessageClass } from '@elitea/client-core/conversation';
 
 /**
  * Persisted conversation history → what the thread renders.
@@ -52,6 +53,10 @@ export interface ChatMessage {
   generation: string | null;
   /** Where the answer ran (`meta.executed_by`: `desktop` for a Local work turn on a laptop), when recorded. */
   executedBy?: string | null;
+  /** The rendering class (ADR-0050 decision 7e, `classifyMessage`), from the contract 1.38 fields. */
+  messageClass?: MessageClass;
+  /** The author's persona `role`, when its soul sets one. */
+  authorRole?: string | null;
 }
 
 /** One file of a message. */
@@ -123,6 +128,9 @@ const asId = (v: unknown): number | null => (typeof v === 'string' && /^\d{1,15}
 
 export function participantName(participant: Participant | undefined): string | null {
   if (!participant) return null;
+  // Client contract 1.38: a persona's display name wins over the agent's name.
+  const persona = participant.persona?.display_name?.trim();
+  if (persona) return persona;
   const meta = asRecord(participant.meta);
   // A user participant's display name is `meta.user_name`; every other kind's is `meta.name`.
   const userName = participant.entity_name === 'user' ? asString(meta?.user_name)?.trim() : null;
@@ -246,6 +254,15 @@ export function toChatMessages(
       replyToGroupId: asInt(group.reply_to_id),
       generation: asString((asRecord(group.meta) ?? asRecord(group.metadata))?.execution_generation),
       executedBy: asString((asRecord(group.meta) ?? asRecord(group.metadata))?.executed_by),
+      messageClass: classifyMessage({
+        authorKind: group.author_kind,
+        fallbackRole: role,
+        addressedTo: Array.isArray(group.addressed_to) ? group.addressed_to : null,
+        visibility: group.visibility,
+        cause: group.cause,
+        kindOfParticipant: (id) => participantKindOf(participants.get(id)?.kind),
+      }),
+      authorRole: role === 'assistant' ? (author?.persona?.role?.trim() || null) : null,
     });
   }
   // Oldest first; equal or missing times keep the server's id order.
