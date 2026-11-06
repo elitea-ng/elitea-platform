@@ -6830,6 +6830,100 @@ async fn the_checkpoint_route_still_refuses_an_unrecognised_terminal_that_fails_
     }
 }
 
+/// A plain accepted claim never meets a terminal Main has not accepted. If it
+/// does, the delivery is retained under its own code and nothing is replaced:
+/// a terminal this build cannot validate, and a valid one from another fence.
+#[tokio::test]
+async fn a_fresh_claim_meeting_a_pending_terminal_is_retained_under_its_own_code() {
+    let (code, retryable) = fanout_member_failed();
+    for case in 0..2 {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |fresh| {
+            if case == 0 {
+                superseded_unrecognised_failure_terminal(code, retryable, 5)
+            } else {
+                superseded_success_terminal(fresh, 5)
+            }
+        })
+        .await;
+        let outcome = preflight(output_root.clone(), "worker-1")
+            .prepare(fresh())
+            .await
+            .expect("a retained outcome, not an error");
+        let AgentOutputPreflightOutcome::RecoveryRequiredNoAck(retained) = outcome else {
+            panic!("case {case}: a pending terminal must be retained");
+        };
+        assert_eq!(
+            retained.kind(),
+            AgentOutputRecoveryRequiredKind::UnexpectedTerminal
+        );
+        assert_eq!(
+            super::agent_delivery_processor::preflight_recovery_code(retained.kind()),
+            "agent_delivery.fresh_claim_terminal_unexpected"
+        );
+        assert_eq!(retired_records(&output_root), 0);
+    }
+}
+
+fn node_recovery_delivery() -> super::agent_delivery::NodeRecoveryAgentDelivery {
+    let raw = bytes("signed_command");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("command");
+    let mut response = claim_response();
+    let receipt = response.receipt.as_mut().expect("receipt");
+    let fence = receipt.fence.clone().expect("fence");
+    let now = receipt.lease_expires_at_unix_millis - 1000;
+    receipt.disposition =
+        crate::protocol::elitea::runtime::v1::ClaimDispositionV1::RecoverNodeVisit as i32;
+    receipt.desired_state = DesiredExecutionStateV1::Suspended as i32;
+    receipt.node_recovery_receipt_json =
+        include_bytes!("../agents/graph/node_recovery_required_v1.fixture.json").to_vec();
+    let inspection = crate::protocol::control::NodeRecoveryInspection::parse(
+        &verified,
+        response,
+        &fence.workload_session_id,
+        &fence.producer_id,
+        now,
+    )
+    .expect("node recovery inspection");
+    super::agent_delivery::test_node_recovery_delivery(bus_delivery(raw), verified, inspection)
+}
+
+/// Same for a node-recovery claim: a pending terminal (canonical or not) is
+/// retained under its own code, while uncovered progress keeps its replay code.
+#[tokio::test]
+async fn a_node_recovery_claim_meeting_a_pending_terminal_is_retained_under_its_own_code() {
+    let (code, retryable) = fanout_member_failed();
+    for case in 0..3 {
+        let (_temporary, output_root) = root();
+        seed_pending_terminal(&output_root, |fresh| match case {
+            0 => superseded_unrecognised_failure_terminal(code, retryable, 5),
+            1 => superseded_failure_terminal(RuntimeFailureKind::Internal),
+            _ => {
+                let fence = claim_response()
+                    .receipt
+                    .expect("receipt")
+                    .fence
+                    .expect("fence");
+                progress_frame(fresh, fence, 9, 8)
+            }
+        })
+        .await;
+        let output = preflight(output_root.clone(), "worker-1")
+            .prepare_node_recovery(&node_recovery_delivery())
+            .await
+            .expect("a retained outcome, not an error");
+        let expected = if case < 2 {
+            "agent_delivery.node_recovery_terminal_unexpected"
+        } else {
+            "node_recovery.output_replay_required"
+        };
+        assert_eq!(output.retained_code(), Some(expected), "case {case}");
+        assert_eq!(retired_records(&output_root), 0);
+    }
+}
+
 /// Parks before its first event while holding a marker, like an agent
 /// suspended inside a session write when its claim lease is lost.
 struct ParkedAgent {

@@ -66,6 +66,8 @@ pub enum AgentOutputPreflightKind {
 pub enum AgentOutputRecoveryRequiredKind {
     PendingProgress,
     ReconciledStaleProgress,
+    /// A plain accepted claim met a pending terminal it cannot settle.
+    UnexpectedTerminal,
 }
 
 /// Fresh delivery plus a locked, validated, empty output spool.
@@ -223,6 +225,33 @@ const fn rejection_failure(
         W::FrameRefused => RuntimeFailureKind::Internal,
     }
 }
+
+/// What a node-recovery claim found in its spool.
+pub(crate) enum NodeRecoveryOutput {
+    Ready(Box<PreparedAgentOutput>),
+    /// Uncovered progress needs its exact replay first.
+    ReplayRequired,
+    /// A pending terminal where Main's invariant says none exists.
+    TerminalUnexpected,
+}
+
+impl NodeRecoveryOutput {
+    /// The code a delivery is retained under when no output is ready.
+    pub(crate) const fn retained_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Ready(_) => None,
+            Self::ReplayRequired => Some("node_recovery.output_replay_required"),
+            Self::TerminalUnexpected => Some(NODE_RECOVERY_TERMINAL_UNEXPECTED_CODE),
+        }
+    }
+}
+
+/// Retained code: a node-recovery claim met a pending terminal.
+pub(crate) const NODE_RECOVERY_TERMINAL_UNEXPECTED_CODE: &str =
+    "agent_delivery.node_recovery_terminal_unexpected";
+/// Retained code: a plain accepted claim met a pending terminal it cannot settle.
+pub(crate) const FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE: &str =
+    "agent_delivery.fresh_claim_terminal_unexpected";
 
 pub(crate) enum CheckpointPendingOutput {
     Progress(Box<super::agent_delivery::CheckpointAgentDelivery>),
@@ -2487,11 +2516,27 @@ impl AgentOutputPreflight {
                 "the pending agent output does not match the accepted claim",
             ));
         }
-        let kind = fresh.validate_output_frame(&frame).map_err(|_| {
-            AgentOutputPreflightError::InvalidDurableState(
-                "the pending agent output contract is malformed",
-            )
-        })?;
+        let unexpected_terminal = |frame: &ExecutionOutputFrameV1| {
+            AgentOutputPreflightOutcome::RecoveryRequiredNoAck(AgentOutputRecoveryRequiredNoAck {
+                execution_kind: fresh.execution_kind(),
+                kind: AgentOutputRecoveryRequiredKind::UnexpectedTerminal,
+                sequence: frame.sequence,
+            })
+        };
+        let kind = match fresh.validate_output_frame(&frame) {
+            Ok(kind) => kind,
+            // Main only hands out a plain claim before any terminal exists; an
+            // old build's unrecognised failure text is retained under its own
+            // code. A tampered or mis-bound frame still fails closed.
+            Err(_) if fresh.is_unrecognised_failure_terminal(&frame) => {
+                return Ok(unexpected_terminal(&frame));
+            }
+            Err(_) => {
+                return Err(AgentOutputPreflightError::InvalidDurableState(
+                    "the pending agent output contract is malformed",
+                ));
+            }
+        };
         if fresh.matches_output_binding(&frame) {
             return match kind {
                 ValidatedAgentOutputFrameKind::Terminal => {
@@ -2557,6 +2602,9 @@ impl AgentOutputPreflight {
                 },
             ));
         }
+        if kind == ValidatedAgentOutputFrameKind::Terminal {
+            return Ok(unexpected_terminal(&frame));
+        }
         Err(AgentOutputPreflightError::InvalidDurableState(
             "the pending agent output does not match the accepted claim",
         ))
@@ -2564,12 +2612,13 @@ impl AgentOutputPreflight {
 
     /// Prepare checkpoint output without discarding unacknowledged frames.
     /// Only structurally valid progress covered by Main's watermark is reconciled.
-    /// Pending terminal or uncovered progress requires exact replay first.
-    #[allow(dead_code)]
+    /// A pending terminal is never expected on a node-recovery claim (Main only
+    /// answers one while no terminal exists), so it is retained under its own
+    /// code; uncovered progress requires exact replay first.
     pub(crate) async fn prepare_node_recovery(
         &self,
         recovery: &super::agent_delivery::NodeRecoveryAgentDelivery,
-    ) -> Result<Option<PreparedAgentOutput>, AgentOutputPreflightError> {
+    ) -> Result<NodeRecoveryOutput, AgentOutputPreflightError> {
         if !recovery.matches_output_transport(
             &self.policy.output_config.workload_session_id,
             &self.policy.output_config.producer_id,
@@ -2589,6 +2638,9 @@ impl AgentOutputPreflight {
                     "the recovery spool contains multiple pending frames",
                 ));
             }
+            if frame.terminal {
+                return Ok(NodeRecoveryOutput::TerminalUnexpected);
+            }
             if !recovery.covered_progress(&frame).map_err(|_| {
                 AgentOutputPreflightError::InvalidDurableState(
                     "the recovery output frame is malformed",
@@ -2600,9 +2652,12 @@ impl AgentOutputPreflight {
                     )
                 })? {
                     let prepared = retire_superseded_frame(&factory, prepared, frame).await?;
-                    return Ok(Some(PreparedAgentOutput { prepared, factory }));
+                    return Ok(NodeRecoveryOutput::Ready(Box::new(PreparedAgentOutput {
+                        prepared,
+                        factory,
+                    })));
                 }
-                return Ok(None);
+                return Ok(NodeRecoveryOutput::ReplayRequired);
             }
             let watermark = recovery.output_watermark();
             tokio::task::spawn_blocking(move || prepared.reconcile_pending_through(watermark))
@@ -2615,10 +2670,13 @@ impl AgentOutputPreflight {
                 .map_err(AgentOutputPreflightError::Output)?;
             prepared = factory.reopen().await?;
             if prepared.pending_frame_count() != 0 {
-                return Ok(None);
+                return Ok(NodeRecoveryOutput::ReplayRequired);
             }
         }
-        Ok(Some(PreparedAgentOutput { prepared, factory }))
+        Ok(NodeRecoveryOutput::Ready(Box::new(PreparedAgentOutput {
+            prepared,
+            factory,
+        })))
     }
 
     /// Prepare checkpoint output without discarding unacknowledged frames.

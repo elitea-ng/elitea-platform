@@ -31,7 +31,8 @@ use super::native_agent_lifecycle::NativeAuthorizedAgentLifecycle;
 use super::output_delivery::{
     AgentFailureTerminalError, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind, AgentProgressConnector,
-    AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay, OutputRecovery,
+    AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay,
+    FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE, NodeRecoveryOutput, OutputRecovery,
     publish_pre_invocation_terminal, reconcile_empty_agent_output_recovery,
     recover_accepted_terminal,
 };
@@ -428,16 +429,19 @@ where
                         ));
                     }
                 };
-                let output = self
+                let output = match self
                     .output
                     .prepare_node_recovery(&recovery)
                     .await
-                    .map_err(AgentDeliveryProcessError::OutputPreflight)?;
-                let Some(output) = output else {
-                    return Ok(AgentDeliveryProcessOutcome::retained(
-                        "node_recovery.output_replay_required",
-                        true,
-                    ));
+                    .map_err(AgentDeliveryProcessError::OutputPreflight)?
+                {
+                    NodeRecoveryOutput::Ready(output) => *output,
+                    other => {
+                        let code = other
+                            .retained_code()
+                            .unwrap_or("node_recovery.output_replay_required");
+                        return Ok(AgentDeliveryProcessOutcome::retained(code, true));
+                    }
                 };
                 let waiter = self
                     .coordinator
@@ -917,8 +921,9 @@ const fn output_recovery_code(kind: AgentOutputRecoveryKind) -> &'static str {
     }
 }
 
-const fn preflight_recovery_code(kind: AgentOutputRecoveryRequiredKind) -> &'static str {
+pub(super) const fn preflight_recovery_code(kind: AgentOutputRecoveryRequiredKind) -> &'static str {
     match kind {
+        AgentOutputRecoveryRequiredKind::UnexpectedTerminal => FRESH_CLAIM_TERMINAL_UNEXPECTED_CODE,
         AgentOutputRecoveryRequiredKind::PendingProgress => {
             "agent_delivery.pending_progress_recovery"
         }

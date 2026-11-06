@@ -207,6 +207,15 @@ impl FreshAgentDelivery {
         )
     }
 
+    /// A failure terminal which differs from this build's canonical frame only
+    /// in its text (an older build wrote it). Tampered or mis-bound frames are not.
+    pub(crate) fn is_unrecognised_failure_terminal(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> bool {
+        crate::protocol::output::unrecognised_failure_terminal_kind(&self.verified, frame).is_ok()
+    }
+
     pub(crate) fn validate_output_frame(
         &self,
         frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
@@ -607,6 +616,19 @@ pub(crate) fn test_checkpoint_delivery(
     inspection: crate::protocol::control::ModelCheckpointInspection,
 ) -> CheckpointAgentDelivery {
     CheckpointAgentDelivery {
+        delivery,
+        verified,
+        inspection,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_node_recovery_delivery(
+    delivery: CommandDelivery,
+    verified: VerifiedAgentCommand,
+    inspection: crate::protocol::control::NodeRecoveryInspection,
+) -> NodeRecoveryAgentDelivery {
+    NodeRecoveryAgentDelivery {
         delivery,
         verified,
         inspection,
