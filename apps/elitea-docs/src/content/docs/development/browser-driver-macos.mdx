@@ -11,9 +11,9 @@ The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-deskt
 
 | Part | Holds |
 | --- | --- |
-| `js/driver.ts` | The source of the driver's page script, in strict TypeScript. It builds the snapshot and performs the actions. Its types are the raw node and answer shapes that `src/reply.rs` reads. |
-| `js/driver.js` | Generated from `driver.ts` and committed. It is the script the crate loads with `include_str!`. Do not edit it by hand. |
-| `js/tsconfig.json` | Compiles `driver.ts` to `driver.js`: one classic script (no imports or exports), ES2022, comments kept. |
+| `js/driver.ts` | The driver's page script, in strict TypeScript, and the only script file in the repository. It builds the snapshot and performs the actions. Its types are the raw node and answer shapes that `src/reply.rs` reads. |
+| `js/tsconfig.json` | Compiles `driver.ts` to one classic script (no imports or exports), ES2022, comments kept. |
+| `build.rs` | Compiles `driver.ts` with `tsc` into the build's `OUT_DIR`. The crate embeds the result (`driver.js`) with `include_str!`. |
 | `src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
 | `src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
 | `src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
@@ -24,13 +24,15 @@ The host attaches a driver when it makes the pane's webview (`browser_pane.rs`, 
 
 ### Changing the page script
 
-Edit `js/driver.ts`, not `js/driver.js`. Then regenerate `driver.js` from the repository root with the web app's pinned TypeScript, and commit both files:
+Edit `js/driver.ts`. No JavaScript is committed: the crate's `build.rs` compiles `driver.ts` every time cargo builds the crate, with the web app's pinned TypeScript, and the crate embeds the output. The build runs the equivalent of this, from the repository root:
 
 ```sh
-apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json
+apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json --outDir "$OUT_DIR"
 ```
 
-The `desktop` job in `ci-desktop.yml` runs the same command and fails when the committed `driver.js` differs from the output (step "Browser driver script is compiled from driver.ts"). The output must stay one self-contained classic script (the header comments, `'use strict'`, then `(function install() { … })();`), because WebKit runs it as a user script and through `evaluateJavaScript`. The crate's unit tests check the emitted file: no `eval` or `Function`, the secure-field tokens, and the error codes.
+So any cargo build that compiles the driver crate needs the web app's `node_modules`: every build of the desktop host on macOS (the host depends on the driver there), and `cargo clippy --workspace`, `cargo test --workspace` or `-p elitea-browser-driver-macos` on any OS (the snapshot reader and the reply parser are plain Rust and build everywhere). Run `npm ci` in `apps/elitea-web` first, or set `ELITEA_TSC` to the path of another `tsc`. When `tsc` is missing, or `driver.ts` has a type error, the build fails and prints what `tsc` printed.
+
+There is no separate CI check for the script: a type error fails the `desktop` job's Clippy and test steps in `ci-desktop.yml`, which run after "Install web (locked)". The output must stay one self-contained classic script (the header comments, `'use strict'`, then `(function install() { … })();`), because WebKit runs it as a user script and through `evaluateJavaScript`. The crate's unit tests check the emitted script: no `eval` or `Function`, the secure-field tokens, and the error codes.
 
 ## The driver world
 

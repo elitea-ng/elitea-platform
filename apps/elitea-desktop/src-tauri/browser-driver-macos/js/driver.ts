@@ -1,11 +1,8 @@
-// driver.js is GENERATED from driver.ts by the TypeScript compiler: do not
-// edit driver.js by hand. Edit driver.ts, then regenerate driver.js from the
-// repository root with
-//
-//   apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json
-//
-// and commit both files. CI (ci-desktop.yml) fails when the committed
-// driver.js is not exactly what tsc emits from driver.ts.
+// The crate's build.rs compiles this file with the web app's pinned
+// TypeScript (apps/elitea-web/node_modules/.bin/tsc, or ELITEA_TSC) into
+// $OUT_DIR/driver.js, and src/lib.rs embeds that output as SCRIPT. This is
+// the only script file in the repository: no JavaScript is committed, and a
+// type error here fails the cargo build.
 //
 // The macOS browser driver's page script (ADR-0048 decision 6).
 //

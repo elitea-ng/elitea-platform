@@ -1,0 +1,30 @@
+[package]
+name = "elitea-browser-session"
+description = "The cloud browser session agent (ADR-0049 decisions 2 and 4): the binary inside the browser session pod. It starts chrome-headless-shell, speaks CDP to it over --remote-debugging-pipe (no TCP listener at all), implements the elitea-browser-tools BrowserDriver over CDP with ADR-0048's hard limits, offers a paced screencast stream for the view relay, and answers the supervisor as JSON lines on stdin and stdout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "elitea-browser-session"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1.92"
+# Screenshots and screencast frames arrive base64-encoded in CDP messages.
+base64 = "0.22.1"
+# Hands the two CDP pipe ends to the engine as fds 3 and 4, which is what
+# --remote-debugging-pipe reads and writes. The fd juggling between fork and
+# exec is the one unsafe step, and it lives in this small, widely used crate
+# rather than here (the workspace forbids unsafe code).
+command-fds = { version = "0.3.3", features = ["tokio"] }
+elitea-browser-tools = { path = "../browser-tools" }
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

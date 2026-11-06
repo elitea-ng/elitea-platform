@@ -43,11 +43,10 @@ pub use driver::{Engine, EnginePage, HandOver, NavigationCheck, NoHandOver, WebD
 #[cfg(target_os = "macos")]
 pub use webkit::{WebKitEngine, accessibility_granted};
 
-/// The driver's page script (`js/driver.js`), compiled by `tsc` from
-/// `js/driver.ts` (`js/tsconfig.json`) and committed. Edit the TypeScript
-/// and regenerate; CI (`ci-desktop.yml`) fails when the committed
-/// `driver.js` is not what `tsc` emits.
-pub const SCRIPT: &str = include_str!("../js/driver.js");
+/// The driver's page script: `js/driver.ts` compiled by `tsc`
+/// (`js/tsconfig.json`) into `$OUT_DIR/driver.js` by `build.rs`. No
+/// JavaScript is committed; a type error in `driver.ts` fails the build.
+pub const SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/driver.js"));
 
 /// The driver of a Tauri child webview (the pane's page): installs the
 /// driver world in it. Call once per webview, right after it is made.
