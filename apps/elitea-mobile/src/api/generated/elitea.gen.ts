@@ -2664,6 +2664,8 @@ export interface components {
         };
         /** @description Client contract 1.30 (ADR-0045). The person's unattended grant for a cloud run. Main admits each named sensitive tool against the run's own toolkits, the withheld categories and the tier hitl rule; a refused part refuses the whole send with 422 `unattended_grant_refused` (`reason`, `field`, `tool`). Schedule and webhook runs cannot name sensitive tools. Main starts each continuation itself. NOTE(W2): internal/api/v2/agentexecution/unattended.go (`startUnattendedBody`). */
         ChatUnattendedRequest: {
+            /** @description Client contract 1.36 (ADR-0049 decision 7). The hosts on which the cloud browser of a schedule's or a webhook's run may submit a form or upload a file without asking. Each entry is a lowercase DNS host name with no scheme, port, path or wildcard. A consequential or payment control always asks. A bad host refuses the grant with 422 `unattended_grant_refused` (`field` `browser_submits`). */
+            browser_submits?: string[];
             chain?: components["schemas"]["UnattendedChainLimits"];
             /** @description Continue the answer when it stops at the output limit. */
             continue_output_limit?: boolean;
@@ -4348,10 +4350,10 @@ export interface components {
             /** Format: int64 */
             total_tokens: number;
             /**
-             * @description What `units` counts. Absent on an llm row.
+             * @description What `units` counts (`second` is cloud browser engine time). Absent on an llm row.
              * @enum {string}
              */
-            unit?: "request" | "credit" | "page";
+            unit?: "request" | "credit" | "page" | "second";
             /**
              * Format: int64
              * @description Units a tool row consumed. Absent on an llm row.

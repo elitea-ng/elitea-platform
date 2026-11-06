@@ -876,7 +876,12 @@ export const getGetProjectUsageResponseMock = (): UsageReport => ({
         ]),
         units: faker.helpers.arrayElement([faker.number.int(), undefined]),
         unit: faker.helpers.arrayElement([
-          faker.helpers.arrayElement(["request", "credit", "page"] as const),
+          faker.helpers.arrayElement([
+            "request",
+            "credit",
+            "page",
+            "second",
+          ] as const),
           undefined,
         ]),
         spend: faker.helpers.arrayElement([
