@@ -27,6 +27,8 @@ on:
       - "libs/rust/workspace-store/**"
       - "libs/rust/llm-wire/**"
       - "libs/rust/content-source/**"
+      # The browser tool contract the pane driver implements (ADR-0048).
+      - "libs/rust/browser-tools/**"
       # The runtime's internal tool client (#1359): platform-rpc and the
       # contracts its build.rs compiles.
       - "libs/rust/platform-rpc/**"
@@ -104,6 +106,17 @@ jobs:
         working-directory: apps/elitea-web
         run: npm ci
 
+      # The macOS browser driver embeds js/driver.js (include_str!), which is
+      # tsc's output from js/driver.ts and is committed: it must be exactly
+      # what the web app's pinned TypeScript emits from the source.
+      - name: Browser driver script is compiled from driver.ts
+        run: |
+          apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json
+          if ! git diff --exit-code -- apps/elitea-desktop/src-tauri/browser-driver-macos/js/driver.js; then
+            echo "::error file=apps/elitea-desktop/src-tauri/browser-driver-macos/js/driver.js::driver.js is not what tsc emits from driver.ts. Run 'apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json' from the repository root and commit driver.js."
+            exit 1
+          fi
+
       - name: Desktop transport unit tests (bearer, refresh, fetch SSE, host bridge)
         working-directory: apps/elitea-web
         run: >
@@ -136,13 +149,24 @@ jobs:
 
       - name: Run Clippy
         working-directory: apps/elitea-desktop/src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        # --workspace: the macOS browser driver (browser-driver-macos) is a
+        # member of this workspace, not the default member.
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       # The flow tests bind loopback ports and run an in-process deployment; the
       # keychain is a mock, so a runner with no login keychain is fine.
       - name: Run tests
         working-directory: apps/elitea-desktop/src-tauri
-        run: cargo test --locked --all-targets
+        run: cargo test --locked --workspace --all-targets
+
+      # The browser driver against a real WKWebView (#1589): the conformance
+      # kit, a cross-origin frame, the driver world's isolation from the page
+      # and the untrusted-input refusal. It opens one window; the macOS
+      # runner has a logged-in session for it.
+      - name: Browser driver on WebKit
+        working-directory: apps/elitea-desktop/src-tauri
+        timeout-minutes: 5
+        run: cargo test --locked -p elitea-browser-driver-macos --test webkit -- --ignored
 
       # The host never links the document extractor: xberg turns on
       # serde_json `preserve_order` (ADR-0029 decision 2). A feature in the

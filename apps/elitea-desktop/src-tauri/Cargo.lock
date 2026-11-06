@@ -1602,6 +1602,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-browser-driver-macos"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "block2",
+ "dispatch2",
+ "elitea-browser-tools",
+ "libc",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-web-kit",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tokio",
+]
+
+[[package]]
+name = "elitea-browser-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "getrandom 0.3.4",
+ "serde_json",
+]
+
+[[package]]
 name = "elitea-code-parsers"
 version = "0.1.0"
 dependencies = [
@@ -1670,6 +1700,8 @@ dependencies = [
  "chrono",
  "dirs",
  "elitea-agent-runtime",
+ "elitea-browser-driver-macos",
+ "elitea-browser-tools",
  "elitea-egress-guard",
  "elitea-llm-wire",
  "elitea-local-embed",
@@ -4815,6 +4847,7 @@ checksum = "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807"
 dependencies = [
  "bitflags 2.13.2",
  "dispatch2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
  "objc2-io-surface",

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Trusted only</title>
+</head>
+<body>
+  <button id="go">Continue</button>
+  <p id="out">Waiting</p>
+  <script>
+    // A page that acts on real input only, as some bot checks do.
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      document.getElementById('go').addEventListener(type, (event) => {
+        if (!event.isTrusted) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (type === 'click') document.getElementById('out').textContent = 'Clicked';
+      }, true);
+    }
+  </script>
+</body>
+</html>

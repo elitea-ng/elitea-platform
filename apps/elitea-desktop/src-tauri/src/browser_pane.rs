@@ -18,17 +18,28 @@
 //!   private by definition (`localhost`, `.local`, …). wry calls the guard
 //!   for frames as well as the top level, so the rule is the same for both.
 //!
-//!   **Known gap (#1634).** The guard sees navigations only, and judges
-//!   the URL's host as written. A public page can still make SUBRESOURCE
-//!   loads (images, scripts, `fetch`/XHR, WebSockets) to loopback and
-//!   private addresses, and a public name that resolves to a private
-//!   address (DNS rebinding, or a record that simply points inside) passes.
-//!   On macOS the fix is a `WKContentRuleList` blocking those hosts for
-//!   every load ([`content_rules`] builds it, tested); installing it needs
-//!   WebKit calls that are `unsafe` in objc2-web-kit, which this crate
-//!   forbids, so it waits on the follow-up. Resolving names in the guard
-//!   would be racy (the page's own lookup can differ), so the follow-up
-//!   does not do that either: the residual DNS gap stays documented.
+//! - **Content rules** (macOS, #1634): the guard sees navigations only, so
+//!   every pane also gets a `WKContentRuleList` ([`content_rules`]) that
+//!   blocks EVERY load (subresources, `fetch`/XHR, WebSockets, frames) to
+//!   the same private names and loopback, private and link-local address
+//!   literals. The pane is made at `about:blank` (wry loads nothing for
+//!   it), the rules are compiled and installed, and only then is it
+//!   navigated to the address: no page loads before the rules apply. A
+//!   rule list WebKit refuses closes the pane and fails the open
+//!   (`browser_unprotected`): fail closed. `browser_open` is serialised, so
+//!   a second open cannot navigate a pane still being armed. The policy
+//!   (rules and guard) is fixed when the pane is made: a change applies to
+//!   panes made after it (the private-network switch is #1590's policy
+//!   key; until then it is always off). The FFI is in
+//!   `browser-driver-macos` (`native`), the one crate allowed `unsafe`.
+//!   Windows and Linux block navigations only until their delivery (#1593).
+//!
+//!   **Residual gap.** Content rules match URLs, not resolved addresses: a
+//!   public name that resolves to a private address (DNS rebinding, or a
+//!   record that simply points inside) passes both the guard and the
+//!   rules. Resolving names in the guard would be racy (the page's own
+//!   lookup can differ); a real fix needs a filtering proxy, a separate
+//!   decision.
 //! - **A new window** (`target=_blank`, `window.open`) is never a window:
 //!   an allowed URL replaces the page (the opener stays in its history).
 //! - **An isolated store per thread.** macOS 14+: a
@@ -48,11 +59,13 @@
 //!   it on first open, as for a Safari download) and records where it came
 //!   from (`com.apple.metadata:kMDItemWhereFroms`). A download that cannot
 //!   be quarantined is deleted and reported as failed.
-//! - **History buttons** (Back, Forward, Stop) run `history.back()` and
-//!   friends in the page, because the native `goBack`/`stopLoading` calls
-//!   need `unsafe` (same follow-up, #1634). A page can override them, so they are a
-//!   convenience, not a control: the address field and Close are host-side
-//!   and always work. Reload is native (`webview.reload()`).
+//! - **History buttons** are native on macOS: Back, Forward and Stop call
+//!   the WKWebView's `goBack`, `goForward` and `stopLoading`
+//!   (`browser-driver-macos`, #1634), Reload `webview.reload()`, so a page
+//!   that overrides `history.back` cannot stop them. On Windows and Linux
+//!   Back, Forward and Stop still run `history.back()` and friends in the
+//!   page until #1593 (the page can override those there). The address
+//!   field and Close are host-side and always work.
 //!
 //! Tauri's child webviews are behind its `unstable` feature: this module is
 //! the one place that uses them.
@@ -70,8 +83,10 @@ use tauri::webview::{
 use tauri::{AppHandle, Emitter as _, Manager as _, State, Webview, WebviewUrl, Wry};
 use url::{Host, Url};
 
+use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
+use crate::browser_tools::BrowserDrivers;
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
 
@@ -535,10 +550,11 @@ const RULE_ADDRESSES: &[&str] = &[
 /// subresources, `fetch`/XHR, WebSockets: no `resource-type`, so all of
 /// them) to loopback, private and link-local addresses and the private
 /// names, whatever the scheme. `None` when the policy allows the private
-/// network. Not installed yet: see the module docs ("Known gap").
+/// network. Installed in every macOS pane before its first load
+/// ([`arm_pane`]).
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "installed by the webkit-shim follow-up, #1634")
+    not(any(test, target_os = "macos")),
+    expect(dead_code, reason = "Windows and Linux content blocking is #1593's")
 )]
 #[must_use]
 pub fn content_rules(policy: GuardPolicy) -> Option<String> {
@@ -614,6 +630,11 @@ pub struct BrowserPanes {
     settings: SettingsFiles,
     registry_path: PathBuf,
     downloads_root: PathBuf,
+    /// The agent's driver of each open pane (`crate::browser_tools`).
+    drivers: Arc<BrowserDrivers>,
+    /// Held across `browser_open`: a pane being made is not navigated by a
+    /// second open before its content rules are installed.
+    opening: tokio::sync::Mutex<()>,
     inner: Mutex<Inner>,
 }
 
@@ -626,13 +647,20 @@ struct Inner {
 
 impl BrowserPanes {
     #[must_use]
-    pub fn new(config_dir: PathBuf, data_dir: &Path, downloads_root: PathBuf) -> Self {
+    pub fn new(
+        config_dir: PathBuf,
+        data_dir: &Path,
+        downloads_root: PathBuf,
+        drivers: Arc<BrowserDrivers>,
+    ) -> Self {
         let registry_path = data_dir.join("browser").join("stores.json");
         let registry = StoreRegistry::load(&registry_path);
         Self {
             settings: SettingsFiles::new(config_dir),
             registry_path,
             downloads_root,
+            drivers,
+            opening: tokio::sync::Mutex::new(()),
             inner: Mutex::new(Inner {
                 registry,
                 ..Inner::default()
@@ -795,14 +823,16 @@ fn build_pane(
     thread_id: &str,
     url: Url,
     rect: PaneRect,
+    policy: GuardPolicy,
 ) -> Result<Webview, IpcError> {
     let label = thread_label(thread_id)?;
     let window = app
         .get_window("main")
         .ok_or_else(|| IpcError::new("browser_unavailable", "the main window is not open"))?;
-    let policy = panes.policy();
     let thread = thread_id.to_owned();
 
+    // `policy` is the one the pane's content rules are built from
+    // (`arm_pane`): guard and rules are fixed together, now.
     let mut builder = WebviewBuilder::<Wry>::new(&label, WebviewUrl::External(url));
     {
         let app = app.clone();
@@ -910,6 +940,7 @@ fn build_pane(
 
 fn close_pane(app: &AppHandle, panes: &BrowserPanes, thread_id: &str) {
     panes.lock().live.remove(thread_id);
+    panes.drivers.detach(thread_id);
     if let Some(webview) = webview_of(app, thread_id)
         && let Err(error) = webview.close()
     {
@@ -998,6 +1029,7 @@ pub async fn forget_all(app: &AppHandle) {
         return;
     };
     let live = panes.lock().live.take_all();
+    panes.drivers.detach_all();
     let had_panes = !live.is_empty();
     for thread in live {
         close_pane(app, &panes, &thread);
@@ -1011,6 +1043,85 @@ pub async fn forget_all(app: &AppHandle) {
         tokio::time::sleep(RELEASE_WAIT).await;
     }
     remove_pending(app, &panes).await;
+}
+
+/// The agent's verdict on a URL it asks the pane to open: the pane's own
+/// guard ([`check`]) under the settings as they are now, as an
+/// `elitea-browser-tools` error.
+fn agent_check(
+    panes: std::sync::Weak<BrowserPanes>,
+) -> impl Fn(&str) -> Result<(), BrowserError> + Send + Sync {
+    move |address| {
+        if address.eq_ignore_ascii_case("about:blank") {
+            return Ok(());
+        }
+        let panes = panes
+            .upgrade()
+            .ok_or_else(|| BrowserError::new(ErrorCode::Unsupported, "the browser pane closed"))?;
+        let url = Url::parse(address).map_err(|_| BrowserError::invalid("not a URL"))?;
+        check(&url, panes.policy()).map_err(|reason| {
+            let code = match reason {
+                Refusal::Scheme => ErrorCode::SchemeRefused,
+                Refusal::Credentials => ErrorCode::InvalidArgument,
+                Refusal::Http | Refusal::PrivateNetwork | Refusal::Forbidden => {
+                    ErrorCode::EgressRefused
+                }
+            };
+            BrowserError::new(code, reason.message())
+        })
+    }
+}
+
+/// Install the agent's driver in a pane just made (macOS: the WKWebView
+/// driver's private content world). Without one the pane is the person's
+/// only, and the browser tools say so.
+#[cfg(target_os = "macos")]
+async fn attach_driver(panes: &Arc<BrowserPanes>, thread_id: &str, webview: &Webview) {
+    // TODO(#1591): the hand-over (`browser_request_user`) and the control
+    // pill; until then the request answers `unsupported`.
+    let hand_over = Arc::new(elitea_browser_driver_macos::NoHandOver);
+    let check = Arc::new(agent_check(Arc::downgrade(panes)));
+    match elitea_browser_driver_macos::attach(webview, check, hand_over).await {
+        Ok(driver) => panes.drivers.attach(thread_id, Arc::new(driver)),
+        Err(error) => {
+            log::warn!(target: "browser", "the agent cannot drive this page: {error}");
+        }
+    }
+}
+
+/// Windows and Linux drivers are #1593's.
+#[cfg(not(target_os = "macos"))]
+async fn attach_driver(_panes: &Arc<BrowserPanes>, _thread_id: &str, _webview: &Webview) {}
+
+/// The page a new pane is made at: wry loads nothing for it, so no request
+/// leaves the pane before [`arm_pane`] installed its content rules.
+fn blank() -> Url {
+    Url::parse("about:blank").unwrap_or_else(|_| unreachable!("a constant URL"))
+}
+
+/// Install the pane's content rules ([`content_rules`]) before its first
+/// load. Fails closed: rules WebKit refuses are an error, and the caller
+/// closes the pane.
+#[cfg(target_os = "macos")]
+async fn arm_pane(webview: &Webview, policy: GuardPolicy) -> Result<(), IpcError> {
+    let Some(rules) = content_rules(policy) else {
+        return Ok(());
+    };
+    elitea_browser_driver_macos::native::install_content_rules(webview, &rules)
+        .await
+        .map_err(|error| {
+            log::error!(target: "browser", "the pane's content rules failed: {error}");
+            IpcError::new(
+                "browser_unprotected",
+                "The page cannot be protected from local network loads, so it was not opened.",
+            )
+        })
+}
+
+/// Windows and Linux: navigations only (the guard) until #1593.
+#[cfg(not(target_os = "macos"))]
+async fn arm_pane(_webview: &Webview, _policy: GuardPolicy) -> Result<(), IpcError> {
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1030,18 +1141,28 @@ pub async fn browser_open(
     let panes = panes.inner().clone();
     thread_label(&thread_id)?;
     let url = address_to_url(&address).ok_or_else(|| invalid("Type a web address."))?;
-    check(&url, panes.policy())
-        .map_err(|reason| IpcError::new("browser_refused", reason.message()))?;
+    let policy = panes.policy();
+    check(&url, policy).map_err(|reason| IpcError::new("browser_refused", reason.message()))?;
     let shown = shown_url(&url);
-    if let Some(webview) = webview_of(&app, &thread_id) {
+    let _opening = panes.opening.lock().await;
+    let webview = if let Some(webview) = webview_of(&app, &thread_id) {
         apply_bounds(&webview, &app, rect)?;
         let _ = webview.show();
         webview
-            .navigate(url)
-            .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))?;
     } else {
-        build_pane(&app, &panes, &thread_id, url, rect)?;
-    }
+        // Made at about:blank, armed, then navigated: the rules apply to the
+        // first page (module docs, "Content rules").
+        let webview = build_pane(&app, &panes, &thread_id, blank(), rect, policy)?;
+        if let Err(error) = arm_pane(&webview, policy).await {
+            close_pane(&app, &panes, &thread_id);
+            return Err(error);
+        }
+        attach_driver(&panes, &thread_id, &webview).await;
+        webview
+    };
+    webview
+        .navigate(url)
+        .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))?;
     let evicted = panes.lock().live.touch(&thread_id);
     if let Some(evicted) = evicted {
         close_pane(&app, &panes, &evicted);
@@ -1089,9 +1210,21 @@ pub enum GoAction {
 }
 
 impl GoAction {
-    /// The script run in the page. History only: nothing is read back. The
-    /// page can override these (module docs, "History buttons"); the native
-    /// calls wait on the webkit-shim follow-up (#1634).
+    /// The native call (macOS); `None`: Reload, which wry has.
+    #[cfg(target_os = "macos")]
+    const fn native(self) -> Option<elitea_browser_driver_macos::native::Go> {
+        use elitea_browser_driver_macos::native::Go;
+        match self {
+            Self::Back => Some(Go::Back),
+            Self::Forward => Some(Go::Forward),
+            Self::Stop => Some(Go::Stop),
+            Self::Reload => None,
+        }
+    }
+
+    /// Windows and Linux (until #1593): the script run in the page. History
+    /// only: nothing is read back. The page can override these.
+    #[cfg(any(test, not(target_os = "macos")))]
     const fn script(self) -> &'static str {
         match self {
             Self::Back => "history.back()",
@@ -1111,12 +1244,31 @@ pub async fn browser_go(
     thread_label(&thread_id)?;
     let webview = webview_of(&app, &thread_id)
         .ok_or_else(|| IpcError::new("browser_closed", "The page is closed."))?;
-    let result = if action == GoAction::Reload {
-        webview.reload()
-    } else {
-        webview.eval(action.script())
+    if action == GoAction::Reload {
+        return webview
+            .reload()
+            .map_err(|error| IpcError::new("browser_unavailable", error.to_string()));
+    }
+    go_in_page(&webview, action).await
+}
+
+/// Back, Forward or Stop on the WKWebView itself: the page cannot override
+/// them.
+#[cfg(target_os = "macos")]
+async fn go_in_page(webview: &Webview, action: GoAction) -> Result<(), IpcError> {
+    let Some(native) = action.native() else {
+        return Ok(());
     };
-    result.map_err(|error| IpcError::new("browser_unavailable", error.to_string()))
+    elitea_browser_driver_macos::native::go(webview, native)
+        .await
+        .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn go_in_page(webview: &Webview, action: GoAction) -> Result<(), IpcError> {
+    webview
+        .eval(action.script())
+        .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))
 }
 
 /// Close the thread's pane; its store stays (Forget site data deletes it).
@@ -1631,6 +1783,25 @@ mod tests {
         })
     }
 
+    /// The rules the driver's WebKit test installs
+    /// (`browser-driver-macos/tests/webkit.rs`, "content rules") are these
+    /// rules. `UPDATE_RULES_FIXTURE=1` rewrites the fixture.
+    #[test]
+    fn the_webkit_tests_install_the_panes_own_rules() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("browser-driver-macos/tests/fixtures/content-rules.json");
+        let rules = content_rules(STRICT).unwrap();
+        if std::env::var_os("UPDATE_RULES_FIXTURE").is_some() {
+            std::fs::write(&path, format!("{rules}\n")).unwrap();
+        }
+        let fixture = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            fixture.trim_end(),
+            rules,
+            "UPDATE_RULES_FIXTURE=1 rewrites it"
+        );
+    }
+
     #[test]
     fn the_content_rules_block_every_private_load() {
         let rules = content_rules(STRICT).unwrap();
@@ -1747,8 +1918,25 @@ mod tests {
         assert_eq!(logical_bounds(rect, 0.0), None);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn the_history_buttons_run_history_only() {
+    fn the_history_buttons_are_native_on_macos() {
+        use elitea_browser_driver_macos::native::Go;
+        assert_eq!(GoAction::Back.native(), Some(Go::Back));
+        assert_eq!(GoAction::Forward.native(), Some(Go::Forward));
+        assert_eq!(GoAction::Stop.native(), Some(Go::Stop));
+        assert_eq!(GoAction::Reload.native(), None, "wry's own reload");
+    }
+
+    #[test]
+    fn a_pane_is_made_at_a_page_that_loads_nothing() {
+        let url = blank();
+        assert_eq!(url.as_str(), "about:blank");
+        assert_eq!(check(&url, STRICT), Ok(()));
+    }
+
+    #[test]
+    fn the_history_buttons_run_history_only_off_macos() {
         assert_eq!(GoAction::Back.script(), "history.back()");
         assert_eq!(GoAction::Forward.script(), "history.forward()");
         assert_eq!(GoAction::Stop.script(), "window.stop()");

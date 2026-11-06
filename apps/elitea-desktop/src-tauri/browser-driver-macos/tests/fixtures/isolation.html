@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Isolation</title>
+<script>
+  // A hostile page: it runs before the driver is ever called, and keeps
+  // probing after. Everything it learns it writes into the page, where the
+  // test reads it back through a snapshot.
+  const found = [];
+  // The page plants its own fake driver below; anything else under that
+  // name, or any other global naming elitea, would be the driver's leaking.
+  let planted;
+  const probe = (label) => {
+    const reach = [];
+    if (window.__eliteaBrowserDriver !== planted) reach.push('driver global');
+    if (Object.getOwnPropertyNames(window).some((name) => name.toLowerCase().includes('elitea') && name !== '__eliteaBrowserDriver')) reach.push('a global named elitea');
+    const handlers = window.webkit && window.webkit.messageHandlers;
+    if (handlers && handlers.eliteaBrowserFrame !== undefined) reach.push('frame handler');
+    if (handlers) {
+      try {
+        handlers.eliteaBrowserFrame.postMessage('{"token":"forged","url":"https://evil.test/"}');
+        reach.push('posted to the frame handler');
+      } catch (_) {
+        // Expected: no such handler in the page world.
+      }
+    }
+    found.push(`${label}: ${reach.length === 0 ? 'nothing' : reach.join(', ')}`);
+    const out = document.getElementById('probe');
+    if (out) out.textContent = found.join('; ');
+  };
+  probe('before load');
+
+  // Tamper with everything the driver could have relied on, in the page world.
+  const real = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  Object.defineProperty(HTMLInputElement.prototype, 'value', {
+    get() { return 'tampered'; },
+    set(v) { real.set.call(this, `tampered:${v}`); },
+    configurable: true,
+  });
+  JSON.stringify = () => '{"ok":{"doc":"forged","url":"https://evil.test/","title":"forged","nodes":[]}}';
+  JSON.parse = () => ({ op: 'forged' });
+  Element.prototype.getAttribute = () => 'forged';
+  Element.prototype.getBoundingClientRect = () => ({ left: -9999, top: -9999, width: 0, height: 0 });
+  window.getComputedStyle = () => ({ display: 'none', visibility: 'hidden' });
+  EventTarget.prototype.dispatchEvent = () => false;
+  planted = { run: async () => '{"ok":{"doc":"forged","url":"https://evil.test/","title":"forged","nodes":[]}}' };
+  Object.defineProperty(window, '__eliteaBrowserDriver', { value: planted });
+  Promise.prototype.then = function () { return this; };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    probe('loaded');
+    setInterval(() => probe('later'), 200);
+  });
+</script>
+</head>
+<body>
+  <h1>Isolation</h1>
+  <label for="name">Name</label>
+  <input id="name">
+  <p id="probe">not run</p>
+</body>
+</html>

@@ -22,6 +22,56 @@ message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
 
+||||||| 221a5f002
+## Desktop: the agent drives the browser pane on macOS (#1589, ADR-0048 decisions 5 and 6)
+
+Desktop app only; no server change, no new setting. On macOS, the agent of
+a Local work thread whose Browser tab is open gets the `browser_*` tools
+(the shared contract, `libs/rust/browser-tools`). The tools are not offered
+to sub-agents and are not workspace tools.
+
+- Plan-mode and unattended turns only read the page: navigating and
+  acting are refused there (unattended: `no_person`). In other turns every
+  tool call runs without an approval prompt until #1590 adds the approvals
+  and the `local_work_browser*` policy keys. A deployment that must not let
+  the agent use web pages should hold this release until then.
+- `browser_open` follows the pane's own rules: https only unless
+  `browser_allow_http` is on, never a loopback, private or link-local host.
+- Pages that accept only real input are clicked with a real mouse event
+  only when the app has the Accessibility permission (System Settings >
+  Privacy & Security > Accessibility). Without it, the agent is told to
+  ask the person. Nothing asks for that permission yet.
+- The driver's script runs in a private WebKit content world; pages cannot
+  see it or call it.
+
+## Computer use policy keys (#1582, ADR-0047 decisions 3 and 4)
+
+Client contract 1.36. The native client policy's `local_work` group gains
+three keys. They are additive, and an app of an earlier release ignores
+them:
+
+- `local_work_computer_use` (default off): local turns may see and act on
+  the user's other applications.
+- `local_work_computer_use_apps_allow` (default empty, no ceiling): when
+  not empty, the only bundle ids computer use may touch.
+- `local_work_computer_use_apps_deny` (default empty): bundle ids it never
+  touches. The desktop always adds its own list (Elitea, password
+  managers, terminals, Screen Time, the login window and the security
+  panes of System Settings). System Settings is refused when the pane it
+  shows is unknown.
+
+Nothing changes until an administrator turns `local_work_computer_use` on
+under Configuration, *Native client policy*. The `computer` tools
+themselves ship later (#1583). No migration. A save refuses an app list
+entry that is not a bundle id (`com.apple.mail`) or a bundle id prefix
+(`com.example.*`), or a list of more than 200 entries. A stored allow list
+whose every entry is invalid loads as one id no application has, so it
+admits nothing rather than everything.
+
+The desktop's remembered-choices file (`choices.json` in each workspace's
+data directory) gains an optional `bundle_id` field for "always for this
+app" answers. Older choice files load unchanged.
+
 ## Other agents are labelled in an agent's history (#1603, ADR-0050 decision 9a)
 
 Upgrade the workers (`elitea-worker-rust`) before Main. In a conversation
@@ -46,6 +96,7 @@ Also in this release, with nothing to do:
   path keeps the loop's `reasoning_content`.
 - The desktop app rebuilds a session with another agent's answers as
   labelled messages, without that agent's tool steps.
+
 ## Desktop: browser pane and the `browser_allow_http` setting (#1588, ADR-0048 decisions 1 and 2)
 
 Desktop app only; no server change. Local work threads get a Browser tab
@@ -68,12 +119,17 @@ site data per thread (macOS 14+: a persistent store per thread; macOS
   (`com.apple.quarantine`, agent `Elitea`, so Gatekeeper checks it on first
   open) and records its URL (`kMDItemWhereFroms`). Unicode format
   characters (bidi overrides, zero-width marks) are removed from the name.
-- Private-network blocking covers navigations only: top-level pages and
-  frames whose address is `localhost`, a private name or a private or
-  loopback IP are refused. Subresources (`fetch`, images, WebSockets) to
-  those addresses, and public names that resolve to private addresses, are
-  NOT blocked yet (#1634). Do not rely on the pane to protect local
+- Private-network blocking: top-level pages and frames whose address is
+  `localhost`, a private name or a private or loopback IP are refused. On
+  macOS, subresources (`fetch`, images, scripts, WebSockets) to those
+  addresses are blocked too, by a `WKContentRuleList` installed in each
+  pane before its first page loads (#1634). If the rules cannot be
+  installed, the pane does not open (`browser_unprotected`). Public names
+  that resolve to private addresses are NOT blocked (the rules match URLs,
+  not resolved addresses). Do not rely on the pane alone to protect local
   services on managed machines.
+- The pane's Back, Forward and Stop are native on macOS: a page cannot
+  override them (#1634).
 - Signing out now also deletes every thread's browser site data.
 
 ## Desktop control driver library (#1581, ADR-0047)

@@ -219,6 +219,11 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             // toolkits; they are no workspace tools.
             web: false,
             host_intel: false,
+            // Computer use is the desktop's, attended only (ADR-0047
+            // decisions 2 and 8): a cloud thread has no computer tools.
+            computer_use: false,
+            computer_use_apps_allow: Vec::new(),
+            computer_use_apps_deny: Vec::new(),
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

@@ -11,6 +11,7 @@ mod app_events;
 mod attention;
 mod auth;
 mod browser_pane;
+mod browser_tools;
 mod commands;
 mod compaction_settings;
 mod context_menu;
@@ -445,6 +446,10 @@ pub fn run() {
                 workspaces.clone(),
             ));
             agents.set_worktrees(&worktrees);
+            // The agent's drivers of the browser panes (ADR-0048 decision
+            // 6): one per open pane, attached by `browser_pane`.
+            let browser_drivers = Arc::new(browser_tools::BrowserDrivers::new());
+            agents.set_browser_drivers(browser_drivers.clone());
             worktrees.register_all();
             app.manage(worktrees);
             app.manage(LocalState {
@@ -464,6 +469,7 @@ pub fn run() {
                 config_dir_for_browser,
                 &data_dir_for_browser,
                 downloads,
+                browser_drivers.clone(),
             )));
             browser_pane::clean_up_at_launch(app.handle().clone());
             app.manage(AppState { auth });
