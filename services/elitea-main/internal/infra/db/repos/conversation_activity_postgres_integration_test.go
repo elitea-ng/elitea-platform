@@ -165,6 +165,18 @@ func TestConversationActivityFollowsTheTurn(t *testing.T) {
 		t.Fatalf("Paused after the turn = %v, %v; want empty", pausedSet, err)
 	}
 
+	// FU-284: an answer that parks a fan-out on its cards needs the user too.
+	c.exec(t, `UPDATE p_1.chat_message_group SET is_streaming = FALSE,
+		meta = '{"thread_id": "t1", "fanout_parked_v1": {"open": 1}}'::jsonb,
+		updated_at = clock_timestamp() AT TIME ZONE 'UTC' WHERE id = $1`, answer)
+	if a := c.activity(t, 8); a.State != chatactivity.StateNeedsYou {
+		t.Fatalf("a parked fan-out = %+v, want needs_you", a)
+	}
+	pausedSet, err = chatactivity.Paused(context.Background(), pool, `"p_1"`, []int64{c.id})
+	if err != nil || !pausedSet[c.id] {
+		t.Fatalf("Paused with a parked fan-out = %v, %v; want the conversation", pausedSet, err)
+	}
+
 	// Reader 0 (the frame snapshot) never reads unread.
 	if a := c.activity(t, 0); a.Unread {
 		t.Fatalf("reader 0 = %+v, want read", a)

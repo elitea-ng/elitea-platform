@@ -325,7 +325,7 @@ names instead of retrying. A rule imported from a repository leaves the
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
 | `agent_turn_steer_update` | `{turn_id, steer_id, text: string \| null}` | `null` — changes a waiting message (`text`), or removes it (`null`). Rejects `steer_not_pending` (the agent has it already, or it was removed), `turn_not_running`, `steer_invalid`, `turn_unknown` / `turn_expired`. |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "allow_thread" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
@@ -2647,6 +2647,35 @@ type BrowserEvent = { thread_id: string } & (
   | { kind: "closed" } // the host closed the page (four live at most)
 );
 ```
+
+## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
+
+No new command or event. A Local turn gets the `computer` toolset
+(`computer_apps`, `computer_snapshot`, `computer_screenshot`,
+`computer_act`, `computer_type`, `computer_key`, `computer_click_at`,
+`computer_open_app`, `computer_wait`, `computer_request_user`) only while the
+client policy's `local_work_computer_use` and `settings.json`
+`"computer_use": true` are both on. Sub-agents never get it. Its calls show
+as ordinary `tool_call` / `tool_result` events.
+
+A computer call's `approval_request` is a `command_approval` with
+`tool: "computer_read" | "computer_act"`, `detail: "<bundle id> · <window
+title> · <action>"`, `computer: {bundle_id, app_name?, window_title?, action,
+open_app, list_apps, control?: {role, name, destructive}}`, and
+`attended_only: true` for an act in an unattended run (only the person at
+the machine answers it; no answer declines). Its actions are `approve`,
+`approve_thread` (when the turn has a thread), `approve_always` and `reject`.
+When `approve_thread` is offered the card has `can_remember_thread: true`,
+and `approval_respond` with `allow_thread` answers it ("Allow for this
+thread"); where it is not offered, `allow_thread` is an approval once.
+
+Both switches are read again at every call: with either off, the call
+fails with `computer_use_off` and nothing is asked or read.
+
+`computer_request_user` raises a `command_approval` with
+`tool: "computer_request_user"`, `title: "The agent hands control to you"`,
+`detail: <the reason>`, `bundle_id`, and a 15-minute wait: `approve` means
+"done", and anything else, an `approval_closed` timeout included, declines.
 
 ## Events
 

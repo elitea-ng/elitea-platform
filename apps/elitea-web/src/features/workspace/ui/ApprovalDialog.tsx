@@ -226,6 +226,11 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
         <Button variant="outlined" onClick={() => respond('allow_once')}>
           {t('workspace.approval.allowOnce', 'Allow once')}
         </Button>
+        {request.can_remember_thread === true && (
+          <Button variant="outlined" onClick={() => respond('allow_thread')}>
+            {t('workspace.approval.allowThread', 'Allow for this thread')}
+          </Button>
+        )}
         {request.can_remember && (
           <Button variant="contained" onClick={() => respond('allow_always')}>
             {request.remember_scope === 'session'

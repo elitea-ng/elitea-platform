@@ -479,6 +479,18 @@ WHERE uuid=$1::uuid`, request.ClientMessageID, test.streaming, test.executionID,
 				}
 			})
 		}
+		// FU-284: a response parked on fan-out cards is PAUSED as well.
+		t.Run("parked_fanout", func(t *testing.T) {
+			tag, err := pool.Exec(t.Context(), `UPDATE p_1.chat_message_group SET is_streaming=FALSE,task_id=$2,
+meta=(meta - 'node_recovery_required_v1') || jsonb_build_object('execution_generation',$3::text,'fanout_parked_v1',jsonb_build_object('open',1))
+WHERE uuid=$1::uuid`, request.ClientMessageID, outcome.ExecutionID, request.CurrentTurn.QuestionID)
+			if err != nil || tag.RowsAffected() != 1 {
+				t.Fatalf("set parked response fixture: rows=%d err=%v", tag.RowsAffected(), err)
+			}
+			if run := read(t); run.Phase != "PAUSED" || !run.CanControl {
+				t.Fatalf("a parked fan-out run = %+v, want PAUSED", run)
+			}
+		})
 	})
 	t.Run("paused_restore_retains_original_control_and_denies_foreign_actor", func(t *testing.T) {
 		f := newEditorLifecycleFixture(t, pool)

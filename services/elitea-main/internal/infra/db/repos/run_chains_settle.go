@@ -39,7 +39,7 @@ SELECT last_execution_id FROM elitea_runtime.run_chains WHERE root_execution_id 
 		return ChainSettleView{}, false, fmt.Errorf("unattended chain: read the latest run: %w", err)
 	}
 	view.Latest = last == nil || *last == executionID
-	facts, err := readResponseFacts(ctx, r.pool, chain.ProjectID, chain.ResponseMessageID)
+	facts, err := readResponseFacts(ctx, r.pool, chain.ProjectID, chain.ResponseMessageID, executionID)
 	if err != nil {
 		return ChainSettleView{}, false, fmt.Errorf("unattended chain: %w", err)
 	}

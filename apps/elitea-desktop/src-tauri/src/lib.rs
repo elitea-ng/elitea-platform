@@ -14,6 +14,7 @@ mod browser_pane;
 mod browser_tools;
 mod commands;
 mod compaction_settings;
+mod computer_tools;
 mod context_menu;
 mod credentials_file;
 mod d0;
@@ -429,7 +430,7 @@ pub fn run() {
                         agents: agents.clone(),
                         app: app.handle().clone(),
                     }),
-                    config_dir,
+                    config_dir: config_dir.clone(),
                     data_dir,
                     log_dir,
                     credentials: credentials.clone(),
@@ -450,6 +451,13 @@ pub fn run() {
             // 6): one per open pane, attached by `browser_pane`.
             let browser_drivers = Arc::new(browser_tools::BrowserDrivers::new());
             agents.set_browser_drivers(browser_drivers.clone());
+            // Computer use (ADR-0047): one desktop driver for the app's
+            // lifetime; the toolset is offered per turn while the policy
+            // and the person's device switch allow it.
+            agents.set_computer(computer_tools::ComputerSetup::from_settings(
+                Arc::from(elitea_desktop_control::default_driver()),
+                config_dir.clone(),
+            ));
             worktrees.register_all();
             app.manage(worktrees);
             app.manage(LocalState {

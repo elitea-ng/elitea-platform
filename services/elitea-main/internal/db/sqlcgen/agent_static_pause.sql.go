@@ -65,6 +65,7 @@ WHERE conversation.uuid = $3::uuid
   AND COALESCE(response.meta ->> 'execution_generation', '') <> ''
   AND NOT (response.meta ? 'hitl_interrupt') AND NOT (response.meta ? 'hitl_interrupts')
   AND NOT (response.meta ? 'authorization_requests') AND NOT (response.meta ? 'output_limit_reached')
+      AND NOT (response.meta ? 'fanout_parked_v1')
 `
 
 type ResolveCurrentStaticContinuationParams struct {
@@ -250,6 +251,7 @@ WITH resolved AS MATERIALIZED (
       AND response.meta ->> 'thread_id' = $12::text
       AND NOT (response.meta ? 'hitl_interrupt') AND NOT (response.meta ? 'hitl_interrupts')
       AND NOT (response.meta ? 'authorization_requests') AND NOT (response.meta ? 'output_limit_reached')
+      AND NOT (response.meta ? 'fanout_parked_v1')
       AND (conversation.author_id = $2::bigint
            OR (question_author.entity_meta ->> 'id')::bigint = $2::bigint)
       AND (response_author.entity_meta ->> 'project_id')::integer = $5::integer

@@ -994,7 +994,7 @@ pub fn approval_respond(
     let decision = UiDecision::parse(&decision, feedback.as_deref()).ok_or_else(|| {
         IpcError::new(
             "invalid_request",
-            "decision must be allow_once, allow_always, deny, continue, cancel, accept or decline",
+            "decision must be allow_once, allow_always, allow_thread, deny, deny_with_feedback, continue, cancel, accept or decline",
         )
     })?;
     if state.agents.respond(&request_id, decision) {

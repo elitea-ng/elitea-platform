@@ -19,6 +19,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/chat-conversations/context-management', title: 'Manage conversation context' },
         { kind: 'page', slug: 'how-tos/chat-conversations/reasoning-effort', title: 'Set the reasoning effort' },
         { kind: 'page', slug: 'how-tos/chat-conversations/desktop-browser-pane', title: 'Browse the web in a thread (desktop)' },
+        { kind: 'page', slug: 'how-tos/chat-conversations/desktop-computer-use', title: 'Let the agent use your other apps (desktop)' },
       ],
     },
     {

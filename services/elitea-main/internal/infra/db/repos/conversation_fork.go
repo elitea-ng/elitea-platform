@@ -81,6 +81,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/responsepause"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -90,9 +91,10 @@ var _ conversations.ConversationForker = (*ConversationsRepo)(nil)
 // conversationForkTimeout bounds one fork, the attachment copies included.
 const conversationForkTimeout = 2 * time.Minute
 
-// forkPauseKeys are the meta keys of a pending pause (agent_cancel.sql
-// removes the same keys when a turn is stopped).
-var forkPauseKeys = []string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "node_recovery_required_v1"}
+// forkPauseKeys are the meta keys of a pending pause: a wait for a person
+// (responsepause, a parked fan-out included: its cards belong to the source
+// response's ledger, so a fork never copies an open park) and a node recovery.
+var forkPauseKeys = append(responsepause.WaitingKeys(), "node_recovery_required_v1")
 
 // forkLeafTables are the optional payload tables the fork copies. Some
 // fixtures and older tenants lack a few of them.
