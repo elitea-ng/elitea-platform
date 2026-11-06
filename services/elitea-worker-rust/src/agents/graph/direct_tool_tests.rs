@@ -1184,6 +1184,7 @@ fn tool_resume_payload(
         summary_model: None,
         platform_preamble: None,
         model_reasoning: None,
+        chat_history_refs: Vec::new(),
     }
 }
 

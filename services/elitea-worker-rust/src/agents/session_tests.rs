@@ -1429,12 +1429,12 @@ async fn assert_next_turn_after_resume(
 
 #[tokio::test]
 async fn block_actions_emit_one_correlated_structured_result_without_executing_the_tool() {
-    assert_blocked_direct_replay("reject", "", "denied by user").await;
-    assert_blocked_direct_replay(
+    Box::pin(assert_blocked_direct_replay("reject", "", "denied by user")).await;
+    Box::pin(assert_blocked_direct_replay(
         "block_with_comment",
         "retain this record",
         "retain this record",
-    )
+    ))
     .await;
 }
 
@@ -3531,4 +3531,131 @@ async fn a_run_without_the_grant_at_its_step_limit_still_fails() {
         assert!(completion.step_limit_stop().is_none());
         assert!(completion.select().await.is_err());
     }
+}
+
+/// One turn of `reader` with `history` (and its references), capturing the
+/// model's request.
+async fn reconciled_turn(
+    sessions: &Arc<InMemorySessionService>,
+    question: &str,
+    history: Vec<Value>,
+    refs: Vec<super::request::ChatHistoryRef>,
+) -> Vec<adk_rust::Content> {
+    let mut request = ordinary_request(AgentExecutionKind::Adhoc);
+    request.payload.chat_history = history;
+    request.payload.chat_history_refs = refs;
+    request.payload.user_input = UserInput::Text(question.to_owned());
+    let profile = OrdinaryNoToolProfile::validate(&request).expect("ordinary profile");
+    let plan = OrdinaryNativeAgentPlan::from_authorized(
+        &request,
+        &profile,
+        &AuthorizedNativeCommandBinding::fixture(),
+        &request.payload.input_attachments,
+    )
+    .expect("native plan");
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let model = FixtureBoundModel {
+        model: Arc::new(CapturingFinalLlm {
+            requests: Arc::clone(&captured),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }),
+        completed: format!("answer to {question}"),
+    };
+    let shared: Arc<dyn SessionService> = sessions.clone();
+    let assembled = assemble_ordinary_native_with_sessions(
+        model,
+        plan,
+        Vec::new(),
+        SensitiveToolCatalog::default(),
+        shared,
+    )
+    .await
+    .expect("assembly");
+    let (mut run, _projector, completion) = assembled.start().expect("run");
+    while run.next_event().await.expect("event").is_some() {}
+    completion.select().await.expect("completion");
+    let requests = captured.lock().expect("captured request");
+    requests
+        .first()
+        .expect("one model request")
+        .contents
+        .clone()
+}
+
+fn history_ref(id: &str, readers_own: bool) -> super::request::ChatHistoryRef {
+    super::request::ChatHistoryRef {
+        message_id: id.to_owned(),
+        readers_own,
+    }
+}
+
+fn role_texts(contents: &[adk_rust::Content]) -> Vec<(String, String)> {
+    contents
+        .iter()
+        .map(|content| {
+            let text = content
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    Part::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+            (content.role.clone(), text)
+        })
+        .collect()
+}
+
+/// ADR-0050 decision 9c (#1603): a restored session sees what another agent
+/// wrote after the reader's last turn, labelled, once.
+#[tokio::test]
+async fn a_restored_session_reconciles_a_peers_later_message_once() {
+    const Q1: &str = "00000000-0000-4000-8000-000000000001";
+    const A1: &str = "00000000-0000-4000-8000-000000000002";
+    const PEER: &str = "00000000-0000-4000-8000-000000000003";
+    const Q2: &str = "00000000-0000-4000-8000-000000000004";
+    const A2: &str = "00000000-0000-4000-8000-000000000005";
+    let sessions = Arc::new(InMemorySessionService::new());
+    reconciled_turn(&sessions, "first question", Vec::new(), Vec::new()).await;
+
+    let peer = json!({
+        "role": "user",
+        "content": [{"type": "text", "text": "the peer's finding"}],
+        "additional_kwargs": {"elitea_author": {"kind": "agent", "name": "CI Doctor"}}
+    });
+    let mut history = vec![
+        json!({"role": "user", "content": [{"type": "text", "text": "first question"}], "additional_kwargs": {}}),
+        json!({"role": "assistant", "content": [{"type": "text", "text": "answer to first question"}], "additional_kwargs": {}}),
+        peer,
+    ];
+    let mut refs = vec![
+        history_ref(Q1, true),
+        history_ref(A1, true),
+        history_ref(PEER, false),
+    ];
+    let second = role_texts(
+        &reconciled_turn(&sessions, "second question", history.clone(), refs.clone()).await,
+    );
+    assert_eq!(second.len(), 4, "{second:?}");
+    assert_eq!(second[0], ("user".to_owned(), "first question".to_owned()));
+    assert_eq!(second[1].0, "model");
+    assert_eq!(second[2].0, "user");
+    assert!(
+        second[2].1.contains("from=\"CI Doctor\"") && second[2].1.contains("the peer's finding"),
+        "{second:?}"
+    );
+    assert_eq!(second[3], ("user".to_owned(), "second question".to_owned()));
+
+    // The next turn matches the peer's message by id: it is not repeated.
+    history.push(json!({"role": "user", "content": [{"type": "text", "text": "second question"}], "additional_kwargs": {}}));
+    history.push(json!({"role": "assistant", "content": [{"type": "text", "text": "answer to second question"}], "additional_kwargs": {}}));
+    refs.push(history_ref(Q2, true));
+    refs.push(history_ref(A2, true));
+    let third = role_texts(&reconciled_turn(&sessions, "third question", history, refs).await);
+    let peers = third
+        .iter()
+        .filter(|(_, text)| text.contains("the peer's finding"))
+        .count();
+    assert_eq!(peers, 1, "{third:?}");
+    assert_eq!(third.len(), 6, "{third:?}");
 }

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/jackc/pgx/v5"
 )
@@ -162,5 +163,61 @@ func TestPostgresAdhocChatHistoryLabelsAnAgentParticipantsAnswer(t *testing.T) {
 	author, _ := history[1].AdditionalKwargs["elitea_author"].(map[string]any)
 	if author["kind"] != "agent" || author["name"] != "leaf-agent" {
 		t.Fatalf("peer=%+v", history[1].AdditionalKwargs)
+	}
+}
+
+// ADR-0050 decision 9c (#1603): every history entry is named by its message
+// and marked when it is the reader's own, so the worker can append the rest
+// to the reader's durable session once.
+func TestPostgresChatHistoryRefsNameEveryEntryAndMarkTheReadersOwn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+	if _, err := tx.Exec(t.Context(), `
+INSERT INTO chat_participants (id, uuid, entity_name, entity_meta, meta) VALUES
+    (26, 'a0000000-0000-4000-8000-000000001604', 'application', '{"id":32,"project_id":1}'::jsonb, '{"name":"CI Doctor"}'::json);
+INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at) VALUES
+    (1, 26, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
+		t.Fatal(err)
+	}
+	// A question to the reader (21), its answer, and a question to the peer
+	// (26) with the peer's answer.
+	toReader := insertPostgresHistoryGroup(t, tx, 1603021, 20, 0, "why is CI red?", 4)
+	insertPostgresHistoryGroup(t, tx, 1603022, 21, toReader, "Step 3 failed.", 3)
+	toPeer := insertPostgresHistoryGroup(t, tx, 1603023, 20, 0, "can you fix it?", 2)
+	insertPostgresHistoryGroup(t, tx, 1603024, 26, toPeer, "Fixed.", 1)
+	if _, err := tx.Exec(t.Context(), `
+UPDATE chat_message_group SET sent_to_id = CASE id WHEN 1603021 THEN 21 ELSE 26 END
+WHERE id IN (1603021, 1603023)`); err != nil {
+		t.Fatal(err)
+	}
+	target, err := queries.ResolveCurrentApplicationTurn(t.Context(), sqlcgen.ResolveCurrentApplicationTurnParams{
+		ActorUserID: 11, TargetParticipantID: 21, ProjectID: 1,
+		QuestionID:       mustCurrentPGUUID(t, "50000000-0000-4000-8000-000000001604"),
+		ConversationUuid: mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031"),
+	})
+	if err != nil {
+		t.Fatalf("resolve application turn: %v", err)
+	}
+	refs, err := agentexecutionapp.DecodeChatHistoryRefs(
+		json.RawMessage(target.ChatHistoryJson), json.RawMessage(target.ChatHistoryRefsJson))
+	if err != nil {
+		t.Fatalf("decode refs %s: %v", target.ChatHistoryRefsJson, err)
+	}
+	var uuids []string
+	if err := tx.QueryRow(t.Context(), `
+SELECT array_agg(uuid::text ORDER BY id) FROM chat_message_group
+WHERE id BETWEEN 1603021 AND 1603024`).Scan(&uuids); err != nil {
+		t.Fatal(err)
+	}
+	own := []bool{true, true, false, false}
+	if len(refs) != 4 {
+		t.Fatalf("refs=%+v", refs)
+	}
+	for index, ref := range refs {
+		if ref.MessageID != uuids[index] || ref.ReadersOwn != own[index] {
+			t.Fatalf("refs[%d]=%+v, want %s own=%v", index, ref, uuids[index], own[index])
+		}
 	}
 }

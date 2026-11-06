@@ -149,6 +149,27 @@ message AgentExecutionInputV1 {
   // catalogue declared one. Workers are upgraded before Main, because a
   // worker from an earlier release refuses this tag.
   ModelReasoningV1 model_reasoning = 70;
+  // ADR-0050 decision 9c (#1603): one reference per `chat_history` entry,
+  // in the same order. A reader's durable worker session is seeded from
+  // `chat_history` once and then holds only the reader's own turns. On each
+  // later turn the worker appends to it, once, the entries it has not seen
+  // and that are not `readers_own`, so messages other participants wrote
+  // since then reach the reader. EMPTY: the
+  // worker keeps the session's stored history, as before. Workers are
+  // upgraded before Main, because a worker from an earlier release refuses
+  // this tag.
+  repeated ChatHistoryRefV1 chat_history_refs = 71;
+}
+
+// Where one `chat_history` entry came from (ADR-0050 decision 9c).
+message ChatHistoryRefV1 {
+  // The chat message group uuid.
+  string message_id = 1;
+  // The reader's own answer, or a message sent to the reader (a question
+  // it answered, a steering message into its turn). The reader's own turns
+  // in the session already hold these.
+  bool readers_own = 2;
+  reserved 3 to 15;
 }
 
 // The catalogue's thinking data for one model (ADR-0038 decisions 3 and 4).

@@ -1189,7 +1189,8 @@ SELECT conversation.id AS conversation_id,
        END)::text AS instructions,
        COALESCE(conversation.meta, '{}'::jsonb)::text AS conversation_meta_json,
        COALESCE(current_tools.tools, '[]'::jsonb)::text AS tools_json,
-       COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json
+       COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
+       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json
 FROM chat_conversations AS conversation
 JOIN chat_participant_mapping AS author_mapping
   ON author_mapping.conversation_id = conversation.id
@@ -1311,10 +1312,25 @@ LEFT JOIN LATERAL (
                    'additional_kwargs', history_group.additional_kwargs
                )
                ORDER BY history_group.created_at, history_group.id
-           ) AS chat_history
+           ) AS chat_history,
+           -- ADR-0050 decision 9c (issue 1603): one reference per entry, in
+           -- the same order. The worker appends to the reader's durable
+           -- session, once, every entry it has not seen that is not the
+           -- reader's own (its answers, and the messages sent to it, which
+           -- its own turns already hold).
+           jsonb_agg(
+               jsonb_build_object(
+                   'message_id', history_group.uuid,
+                   'readers_own', history_group.readers_own
+               )
+               ORDER BY history_group.created_at, history_group.id
+           ) AS chat_history_refs
     FROM (
         SELECT message_group.id,
                message_group.created_at,
+               message_group.uuid,
+               (author.id = target_participant.id
+                OR message_group.sent_to_id = target_participant.id) AS readers_own,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
                -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
@@ -1617,7 +1633,8 @@ LEFT JOIN LATERAL (
                   )
               )
           )
-        GROUP BY message_group.id, message_group.created_at, author.id
+        GROUP BY message_group.id, message_group.created_at, message_group.uuid,
+                 message_group.sent_to_id, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -1846,6 +1863,7 @@ type ResolveCurrentAdhocTurnRow struct {
 	ConversationMetaJson string `db:"conversation_meta_json" json:"conversation_meta_json"`
 	ToolsJson            string `db:"tools_json" json:"tools_json"`
 	ChatHistoryJson      string `db:"chat_history_json" json:"chat_history_json"`
+	ChatHistoryRefsJson  string `db:"chat_history_refs_json" json:"chat_history_refs_json"`
 }
 
 // Chat history for this turn: one entry per prior message group, whose
@@ -1907,6 +1925,7 @@ func (q *Queries) ResolveCurrentAdhocTurn(ctx context.Context, arg ResolveCurren
 		&i.ConversationMetaJson,
 		&i.ToolsJson,
 		&i.ChatHistoryJson,
+		&i.ChatHistoryRefsJson,
 	)
 	return i, err
 }
@@ -1986,6 +2005,7 @@ SELECT conversation.id AS conversation_id,
        (target_mapping.entity_settings ->> 'version_id')::integer AS application_version_id,
        COALESCE(target_mapping.entity_settings -> 'variables', '[]'::jsonb)::text AS application_variables_json,
        COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
+       COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
        jsonb_build_object(
@@ -2239,10 +2259,25 @@ LEFT JOIN LATERAL (
                    'additional_kwargs', history_group.additional_kwargs
                )
                ORDER BY history_group.created_at, history_group.id
-           ) AS chat_history
+           ) AS chat_history,
+           -- ADR-0050 decision 9c (issue 1603): one reference per entry, in
+           -- the same order. The worker appends to the reader's durable
+           -- session, once, every entry it has not seen that is not the
+           -- reader's own (its answers, and the messages sent to it, which
+           -- its own turns already hold).
+           jsonb_agg(
+               jsonb_build_object(
+                   'message_id', history_group.uuid,
+                   'readers_own', history_group.readers_own
+               )
+               ORDER BY history_group.created_at, history_group.id
+           ) AS chat_history_refs
     FROM (
         SELECT message_group.id,
                message_group.created_at,
+               message_group.uuid,
+               (author.id = target_participant.id
+                OR message_group.sent_to_id = target_participant.id) AS readers_own,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
                -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
@@ -2549,7 +2584,8 @@ LEFT JOIN LATERAL (
                   )
               )
           )
-        GROUP BY message_group.id, message_group.created_at, author.id
+        GROUP BY message_group.id, message_group.created_at, message_group.uuid,
+                 message_group.sent_to_id, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -2761,6 +2797,7 @@ type ResolveCurrentApplicationTurnRow struct {
 	ApplicationVersionID          int32  `db:"application_version_id" json:"application_version_id"`
 	ApplicationVariablesJson      string `db:"application_variables_json" json:"application_variables_json"`
 	ChatHistoryJson               string `db:"chat_history_json" json:"chat_history_json"`
+	ChatHistoryRefsJson           string `db:"chat_history_refs_json" json:"chat_history_refs_json"`
 	InternalToolsJson             string `db:"internal_tools_json" json:"internal_tools_json"`
 	ApplicationVersionDetailsJson string `db:"application_version_details_json" json:"application_version_details_json"`
 }
@@ -2843,6 +2880,7 @@ func (q *Queries) ResolveCurrentApplicationTurn(ctx context.Context, arg Resolve
 		&i.ApplicationVersionID,
 		&i.ApplicationVariablesJson,
 		&i.ChatHistoryJson,
+		&i.ChatHistoryRefsJson,
 		&i.InternalToolsJson,
 		&i.ApplicationVersionDetailsJson,
 	)

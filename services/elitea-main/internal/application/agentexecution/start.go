@@ -117,8 +117,12 @@ type CurrentApplicationTarget struct {
 	// Main resolver-only carrier; never serialized into execution input or the command bus.
 	SourceVersionDetails json.RawMessage
 	ChatHistory          json.RawMessage
-	InternalTools        json.RawMessage
-	OriginalSource       *scope.SourceReference
+	// ChatHistoryRefs names each ChatHistory entry, in order (ADR-0050
+	// decision 9c): the worker reconciles the reader's durable session with
+	// them on every turn.
+	ChatHistoryRefs []ChatHistoryRef
+	InternalTools   json.RawMessage
+	OriginalSource  *scope.SourceReference
 	// Release is the agent release the run executes (release.go); nil for
 	// a run of a draft, of a version published before releases existed, or
 	// of the catalogue. When set, VersionDetails and SourceVersionDetails
@@ -595,7 +599,8 @@ func currentApplicationInput(
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.
 		Llm: llm, ChatHistory: bytes.Clone(target.ChatHistory),
-		UserInput: userInput, ThreadId: &threadID, Tools: []byte(`[]`),
+		ChatHistoryRefs: chatHistoryRefsInput(target.ChatHistoryRefs),
+		UserInput:       userInput, ThreadId: &threadID, Tools: []byte(`[]`),
 		Application: application, InternalTools: internalTools,
 		McpTokens: currentMCPTokens(request.MCPTokens), IgnoredMcpServers: []byte(`[]`),
 		UserDeclinedMcpServers: []byte(`[]`), HitlDecisions: []byte(`[]`),

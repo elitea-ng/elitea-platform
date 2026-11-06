@@ -138,6 +138,7 @@ pub fn request_from(
             "the agent chat history must be a list",
         ));
     };
+    let chat_len = chat_history.len();
     let user_input = match parse_user_input(&message.user_input)
         .map_err(|error| error.in_input_field(InputLimitField::UserMessage))?
     {
@@ -312,6 +313,7 @@ pub fn request_from(
                 .platform_preamble
                 .map(platform_preamble_snapshot)
                 .transpose()?,
+            chat_history_refs: chat_history_refs(&message.chat_history_refs, chat_len)?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -323,6 +325,33 @@ pub fn request_from(
             }),
         },
     })
+}
+
+/// ADR-0050 decision 9c: one reference per history entry, each a uuid, or
+/// none at all (an input from before field 71).
+fn chat_history_refs(
+    refs: &[crate::protocol::elitea::runtime::v1::ChatHistoryRefV1],
+    history_len: usize,
+) -> Result<Vec<super::request::ChatHistoryRef>, AgentProtocolError> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    if refs.len() != history_len
+        || refs
+            .iter()
+            .any(|entry| uuid::Uuid::try_parse(&entry.message_id).is_err())
+    {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent chat history references must name every entry",
+        ));
+    }
+    Ok(refs
+        .iter()
+        .map(|entry| super::request::ChatHistoryRef {
+            message_id: entry.message_id.to_ascii_lowercase(),
+            readers_own: entry.readers_own,
+        })
+        .collect())
 }
 
 fn model_context_limits(

@@ -116,6 +116,18 @@ pub struct AgentExecutionPayload {
     /// admission. `None` keeps the form the worker used before the
     /// catalogue declared one.
     pub model_reasoning: Option<ModelReasoning>,
+    /// One reference per `chat_history` entry, in order (ADR-0050 decision
+    /// 9c). Empty: the session keeps its stored history.
+    pub chat_history_refs: Vec<ChatHistoryRef>,
+}
+
+/// Where one `chat_history` entry came from (ADR-0050 decision 9c).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChatHistoryRef {
+    /// The chat message group uuid.
+    pub message_id: String,
+    /// The reader's own answer, or a message sent to the reader.
+    pub readers_own: bool,
 }
 
 /// The catalogue's thinking data for one model (ADR-0038 decisions 3 and
