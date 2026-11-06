@@ -876,7 +876,7 @@
       "/onboarding": "Renders a real page, but not the screen this index describes (a 48-slide tour). That is a parity question, not a wiring one. Not measured, not flipped.",
       "/agents/:tab/:agentId + /pipelines/:tab/:agentId + /toolkits/create/:toolkitType + /credentials/:tab/:credential_uid": "Detail/editor routes needing a seeded entity to reach with real data. Not measured, not flipped.",
       "/user-public/*": "Needs an author with published content; the seeded tenant has none. needs-route-state is accurate.",
-      "/chat/:conversationId": "Already wired; remains EXEMPT for determinism (a per-run conversation grows the sidebar list)."
+      "/chat/:conversationId": "Already wired; covered since #1606 by e2e/visual/chat-message-classes.visual.spec.ts, which serves the transcript reads so no per-run conversation is created."
     },
     "exemptAfterFlip": {
       "/help-center": "Flipped to wired (the route renders its real page) but EXEMPT from snapshots: useResourcesConfig has no backend (issue #26), so all five cards render “No links configured” and the version bar is blank. A baseline would make a screen with no content the official reference."

@@ -63,6 +63,24 @@ Each message records:
 
 While an agent answers, the chat knows which participant is answering and what it is doing: thinking, speaking, working in a tool or a sub-agent, waiting for you, waking up to continue a paused answer, done, or failed. The persisted message and the live answer carry the same author and addressees. Messages written before this release get the kind of their author's participant and the addressee they had.
 
+#### Agent avatars
+
+An agent's answer shows the agent's icon, with the Elitea mark for an agent that has none. Under the persona's display name, the answer shows the persona's role. An answer from an ephemeral agent has a dashed ring around the avatar and a **temporary** marker. A message that an agent sends on its own, from a heartbeat, has a **woke up** marker. The web app, the desktop app and the mobile app show the same avatars and markers.
+
+While an agent answers, its avatar moves with what it is doing:
+
+| State | Motion |
+| --- | --- |
+| Idle | A slow breath |
+| Thinking | A turning ring |
+| Speaking | A pulse |
+| Working | A dot that circles the avatar |
+| Waiting for you | A halo in the attention colour |
+| Waking up | A wider pulse |
+| Done or failed | A check or a cross badge for 3 seconds, then idle |
+
+The motions use the workspace's brand colour and its signal colours, so a [custom brand](/admin/branding) re-colours them. Only one avatar moves at a time: the newest answer of the agent that is working. The other avatars show the still icon. When your system asks for reduced motion, every avatar shows the still icon. The mobile app does not yet switch to the still icon in a data-saver mode.
+
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 
 Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).

@@ -706,18 +706,10 @@ test('@visual chat-empty-rail-collapsed', async ({ page }) => {
 /*
  * NOT COVERED, and why — keep this current, it is the honest half of the suite:
  *
- *  - `/chat/:conversationId` (4 shots). The obstacle is determinism, not a
- *    missing backend: POST /api/v2/elitea_core/conversations/prompt_lib/1
- *    returns 201 and persists a row. Seeding a conversation on each run adds a
- *    row to the sidebar list, so consecutive runs render different lists and the
- *    snapshot diffs for reasons that have nothing to do with the UI. Fixing it
- *    means seeding to a known list state. Recorded as an EXEMPT entry in
- *    scripts/check-visual-coverage.mjs, which prints it on every run.
- *
- *    Now more tractable than when it was written: the conversation list is
- *    the sidebar's (`shell-chats`, PR 1553) and every shot masks it, so only
- *    the transcript itself would still need a FIXED seed before the visual
- *    project runs to unblock all four shots.
+ *  - `/chat/:conversationId` is now covered by
+ *    `chat-message-classes.visual.spec.ts` (#1606), which serves the
+ *    conversation's own reads for an id no tenant holds, so the transcript is
+ *    fixed while the sidebar list stays masked.
  *
  *  - `/help-center` (2 shots). Still EXEMPT, but no longer for the reason
  *    written here before unit A14. `useResourcesConfig` now HAS a backend: the

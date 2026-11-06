@@ -121,7 +121,6 @@ const EXEMPT = new Map([
   // claimed ConvsRepo "is never wired", which stopped being true in 3b73273.
   // What remains true is only that this route has never been snapshotted, and
   // nobody has confirmed a conversation can actually be created end-to-end.
-  ['/chat/:conversationId', 'not snapshotted — needs a deterministic conversation list, NOT a missing backend. POST /api/v2/elitea_core/conversations/prompt_lib/1 was verified returning 201 against the running stack; the route renders (chat.tsx supplies ChatWithEditors + <Outlet/>, so the child\'s `component: () => null` is by design). The obstacle is that seeding a conversation per run grows the sidebar list, so the snapshot would differ every time. It is now closer to tractable: the sidebar is mounted (#128) and /chat\'s own landmark ("Still no conversations created.") is the empty branch of that very list, so a seed producing a FIXED conversation set unblocks all four shots.'],
   // Wired at the route layer as of the #61 re-classification, and still exempt
   // — but for a NARROWER reason since the admin Configuration port (#200).
   //
@@ -132,7 +131,7 @@ const EXEMPT = new Map([
   // Resources, and journey 36g asserts that round trip end to end.
   //
   // What is left is a SEEDING question rather than a wiring one, which is the
-  // same shape as `/chat/:conversationId` above: this stack configures no
+  // same shape `/chat/:conversationId` had before #1606: this stack configures no
   // resource links, so the cards still render "No links configured" and a
   // baseline would still make an unconfigured screen the official reference.
   // Seed a fixed set of links and the route becomes coverable.

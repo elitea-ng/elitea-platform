@@ -4,6 +4,16 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent avatars in chat (#1606, ADR-0050 decision 6)
+
+No action is needed. This is a client change only: the web app, the desktop
+app and the mobile app read the participant `kind` and `persona`, the
+message `author_kind`, `addressed_to`, `visibility` and `cause`, and the
+`agent_state` frame of client contract 1.38 (#1605). Upgrade Main first.
+Against an earlier Main, the clients show every answer with the Elitea mark
+and no motion, as before. The shared view model is the new
+`@elitea/client-core/conversation` entry point.
+
 ## Typed chat participants and message addressing (#1605, ADR-0050 decision 7)
 
 No action is needed. Workers and Main can be upgraded in any order.
