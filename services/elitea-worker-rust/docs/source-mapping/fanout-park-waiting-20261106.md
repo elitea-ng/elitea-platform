@@ -1,6 +1,7 @@
 # A parked fan-out reads as waiting for a person (FU-284), 2026-11-06
 
-`M/` = `services/elitea-main/internal/`. Main only; no migration, no contract change.
+`M/` = `services/elitea-main/internal/`. Main only. One additive tenant migration (0161, number assigned at merge). No
+contract change.
 
 ## Business behaviour
 
@@ -42,7 +43,10 @@ finished:
 | `M/infra/db/repos/run_chains_settle.go:42` | passes the settled execution |
 | `M/infra/db/repos/workspace_handoff_continue.go:427` | hand-back outcome `waiting` via the predicate |
 | `M/infra/db/repos/editor_test_runs.go:63` | `PAUSED` via the predicate (plus its own extra keys) |
-| `M/infra/db/chatactivity/activity.go:34-46` | "needs you" adds a park arm beside the partial index's exact text |
+| `M/infra/db/chatactivity/activity.go` | `Paused()` reads one arm per partial index (0153 paused, 0161 parked), each in its index's exact text; `Load()`'s predicate is built from `responsepause` |
+| `services/elitea-main/migrations/tenant/0161_chat_message_group_parked_index.sql` | additive: partial index `chat_message_group_parked_idx (conversation_id) WHERE NOT is_streaming AND meta ? 'fanout_parked_v1'`, and `chat_group_meta_paused` with the park (the conversation sync bump) |
+| `M/infra/db/repos/execution_interrupts.go` (`closeOpenCards` → `dropResponsePark`) | when every open card is closed (new turn, regenerate, stop, run end, failed wake), the response's park marker goes too, unless a wake of it is queued or admitted |
+| `M/db/queries/agent_chat.sql`, `agent_static_pause.sql` (+ sqlc) | the output-limit and static-pause continue guards refuse the park key |
 | `M/infra/db/repos/conversation_fork.go:93-96` | `forkPauseKeys` = waiting keys + `node_recovery_required_v1` |
 
 ## Tests
@@ -61,25 +65,40 @@ of the reader and re-running.
 | `TestPostgresHandoffContinueCommitsTheSendAndTheTurnTogether` (park case) | hand-back outcome `waiting` | yes ("completed") |
 | `TestForkPointMustBeSettled` (park case) | a parked point is `fork_point_unsettled` | yes (201) |
 | `TestEditorLifecyclePostgres/…/parked_fanout` | the editor test run is `PAUSED` | — (the fixture's disposable listener) |
+| `TestPostgresChainWaitsWhenTheParkWakeAlreadyFailed` | a wake of this park that already finished with an error and a step limit: the parked run's facts are only "parked" (waiting, no check, no continuation) | yes |
+| `TestClosedCardsEndTheResponsePark` | a new turn supersedes the cards and the park marker goes with them, keeping the other meta | yes |
+| `TestClosedCardsKeepTheParkOfARunningWake` | cards closing while a wake is admitted keep the marker | — |
+| `TestPausedReadsBothPartialIndexes` | `Paused()` answers a paused and a parked conversation; `EXPLAIN` uses `chat_message_group_paused_idx` and `chat_message_group_parked_idx`, no `Seq Scan` on the table | — |
+| `TestParkedIndexMigrationIsANoOpTwice` | 0161 applied twice changes nothing; the function reads the park | — |
+| `TestResumeGuardsRefuseEveryWaitingKey` | the four continue/resume guards refuse every `responsepause` key | yes (park key missing) |
 | `responsepause` unit tests | each key waits; other keys don't; the SQL per alias; the alias backstop | — |
 | `TestPausedPredicateNamesEveryWaitingKey` | "needs you" carries every waiting key and the partial index's exact text | — |
 
-The whole `./internal` suite results are in the PR.
+**Counts at `e6ebabb7a`:** Main `go test ./internal/... ./migrations/...`, 281 packages ok; `repos` re-run on a quiet
+machine, ok in 209 s (an earlier run during image builds hit the package's 10-minute default and a 45 s timing budget
+in an unrelated index-activity test; that budget passes unchanged on the quiet machine). `go vet` clean. The editor
+fixture test ran on its own disposable listener (127.0.0.1:15444), removed afterwards. Skips: none of the tests above.
 
 ## Performance
 
 - **Chain settle and run finished.** `readResponseFacts` stays one statement. The wake check is an `EXISTS` on
   `execution_interrupt_wakes_wake_execution` (`migrations/shared/0202_execution_interrupt_wakes.sql:76`). It reads at
   most the rows of one wake execution, and only for the one response row read by uuid.
-- **"Needs you."** The first arm keeps `chat_message_group_paused_idx`'s exact text (tenant/0153:128-132), so the
-  planner can still use it. The park arm is a filter on the rows that `conversation_id = ANY($1)` already selects
-  through `chat_message_group_conversation_newest_idx`. No new index and no migration (an unmerged migration cannot go
-  onto the shared stack).
+- **"Needs you."** `Paused()` is a `UNION` of two arms, each in its partial index's exact text: 0153's
+  `chat_message_group_paused_idx` and 0161's `chat_message_group_parked_idx`. It reads only paused and parked groups, as
+  before (`TestPausedReadsBothPartialIndexes` checks the plan).
+- **The 0161 build.** The runner wraps each tenant file in a transaction, so `CONCURRENTLY` cannot run (as 0156). The
+  plain `CREATE INDEX` holds a SHARE lock on `chat_message_group` for one pass over the table: writes wait, reads go on.
+  - Measured on PostgreSQL 18 (this machine): 1,000,000 groups with about 0.4 KB of meta each, 1 in 1,000 parked,
+    built in 0.31 s.
+  - The real-model dump's largest tenant (3,491 groups) built in under 2 ms.
+  - The index holds only parked groups.
 - **Other readers.** Each is one extra `?|` on a row already read.
 
 ## Durability
 
-- Nothing new is written. The chain end is written once, as before (`EndChain`, `TestPostgresUnattendedChainSettleViewAndEndOnce`).
+- Nothing new is written beyond the park marker's removal when the cards close (same transaction, under the response
+  row lock the caller holds; kept while a wake is queued or admitted). The chain end is written once, as before (`EndChain`, `TestPostgresUnattendedChainSettleViewAndEndOnce`).
 - **What happens when a decision meets a running chain:**
   - *Parked, no decision yet.* The chain ends `waiting` (`M/application/unattendedchain/hook.go:145-146`). The decision
     queues the wake. The wake is not a chain link, so its settle is a no-op for the chain
@@ -116,12 +135,39 @@ The whole `./internal` suite results are in the PR.
 
 ## Browser evidence
 
-To be added after the fanpar pass: main images plus this branch's Main; a run-to-completion chat with a Parallel
-whose branch asks; the run mode read from `run_chains`; while parked, the chain `waiting` with one link and no goal
-check, and "needs you" in the list; then answer, reload, one answer, ledger CONSUMED once.
+- **Stack.** My own standalone `fu284` (`STANDALONE_HOST=fu284.localhost`, port base 19300), from the real-model dump
+  `product-real-models-main-d5e966074.dump`, with the production profile.
+  - verify-profile 50/50.
+  - The migrations at the branch head, 0161 included, applied to this throwaway database only, never to a shared stack.
+  - Torn down afterwards (`stack.sh down --volumes`).
+- **FU-279 workaround** (documented): migration `shared/0206` fails on this dump's legacy `centry.audit_events`. The
+  throwaway database got the five columns `input_tokens INTEGER`, `output_tokens INTEGER`, `llm_cost NUMERIC(18, 8)`,
+  `token_source VARCHAR(16)` and `cost_source VARCHAR(64)` (the types of `001_initial.sql`) before migrate was re-run.
+- **Images:** built from `e6ebabb7a`.
+  - Main `fu284-e6ebabb7a` (`sha256:ff0a7514c95e…`); binary check: `chat_message_group_parked_idx` present.
+  - Worker `fu284-e6ebabb7a` (`sha256:786161ffa658…`).
+  - Web `fu284-e6ebabb7a` (`sha256:0eaf32fa6efe…`).
+  - The other services are the `pm-*` images fanpar runs.
+- **Fixtures.** Created through the UI's own REST endpoints from the signed-in page (`POST
+  …/applications/prompt_lib/118`, relation `PATCH`), never the database:
+  - "FU284 asking agent" (gpt-5.4-mini, `ask_user`);
+  - "FU284 parallel asks" (a Parallel of two Agent branches running it).
+- **Run.** Claude in Chrome, no mocks. Chat 3, run-to-completion on (`aria-pressed=true`).
+  - From `run_chains`: one row, trigger `manual`, grant `goal_check: true`, brief `ready`. So the mode is real, not
+    read from the toggle.
+- **While parked.**
+  - Two cards: "Which colour … for the lights?" and "… for the bell?".
+  - The chain `end_state = waiting`, `continuations = 0`, one link (`root`), `done_check` empty: no goal check ran.
+  - Ledger: 2 PENDING. The response carries `fanout_parked_v1`.
+  - The sidebar shows "Today · 1 needs you".
+- **Answered, then reloaded.**
+  - "amber" (lights), then "silver" (bell). After a reload: one answer, bell "Silver.", lights "amber", both succeeded.
+  - Ledger: 2 CONSUMED. The park marker is gone. The parked root and both wakes are SUCCEEDED.
+  - The chain is still `waiting`, 0 continuations, 1 link. No goal check in Main's log.
+  - The run-finished notification's outcome is `waiting`.
+- **PASS.** On main, this park read as finished: the goal check ran beside the open cards (chat 40, FU-284).
 
 ## Follow-ups
 
-- Extending `chat_message_group_paused_idx` and `chat_group_meta_paused` (tenant/0153) with `fanout_parked_v1` in a
-  later tenant migration would let the index cover the park arm too. This is not needed for correctness, and the
-  conversation sync bump already fires on the park's `is_streaming` flip.
+- FU-279 (pre-existing): a fresh restore of the real-model dump fails `shared/0206`; the workaround above was needed
+  again.
