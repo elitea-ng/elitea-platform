@@ -101,7 +101,8 @@ data:
     {{- /* ADR-0049: the cloud browser sessions. */}}
     {{- with ($r.browserSessions | default dict) }}
     {{- range $key := list "target" "audience" "cpu_millis" "memory_bytes" "wall_seconds" "max_pages" }}
-    {{- if not (hasKey $.Values.worker.runtime.browserSessions $key) }}
+    {{- /* absent and null (--set key=null keeps the key on some Helm versions) are both missing */}}
+    {{- if or (not (hasKey $.Values.worker.runtime.browserSessions $key)) (kindIs "invalid" (index $.Values.worker.runtime.browserSessions $key)) }}
     {{- fail (printf "worker.runtime.browserSessions.%s is required" $key) }}
     {{- end }}
     {{- end }}
