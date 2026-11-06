@@ -32466,14 +32466,26 @@ paths:
         also holds `models.chat.messages.create` in the project. A
         lingering session (the run ended; the browser stays up for its
         linger) opens watch-only for everyone. A browser page must send an
-        `Origin` of the deployment's own host.
+        `Origin` of the deployment's own public origin; the desktop app's
+        origins (`tauri://localhost`, `http(s)://tauri.localhost`) are
+        admitted too. Every refusal is an HTTP status before the upgrade:
+        `hello` is sent only once the supervisor admitted the view.
+
+        Access is checked again every 30 seconds while the view is open. A
+        viewer who may no longer watch is closed with code 4403
+        `access_revoked`; one who may still watch but no longer drive stays
+        open watch-only after a `control_revoked` notice (control handed
+        back to the agent if the viewer held it). If the check cannot be
+        answered three times in a row the view closes with 1013 (try again
+        later).
 
         Down, one JSON text message per event:
         `{"type":"hello","session_id","can_control","lingering"}` first;
         `{"type":"frame","seq","width","height","bytes","url","title","control"}`
         (`control` is `agent` or `user`), followed by exactly ONE binary
         message holding that frame's JPEG of `bytes` bytes;
-        `{"type":"notice","code"}` (`input_refused`, `session_lingering`);
+        `{"type":"notice","code"}` (`input_refused`, `session_lingering`,
+        `control_revoked`);
         `{"type":"refused","code"}` for one up message that was not
         relayed (`input_refused` from a watch-only viewer, `malformed`);
         and `{"type":"end","code"}` (`session_destroyed`, `idle`, `wall`,
@@ -32518,12 +32530,12 @@ paths:
             text/plain:
               schema: { type: string }
         '410':
-          description: The session ended.
+          description: The session ended, or outlived its wall time and linger.
           content:
             text/plain:
               schema: { type: string }
         '429':
-          description: Too many open views on this replica or for this user.
+          description: Too many open views on this replica or for this user, or the browser supervisor is at capacity.
           headers:
             Retry-After:
               schema: { type: string }
@@ -32531,12 +32543,12 @@ paths:
             text/plain:
               schema: { type: string }
         '502':
-          description: The browser supervisor did not open the stream; retry.
+          description: The browser supervisor did not open the stream, or refused Main; retry.
           content:
             text/plain:
               schema: { type: string }
         '503':
-          description: The session could not be read; retry.
+          description: The session or the caller's access could not be read; retry.
           content:
             text/plain:
               schema: { type: string }

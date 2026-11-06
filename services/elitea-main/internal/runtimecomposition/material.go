@@ -51,6 +51,11 @@ func (c Config) MaterialFiles() ([]MaterialFile, error) {
 		add(c.CodeOwnerRecovery.PrivateKeyPath, securefile.PrivateMaterial)
 		add(c.CodeOwnerRecovery.ServerCAPath, securefile.PublicMaterial)
 	}
+	if c.BrowserView != nil {
+		add(c.BrowserView.CertificateChainPath, securefile.PublicMaterial)
+		add(c.BrowserView.PrivateKeyPath, securefile.PrivateMaterial)
+		add(c.BrowserView.ServerCAPath, securefile.PublicMaterial)
+	}
 	if c.CodePlatform != nil {
 		add(c.CodePlatform.ContentKeysFile, securefile.PrivateMaterial)
 	}

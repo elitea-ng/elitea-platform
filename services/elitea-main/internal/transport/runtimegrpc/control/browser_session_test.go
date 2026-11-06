@@ -92,6 +92,10 @@ func TestReportBrowserSessionRefusals(t *testing.T) {
 		{name: "an unconfigured supervisor", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) { r.Audience = "dns:attacker" }), code: denied},
 		{name: "no state", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) { r.State = 0 }), code: violation},
 		{name: "a malformed spec", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) { r.Spec.Revision = 2 }), code: violation},
+		{name: "a lingering session without its linger end", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) {
+			r.State = runtimev1.BrowserSessionReportStateV1_BROWSER_SESSION_REPORT_STATE_V1_LINGERING
+			r.LingerUntilUnixSeconds = 0
+		}), code: violation},
 		{name: "a linger on a live session", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) { r.LingerUntilUnixSeconds = 5 }), code: violation},
 		{name: "another run's session", store: &browserSessionsStub{}, request: mutated(func(r *runtimev1.ReportBrowserSessionRequestV1) {
 			r.Spec.Name = browsersession.NameFor("some-other-execution")

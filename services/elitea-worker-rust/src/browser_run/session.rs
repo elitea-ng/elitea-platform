@@ -68,6 +68,13 @@ pub(crate) trait BrowserGrants: Send + Sync {
     }
 }
 
+/// Whether this deployment's Main serves browser session reports: an older
+/// Main, or one without the view relay, answers `UNSUPPORTED_CAPABILITY`,
+/// and every later report of the process would too. The first such answer
+/// is logged once, at debug, and the reports stop.
+static REPORTS_UNSUPPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Main's grants over the claim's sandbox authority (production).
 pub(crate) struct ClaimBrowserGrants {
     pub(crate) control: Arc<
@@ -98,7 +105,12 @@ impl BrowserGrants for ClaimBrowserGrants {
         state: BrowserSessionReportStateV1,
         linger_until_unix_seconds: u64,
     ) {
-        let stored = self
+        use crate::protocol::control::BrowserSessionReportOutcome;
+        use std::sync::atomic::Ordering;
+        if REPORTS_UNSUPPORTED.load(Ordering::Relaxed) {
+            return;
+        }
+        let outcome = self
             .control
             .report_browser_session(
                 &self.authority,
@@ -108,13 +120,24 @@ impl BrowserGrants for ClaimBrowserGrants {
                 linger_until_unix_seconds,
             )
             .await;
-        if !stored {
-            tracing::warn!(
-                event = "browser_session_report_refused",
-                session = spec.name.as_str(),
-                state = ?state,
-                "Main did not store the browser session report; the session has no viewer"
-            );
+        match outcome {
+            BrowserSessionReportOutcome::Stored => {}
+            BrowserSessionReportOutcome::Unsupported => {
+                if !REPORTS_UNSUPPORTED.swap(true, Ordering::Relaxed) {
+                    tracing::debug!(
+                        event = "browser_session_reports_unsupported",
+                        "Main serves no browser view; the worker stops reporting browser sessions"
+                    );
+                }
+            }
+            BrowserSessionReportOutcome::Refused => {
+                tracing::warn!(
+                    event = "browser_session_report_refused",
+                    session = spec.name.as_str(),
+                    state = ?state,
+                    "Main did not store the browser session report; the session has no viewer"
+                );
+            }
         }
     }
 }
@@ -232,6 +255,9 @@ impl GrpcBrowserSession {
         // The request (with its token copy) is gone; the answer has none.
         answer.map_err(|status| status_error(&status))?;
         *started = true;
+        // The lock is released before the report: a call waiting on it
+        // does not wait for Main too.
+        drop(started);
         // A viewer finds the session through Main's row (decision 6).
         self.grants
             .report(&self.spec, BrowserSessionReportStateV1::Live, 0)

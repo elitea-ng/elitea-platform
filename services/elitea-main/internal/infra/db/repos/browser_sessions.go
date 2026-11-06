@@ -129,14 +129,15 @@ func (s *BrowserSessions) Lookup(ctx context.Context, sessionID string) (browser
 		pages        int32
 		state        string
 		linger       *time.Time
+		started      time.Time
 	)
 	err := s.pool.QueryRow(ctx, `
 SELECT session_id, execution_id, generation, tenant_id, project_id, owner_actor_id,
        conversation_uuid::text, supervisor_audience, spec_revision, spec_engine, spec_cpu_millis,
-       spec_memory_bytes, spec_wall_seconds, spec_max_pages, state, linger_until
+       spec_memory_bytes, spec_wall_seconds, spec_max_pages, state, linger_until, started_at
 FROM elitea_runtime.browser_sessions WHERE session_id = $1::text`, sessionID).Scan(
 		&row.SessionID, &row.ExecutionID, &generation, &row.TenantID, &project, &row.OwnerActorID,
-		&conversation, &row.SupervisorAudience, &revision, &engine, &cpu, &memory, &wall, &pages, &state, &linger)
+		&conversation, &row.SupervisorAudience, &revision, &engine, &cpu, &memory, &wall, &pages, &state, &linger, &started)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return browsersession.Session{}, false, nil
 	}
@@ -159,8 +160,60 @@ FROM elitea_runtime.browser_sessions WHERE session_id = $1::text`, sessionID).Sc
 	if linger != nil {
 		row.LingerUntil = linger.UTC()
 	}
+	row.StartedAt = started.UTC()
 	if _, err := strconv.ParseInt(row.OwnerActorID, 10, 64); err != nil {
 		return browsersession.Session{}, false, errors.New("read browser session: the owner is malformed")
 	}
 	return row, true, nil
+}
+
+// MarkEnded records that the supervisor answered a view of the session
+// with "not started" or "ended": the session is gone, whatever the worker
+// last reported. It moves the row to ended once; an ended row, or none,
+// is left alone.
+func (s *BrowserSessions) MarkEnded(ctx context.Context, sessionID string) error {
+	if !browsersession.ValidName(sessionID) {
+		return nil
+	}
+	if _, err := s.pool.Exec(ctx, `
+UPDATE elitea_runtime.browser_sessions
+SET state = 'ended', ended_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE session_id = $1::text AND state <> 'ended'`, sessionID); err != nil {
+		return fmt.Errorf("end browser session: %w", err)
+	}
+	return nil
+}
+
+// browserSessionRetention is how long a finished row is kept for the step
+// record: a day after its end, or after the bound past which it cannot
+// exist (started_at + wall + linger) when no end was ever reported.
+const browserSessionRetention = 24 * time.Hour
+
+// Prune deletes at most limit rows that ended, or whose bound passed, more
+// than a day ago. One statement, bounded: the retention pass calls it every
+// minute, so a backlog drains a batch at a time.
+func (s *BrowserSessions) Prune(ctx context.Context, limit int) (int64, error) {
+	if limit <= 0 || limit > 10000 {
+		return 0, errors.New("prune browser sessions: limit out of range")
+	}
+	keep := int64(browserSessionRetention / time.Second)
+	linger := int64(browsersession.Linger / time.Second)
+	tag, err := s.pool.Exec(ctx, `
+WITH doomed AS (
+    (SELECT session_id FROM elitea_runtime.browser_sessions
+     WHERE ended_at IS NOT NULL AND ended_at < clock_timestamp() - make_interval(secs => $1::bigint)
+     ORDER BY ended_at LIMIT $3::integer)
+    UNION
+    (SELECT session_id FROM elitea_runtime.browser_sessions
+     WHERE ended_at IS NULL
+       AND started_at + make_interval(secs => spec_wall_seconds + $2::bigint + $1::bigint) < clock_timestamp()
+     ORDER BY started_at LIMIT $3::integer)
+)
+DELETE FROM elitea_runtime.browser_sessions AS s
+USING (SELECT session_id FROM doomed LIMIT $3::integer) AS d
+WHERE s.session_id = d.session_id`, keep, linger, int32(limit)) //nolint:gosec // bounded above
+	if err != nil {
+		return 0, fmt.Errorf("prune browser sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }

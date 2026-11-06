@@ -95,6 +95,14 @@ func TestStatesMoveForwardAndWatchability(t *testing.T) {
 		{Session{State: StateLingering, LingerUntil: now.Add(time.Minute)}, true},
 		{Session{State: StateLingering, LingerUntil: now.Add(-time.Second)}, false},
 		{Session{State: StateEnded}, false},
+		// A lingering row with no linger end is not watchable.
+		{Session{State: StateLingering}, false},
+		// A live row is bounded by its start, its wall and the linger:
+		// a worker that never reported the end does not keep it live.
+		{Session{State: StateLive, StartedAt: now.Add(-time.Hour), Spec: Spec{WallSeconds: 600}}, false},
+		{Session{State: StateLive, StartedAt: now.Add(-15 * time.Minute), Spec: Spec{WallSeconds: 600}}, true},
+		{Session{State: StateLive, StartedAt: now.Add(-20 * time.Minute), Spec: Spec{WallSeconds: 600}}, false},
+		{Session{State: StateLingering, LingerUntil: now.Add(time.Hour), StartedAt: now.Add(-time.Hour), Spec: Spec{WallSeconds: 600}}, false},
 	}
 	for _, c := range cases {
 		if got := c.session.Watchable(now); got != c.want {

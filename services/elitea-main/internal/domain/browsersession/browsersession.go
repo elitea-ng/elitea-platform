@@ -79,16 +79,44 @@ type Session struct {
 	Spec               Spec
 	State              State
 	LingerUntil        time.Time
+	// StartedAt is when Main first stored the row (started_at).
+	StartedAt time.Time
+}
+
+// Linger is the supervisor's linger after a run ends
+// (browser_session_lifetime.rs LINGER): a session is never watchable past
+// its start, its wall and this.
+const Linger = 10 * time.Minute
+
+// Deadline is the latest a session can exist: its start, plus its wall,
+// plus the linger. The supervisor retires every session by then, whether
+// or not the worker reported its end (a worker that crashed, lost its
+// lease or could not reach Main reports nothing). The zero time is a row
+// with no start, which has no bound.
+func (s Session) Deadline() time.Time {
+	if s.StartedAt.IsZero() {
+		return time.Time{}
+	}
+	wall := s.Spec.WallSeconds
+	if wall > 1<<32 {
+		wall = 1 << 32
+	}
+	return s.StartedAt.Add(time.Duration(wall)*time.Second + Linger) //nolint:gosec // bounded above
 }
 
 // Watchable reports whether a viewer may attach at now: a live session, or
-// a lingering one before its linger ends.
+// a lingering one before its linger ends, and either only before its
+// Deadline. A lingering row always carries its linger end (the control
+// server refuses one without).
 func (s Session) Watchable(now time.Time) bool {
+	if deadline := s.Deadline(); !deadline.IsZero() && !now.Before(deadline) {
+		return false
+	}
 	switch s.State {
 	case StateLive:
 		return true
 	case StateLingering:
-		return s.LingerUntil.IsZero() || now.Before(s.LingerUntil)
+		return !s.LingerUntil.IsZero() && now.Before(s.LingerUntil)
 	default:
 		return false
 	}
@@ -155,6 +183,22 @@ func ViewDigest(spec Spec, control bool) [32]byte {
 	copy(out[:], h.Sum(nil))
 	return out
 }
+
+// The refusals of a view stream, as the supervisor's client reports them
+// (whatever the transport's own codes): the relay answers each with its
+// own HTTP status before the WebSocket opens.
+var (
+	// ErrViewSessionGone: the supervisor holds no such session, or it ended
+	// (410). The row is then marked ended.
+	ErrViewSessionGone = errors.New("browser session is gone")
+	// ErrViewUnavailable: the supervisor did not answer, or not in time (502).
+	ErrViewUnavailable = errors.New("browser supervisor unavailable")
+	// ErrViewRefused: the supervisor refused the grant or the spec (502, and
+	// logged: Main signed something the supervisor does not accept).
+	ErrViewRefused = errors.New("browser view refused by the supervisor")
+	// ErrViewBusy: the supervisor is at a limit (429).
+	ErrViewBusy = errors.New("browser supervisor is at its limit")
+)
 
 // ErrInvalidSpec is a spec Main does not store.
 var ErrInvalidSpec = errors.New("browser session spec is invalid")

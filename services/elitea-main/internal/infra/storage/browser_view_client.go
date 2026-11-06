@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -190,9 +193,84 @@ func (c *BrowserViewClient) SignViewGrant(session browsersession.Session, contro
 	return &runtimev1.SignedSandboxJobGrantV1{KeyId: c.keyID, ClaimsBytes: exact, Signature: ed25519.Sign(c.key, input)}, nil
 }
 
+// browserViewErrorMetadata is the supervisor's typed refusal key
+// (browser_session_service.rs ERROR_METADATA).
+const browserViewErrorMetadata = "elitea-browser-error"
+
+// BrowserViewError maps a supervisor refusal to the relay's kinds:
+// browsersession.ErrViewSessionGone (no such session, or it ended),
+// ErrViewBusy (a limit), ErrViewUnavailable (no answer, or not in time) and
+// ErrViewRefused (the grant or the spec). typed is the refusal's
+// elitea-browser-error value, "" for none. A nil err stays nil; an error
+// that carries no gRPC status (a stream that ended) is ErrViewUnavailable.
+func BrowserViewError(err error, typed string) error {
+	if err == nil {
+		return nil
+	}
+	switch typed {
+	case "browser_session_not_started", "browser_session_ended":
+		return browsersession.ErrViewSessionGone
+	case "browser_capacity", "browser_session_limit":
+		return browsersession.ErrViewBusy
+	case "browser_session_fenced", "browser_agent_failed":
+		return browsersession.ErrViewUnavailable
+	}
+	st, ok := grpcstatus.FromError(err)
+	if !ok {
+		return browsersession.ErrViewUnavailable
+	}
+	switch st.Code() {
+	case codes.NotFound:
+		return browsersession.ErrViewSessionGone
+	case codes.ResourceExhausted:
+		return browsersession.ErrViewBusy
+	case codes.PermissionDenied, codes.Unauthenticated, codes.InvalidArgument, codes.FailedPrecondition:
+		return browsersession.ErrViewRefused
+	default:
+		// Unavailable, DeadlineExceeded, Canceled, Internal, Unknown.
+		return browsersession.ErrViewUnavailable
+	}
+}
+
+// browserViewStream maps the stream's refusals: the supervisor refuses a
+// view by ending the stream with a status, which the first Recv returns.
+type browserViewStream struct {
+	runtimev1.BrowserSessionService_BrowserViewClient
+}
+
+func (s browserViewStream) Recv() (*runtimev1.BrowserViewOutputV1, error) {
+	out, err := s.BrowserSessionService_BrowserViewClient.Recv()
+	if err != nil {
+		typed := firstMetadata(s.Trailer(), browserViewErrorMetadata)
+		if typed == "" {
+			// A trailers-only refusal carries it in the one metadata block.
+			if header, headerErr := s.Header(); headerErr == nil {
+				typed = firstMetadata(header, browserViewErrorMetadata)
+			}
+		}
+		return nil, BrowserViewError(err, typed)
+	}
+	return out, nil
+}
+
+func firstMetadata(md metadata.MD, key string) string {
+	if values := md.Get(key); len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+// BrowserViewStream is one open view: the relay's half of the stream.
+type BrowserViewStream interface {
+	Send(*runtimev1.BrowserViewInputV1) error
+	Recv() (*runtimev1.BrowserViewOutputV1, error)
+	CloseSend() error
+}
+
 // OpenView opens a BrowserView stream to the supervisor the session row
-// names and sends its open frame. The stream lives as long as ctx.
-func (c *BrowserViewClient) OpenView(ctx context.Context, session browsersession.Session, control bool) (runtimev1.BrowserSessionService_BrowserViewClient, error) {
+// names and sends its open frame. The stream lives as long as ctx. A
+// refusal arrives on the first Recv, mapped by BrowserViewError.
+func (c *BrowserViewClient) OpenView(ctx context.Context, session browsersession.Session, control bool) (BrowserViewStream, error) {
 	grant, err := c.SignViewGrant(session, control)
 	if err != nil {
 		return nil, err
@@ -200,7 +278,7 @@ func (c *BrowserViewClient) OpenView(ctx context.Context, session browsersession
 	endpoint := c.endpoints[session.SupervisorAudience]
 	stream, err := endpoint.client.BrowserView(ctx)
 	if err != nil {
-		return nil, err
+		return nil, BrowserViewError(err, "")
 	}
 	spec := session.Spec
 	open := &runtimev1.BrowserViewInputV1{Frame: &runtimev1.BrowserViewInputV1_Open{Open: &runtimev1.BrowserViewOpenV1{
@@ -214,7 +292,13 @@ func (c *BrowserViewClient) OpenView(ctx context.Context, session browsersession
 	}}}
 	if err := stream.Send(open); err != nil {
 		_ = stream.CloseSend()
-		return nil, err
+		// io.EOF here means the server already ended the stream; its
+		// status is on Recv.
+		_, recvErr := browserViewStream{stream}.Recv()
+		if recvErr == nil {
+			recvErr = browsersession.ErrViewUnavailable
+		}
+		return nil, recvErr
 	}
-	return stream, nil
+	return browserViewStream{stream}, nil
 }

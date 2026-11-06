@@ -4004,6 +4004,20 @@ main:
       mainWorkloadIdentity: ""
       supervisors: []
 
+    # The cloud browser view relay (ADR-0049 decision 6, #1597): Main's client
+    # toward the browser profile's supervisors (sandboxKubernetes.browserSessions).
+    # Off: no session is recorded and the view route is not mounted. On, it
+    # renders ELITEA_RUNTIME_BROWSER_VIEW_CONFIG and adds browser-view-client.crt
+    # and .key (a client certificate from the runtime CA, with Main's workload
+    # identity as its URI SAN) to the runtime material. Each supervisor's
+    # audience must be in sandboxAudiences; httpsOrigin is its gRPC listener
+    # (https://elitea-sandbox-browser:9471 for the chart's browser profile).
+    # maxFps: frames per second, 1 to 10; 0 or unset is 10.
+    browserView:
+      enabled: false
+      mainWorkloadIdentity: ""
+      supervisors: []
+
     # Credentials stay in Main. Execution containers retain network denial.
     # Use exact host:port rules and the bounded CodeWorkspacePolicy fields.
     codeWorkspace:

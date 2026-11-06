@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/browsersession"
 )
@@ -135,7 +136,9 @@ func TestAuthorizeMatrix(t *testing.T) {
 	}
 }
 
-// fakeStream is the supervisor's side of one BrowserView stream.
+// fakeStream is the supervisor's side of one BrowserView stream. As in
+// production, a refusal arrives on the first Recv (the dial itself
+// succeeds), and an admitted view's first message is the admission notice.
 type fakeStream struct {
 	control bool
 	out     chan *runtimev1.BrowserViewOutputV1
@@ -143,10 +146,19 @@ type fakeStream struct {
 	in      []*runtimev1.BrowserViewInputV1
 	closed  chan struct{}
 	once    sync.Once
+	refusal error
 }
 
-func newFakeStream(control bool) *fakeStream {
-	return &fakeStream{control: control, out: make(chan *runtimev1.BrowserViewOutputV1, 8), closed: make(chan struct{})}
+func newFakeStream(control bool, admission string, refusal error) *fakeStream {
+	s := &fakeStream{control: control, out: make(chan *runtimev1.BrowserViewOutputV1, 8), closed: make(chan struct{}), refusal: refusal}
+	if admission != "" {
+		s.out <- notice(admission)
+	}
+	return s
+}
+
+func notice(code string) *runtimev1.BrowserViewOutputV1 {
+	return &runtimev1.BrowserViewOutputV1{Frame: &runtimev1.BrowserViewOutputV1_Notice{Notice: &runtimev1.BrowserViewNoticeV1{Code: code}}}
 }
 
 func (s *fakeStream) Send(frame *runtimev1.BrowserViewInputV1) error {
@@ -157,6 +169,9 @@ func (s *fakeStream) Send(frame *runtimev1.BrowserViewInputV1) error {
 }
 
 func (s *fakeStream) Recv() (*runtimev1.BrowserViewOutputV1, error) {
+	if s.refusal != nil {
+		return nil, s.refusal
+	}
 	select {
 	case frame := <-s.out:
 		return frame, nil
@@ -179,16 +194,24 @@ func (s *fakeStream) received() []*runtimev1.BrowserViewInputV1 {
 type fakeDialer struct {
 	mu      sync.Mutex
 	streams []*fakeStream
-	err     error
+	// refusal is the supervisor's answer on the first Recv.
+	refusal error
+	// admission is the supervisor's first notice; "" sends none (a
+	// supervisor that sends its first frame first), "-" sends none at all.
+	admission string
 }
 
 func (d *fakeDialer) OpenView(_ context.Context, _ browsersession.Session, control bool) (ViewStream, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.err != nil {
-		return nil, d.err
+	admission := d.admission
+	switch admission {
+	case "":
+		admission = noticeSessionLive
+	case "-":
+		admission = ""
 	}
-	stream := newFakeStream(control)
+	stream := newFakeStream(control, admission, d.refusal)
 	d.streams = append(d.streams, stream)
 	return stream, nil
 }
@@ -277,7 +300,12 @@ func TestViewRefusalsBeforeTheUpgrade(t *testing.T) {
 		{"an ended session", store, &fakeDialer{}, &owner, endedID, http.StatusGone},
 		{"a linger that elapsed", store, &fakeDialer{}, &owner, expiredID, http.StatusGone},
 		{"the table is unavailable", &sessionStore{err: errors.New("down")}, &fakeDialer{}, &owner, testSessionID, http.StatusServiceUnavailable},
-		{"the supervisor is unavailable", store, &fakeDialer{err: errors.New("dial")}, &owner, testSessionID, http.StatusBadGateway},
+		// The supervisor's refusals come on the first Recv, as in production.
+		{"the supervisor no longer holds the session", store, &fakeDialer{refusal: browsersession.ErrViewSessionGone}, &owner, testSessionID, http.StatusGone},
+		{"the supervisor is unreachable", store, &fakeDialer{refusal: browsersession.ErrViewUnavailable}, &owner, testSessionID, http.StatusBadGateway},
+		{"the supervisor refuses Main's grant", store, &fakeDialer{refusal: browsersession.ErrViewRefused}, &owner, testSessionID, http.StatusBadGateway},
+		{"the supervisor is at its limit", store, &fakeDialer{refusal: browsersession.ErrViewBusy}, &owner, testSessionID, http.StatusTooManyRequests},
+		{"the supervisor ends the stream at once", store, &fakeDialer{refusal: io.EOF}, &owner, testSessionID, http.StatusBadGateway},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := serve(t, newTestHandler(t, test.store, test.dialer), test.principal)
@@ -289,7 +317,7 @@ func TestViewRefusalsBeforeTheUpgrade(t *testing.T) {
 			if response == nil || response.StatusCode != test.status {
 				t.Fatalf("response=%v, want %d", response, test.status)
 			}
-			if test.status != http.StatusBadGateway && len(test.dialer.streams) != 0 {
+			if test.dialer.refusal == nil && len(test.dialer.streams) != 0 {
 				t.Fatal("a refused viewer reached the supervisor")
 			}
 		})
@@ -492,5 +520,484 @@ func waitFor(t *testing.T, done func() bool) {
 			t.Fatal("timed out")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// endRecorder records the rows the relay marks ended.
+type endRecorder struct {
+	mu    sync.Mutex
+	ended []string
+}
+
+func (e *endRecorder) MarkEnded(_ context.Context, id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ended = append(e.ended, id)
+	return nil
+}
+
+// A supervisor that no longer holds the session ends its row: the next
+// viewer reads 410 from the row, without a dial.
+func TestASupervisorThatLostTheSessionEndsItsRow(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	owner := user(ownerID)
+	ender := &endRecorder{}
+	handler := newTestHandler(t, store, &fakeDialer{refusal: browsersession.ErrViewSessionGone}).WithSessionEnder(ender)
+	server := serve(t, handler, &owner)
+	if _, response, err := dial(t, server, testSessionID); err == nil || response.StatusCode != http.StatusGone {
+		t.Fatalf("response=%v", response)
+	}
+	if len(ender.ended) != 1 || ender.ended[0] != testSessionID {
+		t.Fatalf("ended=%v", ender.ended)
+	}
+	// A supervisor that announces the session ended in its first message
+	// is the same answer.
+	end := &runtimev1.BrowserViewOutputV1{Frame: &runtimev1.BrowserViewOutputV1_End{End: &runtimev1.BrowserViewEndV1{Code: "wall"}}}
+	dialer := &fakeDialer{admission: "-"}
+	server = serve(t, newTestHandler(t, store, endFirst{dialer, end}).WithSessionEnder(ender), &owner)
+	if _, response, err := dial(t, server, testSessionID); err == nil || response.StatusCode != http.StatusGone {
+		t.Fatalf("end first: response=%v", response)
+	}
+	if len(ender.ended) != 2 {
+		t.Fatalf("ended=%v", ender.ended)
+	}
+}
+
+// endFirst queues an end as the supervisor's first message.
+type endFirst struct {
+	dialer *fakeDialer
+	end    *runtimev1.BrowserViewOutputV1
+}
+
+func (e endFirst) OpenView(ctx context.Context, session browsersession.Session, control bool) (ViewStream, error) {
+	stream, err := e.dialer.OpenView(ctx, session, control)
+	if err == nil {
+		stream.(*fakeStream).out <- e.end
+	}
+	return stream, err
+}
+
+// A row the worker never ended (it crashed, or lost its lease) stops being
+// watchable at its start plus its wall plus the linger.
+func TestALiveRowPastItsBoundIsGone(t *testing.T) {
+	stale := testSession(browsersession.StateLive)
+	stale.StartedAt = time.Now().Add(-time.Hour)
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: stale}}
+	owner := user(ownerID)
+	dialer := &fakeDialer{}
+	server := serve(t, newTestHandler(t, store, dialer), &owner)
+	if _, response, err := dial(t, server, testSessionID); err == nil || response.StatusCode != http.StatusGone {
+		t.Fatalf("response=%v", response)
+	}
+	if len(dialer.streams) != 0 {
+		t.Fatal("a stale row reached the supervisor")
+	}
+}
+
+// A supervisor that admits the view as lingering (the run ended after the
+// row was read) opens it watch-only, whatever the row said.
+func TestTheSupervisorsLingeringAdmissionOpensWatchOnly(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	owner := user(ownerID)
+	dialer := &fakeDialer{admission: noticeSessionLingering}
+	server := serve(t, newTestHandler(t, store, dialer), &owner)
+	conn, _, err := dial(t, server, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if hello := readJSON(t, conn); hello["can_control"] != false || hello["lingering"] != true {
+		t.Fatalf("hello=%v", hello)
+	}
+	writeJSON(t, conn, `{"type":"take_over"}`)
+	if refused := readJSON(t, conn); refused["type"] != "refused" || refused["code"] != "input_refused" {
+		t.Fatalf("refused=%v", refused)
+	}
+}
+
+// failingPermissions: the resolver did not answer.
+type failingPermissions struct{}
+
+func (failingPermissions) ResolvePermissions(context.Context, auth.User, string, string) (auth.PermissionResolution, error) {
+	return auth.PermissionResolution{}, errors.New("database down")
+}
+
+// A resolver outage is 503 (retry), not 404 (not yours): only a refusal
+// means no access.
+func TestAResolverOutageIsNotANotFound(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	handler, err := NewHandler(store, conversations{}, failingPermissions{}, &fakeDialer{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := user(ownerID)
+	server := serve(t, handler, &owner)
+	if _, response, err := dial(t, server, testSessionID); err == nil || response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("response=%v", response)
+	}
+	// A refusal is still no access.
+	if got, err := newTestHandler(t, store, &fakeDialer{}).Authorize(context.Background(), testSession(browsersession.StateLive), user(strangerID)); err != nil || got != (Access{}) {
+		t.Fatalf("a stranger: %+v %v", got, err)
+	}
+}
+
+// switchablePermissions: who may chat, changeable while a view is open.
+type switchablePermissions struct {
+	mu      sync.Mutex
+	chat    map[string]bool
+	members map[string]bool
+}
+
+func (p *switchablePermissions) set(id string, member, chat bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.members[id], p.chat[id] = member, chat
+}
+
+func (p *switchablePermissions) ResolvePermissions(_ context.Context, principal auth.User, _ string, _ string) (auth.PermissionResolution, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.members[principal.UserID] {
+		return auth.PermissionResolution{}, auth.ErrPermissionDenied
+	}
+	if p.chat[principal.UserID] {
+		return auth.PermissionResolution{Permissions: []string{TakeOverPermission}}, nil
+	}
+	return auth.PermissionResolution{Permissions: []string{}}, nil
+}
+
+// revalidator: the viewer's credential, revocable while a view is open.
+type revalidator struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (r *revalidator) set(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
+}
+
+func (r *revalidator) check(req *http.Request) (auth.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return auth.User{}, r.err
+	}
+	principal, _ := auth.RuntimePrincipalFromContext(req.Context())
+	return principal, nil
+}
+
+func reauthHandler(t *testing.T, store *sessionStore, dialer ViewDialer, perms *switchablePermissions, creds *revalidator) *Handler {
+	t.Helper()
+	handler, err := NewHandler(store, conversations{}, perms, dialer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.reauthInterval = 20 * time.Millisecond
+	return handler.WithRevalidator(creds.check)
+}
+
+func readUntil(t *testing.T, conn *websocket.Conn, want func(map[string]any) bool) map[string]any {
+	t.Helper()
+	for range 50 {
+		if message := readJSON(t, conn); want(message) {
+			return message
+		}
+	}
+	t.Fatal("the message never came")
+	return nil
+}
+
+// A driver who loses messages.create mid-stream is downgraded on the same
+// stream: a notice says so, the control it held goes back to the agent,
+// and its input is refused from then on (never relayed).
+func TestADriverWhoLosesControlIsDowngraded(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	perms := &switchablePermissions{chat: map[string]bool{}, members: map[string]bool{}}
+	perms.set(participantID, true, true)
+	creds := &revalidator{}
+	dialer := &fakeDialer{}
+	participant := user(participantID)
+	server := serve(t, reauthHandler(t, store, dialer, perms, creds), &participant)
+	conn, _, err := dial(t, server, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if hello := readJSON(t, conn); hello["can_control"] != true {
+		t.Fatalf("hello=%v", hello)
+	}
+	stream := dialer.last()
+	writeJSON(t, conn, `{"type":"take_over"}`)
+	waitFor(t, func() bool { return len(stream.received()) == 1 })
+
+	perms.set(participantID, true, false)
+	readUntil(t, conn, func(m map[string]any) bool { return m["type"] == "notice" && m["code"] == noticeControlRevoked })
+	waitFor(t, func() bool { return len(stream.received()) == 2 })
+	if got := stream.received(); got[1].GetInput().GetHandBack() == nil {
+		t.Fatalf("the held control was not handed back: %v", got)
+	}
+	writeJSON(t, conn, `{"type":"pointer","kind":"down","x":1,"y":1,"button":1,"click_count":1}`)
+	if refused := readJSON(t, conn); refused["type"] != "refused" || refused["code"] != "input_refused" {
+		t.Fatalf("refused=%v", refused)
+	}
+	writeJSON(t, conn, `{"type":"ack","seq":1}`)
+	waitFor(t, func() bool { return len(stream.received()) == 3 })
+	if got := stream.received(); got[2].GetAck() != 1 {
+		t.Fatalf("the downgraded viewer's input reached the supervisor: %v", got)
+	}
+}
+
+// A viewer who may no longer watch, or whose credential no longer
+// authenticates (signed out, revoked, suspended), is closed with 4403.
+func TestAViewerWhoLosesAccessIsClosed(t *testing.T) {
+	for name, revoke := range map[string]func(*switchablePermissions, *revalidator){
+		"no longer a member": func(p *switchablePermissions, _ *revalidator) { p.set(ownerID, false, false) },
+		"signed out":         func(_ *switchablePermissions, r *revalidator) { r.set(auth.ErrPrincipalInactive) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+			perms := &switchablePermissions{chat: map[string]bool{}, members: map[string]bool{}}
+			perms.set(ownerID, true, true)
+			creds := &revalidator{}
+			dialer := &fakeDialer{}
+			owner := user(ownerID)
+			server := serve(t, reauthHandler(t, store, dialer, perms, creds), &owner)
+			conn, _, err := dial(t, server, testSessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.CloseNow() }()
+			readJSON(t, conn)
+			revoke(perms, creds)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			for {
+				if _, _, err := conn.Read(ctx); err != nil {
+					if websocket.CloseStatus(err) != CloseAccessRevoked {
+						t.Fatalf("close=%v", err)
+					}
+					break
+				}
+			}
+			waitFor(t, func() bool {
+				select {
+				case <-dialer.last().closed:
+					return true
+				default:
+					return false
+				}
+			})
+		})
+	}
+}
+
+// A re-check that cannot be answered does not close the view at once; three
+// in a row do, with "try again later".
+func TestAnUnanswerableReauthorizationClosesTryAgain(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	perms := &switchablePermissions{chat: map[string]bool{}, members: map[string]bool{}}
+	perms.set(ownerID, true, true)
+	creds := &revalidator{}
+	owner := user(ownerID)
+	server := serve(t, reauthHandler(t, store, &fakeDialer{}, perms, creds), &owner)
+	conn, _, err := dial(t, server, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	readJSON(t, conn)
+	creds.set(auth.ErrPrincipalUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err = conn.Read(ctx)
+	if websocket.CloseStatus(err) != CloseAuthorizationUnavailable {
+		t.Fatalf("close=%v", err)
+	}
+}
+
+// AuthRevalidator reads the /api/v2 authentication's answer: a principal,
+// a refusal (inactive) or an outage (unavailable).
+func TestAuthRevalidator(t *testing.T) {
+	owner := user(ownerID)
+	for _, test := range []struct {
+		name   string
+		status int
+		want   error
+	}{
+		{"authenticated", 0, nil},
+		{"refused", http.StatusUnauthorized, auth.ErrPrincipalInactive},
+		{"store down", http.StatusServiceUnavailable, auth.ErrPrincipalUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authenticate := func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if test.status != 0 {
+						http.Error(w, "no", test.status)
+						return
+					}
+					next.ServeHTTP(w, r.WithContext(auth.ContextWithAuthenticatedUser(r.Context(), owner, auth.AuthenticationSourceSession)))
+				})
+			}
+			got, err := AuthRevalidator(authenticate)(httptest.NewRequest(http.MethodGet, "/", nil))
+			if !errors.Is(err, test.want) || (test.want == nil && got.ID != ownerID) {
+				t.Fatalf("got=%+v err=%v", got, err)
+			}
+		})
+	}
+}
+
+// A frame's header and its JPEG are one unit: no other message (a refusal
+// written by the reader, a notice) comes between them.
+func TestAFrameHeaderIsAlwaysFollowedByItsJPEG(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	reader := user(readerID)
+	dialer := &fakeDialer{}
+	server := serve(t, newTestHandler(t, store, dialer), &reader)
+	conn, _, err := dial(t, server, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	readJSON(t, conn)
+	stream := dialer.last()
+	const frames = 300
+	go func() {
+		for i := range frames {
+			stream.out <- &runtimev1.BrowserViewOutputV1{Frame: &runtimev1.BrowserViewOutputV1_Screen{Screen: &runtimev1.BrowserFrameV1{
+				Seq: uint64(i + 1), Jpeg: []byte{0xff, 0xd8, byte(i)}, Width: 1, Height: 1,
+			}}}
+		}
+	}()
+	// The watch-only reader's input: each draws a `refused` written by the
+	// up side while the down side writes frames.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for range frames {
+			if conn.Write(ctx, websocket.MessageText, []byte(`{"type":"take_over"}`)) != nil {
+				return
+			}
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	seen, refused := 0, 0
+	for seen < frames || refused < frames {
+		typ, raw, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("read after %d frames, %d refusals: %v", seen, refused, err)
+		}
+		if typ != websocket.MessageText {
+			t.Fatalf("a JPEG with no header before it (after %d frames)", seen)
+		}
+		var message map[string]any
+		if err := json.Unmarshal(raw, &message); err != nil {
+			t.Fatal(err)
+		}
+		switch message["type"] {
+		case "refused":
+			refused++
+			continue
+		case "frame":
+		default:
+			t.Fatalf("message=%v", message)
+		}
+		typ, jpeg, err := conn.Read(ctx)
+		if err != nil || typ != websocket.MessageBinary || len(jpeg) != 3 || jpeg[2] != byte(seen) {
+			t.Fatalf("frame %d: the next message is type=%v bytes=%q err=%v, not its JPEG", seen, typ, jpeg, err)
+		}
+		seen++
+	}
+}
+
+// recordedAudit keeps the events.
+type recordedAudit struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (r *recordedAudit) Record(_ context.Context, event audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *recordedAudit) actions() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.events))
+	for _, event := range r.events {
+		out = append(out, event.Action)
+	}
+	return out
+}
+
+// Opening a driving view and each take over are in the audit trail; a
+// watch-only view is not.
+func TestDrivingAndTakingOverAreAudited(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	recorder := &recordedAudit{}
+	owner, reader := user(ownerID), user(readerID)
+	dialer := &fakeDialer{}
+	watcher := serve(t, newTestHandler(t, store, dialer).WithAudit(recorder), &reader)
+	conn, _, err := dial(t, watcher, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readJSON(t, conn)
+	_ = conn.CloseNow()
+	if got := recorder.actions(); len(got) != 0 {
+		t.Fatalf("a watch-only view was audited: %v", got)
+	}
+	driver := serve(t, newTestHandler(t, store, dialer).WithAudit(recorder), &owner)
+	conn, _, err = dial(t, driver, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	readJSON(t, conn)
+	writeJSON(t, conn, `{"type":"take_over"}`)
+	waitFor(t, func() bool { return len(recorder.actions()) == 2 })
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	first, second := recorder.events[0], recorder.events[1]
+	if !strings.HasPrefix(first.Action, "Open a driving browser view; session "+testSessionID) ||
+		!strings.HasPrefix(second.Action, "Take over the browser; session "+testSessionID) ||
+		first.EventType != "agent" || first.HTTPRoute != ViewPath || *first.ProjectID != 5 || *first.UserID != 7 ||
+		first.EntityType != "browser_session" || first.EntityName != testSessionID {
+		t.Fatalf("events=%+v", recorder.events)
+	}
+}
+
+// The deployment's public origin and the desktop app's bundled page are
+// admitted; another site, or the public host on another scheme, is not.
+func TestOriginPatternsAdmitThePublicOriginAndTheDesktop(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	owner := user(ownerID)
+	handler := newTestHandler(t, store, &fakeDialer{}).WithOriginPatterns(OriginPatterns("https://elitea.example/some/path"))
+	server := serve(t, handler, &owner)
+	for origin, admitted := range map[string]bool{
+		"https://elitea.example":                  true,
+		"tauri://localhost":                       true,
+		"http://tauri.localhost":                  true,
+		"https://tauri.localhost":                 true,
+		"http://elitea.example":                   false,
+		"https://attacker.example":                false,
+		"https://elitea.example.attacker.example": false,
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		conn, response, err := websocket.Dial(ctx, viewURL(server, testSessionID), &websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{origin}}})
+		cancel()
+		if admitted != (err == nil) {
+			t.Errorf("%s: admitted=%v response=%v", origin, err == nil, response)
+		}
+		if conn != nil {
+			_ = conn.CloseNow()
+		}
+	}
+	if got := OriginPatterns(""); len(got) != len(DesktopOrigins) {
+		t.Fatalf("no public origin: %v", got)
 	}
 }

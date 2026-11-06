@@ -77,11 +77,15 @@ func (s *Server) ReportBrowserSession(ctx context.Context, request *runtimev1.Re
 	if browsersession.ValidateSpec(spec) != nil {
 		return browserSessionRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The browser session spec is malformed.", false), nil
 	}
+	// A lingering session names when its linger ends, and only a lingering
+	// one does: a LINGERING report without it would leave a row no bound
+	// but the wall.
 	var linger time.Time
-	if seconds := request.GetLingerUntilUnixSeconds(); seconds != 0 {
-		if state != browsersession.StateLingering || seconds > 1<<40 {
-			return browserSessionRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The browser session linger is malformed.", false), nil
-		}
+	seconds := request.GetLingerUntilUnixSeconds()
+	if (state == browsersession.StateLingering) != (seconds != 0) || seconds > 1<<40 {
+		return browserSessionRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The browser session linger is malformed.", false), nil
+	}
+	if seconds != 0 {
 		linger = time.Unix(int64(seconds), 0).UTC() //nolint:gosec // bounded above
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())

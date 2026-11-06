@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/binary"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -106,5 +110,34 @@ func TestNewBrowserViewClientRefusesAnUnsafeConfiguration(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// The supervisor's refusals map to the relay's kinds: the typed metadata
+// first, then the gRPC code.
+func TestBrowserViewErrorMapsTheSupervisorsRefusals(t *testing.T) {
+	for _, test := range []struct {
+		err   error
+		typed string
+		want  error
+	}{
+		{grpcstatus.Error(codes.NotFound, "x"), "browser_session_not_started", browsersession.ErrViewSessionGone},
+		{grpcstatus.Error(codes.FailedPrecondition, "x"), "browser_session_ended", browsersession.ErrViewSessionGone},
+		{grpcstatus.Error(codes.NotFound, "x"), "", browsersession.ErrViewSessionGone},
+		{grpcstatus.Error(codes.ResourceExhausted, "x"), "browser_capacity", browsersession.ErrViewBusy},
+		{grpcstatus.Error(codes.ResourceExhausted, "x"), "", browsersession.ErrViewBusy},
+		{grpcstatus.Error(codes.PermissionDenied, "x"), "", browsersession.ErrViewRefused},
+		{grpcstatus.Error(codes.InvalidArgument, "x"), "browser_ceiling_exceeded", browsersession.ErrViewRefused},
+		{grpcstatus.Error(codes.FailedPrecondition, "x"), "browser_session_fenced", browsersession.ErrViewUnavailable},
+		{grpcstatus.Error(codes.Unavailable, "x"), "", browsersession.ErrViewUnavailable},
+		{grpcstatus.Error(codes.DeadlineExceeded, "x"), "", browsersession.ErrViewUnavailable},
+		{io.EOF, "", browsersession.ErrViewUnavailable},
+	} {
+		if got := BrowserViewError(test.err, test.typed); !errors.Is(got, test.want) {
+			t.Errorf("%v %q: %v, want %v", test.err, test.typed, got, test.want)
+		}
+	}
+	if BrowserViewError(nil, "browser_capacity") != nil {
+		t.Fatal("nil is not a refusal")
 	}
 }

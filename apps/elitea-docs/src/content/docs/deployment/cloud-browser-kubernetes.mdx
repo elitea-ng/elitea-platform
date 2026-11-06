@@ -128,23 +128,26 @@ Every session Pod counts toward `sandboxKubernetes.maxPods`, so the chart refuse
 
 A person watches a session, and takes it over, through elitea-main: `GET /api/v2/browser_sessions/{session_id}/view`, a WebSocket. Any Main replica serves any session. The worker reports each session it starts and ends to Main over its control channel, and Main keeps one row per session in `elitea_runtime.browser_sessions` (migration 0228). A viewer's replica reads that row, signs a view grant for the session's run and opens the supervisor's `BrowserView` stream over mTLS. The supervisor runs the screencast only while somebody watches.
 
-Main needs a client certificate the browser profile accepts, and the list of browser supervisors it may dial. Issue the certificate from the runtime CA (the browser profile trusts `browser-client-ca.pem`) with one DNS name, Main's workload identity (for example `elitea-main`, read as `dns:elitea-main`), and give Main the configuration as one environment variable:
+Main needs a client certificate the browser profile accepts, and the list of browser supervisors it may dial. Issue the certificate from the runtime CA (the browser profile trusts `browser-client-ca.pem`) with Main's workload identity as its one name, and put it in Main's runtime material Secret (`main.runtime.material.secretName`) as `browser-view-client.crt` and `browser-view-client.key`, beside `runtime-ca.crt`. With `externalSecrets.enabled` the chart's ExternalSecret asks for both keys. Then turn the relay on:
 
 ```yaml
 main:
-  env:
-    ELITEA_RUNTIME_BROWSER_VIEW_CONFIG: >-
-      {"main_workload_identity": "dns:elitea-main",
-       "certificate_chain_path": "/run/elitea-runtime/browser-view-client.crt",
-       "private_key_path": "/run/elitea-runtime/browser-view-client.key",
-       "server_ca_path": "/run/elitea-runtime/runtime-ca.crt",
-       "supervisors": [{"audience": "dns:elitea-sandbox-browser",
-                        "https_origin": "https://elitea-sandbox-browser:9471"}]}
+  runtime:
+    sandboxAudiences: ["dns:elitea-sandbox-browser"]
+    browserView:
+      enabled: true
+      mainWorkloadIdentity: dns:elitea-main
+      supervisors:
+        - audience: dns:elitea-sandbox-browser
+          httpsOrigin: https://elitea-sandbox-browser:9471
+      # maxFps: 10   # 1 to 10; unset is 10
 ```
 
-Each `audience` must also be in `main.runtime.sandboxAudiences`, and each origin is a fixed HTTPS address: the worker never tells Main where a supervisor is. `max_fps` (at most 10, the default) is optional. Without the variable, Main records no session and does not serve the view; the browser tools still work.
+The chart renders this as `ELITEA_RUNTIME_BROWSER_VIEW_CONFIG` and refuses the variable in `main.env`. Each `audience` must also be in `main.runtime.sandboxAudiences`, and each origin is a fixed HTTPS address: the worker never tells Main where a supervisor is. The relay needs the runtime and agent dispatch on. Off (the default), Main records no session and does not serve the view; the browser tools still work.
 
-The session table keeps one row per session; ended rows stay for the run's history.
+A browser page must send an `Origin` of the deployment's public origin; the desktop app's origins (`tauri://localhost`, `http(s)://tauri.localhost`) are admitted too. Main checks the viewer's access again every 30 seconds: a viewer who may no longer watch is closed with code 4403, and one who may no longer drive is downgraded to watch-only. Driving a session and taking it over are written to the audit log (`agent` events on `browser_session`).
+
+A live row is bounded by its spec's wall time plus the 10-minute linger, so a worker that dies without reporting the end cannot leave a session watchable. Ended rows, and open rows past that bound, are pruned a day later by the same retention pass as replay progress.
 
 ## Step 5: verify
 
@@ -175,5 +178,10 @@ To prove the `--no-sandbox` refusal, point `sandboxKubernetes.runtimeClass.name`
 | `browser_session_ended` | The session ended (idle, wall or run end); the next call in a new run starts a fresh one |
 | Session Pods stay Pending | No node matches `nodeSelector`, or the taint is not tolerated |
 | Pages do not load | `egressProxy.enabled` is off, or the run's host allowlist does not name the site |
-| The view answers 404 for a live run | `ELITEA_RUNTIME_BROWSER_VIEW_CONFIG` is unset, the worker's `browserSessions.audience` is not one of its supervisors (the worker logs `browser_session_report_refused`), or the caller may not read the conversation |
+| The view answers 404 for a live run | `main.runtime.browserView` is off, the worker's `browserSessions.audience` is not one of its supervisors (the worker logs `browser_session_report_refused`), or the caller may not read the conversation |
 | The view answers 502 | Main cannot reach the supervisor, or the browser profile does not accept Main's client certificate |
+| The view answers 410 for a run that looks live | The supervisor no longer has the session, or the row outlived its wall time and linger; the row is marked ended |
+| The view answers 429 | Too many views on the replica or for the user, or the supervisor is at capacity; retry after `Retry-After` |
+| The view answers 503 | Main could not read the session row or resolve the caller's permissions; retry |
+| The view closes with 4403 | The viewer lost access to the run's conversation while watching |
+| The view answers 403 | The page's `Origin` is not the deployment's public origin or the desktop app's |

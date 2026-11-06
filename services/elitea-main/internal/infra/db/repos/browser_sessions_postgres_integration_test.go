@@ -167,3 +167,60 @@ func TestBrowserSessionsRefuseAReportThatIsNotTheRuns(t *testing.T) {
 		t.Fatalf("a malformed id ok=%v err=%v", ok, err)
 	}
 }
+
+// A supervisor's "not started" or "ended" ends the row once; the retention
+// pass deletes a row a day past its end or past its bound, and nothing else.
+func TestBrowserSessionsMarkEndedAndPrune(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	sessions, err := NewBrowserSessions(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const live, stale, old, fresh = "exec-browser-live-1597", "exec-browser-stale-1597", "exec-browser-old-1597", "exec-browser-fresh-1597"
+	for _, execution := range []string{live, stale, old, fresh} {
+		seedBrowserSessionRun(t, pool, execution, "42", "")
+		if err := sessions.Record(ctx, browserReport(execution, browsersession.StateLive)); err != nil {
+			t.Fatalf("record %s: %v", execution, err)
+		}
+	}
+	got, _, err := sessions.Lookup(ctx, browsersession.NameFor(live))
+	if err != nil || got.StartedAt.IsZero() || !got.Watchable(time.Now()) {
+		t.Fatalf("live row %+v err=%v", got, err)
+	}
+	if err := sessions.MarkEnded(ctx, browsersession.NameFor(fresh)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.MarkEnded(ctx, browsersession.NameFor(fresh)); err != nil {
+		t.Fatalf("a repeat: %v", err)
+	}
+	if got, _, _ := sessions.Lookup(ctx, browsersession.NameFor(fresh)); got.State != browsersession.StateEnded {
+		t.Fatalf("marked row %+v", got)
+	}
+	// stale: started two days ago, never ended (its worker lost the lease).
+	// old: ended two days ago.
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.browser_sessions SET started_at = clock_timestamp() - interval '2 days'
+WHERE session_id = $1::text`, browsersession.NameFor(stale)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := sessions.Lookup(ctx, browsersession.NameFor(stale)); got.Watchable(time.Now()) {
+		t.Fatalf("a row past its bound is still watchable: %+v", got)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.browser_sessions SET state = 'ended',
+    started_at = clock_timestamp() - interval '3 days', ended_at = clock_timestamp() - interval '2 days'
+WHERE session_id = $1::text`, browsersession.NameFor(old)); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := sessions.Prune(ctx, 100)
+	if err != nil || pruned != 2 {
+		t.Fatalf("pruned=%d err=%v", pruned, err)
+	}
+	for execution, kept := range map[string]bool{live: true, fresh: true, stale: false, old: false} {
+		if _, ok, err := sessions.Lookup(ctx, browsersession.NameFor(execution)); ok != kept || err != nil {
+			t.Errorf("%s: kept=%v err=%v", execution, ok, err)
+		}
+	}
+	if _, err := sessions.Prune(ctx, 0); err == nil {
+		t.Fatal("an unbounded prune")
+	}
+}

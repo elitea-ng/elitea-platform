@@ -531,6 +531,16 @@ where
     if !matches!(stream, NativeStreamOutcome::FatalLease(_)) {
         probe.flush_steering_acknowledgements().await;
     }
+    // A run that stops here without a terminal of its own ends what its
+    // completion owns (the cloud browser session) while the claim is still
+    // live, so the end reaches Main under it. A lost lease skips this: the
+    // claim is gone, and the drop below is the backstop.
+    if matches!(
+        stream,
+        NativeStreamOutcome::NodeRecoverySuspended | NativeStreamOutcome::RecoveryRequired { .. }
+    ) {
+        completion_selector.abandon().await;
+    }
     // ADR-0045 decision 4: a run stopped at its step limit under an
     // unattended grant completes as STEP_LIMIT_REACHED.
     let mut successful_terminal = if step_limit.as_ref().is_some_and(|stop| stop.reached()) {
@@ -638,12 +648,18 @@ where
     };
     failure = cap_reached_terminal(failure, &run_caps);
 
-    if failure.is_none()
+    let completes = failure.is_none()
         && matches!(
             successful_terminal,
             FreshAgentTerminalSelection::Completed | FreshAgentTerminalSelection::StepLimitReached
-        )
-    {
+        );
+    if !completes {
+        // A failure, a cap or a cancellation: end the browser session
+        // before the claim is settled and released. A pause kept it, so
+        // this is a no-op there.
+        completion_selector.abandon().await;
+    }
+    if completes {
         tracing::info!(event = "agent_completion_selection_started");
         let (next_run, completion_result) = Box::pin(
             run.select_native_completion(completion_selector, projector.has_static_tool_pause()),

@@ -153,6 +153,38 @@ func configureBrowserView(config Config, dependencies Dependencies, key ed25519.
 	return &browserViewComposition{sessions: sessions, client: client, audiences: audiences}, nil
 }
 
+// browserSessionPruneBatch is the most rows one retention pass deletes.
+const browserSessionPruneBatch = 256
+
+// browserSessionPruner is the session table's half of the retention pass.
+type browserSessionPruner interface {
+	Prune(ctx context.Context, limit int) (int64, error)
+}
+
+// browserSessionMaintenance extends the replay retention janitor's pass,
+// as compiled snapshots and code debug artifacts do: no loop of its own.
+type browserSessionMaintenance struct {
+	replay   executionReplayProgressPruner
+	sessions browserSessionPruner
+}
+
+func (m *browserSessionMaintenance) PruneExpiredReplayProgress(ctx context.Context) (int64, error) {
+	count, replayErr := m.replay.PruneExpiredReplayProgress(ctx)
+	_, pruneErr := m.sessions.Prune(ctx, browserSessionPruneBatch)
+	return count, errors.Join(replayErr, pruneErr)
+}
+
+// attachBrowserSessionMaintenance prunes ended and expired session rows on
+// the replay retention pass. The relay needs agent dispatch, which composes
+// that janitor, so a missing one is a composition fault.
+func attachBrowserSessionMaintenance(janitor *executionReplayRetentionJanitor, sessions browserSessionPruner) error {
+	if janitor == nil || janitor.pruner == nil || sessions == nil {
+		return errors.New("browser view requires the execution replay retention janitor")
+	}
+	janitor.pruner = &browserSessionMaintenance{replay: janitor.pruner, sessions: sessions}
+	return nil
+}
+
 // browserSessionRecorder adapts the repository to the control server.
 type browserSessionRecorder struct{ sessions *repos.BrowserSessions }
 
@@ -189,7 +221,13 @@ func newBrowserViewHandler(composition *browserViewComposition, replay *pgxpool.
 	if err != nil {
 		return nil, err
 	}
-	return browsersessions.NewHandler(sessions, conversations, permissions, browserViewDialer{client: composition.client}, slog.Default())
+	handler, err := browsersessions.NewHandler(sessions, conversations, permissions, browserViewDialer{client: composition.client}, slog.Default())
+	if err != nil {
+		return nil, err
+	}
+	// A supervisor that no longer holds the session ends its row (the
+	// control pool writes it, as the worker's reports do).
+	return handler.WithSessionEnder(composition.sessions), nil
 }
 
 // browserViewCloser keeps a nil composition a nil interface (no typed nil).

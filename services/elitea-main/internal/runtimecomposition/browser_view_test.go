@@ -1,11 +1,14 @@
 package runtimecomposition
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/security/securefile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 )
 
@@ -77,5 +80,77 @@ func TestBrowserSessionRecorderMapsARefusal(t *testing.T) {
 	}
 	if mapBrowserSessionError(nil) != nil {
 		t.Fatal("success reads as an error")
+	}
+}
+
+type prunerStub struct{ calls, limit int }
+
+func (p *prunerStub) Prune(_ context.Context, limit int) (int64, error) {
+	p.calls++
+	p.limit = limit
+	return 0, nil
+}
+
+type replayStub struct{ calls int }
+
+func (r *replayStub) PruneExpiredReplayProgress(context.Context) (int64, error) {
+	r.calls++
+	return 0, nil
+}
+
+// The session table is pruned on the replay retention pass, a bounded batch
+// each time, and the replay pass still runs.
+func TestBrowserSessionsArePrunedOnTheRetentionPass(t *testing.T) {
+	replay := &replayStub{}
+	janitor, err := newExecutionReplayRetentionJanitor(replay, time.Minute, func(error) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := &prunerStub{}
+	if err := attachBrowserSessionMaintenance(janitor, sessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := janitor.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if replay.calls != 1 || sessions.calls != 1 || sessions.limit != browserSessionPruneBatch {
+		t.Fatalf("replay=%d sessions=%d limit=%d", replay.calls, sessions.calls, sessions.limit)
+	}
+	if attachBrowserSessionMaintenance(nil, sessions) == nil {
+		t.Fatal("no janitor accepted")
+	}
+}
+
+// The chart places Main's browser view client identity through MaterialFiles;
+// a path the inventory leaves out is never mounted and the relay cannot start.
+func TestBrowserViewMaterialIsListed(t *testing.T) {
+	values := oneDirectoryEnvironment()
+	values["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
+	values["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = "dns:elitea-sandbox-browser"
+	values[BrowserViewConfigEnv] = browserViewFixture
+	config, err := ConfigFromEnv(mapLookup(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := config.MaterialFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]securefile.Permissions{}
+	for _, file := range files {
+		listed[file.Path] = file.Permissions
+	}
+	for path, want := range map[string]securefile.Permissions{
+		"/run/elitea-runtime/browser-view-client.crt": securefile.PublicMaterial,
+		"/run/elitea-runtime/browser-view-client.key": securefile.PrivateMaterial,
+		"/run/elitea-runtime/runtime-ca.crt":          securefile.PublicMaterial,
+	} {
+		if got, found := listed[path]; !found || got != want {
+			t.Fatalf("%s: listed=%v profile=%d, want %d", path, found, got, want)
+		}
+	}
+	if directory, err := config.MaterialDirectory(); err != nil || directory != "/run/elitea-runtime" {
+		t.Fatal(directory, err)
 	}
 }

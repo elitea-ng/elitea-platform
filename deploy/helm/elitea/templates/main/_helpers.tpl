@@ -1367,6 +1367,7 @@ too, whatever the value:
 
 {{- define "elitea-main.validateRuntime" -}}
 {{- include "elitea.codeNodes.validate" . -}}
+{{- include "elitea.browserView.validate" . -}}
 {{- $runtime := .Values.main.runtime | default dict -}}
 {{- $agent := $runtime.agentExecutionDispatch | default dict -}}
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
@@ -1631,6 +1632,9 @@ carries the material must use those names as its keys.
 {{- $sse := $runtime.sse | default dict -}}
 {{- $compiled := $runtime.rustCompiledSnapshots | default dict -}}
 {{- with (include "elitea.codeNodes.env" .) }}
+{{ . }}
+{{- end }}
+{{- with (include "elitea.browserView.env" .) }}
 {{ . }}
 {{- end }}
 {{- if $compiled.enabled }}

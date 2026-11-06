@@ -25,7 +25,9 @@ pub(crate) use toolkit_invocation::{AuthorizedToolkitExecution, ToolkitInvocatio
 
 #[path = "sandbox_authority.rs"]
 mod sandbox_authority;
-pub(crate) use sandbox_authority::{ClaimBoundSandboxAuthority, SandboxStopAuthority};
+pub(crate) use sandbox_authority::{
+    BrowserSessionReportOutcome, ClaimBoundSandboxAuthority, SandboxStopAuthority,
+};
 
 use std::fmt;
 use std::sync::Arc;

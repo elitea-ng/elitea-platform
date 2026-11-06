@@ -716,9 +716,18 @@ async fn the_view_streams_frames_ack_paced_and_refuses_watch_only_input() {
         .await
         .expect("view")
         .into_inner();
+    // The admission comes first: Main upgrades the viewer only after it.
+    let admitted = down.message().await.expect("ok").expect("admission");
+    assert!(
+        matches!(
+            admitted.frame,
+            Some(browser_view_output_v1::Frame::Notice(ref notice)) if notice.code == "session_live"
+        ),
+        "{admitted:?}"
+    );
     let first = down.message().await.expect("ok").expect("a frame");
     let Some(browser_view_output_v1::Frame::Screen(frame)) = first.frame else {
-        panic!("a frame first: {first:?}");
+        panic!("a frame after the admission: {first:?}");
     };
     assert_eq!(frame.jpeg, b"jpeg");
     assert_eq!((frame.width, frame.height), (1280, 800));
@@ -753,6 +762,7 @@ async fn the_view_streams_frames_ack_paced_and_refuses_watch_only_input() {
         .await
         .expect("view")
         .into_inner();
+    let _ = down.message().await.expect("ok").expect("admission");
     let _ = down.message().await.expect("ok").expect("a frame");
     up.send(input).await.unwrap();
     let seen = Arc::clone(&h.backend.seen.lock().unwrap()[&s.name]);
@@ -828,9 +838,10 @@ async fn a_watched_session_does_not_go_idle() {
         .await
         .expect("view")
         .into_inner();
+    let _ = down.message().await.expect("ok").expect("admission");
     let first = down.message().await.expect("ok").expect("a frame");
     let Some(browser_view_output_v1::Frame::Screen(frame)) = first.frame else {
-        panic!("a frame first: {first:?}");
+        panic!("a frame after the admission: {first:?}");
     };
     let seen = Arc::clone(&h.backend.seen.lock().unwrap()[&s.name]);
     let acks = || {

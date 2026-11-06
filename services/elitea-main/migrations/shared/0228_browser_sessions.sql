@@ -26,8 +26,18 @@
 --               supervisor fences calls.
 --
 -- A session is never reused (the supervisor never starts a name twice), so
--- the name is the key. ended rows are kept for the step record; nothing here
--- prunes them yet.
+-- the name is the key.
+--
+-- A row's life is bounded without any report: the supervisor retires every
+-- session by started_at + spec_wall_seconds + its 10 minute linger, so the
+-- relay treats a row past that as ended whatever its state says (a worker
+-- that crashed or lost its lease reports nothing). A supervisor that answers
+-- "not started" or "ended" to a view also marks the row ended.
+--
+-- Pruning: Main's execution replay retention pass (one minute) deletes, a
+-- bounded batch at a time, a row ended more than a day ago and a row whose
+-- bound passed more than a day ago (repos/browser_sessions.go Prune). The
+-- two partial indexes below serve the two halves of that pass.
 --
 -- Shared, not tenant: the execution kernel this row belongs to is shared
 -- (elitea_runtime.execution_jobs, 0030). No permission: only Main reads it.
@@ -65,9 +75,15 @@ CREATE TABLE IF NOT EXISTS elitea_runtime.browser_sessions (
     CONSTRAINT browser_sessions_end CHECK ((state = 'ended') = (ended_at IS NOT NULL))
 );
 
--- The sessions of one run (the step record, a later cleanup).
+-- The sessions of one run (the step record).
 CREATE INDEX IF NOT EXISTS browser_sessions_execution
     ON elitea_runtime.browser_sessions (execution_id);
+
+-- The retention pass: ended rows by their end, open rows by their start.
+CREATE INDEX IF NOT EXISTS browser_sessions_ended_at
+    ON elitea_runtime.browser_sessions (ended_at) WHERE ended_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS browser_sessions_open_started_at
+    ON elitea_runtime.browser_sessions (started_at) WHERE ended_at IS NULL;
 
 COMMENT ON TABLE elitea_runtime.browser_sessions IS
     'Cloud browser sessions (ADR-0049 decision 6): session id -> run, supervisor audience, spec, state. Any elitea-main replica relays a viewer from this row.';

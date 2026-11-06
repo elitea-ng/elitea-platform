@@ -356,6 +356,7 @@ jobs:
           bash deploy/helm/tests/render-workspace-egress.sh
           bash deploy/helm/tests/render-cloud-executor.sh
           bash deploy/helm/tests/render-browser-sessions.sh
+          bash deploy/helm/tests/render-browser-view.sh
 
       # The sandbox runtime installer chart (ADR-0034): the DaemonSet, its
       # RuntimeClass and guards, then the installer script itself against a

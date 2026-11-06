@@ -1519,6 +1519,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				browserView.client.Close()
 			}
 		}()
+		if err := attachBrowserSessionMaintenance(replayMaintenance, browserView.sessions); err != nil {
+			return nil, err
+		}
 	}
 
 	var compiledAuthority runtimedomain.RustSnapshotIndex

@@ -172,6 +172,14 @@ pub(crate) trait NativeAgentCompletionSelector: Send {
     fn step_limit_stop(&self) -> Option<std::sync::Arc<super::unattended::StepLimitStop>> {
         None
     }
+
+    /// The run ends without `select` (a failure, a cap, a cancellation, a
+    /// lost lease). The lifecycle calls this before it settles and releases
+    /// the claim, so what the completion owns ends while the claim is still
+    /// live: a cloud browser session is destroyed, and its ENDED report
+    /// reaches Main under the claim (ADR-0049 decision 6). Idempotent; the
+    /// completion's drop remains the backstop.
+    async fn abandon(&mut self) {}
 }
 
 /// Post-authorization assembly input with one runtime-context redemption.
