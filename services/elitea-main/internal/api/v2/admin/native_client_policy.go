@@ -349,6 +349,41 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.HostIntel,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkComputerUse,
+			"type":  "boolean",
+			"title": "Allow Computer Use",
+			"description": "Whether a local turn may see and use the user's other applications through the " +
+				"accessibility interface (macOS). The user also turns it on per device and approves each " +
+				"application. An unattended run never acts on an application.",
+			"section":      section,
+			"default":      defaults.ComputerUse,
+			"visible_when": visible,
+		},
+		bundleIDList(platformconfig.KeyNativeLocalWorkComputerUseAppsAllow, "Computer Use: Allowed Apps",
+			fmt.Sprintf("When not empty, the only applications computer use may touch, by bundle id (for "+
+				"example com.apple.mail, or com.example.* for a vendor's apps). At most %d entries.",
+				platformconfig.MaxBundleIDPatterns), section, visible),
+		bundleIDList(platformconfig.KeyNativeLocalWorkComputerUseAppsDeny, "Computer Use: Denied Apps",
+			fmt.Sprintf("Applications computer use never touches, by bundle id. They are added to the "+
+				"built-in list (Elitea, password managers, terminals, Screen Time, the login window and "+
+				"the security settings), which cannot be removed. A deny wins over an allow. At most %d entries.",
+				platformconfig.MaxBundleIDPatterns), section, visible),
+	}
+}
+
+// bundleIDList is a computer-use app list field (ADR-0047 decision 3).
+func bundleIDList(key, title, description, section string, visible map[string]any) map[string]any {
+	return map[string]any{
+		"key":          key,
+		"type":         "array",
+		"items":        map[string]any{"type": "string"},
+		"title":        title,
+		"description":  description,
+		"section":      section,
+		"default":      []any{},
+		"maxItems":     platformconfig.MaxBundleIDPatterns,
+		"visible_when": visible,
 	}
 }
 
@@ -411,6 +446,30 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 			if !platformconfig.ValidLocalWorkPattern(pattern) {
 				return fmt.Sprintf("%q[%d] must be a non-blank pattern of at most %d bytes without control "+
 					"characters", key, index, platformconfig.MaxLocalWorkPatternBytes)
+			}
+		}
+	}
+	for _, key := range []string{
+		platformconfig.KeyNativeLocalWorkComputerUseAppsAllow,
+		platformconfig.KeyNativeLocalWorkComputerUseAppsDeny,
+	} {
+		raw, present := values[key]
+		if !present {
+			continue
+		}
+		entries, ok := raw.([]any)
+		if !ok {
+			return fmt.Sprintf("%q must be an array of bundle ids", key)
+		}
+		if len(entries) > platformconfig.MaxBundleIDPatterns {
+			return fmt.Sprintf("%q has too many entries (limit %d)", key, platformconfig.MaxBundleIDPatterns)
+		}
+		for index, entry := range entries {
+			pattern, _ := entry.(string)
+			if !platformconfig.ValidBundleIDPattern(pattern) {
+				return fmt.Sprintf("%q[%d] must be a bundle id such as com.apple.mail, or a prefix such as "+
+					"com.example.* (letters, digits and -, in dot-separated parts, at most %d bytes)",
+					key, index, platformconfig.MaxBundleIDBytes)
 			}
 		}
 	}

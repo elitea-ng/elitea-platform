@@ -77,7 +77,58 @@ const (
 	// both send the turn's queries to third-party providers.
 	KeyNativeLocalWorkWeb       = "local_work_web"
 	KeyNativeLocalWorkHostIntel = "local_work_host_intel"
+	// KeyNativeLocalWorkComputerUse lets a local turn see and act on the
+	// user's other applications (ADR-0047 decision 3, client contract 1.36).
+	// Off unless an administrator turns it on; the user also turns it on per
+	// device. KeyNativeLocalWorkComputerUseAppsAllow is a ceiling of bundle
+	// ids (empty: no ceiling); KeyNativeLocalWorkComputerUseAppsDeny adds to
+	// the platform deny list the desktop always applies (password managers,
+	// terminals, Elitea itself and the system's security surfaces).
+	KeyNativeLocalWorkComputerUse          = "local_work_computer_use"
+	KeyNativeLocalWorkComputerUseAppsAllow = "local_work_computer_use_apps_allow"
+	KeyNativeLocalWorkComputerUseAppsDeny  = "local_work_computer_use_apps_deny"
 )
+
+// MaxBundleIDPatterns and MaxBundleIDBytes bound the computer-use app lists.
+// The save path refuses a list over them; the loader keeps only valid entries
+// and at most MaxBundleIDPatterns of them.
+const (
+	MaxBundleIDPatterns = 200
+	MaxBundleIDBytes    = 255
+)
+
+// ValidBundleIDPattern reports whether pattern may be stored in a computer-use
+// app list: an application bundle id (ASCII letters, digits and `-`, in
+// `.`-separated components none of which is empty, for example
+// com.apple.mail), or such an id followed by `.*`, which names every bundle id
+// under that prefix (com.example.*). At most MaxBundleIDBytes. The desktop
+// applies the same rule (libs/rust/local-tools policy.rs).
+// bundleIDByte reports whether c may appear in a bundle id component:
+// ASCII letters, digits and '-'.
+func bundleIDByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-'
+}
+
+func ValidBundleIDPattern(pattern string) bool {
+	if pattern == "" || len(pattern) > MaxBundleIDBytes {
+		return false
+	}
+	id := strings.TrimSuffix(pattern, ".*")
+	if id == "" {
+		return false
+	}
+	for _, part := range strings.Split(id, ".") {
+		if part == "" {
+			return false
+		}
+		for i := 0; i < len(part); i++ {
+			if !bundleIDByte(part[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // MaxModelMirrorURLBytes bounds KeyNativeLocalWorkIndexModelMirrorURL.
 const MaxModelMirrorURLBytes = 2048
@@ -194,6 +245,15 @@ type LocalWorkPolicy struct {
 	Web bool `json:"web"`
 	// HostIntel: local turns may use the host_intel toolkit (Shodan).
 	HostIntel bool `json:"host_intel"`
+	// ComputerUse: local turns may see and act on the user's other
+	// applications (ADR-0047). The desktop enforces it, asks the user per
+	// application, and never lets an unattended run act on one.
+	ComputerUse bool `json:"computer_use"`
+	// ComputerUseAppsAllow: when non-empty, the only bundle ids computer use
+	// may touch. ComputerUseAppsDeny: bundle ids it never touches, added to
+	// the desktop's own platform list. A deny wins.
+	ComputerUseAppsAllow []string `json:"computer_use_apps_allow"`
+	ComputerUseAppsDeny  []string `json:"computer_use_apps_deny"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -221,6 +281,11 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		IndexModelMirrorURL:   "",
 		Web:                   false,
 		HostIntel:             false,
+		// Computer use controls other applications: it waits for an
+		// administrator.
+		ComputerUse:          false,
+		ComputerUseAppsAllow: []string{},
+		ComputerUseAppsDeny:  []string{},
 	}
 }
 
@@ -244,6 +309,9 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.IndexRemoteEmbeddings = values.Bool(KeyNativeLocalWorkIndexRemoteEmbeddings, policy.IndexRemoteEmbeddings)
 	policy.Web = values.Bool(KeyNativeLocalWorkWeb, policy.Web)
 	policy.HostIntel = values.Bool(KeyNativeLocalWorkHostIntel, policy.HostIntel)
+	policy.ComputerUse = values.Bool(KeyNativeLocalWorkComputerUse, policy.ComputerUse)
+	policy.ComputerUseAppsAllow = bundleIDPatterns(values, KeyNativeLocalWorkComputerUseAppsAllow)
+	policy.ComputerUseAppsDeny = bundleIDPatterns(values, KeyNativeLocalWorkComputerUseAppsDeny)
 	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
 		policy.IndexModelMirrorURL = mirror
 	}
@@ -264,6 +332,36 @@ func localWorkPatterns(values Values, key string) []string {
 	}
 	return out
 }
+
+// bundleIDPatterns keeps the valid entries of a stored computer-use app list,
+// at most MaxBundleIDPatterns. It never answers nil, so the JSON is always an
+// array.
+//
+// An allow list that loses entries narrows the ceiling (fewer apps); an
+// allow list that loses ALL of them would turn into "no ceiling", so a stored
+// non-empty allow list with no valid entry is kept as one entry that matches
+// no application, and the desktop admits nothing.
+func bundleIDPatterns(values Values, key string) []string {
+	out := []string{}
+	stored := values.Strings(key)
+	for _, pattern := range stored {
+		if len(out) == MaxBundleIDPatterns {
+			break
+		}
+		if ValidBundleIDPattern(pattern) {
+			out = append(out, pattern)
+		}
+	}
+	if key == KeyNativeLocalWorkComputerUseAppsAllow && len(stored) > 0 && len(out) == 0 {
+		out = append(out, NoAppBundleID)
+	}
+	return out
+}
+
+// NoAppBundleID is a valid bundle id no application has. A loaded allow list
+// whose every stored entry was invalid becomes [NoAppBundleID]: the ceiling
+// stays closed rather than opening to every application.
+const NoAppBundleID = "invalid.elitea.no-app"
 
 // The values of KeyNativeNotificationPreview: what a notification may show on
 // the lock screen and in the notification centre.

@@ -298,6 +298,7 @@ async fn remembered_shell_choices_and_approve_always_never_allow_a_commit() {
                 network: true,
                 runner: None,
                 loopback: false,
+                bundle_id: None,
             })
             .expect("remember");
     }

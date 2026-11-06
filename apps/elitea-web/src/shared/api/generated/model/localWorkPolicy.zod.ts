@@ -125,6 +125,24 @@ export const LocalWorkPolicy = zod
       .describe(
         "Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false.",
       ),
+    computer_use: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.36 (ADR-0047 decision 3). Local turns may see and act on the user's other applications through the platform's accessibility interface. Absent or false is off (the default): the app does not offer the computer tools and denies their calls. The user also turns it on per device and approves each application; an unattended run never acts on one.",
+      ),
+    computer_use_apps_allow: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "Client contract 1.36. When not empty, the only applications computer use may read or act on, by bundle id (com.apple.mail) or bundle id prefix (com.example.*). At most 200 entries of at most 255 bytes. Absent or empty: no ceiling. A ceiling, not an approval: the user is still asked per application.",
+      ),
+    computer_use_apps_deny: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "Client contract 1.36. Applications computer use never reads or acts on, by bundle id or prefix, whatever the allow list says. The app always adds its own platform list (itself, password managers, terminals, Screen Time, the login window and the security panes of System Settings), which no policy removes. Same bounds.",
+      ),
   })
   .describe(
     "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",

@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.35",
+  "client_contract": "1.36",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -14762,6 +14762,21 @@
                           }
                         },
                         "command_deny": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "computer_use": {
+                          "type": "boolean"
+                        },
+                        "computer_use_apps_allow": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "computer_use_apps_deny": {
                           "type": "array",
                           "items": {
                             "type": "string"

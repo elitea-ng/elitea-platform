@@ -1341,7 +1341,11 @@ impl LocalSession {
             | ToolKind::SaveMemory
             | ToolKind::DeleteMemory
             | ToolKind::WebRead
-            | ToolKind::HostIntel => Err(ToolError::new(
+            | ToolKind::HostIntel
+            // The `computer` toolset is the desktop host's (ADR-0047),
+            // never a workspace tool.
+            | ToolKind::ComputerRead
+            | ToolKind::ComputerAct => Err(ToolError::new(
                 ErrorCode::Denied,
                 format!("`{tool}` is not available"),
             )),
@@ -1865,6 +1869,7 @@ impl LocalSession {
             keep_alive: keep_alive == KeepAlive::Session,
             mcp: None,
             argv: None,
+            computer: None,
         };
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal",

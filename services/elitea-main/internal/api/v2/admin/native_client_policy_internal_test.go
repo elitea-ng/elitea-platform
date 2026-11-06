@@ -47,6 +47,18 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 		{"pattern not a string", `{"local_work_command_allow":[1]}`, "local_work_command_allow"},
 		{"pattern too long", `{"local_work_command_allow":["` + strings.Repeat("x", 513) + `"]}`, "local_work_command_allow"},
 		{"too many patterns", `{"local_work_path_deny":[` + strings.TrimSuffix(strings.Repeat(`"p",`, 201), ",") + `]}`, "local_work_path_deny"},
+		{"computer use valid", `{"local_work_computer_use":true,
+			"local_work_computer_use_apps_allow":["com.apple.mail","com.example.*"],
+			"local_work_computer_use_apps_deny":["com.apple.Notes"]}`, ""},
+		{"computer use empty lists", `{"local_work_computer_use_apps_allow":[],"local_work_computer_use_apps_deny":[]}`, ""},
+		{"app allow not a list", `{"local_work_computer_use_apps_allow":"com.apple.mail"}`, "local_work_computer_use_apps_allow"},
+		{"app allow with a path", `{"local_work_computer_use_apps_allow":["/Applications/Mail.app"]}`, "local_work_computer_use_apps_allow"},
+		{"app deny with a space", `{"local_work_computer_use_apps_deny":["com.apple mail"]}`, "local_work_computer_use_apps_deny"},
+		{"app deny bare wildcard", `{"local_work_computer_use_apps_deny":["*"]}`, "local_work_computer_use_apps_deny"},
+		{"app deny inner wildcard", `{"local_work_computer_use_apps_deny":["com.*.mail"]}`, "local_work_computer_use_apps_deny"},
+		{"app deny not a string", `{"local_work_computer_use_apps_deny":[3]}`, "local_work_computer_use_apps_deny"},
+		{"app id too long", `{"local_work_computer_use_apps_deny":["` + strings.Repeat("a", 256) + `"]}`, "local_work_computer_use_apps_deny"},
+		{"too many apps", `{"local_work_computer_use_apps_allow":[` + strings.TrimSuffix(strings.Repeat(`"a.b",`, 201), ",") + `]}`, "local_work_computer_use_apps_allow"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,14 +106,15 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		"local_work_command_allow", "local_work_command_deny", "local_work_path_deny",
 		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write",
 		"local_work_cloud_handoff", "local_work_index_local_embeddings", "local_work_index_remote_embeddings",
-		"local_work_index_model_mirror_url", "local_work_web", "local_work_host_intel"} {
+		"local_work_index_model_mirror_url", "local_work_web", "local_work_host_intel",
+		"local_work_computer_use", "local_work_computer_use_apps_allow", "local_work_computer_use_apps_deny"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 30 {
+	if len(keys) != 33 {
 		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1, "+
-			"contract 1.9's 3 and #1238's 2", len(keys))
+			"contract 1.9's 3, #1238's 2 and ADR-0047's 3", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {

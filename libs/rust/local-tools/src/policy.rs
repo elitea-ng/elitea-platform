@@ -100,6 +100,19 @@ pub struct LocalWorkPolicy {
     /// `local_work_host_intel` (#1238): local turns may call a remote
     /// `host_intel` toolkit (Shodan). Off when absent.
     pub host_intel: bool,
+    /// `local_work_computer_use` (ADR-0047 decision 3, client contract
+    /// 1.36): the `computer` toolset exists at all. Off when absent: the
+    /// tools are not offered and their calls are denied.
+    pub computer_use: bool,
+    /// `local_work_computer_use_apps_allow`: when non-empty, the only
+    /// applications (bundle ids, see [`bundle_id_matches`]) the agent may
+    /// read or act on. A ceiling, not an approval: an admitted application
+    /// is still asked for ([`crate::approvals`]).
+    pub computer_use_apps_allow: Vec<String>,
+    /// `local_work_computer_use_apps_deny`: applications never read or
+    /// acted on, added to [`PLATFORM_APP_DENY`] (which no policy can lift).
+    /// A deny wins over an allow.
+    pub computer_use_apps_deny: Vec<String>,
 }
 
 impl Default for LocalWorkPolicy {
@@ -121,13 +134,364 @@ impl Default for LocalWorkPolicy {
             memory_write: false,
             web: false,
             host_intel: false,
+            computer_use: false,
+            computer_use_apps_allow: Vec::new(),
+            computer_use_apps_deny: Vec::new(),
         }
+    }
+}
+
+/// The applications computer use never reads or acts on (ADR-0047
+/// decisions 3 and 5), merged into every policy's
+/// [`LocalWorkPolicy::computer_use_apps_deny`]. An administrator can add to
+/// it; nothing removes an entry, and an allow list never admits one.
+///
+/// Each entry is a bundle id, or a `prefix.*` family ([`bundle_id_matches`]).
+/// The list is also matched against the System Settings pane a window
+/// shows (the pane extension's bundle id), so the security panes are denied
+/// while the rest of System Settings is not; a System Settings window whose
+/// pane is unknown is denied too.
+pub const PLATFORM_APP_DENY: &[&str] = &[
+    // Elitea itself: the agent must never approve its own asks (decision 5,
+    // "No Elitea control").
+    "ai.elitea.desktop",
+    // Password managers and credential stores.
+    "com.apple.keychainaccess",   // Keychain Access
+    "com.apple.Passwords",        // Passwords (macOS 15)
+    "com.1password.*",            // 1Password 8 and its helpers
+    "com.agilebits.onepassword7", // 1Password 7
+    "com.bitwarden.desktop",      // Bitwarden
+    "org.keepassxc.keepassxc",    // KeePassXC
+    "com.lastpass.LastPass",      // LastPass
+    "in.sinew.Enpass-Desktop",    // Enpass
+    "me.proton.pass.electron",    // Proton Pass
+    // Terminals: the shell has its own sandboxed tool, and a terminal would
+    // bypass it (owner decision 1 at acceptance).
+    "com.apple.Terminal",     // Terminal
+    "com.googlecode.iterm2",  // iTerm2
+    "dev.warp.*",             // Warp (stable and preview)
+    "com.mitchellh.ghostty",  // Ghostty
+    "org.alacritty",          // Alacritty
+    "net.kovidgoyal.kitty",   // kitty
+    "com.github.wez.wezterm", // WezTerm
+    "co.zeit.hyper",          // Hyper
+    "org.tabby",              // Tabby
+    // Script runners: `do shell script` and "Run Shell Script" are the shell
+    // again, outside its sandbox.
+    "com.apple.ScriptEditor2", // Script Editor
+    "com.apple.Automator",     // Automator
+    "com.apple.shortcuts",     // Shortcuts
+    // The login window and the system's authentication prompts.
+    "com.apple.loginwindow",   // the login window
+    "com.apple.SecurityAgent", // the system's password prompts
+    // Screen Time.
+    "com.apple.Screen-Time-Settings.extension", // the Screen Time pane
+    "com.apple.preference.screentime",          // Screen Time (macOS 12)
+    "com.apple.ScreenTimeAgent",                // its agent
+    // The security panes of System Settings, and their System Preferences
+    // forms before macOS 13.
+    "com.apple.settings.PrivacySecurity.extension", // Privacy & Security
+    "com.apple.Touch-ID-Settings.extension",        // Touch ID & Password
+    "com.apple.Users-Groups-Settings.extension",    // Users & Groups
+    "com.apple.Passwords-Settings.extension",       // Passwords (macOS 13 and 14)
+    "com.apple.Lock-Screen-Settings.extension",     // Lock Screen
+    "com.apple.LoginItems-Settings.extension",      // Login Items & Extensions
+    "com.apple.preference.security",                // Security & Privacy (macOS 12)
+    "com.apple.preferences.password",               // Touch ID (macOS 12)
+    "com.apple.preferences.users",                  // Users & Groups (macOS 12)
+];
+
+/// System Settings' bundle id. Computer use admits it only with a known
+/// pane that no deny entry names ([`LocalWorkPolicy::computer_use_refusal`]).
+pub const SYSTEM_SETTINGS: &str = "com.apple.systempreferences";
+
+/// The longest bundle id (or `prefix.*` pattern) a policy may carry.
+pub const MAX_BUNDLE_ID_BYTES: usize = 255;
+
+/// Whether `pattern` is a bundle id a policy may carry: ASCII letters,
+/// digits and `-`, in `.`-separated components none of which is empty, at
+/// most [`MAX_BUNDLE_ID_BYTES`]; or such an id followed by `.*` (a family:
+/// every bundle id under that prefix). The server's
+/// `platformconfig.ValidBundleIDPattern` is the same rule.
+#[must_use]
+pub fn valid_bundle_id_pattern(pattern: &str) -> bool {
+    if pattern.is_empty() || pattern.len() > MAX_BUNDLE_ID_BYTES {
+        return false;
+    }
+    let id = pattern.strip_suffix(".*").unwrap_or(pattern);
+    !id.is_empty()
+        && id.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+/// Whether `bundle_id` is `pattern`: equal ignoring ASCII case (Launch
+/// Services compares bundle ids that way), or under a `prefix.*` family
+/// (one component more, at least). An invalid pattern matches nothing.
+#[must_use]
+pub fn bundle_id_matches(pattern: &str, bundle_id: &str) -> bool {
+    if !valid_bundle_id_pattern(pattern) {
+        return false;
+    }
+    match pattern.strip_suffix(".*") {
+        Some(prefix) => {
+            bundle_id.len() > prefix.len() + 1
+                && bundle_id.as_bytes()[prefix.len()] == b'.'
+                && bundle_id
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        }
+        None => bundle_id.eq_ignore_ascii_case(pattern),
+    }
+}
+
+impl LocalWorkPolicy {
+    /// The applications computer use refuses: [`PLATFORM_APP_DENY`], then
+    /// the policy's own `computer_use_apps_deny`.
+    #[must_use]
+    pub fn computer_use_denied_apps(&self) -> Vec<String> {
+        PLATFORM_APP_DENY
+            .iter()
+            .map(|&entry| entry.to_owned())
+            .chain(self.computer_use_apps_deny.iter().cloned())
+            .collect()
+    }
+
+    /// Why computer use may not touch the application `bundle_id` (showing
+    /// the System Settings pane `pane`, if any), or `None` when the policy
+    /// admits it. The `computer_use` switch is checked by the caller. In
+    /// order: a value that is not a bundle id; a deny entry (the platform's
+    /// or the policy's) matching the bundle id or the pane, whatever the
+    /// allow list says; System Settings ([`SYSTEM_SETTINGS`]) with no known
+    /// pane (fail closed: it could show a security pane); a non-empty allow
+    /// list that does not name the app.
+    #[must_use]
+    pub fn computer_use_refusal(&self, bundle_id: &str, pane: Option<&str>) -> Option<String> {
+        if bundle_id.ends_with(".*") || !valid_bundle_id_pattern(bundle_id) {
+            return Some(format!("`{bundle_id}` is not an application bundle id"));
+        }
+        let denied = |id: &str| {
+            PLATFORM_APP_DENY
+                .iter()
+                .copied()
+                .chain(self.computer_use_apps_deny.iter().map(String::as_str))
+                .any(|pattern| bundle_id_matches(pattern, id))
+        };
+        if denied(bundle_id) {
+            return Some(format!("computer use never reads or acts on `{bundle_id}`"));
+        }
+        if let Some(pane) = pane.filter(|pane| denied(pane)) {
+            return Some(format!(
+                "computer use never reads or acts on the `{pane}` settings"
+            ));
+        }
+        // System Settings fails closed: with no pane named, the window could
+        // show a security pane, so only a known pane no deny entry names
+        // admits it.
+        if bundle_id.eq_ignore_ascii_case(SYSTEM_SETTINGS)
+            && !pane.is_some_and(|pane| !pane.ends_with(".*") && valid_bundle_id_pattern(pane))
+        {
+            return Some(
+                "computer use reads or acts on System Settings only when the pane it shows is known"
+                    .to_owned(),
+            );
+        }
+        if !self.computer_use_apps_allow.is_empty()
+            && !self
+                .computer_use_apps_allow
+                .iter()
+                .any(|pattern| bundle_id_matches(pattern, bundle_id))
+        {
+            return Some(format!(
+                "`{bundle_id}` is not in the policy's computer_use_apps_allow"
+            ));
+        }
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalWorkPolicy, SandboxMode};
+    use super::{
+        LocalWorkPolicy, PLATFORM_APP_DENY, SandboxMode, bundle_id_matches, valid_bundle_id_pattern,
+    };
+
+    #[test]
+    fn computer_use_absent_is_off() {
+        let absent: LocalWorkPolicy =
+            serde_json::from_value(serde_json::json!({"allowed": true})).expect("parse");
+        assert!(!absent.computer_use);
+        assert_eq!(absent.computer_use_apps_allow, Vec::<String>::new());
+        assert_eq!(absent.computer_use_apps_deny, Vec::<String>::new());
+        assert!(!LocalWorkPolicy::default().computer_use);
+        let on: LocalWorkPolicy = serde_json::from_value(serde_json::json!({
+            "allowed": true,
+            "computer_use": true,
+            "computer_use_apps_allow": ["com.apple.mail"],
+            "computer_use_apps_deny": ["com.example.*"]
+        }))
+        .expect("parse");
+        assert!(on.computer_use);
+        assert_eq!(on.computer_use_apps_allow, ["com.apple.mail"]);
+        assert_eq!(on.computer_use_apps_deny, ["com.example.*"]);
+    }
+
+    #[test]
+    fn bundle_id_patterns_are_ids_or_families() {
+        for good in [
+            "com.apple.mail",
+            "ai.elitea.desktop",
+            "dev.warp.*",
+            "org.tabby",
+            "a",
+        ] {
+            assert!(valid_bundle_id_pattern(good), "{good}");
+        }
+        for bad in [
+            "",
+            ".*",
+            "*",
+            "com..apple",
+            ".com",
+            "com.",
+            "com apple",
+            "com/apple",
+            "com.*.mail",
+            "com.\u{e9}",
+        ] {
+            assert!(!valid_bundle_id_pattern(bad), "{bad}");
+        }
+        assert!(!valid_bundle_id_pattern(&"a".repeat(256)));
+        assert!(bundle_id_matches(
+            "com.apple.Terminal",
+            "com.apple.terminal"
+        ));
+        assert!(!bundle_id_matches(
+            "com.apple.Terminal",
+            "com.apple.TerminalX"
+        ));
+        assert!(bundle_id_matches("dev.warp.*", "dev.warp.Warp-Stable"));
+        assert!(
+            !bundle_id_matches("dev.warp.*", "dev.warp"),
+            "a family needs a component more"
+        );
+        assert!(!bundle_id_matches("dev.warp.*", "dev.warpx.app"));
+        assert!(!bundle_id_matches("bad pattern", "bad pattern"));
+    }
+
+    #[test]
+    fn every_platform_deny_entry_is_a_valid_pattern_and_covers_the_adr_list() {
+        for entry in PLATFORM_APP_DENY {
+            assert!(valid_bundle_id_pattern(entry), "{entry}");
+        }
+        for app in [
+            "ai.elitea.desktop",
+            "com.apple.keychainaccess",
+            "com.apple.Passwords",
+            "com.1password.1password",
+            "com.bitwarden.desktop",
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "dev.warp.Warp-Stable",
+            "com.mitchellh.ghostty",
+            "com.apple.loginwindow",
+            "com.apple.Screen-Time-Settings.extension",
+            "com.apple.settings.PrivacySecurity.extension",
+        ] {
+            assert!(
+                PLATFORM_APP_DENY
+                    .iter()
+                    .any(|pattern| bundle_id_matches(pattern, app)),
+                "{app} must be denied"
+            );
+        }
+    }
+
+    /// The platform list is always merged in, and an allow list never
+    /// admits one of its entries; the policy's own deny wins over its allow.
+    #[test]
+    fn the_platform_deny_list_is_merged_and_beats_the_allow_list() {
+        let policy = LocalWorkPolicy {
+            computer_use: true,
+            computer_use_apps_allow: vec![
+                "com.apple.Terminal".to_owned(),
+                "ai.elitea.desktop".to_owned(),
+                "com.apple.mail".to_owned(),
+                "com.example.*".to_owned(),
+            ],
+            computer_use_apps_deny: vec!["com.example.secret".to_owned()],
+            ..LocalWorkPolicy::default()
+        };
+        let denied = policy.computer_use_denied_apps();
+        assert_eq!(denied.len(), PLATFORM_APP_DENY.len() + 1);
+        assert_eq!(
+            denied.last().map(String::as_str),
+            Some("com.example.secret")
+        );
+        assert!(
+            policy
+                .computer_use_refusal("com.apple.Terminal", None)
+                .is_some()
+        );
+        assert!(
+            policy
+                .computer_use_refusal("ai.elitea.desktop", None)
+                .is_some()
+        );
+        assert!(
+            policy
+                .computer_use_refusal("com.example.secret", None)
+                .is_some()
+        );
+        assert_eq!(policy.computer_use_refusal("com.apple.mail", None), None);
+        assert_eq!(policy.computer_use_refusal("com.example.notes", None), None);
+        let outside = policy
+            .computer_use_refusal("com.apple.Safari", None)
+            .expect("refused");
+        assert!(outside.contains("computer_use_apps_allow"), "{outside}");
+        // System Settings is admitted on a known pane that is not denied;
+        // with no pane (or a pane that is no bundle id) it fails closed.
+        let open = LocalWorkPolicy {
+            computer_use: true,
+            ..LocalWorkPolicy::default()
+        };
+        for unknown in [None, Some(""), Some("not a pane"), Some("com.apple.*")] {
+            let refused = open
+                .computer_use_refusal("com.apple.systempreferences", unknown)
+                .expect("refused");
+            assert!(
+                refused.contains("pane it shows is known"),
+                "{unknown:?}: {refused}"
+            );
+        }
+        assert!(
+            open.computer_use_refusal("com.apple.SystemPreferences", None)
+                .is_some(),
+            "bundle ids compare ignoring case"
+        );
+        assert_eq!(
+            open.computer_use_refusal(
+                "com.apple.systempreferences",
+                Some("com.apple.Displays-Settings.extension")
+            ),
+            None
+        );
+        assert!(
+            open.computer_use_refusal(
+                "com.apple.systempreferences",
+                Some("com.apple.settings.PrivacySecurity.extension")
+            )
+            .is_some()
+        );
+        assert!(
+            open.computer_use_refusal("dev.warp.*", None).is_some(),
+            "a family is no app"
+        );
+        assert!(open.computer_use_refusal("", None).is_some());
+    }
 
     #[test]
     fn defaults_fail_closed_and_unknown_fields_are_ignored() {
