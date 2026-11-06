@@ -22,6 +22,8 @@
   "widgets.chatBox.staticPause.rootContinue": "Continue pipeline",
   "widgets.chatBox.staticPause.toolsContinue": "Continue selected pipelines",
   "widgets.chatBox.staticPause.defaultMessage": "Continue",
+  "chatMessages.author.temporary": "temporary",
+  "chatMessages.author.wokeUp": "woke up",
   "chatMessages.stream.stopFailed": "The stop request could not be confirmed. The run may still be active. Try Stop again.",
   "agents.applicationEditForm.descriptionLabel": "Description",
   "agents.applicationEditForm.generalTitle": "General",

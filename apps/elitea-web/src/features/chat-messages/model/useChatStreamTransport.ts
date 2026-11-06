@@ -29,7 +29,8 @@ import { t } from "@/shared/i18n";
 import { recordStreamFailure, runtimeFailureReason } from "../lib/chatStreamSettle";
 import { applyChatStreamFrame, type ChatStreamContext } from "../lib/chatStreamReducer";
 import { isRootContextFrame } from "../lib/chatStreamContextFrames";
-import { isChatStreamFrame } from "../lib/chatStreamFrame";
+import { SocketMessageType, isChatStreamFrame } from "../lib/chatStreamFrame";
+import { applyAgentAvatarFrame } from "./agentAvatar.store";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isObserverTerminalFrame } from "../lib/chatStreamTurnEnd";
 import { resultReference, settleFinalResultObserver } from '../lib/chatStreamFinalResult';
@@ -147,6 +148,8 @@ export function useChatStreamTransport(
       if ((generation || generationRef.current) && responseId && frame.message_id !== responseId) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
       if ((generation || generationRef.current) && frameQuestionId && questionIdRef.current && frameQuestionId !== questionIdRef.current) return;
+      // A participant state (client contract 1.38) drives the avatar, never the transcript.
+      if (frame.type === SocketMessageType.AgentState) { applyAgentAvatarFrame(ownerRef.current, frame); return; }
       if (generation) generationRef.current = generation;
       // Preserve the admitted question link when a durable frame omits it.
       const identifiedFrame = {

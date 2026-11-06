@@ -1,0 +1,32 @@
+export {
+  MESSAGE_CAUSE,
+  MESSAGE_CLASS,
+  MESSAGE_VISIBILITY,
+  PARTICIPANT_KIND,
+  classifyMessage,
+  hasAgentAvatar,
+  participantKindOf,
+  type ClassifiableMessage,
+  type MessageCause,
+  type MessageClass,
+  type MessageVisibility,
+  type ParticipantKind,
+} from './messageClass';
+export {
+  ONE_SHOT_MS,
+  activeAnimatedParticipant,
+  agentStateOf,
+  applyAgentStateFrame,
+  avatarMotion,
+  isAnimatedState,
+  motionAllowed,
+  nextChangeAt,
+  shownState,
+  type AgentStateFrameFields,
+  type AvatarMotion,
+  type AvatarStates,
+  type ListAvatar,
+  type MotionPreferences,
+  type ParticipantAvatarState,
+} from './avatarState';
+export { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';

@@ -89,7 +89,7 @@ export function applyChatStreamFrame(
   const type = frame.type;
   if (!type) return history;
   // A participant state (client contract 1.38) is not part of the answer:
-  // the participant presence reads it (#1606), the transcript never does.
+  // the avatar store reads it (`model/agentAvatar.store.ts`), the transcript never does.
   if (type === SocketMessageType.AgentState) return history;
   if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
@@ -125,7 +125,26 @@ export function applyChatStreamFrame(
     applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
     frame,
   ), frame);
-  if (!isTurnTerminalFrame(frame)) return next;
+  const stamped = withAnswerParticipant(next, frame);
+  if (!isTurnTerminalFrame(frame)) return stamped;
+  return settleTerminal(stamped, frame);
+}
+
+/**
+ * Client contract 1.38: the stream names the participant that answers (the
+ * run's, on every frame of its tree), so a live answer knows whose avatar it
+ * shows before the reload does.
+ */
+function withAnswerParticipant(history: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {
+  const id = frame.participant_id;
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return history;
+  const target = findTarget(history, frame);
+  const message = history[target];
+  if (!message || message.role === 'user' || message.authorParticipantId === id) return history;
+  return replaceAt(history, target, { authorParticipantId: id });
+}
+
+function settleTerminal(next: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {
   const target = findTarget(next, frame);
   const message = next[target];
   if (!message) return next;

@@ -322,7 +322,7 @@ const ChatBoxInner = memo(function ChatBox({
     <Box sx={chatShellSx(isEmptyConversation)}>
       <Box sx={chatColumnSx(isEmptyConversation)}>
         <ChatMessageList
-          assistantName={assistantName} emptyState={<ChatEmptyGreeting userName={userName} />}
+          assistantName={assistantName} conversationUuid={conversationUuid} emptyState={<ChatEmptyGreeting userName={userName} />}
           chatHistory={queued.decorate(messages)} isStreaming={isStreaming} userId={userId ?? ''} projectId={projectIdString}
           messageActions={buildMessageActions(readOnlyNotice !== undefined, {
             onCopyToClipboard: handleCopy,

@@ -1,3 +1,5 @@
+import type { MessageClass } from '@elitea/client-core/conversation';
+
 import type { GoalCheckView, RunBriefView } from '@/entities/run-brief';
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
 import type { StaticPauseBinding } from './staticPipelinePause.types';
@@ -26,8 +28,16 @@ export interface ChatMessage {
   readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;
-  /** The persisted assistant author name, independent of the composer selection. */
+  /** The persisted assistant author name, independent of the composer selection. A persona's `display_name` wins over the agent's name. */
   readonly authorName?: string | undefined;
+  /** The answering participant (`author_participant_id`), as a number; the key of its avatar state. */
+  readonly authorParticipantId?: number | undefined;
+  /** The answer's rendering class (ADR-0050 decision 7e, `classifyMessage`). */
+  readonly messageClass?: MessageClass | undefined;
+  /** The author's persona `role` (client contract 1.38), shown beside the name. */
+  readonly authorRole?: string | undefined;
+  /** The author's icon URL (`icon_meta.url`); absent shows the brand mark. */
+  readonly authorIconUrl?: string | undefined;
   readonly name: string;
   readonly avatar?: string | undefined;
   readonly content: string;

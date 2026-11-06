@@ -126,6 +126,11 @@ export interface ChatMessageListProps {
    */
   readonly assistantName?: string | undefined;
   /**
+   * The conversation whose `agent_state` frames drive the answer avatars
+   * (ADR-0050 decision 6). Omitted, every avatar shows its still.
+   */
+  readonly conversationUuid?: string | undefined;
+  /**
    * Steering during execution (contract 1.27): shows each answer's delivered steering messages under it, and
    * someone else's that still wait. The reader's own waiting ones are the composer's queue.
    */

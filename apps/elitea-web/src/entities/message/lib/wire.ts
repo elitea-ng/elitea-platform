@@ -50,8 +50,20 @@ export interface MessageAuthorWire {
 export interface MessageParticipantWire {
   readonly id: string;
   readonly entity_name?: string;
-  readonly meta?: { readonly tools?: readonly MessageParticipantToolWire[]; readonly user_name?: string; readonly user_avatar?: string; readonly name?: string };
+  readonly meta?: {
+    readonly tools?: readonly MessageParticipantToolWire[];
+    readonly user_name?: string;
+    readonly user_avatar?: string;
+    readonly name?: string;
+    readonly icon_meta?: unknown;
+  };
   readonly entity_meta?: { readonly email?: string; readonly id?: string | number; readonly name?: string; readonly model_name?: string };
+  /** The agent version's icon (`{url, name}`), copied when the agent was added. */
+  readonly entity_settings?: { readonly icon_meta?: unknown };
+  /** Client contract 1.38: `human`, `agent`, `ephemeral_agent` or `system`; absent for an attachment. */
+  readonly kind?: string;
+  /** Client contract 1.38: the persona of the agent version the conversation runs (ADR-0050). */
+  readonly persona?: { readonly display_name?: string; readonly pronouns?: string; readonly role?: string };
 }
 
 /** `foundParticipant.meta.tools[]` (line 205). */
@@ -250,4 +262,12 @@ export interface MessageGroupWire {
   readonly sent_to?: { readonly entity_name?: string };
   readonly likes?: number;
   readonly meta?: MessageGroupMetaWire;
+  /** Client contract 1.38 (ADR-0050 decision 7): what the author is. Absent on a row written before it. */
+  readonly author_kind?: string;
+  /** Client contract 1.38: participant ids the message is addressed to; empty is everyone. */
+  readonly addressed_to?: readonly number[];
+  /** Client contract 1.38: `all`, or `side` for agent-to-agent talk. */
+  readonly visibility?: string;
+  /** Client contract 1.38: `human_message`, `agent_mention`, `heartbeat`, `delegation` or `system`. */
+  readonly cause?: string;
 }

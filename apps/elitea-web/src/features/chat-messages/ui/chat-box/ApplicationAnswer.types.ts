@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
 
+import type { AvatarMotion } from '@elitea/client-core/conversation';
+
+
 import type { AnswerCanvasSelection } from './AnswerContent';
 import type { ChatContinueProps } from '../chat-continue/ChatContinue';
 import type { HitlResumePayload } from '../chat-hitl-actions/ChatHitlActions';
@@ -146,6 +149,8 @@ export interface ApplicationAnswerAuthor {
   readonly isSwarmChild?: boolean;
   /** Display name of the swarm agent. */
   readonly swarmAgentName?: string;
+  /** What the caption's avatar plays (the list allows one animated avatar). */
+  readonly motion?: AvatarMotion | undefined;
 }
 
 /** @public Props for `ApplicationAnswer`. */
