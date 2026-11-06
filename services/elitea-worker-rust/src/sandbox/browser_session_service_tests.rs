@@ -184,6 +184,7 @@ fn start_request(run: &str, spec: &BrowserSessionSpecV1) -> Request<StartBrowser
             proxy_url: "http://10.0.0.7:3128".into(),
             proxy_token: "run-token".into(),
         }),
+        unattended: false,
     })
 }
 
@@ -240,6 +241,7 @@ async fn a_session_starts_answers_calls_and_is_destroyed_never_to_be_reused() {
     assert_eq!(start_line["engine"], "full");
     assert_eq!(start_line["engine_sandbox"], false);
     assert_eq!(start_line["proxy"]["token"], "run-token");
+    assert_eq!(start_line["attended"], true);
     let launch = h.backend.containers.lock().unwrap()[&s.name].clone();
     assert!(!format!("{launch:?}").contains("run-token"));
     // A retried start observes it.
@@ -288,6 +290,24 @@ async fn a_session_starts_answers_calls_and_is_destroyed_never_to_be_reused() {
             .into_inner()
             .destroyed
     );
+}
+
+#[tokio::test]
+async fn an_unattended_start_tells_the_agent_nobody_can_be_asked() {
+    let h = harness(4);
+    let s = full();
+    let mut request = start_request("run-1", &s);
+    request.get_mut().unattended = true;
+    // The flag is on the request, not the spec: the grant's digest is the
+    // same one an attended start signs.
+    h.service
+        .start_browser_session(request)
+        .await
+        .expect("started");
+    let seen = Arc::clone(&h.backend.seen.lock().unwrap()[&s.name]);
+    let start_line = seen.lines.lock().unwrap()[0].clone();
+    assert_eq!(start_line["op"], "start");
+    assert_eq!(start_line["attended"], false);
 }
 
 #[tokio::test]
@@ -768,4 +788,80 @@ async fn the_view_streams_frames_ack_paced_and_refuses_watch_only_input() {
     .await
     .expect("ended");
     assert_eq!(end.as_deref(), Some("session_destroyed"));
+}
+
+#[tokio::test]
+async fn a_watched_session_does_not_go_idle() {
+    let h = harness(4);
+    let s = full();
+    h.service
+        .start_browser_session(start_request("run-1", &s))
+        .await
+        .expect("started");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    let service = Arc::clone(&h.supervisor).into_service();
+    tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(service)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await;
+    });
+    let mut client = BrowserSessionServiceClient::connect(format!("http://{address}"))
+        .await
+        .expect("connect");
+    let (up, rx) = tokio::sync::mpsc::channel(8);
+    up.send(BrowserViewInputV1 {
+        frame: Some(browser_view_input_v1::Frame::Open(BrowserViewOpenV1 {
+            grant: Some(grant("run-1", &s.name, view_digest(&s, false), 1)),
+            spec: Some(s.clone()),
+            control: false,
+            max_fps: 10,
+        })),
+    })
+    .await
+    .unwrap();
+    let mut down = client
+        .browser_view(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .expect("view")
+        .into_inner();
+    let first = down.message().await.expect("ok").expect("a frame");
+    let Some(browser_view_output_v1::Frame::Screen(frame)) = first.frame else {
+        panic!("a frame first: {first:?}");
+    };
+    let seen = Arc::clone(&h.backend.seen.lock().unwrap()[&s.name]);
+    let acks = || {
+        seen.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|line| line["op"] == "ack")
+            .count()
+    };
+    // No call, only a watch-only viewer acknowledging frames, for well past
+    // the idle limit: each ack keeps the session.
+    for round in 1..=3 {
+        h.clock.advance(IDLE.saturating_sub(MIN));
+        up.send(BrowserViewInputV1 {
+            frame: Some(browser_view_input_v1::Frame::Ack(frame.seq)),
+        })
+        .await
+        .unwrap();
+        // The touch lands before the ack reaches the agent.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while acks() < round {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("ack relayed");
+        assert_eq!(h.supervisor.sweep().await.expect("sweep"), 0);
+    }
+    // Once the acks stop, the idle limit applies again.
+    h.clock.advance(IDLE);
+    assert_eq!(h.supervisor.sweep().await.expect("sweep"), 1);
+    assert!(h.backend.containers.lock().unwrap().is_empty());
 }

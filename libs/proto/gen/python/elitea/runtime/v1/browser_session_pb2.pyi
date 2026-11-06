@@ -83,14 +83,16 @@ class BrowserSessionEgressV1(_message.Message):
     def __init__(self, proxy_url: _Optional[str] = ..., proxy_token: _Optional[str] = ...) -> None: ...
 
 class StartBrowserSessionRequestV1(_message.Message):
-    __slots__ = ("grant", "spec", "egress")
+    __slots__ = ("grant", "spec", "egress", "unattended")
     GRANT_FIELD_NUMBER: _ClassVar[int]
     SPEC_FIELD_NUMBER: _ClassVar[int]
     EGRESS_FIELD_NUMBER: _ClassVar[int]
+    UNATTENDED_FIELD_NUMBER: _ClassVar[int]
     grant: _sandbox_pb2.SignedSandboxJobGrantV1
     spec: BrowserSessionSpecV1
     egress: BrowserSessionEgressV1
-    def __init__(self, grant: _Optional[_Union[_sandbox_pb2.SignedSandboxJobGrantV1, _Mapping]] = ..., spec: _Optional[_Union[BrowserSessionSpecV1, _Mapping]] = ..., egress: _Optional[_Union[BrowserSessionEgressV1, _Mapping]] = ...) -> None: ...
+    unattended: bool
+    def __init__(self, grant: _Optional[_Union[_sandbox_pb2.SignedSandboxJobGrantV1, _Mapping]] = ..., spec: _Optional[_Union[BrowserSessionSpecV1, _Mapping]] = ..., egress: _Optional[_Union[BrowserSessionEgressV1, _Mapping]] = ..., unattended: _Optional[bool] = ...) -> None: ...
 
 class StartBrowserSessionResponseV1(_message.Message):
     __slots__ = ("created", "engine_version")

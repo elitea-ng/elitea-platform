@@ -41,7 +41,7 @@ The supervisor side is `services/elitea-worker-rust/src/sandbox/browser_session_
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `start` | `revision` (1), `engine` (`full` or `lite`), `engine_sandbox` (bool), `max_pages`, `viewport` `{width, height}` (default 1280 by 800), `proxy` (`{url, token}` or `null`) | Always the first line. Start the engine, then answer `ready` or `error`. |
+| `start` | `revision` (1), `engine` (`full` or `lite`), `engine_sandbox` (bool), `max_pages`, `viewport` `{width, height}` (default 1280 by 800), `proxy` (`{url, token}` or `null`), `attended` (bool, optional, default `true`; `false` answers `browser_request_user` with `no_person`) | Always the first line. Start the engine, then answer `ready` or `error`. |
 | `call` | `id`, `name`, `args` | One browser tool call from the `libs/rust/browser-tools` contract: a `browser_*` name with an arguments object. Answer exactly one `result` (or `error` with the same `id`). |
 | `view` | `on` (bool), `max_fps` (1 to 10) | Start or stop the screencast. `on: true` is sent when the first viewer attaches, and `on: false` when the last one leaves. With no viewer, the screencast does not run. |
 | `ack` | `seq` | A viewer showed frame `seq`. |
@@ -63,6 +63,10 @@ The supervisor side is `services/elitea-worker-rust/src/sandbox/browser_session_
   - The token exists only in memory. Never write it to argv, the
     environment, a file or a log.
   - `proxy: null` means the engine has no network.
+- `attended: false` means nobody can be asked: the run is a schedule or a
+  webhook (ADR-0049 decision 7). `browser_request_user` then answers
+  `no_person` at once instead of waiting for a person. The supervisor sends
+  `false` when the start request sets `unattended`.
 - WebRTC, QUIC and DNS-over-HTTPS are off in the engine (ADR-0049
   decision 5).
 

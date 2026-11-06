@@ -43,6 +43,10 @@ pub struct StartLine {
     pub viewport: Viewport,
     /// The egress proxy and the run token; `None` is no network.
     pub proxy: Option<ProxyLine>,
+    /// Whether a person can be asked: `false` (a schedule or webhook run,
+    /// ADR-0049 decision 7) makes `browser_request_user` answer
+    /// `no_person` at once.
+    pub attended: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -570,6 +574,7 @@ mod tests {
                 url: "http://10.0.0.7:3128".into(),
                 token: "t0k".into(),
             }),
+            attended: true,
         }
     }
 
@@ -603,6 +608,7 @@ mod tests {
         assert_eq!(lines[0]["max_pages"], 3);
         assert_eq!(lines[0]["viewport"]["width"], 1280);
         assert_eq!(lines[0]["proxy"]["url"], "http://10.0.0.7:3128");
+        assert_eq!(lines[0]["attended"], true);
         assert_eq!(lines[1]["op"], "call");
         assert_eq!(lines[1]["id"], "c1");
         assert_eq!(lines.last().unwrap()["op"], "destroy");

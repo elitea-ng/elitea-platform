@@ -440,7 +440,12 @@ type StartBrowserSessionRequestV1 struct {
 	Grant *SignedSandboxJobGrantV1 `protobuf:"bytes,1,opt,name=grant,proto3" json:"grant,omitempty"`
 	Spec  *BrowserSessionSpecV1    `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
 	// Absent: the engine has no network at all.
-	Egress        *BrowserSessionEgressV1 `protobuf:"bytes,3,opt,name=egress,proto3" json:"egress,omitempty"`
+	Egress *BrowserSessionEgressV1 `protobuf:"bytes,3,opt,name=egress,proto3" json:"egress,omitempty"`
+	// A schedule or webhook run with nobody to ask (ADR-0049 decision 7):
+	// `browser_request_user` answers `no_person` at once. Default false: a
+	// person may be asked. A field of the request, not of the spec, so it is
+	// not part of the grant's digest.
+	Unattended    bool `protobuf:"varint,4,opt,name=unattended,proto3" json:"unattended,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -494,6 +499,13 @@ func (x *StartBrowserSessionRequestV1) GetEgress() *BrowserSessionEgressV1 {
 		return x.Egress
 	}
 	return nil
+}
+
+func (x *StartBrowserSessionRequestV1) GetUnattended() bool {
+	if x != nil {
+		return x.Unattended
+	}
+	return false
 }
 
 // A repeated start of a live session (a retry after a lost acknowledgement)
@@ -1750,11 +1762,14 @@ const file_elitea_runtime_v1_browser_session_proto_rawDesc = "" +
 	"\x16BrowserSessionEgressV1\x12\x1b\n" +
 	"\tproxy_url\x18\x01 \x01(\tR\bproxyUrl\x12\x1f\n" +
 	"\vproxy_token\x18\x02 \x01(\tR\n" +
-	"proxyTokenJ\x04\b\x03\x10\x10\"\xe6\x01\n" +
+	"proxyTokenJ\x04\b\x03\x10\x10\"\x86\x02\n" +
 	"\x1cStartBrowserSessionRequestV1\x12@\n" +
 	"\x05grant\x18\x01 \x01(\v2*.elitea.runtime.v1.SignedSandboxJobGrantV1R\x05grant\x12;\n" +
 	"\x04spec\x18\x02 \x01(\v2'.elitea.runtime.v1.BrowserSessionSpecV1R\x04spec\x12A\n" +
-	"\x06egress\x18\x03 \x01(\v2).elitea.runtime.v1.BrowserSessionEgressV1R\x06egressJ\x04\b\x04\x10\x10\"f\n" +
+	"\x06egress\x18\x03 \x01(\v2).elitea.runtime.v1.BrowserSessionEgressV1R\x06egress\x12\x1e\n" +
+	"\n" +
+	"unattended\x18\x04 \x01(\bR\n" +
+	"unattendedJ\x04\b\x05\x10\x10\"f\n" +
 	"\x1dStartBrowserSessionResponseV1\x12\x18\n" +
 	"\acreated\x18\x01 \x01(\bR\acreated\x12%\n" +
 	"\x0eengine_version\x18\x02 \x01(\tR\rengineVersionJ\x04\b\x03\x10\x10\"\xef\x01\n" +

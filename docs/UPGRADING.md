@@ -17,6 +17,13 @@ earlier release refuses that profile at start (unknown purpose), so upgrade
 the supervisor image before you enable the profile. The new proto adds
 messages only, and no existing field changes.
 
+`StartBrowserSessionRequestV1.unattended` (field 4) marks a schedule or
+webhook run with nobody to ask (ADR-0049 decision 7). The supervisor passes
+it to the session agent as `attended: false` on the `start` line, so
+`browser_request_user` answers `no_person` at once. It defaults to false,
+meaning a person may be asked. It is a field of the request, not of the
+spec, so it is not part of the grant's digest.
+
 To turn it on, follow
 [Cloud browser on Kubernetes](../apps/elitea-docs/src/content/docs/deployment/cloud-browser-kubernetes.mdx):
 

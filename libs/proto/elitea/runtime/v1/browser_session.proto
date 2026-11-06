@@ -107,7 +107,12 @@ message StartBrowserSessionRequestV1 {
   BrowserSessionSpecV1 spec = 2;
   // Absent: the engine has no network at all.
   BrowserSessionEgressV1 egress = 3;
-  reserved 4 to 15;
+  // A schedule or webhook run with nobody to ask (ADR-0049 decision 7):
+  // `browser_request_user` answers `no_person` at once. Default false: a
+  // person may be asked. A field of the request, not of the spec, so it is
+  // not part of the grant's digest.
+  bool unattended = 4;
+  reserved 5 to 15;
 }
 
 // A repeated start of a live session (a retry after a lost acknowledgement)

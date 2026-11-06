@@ -448,6 +448,7 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionSupervis
         claim: SessionClaim,
         container: BrowserSessionContainer,
         proxy: Option<ProxyLine>,
+        attended: bool,
     ) -> Result<StartBrowserSessionResponseV1, Status> {
         let name = container.name.clone();
         let wall = Duration::from_secs(container.wall_seconds);
@@ -469,7 +470,7 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionSupervis
             }
             Admission::New => {}
         }
-        match self.launch(&claim, &container, proxy).await {
+        match self.launch(&claim, &container, proxy, attended).await {
             Ok(response) => Ok(response),
             Err(status) => {
                 self.table().abandon(&name);
@@ -484,6 +485,7 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionSupervis
         claim: &SessionClaim,
         container: &BrowserSessionContainer,
         proxy: Option<ProxyLine>,
+        attended: bool,
     ) -> Result<StartBrowserSessionResponseV1, Status> {
         let name = container.name.clone();
         let isolation = self.backend.isolation().await.map_err(backend_status)?;
@@ -521,6 +523,7 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionSupervis
                 max_pages: container.max_pages,
                 viewport: Viewport::default(),
                 proxy,
+                attended,
             };
             let engine_version = agent
                 .start(&start)
@@ -683,6 +686,7 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
         let this = &self.0;
         let peer = this.peer(&request)?;
         let request = request.into_inner();
+        let attended = !request.unattended;
         let proxy = match request.egress {
             None => None,
             Some(egress) => {
@@ -709,7 +713,9 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
             proxy.is_some(),
             spec_digest,
         )?;
-        Ok(Response::new(this.start(claim, container, proxy).await?))
+        Ok(Response::new(
+            this.start(claim, container, proxy, attended).await?,
+        ))
     }
 
     async fn browser_call(
@@ -855,6 +861,10 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
             while let Ok(Some(message)) = inbound.message().await {
                 match message.frame {
                     Some(In::Ack(seq)) => {
+                        // A person watching keeps the session from going
+                        // idle. A lingering session refuses the touch,
+                        // which is fine: it is already ending.
+                        let _ = this.table().touch(&name, &claim, this.clock.now());
                         acked_tx.send_replace(seq);
                         agent.ack(seq).await;
                     }
