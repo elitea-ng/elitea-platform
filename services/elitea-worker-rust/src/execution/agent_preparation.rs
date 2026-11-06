@@ -1380,6 +1380,7 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
                     &verified,
                     selection,
                     occurred_at_unix_millis,
+                    &lease,
                     recovery_config,
                 )
                 .await

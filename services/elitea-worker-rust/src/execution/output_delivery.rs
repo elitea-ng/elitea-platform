@@ -855,6 +855,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
         verified: &'a VerifiedAgentCommand,
         selection: FreshAgentTerminalSelection,
         occurred_at_unix_millis: i64,
+        lease: &'a ClaimLeaseMonitor,
         recovery_config: AgentTerminalRecoveryConfig,
     ) -> TerminalFuture<'a, Result<FreshAgentTerminalAck, FreshAgentTerminalError>>
     where
@@ -893,6 +894,7 @@ impl<C: AgentProgressConnector> FreshAgentProgressPublisher<C> {
                 terminal,
                 prepared,
                 reopener,
+                lease,
                 recovery_config.max_output_sessions,
             )
             .await
@@ -1970,6 +1972,7 @@ where
                 frame,
                 spool,
                 reopener,
+                &lease,
                 recovery_config.max_output_sessions,
             )
             .await
@@ -2082,6 +2085,7 @@ where
                 frame,
                 spool,
                 reopener,
+                &lease,
                 recovery_config.max_output_sessions,
             )
             .await
@@ -2164,6 +2168,7 @@ where
                 frame,
                 spool,
                 reopener,
+                &lease,
                 recovery_config.max_output_sessions,
             )
             .await
@@ -2216,6 +2221,7 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
     mut frame: ExecutionOutputFrameV1,
     spool: PreparedOutputSpool,
     mut reopener: AgentOutputSpoolReopener,
+    lease: &ClaimLeaseMonitor,
     max_output_sessions: usize,
 ) -> Result<(DurablyAckedTerminal, ExecutionOutputFrameV1), ExactTerminalReplayError> {
     let acknowledged = match replay_exact_terminal(
@@ -2230,8 +2236,30 @@ async fn replay_terminal_with_replacement<T: AgentTerminalReplay>(
     {
         Ok(acknowledged) => acknowledged,
         Err(error) => {
-            let Some(winner) = output_winner(&error) else {
-                return Err(ExactTerminalReplayError::Output(error));
+            let winner = match output_winner(&error) {
+                Some(winner) => winner,
+                // FU-290: Main refused this exact frame (bound
+                // PROTOCOL_VIOLATION). The same bytes can never be accepted,
+                // so it is replaced once by a canonical failure; a refused
+                // canonical failure (or an undecidable lease) is returned.
+                None if matches!(
+                    error,
+                    OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
+                ) && restored_terminal_failure_kind(&frame).is_none() =>
+                {
+                    match lease.check_now().await {
+                        Ok(()) => RuntimeFailureKind::Internal,
+                        Err(ClaimLeaseError::Cancelled(_)) => RuntimeFailureKind::Cancelled,
+                        Err(_) => {
+                            return Err(ExactTerminalReplayError::Output(
+                                OutputGrpcError::Unavailable(
+                                    "the claim lease is unavailable for terminal replacement",
+                                ),
+                            ));
+                        }
+                    }
+                }
+                None => return Err(ExactTerminalReplayError::Output(error)),
             };
             if restored_terminal_failure_kind(&frame) == Some(winner) {
                 return Err(ExactTerminalReplayError::Output(error));

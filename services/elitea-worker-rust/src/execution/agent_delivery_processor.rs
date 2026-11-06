@@ -44,10 +44,11 @@ use crate::protocol::control::{
     AgentControlClient, AgentOutputRecoveryKind, DesiredExecutionState,
 };
 use crate::protocol::output::RuntimeFailureKind;
-use crate::transport::ControlRpc;
 use crate::transport::command_bus::{
-    CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict,
+    CommandDelivery, CommandRetirementClient, CommandRetirer, DeliveryVerdict, PoisonReason,
+    delivery_token,
 };
+use crate::transport::{ControlRpc, OutputGrpcError, OutputProtocolError};
 
 /// Complete application/ad-hoc command processor behind one command delivery
 /// worker. Every field is an immutable process-owned dependency; no execution
@@ -205,8 +206,9 @@ where
         &self,
         delivery: CommandDelivery,
         verified: VerifiedAgentCommand,
-    ) {
+    ) -> DeliveryVerdict {
         let command = verified.command();
+        let delivery_token = delivery_token(&command.idempotency_key);
         let span = tracing::info_span!(
             parent: None,
             "agent.delivery",
@@ -237,7 +239,10 @@ where
             async move {
                 tracing::info!(event = "agent_delivery_started");
                 match Box::pin(self.process_owned(delivery, verified)).await {
-                    Ok(outcome) => outcome.record(),
+                    Ok(outcome) => {
+                        outcome.record();
+                        DeliveryVerdict::Processed
+                    }
                     Err(error) => {
                         tracing::Span::current().record("outcome", "failed_no_ack");
                         tracing::Span::current().record("error_code", error.code());
@@ -247,12 +252,28 @@ where
                             error_code = error.code(),
                             retryable = error.retryable(),
                         );
+                        if error.terminal_frame_refused() {
+                            // FU-290: one exact replay and one replacement are
+                            // spent and Main still refuses the terminal. A NAK
+                            // would redeliver it every retry delay forever, so
+                            // the delivery is terminated and dead-lettered.
+                            tracing::error!(
+                                event = "agent_failure_terminal.canonical_refused",
+                                error_code = error.code(),
+                            );
+                            DeliveryVerdict::Poison {
+                                reason: PoisonReason::TerminalRefused,
+                                delivery_token: Some(delivery_token),
+                            }
+                        } else {
+                            DeliveryVerdict::Processed
+                        }
                     }
                 }
             }
             .instrument(span),
         )
-        .await;
+        .await
     }
 
     async fn process_checkpoint_delivery(
@@ -699,8 +720,7 @@ where
             });
             return verdict;
         }
-        self.process_verified_delivery(delivery, verified).await;
-        DeliveryVerdict::Processed
+        self.process_verified_delivery(delivery, verified).await
     }
 }
 
@@ -804,6 +824,18 @@ pub(super) enum AgentDeliveryProcessError {
 }
 
 impl AgentDeliveryProcessError {
+    /// Main refused the terminal output frame itself (bound, nonretryable).
+    const fn terminal_frame_refused(&self) -> bool {
+        matches!(
+            self,
+            Self::TerminalRecovery(AgentTerminalRecoveryError::Output(
+                OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
+            )) | Self::FailureTerminal(AgentFailureTerminalError::Output(
+                OutputGrpcError::Protocol(OutputProtocolError::FrameRefused)
+            ))
+        )
+    }
+
     const fn code(&self) -> &'static str {
         match self {
             Self::Delivery(error) => error.code(),

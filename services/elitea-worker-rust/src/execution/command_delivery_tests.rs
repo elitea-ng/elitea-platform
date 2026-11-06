@@ -832,6 +832,44 @@ async fn a_failed_dead_letter_write_never_terminates_the_poison() {
     assert_eq!(terms(&connection), [] as [u64; 0]);
 }
 
+/// FU-290: a delivery whose canonical terminal Main keeps refusing is
+/// dead-lettered and terminated once, never nak'd into a redelivery loop.
+#[tokio::test(start_paused = true)]
+async fn a_refused_canonical_terminal_is_dead_lettered_and_terminated() {
+    let connection = Arc::new(FakeConnection::new(1));
+    connection.push_fetch(Ok(vec![delivery(7)]));
+    let processor = Arc::new(TestProcessor::scripted(BTreeMap::from([(
+        7,
+        Script::Poison(PoisonReason::TerminalRefused),
+    )])));
+    processor.release(1);
+    let runtime = CommandDeliveryRuntime::new(
+        Arc::clone(&connection),
+        Arc::clone(&processor),
+        runtime_config(1, 1),
+    );
+    let (stop, stopped) = watch::channel(false);
+    let task = tokio::spawn(runtime.run(stopped));
+    connection
+        .wait_for(|operations| {
+            operations
+                .iter()
+                .any(|operation| operation == &FakeOperation::Term(7))
+        })
+        .await;
+    stop.send(true).expect("request runtime stop");
+    task.await.expect("runtime task").expect("runtime drain");
+    assert_eq!(terms(&connection), [7]);
+    assert_eq!(naks(&connection), [] as [(u64, Duration); 0]);
+    assert!(connection.operations().iter().any(|operation| matches!(
+        operation,
+        FakeOperation::DeadLetter {
+            reason: PoisonReason::TerminalRefused,
+            ..
+        }
+    )));
+}
+
 #[test]
 fn every_verification_failure_is_poison_with_a_stable_reason() {
     assert_eq!(
