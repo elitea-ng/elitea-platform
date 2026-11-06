@@ -42,7 +42,7 @@ func TestBrowserSecondsSinceSumsTheProjectsLedgerRows(t *testing.T) {
 INSERT INTO gateway.llm_usage_events
     (event_id, project_id, user_id, provider, model, cost_usd, period_start, period_end, occurred_at,
      operation, units, unit)
-VALUES (gen_random_uuid(), $1, 7, $2, $3, 0, $4, $4 + interval '1 month', $5, $6, $7,
+VALUES (gen_random_uuid(), $1, 7, $2, $3, 0, $4::timestamptz, $4::timestamptz + interval '1 month', $5, $6, $7::bigint,
         CASE WHEN $7::bigint IS NULL THEN NULL ELSE 'second' END)`,
 			row.project, row.provider, row.model, monthStart, row.at, row.operation, row.units); err != nil {
 			t.Fatalf("seed: %v", err)
