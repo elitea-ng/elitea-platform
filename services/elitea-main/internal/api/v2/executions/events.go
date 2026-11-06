@@ -38,7 +38,7 @@ type DurableEvent struct {
 	Type   string
 	Data   json.RawMessage
 	// Participant is the chat participant an agent run answers as (shared
-	// 0226); nil for any other execution and for a run admitted before it.
+	// 0227); nil for any other execution and for a run admitted before it.
 	// The handler stamps it on the run's node events and derives the
 	// `agent_state` frames from them (participant_frames.go).
 	Participant *EventParticipant
