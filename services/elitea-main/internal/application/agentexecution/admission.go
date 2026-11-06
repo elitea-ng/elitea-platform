@@ -177,8 +177,9 @@ func (a Admission) ApplicationID() int64 {
 
 // ParticipantID is the chat participant the run answers as (shared 0227,
 // ADR-0050 decision 7b): the target participant of a current turn, an ad hoc
-// chat, a regeneration or a continuation; 0 for a fan-out wake, whose
-// answer's author the event stream then does not name.
+// chat, a regeneration or a continuation; 0 for a fan-out wake, which
+// inherits the participant of the run it wakes in the admission
+// transaction.
 func (a Admission) ParticipantID() int64 {
 	switch {
 	case a.CurrentTurn != nil:

@@ -74,14 +74,14 @@ INSERT INTO public.auth_core__project_role VALUES (1,1,'admin'),(2,1,'viewer'),(
 INSERT INTO public.auth_core__project_user_role VALUES (1,9,1),(1,7,2),(1,8,2),(2,8,3);
 CREATE TABLE p_1.chat_conversation_folders(id serial PRIMARY KEY,name text,owner_id integer,position integer,uuid uuid,meta jsonb,created_at timestamp DEFAULT now(),updated_at timestamp);
 CREATE TABLE p_1.chat_conversations(id serial PRIMARY KEY,uuid uuid UNIQUE DEFAULT gen_random_uuid(),name text NOT NULL,author_id integer NOT NULL,is_private boolean NOT NULL DEFAULT true,meta jsonb NOT NULL DEFAULT '{}',source text DEFAULT 'elitea',instructions text,folder_id integer REFERENCES p_1.chat_conversation_folders(id),created_at timestamp DEFAULT now(),updated_at timestamp);
-CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,uuid uuid UNIQUE,entity_name text,entity_meta jsonb,meta jsonb,created_at timestamp DEFAULT now(),updated_at timestamp);
+CREATE TABLE p_1.chat_participants(id serial PRIMARY KEY,uuid uuid UNIQUE,entity_name text,entity_meta jsonb,meta jsonb,created_at timestamp DEFAULT now(),updated_at timestamp,kind text);
 CREATE TABLE p_1.applications(id serial PRIMARY KEY,name text);
 CREATE TABLE p_1.application_versions(id serial PRIMARY KEY,application_id integer,agent_type text,instructions text,llm_settings jsonb);
 CREATE TABLE p_1.elitea_tools(id serial PRIMARY KEY,name text,type text,settings jsonb);
 CREATE TABLE p_1.entity_tool_mapping(id serial PRIMARY KEY,entity_version_id integer,entity_type text,tool_id integer);
 CREATE TABLE p_1.chat_conversation_archives(conversation_id integer PRIMARY KEY REFERENCES p_1.chat_conversations(id) ON DELETE CASCADE,archived_by bigint NOT NULL,archived_at timestamp NOT NULL DEFAULT now());
 ALTER TABLE p_1.chat_conversations ADD COLUMN attachment_participant_id integer REFERENCES p_1.chat_participants(id);
-CREATE TABLE p_1.chat_participant_mapping(id serial PRIMARY KEY,conversation_id integer REFERENCES p_1.chat_conversations(id),participant_id integer REFERENCES p_1.chat_participants(id),entity_settings jsonb DEFAULT '{}',created_at timestamp DEFAULT now(),updated_at timestamp,UNIQUE(participant_id,conversation_id));
+CREATE TABLE p_1.chat_participant_mapping(id serial PRIMARY KEY,conversation_id integer REFERENCES p_1.chat_conversations(id),participant_id integer REFERENCES p_1.chat_participants(id),entity_settings jsonb DEFAULT '{}',created_at timestamp DEFAULT now(),updated_at timestamp,persona jsonb,UNIQUE(participant_id,conversation_id));
 CREATE TABLE p_1.chat_message_group(id serial PRIMARY KEY,uuid uuid UNIQUE DEFAULT gen_random_uuid(),conversation_id integer REFERENCES p_1.chat_conversations(id),author_participant_id integer,meta jsonb DEFAULT '{}',created_at timestamp DEFAULT now());
 CREATE TABLE p_1.chat_message_items(id serial PRIMARY KEY,uuid uuid UNIQUE DEFAULT gen_random_uuid(),message_group_id integer REFERENCES p_1.chat_message_group(id),item_type text);
 CREATE TABLE p_1.chat_messages_canvas(id integer PRIMARY KEY REFERENCES p_1.chat_message_items(id));

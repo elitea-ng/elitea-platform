@@ -51,7 +51,6 @@ type participantFrameFields struct {
 	StreamID            json.RawMessage `json:"stream_id"`
 	MessageID           json.RawMessage `json:"message_id"`
 	ExecutionGeneration json.RawMessage `json:"execution_generation"`
-	ParticipantID       json.RawMessage `json:"participant_id"`
 	SIOEvent            string          `json:"sio_event"`
 	ResponseMetadata    struct {
 		ParentAgentName string `json:"parent_agent_name"`
@@ -76,11 +75,10 @@ func (s *participantStates) stamp(event DurableEvent) (DurableEvent, *DurableEve
 		if json.Unmarshal(event.Data, &fields) != nil {
 			return event, nil
 		}
-		// A worker that stamps the frame itself is kept as it is.
-		if len(fields.ParticipantID) == 0 {
-			if stamped, ok := appendParticipantKeys(event.Data, participant.ID, addressedTo); ok {
-				event.Data = stamped
-			}
+		// The node event codec refuses unknown keys at ingest, so a stored
+		// frame never names a participant itself.
+		if stamped, ok := appendParticipantKeys(event.Data, participant.ID, addressedTo); ok {
+			event.Data = stamped
 		}
 	} else if event.Type != executionFailedType {
 		return event, nil
@@ -114,14 +112,36 @@ func (s *participantStates) stamp(event DurableEvent) (DurableEvent, *DurableEve
 	return event, &DurableEvent{Cursor: event.Cursor, Type: nodeEventType, Data: data}
 }
 
+// seed is the state frame a resumed stream starts with: the state the
+// newest of the events before the resume cursor left the participant in
+// (oldest first). It has no SSE id, so the client's resume cursor does not
+// move back; nil when none of them moves a participant.
+func (s *participantStates) seed(before []DurableEvent) *DurableEvent {
+	var state *DurableEvent
+	for _, event := range before {
+		if _, next := s.stamp(event); next != nil {
+			state = next
+		}
+	}
+	if state != nil {
+		state.Cursor = 0
+	}
+	return state
+}
+
 // frameAgentState is the state a frame moves its participant to; empty for a
 // frame that does not move it.
 func frameAgentState(eventType string, fields participantFrameFields) string {
 	if eventType == executionFailedType {
 		return AgentStateError
 	}
-	// A sub-agent's frame: the participant has delegated and is working,
-	// and a sub-agent's answer is not the participant's.
+	// A pause waits on a person, whoever in the agent tree asked.
+	switch fields.Type {
+	case "agent_hitl_interrupt", "agent_requires_confirmation", "agent_tool_paused", "mcp_authorization_required":
+		return AgentStateWaiting
+	}
+	// Any other sub-agent frame: the participant has delegated and is
+	// working, and a sub-agent's answer is not the participant's.
 	if fields.ResponseMetadata.ParentAgentName != "" {
 		if fields.Type == "full_message" {
 			return ""
@@ -141,8 +161,6 @@ func frameAgentState(eventType string, fields participantFrameFields) string {
 		return AgentStateSpeaking
 	case "agent_tool_start":
 		return AgentStateWorking
-	case "agent_hitl_interrupt", "agent_requires_confirmation", "agent_tool_paused", "mcp_authorization_required":
-		return AgentStateWaiting
 	case "agent_exception", "error", "llm_error":
 		return AgentStateError
 	case "full_message":

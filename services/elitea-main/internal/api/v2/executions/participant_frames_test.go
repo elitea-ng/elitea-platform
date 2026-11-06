@@ -1,7 +1,10 @@
 package executions
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +36,8 @@ func TestParticipantStampAddsKeysAndDerivesStates(t *testing.T) {
 		{`{"type":"agent_llm_chunk","content":" there","response_metadata":{}}`, ""},
 		{`{"type":"agent_tool_start","response_metadata":{}}`, AgentStateWorking},
 		{`{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`, ""},
+		{`{"type":"agent_hitl_interrupt","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWaiting},
+		{`{"type":"agent_tool_start","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWorking},
 		{`{"type":"full_message","response_metadata":{"parent_agent_name":"sub"}}`, ""},
 		{`{"type":"agent_tool_end","response_metadata":{}}`, AgentStateThinking},
 		{`{"type":"agent_hitl_interrupt","response_metadata":{}}`, AgentStateWaiting},
@@ -102,11 +107,6 @@ func TestParticipantStampLeavesOtherEventsAlone(t *testing.T) {
 	if served, state := states.stamp(plain); string(served.Data) != string(plain.Data) || state != nil {
 		t.Fatalf("an event without a participant was changed")
 	}
-	stamped := agentEvent(2, `{"type":"agent_llm_chunk","participant_id":9,"response_metadata":{}}`)
-	served, _ := states.stamp(stamped)
-	if string(served.Data) != string(stamped.Data) {
-		t.Fatalf("a worker-stamped frame was rewritten: %s", served.Data)
-	}
 	reset := DurableEvent{Cursor: 3, Type: "execution.replay_reset", Data: json.RawMessage(`{}`), Participant: &EventParticipant{ID: 7}}
 	if served, state := states.stamp(reset); string(served.Data) != "{}" || state != nil {
 		t.Fatalf("a reset event was changed")
@@ -117,5 +117,66 @@ func TestAppendParticipantKeysEmptyObject(t *testing.T) {
 	out, ok := appendParticipantKeys(json.RawMessage(`{ }`), 4, []int64{2, 3})
 	if !ok || string(out) != `{"participant_id":4,"addressed_to":[2,3]}` {
 		t.Fatalf("got %s %v", out, ok)
+	}
+}
+
+func TestParticipantSeedRestatesTheLatestState(t *testing.T) {
+	var states participantStates
+	seed := states.seed([]DurableEvent{
+		agentEvent(4, `{"type":"agent_start","stream_id":"s","response_metadata":{}}`),
+		agentEvent(5, `{"type":"agent_hitl_interrupt","response_metadata":{}}`),
+		agentEvent(6, `{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`),
+	})
+	if seed == nil || seed.Cursor != 0 || decode(t, seed.Data)["state"] != AgentStateWorking {
+		t.Fatalf("seed = %+v", seed)
+	}
+	// The stream goes on from the seeded state: the same state is not
+	// written twice.
+	if _, state := states.stamp(agentEvent(7, `{"type":"agent_tool_start","response_metadata":{"parent_agent_name":"sub"}}`)); state != nil {
+		t.Fatalf("a repeated state was written: %s", state.Data)
+	}
+	var empty participantStates
+	if empty.seed(nil) != nil {
+		t.Fatal("a seed from no events")
+	}
+}
+
+type seededEventRepository struct {
+	eventRepositoryStub
+	preceding []DurableEvent
+	through   []uint64
+}
+
+func (s *seededEventRepository) Preceding(_ context.Context, _, _ string, through uint64, _ int) ([]DurableEvent, error) {
+	s.through = append(s.through, through)
+	return s.preceding, nil
+}
+
+func TestEventHandlerRestatesTheStateOfAResumedStream(t *testing.T) {
+	repository := &seededEventRepository{
+		eventRepositoryStub: eventRepositoryStub{events: map[uint64][]DurableEvent{
+			4: {agentEvent(5, `{"type":"agent_hitl_interrupt","response_metadata":{}}`)},
+		}},
+		preceding: []DurableEvent{agentEvent(4, `{"type":"agent_tool_start","response_metadata":{}}`)},
+	}
+	handler, err := NewEventHandler(&eventAuthorizerStub{}, repository, &replayWaiterStub{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := executionEventsRequest()
+	request.Header.Set("Last-Event-ID", "4")
+	response := newStreamingRecorder()
+	handler.Stream(response, request)
+
+	body := response.Body.String()
+	seed := "event: execution.node_event\ndata: {\"addressed_to\":[],\"participant_id\":7,\"response_metadata\":{},\"state\":\"working\",\"type\":\"agent_state\"}\n\n"
+	if !strings.HasPrefix(body, seed) {
+		t.Fatalf("the resumed stream does not start with the seeded state:\n%s", body)
+	}
+	if !strings.Contains(body, "id: 5\nevent: execution.node_event\n") || !strings.Contains(body, `"state":"waiting"`) {
+		t.Fatalf("the replay after the seed:\n%s", body)
+	}
+	if !reflect.DeepEqual(repository.through, []uint64{4}) {
+		t.Fatalf("the look-back read %v", repository.through)
 	}
 }

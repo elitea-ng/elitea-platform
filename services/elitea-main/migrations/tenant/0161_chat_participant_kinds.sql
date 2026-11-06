@@ -101,6 +101,20 @@ BEGIN
         ALTER TABLE chat_participant_mapping ADD CONSTRAINT chat_participant_mapping_persona
             CHECK (persona IS NULL OR (jsonb_typeof(persona) = 'object' AND octet_length(persona::text) <= 4096));
 
+        -- The persona snapshot of a soul (tenant/0160): the one expression
+        -- the backfill below and every application turn
+        -- (InsertCurrentApplicationTurn) use. NULL for no persona.
+        EXECUTE format($fn$
+            CREATE OR REPLACE FUNCTION %1$I.chat_persona_of(soul jsonb) RETURNS jsonb
+            LANGUAGE sql IMMUTABLE AS $body$
+                SELECT CASE WHEN jsonb_typeof(soul) = 'object' THEN
+                    NULLIF(jsonb_strip_nulls(jsonb_build_object(
+                        'display_name', soul ->> 'display_name',
+                        'pronouns', soul ->> 'pronouns',
+                        'role', soul ->> 'role')), '{}'::jsonb)
+                END
+            $body$ $fn$, tenant);
+
         -- The souls stored since 0160: the agents that already have one show
         -- it before their next turn.
         IF to_regclass('chat_participants') IS NOT NULL
@@ -110,10 +124,7 @@ BEGIN
            AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('chat_participant_mapping')
                          AND attname = 'entity_settings' AND NOT attisdropped) THEN
             UPDATE chat_participant_mapping AS mapping
-               SET persona = NULLIF(jsonb_strip_nulls(jsonb_build_object(
-                       'display_name', version.soul ->> 'display_name',
-                       'pronouns', version.soul ->> 'pronouns',
-                       'role', version.soul ->> 'role')), '{}'::jsonb)
+               SET persona = chat_persona_of(version.soul)
               FROM chat_participants AS participant, application_versions AS version
              WHERE participant.id = mapping.participant_id
                AND participant.entity_name = 'application'

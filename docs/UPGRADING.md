@@ -14,9 +14,10 @@ No action is needed. Workers and Main can be upgraded in any order.
   `cause`. It fills them for existing rows from `entity_name`,
   `sent_to_id`, the reply link and the version souls. The backfill turns
   the tenant's user triggers off for its own updates, so it does not
-  re-deliver every message to every synced client. On a tenant with many
-  messages, expect the migration to take as long as one update over
-  `chat_message_group`.
+  re-deliver every message to every synced client. The migration holds an
+  exclusive lock on `chat_message_group` from the column change to the end
+  of the backfill, so chat sends in that project wait until it commits. On
+  a project with millions of messages, run the upgrade in a quiet window.
 - Two `BEFORE INSERT` triggers fill the new columns when a writer leaves
   them unset. A writer that sets `addressed_to` to one participant also
   gets `sent_to_id`, and the other way round. `sent_to_id` is deprecated

@@ -209,3 +209,14 @@ CREATE TABLE entity_skill_mapping (
     CONSTRAINT entity_skill_mapping_unique
         UNIQUE (entity_version_id, skill_id, entity_type)
 );
+
+-- tenant/0161_chat_participant_kinds.sql: the persona snapshot of a soul.
+CREATE FUNCTION chat_persona_of(soul jsonb) RETURNS jsonb
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN jsonb_typeof(soul) = 'object' THEN
+        NULLIF(jsonb_strip_nulls(jsonb_build_object(
+            'display_name', soul ->> 'display_name',
+            'pronouns', soul ->> 'pronouns',
+            'role', soul ->> 'role')), '{}'::jsonb)
+    END
+$$;

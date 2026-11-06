@@ -3332,9 +3332,8 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	return participantID, nil
 }
 
-// messageAddressing is a message group's author kind, addressees,
-// visibility and cause (tenant/0161), as the map-shaped message reads serve
-// them: the same keys and omissions as conversations.Message.
+// messageAddressing scans a message group's tenant/0161 columns for the
+// map-shaped reads, which serve them as conversations.MessageAddressing does.
 type messageAddressing struct {
 	authorKind  *string
 	addressedTo []int32
@@ -3343,12 +3342,7 @@ type messageAddressing struct {
 }
 
 func (a messageAddressing) apply(group map[string]any) {
-	if a.authorKind != nil {
-		group["author_kind"] = *a.authorKind
-	}
-	group["addressed_to"] = participantIDs(a.addressedTo)
-	group["visibility"] = a.visibility
-	if a.cause != nil {
-		group["cause"] = *a.cause
-	}
+	conversations.MessageAddressing{
+		AuthorKind: a.authorKind, AddressedTo: participantIDs(a.addressedTo), Visibility: a.visibility, Cause: a.cause,
+	}.Fields(group)
 }

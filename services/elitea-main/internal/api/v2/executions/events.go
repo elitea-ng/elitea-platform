@@ -55,6 +55,18 @@ type EventRepository interface {
 	Replay(ctx context.Context, projectID, executionID string, afterCursor uint64, limit int) ([]DurableEvent, error)
 }
 
+// EventStateSource is implemented by a repository that can read the events
+// at and before a cursor (newest `limit`, oldest first). A resumed stream
+// reads them to restate the participant's current state (participant_frames.go).
+type EventStateSource interface {
+	Preceding(ctx context.Context, projectID, executionID string, throughCursor uint64, limit int) ([]DurableEvent, error)
+}
+
+// maxStateSeedEvents bounds the look-back of a resumed stream for its
+// participant's state: a longer run of state-inert frames (chunks of one
+// answer) leaves the state of the frame that started them unrestated.
+const maxStateSeedEvents = 64
+
 // ReplayWaiter is only a bounded wakeup/heartbeat mechanism. A wake carries no
 // payload and is never authoritative; the handler always replays from the
 // durable repository after it returns.
@@ -214,6 +226,18 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 
 	events := initial
 	var states participantStates
+	var seed *DurableEvent
+	if source, ok := h.repository.(EventStateSource); ok && cursor > 0 {
+		// Best effort: a failed look-back only leaves the state unrestated.
+		if before, err := source.Preceding(r.Context(), projectID, executionID, cursor, maxStateSeedEvents); err == nil {
+			seed = states.seed(before)
+		}
+	}
+	if seed != nil {
+		if err := stream.writeAndFlush(func() error { return writeStateSeed(w, *seed) }); err != nil {
+			return
+		}
+	}
 	for {
 		if len(events) > 0 {
 			if err := stream.writeAndFlush(func() error {
@@ -413,6 +437,22 @@ func writeDurableEvent(w http.ResponseWriter, event DurableEvent) error {
 		return err
 	}
 	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	_, err := fmt.Fprint(w, "\n\n")
+	return err
+}
+
+// writeStateSeed writes a derived state frame with no SSE id: an id lower
+// than the client's Last-Event-ID would move its resume cursor back.
+func writeStateSeed(w http.ResponseWriter, event DurableEvent) error {
+	if event.Type == "" || strings.ContainsAny(event.Type, "\r\n") || !isCompactSingleLineJSON(event.Data) {
+		return ErrInvalidEventStream
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: ", event.Type); err != nil {
+		return err
+	}
+	if _, err := w.Write(event.Data); err != nil {
 		return err
 	}
 	_, err := fmt.Fprint(w, "\n\n")

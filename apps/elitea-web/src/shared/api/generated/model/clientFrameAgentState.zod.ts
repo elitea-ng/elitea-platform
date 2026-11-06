@@ -61,7 +61,7 @@ export const ClientFrameAgentState = ClientFrameEnvelope.and(
       ),
   }),
 ).describe(
-  "Client contract 1.38: the participant moved to a new state. The server derives it from the frame before it and writes it only on a change; it carries that frame's SSE id, so a client that resumes after it gets the state again with the next change. `idle` is the state before a run's first frame. Not terminal.",
+  "Client contract 1.38: the participant moved to a new state. The server derives it from the frame before it and writes it only on a change, with that frame's SSE id. A stream resumed with a Last-Event-ID starts with one `agent_state` without an id: the participant's state at the cursor. `idle` is the state before a run's first frame. A pause of a sub-agent is `waiting`, its other frames `working`. Not terminal.",
 );
 
 export type ClientFrameAgentState = zod.input<typeof ClientFrameAgentState>;

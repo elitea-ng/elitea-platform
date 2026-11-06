@@ -847,20 +847,13 @@ WITH resolved AS MATERIALIZED (
     -- release's name, pronouns and role show from its first answer. Only for
     -- a same-project version: a catalogue version's row is not visible here
     -- and the stored snapshot is kept.
+    -- chat_persona_of is tenant/0161's, shared with its backfill.
     UPDATE chat_participant_mapping AS mapping
-    SET persona = NULLIF(jsonb_strip_nulls(jsonb_build_object(
-            'display_name', resolved.target_soul ->> 'display_name',
-            'pronouns', resolved.target_soul ->> 'pronouns',
-            'role', resolved.target_soul ->> 'role'
-        )), '{}'::jsonb)
+    SET persona = chat_persona_of(resolved.target_soul)
     FROM resolved
     WHERE mapping.id = resolved.target_mapping_id
       AND resolved.local_version_id IS NOT NULL
-      AND mapping.persona IS DISTINCT FROM NULLIF(jsonb_strip_nulls(jsonb_build_object(
-            'display_name', resolved.target_soul ->> 'display_name',
-            'pronouns', resolved.target_soul ->> 'pronouns',
-            'role', resolved.target_soul ->> 'role'
-        )), '{}'::jsonb)
+      AND mapping.persona IS DISTINCT FROM chat_persona_of(resolved.target_soul)
 ), question_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,

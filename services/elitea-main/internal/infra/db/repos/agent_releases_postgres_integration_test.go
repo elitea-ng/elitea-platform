@@ -627,4 +627,14 @@ SET participant_id = 26, addressed_to = '{27}' WHERE execution_id = $1`, outcome
 		events[0].Participant.ID != 26 || len(events[0].Participant.AddressedTo) != 1 || events[0].Participant.AddressedTo[0] != 27 {
 		t.Fatalf("a run with a participant: %+v %v", events, err)
 	}
+	preceding, err := replay.Preceding(ctx, "1", outcome.ExecutionID, events[0].Cursor, 10)
+	if err != nil || len(preceding) != 1 || preceding[0].Cursor != events[0].Cursor ||
+		preceding[0].Participant == nil || preceding[0].Participant.ID != 26 {
+		t.Fatalf("the look-back: %+v %v", preceding, err)
+	}
+	if events[0].Cursor > 1 {
+		if before, err := replay.Preceding(ctx, "1", outcome.ExecutionID, events[0].Cursor-1, 10); err != nil || len(before) != 0 {
+			t.Fatalf("the look-back before the first event: %+v %v", before, err)
+		}
+	}
 }

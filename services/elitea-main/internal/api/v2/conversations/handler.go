@@ -94,15 +94,7 @@ type Message struct {
 	AuthorParticipantID *int `json:"author_participant_id,omitempty"`
 	SentToID            *int `json:"sent_to_id,omitempty"`
 	ReplyToID           *int `json:"reply_to_id,omitempty"`
-	// Who wrote the message and whom it is for (tenant/0161, ADR-0050
-	// decision 7b): the author participant's kind, the addressees (empty is
-	// everyone), `all` or `side`, and what started it. The stream frames of
-	// a run carry the same author and addressees (participant_id,
-	// addressed_to). AuthorKind and Cause are omitted when unknown.
-	AuthorKind  *string        `json:"author_kind,omitempty"`
-	AddressedTo []int          `json:"addressed_to"`
-	Visibility  string         `json:"visibility"`
-	Cause       *string        `json:"cause,omitempty"`
+	MessageAddressing
 	ContentType string         `json:"content_type,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	// The `attachment_message` items of this group, in the shape the
@@ -150,6 +142,35 @@ type Message struct {
 	// never been rewritten has no update time. Zero-valued `time.Time` would
 	// serialize as year 1 and read, to every client, as a real timestamp.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// MessageAddressing is who wrote a message and whom it is for (tenant/0161,
+// ADR-0050 decision 7b): the author participant's kind, the addressees
+// (empty is everyone), `all` or `side`, and what started it. The stream
+// frames of a run carry the same author and addressees (participant_id,
+// addressed_to). AuthorKind and Cause are omitted when unknown.
+type MessageAddressing struct {
+	AuthorKind  *string `json:"author_kind,omitempty"`
+	AddressedTo []int   `json:"addressed_to"`
+	Visibility  string  `json:"visibility"`
+	Cause       *string `json:"cause,omitempty"`
+}
+
+// Fields writes the same keys, with the same omissions, into a map-shaped
+// message (the details route's message groups, a single message read).
+func (a MessageAddressing) Fields(group map[string]any) {
+	if a.AuthorKind != nil {
+		group["author_kind"] = *a.AuthorKind
+	}
+	addressedTo := a.AddressedTo
+	if addressedTo == nil {
+		addressedTo = []int{}
+	}
+	group["addressed_to"] = addressedTo
+	group["visibility"] = a.Visibility
+	if a.Cause != nil {
+		group["cause"] = *a.Cause
+	}
 }
 
 type ListResponse struct {
