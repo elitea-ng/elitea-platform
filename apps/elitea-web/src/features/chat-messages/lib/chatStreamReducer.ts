@@ -89,8 +89,10 @@ export function applyChatStreamFrame(
   const type = frame.type;
   if (!type) return history;
   // A participant state (client contract 1.38) is not part of the answer:
-  // the avatar store reads it (`model/agentAvatar.store.ts`), the transcript never does.
-  if (type === SocketMessageType.AgentState) return history;
+  // the avatar store reads it (`model/agentAvatar.store.ts`). It only names
+  // the answering participant, often before any other frame of the turn does,
+  // so the avatar that moves is the live answer's.
+  if (type === SocketMessageType.AgentState) return withAnswerParticipant(history, frame);
   if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
   // Resolved ONCE, here, and handed to every family: `index === -1` means "no

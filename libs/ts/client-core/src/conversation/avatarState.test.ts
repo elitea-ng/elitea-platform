@@ -8,7 +8,9 @@ import {
   applyAgentStateFrame,
   avatarMotion,
   motionAllowed,
+  newestSince,
   nextChangeAt,
+  settleAvatarStates,
   shownState,
   type AvatarStates,
 } from './avatarState';
@@ -78,6 +80,22 @@ describe('activeAnimatedParticipant', () => {
     assert.equal(activeAnimatedParticipant(states, 25), 2);
     assert.equal(activeAnimatedParticipant(states, 20 + ONE_SHOT_MS), 1);
     assert.equal(activeAnimatedParticipant({ 3: { state: 'idle', since: 0 } }, 0), undefined);
+  });
+});
+
+describe('settleAvatarStates', () => {
+  it('ends every looping state with the final one and keeps waiting and one-shots', () => {
+    const states: AvatarStates = { 1: { state: 'speaking', since: 10 }, 2: { state: 'waiting', since: 11 }, 3: { state: 'success', since: 12 }, 4: { state: 'working', since: 13 } };
+    assert.deepEqual(settleAvatarStates(states, 'success', 50), {
+      1: { state: 'success', since: 50 }, 2: { state: 'waiting', since: 11 }, 3: { state: 'success', since: 12 }, 4: { state: 'success', since: 50 },
+    });
+    const quiet: AvatarStates = { 2: { state: 'waiting', since: 11 }, 5: { state: 'idle', since: 1 } };
+    assert.equal(settleAvatarStates(quiet, 'idle', 50), quiet);
+  });
+
+  it('newestSince is the latest change, 0 for none', () => {
+    assert.equal(newestSince({ 1: { state: 'speaking', since: 10 }, 2: { state: 'idle', since: 30 } }), 30);
+    assert.equal(newestSince({}), 0);
   });
 });
 

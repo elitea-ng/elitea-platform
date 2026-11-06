@@ -46,11 +46,10 @@ describe('answerAuthor', () => {
 });
 
 describe('participantIconUrl', () => {
-  it('takes a same-origin path or an https URL only', () => {
+  it('takes a same-origin path only', () => {
     const icon = (url: unknown): MessageParticipantWire => ({ id: '9', entity_settings: { icon_meta: { url } } });
     expect(participantIconUrl(icon('/a.png'))).toBe('/a.png');
-    expect(participantIconUrl(icon('https://cdn.example/a.png'))).toBe('https://cdn.example/a.png');
-    for (const bad of ['//evil.example/a.png', 'javascript:alert(1)', 'http://x/a.png', '', 7]) expect(participantIconUrl(icon(bad))).toBeUndefined();
+    for (const bad of ['https://cdn.example/a.png', '//evil.example/a.png', '/\\evil.example/a.png', 'javascript:alert(1)', 'http://x/a.png', '', 7]) expect(participantIconUrl(icon(bad))).toBeUndefined();
     expect(participantIconUrl({ id: '9', meta: { icon_meta: { url: '/m.png' } } })).toBe('/m.png');
   });
 });

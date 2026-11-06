@@ -8,7 +8,7 @@ import { planActions } from '@/features/chat/actions/messageActions';
 import { AssistantAvatar } from '@/features/chat/AssistantAvatar';
 import { ChatEmptyState } from '@/features/chat/ChatEmptyState';
 import { Composer } from '@/features/chat/Composer';
-import { LiveReply, messageMeta, PersistedMessage } from '@/features/chat/ThreadRows';
+import { answerAuthorLine, LiveReply, messageMeta, PersistedMessage } from '@/features/chat/ThreadRows';
 import { SAMPLE_MESSAGES, sampleLive } from '@/features/designGallery/chatFixtures';
 
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));
@@ -112,6 +112,13 @@ describe('answers and the live reply', () => {
     expect(messageMeta('Research', new Date(2026, 9, 7, 9, 41).getTime(), now)).toMatch(/^Research · .*9.*41/);
     expect(messageMeta('Research', null, now)).toBe('Research');
     expect(messageMeta(null, null, now)).toBeNull();
+  });
+
+  it("an answer's line adds the persona role and the class marker (ADR-0050)", () => {
+    expect(answerAuthorLine('Mira', 'Release manager', 'agent_to_humans')).toBe('Mira · Release manager');
+    expect(answerAuthorLine('CI Sleuth', null, 'ephemeral')).toBe('CI Sleuth · temporary');
+    expect(answerAuthorLine('Mira', null, 'heartbeat')).toBe('Mira · woke up');
+    expect(answerAuthorLine(null, null, undefined)).toBeNull();
   });
 });
 

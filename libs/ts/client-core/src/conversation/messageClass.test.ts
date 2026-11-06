@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { MESSAGE_CLASS, PARTICIPANT_KIND, classifyMessage, hasAgentAvatar, participantKindOf, type ParticipantKind } from './messageClass';
+import { MESSAGE_CLASS, PARTICIPANT_KIND, classifyMessage, participantKindOf, type ParticipantKind } from './messageClass';
 
 const roster = new Map<number, ParticipantKind>([
   [1, PARTICIPANT_KIND.Human],
@@ -53,14 +53,5 @@ describe('participantKindOf', () => {
     for (const kind of Object.values(PARTICIPANT_KIND)) assert.equal(participantKindOf(kind), kind);
     assert.equal(participantKindOf('application'), undefined);
     assert.equal(participantKindOf(undefined), undefined);
-  });
-});
-
-describe('hasAgentAvatar', () => {
-  it('draws an agent avatar for agent classes only', () => {
-    assert.deepEqual(
-      Object.values(MESSAGE_CLASS).filter(hasAgentAvatar),
-      [MESSAGE_CLASS.AgentToHumans, MESSAGE_CLASS.AgentToAgent, MESSAGE_CLASS.Ephemeral, MESSAGE_CLASS.Heartbeat],
-    );
   });
 });

@@ -33,13 +33,16 @@ function participantIdOf(value: unknown): number | undefined {
 /**
  * The icon URL a participant carries: the version's `icon_meta.url`, copied
  * when the agent was added (`entity_settings` first, as `useParticipantEntityIcon`
- * reads it). Only a same-origin path or an https URL is used.
+ * reads it). Only a same-origin path is used: Main serves every agent icon
+ * from its own origin (uploads and `/app/default_entity_icons/`), and a
+ * third-party URL in the stored meta would make every reader's browser fetch
+ * it each time the transcript renders.
  */
 export function participantIconUrl(participant: MessageParticipantWire | undefined): string | undefined {
   for (const source of [participant?.entity_settings?.icon_meta, participant?.meta?.icon_meta]) {
     if (source === null || typeof source !== 'object') continue;
     const url = trimmed((source as { readonly url?: unknown }).url);
-    if (url !== undefined && (url.startsWith('/') && !url.startsWith('//') || url.startsWith('https://'))) return url;
+    if (url !== undefined && url.startsWith('/') && !url.startsWith('//') && !url.startsWith('/\\')) return url;
   }
   return undefined;
 }

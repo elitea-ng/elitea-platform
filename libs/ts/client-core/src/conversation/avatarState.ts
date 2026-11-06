@@ -99,6 +99,28 @@ export function activeAnimatedParticipant(states: AvatarStates, now: number): nu
 }
 
 /** The person's motion preferences. */
+/**
+ * The states a run leaves when its stream ends: every participant still in a
+ * looping state takes `final` (`success` or `error` from the turn's last
+ * frame, `idle` for a cancel or a lost stream), so no avatar loops after its
+ * run. `waiting` stays, because the answer is paused on a person, and a
+ * one-shot keeps its slot. The same object when nothing changes.
+ */
+export function settleAvatarStates(states: AvatarStates, final: AgentState, now: number): AvatarStates {
+  let next: Record<number, ParticipantAvatarState> | undefined;
+  for (const [key, entry] of Object.entries(states)) {
+    if (isOneShot(entry.state) || entry.state === AGENT_STATE.Waiting || entry.state === AGENT_STATE.Idle) continue;
+    next ??= { ...states };
+    next[Number(key)] = { state: final, since: now };
+  }
+  return next ?? states;
+}
+
+/** The newest state change, the clock a pure render may read (`now` only moves on with a timer). */
+export function newestSince(states: AvatarStates): number {
+  return Object.values(states).reduce((max, entry) => Math.max(max, entry.since), 0);
+}
+
 export interface MotionPreferences {
   /** `prefers-reduced-motion` on web and desktop, the system setting on mobile. */
   readonly reducedMotion: boolean;

@@ -15,18 +15,25 @@ import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import {
   applyAgentStateFrame,
   avatarMotion,
+  newestSince,
   nextChangeAt,
+  settleAvatarStates,
   type AgentStateFrameFields,
   type AvatarMotion,
   type AvatarStates,
   type ListAvatar,
 } from '@elitea/client-core/conversation';
+import type { AgentState } from '@elitea/client-core/stream';
+
+import { SocketMessageType, type ChatStreamFrame } from '../lib/chatStreamFrame';
+import { terminalAgentState } from '../lib/chatStreamTurnEnd';
 
 const EMPTY: AvatarStates = {};
 
 interface AgentAvatarState {
   readonly byConversation: Readonly<Record<string, AvatarStates>>;
   readonly apply: (conversationUuid: string, frame: AgentStateFrameFields, now: number) => void;
+  readonly settle: (conversationUuid: string, final: AgentState, now: number) => void;
 }
 
 type AgentAvatarStore = UseBoundStore<StoreApi<AgentAvatarState>>;
@@ -39,6 +46,13 @@ export function createAgentAvatarStore(): AgentAvatarStore {
       set((state) => {
         const before = state.byConversation[conversationUuid] ?? EMPTY;
         const after = applyAgentStateFrame(before, frame, now);
+        return after === before ? state : { byConversation: { ...state.byConversation, [conversationUuid]: after } };
+      }),
+    settle: (conversationUuid, final, now) =>
+      set((state) => {
+        const before = state.byConversation[conversationUuid];
+        if (before === undefined) return state;
+        const after = settleAvatarStates(before, final, now);
         return after === before ? state : { byConversation: { ...state.byConversation, [conversationUuid]: after } };
       }),
   }));
@@ -64,10 +78,26 @@ export const useAgentAvatarStore = Object.assign(useAgentAvatarStoreHook, {
   },
 });
 
-/** Records one stream frame; any frame but `agent_state` is a no-op. */
-export function applyAgentAvatarFrame(conversationUuid: string | undefined, frame: AgentStateFrameFields): void {
+/**
+ * Records one stream frame. Returns whether it was an `agent_state`, which
+ * the caller then keeps out of the transcript; any other frame is a no-op.
+ */
+export function applyAgentAvatarFrame(conversationUuid: string | undefined, frame: AgentStateFrameFields): boolean {
+  if (frame.type !== SocketMessageType.AgentState) return false;
+  if (conversationUuid !== undefined && conversationUuid !== '') useAgentAvatarStore.getState().apply(conversationUuid, frame, Date.now());
+  return true;
+}
+
+/**
+ * Ends a run's avatar states when its stream ends. The stream closes on the
+ * turn's last frame, before Main's derived `agent_state` after it, so the
+ * last state is read off that frame (`terminalAgentState`); with none (a
+ * cancel, a lost stream) the avatars go idle. No avatar loops after its run.
+ */
+export function settleAgentAvatars(conversationUuid: string | undefined, terminalFrame?: ChatStreamFrame): void {
   if (conversationUuid === undefined || conversationUuid === '') return;
-  useAgentAvatarStore.getState().apply(conversationUuid, frame, Date.now());
+  const final: AgentState = terminalFrame === undefined ? 'idle' : terminalAgentState(terminalFrame);
+  useAgentAvatarStore.getState().settle(conversationUuid, final, Date.now());
 }
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
@@ -79,14 +109,16 @@ const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 export function useAgentAvatarMotion(conversationUuid: string | undefined): (avatar: ListAvatar) => AvatarMotion {
   const states = useAgentAvatarStore((state) => (conversationUuid === undefined ? EMPTY : (state.byConversation[conversationUuid] ?? EMPTY)));
   const reducedMotion = useMediaQuery(REDUCED_MOTION, { noSsr: true });
-  const [now, setNow] = useState(() => Date.now());
-  // A new state is "now"; the slot timer below moves the clock on.
-  useEffect(() => { setNow(Date.now()); }, [states]);
+  // The clock is the newest state change (each stamps its own `since`), so a
+  // render reads no wall clock; the timer moves it on when a one-shot ends.
+  const latest = newestSince(states);
+  const [tick, setTick] = useState<{ readonly after: number; readonly now: number }>({ after: 0, now: 0 });
+  const now = tick.after === latest ? Math.max(tick.now, latest) : latest;
   useEffect(() => {
     const at = nextChangeAt(states, now);
     if (at === undefined) return undefined;
-    const timer = setTimeout(() => { setNow(Date.now()); }, Math.max(0, at - Date.now()));
+    const timer = setTimeout(() => { setTick({ after: latest, now: at }); }, Math.max(0, at - now));
     return () => { clearTimeout(timer); };
-  }, [states, now]);
+  }, [states, now, latest]);
   return (avatar) => avatarMotion(avatar, states, now, { reducedMotion });
 }

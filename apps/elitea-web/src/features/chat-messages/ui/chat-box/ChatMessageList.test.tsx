@@ -448,7 +448,7 @@ describe('ChatMessageList persisted assistant attribution', () => {
     const buildList = (assistantName: string) => (
       <QueryClientProvider client={queryClient}>
         <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
-          <ChatMessageList chatHistory={history} assistantName={assistantName} />
+          <ChatMessageList chatHistory={history} assistant={{ name: assistantName }} />
         </ThemeProvider>
       </QueryClientProvider>
     );

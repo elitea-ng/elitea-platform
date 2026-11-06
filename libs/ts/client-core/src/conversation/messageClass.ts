@@ -120,13 +120,3 @@ export function classifyMessage(message: ClassifiableMessage): MessageClass {
   if (message.cause === MESSAGE_CAUSE.Heartbeat) return MESSAGE_CLASS.Heartbeat;
   return MESSAGE_CLASS.AgentToHumans;
 }
-
-/** Whether a class is drawn with an agent avatar. */
-export function hasAgentAvatar(messageClass: MessageClass): boolean {
-  return (
-    messageClass === MESSAGE_CLASS.AgentToHumans ||
-    messageClass === MESSAGE_CLASS.AgentToAgent ||
-    messageClass === MESSAGE_CLASS.Ephemeral ||
-    messageClass === MESSAGE_CLASS.Heartbeat
-  );
-}

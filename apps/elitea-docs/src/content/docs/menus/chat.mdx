@@ -65,7 +65,7 @@ While an agent answers, the chat knows which participant is answering and what i
 
 #### Agent avatars
 
-An agent's answer shows the agent's icon, with the Elitea mark for an agent that has none. Under the persona's display name, the answer shows the persona's role. An answer from an ephemeral agent has a dashed ring around the avatar and a **temporary** marker. A message that an agent sends on its own, from a heartbeat, has a **woke up** marker. The web app, the desktop app and the mobile app show the same avatars and markers.
+An agent's answer shows the agent's icon, with the Elitea mark for an agent that has none, and the persona's display name and role. A plain model answer shows them only in a conversation where more than one assistant answers. An answer from an ephemeral agent has a dashed ring around the avatar and a **temporary** marker. A message that an agent sends on its own, from a heartbeat, has a **woke up** marker. The web app, the desktop app and the mobile app show the same avatars and markers.
 
 While an agent answers, its avatar moves with what it is doing:
 
@@ -79,7 +79,7 @@ While an agent answers, its avatar moves with what it is doing:
 | Waking up | A wider pulse |
 | Done or failed | A check or a cross badge for 3 seconds, then idle |
 
-The motions use the workspace's brand colour and its signal colours, so a [custom brand](/admin/branding) re-colours them. Only one avatar moves at a time: the newest answer of the agent that is working. The other avatars show the still icon. When your system asks for reduced motion, every avatar shows the still icon. The mobile app does not yet switch to the still icon in a data-saver mode.
+The motions use the workspace's brand colour and its signal colours, so a [custom brand](/admin/branding) re-colours them. Only one avatar moves at a time: the newest answer of the agent that is working. When you stop an answer, or the connection to it is lost, the avatar goes back to the still. The other avatars show the still icon. When your system asks for reduced motion, every avatar shows the still icon. The mobile app does not yet switch to the still icon in a data-saver mode.
 
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 

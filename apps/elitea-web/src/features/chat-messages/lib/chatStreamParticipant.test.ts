@@ -26,8 +26,10 @@ describe('the answer participant', () => {
     expect(unnamed[0]?.authorParticipantId).toBeUndefined();
   });
 
-  it('leaves agent_state inert', () => {
+  it('agent_state only names the answering participant', () => {
     const history = [pending];
-    expect(applyChatStreamFrame(history, { type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, state: 'speaking' }, CONTEXT)).toBe(history);
+    const next = applyChatStreamFrame(history, { type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, state: 'thinking' }, CONTEXT);
+    expect(next[0]).toEqual({ ...pending, authorParticipantId: 4 });
+    expect(applyChatStreamFrame(next, { type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, state: 'speaking' }, CONTEXT)).toBe(next);
   });
 });

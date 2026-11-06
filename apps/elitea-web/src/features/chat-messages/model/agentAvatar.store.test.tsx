@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe('the chat stream', () => {
-  it('routes agent_state into the avatar store and leaves the transcript alone', async () => {
+  it('routes agent_state into the avatar store, names the live answer, and settles on cancel', async () => {
     server.use(
       http.post(`${BASE}/elitea_core/messages/prompt_lib/7/uuid-1`, () =>
         HttpResponse.json({ task_id: 'exec-1', events_url: EVENTS_URL, response_message_id: MESSAGE_ID })),
@@ -80,8 +80,13 @@ describe('the chat stream', () => {
       registry.emit('execution.node_event', JSON.stringify({ type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, addressed_to: [], state: 'thinking', response_metadata: {} }));
     });
 
-    expect(history.current).toBe(initial);
+    expect(history.current).toEqual([{ ...initial[0], authorParticipantId: 4 }]);
+    expect(history.current[0]?.content).toBe('');
     expect(useAgentAvatarStore.getState().byConversation['uuid-1']?.[4]?.state).toBe('thinking');
+
+    // A cancel ends the run with no last state of its own; the avatar stops looping.
+    act(() => { api.current?.close(); });
+    expect(useAgentAvatarStore.getState().byConversation['uuid-1']?.[4]?.state).toBe('idle');
   });
 });
 

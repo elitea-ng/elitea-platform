@@ -47,3 +47,15 @@ export function isObserverTerminalFrame(frame: ChatStreamFrame, generation?: str
   if (generation && (frame.type === SocketMessageType.PipelineFinish || frame.type === SocketMessageType.AgentResponse)) return false;
   return isTurnTerminalFrame(frame);
 }
+
+/**
+ * The avatar state a turn-ending frame leaves (ADR-0050 decision 6). The
+ * stream closes on this frame, before Main's derived `agent_state` after it
+ * arrives, so the client reads the last state off the frame itself.
+ */
+export function terminalAgentState(frame: ChatStreamFrame): 'success' | 'error' | 'waiting' {
+  if (frame.type !== undefined && TURN_FAILURE_TYPES.has(frame.type)) return 'error';
+  if (isTerminalPauseFrame(frame) || staticPauseFromFrame(frame) !== undefined) return 'waiting';
+  const metadata = frame.response_metadata as { readonly is_error?: unknown; readonly finish_reason?: unknown } | undefined;
+  return metadata?.is_error === true || metadata?.finish_reason === 'error' ? 'error' : 'success';
+}

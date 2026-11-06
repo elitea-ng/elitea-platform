@@ -27,6 +27,7 @@ import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
 import { useAgentAvatarMotion } from '../../model/agentAvatar.store';
+import { answerHasIdentity, newestAnswerByParticipant } from './answerAvatars';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
@@ -123,15 +124,6 @@ function canDeleteAiMessage(
   return isOwnMessage(userId, question?.userId);
 }
 
-/** The id of each participant's newest answer in the list. */
-function newestAnswerByParticipant(chatHistory: readonly ChatMessage[]): ReadonlySet<string> {
-  const newest = new Map<number, string>();
-  for (const message of chatHistory) {
-    if (message.role !== 'user' && message.authorParticipantId !== undefined) newest.set(message.authorParticipantId, message.id);
-  }
-  return new Set(newest.values());
-}
-
 /**
  * `ChatMessageList` — renders the full message list for a conversation.
  * Each message is rendered according to its role (user / assistant), with
@@ -159,8 +151,7 @@ export function ChatMessageList({
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
-  assistantName,
-  conversationUuid,
+  assistant: { name: assistantName, conversationUuid } = {},
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
@@ -353,7 +344,7 @@ export function ChatMessageList({
                   isSpeakingMode={autoSpeak}
                   author={{
                     participantName: message.authorName ?? assistantName,
-                    showCaption: isMultiAssistant,
+                    showCaption: isMultiAssistant || answerHasIdentity(message),
                     motion: motionOf({ participantId: message.authorParticipantId, newest: newestAnswerIds.has(message.id) }),
                   }}
                   toolActions={message.toolActions}

@@ -29,12 +29,12 @@ import { t } from "@/shared/i18n";
 import { recordStreamFailure, runtimeFailureReason } from "../lib/chatStreamSettle";
 import { applyChatStreamFrame, type ChatStreamContext } from "../lib/chatStreamReducer";
 import { isRootContextFrame } from "../lib/chatStreamContextFrames";
-import { SocketMessageType, isChatStreamFrame } from "../lib/chatStreamFrame";
-import { applyAgentAvatarFrame } from "./agentAvatar.store";
+import { isChatStreamFrame } from "../lib/chatStreamFrame";
 import { shouldForwardAgentEvent } from "../lib/agentGraphEvents";
 import { isObserverTerminalFrame } from "../lib/chatStreamTurnEnd";
 import { resultReference, settleFinalResultObserver } from '../lib/chatStreamFinalResult';
 import { completeReferencedChatResult } from './completeReferencedChatResult';
+import { applyAgentAvatarFrame, settleAgentAvatars } from './agentAvatar.store';
 import { resetTurnForReplay } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
@@ -128,6 +128,7 @@ export function useChatStreamTransport(
 
   /** Forget the run and close its stream. Never touches chat history. */
   const detach = useCallback(() => {
+    settleAgentAvatars(ownerRef.current); // no avatar loops after its stream (ADR-0050)
     ownerRef.current = undefined;
     cancelRef.current = null;
     questionIdRef.current = undefined;
@@ -148,8 +149,8 @@ export function useChatStreamTransport(
       if ((generation || generationRef.current) && responseId && frame.message_id !== responseId) return;
       const frameQuestionId = nonEmptyString(frame.question_id);
       if ((generation || generationRef.current) && frameQuestionId && questionIdRef.current && frameQuestionId !== questionIdRef.current) return;
-      // A participant state (client contract 1.38) drives the avatar, never the transcript.
-      if (frame.type === SocketMessageType.AgentState) { applyAgentAvatarFrame(ownerRef.current, frame); return; }
+      // An agent_state (contract 1.38) drives the avatar; the reducer only stamps its participant.
+      if (applyAgentAvatarFrame(ownerRef.current, frame)) { setChatHistory((prev) => applyChatStreamFrame(prev, frame, contextRef.current ?? {})); return; }
       if (generation) generationRef.current = generation;
       // Preserve the admitted question link when a durable frame omits it.
       const identifiedFrame = {
@@ -167,6 +168,7 @@ export function useChatStreamTransport(
       });
       // Success progress precedes full_message; the result releases the durable observer.
       const terminal = isObserverTerminalFrame(identifiedFrame, generationRef.current);
+      if (terminal) settleAgentAvatars(ownerRef.current, identifiedFrame);
       if (terminal && (identifiedFrame.content === null || identifiedFrame.content === undefined) && resultReference(identifiedFrame)) {
         const target = cancelRef.current, owner = ownerRef.current, currentGeneration = generationRef.current, epoch = runEpochRef.current;
         if (hydrationEpochRef.current === epoch) return;
@@ -386,15 +388,7 @@ export function useChatStreamTransport(
   const runTarget = useCallback(() => (ownsRun() ? cancelRef.current : null), [ownsRun]);
 
   return useMemo(
-    () => ({
-      ...starters,
-      isStreaming,
-      attachExistingRun,
-      close: detach,
-      stop,
-      reattach,
-      runTarget,
-    }),
+    () => ({ ...starters, isStreaming, attachExistingRun, close: detach, stop, reattach, runTarget }),
     [starters, isStreaming, attachExistingRun, detach, stop, reattach, runTarget],
   );
 }
