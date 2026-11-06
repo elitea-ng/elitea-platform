@@ -3,9 +3,19 @@
 use std::collections::HashMap;
 
 use adk_rust::Event;
-use adk_rust::session::{Events, Session, State};
+use adk_rust::session::{Events, GetRequest, Session, SessionService, State};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+
+/// A session read as the Runner's model view: the service's `get`, projected.
+/// `RunnerSessionService::get` and the incremental view's full read share it.
+pub(super) async fn read(
+    sessions: &dyn SessionService,
+    request: GetRequest,
+    compaction_scope: Option<([u8; 32], &str)>,
+) -> adk_rust::Result<Box<dyn Session>> {
+    project(sessions.get(request).await?, compaction_scope)
+}
 
 pub(super) fn project(
     inner: Box<dyn Session>,
@@ -14,15 +24,11 @@ pub(super) fn project(
     // The admitted session bounds this snapshot. Copy identity and state, then
     // release the original event payloads. Never persist the projected events.
     let mut events = inner.events().all();
-    for event in &mut events {
-        if event.actions.tool_confirmation.is_some() {
-            event.llm_response.content = None;
-        }
-    }
-    if let Some((definition, agent_name)) = compaction_scope {
-        project_snapshot(&mut events, definition, agent_name)?;
-        project_compaction(&mut events, inner.state(), definition, agent_name)?;
-    }
+    project_events(
+        &mut events,
+        inner.state().get(super::context_compaction::STATE_KEY),
+        compaction_scope,
+    )?;
     let projected = RunnerHistorySession {
         app_name: inner.app_name().to_owned(),
         user_id: inner.user_id().to_owned(),
@@ -33,6 +39,26 @@ pub(super) fn project(
     };
     drop(inner);
     Ok(Box::new(projected))
+}
+
+/// The model's view of the stored active events. The full read and the
+/// incremental refresh (FU-287) both end here, so they cannot disagree.
+/// `compaction_record` is the session state under the compaction key.
+pub(super) fn project_events(
+    events: &mut Vec<Event>,
+    compaction_record: Option<Value>,
+    compaction_scope: Option<([u8; 32], &str)>,
+) -> adk_rust::Result<()> {
+    for event in events.iter_mut() {
+        if event.actions.tool_confirmation.is_some() {
+            event.llm_response.content = None;
+        }
+    }
+    if let Some((definition, agent_name)) = compaction_scope {
+        project_snapshot(events, definition, agent_name)?;
+        project_compaction(events, compaction_record, definition, agent_name)?;
+    }
+    Ok(())
 }
 
 fn project_snapshot(
@@ -85,14 +111,11 @@ fn project_snapshot(
 
 fn project_compaction(
     events: &mut Vec<Event>,
-    state: &dyn State,
+    record: Option<Value>,
     definition: [u8; 32],
     agent_name: &str,
 ) -> adk_rust::Result<()> {
-    let Some(record) = state
-        .get(super::context_compaction::STATE_KEY)
-        .filter(|v| !v.is_null())
-    else {
+    let Some(record) = record.filter(|v| !v.is_null()) else {
         return Ok(());
     };
     // Shared branch history needs its own coverage mapping. Never apply a root
