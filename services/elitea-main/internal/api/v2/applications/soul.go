@@ -1,6 +1,7 @@
 package applications
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -39,17 +40,15 @@ func applySoul(w http.ResponseWriter, body map[string]any, v *applications.Versi
 	return true
 }
 
-// soulObject is the wire value of a stored soul: the object, or nil (JSON
-// null) for none.
+// soulObject is the wire value of a stored soul: the stored JSON as is (it
+// was normalized on write), or nil (JSON null) for none. Not decoded and
+// re-encoded: only a value that is not a JSON object is dropped.
 func soulObject(raw json.RawMessage) any {
-	if len(raw) == 0 {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		return nil
 	}
-	var object map[string]any
-	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return nil
-	}
-	return object
+	return json.RawMessage(trimmed)
 }
 
 // soulValue is soulObject over a scanned nullable column.

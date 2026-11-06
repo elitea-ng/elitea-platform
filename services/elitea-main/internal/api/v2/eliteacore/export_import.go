@@ -3,14 +3,14 @@ package eliteacore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
-
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentsoul"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
 )
 
@@ -940,6 +940,12 @@ func importPrincipalUserID(ctx context.Context) (ownership.UserID, bool) {
 func importedSoul(source map[string]any) (any, error) {
 	soul, err := agentsoul.Normalize(source["soul"])
 	if err != nil {
+		// The refusal's code goes in the message: the import answers its
+		// failures as text rows, and the code is what names the rule.
+		var refused *agentsoul.Error
+		if errors.As(err, &refused) {
+			return nil, fmt.Errorf("soul (%s): %s", refused.Code, refused.Message)
+		}
 		return nil, fmt.Errorf("soul: %w", err)
 	}
 	if soul == nil {

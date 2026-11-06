@@ -17,7 +17,7 @@ func refusalCode(t *testing.T, err error) string {
 }
 
 func TestTheContractExampleIsAValidSoul(t *testing.T) {
-	encoded, err := NormalizeJSON([]byte(`{"schema":"elitea.soul/v1","display_name":"Mira","pronouns":"they/them",
+	encoded, err := normalizeJSON([]byte(`{"schema":"elitea.soul/v1","display_name":"Mira","pronouns":"they/them",
 		"role":"Release coordinator","voice":["concise"],"values":["cite sources"],"boundaries":["never merges without a green CI"],
 		"relationships":[{"agent":"ci-doctor","stance":"delegate failing builds"}],"proactive_goals":["watch CI"],"body":"Short sentences."}`))
 	if err != nil {
@@ -31,7 +31,7 @@ func TestTheContractExampleIsAValidSoul(t *testing.T) {
 
 func TestNoSoulIsNotAnError(t *testing.T) {
 	for _, raw := range []string{"", "null", "  "} {
-		if encoded, err := NormalizeJSON([]byte(raw)); err != nil || encoded != nil {
+		if encoded, err := normalizeJSON([]byte(raw)); err != nil || encoded != nil {
 			t.Fatalf("%q: %s %v", raw, encoded, err)
 		}
 	}
@@ -44,7 +44,7 @@ func TestACapabilityKeyIsRefusedAtAnyDepth(t *testing.T) {
 		`{"schema":"elitea.soul/v1","permissions":["admin"]}`,
 		`{"schema":"elitea.soul/v1","relationships":[{"agent":"a","stance":"b","scopes":["write"]}]}`,
 	} {
-		_, err := NormalizeJSON([]byte(raw))
+		_, err := normalizeJSON([]byte(raw))
 		if code := refusalCode(t, err); code != CodeCapabilityKey {
 			t.Fatalf("%s: code %s", raw, code)
 		}
@@ -74,7 +74,7 @@ func TestTheSchemaRefusesUnknownKeysAndBadShapes(t *testing.T) {
 		`{"schema":"elitea.soul/v1","relationships":[{"agent":"a"}]}`,
 		`["not an object"]`,
 	} {
-		_, err := NormalizeJSON([]byte(raw))
+		_, err := normalizeJSON([]byte(raw))
 		if code := refusalCode(t, err); code != CodeInvalid {
 			t.Fatalf("%s: code %s", raw, code)
 		}
@@ -82,7 +82,7 @@ func TestTheSchemaRefusesUnknownKeysAndBadShapes(t *testing.T) {
 }
 
 func TestARefusalNamesTheFieldNotTheValue(t *testing.T) {
-	_, err := NormalizeJSON([]byte(`{"schema":"elitea.soul/v1","pronouns":"` + strings.Repeat("x", 40) + `"}`))
+	_, err := normalizeJSON([]byte(`{"schema":"elitea.soul/v1","pronouns":"` + strings.Repeat("x", 40) + `"}`))
 	if err == nil || !strings.Contains(err.Error(), "pronouns") || strings.Contains(err.Error(), "xxxx") {
 		t.Fatalf("message %v", err)
 	}

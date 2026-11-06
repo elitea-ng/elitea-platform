@@ -2123,7 +2123,7 @@ export interface components {
          *     }
          */
         AgentSoulV1: {
-            /** @description Free-form markdown, the text after the front matter of SOUL.md. */
+            /** @description Free-form markdown, the text after the front matter of SOUL.md. The whole soul's 16384-byte text bound (every string value, `schema` included) is the tighter limit in practice. */
             body?: string;
             /** @description What the agent declines or always escalates. */
             boundaries?: string[];

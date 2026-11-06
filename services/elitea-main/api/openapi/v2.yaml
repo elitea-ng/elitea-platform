@@ -10419,7 +10419,10 @@ components:
         body:
           type: string
           maxLength: 16384
-          description: Free-form markdown, the text after the front matter of SOUL.md.
+          description: >
+            Free-form markdown, the text after the front matter of SOUL.md.
+            The whole soul's 16384-byte text bound (every string value,
+            `schema` included) is the tighter limit in practice.
       example:
         schema: elitea.soul/v1
         display_name: Mira

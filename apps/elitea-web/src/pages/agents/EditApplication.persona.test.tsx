@@ -103,4 +103,19 @@ describe('EditApplication — the Persona tab', () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]?.['soul']).toEqual({ ...STORED_SOUL, body: '  keep my spacing  ' });
   }, 20_000);
+
+  it('holds Save back while a Persona field holds what Main would refuse', async () => {
+    server.use(getGetApplicationMockHandler(detail(null)));
+    renderAgentsRoute(<EditApplication />, '/agents/all/42', { projectId: '9' });
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId('edit-application-tab-persona', {}, { timeout: 5_000 }));
+    await user.type(await screen.findByTestId('persona-relationships'), 'planner without a stance');
+
+    expect(screen.getByText('Each line must be "agent: stance", at most 32 lines.')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-save-button')).toBeDisabled();
+
+    await user.type(screen.getByTestId('persona-relationships'), ': defer');
+    await waitFor(() => expect(screen.getByTestId('agent-save-button')).toBeEnabled());
+  }, 20_000);
 });

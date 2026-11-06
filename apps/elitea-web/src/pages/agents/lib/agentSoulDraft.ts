@@ -150,3 +150,48 @@ export function soulWriteField(
   }
   return stored === null || stored === undefined ? {} : { soul: stored };
 }
+
+/** Per-entry and entry-count bounds of `AgentSoulV1`, for the list fields. */
+const LIST_BOUNDS = {
+  voice: { count: 16, each: 64 },
+  values: { count: 32, each: 256 },
+  boundaries: { count: 32, each: 512 },
+  proactiveGoals: { count: 16, each: 512 },
+} as const;
+
+const RELATIONSHIP_BOUNDS = { count: 32, agent: 128, stance: 512 } as const;
+
+function listBroken(text: string, bounds: { count: number; each: number }): boolean {
+  const lines = splitLines(text);
+  return lines.length > bounds.count || lines.some((line) => line.length > bounds.each);
+}
+
+function relationshipsBroken(text: string): boolean {
+  const lines = splitLines(text);
+  if (lines.length > RELATIONSHIP_BOUNDS.count) return true;
+  return lines.some((line) => {
+    const entry = parseRelationship(line);
+    // A line Main would never see (no colon, an empty half) is dropped on
+    // save, which would lose what the person typed: flag it instead.
+    return entry === undefined || entry.agent.length > RELATIONSHIP_BOUNDS.agent || entry.stance.length > RELATIONSHIP_BOUNDS.stance;
+  });
+}
+
+/**
+ * The Persona fields a save would be refused for, so the tab can name them
+ * and the editor can hold Save back: a list over its entry count or with an
+ * entry over its length, a relationship line that is not `agent: stance`, and
+ * `size` when the whole soul is over {@link SOUL_MAX_TEXT_BYTES}. The single
+ * line fields carry `maxLength` on their inputs instead. Lengths are UTF-16
+ * code units, which is at least the rune count Main measures, so a draft this
+ * passes is never refused for a length.
+ */
+export function soulDraftProblems(draft: AgentSoulDraft): ReadonlySet<keyof AgentSoulDraft | 'size'> {
+  const problems = new Set<keyof AgentSoulDraft | 'size'>();
+  for (const key of Object.keys(LIST_BOUNDS) as (keyof typeof LIST_BOUNDS)[]) {
+    if (listBroken(draft[key], LIST_BOUNDS[key])) problems.add(key);
+  }
+  if (relationshipsBroken(draft.relationships)) problems.add('relationships');
+  if (soulTextBytes(soulFromDraft(draft)) > SOUL_MAX_TEXT_BYTES) problems.add('size');
+  return problems;
+}

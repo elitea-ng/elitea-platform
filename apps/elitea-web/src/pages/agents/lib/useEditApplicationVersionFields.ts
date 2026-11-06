@@ -9,7 +9,7 @@ import {
 import type { ApplicationVersionDetail, OutputContract } from '@/shared/api/generated/model';
 import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputContractField';
 
-import { areSoulDraftsEqual, soulToDraft, type AgentSoulDraft } from './agentSoulDraft';
+import { areSoulDraftsEqual, soulDraftProblems, soulToDraft, type AgentSoulDraft } from './agentSoulDraft';
 
 /**
  * The version-level fields `CreateAgentForm` renders on the agent EDIT page
@@ -105,6 +105,8 @@ export interface EditApplicationVersionFieldsState {
   readonly setTags: (tags: readonly Tag[]) => void;
   /** Replaces the Persona tab's soul draft (ADR-0050). */
   readonly setSoul: (soul: AgentSoulDraft) => void;
+  /** False while the soul draft holds something Main would refuse, so Save waits (ADR-0050). */
+  readonly isSoulValid: boolean;
   /** Feeds the page's `useUnsavedChangesNavBlocker` — RHF's own `isDirty` cannot see these fields (#133's create-page half made the same point). */
   readonly isDirty: boolean;
   /** Called after a successful save so the edits just persisted stop counting as unsaved (mirrors `form.reset(form.getValues())` on the RHF half). */
@@ -315,6 +317,7 @@ export function useEditApplicationVersionFields(
   const markSaved = useCallback(() => setBaseline(fields), [fields]);
 
   const isDirty = useMemo(() => !areEqual(fields, baseline), [fields, baseline]);
+  const isSoulValid = useMemo(() => soulDraftProblems(fields.soul).size === 0, [fields.soul]);
 
-  return { fields, applyFieldChange, setTags, setSoul, isDirty, markSaved };
+  return { fields, applyFieldChange, setTags, setSoul, isSoulValid, isDirty, markSaved };
 }

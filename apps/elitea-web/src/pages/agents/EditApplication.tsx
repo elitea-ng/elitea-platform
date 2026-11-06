@@ -322,7 +322,7 @@ export function EditApplication(): ReactNode {
                   />
                   <EditApplicationSaveBar
                     onSave={handleSave}
-                    canSave={canSaveApplication(form.formState.isValid, isSaving, isDirty)}
+                    canSave={canSaveApplication(form.formState.isValid && versionFields.isSoulValid, isSaving, isDirty)}
                     isSaving={isSaving}
                     onDiscarded={handleDiscarded}
                   />

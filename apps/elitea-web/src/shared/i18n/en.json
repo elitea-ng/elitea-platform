@@ -5753,5 +5753,7 @@
   "pages.agents.editApplication.persona.size": "{{bytes}} of {{max}} bytes",
   "pages.agents.editApplication.persona.values": "Values",
   "pages.agents.editApplication.persona.voice": "Voice",
-  "pages.agents.editApplication.tabs.persona": "Persona"
+  "pages.agents.editApplication.tabs.persona": "Persona",
+  "pages.agents.editApplication.persona.listTooLong": "Too many entries, or an entry that is too long.",
+  "pages.agents.editApplication.persona.relationshipsInvalid": "Each line must be \"agent: stance\", at most 32 lines."
 }

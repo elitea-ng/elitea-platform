@@ -21,7 +21,13 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-import { SOUL_MAX_TEXT_BYTES, soulFromDraft, soulTextBytes, type AgentSoulDraft } from '../lib/agentSoulDraft';
+import {
+  SOUL_MAX_TEXT_BYTES,
+  soulDraftProblems,
+  soulFromDraft,
+  soulTextBytes,
+  type AgentSoulDraft,
+} from '../lib/agentSoulDraft';
 import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicationVersionFields';
 
 export interface EditApplicationPersonaPanelProps {
@@ -112,7 +118,8 @@ export function EditApplicationPersonaPanel({ versionFields, disabled }: EditApp
   const onSoulChange = versionFields.setSoul;
   const specs = useMemo(() => fieldSpecs(), []);
   const bytes = useMemo(() => soulTextBytes(soulFromDraft(soul)), [soul]);
-  const tooLarge = bytes > SOUL_MAX_TEXT_BYTES;
+  const problems = useMemo(() => soulDraftProblems(soul), [soul]);
+  const tooLarge = problems.has('size');
 
   const handleChange = useCallback(
     (key: keyof AgentSoulDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -132,7 +139,20 @@ export function EditApplicationPersonaPanel({ versionFields, disabled }: EditApp
         <TextField
           key={spec.key}
           label={spec.label}
-          helperText={spec.helper}
+          error={problems.has(spec.key)}
+          helperText={
+            problems.has(spec.key)
+              ? spec.key === 'relationships'
+                ? t(
+                    'pages.agents.editApplication.persona.relationshipsInvalid',
+                    'Each line must be "agent: stance", at most 32 lines.',
+                  )
+                : t(
+                    'pages.agents.editApplication.persona.listTooLong',
+                    'Too many entries, or an entry that is too long.',
+                  )
+              : spec.helper
+          }
           value={soul[spec.key]}
           onChange={handleChange(spec.key)}
           disabled={disabled}

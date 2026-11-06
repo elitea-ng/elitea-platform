@@ -1044,6 +1044,12 @@ fn application_model_for_agent_type(
 /// reads platform, guardrails, soul, instructions, memory. The soul is not
 /// a template: it is never rendered with the version's variables. A
 /// pipeline has no soul; its `instructions` are the graph.
+///
+/// A soul this worker cannot admit fails the profile (fail closed) rather
+/// than running the agent without it: the soul carries the author's
+/// `boundaries`, and an agent that silently lost them is worse than one that
+/// does not start. Main admits every stored soul against the same schema, so
+/// this fires only for a worker older than Main (UPGRADING: workers first).
 pub(crate) fn with_version_soul(
     version: &Map<String, Value>,
     rendered_instructions: &str,

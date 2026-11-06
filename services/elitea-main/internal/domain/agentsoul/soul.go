@@ -38,9 +38,9 @@ const (
 	SchemaID = "elitea.soul/v1"
 	// MaxBytes bounds the text of one soul.
 	MaxBytes = 16 * 1024
-	// MaxEncodedBytes bounds the JSON a soul may arrive as before it is
+	// maxEncodedBytes bounds the JSON a soul may arrive as before it is
 	// decoded: the text bound plus room for keys and escaping.
-	MaxEncodedBytes = 4 * MaxBytes
+	maxEncodedBytes = 4 * MaxBytes
 
 	CodeCapabilityKey = "soul_capability_key"
 	CodeTooLarge      = "soul_too_large"
@@ -148,15 +148,15 @@ func Normalize(value any) (json.RawMessage, error) {
 	return encoded, nil
 }
 
-// NormalizeJSON is Normalize over encoded JSON (an import document, a stored
-// column). Empty input and JSON null are "no soul".
-func NormalizeJSON(raw []byte) (json.RawMessage, error) {
+// normalizeJSON is Normalize over encoded JSON, as the tests feed it. Empty
+// input and JSON null are "no soul".
+func normalizeJSON(raw []byte) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return nil, nil
 	}
-	if len(trimmed) > MaxEncodedBytes {
-		return nil, &Error{Code: CodeTooLarge, Message: fmt.Sprintf("the soul is larger than %d bytes", MaxEncodedBytes)}
+	if len(trimmed) > maxEncodedBytes {
+		return nil, &Error{Code: CodeTooLarge, Message: fmt.Sprintf("the soul is larger than %d bytes", maxEncodedBytes)}
 	}
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(trimmed))

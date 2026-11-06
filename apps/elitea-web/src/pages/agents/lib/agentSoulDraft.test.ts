@@ -6,6 +6,7 @@ import {
   EMPTY_SOUL_DRAFT,
   SOUL_MAX_TEXT_BYTES,
   areSoulDraftsEqual,
+  soulDraftProblems,
   soulFromDraft,
   soulTextBytes,
   soulToDraft,
@@ -53,5 +54,21 @@ describe('agentSoulDraft', () => {
     expect(soulTextBytes({ schema: 'elitea.soul/v1', body: 'x'.repeat(SOUL_MAX_TEXT_BYTES) })).toBeGreaterThan(
       SOUL_MAX_TEXT_BYTES,
     );
+  });
+});
+
+describe('soulDraftProblems', () => {
+  it('passes a draft Main would admit and names each field it would refuse', () => {
+    expect(soulDraftProblems(soulToDraft({ schema: 'elitea.soul/v1', voice: ['dry'] })).size).toBe(0);
+
+    const problems = soulDraftProblems({
+      ...EMPTY_SOUL_DRAFT,
+      voice: Array.from({ length: 17 }, (_, index) => `v${index}`).join('\n'),
+      values: 'x'.repeat(257),
+      relationships: 'planner has no stance',
+      body: 'y'.repeat(SOUL_MAX_TEXT_BYTES),
+    });
+
+    expect([...problems].sort()).toEqual(['relationships', 'size', 'values', 'voice']);
   });
 });
