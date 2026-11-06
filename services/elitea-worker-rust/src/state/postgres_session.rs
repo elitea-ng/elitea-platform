@@ -1233,6 +1233,47 @@ WHERE tenant_id = $1
         candidate_bytes: usize,
         candidate: &Event,
     ) -> Result<(), PostgresSessionError> {
+        // Fast path (FU-287): the active events are a subset of the stored
+        // ones, so stored totals within the caps prove the active ones are.
+        // This reads two integer columns per stored row and never parses a
+        // payload; only a session near a cap pays the full classification
+        // below, which applies the retirement rules exactly.
+        let (stored_events, stored_bytes) = sqlx::query_as::<_, (i64, i64)>(
+            r"
+SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint
+FROM elitea_runtime.agent_session_events
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND session_family = $5
+  AND definition_digest = $6
+  AND thread_id = $7
+  AND app_name = $8
+  AND user_id = $9
+  AND session_id = $10",
+        )
+        .bind(&self.authority.tenant_id)
+        .bind(self.authority.resource_project_id)
+        .bind(self.authority.projection_project_id)
+        .bind(self.authority.capability_id)
+        .bind(SESSION_FAMILY)
+        .bind(self.authority.definition_digest.as_slice())
+        .bind(&self.authority.thread_id)
+        .bind(&self.authority.app_name)
+        .bind(&self.authority.user_id)
+        .bind(&self.authority.session_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(storage_error)?;
+        if usize::try_from(stored_events).is_ok_and(|count| count < self.limits.max_events)
+            && usize::try_from(stored_bytes)
+                .ok()
+                .and_then(|bytes| bytes.checked_add(candidate_bytes))
+                .is_some_and(|retained| retained <= self.limits.max_retained_event_bytes)
+        {
+            return Ok(());
+        }
         let query = format!(
             "{} SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint FROM active_events \
              WHERE NOT ($13 AND recovery_marker AND branch = $14 \

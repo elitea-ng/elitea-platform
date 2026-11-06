@@ -1005,17 +1005,51 @@ where
 /// gives the Runner the incremental view, each refresh is one
 /// `agent.session.persist` span with `operation = refresh`, and the span carries
 /// the rows it read and whether it fell back to a full read.
+///
+/// The spans are captured in a child process that owns a global subscriber:
+/// a thread-local one races parallel tests over callsite interest, which can
+/// leave this test's refresh spans unrecorded (the #1172 pattern).
+#[test]
+fn the_runner_assembly_refreshes_incrementally_and_reports_rows_and_fallback_in_its_span() {
+    if crate::test_pg::database_url_var("ELITEA_TEST_DATABASE_URL").is_err() {
+        eprintln!("SKIP: set ELITEA_TEST_DATABASE_URL for the refresh span proof");
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "agents::runner_view_pg_tests::refresh_span_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(REFRESH_SPAN_CHILD_ENV, "1")
+        .output()
+        .expect("refresh span child process");
+    let logged = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{logged}");
+    assert!(logged.contains("REFRESH-SPAN-CHILD-RAN"), "{logged}");
+}
+
+const REFRESH_SPAN_CHILD_ENV: &str = "ELITEA_REFRESH_SPAN_CHILD";
+
 #[tokio::test(flavor = "current_thread")]
-async fn the_runner_assembly_refreshes_incrementally_and_reports_rows_and_fallback_in_its_span() {
+async fn refresh_span_child() {
     use adk_rust::futures::StreamExt as _;
     use tracing_subscriber::layer::SubscriberExt as _;
+    if std::env::var(REFRESH_SPAN_CHILD_ENV).is_err() {
+        return;
+    }
     let Some(fixture) = Fixture::new(SessionLimits::default()).await else {
         return;
     };
     // Whole-run cross-check stays on: the Runner's own refreshes are compared.
     let spans = RefreshSpans::default();
-    let _subscriber =
-        tracing::subscriber::set_default(tracing_subscriber::registry().with(spans.clone()));
+    tracing::subscriber::set_global_default(tracing_subscriber::registry().with(spans.clone()))
+        .expect("the child owns the global subscriber");
     let sessions = Arc::new(
         super::session::RunnerSessionService::new(fixture.service.clone(), None)
             .with_history_scope(DEFINITION, "recording-probe")
@@ -1057,4 +1091,5 @@ async fn the_runner_assembly_refreshes_incrementally_and_reports_rows_and_fallba
     let rows = spans.iter().map(|(rows, _, _)| *rows).collect::<Vec<_>>();
     assert!(rows.iter().all(|rows| *rows <= 2), "{rows:?}");
     fixture.db.pool.close().await;
+    println!("REFRESH-SPAN-CHILD-RAN");
 }
