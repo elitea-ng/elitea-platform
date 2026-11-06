@@ -82,6 +82,22 @@ func (a *ExecutionObserverAuthority) MayObserveAgentExecution(
 	return a.mayReadConversation(ctx, strconv.FormatInt(project, 10), conversationUUID, principal)
 }
 
+// MayReadConversation reports whether principal may read conversationUUID in
+// project under the chat detail visibility rule: the rule the event replay
+// applies to a run's conversation, and the cloud browser view relay (#1597)
+// applies to a run's browser session.
+func (a *ExecutionObserverAuthority) MayReadConversation(
+	ctx context.Context,
+	project int64,
+	conversationUUID string,
+	principal auth.User,
+) (bool, error) {
+	if _, ok := principal.OwningUserID(); !ok || project <= 0 || conversationUUID == "" {
+		return false, nil
+	}
+	return a.mayReadConversation(ctx, strconv.FormatInt(project, 10), conversationUUID, principal)
+}
+
 func (a *ExecutionObserverAuthority) mayReadConversation(
 	ctx context.Context,
 	projectID string,

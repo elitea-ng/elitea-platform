@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agentexecutionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/browsersessions"
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
@@ -26,6 +27,10 @@ type PublicRoutes struct {
 	ExecutionInterrupts agentexecutionapi.ExecutionInterruptUseCase
 	Validation          http.Handler
 	ExecutionEvents     http.Handler
+	// BrowserView is the cloud browser view relay (ADR-0049 decision 6,
+	// #1597): Main binds it to the /api/v2 group's authentication. Nil
+	// when ELITEA_RUNTIME_BROWSER_VIEW_CONFIG is unset.
+	BrowserView *browsersessions.Handler
 	// IndexStart is composed only when the complete index control/data plane is
 	// enabled. Main binds it to the current route's existing authentication and
 	// project-RBAC middleware before mounting it.

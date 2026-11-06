@@ -263,6 +263,7 @@
 {{- $keys := list "runtime-ca.crt" "command-signing-key.pem" "command-signing-keyring.json" "control-server.crt" "control-server.key" "output-server.crt" "output-server.key" "content-server.crt" "content-server.key" -}}
 {{- if ($r.rustCompiledSnapshots | default dict).enabled -}}{{- $keys = concat $keys (list "rust-compiled-profiles.json" "agent-checkpoint-connection") -}}{{- end -}}
 {{- if ($r.codeOwnerRecovery | default dict).enabled -}}{{- $keys = concat $keys (list "code-owner-client.crt" "code-owner-client.key") -}}{{- end -}}
+{{- if eq ($r.browserView | default dict).enabled true -}}{{- $keys = concat $keys (list "browser-view-client.crt" "browser-view-client.key") -}}{{- end -}}
 {{- if ($r.codePlatform | default dict).enabled -}}{{- $keys = append $keys "code-platform-content-keys.json" -}}{{- end -}}
 {{- if ($r.codeDebugArtifacts | default dict).enabled -}}{{- $keys = append $keys "agent-checkpoint-connection" -}}{{- end -}}
 {{- $keys | uniq | toJson -}}

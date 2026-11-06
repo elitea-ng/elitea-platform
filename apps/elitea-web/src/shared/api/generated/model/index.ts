@@ -949,6 +949,7 @@ export * from "./versionToolRef.zod";
 export * from "./versionValidatorResponse.zod";
 export * from "./versionVariable.zod";
 export * from "./versionWriteRequest.zod";
+export * from "./viewBrowserSessionHeaders.zod";
 export * from "./webhook.zod";
 export * from "./webhookDelivery.zod";
 export * from "./webhookWriteRequest.zod";

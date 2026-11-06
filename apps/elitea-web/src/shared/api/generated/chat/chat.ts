@@ -19771,6 +19771,297 @@ export function useStreamExecutionEvents<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type viewBrowserSessionResponse101 = {
+  data: void;
+  status: 101;
+};
+
+export type viewBrowserSessionResponse400 = {
+  data: InvalidClientVersionError;
+  status: 400;
+};
+
+export type viewBrowserSessionResponse401 = {
+  data: string;
+  status: 401;
+};
+
+export type viewBrowserSessionResponse403 = {
+  data: string;
+  status: 403;
+};
+
+export type viewBrowserSessionResponse404 = {
+  data: string;
+  status: 404;
+};
+
+export type viewBrowserSessionResponse410 = {
+  data: string;
+  status: 410;
+};
+
+export type viewBrowserSessionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type viewBrowserSessionResponse429 = {
+  data: string;
+  status: 429;
+};
+
+export type viewBrowserSessionResponse502 = {
+  data: string;
+  status: 502;
+};
+
+export type viewBrowserSessionResponse503 = {
+  data: string;
+  status: 503;
+};
+
+export type viewBrowserSessionResponseError = (
+  | viewBrowserSessionResponse101
+  | viewBrowserSessionResponse400
+  | viewBrowserSessionResponse401
+  | viewBrowserSessionResponse403
+  | viewBrowserSessionResponse404
+  | viewBrowserSessionResponse410
+  | viewBrowserSessionResponse426
+  | viewBrowserSessionResponse429
+  | viewBrowserSessionResponse502
+  | viewBrowserSessionResponse503
+) & {
+  headers: Headers;
+};
+
+export type viewBrowserSessionResponse = viewBrowserSessionResponseError;
+
+export const getViewBrowserSessionUrl = (sessionId: string) => {
+  return `/browser_sessions/${sessionId}/view`;
+};
+
+/**
+ * Client contract 1.40 (ADR-0049 decision 6). A WebSocket upgrade:
+ * any replica relays it to the browser supervisor, and the session
+ * screencasts only while at least one viewer is attached.
+ *
+ * Who may open it: the run's owner, or a principal who may read the
+ * run's conversation. Who may drive: the owner, or such a viewer who
+ * also holds `models.chat.messages.create` in the project. A
+ * lingering session (the run ended; the browser stays up for its
+ * linger) opens watch-only for everyone. A browser page must send an
+ * `Origin` of the deployment's own public origin; the desktop app's
+ * origins (`tauri://localhost`, `http(s)://tauri.localhost`) are
+ * admitted too. Every refusal is an HTTP status before the upgrade:
+ * `hello` is sent only once the supervisor admitted the view.
+ *
+ * Access is checked again every 30 seconds while the view is open. A
+ * viewer who may no longer watch is closed with code 4403
+ * `access_revoked`; one who may still watch but no longer drive stays
+ * open watch-only after a `control_revoked` notice (control handed
+ * back to the agent if the viewer held it). If the check cannot be
+ * answered three times in a row the view closes with 1013 (try again
+ * later).
+ *
+ * Down, one JSON text message per event:
+ * `{"type":"hello","session_id","can_control","lingering"}` first;
+ * `{"type":"frame","seq","width","height","bytes","url","title","control"}`
+ * (`control` is `agent` or `user`), followed by exactly ONE binary
+ * message holding that frame's JPEG of `bytes` bytes;
+ * `{"type":"notice","code"}` (`input_refused`, `session_lingering`,
+ * `control_revoked`);
+ * `{"type":"refused","code"}` for one up message that was not
+ * relayed (`input_refused` from a watch-only viewer, `malformed`);
+ * and `{"type":"end","code"}` (`session_destroyed`, `idle`, `wall`,
+ * `linger_elapsed`, `agent_failed`) before the close.
+ *
+ * Up, JSON text messages of at most 4 KiB:
+ * `{"type":"ack","seq"}` after showing a frame (the next frame is sent
+ * only after it, always the latest);
+ * `{"type":"pointer","kind":"move|down|up","x","y","button","click_count","modifiers"}`;
+ * `{"type":"wheel","x","y","delta_x","delta_y","modifiers"}`;
+ * `{"type":"key","kind":"down|up|char","key","code","text","modifiers"}`
+ * (each string at most 32 bytes);
+ * `{"type":"take_over"}`; and `{"type":"hand_back","note"}` (the note
+ * at most 2 KiB, given to the agent). Input other than an ack needs
+ * `can_control`. While the person holds control, the agent's browser
+ * tools other than a snapshot or a screenshot answer `user_in_control`.
+ * @summary Watch, and take over, a run's cloud browser (WebSocket)
+ */
+export const viewBrowserSession = async (
+  sessionId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<viewBrowserSessionResponse> => {
+  return eliteaFetch<viewBrowserSessionResponse>(
+    getViewBrowserSessionUrl(sessionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getViewBrowserSessionQueryKey = (sessionId: string) => {
+  return [`/browser_sessions/${sessionId}/view`] as const;
+};
+
+export const getViewBrowserSessionQueryOptions = <
+  TData = Awaited<ReturnType<typeof viewBrowserSession>>,
+  TError =
+    void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse,
+>(
+  sessionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof viewBrowserSession>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getViewBrowserSessionQueryKey(sessionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof viewBrowserSession>>
+  > = ({ signal }) =>
+    viewBrowserSession(sessionId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: sessionId !== null && sessionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof viewBrowserSession>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ViewBrowserSessionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof viewBrowserSession>>
+>;
+export type ViewBrowserSessionQueryError =
+  void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse;
+
+export function useViewBrowserSession<
+  TData = Awaited<ReturnType<typeof viewBrowserSession>>,
+  TError =
+    void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse,
+>(
+  sessionId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof viewBrowserSession>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof viewBrowserSession>>,
+          TError,
+          Awaited<ReturnType<typeof viewBrowserSession>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useViewBrowserSession<
+  TData = Awaited<ReturnType<typeof viewBrowserSession>>,
+  TError =
+    void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse,
+>(
+  sessionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof viewBrowserSession>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof viewBrowserSession>>,
+          TError,
+          Awaited<ReturnType<typeof viewBrowserSession>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useViewBrowserSession<
+  TData = Awaited<ReturnType<typeof viewBrowserSession>>,
+  TError =
+    void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse,
+>(
+  sessionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof viewBrowserSession>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Watch, and take over, a run's cloud browser (WebSocket)
+ */
+
+export function useViewBrowserSession<
+  TData = Awaited<ReturnType<typeof viewBrowserSession>>,
+  TError =
+    void | InvalidClientVersionError | string | ClientUpgradeRequiredResponse,
+>(
+  sessionId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof viewBrowserSession>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getViewBrowserSessionQueryOptions(sessionId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type listMessageTracesResponse200 = {
   data: MessageTraceListing;
   status: 200;

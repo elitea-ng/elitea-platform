@@ -2689,6 +2689,13 @@ where
     fn step_limit_stop(&self) -> Option<Arc<super::unattended::StepLimitStop>> {
         self.step_limit.clone()
     }
+
+    /// The run ends without completing: its browser session ends now, while
+    /// the claim is live, so the ENDED report reaches Main before the claim
+    /// is released.
+    async fn abandon(&mut self) {
+        self.browser.end(true).await;
+    }
 }
 
 /// Fallback completion for a pipeline that emitted no selected public result.

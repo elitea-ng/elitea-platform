@@ -714,6 +714,9 @@ type RouterConfig struct {
 	// three notification operations cannot drift from the REST/UI projection.
 	CurrentNotificationStore  notificationapp.Store
 	CurrentNotificationEvents http.Handler
+	// BrowserSessionView is the cloud browser view WebSocket (ADR-0049
+	// decision 6, #1597), already wrapped in the group's authentication.
+	BrowserSessionView http.Handler
 	// CurrentNotificationPush serves web push: push_config and the caller's
 	// push_subscriptions (ADR-0045 decision 6).
 	CurrentNotificationPush http.Handler

@@ -32,6 +32,7 @@ import (
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	applicationskillsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/browsersessions"
 	v2canvaspresence "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
@@ -2070,6 +2071,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
 	var toolkitDiscovery discovery.UseCase
+	// The cloud browser view relay (#1597), assigned only when the runtime
+	// composed it AND the API group authenticates: a nil http.Handler
+	// otherwise, never a typed nil.
+	var browserSessionView http.Handler
 	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
 	// under the same guard so an absent agent plane leaves a NIL interface.
 	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
@@ -2313,6 +2318,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Standalone toolkit operations also run on the Rust agent stream.
 		// Index ingestion can remain disabled for that deployment.
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
+		if publicRoutes.BrowserView != nil && productionAuthenticationComposed(apiGroupAuth) {
+			// The browser Origins the view admits besides the request's own
+			// host: DEPLOYMENT_URL's origin and the desktop app's bundled
+			// page. Opening a driving view and each take over go to the
+			// audit trail.
+			browserSessionView = publicRoutes.BrowserView.
+				WithOriginPatterns(browsersessions.OriginPatterns(publicOrigin)).
+				WithAudit(auditRecorder).
+				Route(apiGroupAuth)
+		}
 		toolkitToolRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.ClientApplicationVersions != nil {
 			publicRoutes.ClientApplicationVersions.WithPlatformTools(platformMCPTools)
@@ -3099,6 +3114,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		CurrentNotifications:           currentNotifications,
 		CurrentNotificationStore:       currentNotificationStore,
 		CurrentNotificationEvents:      currentNotificationEvents,
+		BrowserSessionView:             browserSessionView,
 		CurrentNotificationPush:        currentNotificationPush,
 		CurrentModelCatalog:            currentModelCatalog,
 		CurrentModelDefault:            currentModelDefault,

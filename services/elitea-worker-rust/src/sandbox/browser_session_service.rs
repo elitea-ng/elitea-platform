@@ -813,9 +813,15 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
         agent.viewer_attached(max_fps).await;
         let (tx, rx) = mpsc::channel::<Result<BrowserViewOutputV1, Status>>(4);
         let (acked_tx, mut acked) = watch::channel(0_u64);
-        if lingering {
-            let _ = tx.send(Ok(notice("session_lingering"))).await;
-        }
+        // The first message says the view is admitted, and in which state:
+        // Main waits for it before it upgrades the viewer's WebSocket, so a
+        // refusal above is an HTTP status there and never a closed socket.
+        let admitted = if lingering {
+            "session_lingering"
+        } else {
+            "session_live"
+        };
+        let _ = tx.send(Ok(notice(admitted))).await;
         // Down: the latest frame, one at a time, each after the viewer
         // acknowledged the one before it.
         let mut frames = agent.frames();

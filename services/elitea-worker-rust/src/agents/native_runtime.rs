@@ -105,6 +105,13 @@ where
             Self::Pipeline(completion) => completion.step_limit_stop(),
         }
     }
+
+    async fn abandon(&mut self) {
+        match self {
+            Self::Direct(completion) => completion.abandon().await,
+            Self::Pipeline(completion) => completion.abandon().await,
+        }
+    }
 }
 
 /// Strict router over the concrete direct-agent and pipeline assemblers.

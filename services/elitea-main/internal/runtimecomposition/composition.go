@@ -1509,6 +1509,20 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}()
 	}
 	recoveryOwners.Code = originalCodeIntents
+	browserView, err := configureBrowserView(config, dependencies, privateKey)
+	if err != nil {
+		return nil, err
+	}
+	if browserView != nil {
+		defer func() {
+			if closeNATS {
+				browserView.client.Close()
+			}
+		}()
+		if err := attachBrowserSessionMaintenance(replayMaintenance, browserView.sessions); err != nil {
+			return nil, err
+		}
+	}
 
 	var compiledAuthority runtimedomain.RustSnapshotIndex
 	if compiledSnapshots != nil {
@@ -2553,6 +2567,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		controlServer.WithRunSteps(runSteps)
 	}
+	if browserView != nil {
+		// The worker reports its run's browser session here (the view
+		// relay's session table, #1597).
+		controlServer.WithBrowserSessions(browserSessionRecorder{sessions: browserView.sessions}, browserView.audiences)
+	}
 	if dependencies.DelegationAssertions != nil {
 		controlServer.WithDelegationAssertions(dependencies.DelegationAssertions)
 	}
@@ -2622,6 +2641,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, err
 	}
 	publicRoutes.ToolkitDiscovery = toolkitDiscovery
+	if publicRoutes.BrowserView, err = newBrowserViewHandler(browserView, dependencies.ReplayPool, executionObservers, dependencies.PermissionResolver); err != nil {
+		return nil, err
+	}
 	if currentIndex != nil {
 		publicRoutes.IndexCancel = currentIndex.cancel
 		publicRoutes.IndexMeta = currentIndex.indexMeta
@@ -2664,6 +2686,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		runtimeNATS:            runtimeNATS,
 		sandboxSpoolDir:        sandboxSpoolDir,
 		codeOwnerClient:        codeOwnerClient,
+		browserViewClient:      browserViewCloser(browserView),
 		publicRoutes:           publicRoutes,
 		configurationValidator: currentSDKConfigurationValidator,
 		egressAudit:            egressAuditMerger,

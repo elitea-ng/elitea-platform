@@ -243,6 +243,17 @@ impl ClaimBoundSandboxAuthority {
     }
 }
 
+/// What Main made of one browser session report.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BrowserSessionReportOutcome {
+    /// Main stored it.
+    Stored,
+    /// This deployment serves no view (an older Main, or the relay off).
+    Unsupported,
+    /// Main refused it, or did not answer.
+    Refused,
+}
+
 impl<R: ControlRpc> AgentControlClient<R> {
     pub(crate) async fn stop_sandbox_job(
         &self,
@@ -273,6 +284,48 @@ impl<R: ControlRpc> AgentControlClient<R> {
                 digest,
             )
             .await
+    }
+
+    /// Tell Main the run's cloud browser session changed state (ADR-0049
+    /// decision 6, #1597), under this claim's identity and fence. Main keeps
+    /// the session row a viewer's relay reads.
+    pub(crate) async fn report_browser_session(
+        &self,
+        authority: &ClaimBoundSandboxAuthority,
+        audience: &str,
+        spec: &crate::protocol::elitea::runtime::v1::BrowserSessionSpecV1,
+        state: crate::protocol::elitea::runtime::v1::BrowserSessionReportStateV1,
+        linger_until_unix_seconds: u64,
+    ) -> BrowserSessionReportOutcome {
+        if self.require_sandbox_authority(authority).is_err() {
+            return BrowserSessionReportOutcome::Refused;
+        }
+        let request = crate::protocol::elitea::runtime::v1::ReportBrowserSessionRequestV1 {
+            identity: Some(authority.claim.identity.clone()),
+            fence: Some(authority.claim.fence.clone()),
+            spec: Some(spec.clone()),
+            audience: audience.to_owned(),
+            state: state as i32,
+            linger_until_unix_seconds,
+        };
+        match self.control.report_browser_session(request).await {
+            Ok(response) => match response.rejection {
+                None => BrowserSessionReportOutcome::Stored,
+                Some(rejection)
+                    if rejection.code
+                        == crate::protocol::elitea::runtime::v1::RuntimeErrorCodeV1::UnsupportedCapability
+                            as i32 =>
+                {
+                    BrowserSessionReportOutcome::Unsupported
+                }
+                Some(_) => BrowserSessionReportOutcome::Refused,
+            },
+            // A Main without the RPC at all.
+            Err(crate::transport::control_grpc::ControlGrpcError::InvalidConfiguration(_)) => {
+                BrowserSessionReportOutcome::Unsupported
+            }
+            Err(_) => BrowserSessionReportOutcome::Refused,
+        }
     }
 
     /// Main's grant for one cloud-executor workspace run (ADR-0034): the

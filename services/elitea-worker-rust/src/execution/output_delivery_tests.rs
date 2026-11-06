@@ -4153,9 +4153,32 @@ struct StopAwareAssembler {
     inner: TestNativeAssembler,
     stop: Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>>,
 }
+/// A completion that records when the lifecycle abandons it (the run's
+/// browser session ends there, ADR-0049 decision 6).
+struct AbandonRecordingCompletion {
+    trace: Arc<Mutex<Vec<&'static str>>>,
+}
+
+#[async_trait]
+impl NativeAgentCompletionSelector for AbandonRecordingCompletion {
+    async fn select(self) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        FixedCompletion.select().await
+    }
+
+    async fn select_static_pause(
+        self,
+    ) -> Result<CompletedAgentBrowserOutput, NativeAgentAssemblyError> {
+        self.select().await
+    }
+
+    async fn abandon(&mut self) {
+        self.trace.lock().expect("trace").push("abandon");
+    }
+}
+
 #[async_trait]
 impl NativeAgentAssembler for StopAwareAssembler {
-    type Completion = FixedCompletion;
+    type Completion = AbandonRecordingCompletion;
     fn sandbox_stop_delivery(
         &self,
     ) -> Option<Arc<dyn crate::sandbox::dispatch::SandboxStopDelivery>> {
@@ -4165,7 +4188,10 @@ impl NativeAgentAssembler for StopAwareAssembler {
         &self,
         assembly: AuthorizedNativeAssembly<'_>,
     ) -> Result<AssembledNativeAgentInvocation<Self::Completion>, NativeAgentAssemblyError> {
-        Box::pin(self.inner.assemble(assembly)).await
+        let trace = Arc::clone(&self.inner.trace);
+        Ok(Box::pin(self.inner.assemble(assembly))
+            .await?
+            .map_completion(|FixedCompletion| AbandonRecordingCompletion { trace }))
     }
 }
 #[tokio::test(start_paused = true)]
@@ -4318,6 +4344,16 @@ async fn run_durable_stop_case(sandbox_complete: Option<bool>) {
             .expect("trace")
             .ends_with(&["settlement", "retire"])
     );
+    // The cancelled run's completion is abandoned (its browser session
+    // ended) once, before the claim is settled and released.
+    {
+        let observed = trace.lock().expect("trace");
+        let abandoned = observed.iter().filter(|event| **event == "abandon").count();
+        let at = observed.iter().position(|event| *event == "abandon");
+        let settled = observed.iter().position(|event| *event == "settlement");
+        assert_eq!(abandoned, 1, "{observed:?}");
+        assert!(at < settled, "{observed:?}");
+    }
     drop(temporary);
 }
 

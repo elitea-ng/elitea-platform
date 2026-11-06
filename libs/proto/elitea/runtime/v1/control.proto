@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package elitea.runtime.v1;
 
+import "elitea/runtime/v1/browser_session.proto";
 import "elitea/runtime/v1/common.proto";
 import "elitea/runtime/v1/compiled_code.proto";
 import "elitea/runtime/v1/egress_audit.proto";
@@ -418,6 +419,47 @@ message MintDelegationAssertionResponseV1 {
   reserved 6 to 15;
 }
 
+// ReportBrowserSession tells Main that this claim started the run's cloud
+// browser session, or that the run ended it (ADR-0049 decision 6, #1597).
+// Main keeps one row per session in elitea_runtime.browser_sessions, so any
+// elitea-main replica can relay a viewer to it. It is sent under the live
+// claim: Main refuses a released or stale fence. Main reads the tenant, the
+// project and the run's owner from the execution kernel, never from the
+// worker, and the session name must be the run's own: `elitea-br-` and the
+// first 24 hex of SHA-256 over "elitea.browser-session\x00" and the
+// execution id. The audience must be one of Main's configured browser
+// supervisors; the worker never sends an address. Best effort: a refused
+// report never fails a tool call, and the session then has no viewer.
+message ReportBrowserSessionRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // The session's exact spec, as StartBrowserSession sent it. Main binds a
+  // view grant's digest to it.
+  BrowserSessionSpecV1 spec = 3;
+  // The audience of the supervisor's browser profile.
+  string audience = 4;
+  BrowserSessionReportStateV1 state = 5;
+  // LINGERING only: when the linger ends (DestroyBrowserSession's answer).
+  uint64 linger_until_unix_seconds = 6;
+  reserved 7 to 15;
+}
+
+enum BrowserSessionReportStateV1 {
+  BROWSER_SESSION_REPORT_STATE_V1_UNSPECIFIED = 0;
+  // StartBrowserSession answered OK: the session is live.
+  BROWSER_SESSION_REPORT_STATE_V1_LIVE = 1;
+  // DestroyBrowserSession(RUN_ENDED): a viewer may watch until the linger
+  // ends; input is refused.
+  BROWSER_SESSION_REPORT_STATE_V1_LINGERING = 2;
+  // DestroyBrowserSession(NOW): the session is gone.
+  BROWSER_SESSION_REPORT_STATE_V1_ENDED = 3;
+}
+
+message ReportBrowserSessionResponseV1 {
+  RuntimeErrorV1 rejection = 1;
+  reserved 2 to 10;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -433,4 +475,5 @@ service RuntimeControlService {
   rpc ReportEgressSummary(ReportEgressSummaryRequestV1) returns (ReportEgressSummaryResponseV1);
   rpc ReportRunSteps(ReportRunStepsRequestV1) returns (ReportRunStepsResponseV1);
   rpc MintDelegationAssertion(MintDelegationAssertionRequestV1) returns (MintDelegationAssertionResponseV1);
+  rpc ReportBrowserSession(ReportBrowserSessionRequestV1) returns (ReportBrowserSessionResponseV1);
 }
