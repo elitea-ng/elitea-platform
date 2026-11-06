@@ -83,7 +83,7 @@ func TestValidateSpec(t *testing.T) {
 }
 
 func TestStatesMoveForwardAndWatchability(t *testing.T) {
-	if !(StateLive.Rank() < StateLingering.Rank() && StateLingering.Rank() < StateEnded.Rank()) || State("x").Rank() != 0 {
+	if StateLive.Rank() >= StateLingering.Rank() || StateLingering.Rank() >= StateEnded.Rank() || State("x").Rank() != 0 {
 		t.Fatal("state order")
 	}
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
