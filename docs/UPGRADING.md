@@ -91,10 +91,6 @@ message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
 
-||||||| 221a5f002
-||||||| 2e4e7c6fe
-||||||| 72ca1c414
-||||||| parent of 4946aae0c (docs+chart: cloud browser toolkit page, worker browserSessions value, upgrade note (#1596))
 
 ## Cloud browser: the supervisor's `browser` profile (#1595, ADR-0049 decisions 1 and 10)
 
