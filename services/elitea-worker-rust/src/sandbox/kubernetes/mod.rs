@@ -1,5 +1,6 @@
 //! Kubernetes workload contract. The API adapter must preserve this identity
 //! and must not treat Pod disappearance as proof that execution stopped.
+pub mod browser_session;
 pub mod client;
 #[cfg(test)]
 mod live_tests;

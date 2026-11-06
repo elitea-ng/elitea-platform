@@ -1,0 +1,321 @@
+syntax = "proto3";
+
+package elitea.runtime.v1;
+
+import "elitea/runtime/v1/sandbox.proto";
+
+option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
+
+// Cloud browser sessions on the sandbox supervisor (ADR-0049 decisions 1, 4,
+// 6 and 10).
+//
+// A browser session is one sandbox container (Docker) or Pod (Kubernetes,
+// gVisor runtime class) running one engine and the in-pod session agent. It
+// holds no workspace and no platform credential, and CDP never leaves it.
+// The worker reaches it only through the supervisor's dedicated `browser`
+// profile (its own listener, audience `dns:elitea-sandbox-browser`, image
+// and ceilings), and only with this service; elitea-main reaches it the same
+// way for the view stream (BrowserView).
+//
+// Authority is Main's existing sandbox grant (SignedSandboxJobGrantV1,
+// revision 1, from RuntimeControlService.AuthorizeSandboxJob), exactly as
+// for WorkspaceRunService:
+//
+//   * the grant's audience is the browser profile's;
+//   * its activation_id is the spec's name;
+//   * its submitter_workload_identity is the caller's mTLS identity;
+//   * its request_digest is, for StartBrowserSession, BrowserCall and
+//     DestroyBrowserSession, SHA-256 over the domain
+//     "elitea.sandbox.browser-session.v1\x00" followed by the canonical spec
+//     encoding (revision, name length-prefixed, engine, cpu_millis,
+//     memory_bytes, wall_seconds, max_pages, each fixed-width big-endian;
+//     see the supervisor's `browser_session.rs`), and for BrowserView,
+//     SHA-256 over "elitea.sandbox.browser-view.v1\x00", the 32-byte session
+//     digest, then one byte: 1 when the open frame asks for control, else 0.
+//
+// The session carries the session digest and the grant's activation scope
+// (tenant, project, execution activation) as its binding; every later call
+// is refused unless its grant names the same binding. A grant lives at most
+// 30 seconds; a call or a view stream that started under a valid grant runs
+// to its end.
+//
+// Lifetime (decision 1). The worker starts a session at the run's first
+// browser call. The supervisor destroys it at the earliest of: the run's end
+// plus a linger of 10 minutes (DestroyBrowserSession with RUN_ENDED), 15
+// minutes without a call or viewer input, or its wall limit. A destroyed
+// session's name is never started again by that supervisor: a session is
+// never reused. A start while the profile is at its concurrency waits up to
+// 30 seconds for a slot, then fails RESOURCE_EXHAUSTED with the code
+// `browser_capacity` (decision 10).
+//
+// Typed refusals carry their stable code in the `elitea-browser-error`
+// response metadata: `browser_capacity` (RESOURCE_EXHAUSTED),
+// `browser_session_limit` (RESOURCE_EXHAUSTED, the run already holds its
+// sessions-per-run ceiling), `browser_session_ended` (FAILED_PRECONDITION,
+// destroyed or lingering), `browser_session_not_started` (NOT_FOUND),
+// `browser_isolation_refused` (FAILED_PRECONDITION: the engine would need
+// `--no-sandbox` on a runtime that is not gVisor), `browser_agent_failed`
+// (UNAVAILABLE).
+//
+// The supervisor speaks to the session agent over the agent's stdin and
+// stdout, one JSON object per line (browser_session_agent_v1.md beside this
+// file). Nothing a model chose is a selector here: the supervisor renders
+// the container from its own configuration plus the validated spec.
+
+// The engine a session runs (decision 2). Until the bake-off admits `lite`,
+// the platform offers only FULL.
+enum BrowserEngineV1 {
+  BROWSER_ENGINE_V1_UNSPECIFIED = 0;
+  // chrome-headless-shell at the image's pinned Chrome for Testing version.
+  BROWSER_ENGINE_V1_FULL = 1;
+  // Moli at the image's pinned commit.
+  BROWSER_ENGINE_V1_LITE = 2;
+}
+
+// BrowserSessionSpecV1 is the backend-independent container of one session.
+// Every resource is bounded above by the profile's ceiling for the engine.
+message BrowserSessionSpecV1 {
+  // Exactly 1.
+  uint32 revision = 1;
+  // A DNS label `elitea-br-<24 hex>`, unique for one run's session index
+  // (the worker derives it from the claim, the epoch and the index).
+  string name = 2;
+  BrowserEngineV1 engine = 3;
+  uint64 cpu_millis = 4;
+  uint64 memory_bytes = 5;
+  // The session's wall limit; at most the profile's (60 minutes by default).
+  uint64 wall_seconds = 6;
+  // Pages (tabs) the session agent keeps open at once; at most the
+  // profile's (3 by default).
+  uint32 max_pages = 7;
+  reserved 8 to 15;
+}
+
+// Where the engine's only route out goes (decision 5): the egress proxy and
+// the signed run token that carries the run's allowlist. It rides the
+// agent's stdin only; it is never in the container's spec, labels, argv or
+// environment, and it is not part of the grant's digest.
+message BrowserSessionEgressV1 {
+  // `http://<ip literal>:<port>`: the session has no resolver.
+  string proxy_url = 1;
+  string proxy_token = 2;
+  reserved 3 to 15;
+}
+
+message StartBrowserSessionRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  BrowserSessionSpecV1 spec = 2;
+  // Absent: the engine has no network at all.
+  BrowserSessionEgressV1 egress = 3;
+  // A schedule or webhook run with nobody to ask (ADR-0049 decision 7):
+  // `browser_request_user` answers `no_person` at once. Default false: a
+  // person may be asked. A field of the request, not of the spec, so it is
+  // not part of the grant's digest.
+  bool unattended = 4;
+  reserved 5 to 15;
+}
+
+// A repeated start of a live session (a retry after a lost acknowledgement)
+// observes it and answers `created` false.
+message StartBrowserSessionResponseV1 {
+  bool created = 1;
+  // What the session agent reported when it became ready, for the step
+  // record: e.g. `chrome-headless-shell/142.0.7444.59`.
+  string engine_version = 2;
+  reserved 3 to 15;
+}
+
+// One browser tool call (the libs/rust/browser-tools contract).
+message BrowserCallRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  BrowserSessionSpecV1 spec = 2;
+  // The worker's tool-call id, echoed in the step record. At most 128
+  // bytes of [A-Za-z0-9_.:-].
+  string call_id = 3;
+  // A `browser_*` tool name.
+  string name = 4;
+  // The tool's arguments, a JSON object of at most 64 KiB.
+  string arguments_json = 5;
+  reserved 6 to 15;
+}
+
+message BrowserImageV1 {
+  string media_type = 1;
+  bytes data = 2;
+  reserved 3 to 15;
+}
+
+message BrowserCallResponseV1 {
+  // The tool's JSON result, failures included (`{"status":"error",
+  // "code":...}` as the contract defines them).
+  string result_json = 1;
+  // `browser_screenshot` only: the image for the model.
+  BrowserImageV1 image = 2;
+  reserved 3 to 15;
+}
+
+// The first frame of a view stream. `control` asks to drive: Main sets it
+// only for the run's owner or a participant with
+// `models.chat.messages.create` on the conversation (decision 6); it is
+// bound by the grant's digest, so a watch-only grant cannot drive.
+message BrowserViewOpenV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  BrowserSessionSpecV1 spec = 2;
+  bool control = 3;
+  // At most 10; 0 is 10.
+  uint32 max_fps = 4;
+  reserved 5 to 15;
+}
+
+enum BrowserPointerKindV1 {
+  BROWSER_POINTER_KIND_V1_UNSPECIFIED = 0;
+  BROWSER_POINTER_KIND_V1_MOVE = 1;
+  BROWSER_POINTER_KIND_V1_DOWN = 2;
+  BROWSER_POINTER_KIND_V1_UP = 3;
+}
+
+// Positions are in the frame's logical pixels. `modifiers` is CDP's bit
+// field (Alt 1, Ctrl 2, Meta 4, Shift 8).
+message BrowserPointerEventV1 {
+  BrowserPointerKindV1 kind = 1;
+  double x = 2;
+  double y = 3;
+  // 0 none, 1 left, 2 middle, 3 right.
+  uint32 button = 4;
+  uint32 click_count = 5;
+  uint32 modifiers = 6;
+  reserved 7 to 15;
+}
+
+message BrowserWheelEventV1 {
+  double x = 1;
+  double y = 2;
+  double delta_x = 3;
+  double delta_y = 4;
+  uint32 modifiers = 5;
+  reserved 6 to 15;
+}
+
+enum BrowserKeyKindV1 {
+  BROWSER_KEY_KIND_V1_UNSPECIFIED = 0;
+  BROWSER_KEY_KIND_V1_DOWN = 1;
+  BROWSER_KEY_KIND_V1_UP = 2;
+  BROWSER_KEY_KIND_V1_CHAR = 3;
+}
+
+message BrowserKeyEventV1 {
+  BrowserKeyKindV1 kind = 1;
+  // DOM `key` and `code`; `text` for CHAR. Each at most 32 bytes.
+  string key = 2;
+  string code = 3;
+  string text = 4;
+  uint32 modifiers = 5;
+  reserved 6 to 15;
+}
+
+message BrowserHandBackV1 {
+  // The person's note to the agent, at most 2 KiB.
+  string note = 1;
+  reserved 2 to 15;
+}
+
+message BrowserInputEventV1 {
+  oneof event {
+    BrowserPointerEventV1 pointer = 1;
+    BrowserWheelEventV1 wheel = 2;
+    BrowserKeyEventV1 key = 3;
+    // The person takes control; the agent's calls then return
+    // `user_in_control` until hand_back.
+    bool take_over = 4;
+    BrowserHandBackV1 hand_back = 5;
+  }
+  reserved 6 to 15;
+}
+
+// Main to supervisor: the open frame, then input events and frame acks.
+// Input on a stream opened without control is refused with a notice.
+message BrowserViewInputV1 {
+  oneof frame {
+    BrowserViewOpenV1 open = 1;
+    BrowserInputEventV1 input = 2;
+    // The sequence number of the last frame the viewer showed. The next
+    // frame is sent only after it (ack pacing), and it is always the latest
+    // one (frames in between are dropped).
+    uint64 ack = 3;
+  }
+  reserved 4 to 15;
+}
+
+enum BrowserControlV1 {
+  BROWSER_CONTROL_V1_UNSPECIFIED = 0;
+  BROWSER_CONTROL_V1_AGENT = 1;
+  BROWSER_CONTROL_V1_USER = 2;
+}
+
+message BrowserFrameV1 {
+  uint64 seq = 1;
+  // One JPEG, at most 1280 by 800 logical pixels by default.
+  bytes jpeg = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  string url = 5;
+  string title = 6;
+  BrowserControlV1 control = 7;
+  reserved 8 to 15;
+}
+
+// A non-fatal notice on the view stream, by stable code:
+// `input_refused` (watch-only stream or a lingering session),
+// `session_lingering` (the run ended; the page stays for the linger).
+message BrowserViewNoticeV1 {
+  string code = 1;
+  reserved 2 to 15;
+}
+
+// The stream's end, by stable code: `session_destroyed`, `idle`, `wall`,
+// `linger_elapsed`, `agent_failed`.
+message BrowserViewEndV1 {
+  string code = 1;
+  reserved 2 to 15;
+}
+
+// Supervisor to Main: frames (latest first, ack-paced, at most 10 per
+// second), notices, and exactly one end frame when the session goes away.
+message BrowserViewOutputV1 {
+  oneof frame {
+    BrowserFrameV1 screen = 1;
+    BrowserViewNoticeV1 notice = 2;
+    BrowserViewEndV1 end = 3;
+  }
+  reserved 4 to 15;
+}
+
+enum BrowserSessionEndV1 {
+  BROWSER_SESSION_END_V1_UNSPECIFIED = 0;
+  // The run ended: refuse further calls and destroy after the linger.
+  BROWSER_SESSION_END_V1_RUN_ENDED = 1;
+  // Destroy now (a cancelled or failed run, or the worker's own cleanup).
+  BROWSER_SESSION_END_V1_NOW = 2;
+}
+
+message DestroyBrowserSessionRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  BrowserSessionSpecV1 spec = 2;
+  BrowserSessionEndV1 end = 3;
+  reserved 4 to 15;
+}
+
+// Idempotent: a session that is gone answers `destroyed` false. RUN_ENDED
+// answers `destroyed` false and the time the linger ends.
+message DestroyBrowserSessionResponseV1 {
+  bool destroyed = 1;
+  uint64 linger_until_unix_seconds = 2;
+  reserved 3 to 15;
+}
+
+service BrowserSessionService {
+  rpc StartBrowserSession(StartBrowserSessionRequestV1) returns (StartBrowserSessionResponseV1);
+  rpc BrowserCall(BrowserCallRequestV1) returns (BrowserCallResponseV1);
+  rpc BrowserView(stream BrowserViewInputV1) returns (stream BrowserViewOutputV1);
+  rpc DestroyBrowserSession(DestroyBrowserSessionRequestV1) returns (DestroyBrowserSessionResponseV1);
+}

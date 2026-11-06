@@ -149,3 +149,35 @@ carries; sandbox/workspace-profile.yaml validates the values first.
   "max_wall_seconds" (int64 $p.maxWallSeconds)
   "backend" $backend | toJson -}}
 {{- end -}}
+
+{{- /*
+The cloud browser's `browser` supervisor profile JSON (ADR-0049), from
+sandboxKubernetes.browserSessions. Paths name files the material Secret
+carries; sandbox/browser-profile.yaml validates the values first.
+*/ -}}
+{{- define "elitea-sandbox.browserProfile" -}}
+{{- $s := .Values.sandboxKubernetes -}}
+{{- $b := $s.browserSessions -}}
+{{- $p := $b.profile -}}
+{{- $dir := "/run/elitea-sandbox" -}}
+{{- $backend := dict "kind" "kubernetes" "namespace" $s.executionNamespace "runtime_class" $s.runtimeClass.name "node_selector" $b.nodeSelector -}}
+{{- with $b.tolerations }}{{ $_ := set $backend "tolerations" . }}{{ end -}}
+{{- $profile := dict
+  "revision" 1 "purpose" "browser"
+  "listen_address" (printf "0.0.0.0:%v" $p.port)
+  "owner" $p.owner "audience" $p.audience
+  "ca_path" (printf "%s/%s" $dir $p.material.ca)
+  "certificate_path" (printf "%s/%s" $dir $p.material.certificate)
+  "private_key_path" (printf "%s/%s" $dir $p.material.privateKey)
+  "verification_keyring_path" (printf "%s/%s" $dir $p.material.keyring)
+  "image" $p.image
+  "concurrency" (int64 $p.concurrency)
+  "sessions_per_run" (int64 $p.sessionsPerRun)
+  "max_pages" (int64 $p.maxPages)
+  "max_wall_seconds" (int64 $p.maxWallSeconds)
+  "engine_sandbox" (eq (toString $p.engineSandbox) "true")
+  "full" (dict "max_cpu_millis" (int64 $p.full.maxCpuMillis) "max_memory_bytes" (int64 $p.full.maxMemoryBytes))
+  "backend" $backend -}}
+{{- with $p.lite }}{{ $_ := set $profile "lite" (dict "max_cpu_millis" (int64 .maxCpuMillis) "max_memory_bytes" (int64 .maxMemoryBytes)) }}{{ end -}}
+{{- $profile | toJson -}}
+{{- end -}}

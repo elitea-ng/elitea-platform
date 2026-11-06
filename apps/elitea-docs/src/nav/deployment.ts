@@ -23,6 +23,7 @@ export const deploymentTab: NavTab = {
         { kind: 'page', slug: 'deployment/helm-install', title: 'Install with Helm' },
         { kind: 'page', slug: 'deployment/argocd', title: 'GitOps with ArgoCD' },
         { kind: 'page', slug: 'deployment/cloud-executor-kubernetes', title: 'Cloud executor on Kubernetes' },
+        { kind: 'page', slug: 'deployment/cloud-browser-kubernetes', title: 'Cloud browser on Kubernetes' },
       ],
     },
     {
