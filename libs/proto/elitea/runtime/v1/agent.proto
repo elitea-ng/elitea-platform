@@ -221,8 +221,9 @@ message UnattendedGrantV1 {
   // worker approves the call itself, as for a named sensitive tool. A
   // consequential control (send, delete, sign, buy, pay and their kin) is
   // never answered by a grant. Empty: no browser ask is answered.
-  repeated string browser_submits = 9;
-  reserved 10 to 15;
+  // 9 to 15 stay reserved: a reserved range is never narrowed.
+  repeated string browser_submits = 16;
+  reserved 9 to 15;
 }
 
 // One named sensitive tool: the toolkit name as the agent configures it,

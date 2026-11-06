@@ -826,7 +826,8 @@ type UnattendedGrantV1 struct {
 	// worker approves the call itself, as for a named sensitive tool. A
 	// consequential control (send, delete, sign, buy, pay and their kin) is
 	// never answered by a grant. Empty: no browser ask is answered.
-	BrowserSubmits []string `protobuf:"bytes,9,rep,name=browser_submits,json=browserSubmits,proto3" json:"browser_submits,omitempty"`
+	// 9 to 15 stay reserved: a reserved range is never narrowed.
+	BrowserSubmits []string `protobuf:"bytes,16,rep,name=browser_submits,json=browserSubmits,proto3" json:"browser_submits,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1802,8 +1803,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15continue_output_limit\x18\x06 \x01(\bR\x13continueOutputLimit\x12@\n" +
 	"\x05chain\x18\a \x01(\v2*.elitea.runtime.v1.UnattendedChainLimitsV1R\x05chain\x12-\n" +
 	"\x12continuation_index\x18\b \x01(\rR\x11continuationIndex\x12'\n" +
-	"\x0fbrowser_submits\x18\t \x03(\tR\x0ebrowserSubmitsJ\x04\b\n" +
-	"\x10\x10\"]\n" +
+	"\x0fbrowser_submits\x18\x10 \x03(\tR\x0ebrowserSubmitsJ\x04\b\t\x10\x10\"]\n" +
 	"\x15UnattendedGrantToolV1\x12!\n" +
 	"\ftoolkit_name\x18\x01 \x01(\tR\vtoolkitName\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolNameJ\x04\b\x03\x10\b\"\xa4\x01\n" +
