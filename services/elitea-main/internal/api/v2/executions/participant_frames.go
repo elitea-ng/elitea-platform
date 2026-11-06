@@ -18,8 +18,8 @@ import (
 //
 // After a node event that moves the participant to a new state, the handler
 // writes one `agent_state` frame. It is derived, so it has no cursor of its
-// own: it carries its cause's, and a client that resumes after the cause
-// gets the state again with the next transition.
+// own and is served without an SSE id; a client that resumes after the cause
+// gets the state from the resume seed.
 
 const (
 	nodeEventType       = "execution.node_event"
@@ -109,7 +109,7 @@ func (s *participantStates) stamp(event DurableEvent) (DurableEvent, *DurableEve
 	if err != nil {
 		return event, nil
 	}
-	return event, &DurableEvent{Cursor: event.Cursor, Type: nodeEventType, Data: data}
+	return event, &DurableEvent{Type: nodeEventType, Data: data}
 }
 
 // seed is the state frame a resumed stream starts with: the state the
@@ -122,9 +122,6 @@ func (s *participantStates) seed(before []DurableEvent) *DurableEvent {
 		if _, next := s.stamp(event); next != nil {
 			state = next
 		}
-	}
-	if state != nil {
-		state.Cursor = 0
 	}
 	return state
 }

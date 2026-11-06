@@ -234,7 +234,7 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if seed != nil {
-		if err := stream.writeAndFlush(func() error { return writeStateSeed(w, *seed) }); err != nil {
+		if err := stream.writeAndFlush(func() error { return writeDerivedFrame(w, *seed) }); err != nil {
 			return
 		}
 	}
@@ -249,11 +249,13 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 					if err := writeDurableEvent(w, stamped); err != nil {
 						return err
 					}
-					// The derived state frame shares its cause's cursor and
-					// follows it: a client that resumes after the cause skips
-					// the state, and the next transition restates it.
+					// The derived state frame follows its cause with no SSE id,
+					// so cursors stay strictly increasing and the client's
+					// resume cursor stays at the cause: a client that resumes
+					// after it skips the state, and the next transition (or the
+					// resume seed) restates it.
 					if state != nil {
-						if err := writeDurableEvent(w, *state); err != nil {
+						if err := writeDerivedFrame(w, *state); err != nil {
 							return err
 						}
 					}
@@ -443,9 +445,10 @@ func writeDurableEvent(w http.ResponseWriter, event DurableEvent) error {
 	return err
 }
 
-// writeStateSeed writes a derived state frame with no SSE id: an id lower
-// than the client's Last-Event-ID would move its resume cursor back.
-func writeStateSeed(w http.ResponseWriter, event DurableEvent) error {
+// writeDerivedFrame writes a derived state frame with no SSE id: a derived
+// frame has no cursor of its own, and a repeated or lower id would break the
+// strictly increasing cursor order or move the client's resume cursor back.
+func writeDerivedFrame(w http.ResponseWriter, event DurableEvent) error {
 	if event.Type == "" || strings.ContainsAny(event.Type, "\r\n") || !isCompactSingleLineJSON(event.Data) {
 		return ErrInvalidEventStream
 	}

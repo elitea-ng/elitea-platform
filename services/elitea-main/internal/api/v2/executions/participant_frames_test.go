@@ -63,7 +63,7 @@ func TestParticipantStampAddsKeysAndDerivesStates(t *testing.T) {
 		}
 		stateBody := decode(t, state.Data)
 		if stateBody["type"] != agentStateFrameType || stateBody["state"] != frame.state ||
-			stateBody["participant_id"] != float64(7) || state.Cursor != served.Cursor || state.Type != nodeEventType {
+			stateBody["participant_id"] != float64(7) || state.Cursor != 0 || state.Type != nodeEventType {
 			t.Fatalf("frame %d: state frame %s at %d, want %s", index, state.Data, state.Cursor, frame.state)
 		}
 	}
