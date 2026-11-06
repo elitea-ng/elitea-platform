@@ -336,7 +336,21 @@ impl PreparedAgentOutput {
             {
                 if pending.terminal {
                     // An old build's failure text: the same single
-                    // compare-and-swap keeps the old frame as a record.
+                    // compare-and-swap keeps the old frame as a record. A
+                    // canonical (valid) pending terminal is never replaced here,
+                    // whatever the routing.
+                    if restored_terminal_failure_kind(&pending).is_some()
+                        || !matches!(
+                            pending.payload,
+                            Some(
+                                crate::protocol::elitea::runtime::v1::execution_output_frame_v1::Payload::RuntimeError(_)
+                            )
+                        )
+                    {
+                        return Err(OutputGrpcError::Spool(SpoolError::InvalidInput(
+                            "a canonical pending terminal is never replaced",
+                        )));
+                    }
                     prepared.replace_pending_unrecognised_terminal(&pending, &durable)?;
                     log_unrecognised_terminal_replaced(&pending);
                 } else {
@@ -2478,6 +2492,22 @@ fn preflight_as_output_error(error: AgentOutputPreflightError) -> OutputGrpcErro
 #[derive(Clone)]
 pub struct AgentOutputPreflight {
     policy: Arc<AgentOutputSpoolPolicy>,
+}
+
+#[cfg(test)]
+impl AgentOutputPreflight {
+    /// Reopen the execution's spool as the prepared output a route would hold.
+    pub(super) async fn reopen_output_for_test(
+        &self,
+        fresh: &FreshAgentDelivery,
+    ) -> PreparedAgentOutput {
+        let factory = AgentOutputSpoolFactory {
+            policy: Arc::clone(&self.policy),
+            binding: Arc::new(fresh.spool_identity()),
+        };
+        let prepared = factory.reopen().await.expect("reopened spool");
+        PreparedAgentOutput::new(prepared, factory)
+    }
 }
 
 impl AgentOutputPreflight {

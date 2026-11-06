@@ -21,16 +21,19 @@ Date: 2026-11-06. Branch `fix/refused-terminal-ends-typed`. Plan and reviewer de
 
 ## 2. What changed (all in the Worker; no Main code, no migration, no wire change, no flag)
 
-| Step | Path | Rule |
+| Step | Enforcing code | Rule |
 |---|---|---|
-| **A** | `src/execution/output_delivery.rs` `replay_terminal_with_replacement` | A **bound** `FrameRefused` of a non-canonical terminal is replaced **once**, through the spool's one-terminal swap (`replace_expected_terminal`). The replacement is Cancelled when the lease reports a stop, otherwise Internal. An unreadable lease stays retryable. |
-| **B** | `src/execution/agent_delivery_processor.rs` (`terminal_frame_refused`), `src/transport/command_bus.rs` (`PoisonReason::TerminalRefused`) | A refused **canonical** terminal (version skew) is dead-lettered and terminated, not NAKed. ERROR event `agent_failure_terminal.canonical_refused`. |
-| **Output-recovery route** (after a Stop) | `prepare_output_recovery` (was `prepare_empty_recovery`); processor `process_output_recovery` | When the spool holds exactly one pending terminal at watermark+1, it is replayed exactly through the existing `recover_accepted_terminal` (no third replay path). A Completed terminal Main accepts settles Completed once. A refused one gets A. A second terminal is never persisted beside it. |
-| **(g)** stranded, unreadable terminal | `protocol/output.rs` `unrecognised_failure_terminal_kind`; `transport/output_grpc.rs` `retire_unrecognised_terminal` | Applies to a pending terminal at exactly watermark+1 whose only defect is a failure text this binary does not register (spooled by an older binary). It must pass every other check: identity, fence, stream, event type, logical output id, digest, single pending frame. It is retired as an encrypted record and replaced by one canonical failure. The kind is Cancelled on a stop; otherwise the old frame's kind when its code maps to exactly one registered kind; otherwise Internal. The deadline rule applies. |
-| **Checkpoint route** (no Stop) | `prepare_checkpoint`, `prepare_checkpoint_pending`, `settle_rejected_checkpoint_progress`, shared `settle_replacement` | The same (g) qualification and replacement on the route Main answers a stranded run without a stop (see section 6). |
-| **(1)** pending terminal ≤ watermark | `prepare_output_recovery` | Replayed exactly if it validates (Main acks the exact duplicate). Otherwise retained under `agent_delivery.output_recovery_terminal_unrecoverable`. Never followed by a fresh terminal (the two-terminals hazard). |
-| **Unreachable routes** | `prepare` (fresh claim), `prepare_node_recovery` | A pending terminal there is retained under its own code, `agent_delivery.fresh_claim_terminal_unexpected` or `agent_delivery.node_recovery_terminal_unexpected`, not the generic NAK. Tampered or mis-bound terminals keep failing closed. |
-| Live code | 10 `#[allow(dead_code)]` notes removed | The accepted-terminal recovery and its helpers are now reachable. |
+| **A** refused terminal | `src/execution/output_delivery.rs:2311` `replay_terminal_with_replacement` | A **bound** `FrameRefused` of a non-canonical terminal is replaced **once**, through the spool's one-terminal swap. The replacement is Cancelled on a stop, otherwise Internal, with the deadline rule. An unreadable lease stays retryable. |
+| **Never replace a committed terminal** | `src/execution/output_delivery.rs:2334` | A frame at or below Main's watermark is never replaced, whatever Main answers. |
+| **B** refused canonical terminal | `src/execution/agent_delivery_processor.rs:909` `terminal_frame_refused`, `src/execution/agent_delivery_processor.rs:266`; `src/transport/command_bus.rs:405` | Dead-lettered and terminated on the delivery's own token (`PoisonReason::TerminalRefused`), not NAKed. |
+| **Output-recovery route** (after a stop) | `src/execution/output_delivery.rs:3044` `prepare_output_recovery`; `src/execution/output_delivery.rs:319` `persist_terminal` | Exactly one pending terminal at watermark+1 is replayed exactly through `recover_accepted_terminal` (no third replay path). A Completed or failure terminal Main accepts settles once; a refused one gets A. A second terminal is never persisted beside it. `persist_terminal` refuses to replace a canonical pending terminal (`src/execution/output_delivery.rs:342`). |
+| **(g)** stranded, unreadable terminal | `src/protocol/output.rs:330` `unrecognised_failure_terminal_kind`; `src/protocol/control.rs:772` `terminal_replacement` | Applies to a pending terminal at exactly watermark+1 whose only defect is an unregistered failure text. It must pass identity, fence, stream, event type, logical output id, digest and settlement validation, carry a registered code, and be the single pending frame. The kind is Cancelled on a stop; otherwise the old kind when its code maps to exactly one registered kind; otherwise Internal; deadline rule. |
+| **Atomic retire-and-replace** (both routes) | `src/transport/output_grpc.rs:463` `replace_pending_unrecognised_terminal` → `src/spool.rs:451` `replace_exact_retiring` and `src/spool.rs:566` `set_aside_record` | (1) The `.retired` record is linked to the pending frame's inode and the directory is fsynced while the frame stays in place. (2) One compare-and-swap rename installs the canonical failure. The sequence is never empty, so a checkpoint claim can never resume the model for a decided run. |
+| **Checkpoint route** (no stop) | `src/execution/output_delivery.rs:2754` `prepare_checkpoint`, `src/execution/output_delivery.rs:2813` `prepare_checkpoint_pending`, `src/execution/output_delivery.rs:2940` `settle_rejected_checkpoint_progress` | The same (g) qualification and primitive, on the route Main answers a stranded run without a stop (section 6). |
+| **One deadline rule** | `src/protocol/output.rs:287` `failure_after_deadline` | Used by A, output recovery and the checkpoint route alike. |
+| **(1)** pending terminal ≤ watermark | `src/execution/output_delivery.rs:3044`; `src/execution/agent_delivery_processor.rs:512` | Replayed exactly if it validates (Main acks the exact duplicate). Otherwise dead-lettered as `PoisonReason::CommittedTerminalUnvalidated` on the delivery's own token. Never followed by a fresh terminal. |
+| **Unreachable routes** | fresh `src/execution/output_delivery.rs:2546` `prepare` (kind `src/execution/output_delivery.rs:70`); `src/execution/output_delivery.rs:2685` `prepare_node_recovery` | Only a fully validated, correctly bound frame whose sole defect is unregistered text is retained under `agent_delivery.fresh_claim_terminal_unexpected` or `agent_delivery.node_recovery_terminal_unexpected`. Mis-bound or unvalidated frames fail closed (`agent_output.invalid_durable_state`) as before. |
+| Live code | 12 `#[allow(dead_code)]` notes removed | The accepted-terminal recovery, `prepare_checkpoint` and `replay_checkpoint_progress` are reachable. |
 
 Main tests added (no Main code change): `services/elitea-main/.../output/terminal_refusal_replacement_test.go` and
 `.../repos/agent_execution_dispatch_postgres_integration_test.go`.
@@ -66,6 +69,16 @@ Main tests added (no Main code change): `services/elitea-main/.../output/termina
   - (g4) `a_stranded_terminal_with_unrecognised_text_settles_on_the_checkpoint_route_without_a_stop` (:6777),
     driving the whole processor;
   - `the_checkpoint_route_still_refuses_an_unrecognised_terminal_that_fails_other_checks` (:6810).
+- **Review round (code review of #1654):**
+  - crash windows: `a_crash_between_the_record_and_the_swap_is_redone_on_the_output_recovery_route` and
+    `…_on_the_checkpoint_route` (one canonical terminal, one record, the model never resumes, no empty spool);
+  - `a_terminal_main_already_committed_is_never_replaced`;
+  - `a_fresh_claim_retains_only_a_fully_bound_frame_with_unregistered_text`;
+  - `a_node_recovery_claim_names_only_a_validated_pending_terminal`;
+  - `an_unknown_code_or_a_bad_settlement_fails_closed`;
+  - `the_deadline_rule_is_the_same_on_every_terminal_route`;
+  - `an_unvalidated_terminal_at_or_below_the_watermark_is_dead_lettered_untouched`;
+  - the N3 guard test (a canonical pending terminal is never replaced by `persist_terminal`).
 - **Named codes:**
   - `a_fresh_claim_meeting_a_pending_terminal_is_retained_under_its_own_code` (:6837);
   - `a_node_recovery_claim_meeting_a_pending_terminal_is_retained_under_its_own_code` (:6896).
@@ -110,17 +123,18 @@ variant.
 
 - **Exactly one terminal per stream:**
   - A replaces through `replace_expected_terminal`;
-  - (g) retires the old frame before persisting the canonical failure;
+  - (g) uses the atomic retire-and-replace (`src/spool.rs:451`, `:566`);
   - (1) never adds a terminal after one Main may hold.
-- **Crash between retire and persist:** the `.retired` record stays, and recovery persists the canonical failure
-  again (idempotent).
-- **Crash after a swap, before the ack:** the replacement bytes are replayed (`the_replacement_survives_a_crash…`).
+- **Crash after the record and before the rename:** the record plus the same pending frame remain; the next claim
+  redoes it idempotently (same inode and digest). Proven by the two crash-window tests.
+- **Crash after the rename, before the ack:** the canonical replacement is replayed (`the_replacement_survives_a_crash…`).
 - **What is kept, and for how long:**
-  - The retired frame stays as an encrypted `.retired` record until the run's settlement ack. It is then deleted
-    with the run's other retired records (`discard_retired_records`, `transport/output_grpc.rs:885`), the same
-    lifecycle as superseded progress frames.
-  - The lasting trace is the ERROR log line `agent_output_unrecognised_terminal_retired`, which carries the
-    execution id, the sequence, `frame_sha256` and the superseded claim attempt, never payload text.
+  - The retired frame stays as an encrypted `.retired` record (a hard link to the same encrypted file) until the
+    run's settlement ack. It is then deleted with the run's other retired records (`discard_retired_records`,
+    `src/transport/output_grpc.rs:940`), the same lifecycle as superseded progress frames.
+  - The lasting trace is the ERROR log line `agent_output_unrecognised_terminal_retired`
+    (`src/execution/output_delivery.rs:3162`), which carries the execution id, the sequence, `frame_sha256` and the
+    superseded claim attempt, never payload text.
 
 ## 6. Resilience and Security
 
@@ -134,6 +148,19 @@ variant.
 | Which route a stranded run takes: with node recovery on (the production profile), a RUNNING, MAY_HAVE_STARTED run with no terminal in Main gets `ClaimRecoverAgentModelCheckpoint` (`node_recovery_claim.go:~77-91`, picked at `claims.go:~474-495`, `:512`). After a stop it gets output recovery. An accepted terminal goes to `ClaimRecoverTerminalACK` first (`claims.go:216-219`, `:464-468`), so (1) is defensive. A node visit requires no terminal in Main (`node_recovery_claim.go:~137`), and a fresh claim is PREPARING with nothing spooled, so those two routes only keep a named retained code. | as listed | the named-code tests |
 | Logs carry codes, sequence and digest only. | the new events | event-capture assertions in the tests |
 
+**`/security-review` on the branch (906b32437), per category** — no high-confidence finding:
+- *Input validation:* spool names are numeric only; every file operation is directory-fd relative with
+  `SYMLINK_NOFOLLOW`; an existing different inode at the retired name is refused, not overwritten.
+- *AuthN/authZ:* replacement needs full identity, fence, settlement, digest and binding validation plus
+  watermark+1; the replacement is stamped with the current claim's fence; `FrameRefused` is only a bound,
+  non-retryable violation and a stale fence maps to `AuthorizationFailed`, so a stale or foreign claim cannot
+  replace, TERM or dead-letter another delivery.
+- *Crypto/secrets:* the retired record is the same encrypted inode; the swap is a byte-exact compare-and-swap; no key
+  or plaintext handling added.
+- *Injection/code execution:* fixed protobuf decoding only; no shell, SQL or template.
+- *Data exposure:* the new log line carries sequence, digest and claim attempt only; old unregistered text is never
+  forwarded; new codes are static strings.
+
 **Security categories** (`rules/security.md`):
 - No route, RPC, identity, authorization, parser, SQL, egress, URL or template change, and no secret.
 - Restored frames keep their integrity checks: only the text-equality step is relaxed, and only to choose a
@@ -144,12 +171,13 @@ variant.
 
 | Component x phase | Before | After | Enforcing code | Proving test / evidence |
 |---|---|---|---|---|
-| Worker x output delivery: terminal refused by Main (A) | **L** (RUNNING forever; 60 s loop) | **I/C**: exact replay first, then one bound replacement; the user sees one result | `replay_terminal_with_replacement` | A tests |
-| Worker x output delivery: pending terminal after a stop (output-recovery route) | **L** (a second terminal refused locally; NAK forever) | **I/C**: exact replay of the pending terminal, then A | `prepare_output_recovery` → `recover_accepted_terminal` | (a)–(f); live run `87e453d9` (section 8) |
-| Worker x output delivery: pending terminal this binary cannot read, no stop (checkpoint route) | **L** (preflight refusal; NAK forever) | **C**: retired as a record, replaced by one canonical failure | (g) on the checkpoint route | g4; live chat 889 (section 8) |
-| Worker x output delivery: canonical terminal refused (version skew; parity tests keep it unreachable) | L | **C, escalated**: dead-lettered and TERMed; no re-dispatch (section 6). The job stays RUNNING and the chat keeps a running turn until FU-295 (Main quarantines or settles it; the UI shows a readable state). | B | B tests; `TestPostgresAgentDispatchNeverRepublishes…` |
-| Worker x a pending terminal ≤ watermark, or on the fresh or node-recovery route (unreachable by Main's invariants) | L (generic NAK) | **F, retained** under a named code; never a second terminal | (1); named codes | (1) and named-code tests |
-| Worker crash between the swap or retire and the ack | n/a | **I** | spool authority | `the_replacement_survives_a_crash…` |
+| Worker x output delivery: terminal refused by Main (A) | **L** (RUNNING forever; 60 s loop) | **I/C**: exact replay first, then one bound replacement; the user sees one result | `src/execution/output_delivery.rs:2311`, `src/execution/output_delivery.rs:2334` | A tests; `a_terminal_main_already_committed_is_never_replaced` |
+| Worker x output delivery: pending terminal after a stop (output-recovery route) | **L** (a second terminal refused locally; NAK forever) | **I/C**: exact replay of the pending terminal, then A | `src/execution/output_delivery.rs:3044`, `src/execution/output_delivery.rs:319` | (a)–(f); live run `87e453d9` (section 8) |
+| Worker x output delivery: pending terminal this binary cannot read, no stop (checkpoint route) | **L** (preflight refusal; NAK forever) | **C**: retired as a record and replaced atomically by one canonical failure | `src/execution/output_delivery.rs:2754`, `src/execution/output_delivery.rs:2940`; `src/spool.rs:451` | g4; crash-window tests; live chat 889 (section 8) |
+| Worker x output delivery: canonical terminal refused (version skew; parity tests keep it unreachable) | L | **C, escalated**: dead-lettered and TERMed; no re-dispatch (section 6). The job stays RUNNING and the chat keeps a running turn until FU-295 (Main quarantines or settles it; the UI shows a readable state). | `src/execution/agent_delivery_processor.rs:909`, `src/execution/agent_delivery_processor.rs:266` | B tests; `TestPostgresAgentDispatchNeverRepublishes…` |
+| Worker x a pending terminal ≤ watermark (inconsistent state; Main routes a committed terminal to terminal recovery, which settles from Main's stored proposal) | L (generic NAK) | **I** when it validates (exact replay); **C, escalated** when it does not (dead-lettered `committed_terminal_unvalidated`, FU-295) | `src/execution/output_delivery.rs:3044`, `src/execution/agent_delivery_processor.rs:512` | `the_pending_terminal_sequence_guard_matches_the_nonterminal_rule`; `an_unvalidated_terminal_at_or_below_the_watermark_is_dead_lettered_untouched` |
+| Worker x a pending terminal on the fresh or node-recovery route (unreachable by Main's invariants) | L (generic NAK) | **F, retained** under a named code if fully valid; fail-closed `invalid_durable_state` otherwise | `src/execution/output_delivery.rs:2546`, `src/execution/output_delivery.rs:2685` | named-code tests; `restored_terminal_payload_digest_is_revalidated_before_recovery`; `restored_terminal_must_match_the_admitted_request_binding` |
+| Worker crash between the record and the rename, or after the rename and before the ack | n/a | **I** | `src/spool.rs:451`, `:566` | crash-window tests; `the_replacement_survives_a_crash…` |
 | Main, NATS, PostgreSQL, sandbox supervisor, LLM gateway, Web | not touched | - | - | - |
 
 A success terminal that Main refuses also ends with a failure (A). The user sees a failure for a run whose result

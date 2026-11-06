@@ -7248,6 +7248,51 @@ async fn the_deadline_rule_is_the_same_on_every_terminal_route() {
     assert_eq!(failure_code(&sent[0]), deadline, "checkpoint route");
 }
 
+/// N3: `persist_terminal` only ever replaces an unrecognised-text failure
+/// terminal. A canonical failure (or a result) found pending at its sequence is
+/// refused: the original stays byte for byte and no record is written.
+#[tokio::test]
+async fn persist_terminal_never_replaces_a_canonical_pending_terminal() {
+    for case in 0..2 {
+        let (_temporary, output_root) = root();
+        let original = std::sync::Arc::new(Mutex::new(None));
+        let kept = Arc::clone(&original);
+        seed_pending_terminal(&output_root, move |fresh| {
+            let frame = if case == 0 {
+                superseded_failure_terminal(RuntimeFailureKind::Internal)
+            } else {
+                superseded_success_terminal(fresh, 5)
+            };
+            *kept.lock().expect("original") = Some(frame.clone());
+            frame
+        })
+        .await;
+        let original = original.lock().expect("original").clone().expect("seeded");
+        let probe = preflight(output_root.clone(), "worker-1");
+        let output = probe.reopen_output_for_test(&fresh()).await;
+        let different = superseded_failure_terminal(RuntimeFailureKind::DeadlineExceeded);
+        let Err(error) = output.persist_terminal(&different).await else {
+            panic!("case {case}: a canonical pending terminal must not be replaced");
+        };
+        assert!(
+            matches!(
+                error,
+                OutputGrpcError::Spool(SpoolError::InvalidInput(
+                    "a canonical pending terminal is never replaced"
+                ))
+            ),
+            "case {case}"
+        );
+        let after = probe
+            .reopen_output_for_test(&fresh())
+            .await
+            .into_test_spool();
+        assert_eq!(after.pending_frame_count(), 1);
+        assert_eq!(after.pending_replay_frame(), Some(original));
+        assert_eq!(retired_records(&output_root), 0);
+    }
+}
+
 /// Parks before its first event while holding a marker, like an agent
 /// suspended inside a session write when its claim lease is lost.
 struct ParkedAgent {
