@@ -1315,11 +1315,9 @@ async fn materialize(
         let toolset = materialize_web(reference.tool_type(), name, settings, policy, artifacts)?;
         return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
-    if reference.tool_type() == browser::TOOLKIT_TYPE {
-        let host = artifacts.and_then(ArtifactToolAuthority::browser);
-        let toolset = browser::build_browser_toolset(name, settings, policy, host)
-            .map_err(|_| invalid_configuration())?;
-        return Ok((Arc::new(toolset), DelegatedAuthorizationCatalog::default()));
+    if reference.tool_type() == "browser" {
+        let toolset = materialize_browser(name, settings, policy, artifacts)?;
+        return Ok((toolset, DelegatedAuthorizationCatalog::default()));
     }
     if matches!(
         reference.tool_type(),
@@ -1446,6 +1444,21 @@ fn materialize_web(
         _ => return Err(unsupported_toolkit()),
     }
     .map_err(|_| invalid_configuration())?;
+    Ok(Arc::new(toolset))
+}
+
+/// The `browser` family (#1596). Its session, meter and gate ride on the
+/// artifact authority of the live claim; a path that lends none builds it
+/// anyway, and every call is then refused (`browser_unavailable`).
+fn materialize_browser(
+    name: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    policy: &Arc<ToolAdmissionPolicy>,
+    artifacts: Option<&ArtifactToolAuthority>,
+) -> Result<Arc<dyn Toolset>, ToolsetMaterializationError> {
+    let host = artifacts.and_then(ArtifactToolAuthority::browser);
+    let toolset = browser::build_browser_toolset(name, settings, policy, host)
+        .map_err(|_| invalid_configuration())?;
     Ok(Arc::new(toolset))
 }
 

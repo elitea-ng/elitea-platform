@@ -153,6 +153,21 @@
       "label": "Bitbucket"
     }
   },
+  "browser": {
+    "metadata": {
+      "categories": [
+        "other"
+      ],
+      "extra_categories": [
+        "browser",
+        "web",
+        "browse",
+        "automation"
+      ],
+      "icon_url": null,
+      "label": "Cloud Browser"
+    }
+  },
   "carrier": {
     "metadata": {
       "categories": [
