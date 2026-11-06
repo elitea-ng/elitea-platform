@@ -8,7 +8,7 @@ newest entry is first.
 
 No action is needed. Workers and Main can be upgraded in any order.
 
-- Tenant migration `0161_chat_participant_kinds.sql` adds
+- Tenant migration `0162_chat_participant_kinds.sql` adds
   `chat_participants.kind`, `chat_participant_mapping.persona` and, on
   `chat_message_group`, `author_kind`, `addressed_to`, `visibility` and
   `cause`. It fills them for existing rows from `entity_name`,
@@ -33,6 +33,28 @@ No action is needed. Workers and Main can be upgraded in any order.
   state. Main adds both when it serves the stream. The stored frames, and
   the digests the result check reads, do not change. Clients of an earlier
   contract ignore the new frame type.
+
+## Desktop: the `computer` toolset (#1583, ADR-0047)
+
+Nothing changes unless you turn it on. On macOS, the desktop app's Local
+work threads can now see and operate the person's other applications. Two
+switches must both be on:
+
+- the client policy key `local_work_computer_use` (off by default), with
+  the optional `local_work_computer_use_apps_allow` and
+  `local_work_computer_use_apps_deny` lists;
+- the person's device switch, `"computer_use": true` in the app's
+  `settings.json` (off unless it is `true`).
+
+With either one off, a turn has no `computer` tools, and the rules deny a
+forged call, and turning either off stops a running turn's next call
+(`computer_use_off`). The hard limits (locked screen, secure input and
+password fields, denied chords and the Quit, Log Out, Shut Down, Restart,
+Sleep, Lock Screen, Force Quit and Switch User menu items, Elitea's own
+windows, input only into the named app while it is frontmost, 10 acts and
+2 screenshots a second) hold in every mode, bypass included. See the how-to page "Let the
+agent use your other apps (desktop)".
+
 
 ## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
 

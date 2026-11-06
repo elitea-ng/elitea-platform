@@ -42,6 +42,41 @@ const DENIED: &[(&[Modifier], &str)] = &[
     (&[], "siri"),
 ];
 
+/// Menu item titles that end the session or the app, whatever chord they
+/// carry (ADR-0047 decision 5): the menu path to a denied chord. A title
+/// matches whole (`Sleep`), or as its first words followed by more
+/// (`Quit TextEdit`, `Log Out Alex…`, `Force Quit…`), ASCII case ignored and
+/// a trailing ellipsis (`…` or `...`) dropped.
+const DENIED_MENU_EXACT: &[&str] = &["shut down", "restart", "sleep", "lock screen"];
+const DENIED_MENU_PREFIX: &[&str] = &["quit", "log out", "force quit", "switch user"];
+
+/// Whether an element with this (normalised) role and title is a denied
+/// menu item (`menu_item_refused`): pressing it is refused in every mode.
+#[must_use]
+pub fn is_denied_menu_item(role: &str, title: Option<&str>) -> bool {
+    if !role.eq_ignore_ascii_case("menuitem") {
+        return false;
+    }
+    let Some(title) = title else {
+        return false;
+    };
+    let lower = title.trim().to_ascii_lowercase();
+    let mut title = lower.as_str();
+    for ellipsis in ["\u{2026}", "..."] {
+        title = title.strip_suffix(ellipsis).unwrap_or(title);
+    }
+    // Non-breaking spaces read as spaces.
+    let title = title.replace('\u{a0}', " ");
+    let title = title.trim();
+    DENIED_MENU_EXACT.contains(&title)
+        || DENIED_MENU_PREFIX.iter().any(|prefix| {
+            title == *prefix
+                || title
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with(' '))
+        })
+}
+
 /// Key names that mean the same key.
 fn canonical_key(key: &str) -> &str {
     match key {
@@ -142,6 +177,36 @@ mod tests {
             "space",
         ] {
             assert!(!is_denied_chord(&chord(c)), "{c} must pass");
+        }
+    }
+
+    #[test]
+    fn power_and_quit_menu_items_are_denied() {
+        for title in [
+            "Quit",
+            "Quit TextEdit",
+            "quit textedit",
+            "Log Out Alex Kharkevich\u{2026}",
+            "Log Out...",
+            "Shut Down\u{2026}",
+            "Restart\u{2026}",
+            "Sleep",
+            "Lock Screen",
+            "Force Quit\u{2026}",
+            "Force Quit TextEdit",
+            "Switch User\u{2026}",
+            "  SHUT DOWN  ",
+        ] {
+            assert!(is_denied_menu_item("menuitem", Some(title)), "{title}");
+        }
+        for (role, title) in [
+            ("menuitem", Some("Quitting tips")),
+            ("menuitem", Some("Save")),
+            ("menuitem", Some("Restart Game")),
+            ("menuitem", None),
+            ("button", Some("Quit")),
+        ] {
+            assert!(!is_denied_menu_item(role, title), "{role} {title:?}");
         }
     }
 

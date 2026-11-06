@@ -84,6 +84,9 @@ elitea-egress-guard = { path = "../../../libs/rust/egress-guard" }
 # The browser tool contract (ADR-0048 decision 3): the toolset the agent
 # drives the pane with (src/browser_tools.rs). No engine, no runtime.
 elitea-browser-tools = { path = "../../../libs/rust/browser-tools" }
+# Desktop computer use (ADR-0047): the driver the `computer` toolset
+# (src/computer_tools.rs) operates the person's other apps through.
+elitea-desktop-control = { path = "../../../libs/rust/desktop-control" }
 # Tilde, like the runtime: adk breaks its API between minors. adk-agent and
 # adk-runner are PATCHED (below); the runtime refuses to compile without it.
 adk-agent = { version = "~2.3.0", default-features = false }

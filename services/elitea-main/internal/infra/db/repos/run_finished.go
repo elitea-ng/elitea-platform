@@ -24,6 +24,7 @@ import (
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runfinished"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/responsepause"
 )
 
 // chainExecutor is what a chain end needs: a transaction (or, in a test, a
@@ -212,7 +213,7 @@ func (r *RunFinishedRepository) RecordSettledRun(
 		state := runfinished.OutcomeCompleted
 		if outcome == executionapp.SettlementFailed {
 			state = runfinished.OutcomeFailed
-		} else if facts, err := readResponseFacts(ctx, tx, run.ProjectID, run.ResponseMessageID); err != nil {
+		} else if facts, err := readResponseFacts(ctx, tx, run.ProjectID, run.ResponseMessageID, executionID); err != nil {
 			return err
 		} else if facts.IsError {
 			state = runfinished.OutcomeFailed
@@ -317,10 +318,18 @@ type responseFacts struct {
 	IsError             bool
 }
 
-// readResponseFacts reads a response's terminal facts from its meta. A
-// response that does not exist answers no facts.
-func readResponseFacts(ctx context.Context, queryer rowQueryer, projectID int64, messageID string) (responseFacts, error) {
+// readResponseFacts reads the terminal facts of the response that
+// executionID settled, from its meta. A response that does not exist answers
+// no facts. Paused: it waits for a person (responsepause; a parked fan-out
+// included, FU-284). When a fan-out wake of this very park already took the
+// response (a decision was waiting when the run parked, so the wake was
+// queued in the settlement and may have started or even finished before this
+// read), the meta is the wake's: the settled run's facts are only that it
+// parked. A response another execution took for any other reason (a
+// regenerate, a new turn) keeps the facts its meta holds.
+func readResponseFacts(ctx context.Context, queryer rowQueryer, projectID int64, messageID, executionID string) (responseFacts, error) {
 	var facts responseFacts
+	var takenByWake bool
 	if _, err := uuid.Parse(messageID); err != nil {
 		return facts, nil
 	}
@@ -333,16 +342,25 @@ SELECT COALESCE(meta -> 'output_limit_reached' = 'true'::jsonb, FALSE),
        CASE WHEN COALESCE(meta ->> 'output_limit_sequence', '') ~ '^[0-9]{1,18}$'
             THEN (meta ->> 'output_limit_sequence')::bigint ELSE 0 END,
        COALESCE(meta -> 'step_limit_reached' = 'true'::jsonb, FALSE),
-       COALESCE(meta ? 'hitl_interrupt' OR meta ? 'hitl_interrupts' OR meta ? 'authorization_requests', FALSE),
-       COALESCE(meta -> 'is_error' = 'true'::jsonb, FALSE)
-FROM %s.chat_message_group
-WHERE uuid = $1::uuid`, schema), messageID).Scan(
-		&facts.OutputLimitReached, &facts.OutputLimitSequence, &facts.StepLimitReached, &facts.Paused, &facts.IsError)
+       COALESCE(%s, FALSE),
+       COALESCE(meta -> 'is_error' = 'true'::jsonb, FALSE),
+       EXISTS (
+           SELECT 1 FROM elitea_runtime.execution_interrupt_wakes AS wake
+           WHERE wake.wake_execution_id = response.task_id
+             AND wake.root_response_id = response.uuid
+             AND wake.parked_execution_id = $2)
+FROM %s.chat_message_group AS response
+WHERE uuid = $1::uuid`, responsepause.SQL(responsepause.Unqualified), schema), messageID, executionID).Scan(
+		&facts.OutputLimitReached, &facts.OutputLimitSequence, &facts.StepLimitReached, &facts.Paused, &facts.IsError,
+		&takenByWake)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return responseFacts{}, nil
 	}
 	if err != nil {
 		return responseFacts{}, fmt.Errorf("read the response: %w", err)
+	}
+	if takenByWake {
+		return responseFacts{Paused: true}, nil
 	}
 	return facts, nil
 }

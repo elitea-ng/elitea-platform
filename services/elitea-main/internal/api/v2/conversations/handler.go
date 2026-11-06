@@ -144,7 +144,7 @@ type Message struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// MessageAddressing is who wrote a message and whom it is for (tenant/0161,
+// MessageAddressing is who wrote a message and whom it is for (tenant/0162,
 // ADR-0050 decision 7b): the author participant's kind, the addressees
 // (empty is everyone), `all` or `side`, and what started it. The stream
 // frames of a run carry the same author and addressees (participant_id,
@@ -280,7 +280,7 @@ type Participant struct {
 	EntityMeta     map[string]any `json:"entity_meta"`
 	EntitySettings map[string]any `json:"entity_settings"`
 	Meta           map[string]any `json:"meta"`
-	// Kind is human, agent, ephemeral_agent or system (tenant/0161); omitted
+	// Kind is human, agent, ephemeral_agent or system (tenant/0162); omitted
 	// for an attachment (a toolkit, a prompt), which never speaks.
 	Kind *string `json:"kind,omitempty"`
 	// Persona is the agent's persona in this conversation: display_name,

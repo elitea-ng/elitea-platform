@@ -1283,12 +1283,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 160: tenant/0160_application_version_soul.sql, the nullable
 	// application_versions.soul jsonb column (ADR-0050 decision 1a, issue
 	// 1604). No data, no permission.
-	// 161: tenant/0161_chat_participant_kinds.sql, chat_participants.kind,
+	// 161: tenant/0161_chat_message_group_parked_index.sql, the partial index
+	// of message groups parked on fan-out cards and chat_group_meta_paused
+	// with the park (FU-284), so "needs you" counts a parked fan-out. No data,
+	// no permission.
+	//
+	// 162: tenant/0162_chat_participant_kinds.sql, chat_participants.kind,
 	// chat_participant_mapping.persona and chat_message_group's author_kind,
 	// addressed_to, visibility and cause, their insert triggers and a
 	// backfill from entity_name and sent_to_id (ADR-0050 decision 7a and 7b,
 	// issue 1605). No permission.
-	require.EqualValues(t, 161, Head(tenant))
+	require.EqualValues(t, 162, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

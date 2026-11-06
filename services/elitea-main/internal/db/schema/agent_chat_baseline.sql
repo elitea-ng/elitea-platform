@@ -24,7 +24,7 @@ CREATE TABLE chat_participants (
     entity_name varchar NOT NULL,
     entity_meta jsonb NOT NULL DEFAULT '{}'::jsonb,
     meta json NOT NULL DEFAULT '{}'::json,
-    -- tenant/0161
+    -- tenant/0162
     kind text
 );
 
@@ -35,7 +35,7 @@ CREATE TABLE chat_participant_mapping (
     entity_settings jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp,
-    -- tenant/0161
+    -- tenant/0162
     persona jsonb,
     UNIQUE (participant_id, conversation_id)
 );
@@ -52,7 +52,7 @@ CREATE TABLE chat_message_group (
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp,
     task_id varchar(64),
-    -- tenant/0161
+    -- tenant/0162
     author_kind text,
     addressed_to integer[] NOT NULL DEFAULT '{}',
     visibility text NOT NULL DEFAULT 'all',
@@ -210,7 +210,7 @@ CREATE TABLE entity_skill_mapping (
         UNIQUE (entity_version_id, skill_id, entity_type)
 );
 
--- tenant/0161_chat_participant_kinds.sql: the persona snapshot of a soul.
+-- tenant/0162_chat_participant_kinds.sql: the persona snapshot of a soul.
 CREATE FUNCTION chat_persona_of(soul jsonb) RETURNS jsonb
 LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN jsonb_typeof(soul) = 'object' THEN

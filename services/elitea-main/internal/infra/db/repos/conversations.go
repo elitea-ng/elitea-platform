@@ -3332,7 +3332,7 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	return participantID, nil
 }
 
-// messageAddressing scans a message group's tenant/0161 columns for the
+// messageAddressing scans a message group's tenant/0162 columns for the
 // map-shaped reads, which serve them as conversations.MessageAddressing does.
 type messageAddressing struct {
 	authorKind  *string

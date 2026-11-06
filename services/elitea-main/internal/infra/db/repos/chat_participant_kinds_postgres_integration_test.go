@@ -1,7 +1,7 @@
 package repos
 
 // ADR-0050 decision 7a and 7b (issue 1605): typed participants and message
-// authors, addressees, visibility and cause (tenant/0161), as the
+// authors, addressees, visibility and cause (tenant/0162), as the
 // migration's triggers stamp them and every read serves them.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).

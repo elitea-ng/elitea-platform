@@ -93,6 +93,17 @@ describe('ApprovalDialog', () => {
     expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
   });
 
+  it('offers "Allow for this thread" only on a computer ask that can be remembered for the thread', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = renderWithTheme(<ApprovalDialog request={REQUEST} queued={0} onRespond={onRespond} />);
+    expect(screen.queryByRole('button', { name: 'Allow for this thread' })).toBeNull();
+    unmount();
+    renderWithTheme(<ApprovalDialog request={{ ...REQUEST, tool: 'computer_act', can_remember_thread: true }} queued={0} onRespond={onRespond} />);
+    await user.click(screen.getByRole('button', { name: 'Allow for this thread' }));
+    expect(onRespond).toHaveBeenCalledWith('r1', 'allow_thread');
+  });
+
   it('says "Allow for this session" when the choice lasts the session', () => {
     renderWithTheme(<ApprovalDialog request={{ ...REQUEST, remember_scope: 'session' }} queued={0} onRespond={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument();

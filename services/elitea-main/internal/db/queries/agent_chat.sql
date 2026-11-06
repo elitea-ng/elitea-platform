@@ -2179,6 +2179,7 @@ WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
   AND NOT (response.meta ? 'hitl_interrupt')
   AND NOT (response.meta ? 'hitl_interrupts')
   AND NOT (response.meta ? 'authorization_requests')
+  AND NOT (response.meta ? 'fanout_parked_v1')
   AND (
       conversation.author_id = sqlc.arg(actor_user_id)::bigint
       OR (question_author.entity_meta ->> 'id')::bigint = sqlc.arg(actor_user_id)::bigint
@@ -2225,6 +2226,7 @@ WITH resolved AS MATERIALIZED (
       AND NOT (response.meta ? 'hitl_interrupt')
       AND NOT (response.meta ? 'hitl_interrupts')
       AND NOT (response.meta ? 'authorization_requests')
+      AND NOT (response.meta ? 'fanout_parked_v1')
       AND (
           conversation.author_id = sqlc.arg(actor_user_id)::bigint
           OR (question_author.entity_meta ->> 'id')::bigint = sqlc.arg(actor_user_id)::bigint
@@ -3006,7 +3008,7 @@ WITH resolved AS MATERIALIZED (
     -- release's name, pronouns and role show from its first answer. Only for
     -- a same-project version: a catalogue version's row is not visible here
     -- and the stored snapshot is kept.
-    -- chat_persona_of is tenant/0161's, shared with its backfill.
+    -- chat_persona_of is tenant/0162's, shared with its backfill.
     UPDATE chat_participant_mapping AS mapping
     SET persona = chat_persona_of(resolved.target_soul)
     FROM resolved

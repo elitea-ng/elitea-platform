@@ -29,6 +29,10 @@ on:
       - "libs/rust/content-source/**"
       # The browser tool contract the pane driver implements (ADR-0048).
       - "libs/rust/browser-tools/**"
+      # The desktop control driver the computer toolset drives (ADR-0047)
+      # and the vendored agent-desktop crates it is built on.
+      - "libs/rust/desktop-control/**"
+      - "libs/rust/vendor/agent-desktop/**"
       # The runtime's internal tool client (#1359): platform-rpc and the
       # contracts its build.rs compiles.
       - "libs/rust/platform-rpc/**"

@@ -1,4 +1,4 @@
--- 0161_chat_participant_kinds.sql — typed participants and message authors,
+-- 0162_chat_participant_kinds.sql — typed participants and message authors,
 -- addressees, visibility and cause (ADR-0050 decision 7a and 7b, issue 1605).
 --
 -- chat_participants

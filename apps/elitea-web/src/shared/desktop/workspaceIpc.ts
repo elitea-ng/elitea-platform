@@ -56,9 +56,8 @@ export interface TurnStarted {
 
 /**
  * `continue` / `cancel` answer an `mcp_authorization` request; `accept` / `decline` a `plan_proposed` card; the rest a tool's
- * approval (`continue` takes `allow_once` too). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback").
- */
-export type ApprovalDecision = 'allow_once' | 'allow_always' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
+ * approval (`continue` takes `allow_once` too; `allow_thread` answers a `computer` ask with `can_remember_thread`). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback"). */
+export type ApprovalDecision = 'allow_once' | 'allow_always' | 'allow_thread' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
 type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
@@ -124,6 +123,7 @@ export interface ApprovalRequestPayload {
   /** The rule's justification, shown in place of the classifier's reason. */
   justification?: string;
   can_remember: boolean;
+  can_remember_thread?: boolean;
   /** `session`: "always" lasts until the app quits (host-intel tools, #1238). */
   remember_scope?: 'session';
 }

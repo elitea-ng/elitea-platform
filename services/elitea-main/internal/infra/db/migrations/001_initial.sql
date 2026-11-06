@@ -600,7 +600,7 @@ BEGIN
             meta JSONB NOT NULL DEFAULT ''{}''::jsonb,
             -- The speaker kind (ADR-0050 decision 7a): human, agent,
             -- ephemeral_agent, system; NULL for an attachment. Declared here
-            -- and, with its insert trigger, by migrations/tenant/0161.
+            -- and, with its insert trigger, by migrations/tenant/0162.
             kind TEXT
         )', schema_name);
 
@@ -613,7 +613,7 @@ BEGIN
             entity_settings JSONB NOT NULL DEFAULT ''{}''::jsonb,
             created_at TIMESTAMP NOT NULL DEFAULT now(),
             updated_at TIMESTAMP,
-            -- The agent''s persona snapshot here (tenant/0161).
+            -- The agent''s persona snapshot here (tenant/0162).
             persona JSONB,
             CONSTRAINT _participant_conversation_uc UNIQUE (participant_id, conversation_id)
         )', schema_name, schema_name, schema_name);
@@ -632,7 +632,7 @@ BEGIN
             task_id VARCHAR(64),
             created_at TIMESTAMP NOT NULL DEFAULT now(),
             updated_at TIMESTAMP,
-            -- ADR-0050 decision 7b; filled by tenant/0161''s insert trigger.
+            -- ADR-0050 decision 7b; filled by tenant/0162''s insert trigger.
             author_kind TEXT,
             addressed_to INTEGER[] NOT NULL DEFAULT ''{}'',
             visibility TEXT NOT NULL DEFAULT ''all'',

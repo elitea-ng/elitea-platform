@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/responsepause"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/chatauthority"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5"
@@ -60,7 +61,7 @@ func (r *ConversationsRepo) EditorTestRuns(ctx context.Context, projectID, conve
   AND EXISTS (SELECT 1 FROM %[1]s.chat_message_trace_step trace WHERE trace.message_group_id=response.id
    AND (trace.kind<>'thinking_step' OR trace.has_visible_content)),FALSE),response.uuid::text,question.uuid::text,job.execution_id,binding.client_execution_generation,
  CASE WHEN binding.execution_id IS DISTINCT FROM response.task_id OR binding.client_execution_generation IS DISTINCT FROM response.meta->>'execution_generation' THEN 'TERMINAL'
- WHEN NOT response.is_streaming AND (response.meta ? 'hitl_interrupt' OR response.meta ? 'hitl_interrupts' OR response.meta ? 'authorization_requests' OR response.meta->'output_limit_reached'='true'::jsonb OR response.meta ? 'pipeline_static_v1' OR response.meta ? 'node_recovery_required_v1') THEN 'PAUSED'
+ WHEN NOT response.is_streaming AND (%[3]s OR response.meta->'output_limit_reached'='true'::jsonb OR response.meta ? 'pipeline_static_v1' OR response.meta ? 'node_recovery_required_v1') THEN 'PAUSED'
  WHEN job.settled_at IS NOT NULL THEN 'TERMINAL' ELSE 'RUNNING' END,
  job.state,job.desired_state,job.admitted_at,job.settled_at,
  job.input_bundle_id,binding.request_entry_id,entry.entry_version,encode(entry.content_digest,'hex'),
@@ -76,7 +77,7 @@ func (r *ConversationsRepo) EditorTestRuns(ctx context.Context, projectID, conve
  WHERE %[2]s AND c.source='editor_test' AND job.tenant_id=$2
   AND job.resource_project_id=$2::integer AND job.projection_project_id=$2::integer
   AND job.capability_id IN ('agent.execute.application.v1','agent.execute.adhoc.v1')
- ORDER BY job.admitted_at DESC,job.execution_id DESC,job.generation DESC,response.id DESC LIMIT $4 OFFSET $5`, s, predicate)
+ ORDER BY job.admitted_at DESC,job.execution_id DESC,job.generation DESC,response.id DESC LIMIT $4 OFFSET $5`, s, predicate, responsepause.SQL(responsepause.Response))
 	rows, err := tx.Query(ctx, query, conversationID, projectID, strconv.FormatInt(access.ActorID, 10), limit+1, offset)
 	if err != nil {
 		return page, err
