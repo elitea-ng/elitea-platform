@@ -130,6 +130,9 @@ type threadGrantBody struct {
 	ContinueOutputLimit bool                  `json:"continue_output_limit"`
 	GoalCheck           bool                  `json:"goal_check"`
 	Chain               *unattendedwire.Chain `json:"chain,omitempty"`
+	// BrowserSubmits: the hosts on which each occurrence's cloud browser
+	// submits and uploads without asking (ADR-0049 decision 7).
+	BrowserSubmits []string `json:"browser_submits,omitempty"`
 }
 
 // defaultThreadGrant is the ADR-0045 decision 10 grant: continue at the
@@ -142,6 +145,7 @@ func (g threadGrantBody) request() *unattended.Request {
 	return &unattended.Request{
 		ContinueStepLimit: g.ContinueStepLimit, ContinueOutputLimit: g.ContinueOutputLimit,
 		GoalCheck: g.GoalCheck, Chain: g.Chain.Request(),
+		BrowserSubmits: append([]string(nil), g.BrowserSubmits...),
 	}
 }
 
@@ -168,6 +172,7 @@ type threadGrantWire struct {
 	HookAsks             bool                  `json:"hook_asks"`
 	RemoteConfirmations  bool                  `json:"remote_confirmations"`
 	SensitiveTools       []unattended.Tool     `json:"sensitive_tools"`
+	BrowserSubmits       []string              `json:"browser_submits"`
 	GoalCheck            *bool                 `json:"goal_check"`
 	Chain                *unattendedwire.Chain `json:"chain"`
 	ChainRootExecutionID string                `json:"chain_root_execution_id"`
@@ -311,6 +316,9 @@ func (h *Handler) admitThreadGrant(ctx context.Context, grant *threadGrantWire) 
 	case grant.Kind != "":
 		return nil, unattended.Refused("kind", "", unattended.RefusedInvalid)
 	}
+	if err := unattended.ValidateBrowserSubmits(grant.BrowserSubmits); err != nil {
+		return nil, err
+	}
 	settings, err := platformconfig.LoadUnattendedSettings(ctx, h.pool)
 	if err != nil {
 		return nil, err
@@ -321,6 +329,7 @@ func (h *Handler) admitThreadGrant(ctx context.Context, grant *threadGrantWire) 
 	stored := threadGrantBody{
 		ContinueStepLimit: grant.ContinueStepLimit, ContinueOutputLimit: grant.ContinueOutputLimit,
 		GoalCheck: grant.GoalCheck == nil || *grant.GoalCheck, Chain: grant.Chain,
+		BrowserSubmits: unattended.NormalizeBrowserSubmits(grant.BrowserSubmits),
 	}
 	return json.Marshal(stored)
 }

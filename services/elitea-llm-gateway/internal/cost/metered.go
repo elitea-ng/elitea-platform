@@ -29,6 +29,9 @@ const (
 	MeteredUnitRequest = "request"
 	MeteredUnitCredit  = "credit"
 	MeteredUnitPage    = "page"
+	// MeteredUnitSecond is one engine second of a cloud browser session
+	// (ADR-0049 decision 8, shared migration 0226).
+	MeteredUnitSecond = "second"
 )
 
 // meteredPriceSQL reads one operation's price and scales it to nano-USD in
@@ -41,7 +44,8 @@ const meteredPriceSQL = `SELECT unit, (price_per_unit_usd * $3::numeric)::bigint
 
 // MeteredPrice is the price of one unit of a metered operation.
 type MeteredPrice struct {
-	// Unit is MeteredUnitRequest, MeteredUnitCredit or MeteredUnitPage.
+	// Unit is MeteredUnitRequest, MeteredUnitCredit, MeteredUnitPage or
+	// MeteredUnitSecond.
 	Unit string
 	// NanoUSDPerUnit is the price of one unit, in nano-USD. Zero is a real,
 	// explicit price.
@@ -54,6 +58,8 @@ type MeteredUnits struct {
 	Requests int64 `json:"requests"`
 	Credits  int64 `json:"credits"`
 	Pages    int64 `json:"pages"`
+	// Seconds is absent from every caller but the cloud browser.
+	Seconds int64 `json:"seconds,omitempty"`
 }
 
 // Of returns the count in unit; 0 for an unknown unit or a negative count.
@@ -66,6 +72,8 @@ func (u MeteredUnits) Of(unit string) int64 {
 		n = u.Credits
 	case MeteredUnitPage:
 		n = u.Pages
+	case MeteredUnitSecond:
+		n = u.Seconds
 	}
 	return max(n, 0)
 }

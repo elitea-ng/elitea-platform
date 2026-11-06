@@ -80,6 +80,18 @@ func TestRunCaps_OverrideGrantIsConsumedOnceByTheNextRun(t *testing.T) {
 	}); !errors.Is(err, workerruncaps.ErrOverrideNeedsTierCaps) {
 		t.Fatalf("grant without tier caps = %v", err)
 	}
+	// The cloud browser's caps are never raised for one run, and the
+	// refusal says so (not "not capped").
+	for _, browserCap := range []string{"max_browser_seconds", "browser_monthly_quota"} {
+		browser := h.newResponse()
+		h.bindToConversation(browser)
+		h.capResponse(browser, browserCap)
+		if _, err := repo.GrantRunCapOverride(ctx, workerruncaps.OverrideRequest{
+			ProjectID: 1, ActorUserID: 7, MessageID: browser, AllowWorkerCaps: true, ExpiresIn: time.Hour,
+		}); !errors.Is(err, workerruncaps.ErrOverrideNotOverridable) {
+			t.Fatalf("grant past %s = %v", browserCap, err)
+		}
+	}
 	// A response that did not stop at a cap, or one of another conversation.
 	plain := h.newResponse()
 	if _, err := repo.GrantRunCapOverride(ctx, workerruncaps.OverrideRequest{

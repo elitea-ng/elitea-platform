@@ -11,5 +11,12 @@ export function resolveAssistantFailureFields(
   return {
     ...(exception !== undefined ? { exception } : {}),
     ...(isError && typeof meta?.error_code === 'string' ? { failureCode: meta.error_code } : {}),
+    ...(isError ? failureCapField(meta) : {}),
   };
+}
+
+/** The cap a CAP_REACHED response stopped at, when the server named one. */
+function failureCapField(meta: MessageGroupWire['meta']): { readonly failureCap?: string } {
+  const cap = meta?.cap;
+  return typeof cap === 'string' && cap !== '' ? { failureCap: cap } : {};
 }

@@ -299,6 +299,7 @@ impl ProductionAgentRuntime {
             index_runtime,
             extractor,
             workspace_runs,
+            browser_sessions,
             platform_channel,
         } = bundle;
         let limits = deployment.limits;
@@ -413,6 +414,7 @@ impl ProductionAgentRuntime {
             .with_web_runtime(web_runtime.clone())
             .with_fanout_decisions(Arc::clone(&input))
             .with_workspace_runs(workspace_runs)
+            .with_browser_sessions(browser_sessions)
             .with_mcp_connector(Arc::clone(&mcp_connector)),
         );
         let clock = Arc::new(SystemUnixMillisClock);

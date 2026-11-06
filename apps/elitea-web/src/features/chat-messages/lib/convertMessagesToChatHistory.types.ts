@@ -42,6 +42,8 @@ export interface ChatMessage {
   readonly toolActions?: readonly SubAgentGroupable[] | undefined;
   readonly exception?: unknown;
   readonly failureCode?: string;
+  /** The run cap a CAP_REACHED answer stopped at (`meta.cap`, or the failure frame's `cap`). */
+  readonly failureCap?: string;
   readonly isStreaming?: boolean | undefined;
   readonly isLoading?: boolean | undefined;
   /**

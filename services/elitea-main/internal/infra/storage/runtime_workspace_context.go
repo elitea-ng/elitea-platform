@@ -39,6 +39,8 @@ func (s *EliteaClientTokenService) WithWorkspaceContext(resolver WorkspaceContex
 type RuntimeContextAccept struct {
 	SecretsHeaderValue bool
 	Workspace          bool
+	// Browser: the worker reads the `browser` field (ADR-0049).
+	Browser bool
 	// GovernedRun is not a worker field: the content server sets it for a
 	// run pinned to the governed profile. A governed SCHEDULED run is then
 	// refused the project system token (#1122): its authority is its
@@ -67,6 +69,9 @@ func (s *EliteaClientTokenService) ResolveAccepting(
 ) (EliteaClientTokenContext, error) {
 	value, authorization, err := s.resolve(ctx, claim, accept.SecretsHeaderValue, accept.GovernedRun)
 	if err != nil {
+		return EliteaClientTokenContext{}, err
+	}
+	if err := s.resolveBrowser(ctx, claim, authorization, accept, &value); err != nil {
 		return EliteaClientTokenContext{}, err
 	}
 	if s.workspace == nil {

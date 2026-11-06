@@ -198,6 +198,23 @@ impl SensitiveToolPolicy {
     }
 }
 
+impl SensitiveToolPolicy {
+    /// One cloud browser tool (ADR-0049 decision 3) when its call is a
+    /// submit, an upload, a consequential or a payment control, or a call of
+    /// a category the run's approval policy names: asked as a server HITL
+    /// interrupt before it runs. `toolkit_name` is the run's browser toolkit.
+    #[must_use]
+    pub fn browser_act(toolkit_name: &str, tool_name: &str) -> Self {
+        Self {
+            toolkit_type: "browser".into(),
+            toolkit_name: toolkit_name.into(),
+            action_name: tool_name.into(),
+            policy_message: "The agent wants the cloud browser to submit a form, upload a file, or use a control that sends, deletes, signs, buys or pays on the page it shows. Approve it to let the browser do it.".into(),
+            rule: ApprovalRule::Builtin,
+        }
+    }
+}
+
 impl ToolAdmissionPolicy {
     /// Normalize one trusted deployment configuration.
     ///

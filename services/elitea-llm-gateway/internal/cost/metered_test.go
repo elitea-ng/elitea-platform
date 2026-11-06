@@ -131,3 +131,19 @@ func TestMeteredPriceWithoutDatabaseIsUnpriced(t *testing.T) {
 		t.Fatal("with no catalog every metered operation is unpriced; there is no default table")
 	}
 }
+
+// The cloud browser bills engine seconds (ADR-0049 decision 8): the seconds
+// count, not the request that carried them.
+func TestCostMeteredBrowserSeconds(t *testing.T) {
+	db := &meteredDB{rows: map[string]meteredRow{
+		"browser/engine_seconds": {unit: MeteredUnitSecond, nano: 50_000},
+	}}
+	calc := newMeteredCalculator(db, nil)
+	got, ok := calc.CostMetered(context.Background(), "browser", "engine_seconds", MeteredUnits{Requests: 1, Seconds: 90})
+	if !ok || got.Units != 90 || got.TotalNanoUSD != 4_500_000 || got.Price.Unit != MeteredUnitSecond {
+		t.Fatalf("CostMetered = %+v ok=%v, want 90 seconds at 4500000 nano-USD", got, ok)
+	}
+	if (MeteredUnits{Pages: 4}).Of(MeteredUnitSecond) != 0 {
+		t.Fatal("a call without seconds bills no seconds")
+	}
+}

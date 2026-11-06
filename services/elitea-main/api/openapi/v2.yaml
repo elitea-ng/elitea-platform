@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.36"
+  x-elitea-client-contract: "1.37"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -1326,8 +1326,8 @@ components:
           description: Units a tool row consumed. Absent on an llm row.
         unit:
           type: string
-          enum: [request, credit, page]
-          description: What `units` counts. Absent on an llm row.
+          enum: [request, credit, page, second]
+          description: What `units` counts (`second` is cloud browser engine time). Absent on an llm row.
         spend:
           type: number
           nullable: true
@@ -4037,6 +4037,21 @@ components:
             properties:
               toolkit_name: { type: string, minLength: 1 }
               tool_name: { type: string, minLength: 1 }
+        browser_submits:
+          type: array
+          maxItems: 32
+          description: >-
+            Client contract 1.37 (ADR-0049 decision 7). The hosts on which
+            the cloud browser of a schedule's or a webhook's run may submit
+            a form or upload a file without asking. Each entry is a
+            lowercase DNS host name with no scheme, port, path or wildcard.
+            A consequential or payment control always asks. A bad host
+            refuses the grant with 422 `unattended_grant_refused` (`field`
+            `browser_submits`).
+          items:
+            type: string
+            minLength: 1
+            maxLength: 253
         continue_step_limit:
           type: boolean
           description: Continue the run with a new turn when it stops at its step limit.
@@ -27406,7 +27421,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '422':
-          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet
+          description: (code tier_caps_not_saved) The cap is a worker-side cap and no administrator saved the per-tier run caps yet, or (code cap_not_overridable) the cap is the cloud browser's run cap or monthly quota, which no override passes
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

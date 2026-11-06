@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use crate::host::PlatformWriter;
 
+use super::browser::BrowserToolHost;
 use super::office_host::SharedOfficeToolHost;
 use super::web::WebToolHost;
 
@@ -51,6 +52,7 @@ pub struct ArtifactToolAuthority {
     writer: Arc<dyn PlatformWriter>,
     office: Option<SharedOfficeToolHost>,
     web: Option<WebToolHost>,
+    browser: Option<BrowserToolHost>,
 }
 
 impl ArtifactToolAuthority {
@@ -60,6 +62,7 @@ impl ArtifactToolAuthority {
             writer,
             office: None,
             web: None,
+            browser: None,
         }
     }
 
@@ -76,6 +79,21 @@ impl ArtifactToolAuthority {
     #[must_use]
     pub fn web(&self) -> Option<&WebToolHost> {
         self.web.as_ref()
+    }
+
+    /// This authority with the cloud browser (ADR-0049): the run's session,
+    /// meter and browser state. Without it a `browser` toolkit is built but
+    /// refuses every call (`browser_unavailable`).
+    #[must_use]
+    pub fn with_browser(mut self, browser: BrowserToolHost) -> Self {
+        self.browser = Some(browser);
+        self
+    }
+
+    /// The cloud browser, when the host lends one.
+    #[must_use]
+    pub fn browser(&self) -> Option<&BrowserToolHost> {
+        self.browser.as_ref()
     }
 
     /// This authority with the Office capability (ADR-0032): binary objects

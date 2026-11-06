@@ -244,6 +244,14 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		}
 	}
 
+	// The cloud browser policy's modes and ranges (ADR-0049, #1596).
+	if section.id == platformconfig.SectionBrowser {
+		if reason := validateBrowserValues(body.Values); reason != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+			return
+		}
+	}
+
 	// The remote agent policy (ADR-0044 decision 4).
 	if section.id == platformconfig.SectionRemoteAgents {
 		if reason := validateRemoteAgentsValues(body.Values); reason != "" {

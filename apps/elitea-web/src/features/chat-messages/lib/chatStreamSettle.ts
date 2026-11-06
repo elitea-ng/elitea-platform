@@ -26,7 +26,7 @@ import type { ChatMessage } from './convertMessagesToChatHistory';
  * `recordStreamFailure` below tell "settled a message" from "there was no
  * message to settle" without a second pass over the history.
  */
-export function settleInFlight(history: readonly ChatMessage[], exception?: unknown, failureCode?: string): readonly ChatMessage[] {
+export function settleInFlight(history: readonly ChatMessage[], exception?: unknown, failureCode?: string, failureCap?: string): readonly ChatMessage[] {
   let changed = false;
   const next = history.map((message) => {
     if (!message.isStreaming && !message.isLoading) return message;
@@ -39,6 +39,7 @@ export function settleInFlight(history: readonly ChatMessage[], exception?: unkn
       toolActions: settleContextProgress(message.toolActions),
       ...(exception !== undefined ? { exception } : {}),
       ...(failureCode !== undefined ? { failureCode } : {}),
+      ...(failureCap !== undefined ? { failureCap } : {}),
     };
   });
   return changed ? next : history;
@@ -97,8 +98,10 @@ export function recordStreamFailure(
   /** Use the accepted run's persisted answer identity before its first frame. */
   responseMessageId?: string,
   failureCode?: string,
+  /** The run cap of a CAP_REACHED failure frame (`cap`). */
+  failureCap?: string,
 ): readonly ChatMessage[] {
-  const settled = settleInFlight(history, exception, failureCode);
+  const settled = settleInFlight(history, exception, failureCode, failureCap);
   if (settled !== history) return settled;
   const identity = context ?? {};
   return [
@@ -113,6 +116,7 @@ export function recordStreamFailure(
       isLoading: false,
       exception,
       ...(failureCode !== undefined ? { failureCode } : {}),
+      ...(failureCap !== undefined ? { failureCap } : {}),
       ...(questionId !== undefined ? { questionId } : {}),
       ...(identity.participantId !== undefined ? { participantId: identity.participantId } : {}),
       ...(identity.avatar !== undefined ? { avatar: identity.avatar } : {}),

@@ -13,6 +13,9 @@
 //! * `continue_step_limit`: at the step limit the run ends with
 //!   `STEP_LIMIT_REACHED` and the text so far, not with an error. Main then
 //!   starts the next link of the chain.
+//! * `browser_submits` (ADR-0049 decision 7): the hosts on which the cloud
+//!   browser may submit a form or upload a file without asking. It never
+//!   answers a consequential or a payment control.
 //!
 //! The grant never lifts a deny, a guardrail, a run cap or a budget. An
 //! absent grant changes nothing. The legacy boolean
@@ -50,6 +53,8 @@ pub(crate) struct UnattendedGrant {
     owner_user_id: i64,
     sensitive_tools: BTreeSet<(Box<str>, Box<str>)>,
     continue_step_limit: bool,
+    /// Lowercase host names, at most `MAX_SUBMIT_HOSTS`.
+    browser_submits: Vec<String>,
 }
 
 impl UnattendedGrant {
@@ -72,6 +77,12 @@ impl UnattendedGrant {
         !self.sensitive_tools.is_empty()
     }
 
+    /// The hosts on which the cloud browser may submit without asking.
+    #[must_use]
+    pub(crate) fn browser_submits(&self) -> &[String] {
+        &self.browser_submits
+    }
+
     /// Whether the run ends with `STEP_LIMIT_REACHED` at its step limit.
     #[must_use]
     pub(crate) const fn continue_step_limit(&self) -> bool {
@@ -89,7 +100,15 @@ impl UnattendedGrant {
                 .map(|(toolkit, tool)| (Box::from(*toolkit), Box::from(*tool)))
                 .collect(),
             continue_step_limit,
+            browser_submits: Vec::new(),
         }
+    }
+
+    /// A grant for tests that names browser submit hosts.
+    #[cfg(test)]
+    pub(crate) fn with_browser_submits(mut self, hosts: &[&str]) -> Self {
+        self.browser_submits = hosts.iter().map(|host| (*host).to_owned()).collect();
+        self
     }
 }
 
@@ -116,6 +135,8 @@ fn grant_from(grant: &UnattendedGrantV1) -> Result<UnattendedGrant, AgentProtoco
     if !canonical_uuid(&grant.grant_id)
         || grant.owner_user_id <= 0
         || grant.sensitive_tools.len() > MAX_GRANTED_TOOLS
+        || grant.browser_submits.len() > elitea_agent_runtime::toolkits::MAX_SUBMIT_HOSTS
+        || !grant.browser_submits.iter().all(|host| valid_host(host))
         || (!grant.chain_root_execution_id.is_empty()
             && !valid_name(&grant.chain_root_execution_id))
     {
@@ -133,11 +154,19 @@ fn grant_from(grant: &UnattendedGrantV1) -> Result<UnattendedGrant, AgentProtoco
             return Err(malformed());
         }
     }
+    let mut browser_submits: Vec<String> = Vec::with_capacity(grant.browser_submits.len());
+    for host in &grant.browser_submits {
+        if browser_submits.contains(host) {
+            return Err(malformed());
+        }
+        browser_submits.push(host.clone());
+    }
     Ok(UnattendedGrant {
         grant_id: Arc::from(grant.grant_id.as_str()),
         owner_user_id: grant.owner_user_id,
         sensitive_tools,
         continue_step_limit: grant.continue_step_limit,
+        browser_submits,
     })
 }
 
@@ -145,6 +174,22 @@ fn valid_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_GRANTED_NAME_BYTES
         && !value.chars().any(char::is_control)
+}
+
+/// A lowercase DNS host name, as Main admits it: labels of `[a-z0-9-]`, no
+/// port, no wildcard, at most 253 bytes, at least two labels.
+fn valid_host(host: &str) -> bool {
+    host.len() <= 253
+        && host.contains('.')
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 /// A lowercase canonical UUID: 8-4-4-4-12 lowercase hex digits.
@@ -268,6 +313,34 @@ mod tests {
         assert!(!grant.names_tool("files", "read_file"));
         assert!(!grant.names_tool("other", "delete_file"));
         assert!(grant.continue_step_limit());
+    }
+
+    #[test]
+    fn browser_submit_hosts_decode_and_bad_ones_are_refused() {
+        let mut grant = valid();
+        grant.browser_submits = vec!["shop.example".to_owned(), "forms.example.org".to_owned()];
+        let decoded = grant_from_input(&input(grant))
+            .expect("valid")
+            .expect("present");
+        assert_eq!(
+            decoded.browser_submits(),
+            ["shop.example", "forms.example.org"]
+        );
+        for bad in [
+            vec!["Shop.Example".to_owned()],
+            vec!["*.example.com".to_owned()],
+            vec!["example.com:443".to_owned()],
+            vec!["localhost".to_owned()],
+            vec!["https://example.com".to_owned()],
+            vec!["a.example".to_owned(), "a.example".to_owned()],
+            (0..=elitea_agent_runtime::toolkits::MAX_SUBMIT_HOSTS)
+                .map(|index| format!("h{index}.example"))
+                .collect(),
+        ] {
+            let mut grant = valid();
+            grant.browser_submits = bad.clone();
+            assert!(grant_from_input(&input(grant)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

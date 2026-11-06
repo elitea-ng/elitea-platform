@@ -208,6 +208,17 @@ impl NativeRuntimeAssembler<OrdinaryNativeAgentAssembler, PipelineNativeAgentAss
         self
     }
 
+    /// Lend the cloud browser's sessions to direct agents (ADR-0049); a
+    /// pipeline's browser tools answer `browser_unavailable`.
+    #[must_use]
+    pub(crate) fn with_browser_sessions(
+        mut self,
+        browser_sessions: Option<Arc<crate::browser_run::BrowserSessions>>,
+    ) -> Self {
+        self.direct = self.direct.with_browser_sessions(browser_sessions);
+        self
+    }
+
     /// Compose both native modes over the same authorized `agentstate` pool.
     ///
     /// Direct agents consume only the session writer. Pipelines consume a

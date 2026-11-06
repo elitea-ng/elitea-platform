@@ -45,6 +45,11 @@ pub enum RunCap {
     MaxToolCalls,
     MaxModelTurns,
     MaxRecordsRead,
+    /// The run's cloud browser engine seconds (ADR-0049 decision 8).
+    MaxBrowserSeconds,
+    /// The project's monthly cloud browser engine seconds (ADR-0049
+    /// decision 8): the project used its quota for the month.
+    BrowserMonthlyQuota,
 }
 
 impl RunCap {
@@ -56,6 +61,8 @@ impl RunCap {
             Self::MaxToolCalls => "max_tool_calls",
             Self::MaxModelTurns => "max_model_turns",
             Self::MaxRecordsRead => "max_records_read",
+            Self::MaxBrowserSeconds => "max_browser_seconds",
+            Self::BrowserMonthlyQuota => "browser_monthly_quota",
         }
     }
 
@@ -66,6 +73,8 @@ impl RunCap {
             Self::MaxToolCalls => "run_caps.max_tool_calls",
             Self::MaxModelTurns => "run_caps.max_model_turns",
             Self::MaxRecordsRead => "run_caps.max_records_read",
+            Self::MaxBrowserSeconds => "run_caps.max_browser_seconds",
+            Self::BrowserMonthlyQuota => "run_caps.browser_monthly_quota",
         }
     }
 
@@ -76,6 +85,8 @@ impl RunCap {
             Self::MaxToolCalls,
             Self::MaxModelTurns,
             Self::MaxRecordsRead,
+            Self::MaxBrowserSeconds,
+            Self::BrowserMonthlyQuota,
         ]
         .into_iter()
         .find(|cap| cap.error_code() == code)
@@ -86,6 +97,8 @@ impl RunCap {
             Self::MaxToolCalls => 1,
             Self::MaxModelTurns => 2,
             Self::MaxRecordsRead => 3,
+            Self::MaxBrowserSeconds => 4,
+            Self::BrowserMonthlyQuota => 5,
         }
     }
 
@@ -94,6 +107,8 @@ impl RunCap {
             1 => Some(Self::MaxToolCalls),
             2 => Some(Self::MaxModelTurns),
             3 => Some(Self::MaxRecordsRead),
+            4 => Some(Self::MaxBrowserSeconds),
+            5 => Some(Self::BrowserMonthlyQuota),
             _ => None,
         }
     }
@@ -197,6 +212,8 @@ impl RunCapsMeter {
                 u64::from(self.limits.max_model_turns),
             ),
             RunCap::MaxRecordsRead => (self.records_read(), self.limits.max_records_read),
+            // The browser family counts these itself (families/browser).
+            RunCap::MaxBrowserSeconds | RunCap::BrowserMonthlyQuota => (0, 0),
         }
     }
 
@@ -259,6 +276,13 @@ impl RunCapsMeter {
             return Err(self.trip(RunCap::MaxRecordsRead));
         }
         Ok(())
+    }
+
+    /// Latch a cap a family counts itself (the cloud browser's engine
+    /// seconds, ADR-0049 decision 8) and answer the latched cap: this one,
+    /// or the one the run reached before.
+    pub fn latch(&self, cap: RunCap) -> RunCap {
+        self.trip(cap)
     }
 
     fn ensure_open(&self) -> Result<(), RunCap> {

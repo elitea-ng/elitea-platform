@@ -29,6 +29,14 @@ export const CAP_REACHED_CODE = 'CAP_REACHED';
 /** @public The permission the override route is gated on (shared 0212). */
 export const OVERRIDE_CAP_PERMISSION = 'safety.override_cap';
 
+/**
+ * @public The caps no override passes (ADR-0049 decision 8): the cloud
+ * browser's run cap is the project's browser setting, and a monthly quota is
+ * not doubled for one run. The server refuses them (`run_caps.go`), so the
+ * button is not offered.
+ */
+export const NON_OVERRIDABLE_CAPS: ReadonlySet<string> = new Set(['max_browser_seconds', 'browser_monthly_quota']);
+
 /** @public The words for a refused override, from the server's code. */
 export function describeCapOverrideError(error: unknown): string {
   const failure = error instanceof EliteaApiError && error.failure.kind === 'http' ? error.failure : undefined;
@@ -41,6 +49,8 @@ export function describeCapOverrideError(error: unknown): string {
       return t('chatMessages.capOverride.openGrant', 'This conversation already has an unused allowance. Send a message to use it.');
     case 'tier_caps_not_saved':
       return t('chatMessages.capOverride.tierCapsNotSaved', 'This cap cannot be raised until an administrator saves the run caps.');
+    case 'cap_not_overridable':
+      return t('chatMessages.capOverride.notOverridable', 'This cap cannot be raised for one run.');
     default:
       return failure?.status === 403
         ? t('chatMessages.capOverride.forbidden', 'You do not have permission to override run caps.')
@@ -60,11 +70,14 @@ export interface CapOverrideActionProps {
   readonly projectId: string | undefined;
   readonly messageId: string;
   readonly code: string | undefined;
+  /** The cap the run reached (`meta.cap`, or `cap` on the failure frame), when the server named it. */
+  readonly cap?: string | undefined;
 }
 
 /** Renders nothing for any other failure, so other answers query nothing. */
-export function CapOverrideAction({ projectId, messageId, code }: CapOverrideActionProps): ReactNode {
+export function CapOverrideAction({ projectId, messageId, code, cap }: CapOverrideActionProps): ReactNode {
   if (code !== CAP_REACHED_CODE || projectId === undefined || projectId === '') return null;
+  if (cap !== undefined && NON_OVERRIDABLE_CAPS.has(cap)) return null;
   return <CapOverrideButton projectId={projectId} messageId={messageId} />;
 }
 

@@ -35,6 +35,7 @@ export const PAGES_DIR = fileURLToPath(new URL('../src/content/docs/integrations
  * null: the page has no tool table (the tools are defined by the user).
  */
 export const PAGE_TOOLKIT = {
+  'cloud_browser_toolkit.mdx': 'browser',
   'custom_toolkit.mdx': null,
   'openapi_toolkit.mdx': null,
   'web_search_toolkit.mdx': null,

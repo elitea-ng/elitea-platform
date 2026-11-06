@@ -146,6 +146,21 @@
       "stepback_search_index": "read",
       "stepback_summary_index": "read"
     },
+    "browser": {
+      "browser_back": "read",
+      "browser_click": "write",
+      "browser_forward": "read",
+      "browser_open": "read",
+      "browser_press": "write",
+      "browser_reload": "read",
+      "browser_request_user": "read",
+      "browser_screenshot": "read",
+      "browser_scroll": "write",
+      "browser_select": "write",
+      "browser_snapshot": "read",
+      "browser_type": "write",
+      "browser_wait": "read"
+    },
     "carrier": {
       "get_report_by_id": "read",
       "get_reports": "read",

@@ -576,9 +576,13 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 	// hold; the snapshot is a fixed 51 (52 before the pgvector type was
 	// retired), plus the Go-registered cloud_executor project setting
 	// (ADR-0034 decision 11), worker_egress project setting (ADR-0044
-	// decision 2) and ai_disclosure project setting (ADR-0043 decision 3).
-	if len(types) != 59 {
-		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress and ai_disclosure, got %d", len(types))
+	// decision 2), ai_disclosure project setting (ADR-0043 decision 3) and
+	// browser project setting (ADR-0049).
+	if len(types) != 60 {
+		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress, ai_disclosure and browser, got %d", len(types))
+	}
+	if got := found["browser"].Section; got != "project_settings" {
+		t.Errorf("browser section = %q, want project_settings", got)
 	}
 	if got := found["ai_disclosure"].Section; got != "project_settings" {
 		t.Errorf("ai_disclosure section = %q, want project_settings", got)

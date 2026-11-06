@@ -27,6 +27,7 @@ use zeroize::Zeroizing;
 use super::input_content::{
     ContentRpc, channel_transport, claim_request, content_rpc, content_scope, is_transport_status,
 };
+use crate::browser_run::context::{BrowserRuntimeContext, RUNTIME_CONTEXT_FIELD as BROWSER_FIELD};
 use crate::protocol::control::{
     ClaimBoundRuntimeContextAuthority, RuntimeContextRedemptionBinding,
 };
@@ -126,9 +127,10 @@ pub(crate) const MAX_ATTACHMENT_OBJECT_BYTES: usize = 6 * 1_024 * 1_024;
 const MAX_TOKEN_BYTES: usize = 16 * 1_024;
 const MAX_RUNTIME_CONTEXT_DEADLINE: Duration = Duration::from_mins(5);
 /// The optional runtime-context fields this worker reads (Main's
-/// `accept_fields`): only `workspace` (ADR-0034). The `secrets-header-value`
-/// field is not read by this worker, so it is not asked for.
-const ACCEPT_FIELDS: [&str; 1] = [WORKSPACE_FIELD];
+/// `accept_fields`): `workspace` (ADR-0034) and `browser` (ADR-0049). The
+/// `secrets-header-value` field is not read by this worker, so it is not
+/// asked for.
+const ACCEPT_FIELDS: [&str; 2] = [WORKSPACE_FIELD, BROWSER_FIELD];
 
 /// Immutable policy for the dedicated runtime-context channel.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,6 +312,8 @@ pub(crate) struct ClaimScopedEliteaContext {
     execution_id: String,
     /// ADR-0034: present only for a cloud turn of a handed-off thread.
     workspace: Option<WorkspaceRuntimeContext>,
+    /// ADR-0049: present only when the project allows the cloud browser.
+    browser: Option<BrowserRuntimeContext>,
 }
 
 impl ClaimScopedEliteaContext {
@@ -341,6 +345,12 @@ impl ClaimScopedEliteaContext {
         self.workspace.as_ref()
     }
 
+    /// The cloud browser of this run (ADR-0049), if the project allows it.
+    #[must_use]
+    pub(crate) const fn browser(&self) -> Option<&BrowserRuntimeContext> {
+        self.browser.as_ref()
+    }
+
     #[cfg(test)]
     pub(super) const fn project_id(&self) -> u64 {
         self.project_id
@@ -363,6 +373,12 @@ impl ClaimScopedEliteaContext {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_browser(mut self, browser: BrowserRuntimeContext) -> Self {
+        self.browser = Some(browser);
+        self
+    }
+
+    #[cfg(test)]
     pub(super) fn fixture_with_execution_id(
         project_id: u64,
         token: &str,
@@ -373,6 +389,7 @@ impl ClaimScopedEliteaContext {
             token: Zeroizing::new(token.to_owned()),
             execution_id: execution_id.to_owned(),
             workspace: None,
+            browser: None,
         }
     }
 }
@@ -1361,11 +1378,17 @@ fn redeem_response(
             .validate()
             .map_err(RuntimeContextError::InvalidResponse)?;
     }
+    if let Some(browser) = &decoded.browser {
+        browser
+            .validate()
+            .map_err(RuntimeContextError::InvalidResponse)?;
+    }
     Ok(ClaimScopedEliteaContext {
         project_id: decoded.project_id,
         token: decoded.token.0,
         execution_id: binding.execution_id.to_owned(),
         workspace: decoded.workspace,
+        browser: decoded.browser,
     })
 }
 
@@ -1620,6 +1643,10 @@ struct RuntimeContextResponse {
     /// turn; absent otherwise. Its own keys are as strict as these.
     #[serde(default)]
     workspace: Option<WorkspaceRuntimeContext>,
+    /// Served only because this worker accepts it, and only for a project
+    /// that allows the cloud browser (ADR-0049).
+    #[serde(default)]
+    browser: Option<BrowserRuntimeContext>,
 }
 
 #[derive(Deserialize)]

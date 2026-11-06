@@ -691,3 +691,41 @@ func TestAdminHandler(t *testing.T) {
 		t.Fatalf("metrics:\n%s", body)
 	}
 }
+
+// An open token (the cloud browser's browser_egress: open, ADR-0049
+// decision 5) admits any public host by name, and the address checks still
+// refuse every private, loopback, link-local and metadata address, by name
+// or as a literal.
+func TestOpenTokenAdmitsPublicHostsOnly(t *testing.T) {
+	h := newHarness(t)
+	tlsDestination(t, h)
+	nonce, err := runtoken.NewNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	tok, err := h.signer.Sign(runtoken.Claims{
+		ExecutionID: "exec-open", ProjectID: 9, Open: true,
+		IssuedAt: now, NotBefore: now, ExpiresAt: now.Add(time.Hour), Nonce: nonce,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := basic(tok)
+	h.resolver.set("private.example", []string{"10.0.0.5"})
+	h.resolver.set("metadata.example", []string{"169.254.169.254"})
+	h.expectRefused("private.example:443", auth, 403, ReasonAddressNotPublic)
+	h.expectRefused("metadata.example:443", auth, 403, ReasonAddressNotPublic)
+	h.expectRefused("10.0.0.1:443", auth, 403, ReasonAddressNotPublic)
+	h.expectRefused("169.254.169.254:80", auth, 403, ReasonAddressNotPublic)
+	if d := h.dialer.dialedAddrs(); len(d) != 0 {
+		t.Fatalf("a refused request dialled %v", d)
+	}
+	resp, conn, _ := h.rawConnect("example.com:443", auth)
+	if conn != nil {
+		defer func() { _ = conn.Close() }()
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("an open token must admit a public host, got %d", resp.StatusCode)
+	}
+}

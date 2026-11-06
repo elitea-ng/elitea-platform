@@ -112,6 +112,7 @@ var rustNativeToolTypes = []string{
 	"azure_search",
 	"bigquery",
 	"bitbucket",
+	"browser",
 	"carrier",
 	"confluence",
 	"docx",

@@ -81,7 +81,7 @@ async fn redemption_asks_for_the_workspace_field_and_an_ordinary_turn_has_none()
         .await
         .expect("an ordinary turn redeems as before");
     assert!(context.workspace().is_none());
-    assert_eq!(*accept.lock().expect("accept"), ["workspace"]);
+    assert_eq!(*accept.lock().expect("accept"), ["workspace", "browser"]);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -123,6 +123,37 @@ async fn strict_parsing_is_unaffected_and_extends_into_the_field() {
     let mut zero = workspace();
     zero["epoch"] = serde_json::json!(0);
     let (client, _) = fake(&token(Some(zero)));
+    assert!(matches!(
+        client.redeem(&test_runtime_context_authority()).await,
+        Err(RuntimeContextError::InvalidResponse(_))
+    ));
+}
+
+/// ADR-0049: the `browser` field is asked for, parsed strictly and carried.
+#[tokio::test(flavor = "current_thread")]
+async fn a_browser_field_is_parsed_and_a_malformed_one_refused() {
+    let (client, _) = fake(&token(None));
+    let context = client
+        .redeem(&test_runtime_context_authority())
+        .await
+        .expect("no browser field");
+    assert!(context.browser().is_none());
+
+    let mut body = token(None);
+    body["browser"] = crate::browser_run::context::tests::field();
+    let (client, _) = fake(&body);
+    let context = client
+        .redeem(&test_runtime_context_authority())
+        .await
+        .expect("a browser field redeems");
+    let field = context.browser().expect("the browser field");
+    assert!(field.unattended);
+    assert_eq!(field.monthly_quota_seconds, 36_000);
+
+    let mut lite = token(None);
+    lite["browser"] = crate::browser_run::context::tests::field();
+    lite["browser"]["engine"] = serde_json::json!("lite");
+    let (client, _) = fake(&lite);
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::InvalidResponse(_))

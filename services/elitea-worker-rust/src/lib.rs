@@ -14,6 +14,8 @@ pub mod agents;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod bootstrap;
 use elitea_agent_runtime::bounded_yaml;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod browser_run;
 pub mod capabilities;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod config;

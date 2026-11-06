@@ -553,6 +553,16 @@ describe('runtime failure identity', () => {
     }, [], undefined);
     expect(result.failureCode).toBe(failed ? 'OUTPUT_CONTINUATION_EXHAUSTED' : undefined);
   });
+
+  it('keeps the cap a CAP_REACHED response stopped at', () => {
+    const result = normaliseAssistantMessage({
+      id: 'capped', uuid: 'capped-uuid', created_at: '2026-11-06T00:00:00Z', content: '',
+      meta: { is_error: true, error: 'The run reached its cloud browser time limit.',
+        error_code: 'CAP_REACHED', cap: 'max_browser_seconds' },
+    }, [], undefined);
+    expect(result.failureCode).toBe('CAP_REACHED');
+    expect(result.failureCap).toBe('max_browser_seconds');
+  });
 });
 
 describe('normaliseAssistantMessage — a stored pause with mistyped fields', () => {

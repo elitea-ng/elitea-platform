@@ -99,7 +99,21 @@ sandboxKubernetes:
       # Defaults shown: port 9471, serviceName elitea-sandbox-browser,
       # concurrency 100, 3 sessions per run, 3 pages, one hour,
       # engineSandbox false (gVisor), full 2 CPUs / 2 GiB, lite off.
+
+worker:
+  runtime:
+    # The worker's side: the profile it starts sessions on, and the size of
+    # each session (at most the profile's `full` ceilings).
+    browserSessions:
+      target: elitea-sandbox-browser:9471
+      audience: dns:elitea-sandbox-browser
+      cpu_millis: 2000
+      memory_bytes: 2147483648
+      wall_seconds: 3600
+      max_pages: 3
 ```
+
+Without `worker.runtime.browserSessions` the worker has no browser, and every browser tool answers `browser_unavailable`. A project uses the browser only when its **Cloud browser** setting is enabled. Egress, the time limits and the unattended rules are in [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit).
 
 From these values the chart renders the supervisor's `browser` profile into the `elitea-sandbox-browser-profile` ConfigMap, projects it beside the material Secret, adds `--config /run/elitea-sandbox/browser.json` and port 9471 to the supervisor, and creates the `elitea-sandbox-browser` Service. The supervisor's NetworkPolicy admits the port from the worker and Main only. The chart also grants the supervisor `get` on the one RuntimeClass, as it does for workspace runs.
 

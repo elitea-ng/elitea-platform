@@ -172,6 +172,8 @@ export interface MessageGroupMetaWire {
   readonly is_error?: boolean;
   readonly error?: unknown;
   readonly error_code?: string;
+  /** The run cap a CAP_REACHED response stopped at (`cap_reached_presentation.go`). */
+  readonly cap?: string;
   readonly thinking_steps?: readonly ThinkingStepWire[];
   readonly tool_calls?: Readonly<Record<string, ToolCallStepWire>> | readonly ToolCallStepWire[];
   readonly first_tool_timestamp_start?: string;

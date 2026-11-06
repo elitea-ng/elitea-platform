@@ -166,7 +166,49 @@ pub struct RuntimeDeployConfig {
     /// thread's cloud turn fails with `workspace_run.unavailable`.
     #[serde(default)]
     pub workspace_runs: Option<WorkspaceRunsConfig>,
+    /// The cloud browser (ADR-0049): the sandbox supervisor's `browser`
+    /// profile and the session shape this worker asks for. Absent, every
+    /// browser tool answers `browser_unavailable`.
+    #[serde(default)]
+    pub browser_sessions: Option<BrowserSessionsConfig>,
     pub limits: RuntimeLimits,
+}
+
+/// Where cloud browser sessions start, and the shape of each one.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSessionsConfig {
+    /// `host:port` of the supervisor's browser profile (mTLS).
+    pub target: String,
+    /// That profile's grant audience.
+    pub audience: String,
+    /// Each at most the profile's ceiling for the `full` engine.
+    pub cpu_millis: u64,
+    pub memory_bytes: u64,
+    pub wall_seconds: u64,
+    pub max_pages: u32,
+}
+
+impl BrowserSessionsConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        validate_grpc_target(&self.target)?;
+        if self.audience.is_empty()
+            || self.audience.len() > 256
+            || self
+                .audience
+                .chars()
+                .any(|c| c.is_control() || c.is_whitespace())
+            || !(1..=64_000).contains(&self.cpu_millis)
+            || self.memory_bytes < crate::sandbox::browser_session::MIN_MEMORY_BYTES
+            || self.memory_bytes > 64 << 30
+            || !(60..=crate::sandbox::browser_session::MAX_WALL_SECONDS)
+                .contains(&self.wall_seconds)
+            || !(1..=crate::sandbox::browser_session::MAX_PAGES).contains(&self.max_pages)
+        {
+            return Err(invalid_config());
+        }
+        Ok(())
+    }
 }
 
 /// Where workspace runs start, and this worker's ceilings for them.
@@ -428,6 +470,9 @@ impl RuntimeDeployConfig {
         }
         if let Some(runs) = &self.workspace_runs {
             runs.validate()?;
+        }
+        if let Some(sessions) = &self.browser_sessions {
+            sessions.validate()?;
         }
         if self.sandbox_runtimes.len() > 4 {
             return Err(invalid_config());

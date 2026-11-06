@@ -13,3 +13,13 @@ sandboxKubernetes:
       - {key: elitea.ai/browser, operator: Equal, value: "true", effect: NoSchedule}
     profile:
       image: registry/browser-session@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+worker:
+  runtime:
+    # The worker's side (#1596): the profile it starts sessions on.
+    browserSessions:
+      target: elitea-sandbox-browser:9471
+      audience: dns:elitea-sandbox-browser
+      cpu_millis: 2000
+      memory_bytes: 2147483648
+      wall_seconds: 3600
+      max_pages: 3
