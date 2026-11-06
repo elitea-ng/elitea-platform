@@ -10,9 +10,15 @@ import (
 	"strings"
 )
 
-// WaitingKeys are the chat_message_group.meta members of a response that
+// waitingKeys are the chat_message_group.meta members of a response that
 // waits for a person's decision.
-var WaitingKeys = []string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "fanout_parked_v1"}
+var waitingKeys = [...]string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "fanout_parked_v1"}
+
+// WaitingKeys answers a copy of the waiting keys, for a reader that binds
+// them as a parameter.
+func WaitingKeys() []string {
+	return append([]string(nil), waitingKeys[:]...)
+}
 
 // Alias is the table alias a caller reads chat_message_group under. Only the
 // values below exist, so no caller data reaches the SQL text.
@@ -30,32 +36,26 @@ var (
 	Group = Alias{name: "g"}
 )
 
-// identifier is the backstop: an alias is a plain lower-case identifier.
+// identifier is a backstop: an alias is a plain lower-case identifier.
 var identifier = regexp.MustCompile(`^[a-z_]{1,32}$`)
+
+// keysArray is the waiting keys as a SQL text[] literal.
+var keysArray = func() string {
+	quoted := make([]string, len(waitingKeys))
+	for i, key := range waitingKeys {
+		quoted[i] = "'" + key + "'"
+	}
+	return "ARRAY[" + strings.Join(quoted, ", ") + "]::text[]"
+}()
 
 // SQL is a boolean SQL expression: the response under alias waits for a
 // person. It is built only from the constants above.
 func SQL(alias Alias) string {
-	column := "meta"
-	if alias.name != "" {
-		if !identifier.MatchString(alias.name) {
-			return "FALSE"
-		}
-		column = alias.name + ".meta"
+	if alias.name == "" {
+		return "(meta ?| " + keysArray + ")"
 	}
-	quoted := make([]string, len(WaitingKeys))
-	for i, key := range WaitingKeys {
-		quoted[i] = "'" + key + "'"
+	if !identifier.MatchString(alias.name) {
+		return "FALSE"
 	}
-	return "(" + column + " ?| ARRAY[" + strings.Join(quoted, ", ") + "]::text[])"
-}
-
-// Waiting reports whether a response's meta keys hold a wait for a person.
-func Waiting(meta map[string]any) bool {
-	for _, key := range WaitingKeys {
-		if _, ok := meta[key]; ok {
-			return true
-		}
-	}
-	return false
+	return "(" + alias.name + ".meta ?| " + keysArray + ")"
 }

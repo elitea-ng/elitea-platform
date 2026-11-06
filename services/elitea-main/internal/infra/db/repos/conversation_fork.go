@@ -94,7 +94,7 @@ const conversationForkTimeout = 2 * time.Minute
 // forkPauseKeys are the meta keys of a pending pause: a wait for a person
 // (responsepause, a parked fan-out included: its cards belong to the source
 // response's ledger, so a fork never copies an open park) and a node recovery.
-var forkPauseKeys = append(append([]string{}, responsepause.WaitingKeys...), "node_recovery_required_v1")
+var forkPauseKeys = append(responsepause.WaitingKeys(), "node_recovery_required_v1")
 
 // forkLeafTables are the optional payload tables the fork copies. Some
 // fixtures and older tenants lack a few of them.

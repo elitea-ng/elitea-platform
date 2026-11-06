@@ -2,22 +2,20 @@ package responsepause
 
 import "testing"
 
-func TestEachWaitingKeyIsAWaitAndOthersAreNot(t *testing.T) {
-	for _, key := range []string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "fanout_parked_v1"} {
-		if !Waiting(map[string]any{key: map[string]any{}}) {
-			t.Errorf("%s does not wait", key)
+func TestWaitingKeysAreTheFourPauseKindsAndACopy(t *testing.T) {
+	keys := WaitingKeys()
+	want := []string{"hitl_interrupt", "hitl_interrupts", "authorization_requests", "fanout_parked_v1"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v", keys)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("keys = %v, want %v", keys, want)
 		}
 	}
-	for _, meta := range []map[string]any{
-		{},
-		{"output_limit_reached": true},
-		{"is_error": true},
-		{"pipeline_static_v1": map[string]any{}},
-		{"thread_id": "t"},
-	} {
-		if Waiting(meta) {
-			t.Errorf("%v waits", meta)
-		}
+	keys[0] = "changed"
+	if WaitingKeys()[0] != "hitl_interrupt" {
+		t.Fatal("a caller changed the shared set")
 	}
 }
 

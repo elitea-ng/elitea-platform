@@ -207,6 +207,29 @@ func TestPostgresChainWaitsWhenTheParkWakeAlreadyTookTheResponse(t *testing.T) {
 	}
 }
 
+// TestPostgresChainWaitsWhenTheParkWakeAlreadyFailed: the wake that took the
+// response already finished with an error and a step limit before the parked
+// run's settle read it (a late or replayed settle). Those are the wake's facts;
+// the parked run still only parked, so the chain waits (it does not end failed
+// or start a step-limit continuation).
+func TestPostgresChainWaitsWhenTheParkWakeAlreadyFailed(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := t.Context()
+	root, wake := strings.Repeat("a6", 16), strings.Repeat("b6", 16)
+	response := "9b0c1d2e-3f4a-4b5c-8d6e-7f8a9b0c1d26"
+	parkChain(t, pool, root, response, wake,
+		`{"thread_id": "t1", "is_error": true, "step_limit_reached": true}`, false)
+	writeWake(t, pool, response, root, wake)
+	hook, starts, goals := newParkHook(pool)
+	if err := hook.Settle(ctx, root, executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	if _, state, _ := chainState(t, pool, root); state != unattended.EndWaiting || goals.checks != 0 || starts.starts != 0 {
+		t.Fatalf("state %q, checks %d, starts %d; want waiting with no check or continuation", state, goals.checks,
+			starts.starts)
+	}
+}
+
 // TestPostgresChainKeepsItsOutcomeWhenAnotherExecutionTookTheResponse: a
 // response that a later execution took for another reason (no wake of this
 // park) is not a wait: the chain finishes through its goal check, as before.
@@ -271,5 +294,35 @@ VALUES (1, $1::uuid, 'schedule', 41, 4712, 'fail')`, conversation); err != nil {
 	}
 	if rows := runFinishedRows(t, pool, execution); len(rows) != 1 || rows[0].Outcome != runfinished.OutcomeWaiting {
 		t.Fatalf("a parked schedule run was announced as %+v, want waiting", rows)
+	}
+}
+
+// TestClosedCardsEndTheResponsePark: when a new turn supersedes a parked
+// response's cards (as stop, regenerate and a failed wake close them), the
+// response no longer waits for a person: its park marker goes with the
+// cards, and its other meta stays. A fork or an editor test run then does
+// not read it as paused forever.
+func TestClosedCardsEndTheResponsePark(t *testing.T) {
+	w := newWakeHarness(t)
+	parked := w.newResponse()
+	w.queueWake(parked)
+	if n := w.count(`SELECT count(*) FROM p_1.chat_message_group WHERE uuid = $1::uuid AND meta ? 'fanout_parked_v1'`, parked); n != 1 {
+		t.Fatal("the fixture response is not parked")
+	}
+	newTurn := w.newResponse()
+	err := w.repo.projects.WithinProjectTx(t.Context(), 1, interruptWriteTx, func(tx sqlExecutor) error {
+		_, err := supersedeEarlierTurnInterrupts(t.Context(), tx, 1, w.conversation, newTurn, interruptAsker)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := w.count(`SELECT count(*) FROM p_1.chat_message_group WHERE uuid = $1::uuid
+AND NOT meta ? 'fanout_parked_v1' AND meta ? 'thread_id'`, parked); n != 1 {
+		t.Fatal("the superseded response still carries its park, or lost its other meta")
+	}
+	if n := w.count(`SELECT count(*) FROM elitea_runtime.execution_interrupts
+WHERE root_response_id = $1::uuid AND state IN ('PENDING', 'DECIDED')`, parked); n != 0 {
+		t.Fatalf("%d cards still open", n)
 	}
 }

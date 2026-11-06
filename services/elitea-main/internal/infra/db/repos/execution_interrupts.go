@@ -791,6 +791,13 @@ SET state = 'FAILED', failure_code = $2, updated_at = clock_timestamp()
 WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClosedFailureCode(pendingTo)); err != nil {
 		return nil, resolvedNotice{}, fmt.Errorf("execution interrupt close: %w", err)
 	}
+	// Every open card is closed, so the response no longer waits for a person
+	// (responsepause, FU-284): its park marker goes with the cards, as the
+	// approval and wake-failure paths drop it. The caller holds the response
+	// row lock, so this keeps the ledger lock order.
+	if err := dropResponsePark(ctx, tx, projectID, rootResponseID); err != nil {
+		return nil, resolvedNotice{}, err
+	}
 	notice, err := emitInterruptResolved(ctx, tx, projectID, rootResponseID, closed)
 	if err != nil {
 		return nil, resolvedNotice{}, err
@@ -808,6 +815,22 @@ WHERE root_response_id = $1::uuid AND state = 'QUEUED'`, rootResponseID, wakeClo
 		return nil, resolvedNotice{}, err
 	}
 	return closed, notice, nil
+}
+
+// dropResponsePark removes fanout_parked_v1 from the response whose cards
+// just closed, in the response's own project schema.
+func dropResponsePark(ctx context.Context, tx sqlExecutor, projectID int64, rootResponseID string) error {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return fmt.Errorf("execution interrupt close: %w", err)
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+UPDATE %s.chat_message_group
+SET meta = meta - 'fanout_parked_v1', updated_at = (clock_timestamp() AT TIME ZONE 'UTC')
+WHERE uuid = $1::uuid AND meta ? 'fanout_parked_v1'`, schema), rootResponseID); err != nil {
+		return fmt.Errorf("execution interrupt close: drop the park: %w", err)
+	}
+	return nil
 }
 
 func closingState(state domain.State) bool {

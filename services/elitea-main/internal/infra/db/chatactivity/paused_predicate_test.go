@@ -11,7 +11,7 @@ import (
 // included, and keeps the partial index's text as its first arm.
 func TestPausedPredicateNamesEveryWaitingKey(t *testing.T) {
 	predicate := PausedPredicate()
-	for _, key := range responsepause.WaitingKeys {
+	for _, key := range responsepause.WaitingKeys() {
 		if !strings.Contains(predicate, "g.meta ? '"+key+"'") {
 			t.Errorf("the paused predicate misses %s", key)
 		}
