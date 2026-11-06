@@ -21,7 +21,9 @@ pub(crate) use postgres_session::{
 };
 pub use postgres_session::{PostgresSessionError, PostgresSessionService, SessionLimits};
 #[cfg(test)]
-pub(crate) use postgres_session::{active_events_sql, classified_events_sql};
+pub(crate) use postgres_session::{
+    active_events_sql, classified_events_sql, disable_capacity_fast_path,
+};
 #[cfg(test)]
 pub(crate) use writer_lease::TestStateWriterLease;
 pub(crate) use writer_lease::{StateWriterLease, StateWriterLeaseLost, TurnSteering};

@@ -237,6 +237,34 @@ pub(crate) struct ActiveSeed {
     pub(crate) too_large: bool,
 }
 
+/// Test-only: skip the stored-totals fast path of `ensure_event_capacity`, so
+/// a measurement can time the exact classification alone.
+#[cfg(test)]
+static CAPACITY_FAST_PATH_OFF: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn capacity_fast_path_disabled() -> bool {
+    CAPACITY_FAST_PATH_OFF.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Test-only: turn the capacity fast path off until the guard drops, which
+/// restores the flag it found.
+#[cfg(test)]
+pub(crate) fn disable_capacity_fast_path() -> CapacityFastPathOff {
+    CapacityFastPathOff(CAPACITY_FAST_PATH_OFF.swap(true, std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(test)]
+pub(crate) struct CapacityFastPathOff(bool);
+
+#[cfg(test)]
+impl Drop for CapacityFastPathOff {
+    fn drop(&mut self) {
+        CAPACITY_FAST_PATH_OFF.store(self.0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// The classification CTE over every row of the session.
 pub(crate) fn classified_events_sql() -> &'static str {
     static SQL: LazyLock<String> = LazyLock::new(|| {
@@ -1170,6 +1198,32 @@ WHERE tenant_id = $1
         })
     }
 
+    /// Test-only: the stored size of an event, as the capacity check counts it.
+    #[cfg(test)]
+    pub(crate) fn encoded_event_len(&self, event: &Event) -> usize {
+        encode_event(event, self.limits).map_or(0, |encoded| encoded.len())
+    }
+
+    /// Test-only: the capacity decision for `candidate` under `limits`, in a
+    /// transaction which is rolled back. Nothing is written.
+    #[cfg(test)]
+    pub(crate) async fn capacity_decision(
+        &self,
+        candidate: &Event,
+        limits: SessionLimits,
+    ) -> Result<(), PostgresSessionError> {
+        let mut writer = self.owned();
+        writer.limits = limits;
+        let encoded = encode_event(candidate, writer.limits)?;
+        let mut transaction = begin_bounded(&writer.pool, writer.limits).await?;
+        writer.lock_current_writer(&mut transaction, false).await?;
+        let decision = writer
+            .ensure_event_capacity(&mut transaction, encoded.len(), candidate)
+            .await;
+        transaction.rollback().await.map_err(storage_error)?;
+        decision
+    }
+
     /// The database this service's pool is connected to, for tests which tell
     /// concurrent runs apart.
     #[cfg(test)]
@@ -1321,41 +1375,47 @@ WHERE tenant_id = $1
         // This reads two integer columns per stored row and never parses a
         // payload; only a session near a cap pays the full classification
         // below, which applies the retirement rules exactly.
-        let (stored_events, stored_bytes) = sqlx::query_as::<_, (i64, i64)>(
-            r"
-SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint
-FROM elitea_runtime.agent_session_events
-WHERE tenant_id = $1
-  AND resource_project_id = $2
-  AND projection_project_id = $3
-  AND capability_id = $4
-  AND session_family = $5
-  AND definition_digest = $6
-  AND thread_id = $7
-  AND app_name = $8
-  AND user_id = $9
-  AND session_id = $10",
-        )
-        .bind(&self.authority.tenant_id)
-        .bind(self.authority.resource_project_id)
-        .bind(self.authority.projection_project_id)
-        .bind(self.authority.capability_id)
-        .bind(SESSION_FAMILY)
-        .bind(self.authority.definition_digest.as_slice())
-        .bind(&self.authority.thread_id)
-        .bind(&self.authority.app_name)
-        .bind(&self.authority.user_id)
-        .bind(&self.authority.session_id)
-        .fetch_one(&mut **transaction)
-        .await
-        .map_err(storage_error)?;
-        if usize::try_from(stored_events).is_ok_and(|count| count < self.limits.max_events)
-            && usize::try_from(stored_bytes)
-                .ok()
-                .and_then(|bytes| bytes.checked_add(candidate_bytes))
-                .is_some_and(|retained| retained <= self.limits.max_retained_event_bytes)
-        {
-            return Ok(());
+        #[cfg(test)]
+        let fast_path = !capacity_fast_path_disabled();
+        #[cfg(not(test))]
+        let fast_path = true;
+        if fast_path {
+            let (stored_events, stored_bytes) = sqlx::query_as::<_, (i64, i64)>(
+                r"
+    SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint
+    FROM elitea_runtime.agent_session_events
+    WHERE tenant_id = $1
+      AND resource_project_id = $2
+      AND projection_project_id = $3
+      AND capability_id = $4
+      AND session_family = $5
+      AND definition_digest = $6
+      AND thread_id = $7
+      AND app_name = $8
+      AND user_id = $9
+      AND session_id = $10",
+            )
+            .bind(&self.authority.tenant_id)
+            .bind(self.authority.resource_project_id)
+            .bind(self.authority.projection_project_id)
+            .bind(self.authority.capability_id)
+            .bind(SESSION_FAMILY)
+            .bind(self.authority.definition_digest.as_slice())
+            .bind(&self.authority.thread_id)
+            .bind(&self.authority.app_name)
+            .bind(&self.authority.user_id)
+            .bind(&self.authority.session_id)
+            .fetch_one(&mut **transaction)
+            .await
+            .map_err(storage_error)?;
+            if usize::try_from(stored_events).is_ok_and(|count| count < self.limits.max_events)
+                && usize::try_from(stored_bytes)
+                    .ok()
+                    .and_then(|bytes| bytes.checked_add(candidate_bytes))
+                    .is_some_and(|retained| retained <= self.limits.max_retained_event_bytes)
+            {
+                return Ok(());
+            }
         }
         let query = format!(
             "{} SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint FROM active_events \

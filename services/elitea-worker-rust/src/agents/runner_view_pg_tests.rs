@@ -23,19 +23,19 @@ use crate::state::{
 };
 
 const DATABASE_ENV: &str = "ELITEA_TEST_DATABASE_URL";
-const APP: &str = "elitea-agent-v1";
+pub(super) const APP: &str = "elitea-agent-v1";
 const COMPACTION_KEY: &str = "elitea.context.root.v1";
 /// The digest the snapshot checkpoints below carry and the view's scope names.
-const DEFINITION: [u8; 32] = [34; 32];
+pub(super) const DEFINITION: [u8; 32] = [34; 32];
 
-struct Fixture {
-    db: IsolatedPostgres,
-    service: Arc<PostgresSessionService>,
-    identity: AdkIdentity,
+pub(super) struct Fixture {
+    pub(super) db: IsolatedPostgres,
+    pub(super) service: Arc<PostgresSessionService>,
+    pub(super) identity: AdkIdentity,
 }
 
 impl Fixture {
-    async fn new(limits: SessionLimits) -> Option<Self> {
+    pub(super) async fn new(limits: SessionLimits) -> Option<Self> {
         let Ok(url) = crate::test_pg::database_url_var(DATABASE_ENV) else {
             eprintln!("skipping PostgreSQL runner view test: set {DATABASE_ENV}");
             return None;
@@ -69,11 +69,11 @@ impl Fixture {
         })
     }
 
-    fn view(&self, scope: Option<([u8; 32], String)>) -> IncrementalRunnerView {
+    pub(super) fn view(&self, scope: Option<([u8; 32], String)>) -> IncrementalRunnerView {
         IncrementalRunnerView::new(Arc::clone(&self.service), self.identity.clone(), scope)
     }
 
-    async fn append(&self, event: Event) -> adk_rust::Result<()> {
+    pub(super) async fn append(&self, event: Event) -> adk_rust::Result<()> {
         self.service
             .append_event_for_identity(AppendEventRequest {
                 identity: self.identity.clone(),
@@ -82,7 +82,7 @@ impl Fixture {
             .await
     }
 
-    async fn stored(&self) -> Vec<Event> {
+    pub(super) async fn stored(&self) -> Vec<Event> {
         self.service
             .get(GetRequest {
                 app_name: APP.to_owned(),
@@ -105,7 +105,7 @@ fn encode(events: &[Event]) -> Vec<Value> {
         .collect()
 }
 
-fn event(id: &str, author: &str) -> Event {
+pub(super) fn event(id: &str, author: &str) -> Event {
     let mut event = Event::with_id(id, "invocation-1");
     event.author = author.to_owned();
     event.set_content(
@@ -115,20 +115,20 @@ fn event(id: &str, author: &str) -> Event {
     event
 }
 
-fn branch_event(id: &str, branch: &str) -> Event {
+pub(super) fn branch_event(id: &str, branch: &str) -> Event {
     let mut event = event(id, "agent");
     event.branch = branch.to_owned();
     event
 }
 
-fn control_event(id: &str) -> Event {
+pub(super) fn control_event(id: &str) -> Event {
     let mut event = event(id, "agent");
     event.actions.transfer_to_agent = Some("child".to_owned());
     event
 }
 
 /// A recovery marker. With `snapshot` it is a model-history snapshot of that agent.
-fn marker(id: &str, branch: &str, snapshot: Option<&str>, padding: usize) -> Event {
+pub(super) fn marker(id: &str, branch: &str, snapshot: Option<&str>, padding: usize) -> Event {
     let mut marker = Event::with_id(id, "invocation-1");
     marker.author = "elitea-recovery".to_owned();
     marker.branch = branch.to_owned();
@@ -196,17 +196,17 @@ async fn assert_equals_full(view: &IncrementalRunnerView, fixture: &Fixture, ste
 }
 
 /// xorshift64*: a deterministic generator, no dependency.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 ^= self.0 >> 12;
         self.0 ^= self.0 << 25;
         self.0 ^= self.0 >> 27;
         self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    fn below(&mut self, bound: usize) -> usize {
+    pub(super) fn below(&mut self, bound: usize) -> usize {
         usize::try_from(self.next() % u64::try_from(bound).expect("bound")).expect("index")
     }
 }
@@ -425,7 +425,7 @@ FROM elitea_runtime.agent_session_events WHERE event_id = 'anchor'
 }
 
 /// The ten scope binds of the fixture's session.
-fn authority_binds() -> (
+pub(super) fn authority_binds() -> (
     &'static str,
     i32,
     i32,
@@ -1095,7 +1095,10 @@ async fn refresh_span_child() {
 }
 
 /// A reader of the fixture's session under other bounds (the same claim).
-async fn bounded_reader(fixture: &Fixture, limits: SessionLimits) -> Arc<PostgresSessionService> {
+pub(super) async fn bounded_reader(
+    fixture: &Fixture,
+    limits: SessionLimits,
+) -> Arc<PostgresSessionService> {
     Arc::new(
         PostgresSessionService::activate(
             fixture.db.pool.clone(),
@@ -1108,7 +1111,7 @@ async fn bounded_reader(fixture: &Fixture, limits: SessionLimits) -> Arc<Postgre
     )
 }
 
-async fn stored_bytes(fixture: &Fixture) -> usize {
+pub(super) async fn stored_bytes(fixture: &Fixture) -> usize {
     let bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(sum(payload_bytes), 0)::bigint FROM elitea_runtime.agent_session_events",
     )

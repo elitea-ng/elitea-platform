@@ -78,6 +78,8 @@ mod runner_view_pg_tests;
 #[cfg(test)]
 mod runtime_tests;
 #[cfg(test)]
+mod session_capacity_pg_tests;
+#[cfg(test)]
 mod session_tests;
 #[cfg(test)]
 mod tool_namespacing_tests;
