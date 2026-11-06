@@ -668,6 +668,36 @@ export const getCreateConversationResponseMock = (
         ]),
         undefined,
       ]),
+      kind: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          "human",
+          "agent",
+          "ephemeral_agent",
+          "system",
+        ] as const),
+        undefined,
+      ]),
+      persona: faker.helpers.arrayElement([
+        {
+          display_name: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          pronouns: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          role: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          avatar_pack: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+        },
+        undefined,
+      ]),
     })),
     undefined,
   ]),
@@ -815,6 +845,36 @@ export const getGetConversationResponseMock = (
       ]),
       undefined,
     ]),
+    kind: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "human",
+        "agent",
+        "ephemeral_agent",
+        "system",
+      ] as const),
+      undefined,
+    ]),
+    persona: faker.helpers.arrayElement([
+      {
+        display_name: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        pronouns: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        role: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+        avatar_pack: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      },
+      undefined,
+    ]),
   })),
   message_groups: faker.helpers.arrayElement([
     Array.from(
@@ -960,6 +1020,36 @@ export const getAddConversationParticipantsResponseMock =
         ]),
         undefined,
       ]),
+      kind: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          "human",
+          "agent",
+          "ephemeral_agent",
+          "system",
+        ] as const),
+        undefined,
+      ]),
+      persona: faker.helpers.arrayElement([
+        {
+          display_name: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          pronouns: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          role: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          avatar_pack: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+        },
+        undefined,
+      ]),
     }));
 
 export const getListParticipantCandidatesResponseMock = (
@@ -1007,6 +1097,36 @@ export const getListConversationMessagesResponseMock = (
     ]),
     sent_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
     reply_to_id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+    author_kind: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "human",
+        "agent",
+        "ephemeral_agent",
+        "system",
+      ] as const),
+      undefined,
+    ]),
+    addressed_to: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 64 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.number.int()),
+      undefined,
+    ]),
+    visibility: faker.helpers.arrayElement([
+      faker.helpers.arrayElement(["all", "side"] as const),
+      undefined,
+    ]),
+    cause: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "human_message",
+        "agent_mention",
+        "heartbeat",
+        "delegation",
+        "system",
+      ] as const),
+      undefined,
+    ]),
     metadata: faker.helpers.arrayElement([
       {
         mentioned_user_ids: faker.helpers.arrayElement([

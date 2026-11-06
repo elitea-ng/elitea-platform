@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.37
+ * client contract:    1.38
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -3073,7 +3073,19 @@ export interface components {
         };
         /** @description One message group of a transcript. NOTE(W2): internal/api/v2/conversations/handler.go:74 (`Message`). Delta rows (`changes_since`) use the same projection, byte for byte. */
         ConversationMessage: {
+            /** @description Client contract 1.38: the participant ids the message is for. Empty is everyone. The frames of the run that writes an answer carry the same list. */
+            addressed_to?: number[];
+            /**
+             * @description Client contract 1.38: the author participant's kind when the message was written. A message an attachment wrote (a toolkit answer) is `agent`.
+             * @enum {string}
+             */
+            author_kind?: "human" | "agent" | "ephemeral_agent" | "system";
             author_participant_id?: number;
+            /**
+             * @description Client contract 1.38: what started the message. Absent when unknown.
+             * @enum {string}
+             */
+            cause?: "human_message" | "agent_mention" | "heartbeat" | "delegation" | "system";
             content: string;
             content_type?: string;
             conversation_id: string;
@@ -3097,6 +3109,7 @@ export interface components {
             reply_to_id?: number;
             /** @description `user` or `assistant`. */
             role: string;
+            /** @description Deprecated in client contract 1.38: read `addressed_to`. Kept for one release; it is the single addressee when there is one. */
             sent_to_id?: number;
             /** @description The in-flight turn's execution id; present only with `is_streaming`. */
             task_id?: string;
@@ -3107,6 +3120,11 @@ export interface components {
              * @description When the group was last rewritten (an answer finalised or regenerated). Omitted when never.
              */
             updated_at?: string;
+            /**
+             * @description Client contract 1.38: `side` is agent-to-agent talk, shown collapsed.
+             * @enum {string}
+             */
+            visibility?: "all" | "side";
         };
         /** @description The transcript page. Legacy mode carries `items`, `total`, `page`, `page_size` and `total_pages` (NOTE(W2): internal/api/v2/conversations/handler.go:148). With `changes_since` (ADR-0025 WP6) it carries `items` (changed groups, oldest change first), `total` (groups in the conversation now), `tombstones`, `next_cursor` and `has_more` (internal/api/v2/conversations/changes.go, `MessageChanges`). */
         ConversationMessageListing: {
@@ -3144,6 +3162,11 @@ export interface components {
                 [key: string]: unknown;
             }) | null;
             id: number;
+            /**
+             * @description Client contract 1.38: what the participant is. Absent for an attachment (a toolkit, a prompt), which is in the conversation but never speaks. Read it instead of inferring from `entity_name`.
+             * @enum {string}
+             */
+            kind?: "human" | "agent" | "ephemeral_agent" | "system";
             meta?: ({
                 /** @description Every other kind's display name. */
                 name?: string;
@@ -3152,6 +3175,7 @@ export interface components {
             } & {
                 [key: string]: unknown;
             }) | null;
+            persona?: components["schemas"]["ConversationParticipantPersona"];
         };
         /** @description One participant to add (see `addConversationParticipants` for the keys each kind needs). NOTE(W2): internal/api/v2/conversations/participant_settings.go:131 (`Participant.Validate`). */
         ConversationParticipantCreate: {
@@ -3177,6 +3201,14 @@ export interface components {
             } & {
                 [key: string]: unknown;
             };
+        };
+        /** @description Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set. */
+        ConversationParticipantPersona: {
+            /** @description Reserved for the avatar pack of a later release. */
+            avatar_pack?: string;
+            display_name?: string;
+            pronouns?: string;
+            role?: string;
         };
         /** @description Client contract 1.12. The caller's read marker of a conversation after markConversationRead. */
         ConversationReadState: {

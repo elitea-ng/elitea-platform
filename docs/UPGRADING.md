@@ -4,6 +4,35 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Typed chat participants and message addressing (#1605, ADR-0050 decision 7)
+
+No action is needed. Workers and Main can be upgraded in any order.
+
+- Tenant migration `0161_chat_participant_kinds.sql` adds
+  `chat_participants.kind`, `chat_participant_mapping.persona` and, on
+  `chat_message_group`, `author_kind`, `addressed_to`, `visibility` and
+  `cause`. It fills them for existing rows from `entity_name`,
+  `sent_to_id`, the reply link and the version souls. The backfill turns
+  the tenant's user triggers off for its own updates, so it does not
+  re-deliver every message to every synced client. On a tenant with many
+  messages, expect the migration to take as long as one update over
+  `chat_message_group`.
+- Two `BEFORE INSERT` triggers fill the new columns when a writer leaves
+  them unset. A writer that sets `addressed_to` to one participant also
+  gets `sent_to_id`, and the other way round. `sent_to_id` is deprecated
+  and stays for one release.
+- Shared migration `0227_agent_execution_participant.sql` adds
+  `participant_id` and `addressed_to` to
+  `elitea_runtime.agent_execution_jobs`. Admission writes them for chat
+  runs. A run admitted before the upgrade has neither, so its frames
+  carry no participant.
+- Client contract 1.38. The execution event stream adds `participant_id`
+  and `addressed_to` to each frame of a chat run, and a derived
+  `agent_state` frame after each frame that moves the participant to a new
+  state. Main adds both when it serves the stream. The stored frames, and
+  the digests the result check reads, do not change. Clients of an earlier
+  contract ignore the new frame type.
+
 ## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
 
 Nothing changes unless you turn it on. Upgrade the workers before Main:

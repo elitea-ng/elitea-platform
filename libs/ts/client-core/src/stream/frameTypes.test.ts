@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  AGENT_STATE,
   ANSWER_DELTA_TYPES,
   EXECUTION_EVENT,
   FRAME_TYPE,
@@ -31,6 +32,13 @@ describe('FRAME_TYPE', () => {
 
   it('the pause reasons are the contract 1.2 set', () => {
     assert.deepEqual([...PAUSE_FINISH_REASONS].sort(), ['awaiting_approval', 'awaiting_input', 'interrupted']);
+  });
+
+  it('the agent states are the contract 1.38 set', () => {
+    assert.deepEqual(Object.values(AGENT_STATE).sort(), [
+      'error', 'idle', 'speaking', 'success', 'thinking', 'waiting', 'waking', 'working',
+    ]);
+    assert.equal(FRAME_TYPE.AgentState, 'agent_state');
   });
 
   it('the execution event names are the replay stream names', () => {

@@ -134,7 +134,31 @@ export const FRAME_TYPE = {
   AgentSwarmAgentStart: 'agent_swarm_agent_start',
   AgentSwarmAgentResponse: 'agent_swarm_agent_response',
   AgentSwarmHandoff: 'agent_swarm_handoff',
+  /**
+   * Client contract 1.38 (ADR-0050 decision 7e): the participant moved to a
+   * new state (`AGENT_STATE`). Derived by the server; it carries the SSE id
+   * of the frame that caused it. Not part of the answer.
+   */
+  AgentState: 'agent_state',
 } as const;
+
+/** The `state` of an `agent_state` frame (client contract 1.38). */
+export const AGENT_STATE = {
+  /** Before a run's first frame. */
+  Idle: 'idle',
+  Thinking: 'thinking',
+  Speaking: 'speaking',
+  /** In a tool or a sub-agent. */
+  Working: 'working',
+  /** On a person: an approval, a question, an authorization. */
+  Waiting: 'waiting',
+  Success: 'success',
+  Error: 'error',
+  /** A continuation resumes a paused answer. */
+  Waking: 'waking',
+} as const;
+
+export type AgentState = (typeof AGENT_STATE)[keyof typeof AGENT_STATE];
 
 export type FrameType = (typeof FRAME_TYPE)[keyof typeof FRAME_TYPE];
 

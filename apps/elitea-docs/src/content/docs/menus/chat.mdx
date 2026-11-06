@@ -50,6 +50,19 @@ Each agent in the conversation keeps its own view of it. An agent sees what othe
 
 An agent also sees what was written since it last answered. If another agent or person writes between two of its turns, the next turn shows those messages to it, once each, in the order they were written.
 
+### Who is speaking
+
+Every participant has a kind: a **person**, an **agent**, a short-lived **ephemeral agent** that an agent starts for one task, or the **system**. A toolkit, a prompt or an MCP has no kind: it is in the conversation but never writes. An agent with a [persona](/menus/agents#persona) shows its persona's display name, pronouns and role in this conversation. They come from the agent version the conversation runs, and change with the next answer after a new release.
+
+Each message records:
+
+- who wrote it, and their kind;
+- whom it is for. Empty means everyone in the conversation;
+- whether everyone sees it, or it is agent-to-agent talk that the chat shows collapsed;
+- what started it: a person's message, a mention by another agent, a heartbeat, a delegation, or the system.
+
+While an agent answers, the chat knows which participant is answering and what it is doing: thinking, speaking, working in a tool or a sub-agent, waiting for you, waking up to continue a paused answer, done, or failed. The persisted message and the live answer carry the same author and addressees. Messages written before this release get the kind of their author's participant and the addressee they had.
+
 Hovering an existing participant's card reveals an **edit** icon that opens its inline editor (the same form as its own menu page) without leaving the conversation.
 
 Each category (Agents, Pipelines, Toolkits, and the MCPs category's own view) also offers a **Create new** row above the existing-item list. Selecting it opens the same inline editor a participant's own edit icon opens, in create mode; saving creates the agent/pipeline/toolkit and attaches it to the current conversation as a participant, the same as picking an existing one. See [Edit agents, pipelines, toolkits and MCPs from chat](/how-tos/chat-conversations/create-entities-from-chat).
