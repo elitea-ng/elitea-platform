@@ -699,8 +699,10 @@ async fn an_unattended_act_waits_for_the_person_and_a_silence_declines() {
         PermissionProfile::Bypass,
         Person::answering(ApprovalOutcome::Deferred),
     );
-    rig.rules
-        .set_unattended(Some(Unattended { hook_asks: true }));
+    rig.rules.set_unattended(Some(Unattended {
+        hook_asks: true,
+        ..Unattended::default()
+    }));
     let result = rig
         .call(COMPUTER_KEY, json!({ "bundle_id": APP, "chord": "cmd+s" }))
         .await;
