@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use adk_rust::session::{
@@ -222,6 +222,9 @@ pub(crate) struct ClassifiedEvent {
 pub(crate) struct EventTail {
     pub(crate) head: i64,
     pub(crate) rows: Vec<ClassifiedEvent>,
+    /// The tail passes the event or byte bound of a full read. Nothing was
+    /// decoded (and the payloads were not transferred): read in full.
+    pub(crate) too_large: bool,
 }
 
 /// The active view with its classification, in ascending ordinal order.
@@ -230,20 +233,71 @@ pub(crate) struct ActiveSeed {
     pub(crate) head: i64,
     pub(crate) rows: Vec<ClassifiedEvent>,
     pub(crate) state_value: Option<Value>,
+    /// The active rows pass the retained-byte bound. Nothing was decoded.
+    pub(crate) too_large: bool,
 }
 
-/// The shared classification CTE for rows after `after` (`0` or a bind).
-pub(crate) fn classified_events_sql(after: &str) -> String {
-    include_str!("postgres_session_classified_events.sql").replace("{ORDINAL_AFTER}", after)
+/// The classification CTE over every row of the session.
+pub(crate) fn classified_events_sql() -> &'static str {
+    static SQL: LazyLock<String> = LazyLock::new(|| {
+        include_str!("postgres_session_classified_events.sql").replace("{ORDINAL_AFTER}", "0")
+    });
+    &SQL
 }
 
 /// Classification plus the global retirement rules: the `active_events` CTE.
-pub(crate) fn active_events_sql() -> String {
-    format!(
-        "{}{}",
-        classified_events_sql("0"),
-        include_str!("postgres_session_active_events.sql")
-    )
+pub(crate) fn active_events_sql() -> &'static str {
+    static SQL: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            "{}{}",
+            classified_events_sql(),
+            include_str!("postgres_session_active_events.sql")
+        )
+    });
+    &SQL
+}
+
+/// The active rows of a full read, newest first, `LIMIT $13`.
+fn load_events_sql() -> &'static str {
+    static SQL: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
+            active_events_sql()
+        )
+    });
+    &SQL
+}
+
+/// The rows after `$11` with their classification, oldest first, `LIMIT $12`.
+/// The payload is returned only while the rows' bytes stay within `$13`, so a
+/// tail over the byte bound is neither transferred nor decoded.
+fn events_since_sql() -> &'static str {
+    static SQL: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            "{} SELECT event_ordinal, \
+             CASE WHEN sum(payload_bytes) OVER () <= $13 THEN event_payload END AS event_payload, \
+             event_timestamp, payload_bytes, recovery_marker, branch, snapshot_agent, \
+             has_control, author FROM classified ORDER BY event_ordinal ASC LIMIT $12",
+            include_str!("postgres_session_classified_events.sql")
+                .replace("{ORDINAL_AFTER}", "$11")
+        )
+    });
+    &SQL
+}
+
+/// The active rows with their classification, newest first, `LIMIT $13`; the
+/// payload is returned only while the active bytes stay within `$14`.
+fn active_seed_sql() -> &'static str {
+    static SQL: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            "{} SELECT event_ordinal, \
+             CASE WHEN sum(payload_bytes) OVER () <= $14 THEN event_payload END AS event_payload, \
+             event_timestamp, payload_bytes, recovery_marker, branch, snapshot_agent, \
+             has_control, author FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
+            active_events_sql()
+        )
+    });
+    &SQL
 }
 
 /// One non-cloneable claim/fence binding for an exact ADK session lineage.
@@ -891,11 +945,7 @@ WHERE tenant_id = $1
             .ok_or(PostgresSessionError::ResourceExhausted)?;
         let fetch_limit =
             i64::try_from(fetch_limit).map_err(|_| PostgresSessionError::ResourceExhausted)?;
-        let query = format!(
-            "{} SELECT event_payload, event_timestamp FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
-            active_events_sql()
-        );
-        let rows = sqlx::query(sqlx::AssertSqlSafe(&*query))
+        let rows = sqlx::query(sqlx::AssertSqlSafe(load_events_sql()))
             .bind(&self.authority.tenant_id)
             .bind(self.authority.resource_project_id)
             .bind(self.authority.projection_project_id)
@@ -971,66 +1021,85 @@ WHERE tenant_id = $1
     ///
     /// One short transaction under the shared writer lock, so the rows are an
     /// exact prefix: ordinals `after + 1 .. head`. The rows are every new row,
-    /// active or not, each with the classification the full read computes. At
-    /// most `limit` rows are scanned; the caller treats a larger gap as a
-    /// reason to re-read in full. The lock is released at the commit, before
-    /// the caller does any other work.
+    /// active or not, each with the classification the full read computes. A
+    /// tail of more than `max_events` rows, or of more than
+    /// `max_retained_event_bytes` payload bytes, is not decoded: the result is
+    /// `too_large` and the caller reads in full. The lock is released at the
+    /// commit, before the caller does any other work.
     pub(crate) async fn events_since(
         &self,
         span: &tracing::Span,
         after: i64,
-        limit: usize,
     ) -> adk_rust::Result<EventTail> {
-        let limit =
-            i64::try_from(limit).map_err(|_| PostgresSessionError::ResourceExhausted.into_adk())?;
         let result = self
             .driven(span, move |writer| async move {
-                writer.read_events_since(after, limit).await
+                writer.read_events_since(after).await
             })
             .await?;
         record_session_result(span, &result);
         result.map_err(session_read_error)
     }
 
-    async fn read_events_since(
-        &self,
-        after: i64,
-        limit: i64,
-    ) -> Result<EventTail, PostgresSessionError> {
+    async fn read_events_since(&self, after: i64) -> Result<EventTail, PostgresSessionError> {
         let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         let head = self.lock_current_writer(&mut transaction, false).await?;
         let mut rows = Vec::new();
-        // A gap wider than `limit` is not scanned: the caller reads in full.
-        if head - 1 > after && head - 1 - after <= limit {
-            let query = format!(
-                "{} SELECT event_ordinal, event_payload, event_timestamp, payload_bytes, \
-                 recovery_marker, branch, snapshot_agent, has_control, author \
-                 FROM classified ORDER BY event_ordinal ASC LIMIT $12",
-                classified_events_sql("$11")
-            );
-            let stored = sqlx::query(sqlx::AssertSqlSafe(&*query))
-                .bind(&self.authority.tenant_id)
-                .bind(self.authority.resource_project_id)
-                .bind(self.authority.projection_project_id)
-                .bind(self.authority.capability_id)
-                .bind(SESSION_FAMILY)
-                .bind(self.authority.definition_digest.as_slice())
-                .bind(&self.authority.thread_id)
-                .bind(&self.authority.app_name)
-                .bind(&self.authority.user_id)
-                .bind(&self.authority.session_id)
-                .bind(after)
-                .bind(limit)
-                .fetch_all(&mut *transaction)
-                .await
-                .map_err(storage_error)?;
-            rows.reserve(stored.len());
-            for row in &stored {
-                rows.push(self.classified_event(row)?);
+        let mut too_large = false;
+        if head - 1 > after {
+            let gap = head - 1 - after;
+            if usize::try_from(gap).map_or(true, |gap| gap > self.limits.max_events) {
+                too_large = true;
+            } else {
+                let stored = sqlx::query(sqlx::AssertSqlSafe(events_since_sql()))
+                    .bind(&self.authority.tenant_id)
+                    .bind(self.authority.resource_project_id)
+                    .bind(self.authority.projection_project_id)
+                    .bind(self.authority.capability_id)
+                    .bind(SESSION_FAMILY)
+                    .bind(self.authority.definition_digest.as_slice())
+                    .bind(&self.authority.thread_id)
+                    .bind(&self.authority.app_name)
+                    .bind(&self.authority.user_id)
+                    .bind(&self.authority.session_id)
+                    .bind(after)
+                    .bind(gap)
+                    .bind(i64::try_from(self.limits.max_retained_event_bytes).unwrap_or(i64::MAX))
+                    .fetch_all(&mut *transaction)
+                    .await
+                    .map_err(storage_error)?;
+                too_large = self.passes_byte_bound(&stored)?;
+                if !too_large {
+                    rows.reserve(stored.len());
+                    for row in &stored {
+                        rows.push(self.classified_event(row)?);
+                    }
+                }
             }
         }
         self.commit_current(transaction).await?;
-        Ok(EventTail { head, rows })
+        Ok(EventTail {
+            head,
+            rows,
+            too_large,
+        })
+    }
+
+    /// Whether the rows' payload bytes pass the retained-byte bound, from the
+    /// stored sizes alone (the payloads of such rows were not returned).
+    fn passes_byte_bound(
+        &self,
+        rows: &[sqlx::postgres::PgRow],
+    ) -> Result<bool, PostgresSessionError> {
+        let mut total = 0_usize;
+        for row in rows {
+            let bytes = usize::try_from(
+                row.try_get::<i64, _>("payload_bytes")
+                    .map_err(storage_error)?,
+            )
+            .map_err(|_| PostgresSessionError::CorruptStoredState)?;
+            total = total.saturating_add(bytes);
+        }
+        Ok(total > self.limits.max_retained_event_bytes)
     }
 
     /// FU-287: the active view with its classification, the head, and the
@@ -1059,13 +1128,7 @@ WHERE tenant_id = $1
         let mut transaction = begin_bounded(&self.pool, self.limits).await?;
         let head = self.lock_current_writer(&mut transaction, false).await?;
         let (mut state, _) = self.load_session_row(&mut transaction).await?;
-        let query = format!(
-            "{} SELECT event_ordinal, event_payload, event_timestamp, payload_bytes, \
-             recovery_marker, branch, snapshot_agent, has_control, author \
-             FROM active_events ORDER BY event_ordinal DESC LIMIT $13",
-            active_events_sql()
-        );
-        let stored = sqlx::query(sqlx::AssertSqlSafe(&*query))
+        let stored = sqlx::query(sqlx::AssertSqlSafe(active_seed_sql()))
             .bind(&self.authority.tenant_id)
             .bind(self.authority.resource_project_id)
             .bind(self.authority.projection_project_id)
@@ -1079,12 +1142,21 @@ WHERE tenant_id = $1
             .bind(Option::<&str>::None)
             .bind(false)
             .bind(fetch_limit)
+            .bind(i64::try_from(self.limits.max_retained_event_bytes).unwrap_or(i64::MAX))
             .fetch_all(&mut *transaction)
             .await
             .map_err(storage_error)?;
         self.commit_current(transaction).await?;
         if stored.len() > self.limits.max_events {
             return Err(PostgresSessionError::ResourceExhausted);
+        }
+        if self.passes_byte_bound(&stored)? {
+            return Ok(ActiveSeed {
+                head,
+                rows: Vec::new(),
+                state_value: None,
+                too_large: true,
+            });
         }
         let mut rows = Vec::with_capacity(stored.len());
         for row in stored.iter().rev() {
@@ -1094,7 +1166,18 @@ WHERE tenant_id = $1
             head,
             rows,
             state_value: state.remove(state_key),
+            too_large: false,
         })
+    }
+
+    /// The database this service's pool is connected to, for tests which tell
+    /// concurrent runs apart.
+    #[cfg(test)]
+    pub(crate) fn database_name(&self) -> Option<String> {
+        self.pool
+            .connect_options()
+            .get_database()
+            .map(str::to_owned)
     }
 
     /// The bounds this service enforces on a session read.
@@ -1580,7 +1663,7 @@ impl SessionService for PostgresSessionService {
 }
 
 /// A read of a session which does not exist is `session.not_found`.
-fn session_read_error(error: PostgresSessionError) -> AdkError {
+pub(crate) fn session_read_error(error: PostgresSessionError) -> AdkError {
     match error {
         PostgresSessionError::InvalidScope => AdkError::new(
             ErrorComponent::Session,

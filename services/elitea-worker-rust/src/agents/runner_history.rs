@@ -3,9 +3,19 @@
 use std::collections::HashMap;
 
 use adk_rust::Event;
-use adk_rust::session::{Events, Session, State};
+use adk_rust::session::{Events, GetRequest, Session, SessionService, State};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+
+/// A session read as the Runner's model view: the service's `get`, projected.
+/// `RunnerSessionService::get` and the incremental view's full read share it.
+pub(super) async fn read(
+    sessions: &dyn SessionService,
+    request: GetRequest,
+    compaction_scope: Option<([u8; 32], &str)>,
+) -> adk_rust::Result<Box<dyn Session>> {
+    project(sessions.get(request).await?, compaction_scope)
+}
 
 pub(super) fn project(
     inner: Box<dyn Session>,

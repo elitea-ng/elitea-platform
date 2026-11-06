@@ -368,7 +368,7 @@ FROM elitea_runtime.agent_session_events WHERE event_id = 'anchor'
         let classified = sqlx::query(sqlx::AssertSqlSafe(format!(
             "{} SELECT event_ordinal, payload_bytes, recovery_marker, branch, snapshot_agent, \
              has_control, author FROM classified ORDER BY event_ordinal",
-            classified_events_sql("0")
+            classified_events_sql()
         )))
         .bind(scope.0)
         .bind(scope.1)
@@ -1092,4 +1092,179 @@ async fn refresh_span_child() {
     assert!(rows.iter().all(|rows| *rows <= 2), "{rows:?}");
     fixture.db.pool.close().await;
     println!("REFRESH-SPAN-CHILD-RAN");
+}
+
+/// A reader of the fixture's session under other bounds (the same claim).
+async fn bounded_reader(fixture: &Fixture, limits: SessionLimits) -> Arc<PostgresSessionService> {
+    Arc::new(
+        PostgresSessionService::activate(
+            fixture.db.pool.clone(),
+            authority_for("claim-1", 1, 1, [0x22; 32]),
+            limits,
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .expect("activate the bounded reader"),
+    )
+}
+
+async fn stored_bytes(fixture: &Fixture) -> usize {
+    let bytes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(payload_bytes), 0)::bigint FROM elitea_runtime.agent_session_events",
+    )
+    .fetch_one(&fixture.db.pool)
+    .await
+    .expect("stored bytes");
+    usize::try_from(bytes).expect("bytes")
+}
+
+#[tokio::test]
+async fn a_tail_over_the_event_or_byte_bound_is_not_decoded() {
+    let Some(fixture) = Fixture::new(SessionLimits::default()).await else {
+        return;
+    };
+    for index in 0..6 {
+        fixture
+            .append(event(&format!("r{index}"), "user"))
+            .await
+            .expect("append");
+    }
+    // A row which cannot be decoded: reading it fails, so any read which
+    // decodes it is seen. Its stored size is part of the tail's bytes.
+    sqlx::query(
+        "UPDATE elitea_runtime.agent_session_events SET event_payload = '{\"author\":\"user\"}' \
+         WHERE event_ordinal = 3",
+    )
+    .execute(&fixture.db.pool)
+    .await
+    .expect("corrupt one payload");
+    let bytes = stored_bytes(&fixture).await;
+    let span = tracing::Span::none();
+    // Bytes: the bound exactly, then one under it.
+    let at_limit = bounded_reader(
+        &fixture,
+        SessionLimits {
+            max_retained_event_bytes: bytes,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    let error = at_limit
+        .events_since(&span, 0)
+        .await
+        .expect_err("within the bound the rows are decoded, and the corrupt one fails");
+    assert_eq!(error.code, "session.corrupt_state");
+    let over = bounded_reader(
+        &fixture,
+        SessionLimits {
+            max_retained_event_bytes: bytes - 1,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    let tail = over
+        .events_since(&span, 0)
+        .await
+        .expect("too large, not decoded");
+    assert!(tail.too_large && tail.rows.is_empty());
+    assert_eq!(tail.head, 7);
+    // Events: six rows within a bound of six, over a bound of five.
+    let six = bounded_reader(
+        &fixture,
+        SessionLimits {
+            max_events: 6,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        six.events_since(&span, 0).await.expect_err("decoded").code,
+        "session.corrupt_state"
+    );
+    let five = bounded_reader(
+        &fixture,
+        SessionLimits {
+            max_events: 5,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    let tail = five
+        .events_since(&span, 0)
+        .await
+        .expect("too large, not scanned");
+    assert!(tail.too_large && tail.rows.is_empty());
+    // No gap, no tail.
+    let none = five.events_since(&span, 6).await.expect("nothing new");
+    assert!(!none.too_large && none.rows.is_empty());
+    fixture.db.pool.close().await;
+}
+
+#[tokio::test]
+async fn a_view_passing_the_byte_bound_reads_in_full_at_once_and_caches_again_when_it_fits() {
+    let Some(fixture) = Fixture::new(SessionLimits::default()).await else {
+        return;
+    };
+    for index in 0..6 {
+        fixture
+            .append(event(
+                &format!("r{index}"),
+                if index % 2 == 0 { "user" } else { "agent" },
+            ))
+            .await
+            .expect("append");
+    }
+    let bound = stored_bytes(&fixture).await;
+    let reader = bounded_reader(
+        &fixture,
+        SessionLimits {
+            max_retained_event_bytes: bound,
+            ..SessionLimits::default()
+        },
+    )
+    .await;
+    let view = IncrementalRunnerView::new(reader, fixture.identity.clone(), None);
+    let stats = view.stats();
+    // The view is exactly at the bound: cached.
+    view.refresh_for_tests().await.expect("seed");
+    assert!(view.cached_events().await.is_some());
+    assert_eq!(stats.snapshot().seeds, 1);
+    // One more row passes it: the tail, then the full read, and no seed.
+    fixture.append(event("r6", "user")).await.expect("append");
+    assert_equals_full(&view, &fixture, "over the bound").await;
+    let tally = stats.snapshot();
+    assert_eq!(tally.seeds, 1, "no discarded seed decode: {tally:?}");
+    assert_eq!(tally.fallbacks, 1, "{tally:?}");
+    assert_eq!(
+        tally.rows_read,
+        6 + 1,
+        "the seed's six and the one new row: {tally:?}"
+    );
+    assert!(view.cached_events().await.is_none());
+    assert!(view.is_oversized().await);
+    // Still over: the probe decodes nothing and the full read serves.
+    assert_equals_full(&view, &fixture, "still over").await;
+    let tally = stats.snapshot();
+    assert_eq!(
+        tally.rows_read, 7,
+        "an oversized probe decodes no row: {tally:?}"
+    );
+    assert!(view.is_oversized().await);
+    // A snapshot cut retires the old rows: the view fits again and is cached.
+    fixture
+        .append(marker("snap", "", Some("agent"), 0))
+        .await
+        .expect("snapshot");
+    fixture.append(event("r7", "user")).await.expect("append");
+    assert_equals_full(&view, &fixture, "after the cut").await;
+    assert!(!view.is_oversized().await, "oversized does not stick");
+    assert!(view.cached_events().await.is_some());
+    // And the next refresh is incremental again.
+    let before = stats.snapshot();
+    fixture.append(event("r8", "agent")).await.expect("append");
+    assert_equals_full(&view, &fixture, "incremental again").await;
+    let after = stats.snapshot();
+    assert_eq!(after.rows_read - before.rows_read, 1, "{after:?}");
+    assert_eq!(after.fallbacks, before.fallbacks, "{after:?}");
+    fixture.db.pool.close().await;
 }

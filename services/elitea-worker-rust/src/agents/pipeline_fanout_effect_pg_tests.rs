@@ -6451,8 +6451,7 @@ async fn measure_saved_agent_map_with_latency(concurrency: usize) {
         return;
     };
     // A timing run: the cross-check would add a full read to every refresh.
-    crate::agents::runner_view::set_cross_check(false);
-    let tally_before = crate::agents::runner_view::tally::totals();
+    let _cross_check_off = crate::agents::runner_view::disable_cross_check();
     let db = IsolatedPostgres::create(&url).await;
     install_schema(&db.pool).await;
     sqlx::raw_sql(CHECKPOINT_MIGRATION)
@@ -6502,16 +6501,16 @@ async fn measure_saved_agent_map_with_latency(concurrency: usize) {
         "T2A3_MAP_LATENCY concurrency={concurrency} items=64 model_latency_ms=100 elapsed_ms={}",
         elapsed.as_millis()
     );
-    // FU-287: the root session's refreshes of this run (the tally is process
-    // wide; the measurements run one at a time).
-    let tally = crate::agents::runner_view::tally::totals();
-    let (refreshes, fallbacks, rows_read) = (
-        tally.0 - tally_before.0,
-        tally.1 - tally_before.1,
-        tally.2 - tally_before.2,
-    );
+    // FU-287: the root session's refreshes of this run, from the stats of the
+    // views built over this run's own database (concurrent tests have theirs).
+    let tally = crate::agents::runner_view::stats_for_database(&db.database_name);
+    let (refreshes, fallbacks, rows_read) = (tally.refreshes, tally.fallbacks, tally.rows_read);
     eprintln!(
         "FU287_REFRESH concurrency={concurrency} refreshes={refreshes} fallbacks={fallbacks} rows_read={rows_read}"
+    );
+    assert!(
+        refreshes > 0,
+        "the root session's refreshes went through the view"
     );
     assert!(
         fallbacks <= 1,

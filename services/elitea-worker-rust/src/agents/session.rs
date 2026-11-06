@@ -2496,13 +2496,14 @@ impl SessionService for RunnerSessionService {
     }
 
     async fn get(&self, req: GetRequest) -> adk_rust::Result<Box<dyn Session>> {
-        let session = self.inner.get(req).await?;
-        super::runner_history::project(
-            session,
+        super::runner_history::read(
+            self.inner.as_ref(),
+            req,
             self.compaction_view
                 .as_ref()
                 .map(|(digest, agent)| (*digest, agent.as_str())),
         )
+        .await
     }
 
     async fn list(&self, req: ListRequest) -> adk_rust::Result<Vec<Box<dyn Session>>> {

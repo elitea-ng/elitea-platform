@@ -27,18 +27,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(test)]
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use adk_runner::SessionEventRefresh;
-use adk_rust::session::{GetRequest, SessionService as _};
-use adk_rust::{AdkError, AdkIdentity, ErrorCategory, ErrorComponent, Event};
+use adk_rust::session::GetRequest;
+use adk_rust::{AdkIdentity, Event};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::state::{ClassifiedEvent, PostgresSessionService, refresh_span};
+use crate::state::{
+    ClassifiedEvent, PostgresSessionError, PostgresSessionService, refresh_span, session_read_error,
+};
 
-/// Counters of one view, readable by tests and by the run's owner.
+/// Counters of one view, read by tests. Production reads the span fields.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct RefreshStats {
     /// Refreshes served.
@@ -73,6 +75,97 @@ pub(crate) struct RefreshTally {
     pub(crate) rows_read: u64,
 }
 
+/// Test-only: the stats of every view built over a database, by its name, so a
+/// run reads its own views and no other test's.
+#[cfg(test)]
+static VIEWS_BY_DATABASE: std::sync::Mutex<Vec<(String, Arc<RefreshStats>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Test-only: the summed stats of the views built over `database`.
+#[cfg(test)]
+pub(crate) fn stats_for_database(database: &str) -> RefreshTally {
+    let views = VIEWS_BY_DATABASE.lock().expect("view registry");
+    views
+        .iter()
+        .filter(|(name, _)| name == database)
+        .map(|(_, stats)| stats.snapshot())
+        .fold(RefreshTally::default(), |sum, tally| RefreshTally {
+            refreshes: sum.refreshes + tally.refreshes,
+            seeds: sum.seeds + tally.seeds,
+            fallbacks: sum.fallbacks + tally.fallbacks,
+            rows_read: sum.rows_read + tally.rows_read,
+        })
+}
+
+/// The global facts the retirement rules read, mirrored from
+/// `postgres_session_active_events.sql`: the latest history snapshot, whether
+/// any row has a branch, and the latest recovery marker of each branch.
+#[derive(Clone, Default)]
+struct ViewFacts {
+    /// The latest history snapshot marker: its ordinal and agent.
+    snapshot: Option<(i64, String)>,
+    /// Any stored row has a branch.
+    has_branches: bool,
+    /// The latest recovery marker ordinal of each branch.
+    markers: HashMap<String, i64>,
+}
+
+impl ViewFacts {
+    /// Take in one row, in ascending ordinal order or not.
+    fn absorb(&mut self, row: &ClassifiedEvent) {
+        self.has_branches |= !row.branch.is_empty();
+        if row.recovery_marker {
+            let latest = self
+                .markers
+                .entry(row.branch.clone())
+                .or_insert(row.ordinal);
+            *latest = (*latest).max(row.ordinal);
+            if let Some(agent) = &row.snapshot_agent
+                && self
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|(ordinal, _)| *ordinal < row.ordinal)
+            {
+                self.snapshot = Some((row.ordinal, agent.clone()));
+            }
+        }
+    }
+
+    /// The facts of a set of rows. A seed (the active view) gives the facts of
+    /// every stored row: its snapshot marker is always active, each branch's
+    /// latest marker is active, and when any row has a branch the view holds a
+    /// branch row (one is either active itself or superseded by an active
+    /// marker of its branch).
+    fn from_rows(rows: &[ClassifiedEvent]) -> Self {
+        let mut facts = Self::default();
+        for row in rows {
+            facts.absorb(row);
+        }
+        facts
+    }
+
+    /// The `active_events` rule for one row (read path: no candidate).
+    fn is_active(&self, row: &ClassifiedEvent) -> bool {
+        let snapshot = self.snapshot.as_ref();
+        if row.recovery_marker {
+            return self.markers.get(&row.branch) == Some(&row.ordinal)
+                || snapshot.is_some_and(|(ordinal, _)| *ordinal == row.ordinal);
+        }
+        // `author NOT IN ('user', snapshot_agent)` is NULL, not true, for a
+        // NULL author: such a row is kept only by the other terms.
+        self.has_branches
+            || snapshot.is_none()
+            || row.has_control
+            || snapshot.is_some_and(|(ordinal, agent)| {
+                row.ordinal > *ordinal
+                    || row
+                        .author
+                        .as_deref()
+                        .is_some_and(|author| author != "user" && author != agent)
+            })
+    }
+}
+
 /// What the cached view is made of: the active rows and the global facts the
 /// retirement rules read.
 struct ViewCache {
@@ -80,12 +173,7 @@ struct ViewCache {
     cursor: i64,
     /// Active rows in ascending ordinal order.
     rows: Vec<ClassifiedEvent>,
-    /// The latest history snapshot marker: its ordinal and agent.
-    snapshot: Option<(i64, String)>,
-    /// Any stored row has a branch.
-    has_branches: bool,
-    /// The latest recovery marker ordinal of each branch.
-    markers: HashMap<String, i64>,
+    facts: ViewFacts,
     /// The session state under the compaction key.
     compaction_record: Option<Value>,
     /// Payload bytes of the cached rows.
@@ -101,63 +189,16 @@ enum Extension {
 
 impl ViewCache {
     fn from_seed(head: i64, rows: Vec<ClassifiedEvent>, record: Option<Value>) -> Self {
-        // The seed is the active view. Its snapshot marker is always active,
-        // each branch's latest marker is active, and when any row has a
-        // branch the view holds a branch row (a branch row is either active
-        // itself or superseded by an active marker of its branch).
-        let mut snapshot: Option<(i64, String)> = None;
-        let mut markers: HashMap<String, i64> = HashMap::new();
-        let mut has_branches = false;
-        let mut bytes = 0_usize;
-        for row in &rows {
-            bytes = bytes.saturating_add(row.payload_bytes);
-            has_branches |= !row.branch.is_empty();
-            if row.recovery_marker {
-                let latest = markers.entry(row.branch.clone()).or_insert(row.ordinal);
-                *latest = (*latest).max(row.ordinal);
-                if let Some(agent) = &row.snapshot_agent
-                    && snapshot
-                        .as_ref()
-                        .is_none_or(|(ordinal, _)| *ordinal < row.ordinal)
-                {
-                    snapshot = Some((row.ordinal, agent.clone()));
-                }
-            }
-        }
+        let bytes = rows
+            .iter()
+            .fold(0_usize, |sum, row| sum.saturating_add(row.payload_bytes));
         Self {
             cursor: head - 1,
+            facts: ViewFacts::from_rows(&rows),
             rows,
-            snapshot,
-            has_branches,
-            markers,
             compaction_record: record,
             bytes,
         }
-    }
-
-    /// The `active_events` rule for one row (read path: no candidate).
-    fn is_active(
-        row: &ClassifiedEvent,
-        snapshot: Option<&(i64, String)>,
-        has_branches: bool,
-        markers: &HashMap<String, i64>,
-    ) -> bool {
-        if row.recovery_marker {
-            return markers.get(&row.branch) == Some(&row.ordinal)
-                || snapshot.is_some_and(|(ordinal, _)| *ordinal == row.ordinal);
-        }
-        // `author NOT IN ('user', snapshot_agent)` is NULL, not true, for a
-        // NULL author: such a row is kept only by the other terms.
-        has_branches
-            || snapshot.is_none()
-            || row.has_control
-            || snapshot.is_some_and(|(ordinal, agent)| {
-                row.ordinal > *ordinal
-                    || row
-                        .author
-                        .as_deref()
-                        .is_some_and(|author| author != "user" && author != agent)
-            })
     }
 
     /// Apply rows committed after the cursor. On `FullRead` the cache is
@@ -177,24 +218,19 @@ impl ViewCache {
         if !continues {
             return Extension::FullRead;
         }
-        let mut snapshot = self.snapshot.clone();
-        let mut has_branches = self.has_branches;
-        let mut markers = self.markers.clone();
+        let mut facts = self.facts.clone();
         for row in &new_rows {
-            has_branches |= !row.branch.is_empty();
-            if row.recovery_marker {
-                markers.insert(row.branch.clone(), row.ordinal);
-                if let Some(agent) = &row.snapshot_agent {
-                    snapshot = Some((row.ordinal, agent.clone()));
-                }
-            }
+            facts.absorb(row);
         }
         // A row dropped behind a snapshot cut returns when a branch appears
         // or when a snapshot of another agent moves the cut. Dropped rows are
         // not kept, so only a full read can bring them back.
-        let brings_back = self.snapshot.as_ref().is_some_and(|(_, agent)| {
-            (!self.has_branches && has_branches)
-                || snapshot.as_ref().is_none_or(|(_, latest)| latest != agent)
+        let brings_back = self.facts.snapshot.as_ref().is_some_and(|(_, agent)| {
+            (!self.facts.has_branches && facts.has_branches)
+                || facts
+                    .snapshot
+                    .as_ref()
+                    .is_none_or(|(_, latest)| latest != agent)
         });
         if brings_back {
             return Extension::FullRead;
@@ -205,12 +241,9 @@ impl ViewCache {
             }
         }
         self.rows.extend(new_rows);
-        self.snapshot = snapshot;
-        self.has_branches = has_branches;
-        self.markers = markers;
-        let (snapshot, has_branches, markers) = (&self.snapshot, self.has_branches, &self.markers);
-        self.rows
-            .retain(|row| Self::is_active(row, snapshot.as_ref(), has_branches, markers));
+        self.facts = facts;
+        let facts = &self.facts;
+        self.rows.retain(|row| facts.is_active(row));
         self.bytes = self
             .rows
             .iter()
@@ -224,8 +257,10 @@ impl ViewCache {
 #[derive(Default)]
 struct ViewState {
     cache: Option<ViewCache>,
-    /// The active view passed the retained-byte bound: every refresh reads in
-    /// full, as it did before the cache, and nothing stays resident.
+    /// The active view passed the retained-byte bound, so nothing stays
+    /// resident and the refresh reads in full, as before the cache. The next
+    /// refresh looks at the active bytes again (without decoding them while
+    /// they are still over) and caches the view once it fits.
     oversized: bool,
 }
 
@@ -236,6 +271,7 @@ pub(crate) struct IncrementalRunnerView {
     /// The history scope of the root agent, as `RunnerSessionService` has it.
     scope: Option<([u8; 32], String)>,
     state: tokio::sync::Mutex<ViewState>,
+    #[cfg(test)]
     stats: Arc<RefreshStats>,
 }
 
@@ -245,12 +281,22 @@ impl IncrementalRunnerView {
         identity: AdkIdentity,
         scope: Option<([u8; 32], String)>,
     ) -> Self {
+        #[cfg(test)]
+        let stats = Arc::new(RefreshStats::default());
+        #[cfg(test)]
+        if let Some(database) = sessions.database_name() {
+            VIEWS_BY_DATABASE
+                .lock()
+                .expect("view registry")
+                .push((database, Arc::clone(&stats)));
+        }
         Self {
             sessions,
             identity,
             scope,
             state: tokio::sync::Mutex::new(ViewState::default()),
-            stats: Arc::new(RefreshStats::default()),
+            #[cfg(test)]
+            stats,
         }
     }
 
@@ -276,17 +322,18 @@ impl IncrementalRunnerView {
 
     /// The view exactly as `RunnerSessionService::get` serves it.
     async fn full_read(&self) -> adk_rust::Result<Vec<Event>> {
-        let session = self
-            .sessions
-            .get(GetRequest {
+        let session = super::runner_history::read(
+            self.sessions.as_ref(),
+            GetRequest {
                 app_name: self.identity.app_name.to_string(),
                 user_id: self.identity.user_id.to_string(),
                 session_id: self.identity.session_id.to_string(),
                 num_recent_events: None,
                 after: None,
-            })
-            .await?;
-        let session = super::runner_history::project(session, self.scope())?;
+            },
+            self.scope(),
+        )
+        .await?;
         Ok(session.events().all())
     }
 
@@ -299,13 +346,14 @@ impl IncrementalRunnerView {
             .await;
         span.record("rows_read", rows_read);
         span.record("fallback", fallback);
-        self.stats.refreshes.fetch_add(1, Ordering::Relaxed);
-        self.stats.rows_read.fetch_add(rows_read, Ordering::Relaxed);
-        if fallback {
-            self.stats.fallbacks.fetch_add(1, Ordering::Relaxed);
-        }
         #[cfg(test)]
-        tally::record(rows_read, fallback);
+        {
+            self.stats.refreshes.fetch_add(1, Ordering::Relaxed);
+            self.stats.rows_read.fetch_add(rows_read, Ordering::Relaxed);
+            if fallback {
+                self.stats.fallbacks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         drop(state);
         result
     }
@@ -318,47 +366,52 @@ impl IncrementalRunnerView {
         fallback: &mut bool,
     ) -> adk_rust::Result<Vec<Event>> {
         let limits = self.sessions.limits();
-        if state.oversized {
-            *fallback = true;
-            return self.full_read().await;
-        }
         if let Some(cache) = state.cache.as_mut() {
-            let tail = self
-                .sessions
-                .events_since(span, cache.cursor, limits.max_events + 1)
-                .await?;
+            let tail = self.sessions.events_since(span, cache.cursor).await?;
             *rows_read += count(tail.rows.len());
-            if tail.head - 1 == cache.cursor && tail.rows.is_empty() {
+            if !tail.too_large && tail.head - 1 == cache.cursor && tail.rows.is_empty() {
                 return self.project(cache);
             }
-            match cache.extend(tail.head, tail.rows, super::context_compaction::STATE_KEY) {
-                Extension::Applied => {
-                    if cache.rows.len() <= limits.max_events
-                        && cache.bytes <= limits.max_retained_event_bytes
-                    {
-                        return self.project(cache);
-                    }
+            if !tail.too_large
+                && matches!(
+                    cache.extend(tail.head, tail.rows, super::context_compaction::STATE_KEY),
+                    Extension::Applied
+                )
+            {
+                if cache.rows.len() <= limits.max_events
+                    && cache.bytes <= limits.max_retained_event_bytes
+                {
+                    return self.project(cache);
                 }
-                Extension::FullRead => {}
+                // The cache passed the bounds: read in full at once. The full
+                // read has the typed count limit and no byte bound, and the
+                // next refresh looks again at whether the view fits.
+                state.oversized = cache.bytes > limits.max_retained_event_bytes;
+                state.cache = None;
+                *fallback = true;
+                return self.full_read().await;
             }
             // Dropping the cache before the read keeps a failed read from
             // leaving a stale cache behind.
             state.cache = None;
             *fallback = true;
         }
+        *fallback |= state.oversized;
         let seed = self
             .sessions
             .seed_active(span, super::context_compaction::STATE_KEY)
             .await?;
         *rows_read += count(seed.rows.len());
+        #[cfg(test)]
         self.stats.seeds.fetch_add(1, Ordering::Relaxed);
-        let cache = ViewCache::from_seed(seed.head, seed.rows, seed.state_value);
-        if cache.bytes > limits.max_retained_event_bytes {
+        if seed.too_large {
             // The full read has no byte bound; keep nothing resident.
             state.oversized = true;
             *fallback = true;
             return self.full_read().await;
         }
+        state.oversized = false;
+        let cache = ViewCache::from_seed(seed.head, seed.rows, seed.state_value);
         let events = self.project(&cache)?;
         state.cache = Some(cache);
         Ok(events)
@@ -369,12 +422,14 @@ fn count(rows: usize) -> u64 {
     u64::try_from(rows).unwrap_or(u64::MAX)
 }
 
-fn identity_refused() -> AdkError {
-    AdkError::new(
-        ErrorComponent::Session,
-        ErrorCategory::NotFound,
-        "session.not_found",
-        "the durable session was not found",
+/// A failure of the test-only comparison, never of a run.
+#[cfg(test)]
+fn cross_check_error(message: &'static str) -> adk_rust::AdkError {
+    adk_rust::AdkError::new(
+        adk_rust::ErrorComponent::Session,
+        adk_rust::ErrorCategory::Internal,
+        "session.refresh_cross_check",
+        message,
     )
 }
 
@@ -383,7 +438,7 @@ impl SessionEventRefresh for IncrementalRunnerView {
     async fn refreshed_events(&self, identity: &AdkIdentity) -> adk_rust::Result<Vec<Event>> {
         // One view serves one session. Any other identity fails closed.
         if *identity != self.identity {
-            return Err(identity_refused());
+            return Err(session_read_error(PostgresSessionError::InvalidScope));
         }
         let span = refresh_span();
         let events = self.refresh(&span).await?;
@@ -406,16 +461,33 @@ pub(crate) fn cross_check_enabled() -> bool {
     CROSS_CHECK.load(Ordering::Relaxed)
 }
 
-/// Test-only: a timing measurement turns the extra full reads off.
+/// Test-only: a timing measurement turns the extra full reads off. The
+/// returned guard turns them back on when it drops.
 #[cfg(test)]
-pub(crate) fn set_cross_check(enabled: bool) {
-    CROSS_CHECK.store(enabled, Ordering::Relaxed);
+pub(crate) fn disable_cross_check() -> CrossCheckOff {
+    CrossCheckOff(CROSS_CHECK.swap(false, Ordering::Relaxed))
+}
+
+/// Restores the cross-check flag it found.
+#[cfg(test)]
+pub(crate) struct CrossCheckOff(bool);
+
+#[cfg(test)]
+impl Drop for CrossCheckOff {
+    fn drop(&mut self) {
+        CROSS_CHECK.store(self.0, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
 impl IncrementalRunnerView {
     pub(crate) fn stats(&self) -> Arc<RefreshStats> {
         Arc::clone(&self.stats)
+    }
+
+    /// Whether the view has given up caching for the byte bound.
+    pub(crate) async fn is_oversized(&self) -> bool {
+        self.state.lock().await.oversized
     }
 
     /// The compaction record the cache holds.
@@ -448,7 +520,7 @@ impl IncrementalRunnerView {
 
     async fn committed_head(&self, span: &tracing::Span) -> adk_rust::Result<i64> {
         self.sessions
-            .events_since(span, i64::MAX, 0)
+            .events_since(span, i64::MAX)
             .await
             .map(|tail| tail.head)
     }
@@ -466,30 +538,27 @@ impl IncrementalRunnerView {
             state.cache.as_ref().map(|cache| cache.cursor)
         };
         if before != after || cursor != Some(before - 1) {
-            tally::skipped();
             return Ok(());
         }
         let encode = |events: &[Event]| {
             events
                 .iter()
-                .map(|event| serde_json::to_value(event).map_err(|_| identity_refused()))
+                .map(|event| {
+                    serde_json::to_value(event)
+                        .map_err(|_| cross_check_error("an event cannot be encoded"))
+                })
                 .collect::<Result<Vec<_>, _>>()
         };
         if encode(refreshed)? != encode(&full)? {
-            tally::mismatch();
             eprintln!(
                 "FU-287 cross-check: the incremental view ({} events) differs from the full read ({} events)",
                 refreshed.len(),
                 full.len()
             );
-            return Err(AdkError::new(
-                ErrorComponent::Session,
-                ErrorCategory::Internal,
-                "session.refresh_cross_check",
+            return Err(cross_check_error(
                 "the incremental session view differs from the full read",
             ));
         }
-        tally::checked();
         Ok(())
     }
 }
@@ -498,70 +567,9 @@ impl IncrementalRunnerView {
 /// stored row. The SQL `active_events` rules are the oracle.
 #[cfg(test)]
 pub(crate) fn mirrored_active_ordinals(all: &[ClassifiedEvent]) -> Vec<i64> {
-    let mut snapshot: Option<(i64, String)> = None;
-    let mut markers: HashMap<String, i64> = HashMap::new();
-    let mut has_branches = false;
-    for row in all {
-        has_branches |= !row.branch.is_empty();
-        if row.recovery_marker {
-            let latest = markers.entry(row.branch.clone()).or_insert(row.ordinal);
-            *latest = (*latest).max(row.ordinal);
-            if let Some(agent) = &row.snapshot_agent
-                && snapshot
-                    .as_ref()
-                    .is_none_or(|(ordinal, _)| *ordinal < row.ordinal)
-            {
-                snapshot = Some((row.ordinal, agent.clone()));
-            }
-        }
-    }
+    let facts = ViewFacts::from_rows(all);
     all.iter()
-        .filter(|row| ViewCache::is_active(row, snapshot.as_ref(), has_branches, &markers))
+        .filter(|row| facts.is_active(row))
         .map(|row| row.ordinal)
         .collect()
-}
-
-/// Test-only process-wide counts, for runs whose views no test holds.
-#[cfg(test)]
-pub(crate) mod tally {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static REFRESHES: AtomicU64 = AtomicU64::new(0);
-    static FALLBACKS: AtomicU64 = AtomicU64::new(0);
-    static ROWS_READ: AtomicU64 = AtomicU64::new(0);
-    static CHECKED: AtomicU64 = AtomicU64::new(0);
-    static SKIPPED: AtomicU64 = AtomicU64::new(0);
-    static MISMATCHES: AtomicU64 = AtomicU64::new(0);
-
-    pub(super) fn record(rows_read: u64, fallback: bool) {
-        REFRESHES.fetch_add(1, Ordering::Relaxed);
-        ROWS_READ.fetch_add(rows_read, Ordering::Relaxed);
-        if fallback {
-            FALLBACKS.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    pub(super) fn checked() {
-        CHECKED.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn skipped() {
-        SKIPPED.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(super) fn mismatch() {
-        MISMATCHES.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// `(refreshes, fallbacks, rows_read, cross_checked, cross_check_skipped, mismatches)`
-    pub(crate) fn totals() -> (u64, u64, u64, u64, u64, u64) {
-        (
-            REFRESHES.load(Ordering::Relaxed),
-            FALLBACKS.load(Ordering::Relaxed),
-            ROWS_READ.load(Ordering::Relaxed),
-            CHECKED.load(Ordering::Relaxed),
-            SKIPPED.load(Ordering::Relaxed),
-            MISMATCHES.load(Ordering::Relaxed),
-        )
-    }
 }
