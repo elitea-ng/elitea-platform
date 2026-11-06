@@ -465,5 +465,6 @@ fn printer_resume_payload(input: &str) -> AgentExecutionPayload {
         summary_model: None,
         platform_preamble: None,
         model_reasoning: None,
+        chat_history_refs: Vec::new(),
     }
 }

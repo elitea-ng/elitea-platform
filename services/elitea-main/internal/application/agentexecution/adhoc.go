@@ -66,8 +66,11 @@ type CurrentAdhocTarget struct {
 	Instructions        string
 	Tools               json.RawMessage
 	ChatHistory         json.RawMessage
-	ConversationMeta    json.RawMessage
-	OriginalSource      *scope.SourceReference
+	// ChatHistoryRefs names each ChatHistory entry, in order (ADR-0050
+	// decision 9c).
+	ChatHistoryRefs  []ChatHistoryRef
+	ConversationMeta json.RawMessage
+	OriginalSource   *scope.SourceReference
 	// CloudWorkspace: the conversation is a desktop Local work thread
 	// handed off to the cloud executor (CLOUD_IDLE). Its turn has the
 	// workspace tools, so an unattended grant may name workspace/git_push
@@ -466,7 +469,8 @@ func currentAdhocInput(
 		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
 		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
-		ThreadId: &threadID, Tools: toolsJSON, Application: application,
+		ChatHistoryRefs: chatHistoryRefsInput(target.ChatHistoryRefs),
+		ThreadId:        &threadID, Tools: toolsJSON, Application: application,
 		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),
 		HitlDecisions: []byte(`[]`), ExecutionGeneration: &executionGeneration,

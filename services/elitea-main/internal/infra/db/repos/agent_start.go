@@ -433,6 +433,11 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 				variables := json.RawMessage(row.ApplicationVariablesJson)
 				versionDetails := json.RawMessage(row.ApplicationVersionDetailsJson)
 				chatHistory := json.RawMessage(row.ChatHistoryJson)
+				historyRefs, refsErr := agentexecutionapp.DecodeChatHistoryRefs(chatHistory, json.RawMessage(row.ChatHistoryRefsJson))
+				if refsErr != nil {
+					return agentexecutionapp.UnsupportedCurrentAgentStart(
+						"the resolved turn carries a malformed JSON projection")
+				}
 				internalTools := json.RawMessage(row.InternalToolsJson)
 				if row.ApplicationID <= 0 {
 					return agentexecutionapp.UnsupportedCurrentAgentStart(
@@ -481,6 +486,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 						ApplicationVersionID: int64(row.ApplicationVersionID),
 						Variables:            variables,
 						ChatHistory:          chatHistory,
+						ChatHistoryRefs:      historyRefs,
 						InternalTools:        internalTools,
 					}
 					return nil
@@ -551,6 +557,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					VersionDetails:       versionDetails,
 					SourceVersionDetails: sourceVersionDetails,
 					ChatHistory:          chatHistory,
+					ChatHistoryRefs:      historyRefs,
 					InternalTools:        internalTools,
 					Release:              release,
 				}
@@ -890,6 +897,10 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 				llmSettings := json.RawMessage(row.LlmSettingsJson)
 				tools := json.RawMessage(row.ToolsJson)
 				chatHistory := json.RawMessage(row.ChatHistoryJson)
+				historyRefs, refsErr := agentexecutionapp.DecodeChatHistoryRefs(chatHistory, json.RawMessage(row.ChatHistoryRefsJson))
+				if refsErr != nil {
+					return agentexecutionapp.ErrUnsupportedCurrentAgentStart
+				}
 				conversationMeta := json.RawMessage(row.ConversationMetaJson)
 				if row.TargetParticipantID <= 0 ||
 					(request.TargetParticipantID > 0 && int64(row.TargetParticipantID) != request.TargetParticipantID) ||
@@ -914,7 +925,7 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentAdhoc(
 				target = agentexecutionapp.CurrentAdhocTarget{
 					TargetParticipantID: int64(row.TargetParticipantID),
 					LLMSettings:         llmSettings, Instructions: row.Instructions,
-					Tools: tools, ChatHistory: chatHistory, ConversationMeta: conversationMeta,
+					Tools: tools, ChatHistory: chatHistory, ChatHistoryRefs: historyRefs, ConversationMeta: conversationMeta,
 				}
 				return nil
 			},

@@ -93,6 +93,7 @@ const MAX_PUBLIC_APPLICATION_DETAILS_BYTES: usize = 32 * 1_024;
 const APPLICATION_CAPABILITY_ID: &str = "agent.execute.application.v1";
 const ADHOC_CAPABILITY_ID: &str = "agent.execute.adhoc.v1";
 const FROZEN_HISTORY_EVENT_DOMAIN: &[u8] = b"elitea.adk.frozen-history-event.v1\0";
+const HISTORY_MESSAGE_EVENT_DOMAIN: &[u8] = b"elitea.adk.history-message-event.v1\0";
 const MAX_PARALLEL_APPLICATION_CALLS: usize = 8;
 /// The user turn of an output continuation.
 ///
@@ -892,6 +893,9 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     projection: AgentEventProjectionContext,
     thread_id: String,
     chat_history: Vec<Content>,
+    /// ADR-0050 decision 9c: one reference per `chat_history` entry, or none
+    /// for an input from before field 71.
+    chat_history_refs: Vec<super::request::ChatHistoryRef>,
     context_management: ContextManagementPlan,
     step_compaction: Option<super::context_management::CompactionPolicy>,
     capability_id: &'static str,
@@ -1100,6 +1104,7 @@ impl OrdinaryNativeAgentPlan {
             projection,
             thread_id,
             chat_history: profile.chat_history().to_vec(),
+            chat_history_refs: request.payload.chat_history_refs.clone(),
             context_management: profile.context_management(),
             step_compaction: profile.step_compaction(),
             capability_id,
@@ -2864,6 +2869,7 @@ pub(super) async fn assemble_pipeline_native(
         projection,
         thread_id,
         chat_history: _,
+        chat_history_refs: _,
         context_management: _,
         step_compaction: _,
         capability_id: _,
@@ -2986,14 +2992,25 @@ async fn resolve_pipeline_start(
             let (session, created) =
                 restore_or_create_session(state.sessions.as_ref(), &plan.user_id, &plan.session_id)
                     .await?;
+            let identity = session
+                .try_identity()
+                .map_err(|_| invalid_configuration())?;
             if created {
-                let identity = session
-                    .try_identity()
-                    .map_err(|_| invalid_configuration())?;
                 seed_frozen_history(
                     state.sessions.as_ref(),
                     &identity,
                     plan.chat_history.clone(),
+                    &plan.chat_history_refs,
+                    plan.definition_digest,
+                )
+                .await?;
+            } else {
+                reconcile_history(
+                    state.sessions.as_ref(),
+                    &identity,
+                    session.as_ref(),
+                    &plan.chat_history,
+                    &plan.chat_history_refs,
                     plan.definition_digest,
                 )
                 .await?;
@@ -3432,6 +3449,7 @@ where
         projection,
         thread_id,
         chat_history,
+        chat_history_refs,
         context_management,
         step_compaction,
         capability_id: _,
@@ -3524,6 +3542,7 @@ where
             sessions.as_ref(),
             &identity,
             chat_history,
+            &chat_history_refs,
             definition_digest,
         )
         .await?;
@@ -3533,6 +3552,16 @@ where
         // every later turn of the same conversation — the same "once, at
         // session creation" shape the frozen-history seed itself uses.
         seed_fresh_session_notices(sessions.as_ref(), &identity, internal_tools, &notices).await?;
+    } else if !checkpoint_recovery {
+        reconcile_history(
+            sessions.as_ref(),
+            &identity,
+            session.as_ref(),
+            &chat_history,
+            &chat_history_refs,
+            definition_digest,
+        )
+        .await?;
     }
     tracing::Span::current().record(
         "session_bootstrap",
@@ -4042,6 +4071,7 @@ where
         projection,
         thread_id,
         chat_history: _,
+        chat_history_refs: _,
         context_management,
         // A direct resume has no model checkpoint to prepare requests in:
         // it keeps the Runner composition of the plan.
@@ -4187,29 +4217,151 @@ async fn seed_frozen_history(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
     chat_history: Vec<Content>,
+    refs: &[super::request::ChatHistoryRef],
     definition_digest: [u8; 32],
 ) -> Result<(), NativeAgentAssemblyError> {
     for (ordinal, content) in chat_history.into_iter().enumerate() {
-        let ordinal = u64::try_from(ordinal).map_err(|_| resource_exhausted())?;
-        let mut event = Event::with_id(
-            frozen_history_event_id(definition_digest, ordinal),
-            "frozen-current-history",
-        );
-        event.author = if content.role == "user" {
-            "user".to_owned()
-        } else {
-            ROOT_AGENT_NAME.to_owned()
+        // ADR-0050 decision 9c: with references, each seeded event is named
+        // by its message, so a later turn's reconciliation knows it is here.
+        let id = match refs.get(ordinal) {
+            Some(reference) => history_message_event_id(definition_digest, &reference.message_id),
+            None => frozen_history_event_id(
+                definition_digest,
+                u64::try_from(ordinal).map_err(|_| resource_exhausted())?,
+            ),
         };
-        event.llm_response.content = Some(content);
-        sessions
-            .append_event_for_identity(AppendEventRequest {
-                identity: identity.clone(),
-                event,
-            })
-            .await
-            .map_err(|_| dependency_unavailable())?;
+        append_history_event(sessions, identity, id, content).await?;
+    }
+    if !refs.is_empty() {
+        append_reconciliation_marker(sessions, identity, &[]).await?;
     }
     Ok(())
+}
+
+async fn append_history_event(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    id: String,
+    content: Content,
+) -> Result<(), NativeAgentAssemblyError> {
+    let mut event = Event::with_id(id, "frozen-current-history");
+    event.author = if content.role == "user" {
+        "user".to_owned()
+    } else {
+        ROOT_AGENT_NAME.to_owned()
+    };
+    event.llm_response.content = Some(content);
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
+}
+
+/// The session state key that says its history entries are named by message
+/// (ADR-0050 decision 9c). Its value lists the messages a session seeded
+/// before field 71 holds under ordinal ids (`fh-`), so they are never
+/// appended again. A session seeded with references lists none.
+const HISTORY_RECONCILED_KEY: &str = "elitea.history.reconciled.v1";
+
+/// A content-less event that sets [`HISTORY_RECONCILED_KEY`]; the model
+/// history skips events without content.
+async fn append_reconciliation_marker(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    covered: &[&str],
+) -> Result<(), NativeAgentAssemblyError> {
+    let mut event = Event::new("frozen-current-history");
+    "elitea-history".clone_into(&mut event.author);
+    event.actions.state_delta.insert(
+        HISTORY_RECONCILED_KEY.to_owned(),
+        serde_json::json!({"version": 1, "covered": covered}),
+    );
+    sessions
+        .append_event_for_identity(AppendEventRequest {
+            identity: identity.clone(),
+            event,
+        })
+        .await
+        .map_err(|_| dependency_unavailable())
+}
+
+/// ADR-0050 decision 9c (#1603): a restored session holds the history it was
+/// seeded with and the reader's own turns since, never what other
+/// participants wrote later. Append, labelled and once, the visible
+/// messages it has not seen; the reader's own turns already hold the rest.
+///
+/// A session seeded before field 71 names its seed by ordinal. Its first
+/// reconciliation treats the seeded prefix and everything up to the
+/// reader's last own entry as seen, records those messages in the marker,
+/// and appends only what came after; later turns match by message.
+async fn reconcile_history(
+    sessions: &dyn SessionService,
+    identity: &AdkIdentity,
+    session: &dyn adk_rust::session::Session,
+    chat_history: &[Content],
+    refs: &[super::request::ChatHistoryRef],
+    definition_digest: [u8; 32],
+) -> Result<(), NativeAgentAssemblyError> {
+    if refs.is_empty() || refs.len() != chat_history.len() {
+        return Ok(());
+    }
+    let events = session.events().all();
+    let present = events
+        .iter()
+        .map(|event| event.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let marker = session.state().get(HISTORY_RECONCILED_KEY);
+    let (start, covered) = if let Some(marker) = &marker {
+        (0, covered_messages(marker))
+    } else {
+        // The ordinal seed is at most one event per history entry.
+        let seeded = (0..refs.len())
+            .take_while(|ordinal| {
+                u64::try_from(*ordinal).is_ok_and(|ordinal| {
+                    present.contains(frozen_history_event_id(definition_digest, ordinal).as_str())
+                })
+            })
+            .count();
+        let start = refs
+            .iter()
+            .rposition(|reference| reference.readers_own)
+            .map_or(0, |index| index + 1)
+            .max(seeded);
+        let covered = refs[..start]
+            .iter()
+            .filter(|reference| !reference.readers_own)
+            .map(|reference| reference.message_id.clone())
+            .collect();
+        (start, covered)
+    };
+    for (reference, content) in refs.iter().zip(chat_history).skip(start) {
+        if reference.readers_own || covered.contains(&reference.message_id) {
+            continue;
+        }
+        let id = history_message_event_id(definition_digest, &reference.message_id);
+        if !present.contains(id.as_str()) {
+            append_history_event(sessions, identity, id, content.clone()).await?;
+        }
+    }
+    if marker.is_none() {
+        let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
+        append_reconciliation_marker(sessions, identity, &covered).await?;
+    }
+    Ok(())
+}
+
+fn covered_messages(marker: &Value) -> BTreeSet<String> {
+    marker
+        .get("covered")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// #866: append ONE role-`"tool"` event naming every internal tool this
@@ -4392,6 +4544,15 @@ async fn seed_skipped_application_children_notice(
         })
         .await
         .map_err(|_| dependency_unavailable())
+}
+
+/// One message's history event in a reader's session (ADR-0050 decision 9c).
+fn history_message_event_id(definition_digest: [u8; 32], message_id: &str) -> String {
+    let mut context = digest::Context::new(&digest::SHA256);
+    context.update(HISTORY_MESSAGE_EVENT_DOMAIN);
+    context.update(&definition_digest);
+    context.update(message_id.as_bytes());
+    format!("hm-{}", URL_SAFE_NO_PAD.encode(context.finish().as_ref()))
 }
 
 fn frozen_history_event_id(definition_digest: [u8; 32], ordinal: u64) -> String {

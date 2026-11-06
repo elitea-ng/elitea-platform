@@ -110,6 +110,31 @@ mod credential_reference_tests {
     }
 }
 
+#[cfg(test)]
+mod chat_history_ref_tests {
+    use super::chat_history_refs;
+    use crate::protocol::elitea::runtime::v1::ChatHistoryRefV1;
+
+    fn reference(id: &str) -> ChatHistoryRefV1 {
+        ChatHistoryRefV1 {
+            message_id: id.to_owned(),
+            readers_own: true,
+        }
+    }
+
+    /// ADR-0050 decision 9c: none, or one valid uuid per history entry.
+    #[test]
+    fn chat_history_refs_name_every_entry_or_none() {
+        assert_eq!(chat_history_refs(&[], 3).expect("none"), Vec::new());
+        let id = "00000000-0000-4000-8000-0000000000AB";
+        let refs = chat_history_refs(&[reference(id)], 1).expect("one");
+        assert_eq!(refs[0].message_id, id.to_ascii_lowercase());
+        assert!(refs[0].readers_own);
+        assert!(chat_history_refs(&[reference(id)], 2).is_err());
+        assert!(chat_history_refs(&[reference("not-a-uuid")], 1).is_err());
+    }
+}
+
 /// Validate every semantic field and bind it to the exact materialized input.
 ///
 /// # Errors
@@ -138,6 +163,7 @@ pub fn request_from(
             "the agent chat history must be a list",
         ));
     };
+    let chat_len = chat_history.len();
     let user_input = match parse_user_input(&message.user_input)
         .map_err(|error| error.in_input_field(InputLimitField::UserMessage))?
     {
@@ -312,6 +338,7 @@ pub fn request_from(
                 .platform_preamble
                 .map(platform_preamble_snapshot)
                 .transpose()?,
+            chat_history_refs: chat_history_refs(&message.chat_history_refs, chat_len)?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -323,6 +350,33 @@ pub fn request_from(
             }),
         },
     })
+}
+
+/// ADR-0050 decision 9c: one reference per history entry, each a uuid, or
+/// none at all (an input from before field 71).
+fn chat_history_refs(
+    refs: &[crate::protocol::elitea::runtime::v1::ChatHistoryRefV1],
+    history_len: usize,
+) -> Result<Vec<super::request::ChatHistoryRef>, AgentProtocolError> {
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    if refs.len() != history_len
+        || refs
+            .iter()
+            .any(|entry| uuid::Uuid::try_parse(&entry.message_id).is_err())
+    {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent chat history references must name every entry",
+        ));
+    }
+    Ok(refs
+        .iter()
+        .map(|entry| super::request::ChatHistoryRef {
+            message_id: entry.message_id.to_ascii_lowercase(),
+            readers_own: entry.readers_own,
+        })
+        .collect())
 }
 
 fn model_context_limits(
