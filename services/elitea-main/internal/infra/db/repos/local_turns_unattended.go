@@ -32,17 +32,23 @@ const (
 	// unattended turn a rule's ask takes its default (source timeout); only
 	// a hook's ask is a grant answer (hook_asks).
 	exchangeKindCommandApproval = "command_approval"
+	// exchangeKindBrowserSubmit is a browser pane submit or upload the
+	// grant's browser_submits answered (ADR-0048 decision 8).
+	exchangeKindBrowserSubmit = "browser_submit"
 )
 
 // grantCoversExchange reports whether the stored grant answers an exchange
-// of kind: hook asks need hook_asks and "Continue?" needs
-// continue_step_limit. No other kind is a grant answer.
+// of kind: hook asks need hook_asks, "Continue?" needs continue_step_limit
+// and a browser submit needs a browser_submits host. No other kind is a
+// grant answer.
 func grantCoversExchange(grant unattended.Grant, kind string) bool {
 	switch kind {
 	case exchangeKindCommandApproval:
 		return grant.HookAsks
 	case exchangeKindContinue:
 		return grant.ContinueStepLimit
+	case exchangeKindBrowserSubmit:
+		return len(grant.BrowserSubmits) > 0
 	}
 	return false
 }

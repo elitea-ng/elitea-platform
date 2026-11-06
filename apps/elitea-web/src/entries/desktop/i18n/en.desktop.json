@@ -1092,5 +1092,6 @@
   "workspace.browser.stop": "Stop",
   "workspace.panel.browser": "Browser",
   "workspace.approval.allowThread": "Allow for this thread",
+  "workspace.approval.allowSiteThread": "Allow for {{site}} in this thread",
   "workspace.panel.allowedThread": "Allowed for this thread"
 }

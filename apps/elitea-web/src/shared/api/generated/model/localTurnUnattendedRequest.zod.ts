@@ -46,6 +46,9 @@ import { UnattendedChainLimits } from "./unattendedChainLimits.zod";
 export const localTurnUnattendedRequestChainRootExecutionIdRegExp = new RegExp(
   "^[0-9a-f]{32}$",
 );
+export const localTurnUnattendedRequestBrowserSubmitsItemMax = 253;
+
+export const localTurnUnattendedRequestBrowserSubmitsMax = 32;
 
 export const LocalTurnUnattendedRequest = zod
   .object({
@@ -80,6 +83,13 @@ export const LocalTurnUnattendedRequest = zod
       .optional()
       .describe(
         "Client contract 1.31 (ADR-0045 decision 11). Main writes a run brief with the small model and checks the goal before the chain ends as completed. Absent is true; false turns the brief and the check off for this chain.",
+      ),
+    browser_submits: zod
+      .array(zod.string().max(localTurnUnattendedRequestBrowserSubmitsItemMax))
+      .max(localTurnUnattendedRequestBrowserSubmitsMax)
+      .optional()
+      .describe(
+        "Client contract 1.38 (ADR-0048 decision 8). The hosts on which the desktop browser pane's form submits and uploads are answered by the grant (exact lowercase host names, no scheme, port, wildcard or address). A buy, pay, delete, send or sign control and a download are never the grant's. An invalid host answers 422 `unattended_grant_refused` (field `browser_submits`).",
       ),
     kind: zod
       .string()

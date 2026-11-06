@@ -92,6 +92,12 @@ The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `a
 | `local_work_computer_use` | Off | A local turn may see and use the user's other applications (macOS, through the accessibility interface). |
 | `local_work_computer_use_apps_allow` | Empty | When not empty, the only applications computer use may touch. |
 | `local_work_computer_use_apps_deny` | Empty | Applications computer use never touches, added to the built-in list. |
+| `local_work_browser` | On | The desktop's browser pane exists for local threads. |
+| `local_work_browser_agent` | On | The agent may drive the browser pane. Off, the person can still browse in it. |
+| `local_work_browser_allow_domains` | Empty | When not empty, the only sites the pane loads. |
+| `local_work_browser_deny_domains` | Empty | Sites the pane never loads. |
+| `local_work_browser_http` | Off | Plain `http` pages may load. |
+| `local_work_browser_private_network` | Off | Local and private network addresses (`localhost`, `192.168.x.x`, `.local` names) may load. Turn it on for developers who test a local app. |
 
 **Computer use.** Turning `local_work_computer_use` on lets people turn it on for their own device. It is still off on each device until the person turns it on in Settings and grants the macOS Accessibility permission. The agent then asks per application: once to see an app, and again to use it. The person can allow an app for one thread or always. The agent asks every time before an action that sends, deletes, buys, pays, signs, submits or confirms, and it never remembers that answer. In plan mode the agent can only look. A scheduled or other unattended run never acts on an application without a person at the machine: every action is asked, even on an app the person allowed always or for the thread, and the request waits for an answer, then is declined. An unattended run can still see the apps the person allowed. Every request names the application it is about, except the list of running applications.
 
@@ -105,6 +111,10 @@ The app lists take bundle ids, such as `com.apple.mail`. A prefix such as `com.e
 - Screen Time.
 - The security panes of System Settings: Privacy & Security, Touch ID & Password, Users & Groups, Passwords, Lock Screen, and Login Items & Extensions. The agent may use the other panes of System Settings, but only when the app can tell which pane is open. If it cannot, System Settings is refused.
 </Accordion>
+
+**Browser pane.** The desktop app has a browser pane beside each local thread. The person and the agent use the same page. The site lists take host names: `example.com` covers that site and every site under it, and `*.example.com` covers only the sites under it. Each list holds at most 200 entries, with no scheme, port or IP address; the save refuses anything else. A deny entry wins over an allow entry. A non-empty allow list is a ceiling: the pane loads nothing else, including local addresses. Link-local addresses (the cloud metadata endpoints) never load. A change applies to panes opened after it.
+
+The agent reads pages and navigates without asking. It asks before it submits a form, uploads a file or downloads one; the person can allow that for the site for the rest of the thread. It asks every time before it clicks a control that buys, pays, deletes, sends or signs, and it never remembers that answer, even in bypass mode. In plan mode the agent can only read the page. An unattended run's grant can name sites in `browser_submits`: on those sites the run submits forms and uploads files without asking. Every other ask waits for a person and is then declined. The agent never types into a password or card field, and sign-in is the person's.
 
 <Accordion title="Authentication, LLM Proxy, MCP Servers, Branding (dedicated pages)">
 These sections carry credentials or need a row-editor shape a flat form cannot express, so each is a page of its own: see [Authentication](/admin/authentication), [LLM proxy](/admin/llm-proxy), and [Branding](/admin/branding). MCP Servers configures the pre-built MCP server catalogue; see the MCP integration guides for what that catalogue offers.

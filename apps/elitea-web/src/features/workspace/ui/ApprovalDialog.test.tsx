@@ -104,6 +104,21 @@ describe('ApprovalDialog', () => {
     expect(onRespond).toHaveBeenCalledWith('r1', 'allow_thread');
   });
 
+  it('names the site on a browser submit that can be allowed for the thread', async () => {
+    const onRespond = vi.fn();
+    const user = userEvent.setup();
+    renderWithTheme(
+      <ApprovalDialog
+        request={{ ...REQUEST, tool: 'browser_click', can_remember: false, can_remember_thread: true, site: 'shop.example.com' }}
+        queued={0}
+        onRespond={onRespond}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Allow for shop.example.com in this thread' }));
+    expect(onRespond).toHaveBeenCalledWith('r1', 'allow_thread');
+  });
+
   it('says "Allow for this session" when the choice lasts the session', () => {
     renderWithTheme(<ApprovalDialog request={{ ...REQUEST, remember_scope: 'session' }} queued={0} onRespond={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument();

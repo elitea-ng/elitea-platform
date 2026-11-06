@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.37"
+  x-elitea-client-contract: "1.38"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -5056,6 +5056,17 @@ components:
             brief with the small model and checks the goal before the chain
             ends as completed. Absent is true; false turns the brief and the
             check off for this chain.
+        browser_submits:
+          type: array
+          maxItems: 32
+          items: { type: string, maxLength: 253 }
+          description: >-
+            Client contract 1.38 (ADR-0048 decision 8). The hosts on which the
+            desktop browser pane's form submits and uploads are answered by
+            the grant (exact lowercase host names, no scheme, port, wildcard
+            or address). A buy, pay, delete, send or sign control and a
+            download are never the grant's. An invalid host answers 422
+            `unattended_grant_refused` (field `browser_submits`).
         kind:
           type: string
           description: >-
@@ -17648,6 +17659,46 @@ components:
             always adds its own platform list (itself, password managers,
             terminals, Screen Time, the login window and the security panes of
             System Settings), which no policy removes. Same bounds.
+        browser:
+          type: boolean
+          description: >-
+            Client contract 1.38 (ADR-0048 decision 8). The desktop browser
+            pane and its toolset exist for local threads. Default true. Only
+            with `allowed`.
+        browser_agent:
+          type: boolean
+          description: >-
+            Client contract 1.38. The agent may drive the browser pane; off,
+            the person can still browse. Default true. Only with `browser`.
+        browser_allow_domains:
+          type: array
+          maxItems: 200
+          items: { type: string, maxLength: 253 }
+          description: >-
+            Client contract 1.38. When non-empty, the only hosts the pane
+            loads: `example.com` (it and every host under it) or
+            `*.example.com` (only the hosts under it), lowercase, no scheme,
+            port or address. A ceiling, not an approval. A stored list whose
+            every entry is invalid is sent as `["no-host.elitea.invalid"]`,
+            never as no ceiling.
+        browser_deny_domains:
+          type: array
+          maxItems: 200
+          items: { type: string, maxLength: 253 }
+          description: >-
+            Client contract 1.38. Hosts the pane never loads, in the same
+            form. A deny wins over an allow.
+        browser_http:
+          type: boolean
+          description: >-
+            Client contract 1.38. Plain `http` pages may load. Default false.
+        browser_private_network:
+          type: boolean
+          description: >-
+            Client contract 1.38. Loopback and private addresses (and the
+            names private by definition, `localhost`, `.local`, ...) may
+            load. Link-local and the other forbidden ranges never do.
+            Default false.
     InvalidQueryParameterError:
       type: object
       description: >-

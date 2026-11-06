@@ -2575,13 +2575,25 @@ UI's, outside the page rectangle. At most four pages live at once (the
 least recently used is closed, `closed` event); the site data stays.
 
 **Navigation guard** (top level, frames, redirects and new windows):
-`https:` always; `http:` only with the host setting `browser_allow_http`
-(default false; replaced by the policy key `local_work_browser_http` in
-#1590); `about:blank`/`about:srcdoc`; `blob:` judged by its origin.
-Refused: every other scheme (`file:`, `tauri:`, `asset:`, `javascript:`,
-`data:`, …), user info in the URL, `localhost`/`*.localhost`/`*.local`/
-`*.internal`/`*.home.arpa`, and IP literals the egress guard classes as
-private or forbidden (`libs/rust/egress-guard`). A new window
+`https:` always; `http:` only with the client policy key
+`local_work_browser_http` (ADR-0048 decision 8, #1590); `about:blank`/
+`about:srcdoc`; `blob:` judged by its origin. Refused: every other scheme
+(`file:`, `tauri:`, `asset:`, `javascript:`, `data:`, …), user info in the
+URL, `localhost`/`*.localhost`/`*.local`/`*.internal`/`*.home.arpa` and IP
+literals the egress guard classes as private (unless
+`local_work_browser_private_network`) or forbidden
+(`libs/rust/egress-guard`), and a host that `local_work_browser_deny_domains`
+names or a non-empty `local_work_browser_allow_domains` does not (`refused`
+reason `domain`). With `local_work_browser` (or local work) off,
+`browser_open` rejects `browser_disabled`. The agent's browser tools are
+offered only with `local_work_browser_agent` too; each call is decided by the
+rules engine (`elitea-local-tools` approvals, `BrowserRead`,
+`BrowserNavigate`, `BrowserAct`): a submit, upload or download is an
+`approval_request` with `can_remember_thread` and `site` (answered
+`allow_thread`: allowed for that host for the rest of the thread), a buy,
+pay, delete, send or sign control is asked every time, plan mode denies
+navigating and acting. An unattended grant's `browser_submits` answers a
+submit or upload on its hosts (exchange kind `browser_submit`). A new window
 (`target=_blank`, `window.open`) is not opened: the page navigates there,
 the opener kept in history.
 

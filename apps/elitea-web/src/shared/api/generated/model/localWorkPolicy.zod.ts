@@ -42,6 +42,14 @@
  */
 import * as zod from "zod";
 
+export const localWorkPolicyBrowserAllowDomainsItemMax = 253;
+
+export const localWorkPolicyBrowserAllowDomainsMax = 200;
+
+export const localWorkPolicyBrowserDenyDomainsItemMax = 253;
+
+export const localWorkPolicyBrowserDenyDomainsMax = 200;
+
 export const LocalWorkPolicy = zod
   .object({
     allowed: zod.boolean().describe("Local work is permitted. Default false."),
@@ -142,6 +150,44 @@ export const LocalWorkPolicy = zod
       .optional()
       .describe(
         "Client contract 1.36. Applications computer use never reads or acts on, by bundle id or prefix, whatever the allow list says. The app always adds its own platform list (itself, password managers, terminals, Screen Time, the login window and the security panes of System Settings), which no policy removes. Same bounds.",
+      ),
+    browser: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.38 (ADR-0048 decision 8). The desktop browser pane and its toolset exist for local threads. Default true. Only with `allowed`.",
+      ),
+    browser_agent: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.38. The agent may drive the browser pane; off, the person can still browse. Default true. Only with `browser`.",
+      ),
+    browser_allow_domains: zod
+      .array(zod.string().max(localWorkPolicyBrowserAllowDomainsItemMax))
+      .max(localWorkPolicyBrowserAllowDomainsMax)
+      .optional()
+      .describe(
+        'Client contract 1.38. When non-empty, the only hosts the pane loads: `example.com` (it and every host under it) or `*.example.com` (only the hosts under it), lowercase, no scheme, port or address. A ceiling, not an approval. A stored list whose every entry is invalid is sent as `["no-host.elitea.invalid"]`, never as no ceiling.',
+      ),
+    browser_deny_domains: zod
+      .array(zod.string().max(localWorkPolicyBrowserDenyDomainsItemMax))
+      .max(localWorkPolicyBrowserDenyDomainsMax)
+      .optional()
+      .describe(
+        "Client contract 1.38. Hosts the pane never loads, in the same form. A deny wins over an allow.",
+      ),
+    browser_http: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.38. Plain `http` pages may load. Default false.",
+      ),
+    browser_private_network: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.38. Loopback and private addresses (and the names private by definition, `localhost`, `.local`, ...) may load. Link-local and the other forbidden ranges never do. Default false.",
       ),
   })
   .describe(

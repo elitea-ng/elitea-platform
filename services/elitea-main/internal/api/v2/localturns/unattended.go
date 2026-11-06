@@ -19,6 +19,9 @@ type unattendedBody struct {
 	// goal_not_met (ADR-0045 decision 11) or resume (decision 7). Absent is
 	// continue.
 	Kind string `json:"kind"`
+	// BrowserSubmits: the hosts on which the desktop browser pane submits
+	// and uploads without asking (ADR-0048 decision 8, client contract 1.38).
+	BrowserSubmits []string `json:"browser_submits"`
 }
 
 func (b *unattendedBody) request() *unattended.Request {
@@ -28,6 +31,7 @@ func (b *unattendedBody) request() *unattended.Request {
 	request := b.Request()
 	request.ChainRootExecutionID = b.ChainRootExecutionID
 	request.Kind = b.Kind
+	request.BrowserSubmits = append(request.BrowserSubmits, b.BrowserSubmits...)
 	return &request
 }
 

@@ -435,6 +435,10 @@ impl UiPrompt {
 /// tool result bounds it the same way).
 const FEEDBACK_BYTES: usize = elitea_local_tools::session::MAX_FEEDBACK_BYTES;
 
+/// The exchange kind of a browser pane submit or upload answered by the
+/// unattended grant's `browser_submits` (ADR-0048 decision 8).
+pub const BROWSER_SUBMIT_KIND: &str = "browser_submit";
+
 /// The answer of a remote confirmation that the unattended grant covers
 /// (`remote_confirmations`): approved, `source: "grant"`.
 fn granted_confirmation(
@@ -491,10 +495,17 @@ impl AnswerSink for UiPrompt {
         } else {
             TIMEOUT_ACTION
         };
+        // A browser submit the grant's `browser_submits` answered has a kind
+        // of its own: the platform's ledger checks it against that part.
+        let kind = if call.browser.is_some() && decision.source == Source::Grant {
+            BROWSER_SUBMIT_KIND
+        } else {
+            "command_approval"
+        };
         binding.recorder.hitl_exchange(exchange_of(
             &request,
             &uuid::Uuid::new_v4().to_string(),
-            "command_approval",
+            kind,
             &clean(&title),
             action,
             source,
@@ -1251,6 +1262,20 @@ mod tests {
         );
         assert_eq!(exchanges[0]["kind"], "command_approval");
         assert_eq!(exchanges[0]["prompt"], "run_command: git reset --hard");
+
+        // A browser submit the grant answered is a `browser_submit`.
+        let submit = ToolCall {
+            browser: Some(elitea_local_tools::approvals::BrowserTarget {
+                tool: "browser_click".into(),
+                host: Some("shop.example.com".into()),
+                ..Default::default()
+            }),
+            ..ToolCall::new(ToolKind::BrowserAct)
+        };
+        prompt.answered("c5", &submit, &decision(Verdict::Allow, Source::Grant));
+        let exchanges = binding.recorder.hitl_exchanges();
+        assert_eq!(exchanges[2]["kind"], BROWSER_SUBMIT_KIND);
+        assert_eq!(exchanges[2]["source"], SOURCE_GRANT);
     }
 
     /// A question with a wait that nobody answers is closed: the card goes
