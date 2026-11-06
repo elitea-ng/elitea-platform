@@ -102,7 +102,7 @@ pub mod untrusted;
 pub mod workspace_archive;
 pub mod workspace_tools;
 
-/// The patched-adk guard. The three builders below exist only in the patched
+/// The patched-adk guard. The builders below exist only in the patched
 /// adk 2.3.0 crates in `libs/rust/vendor` (the registry releases have
 /// none of them), and these constants are compiled into every build of this crate,
 /// not only its tests. So a workspace or host that links the runtime without
@@ -112,6 +112,10 @@ const _: fn(adk_agent::LlmAgentBuilder, bool) -> adk_agent::LlmAgentBuilder =
     adk_agent::LlmAgentBuilder::retain_prepared_history;
 const _: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
     adk_runner::Runner::with_session_event_refresh;
+const _: fn(
+    adk_runner::Runner,
+    std::sync::Arc<dyn adk_runner::SessionEventRefresh>,
+) -> adk_runner::Runner = adk_runner::Runner::with_session_event_refresher;
 const _: fn(
     adk_agent::LlmAgentBuilder,
     std::sync::Arc<dyn adk_agent::SteeringSource>,

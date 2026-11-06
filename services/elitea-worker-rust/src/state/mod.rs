@@ -16,8 +16,10 @@ pub(crate) use postgres_checkpointer::CheckpointWriterAuthority;
 #[cfg(test)]
 pub(crate) use postgres_checkpointer::derive_child_thread_id;
 pub use postgres_checkpointer::{CheckpointLimits, PostgresCheckpointError, PostgresCheckpointer};
-pub(crate) use postgres_session::SessionWriterAuthority;
+pub(crate) use postgres_session::{ClassifiedEvent, SessionWriterAuthority, refresh_span};
 pub use postgres_session::{PostgresSessionError, PostgresSessionService, SessionLimits};
+#[cfg(test)]
+pub(crate) use postgres_session::{active_events_sql, classified_events_sql};
 #[cfg(test)]
 pub(crate) use writer_lease::TestStateWriterLease;
 pub(crate) use writer_lease::{StateWriterLease, StateWriterLeaseLost, TurnSteering};

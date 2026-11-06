@@ -15,6 +15,20 @@ use async_stream::stream;
 use std::{collections::HashMap, sync::Arc};
 use tokio_util::sync::CancellationToken;
 
+/// Elitea patch: the complete model view a host serves after each persisted event.
+///
+/// With [`Runner::with_session_event_refresh`] enabled, the runner replaces its
+/// in-memory events after every persisted non-partial event. When a host
+/// supplies this hook ([`Runner::with_session_event_refresher`]) the runner asks
+/// it for the view instead of re-reading the whole session. The returned
+/// events must equal what a full `SessionService::get` of the same identity
+/// would return. Unset, the runner re-reads the session as before.
+#[async_trait::async_trait]
+pub trait SessionEventRefresh: Send + Sync {
+    /// The complete, identity-scoped model view of the session.
+    async fn refreshed_events(&self, identity: &adk_core::AdkIdentity) -> Result<Vec<Event>>;
+}
+
 /// A run currently in flight, tracked so it can be interrupted.
 ///
 /// Keyed by run ID rather than session ID: a session ID is only unique within an
@@ -161,6 +175,8 @@ pub struct RunnerConfig {
 /// [`Runner::new()`].
 pub struct Runner {
     refresh_session_events: bool,
+    /// Elitea patch: see [`SessionEventRefresh`].
+    session_event_refresher: Option<Arc<dyn SessionEventRefresh>>,
     /// Elitea patch: see [`Runner::with_unanswered_tool_calls_kept`].
     keep_unanswered_tool_calls: bool,
     app_name: String,
@@ -208,6 +224,13 @@ impl Runner {
         self
     }
 
+    /// Elitea patch: serve the refreshed view from `refresher` instead of a
+    /// full session read. Only used while the session event refresh is enabled.
+    pub fn with_session_event_refresher(mut self, refresher: Arc<dyn SessionEventRefresh>) -> Self {
+        self.session_event_refresher = Some(refresher);
+        self
+    }
+
     /// Elitea patch: keep unanswered function calls in the model history.
     ///
     /// ADK 2.3.0 omits a call without a result once a later user turn exists.
@@ -221,9 +244,14 @@ impl Runner {
 
     async fn refresh_events_from_storage(
         service: &dyn SessionService,
+        refresher: Option<&dyn SessionEventRefresh>,
         identity: &adk_core::AdkIdentity,
         session: &crate::context::MutableSession,
     ) -> Result<()> {
+        if let Some(refresher) = refresher {
+            session.replace_events(refresher.refreshed_events(identity).await?);
+            return Ok(());
+        }
         let current = service.get(adk_session::GetRequest {
             app_name: identity.app_name.to_string(),
             user_id: identity.user_id.to_string(),
@@ -288,6 +316,7 @@ impl Runner {
             root_agent: config.agent,
             session_service: config.session_service,
             refresh_session_events: false,
+            session_event_refresher: None,
             keep_unanswered_tool_calls: false,
             #[cfg(feature = "artifacts")]
             artifact_service: config.artifact_service,
@@ -432,6 +461,7 @@ impl Runner {
         let typed_app_name = AppName::try_from(app_name.clone())?;
         let session_service = self.session_service.clone();
         let refresh_session_events = self.refresh_session_events;
+        let session_event_refresher = self.session_event_refresher.clone();
         let keep_unanswered_tool_calls = self.keep_unanswered_tool_calls;
         let root_agent = self.root_agent.clone();
         #[cfg(feature = "artifacts")]
@@ -1053,7 +1083,7 @@ impl Runner {
                             }
                         if refresh_session_events && !event.llm_response.partial {
                             if let Err(error) = Self::refresh_events_from_storage(
-                                session_service.as_ref(), &identity, ctx.mutable_session(),
+                                session_service.as_ref(), session_event_refresher.as_deref(), &identity, ctx.mutable_session(),
                             ).await {
                                 #[cfg(feature = "plugins")]
                                 if let Some(manager) = plugin_manager.as_ref() {
@@ -1337,7 +1367,7 @@ impl Runner {
                                 }
                             if refresh_session_events && !event.llm_response.partial {
                                 if let Err(error) = Self::refresh_events_from_storage(
-                                    session_service.as_ref(), &identity, transfer_ctx.mutable_session(),
+                                    session_service.as_ref(), session_event_refresher.as_deref(), &identity, transfer_ctx.mutable_session(),
                                 ).await {
                                     #[cfg(feature = "plugins")]
                                     if let Some(manager) = plugin_manager.as_ref() {

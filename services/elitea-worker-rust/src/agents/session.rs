@@ -328,6 +328,9 @@ pub(crate) struct OrdinaryRuntimeBindings {
     /// discovery runs after a tool call, outside any egress scope, so it is
     /// handed the run here; never set, nothing public is reached.
     egress: Arc<elitea_agent_runtime::egress::RunEgress>,
+    /// FU-287: the durable root session the Runner refreshes by ordinal.
+    /// Unset (`InvocationLocal`, tests), the Runner re-reads it whole.
+    event_source: Option<Arc<PostgresSessionService>>,
 }
 
 impl OrdinaryRuntimeBindings {
@@ -353,7 +356,15 @@ impl OrdinaryRuntimeBindings {
             tool_call_confirmation: None,
             steering: None,
             egress: elitea_agent_runtime::egress::RunEgress::closed(),
+            event_source: None,
         }
+    }
+
+    /// Refresh the Runner's view from this durable session by ordinal (FU-287).
+    #[must_use]
+    pub(crate) fn with_event_source(mut self, source: Option<Arc<PostgresSessionService>>) -> Self {
+        self.event_source = source;
+        self
     }
 
     /// The run whose egress policy delegated-auth discovery runs under.
@@ -1304,7 +1315,7 @@ impl NativeSessionBackend {
     ) -> Result<Arc<dyn SessionService>, NativeAgentAssemblyError> {
         self.open_with_model_scopes(authority, state_writer_lease, plan)
             .await
-            .map(|(sessions, _)| sessions)
+            .map(|(sessions, ..)| sessions)
     }
 
     pub(super) async fn open_with_model_scopes(
@@ -1316,6 +1327,7 @@ impl NativeSessionBackend {
         (
             Arc<dyn SessionService>,
             super::model_scope::ModelScopeSessions,
+            Option<Arc<PostgresSessionService>>,
         ),
         NativeAgentAssemblyError,
     > {
@@ -1335,7 +1347,7 @@ impl NativeSessionBackend {
                 let scopes = plan.model_scope_sessions(
                     super::model_scope::ModelScopeBackend::Local(service.clone()),
                 );
-                Ok((service, scopes))
+                Ok((service, scopes, None))
             }
             Self::Postgres { pool, limits } => {
                 let resource_project_id = claim
@@ -1388,7 +1400,7 @@ impl NativeSessionBackend {
                 let scopes = plan.model_scope_sessions(
                     super::model_scope::ModelScopeBackend::Postgres(service.clone()),
                 );
-                Ok((service, scopes))
+                Ok((service.clone(), scopes, Some(service)))
             }
             #[cfg(test)]
             Self::Injected(service) => {
@@ -1396,7 +1408,7 @@ impl NativeSessionBackend {
                 let scopes = plan.model_scope_sessions(
                     super::model_scope::ModelScopeBackend::Local(service.clone()),
                 );
-                Ok((Arc::clone(service), scopes))
+                Ok((Arc::clone(service), scopes, None))
             }
         }
     }
@@ -1534,6 +1546,7 @@ impl NativePipelineStateBackend {
                 drop(claim);
                 drop(state_writer_lease);
                 Ok(PipelineStateServices {
+                    event_source: None,
                     sessions: Arc::clone(sessions),
                     checkpointer: Arc::clone(checkpointer),
                     parallel_authority: None,
@@ -1669,6 +1682,7 @@ async fn activate_pipeline_postgres(
     let authority: Arc<dyn super::graph::ParallelCheckpointAuthority> = holder;
     let checkpointer: Arc<dyn Checkpointer> = authority.clone();
     Ok(PipelineStateServices {
+        event_source: Some(Arc::clone(&sessions)),
         sessions,
         checkpointer,
         parallel_authority: Some(authority),
@@ -1680,6 +1694,8 @@ async fn activate_pipeline_postgres(
 
 pub(super) struct PipelineStateServices {
     sessions: Arc<dyn SessionService>,
+    /// FU-287: the durable root session, when the Runner refreshes it by ordinal.
+    event_source: Option<Arc<PostgresSessionService>>,
     checkpointer: Arc<dyn Checkpointer>,
     parallel_authority: Option<Arc<dyn super::graph::ParallelCheckpointAuthority>>,
     node_recovery_authority:
@@ -2342,6 +2358,8 @@ pub(super) struct RunnerSessionService {
     completion: Option<Arc<dyn DurableModelCompletion>>,
     omit_empty_user_input: bool,
     compaction_view: Option<([u8; 32], String)>,
+    /// FU-287: the durable session the Runner's refresh reads incrementally.
+    event_source: Option<Arc<PostgresSessionService>>,
 }
 
 impl RunnerSessionService {
@@ -2354,6 +2372,33 @@ impl RunnerSessionService {
             completion,
             omit_empty_user_input: false,
             compaction_view: None,
+            event_source: None,
+        }
+    }
+
+    /// FU-287: refresh the Runner's view from this durable session by ordinal
+    /// instead of re-reading it whole. Without it, or off `PostgreSQL`, the
+    /// Runner re-reads through [`SessionService::get`] as before.
+    pub(super) fn with_event_source(mut self, source: Option<Arc<PostgresSessionService>>) -> Self {
+        self.event_source = source;
+        self
+    }
+
+    /// Give `runner` the incremental refresh of this service's session.
+    pub(super) fn refreshing(
+        &self,
+        runner: adk_rust::runner::Runner,
+        identity: AdkIdentity,
+    ) -> adk_rust::runner::Runner {
+        match &self.event_source {
+            Some(source) => runner.with_session_event_refresher(Arc::new(
+                super::runner_view::IncrementalRunnerView::new(
+                    Arc::clone(source),
+                    identity,
+                    self.compaction_view.clone(),
+                ),
+            )),
+            None => runner,
         }
     }
 
@@ -2908,6 +2953,7 @@ pub(super) async fn assemble_pipeline_native(
     let graph = definition
         .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
         .map_err(|error| pipeline_configuration_error(&error))?;
+    let root_identity = plan.session_identity()?;
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -2956,14 +3002,18 @@ pub(super) async fn assemble_pipeline_native(
     });
     // A failed dispatch record ends the run even when no model step follows it.
     let agent = dispatch_abort.guard_agent(agent);
+    let runner_sessions = Arc::new(
+        RunnerSessionService::new(state.sessions, None)
+            .with_recovery(checkpoint_recovery)
+            .with_event_source(state.event_source),
+    );
     let runner = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(Arc::new(
-            RunnerSessionService::new(state.sessions, None).with_recovery(checkpoint_recovery),
-        ))
+        .session_service(runner_sessions.clone())
         .build()
         .map_err(|_| invalid_configuration())?;
+    let runner = runner_sessions.refreshing(runner, root_identity);
     // FU-243: a pipeline root names what its Agent nodes left out, like an ordinary root.
     let projection =
         projection.with_skipped_capabilities(super::skipped_capabilities::skipped_capabilities(
@@ -3488,6 +3538,8 @@ async fn assemble_ordinary_with_checkpoint_mode<M>(
 where
     M: BoundOrdinaryAgentModel,
 {
+    let root_identity = plan.session_identity()?;
+    let event_source = runtime.event_source.clone();
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -3676,18 +3728,20 @@ where
     let runner_sessions = Arc::new(
         RunnerSessionService::new(sessions, model.durable_completion())
             .with_recovery(recovering)
-            .with_history_scope(definition_digest, ROOT_AGENT_NAME),
+            .with_history_scope(definition_digest, ROOT_AGENT_NAME)
+            .with_event_source(event_source),
     );
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(runner_sessions);
+        .session_service(runner_sessions.clone());
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }
     let runner = runner_builder
         .build()
         .map_err(|_| invalid_configuration())?;
+    let runner = runner_sessions.refreshing(runner, root_identity);
     let invocation = if parallel {
         NativeAgentInvocation::new_with_run_config(
             runner,
@@ -3768,6 +3822,8 @@ fn build_runtime_agent(
         tool_call_confirmation,
         steering,
         egress,
+        // Read by the Runner assembly before the runtime is taken apart.
+        event_source: _,
     } = runtime;
     let mut delegated_authorization = delegated_authorization;
     let (model, toolsets) = crate::toolkits::bind_authorization_model_tools(
@@ -3972,6 +4028,8 @@ async fn prepare_direct_resume(
         tool_call_confirmation,
         steering,
         egress,
+        // Read by the Runner assembly before the runtime is taken apart.
+        event_source: _,
     } = runtime;
     let events = stored.events().all();
     let resolved = match start {
@@ -4111,6 +4169,8 @@ where
     M: BoundOrdinaryAgentModel,
 {
     let journal = plan.dispatch_journal(Arc::clone(&sessions))?;
+    let root_identity = plan.session_identity()?;
+    let event_source = runtime.event_source.clone();
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -4171,19 +4231,22 @@ where
     )?;
     projector.attach_grounding(model.grounding_sources());
     let agent = journal.abort().guard_agent(agent);
+    let runner_sessions = Arc::new(
+        RunnerSessionService::new(sessions, model.durable_completion())
+            .with_history_scope(definition_digest, ROOT_AGENT_NAME)
+            .with_event_source(event_source),
+    );
     let mut runner_builder = adk_rust::runner::Runner::builder()
         .app_name(APP_NAME)
         .agent(agent)
-        .session_service(Arc::new(
-            RunnerSessionService::new(sessions, model.durable_completion())
-                .with_history_scope(definition_digest, ROOT_AGENT_NAME),
-        ));
+        .session_service(runner_sessions.clone());
     if let Some(compaction) = context_compaction {
         runner_builder = runner_builder.context_compaction(compaction);
     }
     let runner = runner_builder
         .build()
         .map_err(|_| invalid_configuration())?;
+    let runner = runner_sessions.refreshing(runner, root_identity);
     Ok(AssembledNativeAgentInvocation::new(
         NativeAgentInvocation::new_direct_hitl(runner, user_id, session_id, prepared.run_input),
         projector,
@@ -5084,6 +5147,7 @@ mod fanout_start_tests {
             checkpointer.save(&parked).await.expect("parked frontier");
         }
         let state = PipelineStateServices {
+            event_source: None,
             sessions: Arc::clone(&sessions),
             checkpointer,
             parallel_authority: None,

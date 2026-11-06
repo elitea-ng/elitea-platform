@@ -535,7 +535,7 @@ fn starts_with(contents: &[Content], prefix: &[Content]) -> bool {
             .all(|(a, b)| a.role == b.role && a.parts == b.parts)
 }
 
-fn extend_digest(seed: [u8; 32], contents: &[Content]) -> adk_rust::Result<[u8; 32]> {
+pub(super) fn extend_digest(seed: [u8; 32], contents: &[Content]) -> adk_rust::Result<[u8; 32]> {
     let mut value = seed;
     for content in contents {
         let mut canonical = serde_json::to_value(content).map_err(|_| invalid_compaction())?;
