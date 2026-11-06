@@ -176,9 +176,11 @@ func TestPostgresChatHistoryRefsNameEveryEntryAndMarkTheReadersOwn(t *testing.T)
 	queries := sqlcgen.New(tx)
 	if _, err := tx.Exec(t.Context(), `
 INSERT INTO chat_participants (id, uuid, entity_name, entity_meta, meta) VALUES
-    (26, 'a0000000-0000-4000-8000-000000001604', 'application', '{"id":32,"project_id":1}'::jsonb, '{"name":"CI Doctor"}'::json);
+    (26, 'a0000000-0000-4000-8000-000000001604', 'application', '{"id":32,"project_id":1}'::jsonb, '{"name":"CI Doctor"}'::json),
+    (27, '90000000-0000-4000-8000-000000001604', 'user', '{"id":12}'::jsonb, '{"user_name":"Sam"}'::json);
 INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at) VALUES
-    (1, 26, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
+    (1, 26, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 27, '{}'::jsonb, now() AT TIME ZONE 'UTC');`); err != nil {
 		t.Fatal(err)
 	}
 	// A question to the reader (21), its answer, and a question to the peer
@@ -187,9 +189,13 @@ INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_se
 	insertPostgresHistoryGroup(t, tx, 1603022, 21, toReader, "Step 3 failed.", 3)
 	toPeer := insertPostgresHistoryGroup(t, tx, 1603023, 20, 0, "can you fix it?", 2)
 	insertPostgresHistoryGroup(t, tx, 1603024, 26, toPeer, "Fixed.", 1)
+	// Another person's turn with the reader lives in that person's session,
+	// not the asker's: it is not the reader's own here.
+	fromSam := insertPostgresHistoryGroup(t, tx, 1603025, 27, 0, "and the docs?", 1)
+	insertPostgresHistoryGroup(t, tx, 1603026, 21, fromSam, "Also fixed.", 0)
 	if _, err := tx.Exec(t.Context(), `
-UPDATE chat_message_group SET sent_to_id = CASE id WHEN 1603021 THEN 21 ELSE 26 END
-WHERE id IN (1603021, 1603023)`); err != nil {
+UPDATE chat_message_group SET sent_to_id = CASE id WHEN 1603023 THEN 26 ELSE 21 END
+WHERE id IN (1603021, 1603023, 1603025)`); err != nil {
 		t.Fatal(err)
 	}
 	target, err := queries.ResolveCurrentApplicationTurn(t.Context(), sqlcgen.ResolveCurrentApplicationTurnParams{
@@ -208,11 +214,11 @@ WHERE id IN (1603021, 1603023)`); err != nil {
 	var uuids []string
 	if err := tx.QueryRow(t.Context(), `
 SELECT array_agg(uuid::text ORDER BY id) FROM chat_message_group
-WHERE id BETWEEN 1603021 AND 1603024`).Scan(&uuids); err != nil {
+WHERE id BETWEEN 1603021 AND 1603026`).Scan(&uuids); err != nil {
 		t.Fatal(err)
 	}
-	own := []bool{true, true, false, false}
-	if len(refs) != 4 {
+	own := []bool{true, true, false, false, false, false}
+	if len(refs) != 6 {
 		t.Fatalf("refs=%+v", refs)
 	}
 	for index, ref := range refs {

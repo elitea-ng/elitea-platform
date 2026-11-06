@@ -110,6 +110,31 @@ mod credential_reference_tests {
     }
 }
 
+#[cfg(test)]
+mod chat_history_ref_tests {
+    use super::chat_history_refs;
+    use crate::protocol::elitea::runtime::v1::ChatHistoryRefV1;
+
+    fn reference(id: &str) -> ChatHistoryRefV1 {
+        ChatHistoryRefV1 {
+            message_id: id.to_owned(),
+            readers_own: true,
+        }
+    }
+
+    /// ADR-0050 decision 9c: none, or one valid uuid per history entry.
+    #[test]
+    fn chat_history_refs_name_every_entry_or_none() {
+        assert_eq!(chat_history_refs(&[], 3).expect("none"), Vec::new());
+        let id = "00000000-0000-4000-8000-0000000000AB";
+        let refs = chat_history_refs(&[reference(id)], 1).expect("one");
+        assert_eq!(refs[0].message_id, id.to_ascii_lowercase());
+        assert!(refs[0].readers_own);
+        assert!(chat_history_refs(&[reference(id)], 2).is_err());
+        assert!(chat_history_refs(&[reference("not-a-uuid")], 1).is_err());
+    }
+}
+
 /// Validate every semantic field and bind it to the exact materialized input.
 ///
 /// # Errors

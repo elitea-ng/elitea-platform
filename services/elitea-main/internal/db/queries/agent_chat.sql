@@ -337,8 +337,19 @@ LEFT JOIN LATERAL (
         SELECT message_group.id,
                message_group.created_at,
                message_group.uuid,
-               (author.id = target_participant.id
-                OR message_group.sent_to_id = target_participant.id) AS readers_own,
+               -- The reader's durable session belongs to the asking person
+               -- (its user id is the principal's): only that person's own
+               -- turns with the reader are in it. A turn of the same agent
+               -- with another person is not.
+               ((message_group.sent_to_id = target_participant.id
+                 AND author.id = author_participant.id)
+                OR (author.id = target_participant.id
+                    AND EXISTS (
+                        SELECT 1
+                        FROM chat_message_group AS own_question
+                        WHERE own_question.id = message_group.reply_to_id
+                          AND own_question.author_participant_id = author_participant.id
+                    ))) AS readers_own,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are `assistant`. Before this, every non-user author
                -- was an unnamed `assistant`, so in a conversation with several
@@ -646,7 +657,7 @@ LEFT JOIN LATERAL (
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
-                 message_group.sent_to_id, author.id
+                 message_group.sent_to_id, message_group.reply_to_id, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -1341,8 +1352,19 @@ LEFT JOIN LATERAL (
         SELECT message_group.id,
                message_group.created_at,
                message_group.uuid,
-               (author.id = target_participant.id
-                OR message_group.sent_to_id = target_participant.id) AS readers_own,
+               -- The reader's durable session belongs to the asking person
+               -- (its user id is the principal's): only that person's own
+               -- turns with the reader are in it. A turn of the same agent
+               -- with another person is not.
+               ((message_group.sent_to_id = target_participant.id
+                 AND author.id = author_participant.id)
+                OR (author.id = target_participant.id
+                    AND EXISTS (
+                        SELECT 1
+                        FROM chat_message_group AS own_question
+                        WHERE own_question.id = message_group.reply_to_id
+                          AND own_question.author_participant_id = author_participant.id
+                    ))) AS readers_own,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are `assistant`. Before this, every non-user author
                -- was an unnamed `assistant`, so in a conversation with several
@@ -1646,7 +1668,7 @@ LEFT JOIN LATERAL (
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
-                 message_group.sent_to_id, author.id
+                 message_group.sent_to_id, message_group.reply_to_id, author.id
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE

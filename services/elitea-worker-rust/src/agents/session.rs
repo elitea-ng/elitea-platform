@@ -3009,7 +3009,7 @@ async fn resolve_pipeline_start(
                     state.sessions.as_ref(),
                     &identity,
                     session.as_ref(),
-                    plan.chat_history.clone(),
+                    &plan.chat_history,
                     &plan.chat_history_refs,
                     plan.definition_digest,
                 )
@@ -3557,7 +3557,7 @@ where
             sessions.as_ref(),
             &identity,
             session.as_ref(),
-            chat_history,
+            &chat_history,
             &chat_history_refs,
             definition_digest,
         )
@@ -4233,7 +4233,7 @@ async fn seed_frozen_history(
         append_history_event(sessions, identity, id, content).await?;
     }
     if !refs.is_empty() {
-        append_reconciliation_marker(sessions, identity).await?;
+        append_reconciliation_marker(sessions, identity, &[]).await?;
     }
     Ok(())
 }
@@ -4260,8 +4260,10 @@ async fn append_history_event(
         .map_err(|_| dependency_unavailable())
 }
 
-/// The session state key that says its history events are named by message
-/// (ADR-0050 decision 9c). A session seeded before field 71 lacks it.
+/// The session state key that says its history entries are named by message
+/// (ADR-0050 decision 9c). Its value lists the messages a session seeded
+/// before field 71 holds under ordinal ids (`fh-`), so they are never
+/// appended again. A session seeded with references lists none.
 const HISTORY_RECONCILED_KEY: &str = "elitea.history.reconciled.v1";
 
 /// A content-less event that sets [`HISTORY_RECONCILED_KEY`]; the model
@@ -4269,13 +4271,14 @@ const HISTORY_RECONCILED_KEY: &str = "elitea.history.reconciled.v1";
 async fn append_reconciliation_marker(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
+    covered: &[&str],
 ) -> Result<(), NativeAgentAssemblyError> {
     let mut event = Event::new("frozen-current-history");
     "elitea-history".clone_into(&mut event.author);
-    event
-        .actions
-        .state_delta
-        .insert(HISTORY_RECONCILED_KEY.to_owned(), Value::from(1));
+    event.actions.state_delta.insert(
+        HISTORY_RECONCILED_KEY.to_owned(),
+        serde_json::json!({"version": 1, "covered": covered}),
+    );
     sessions
         .append_event_for_identity(AppendEventRequest {
             identity: identity.clone(),
@@ -4288,64 +4291,76 @@ async fn append_reconciliation_marker(
 /// ADR-0050 decision 9c (#1603): a restored session holds the history it was
 /// seeded with and the reader's own turns since, never what other
 /// participants wrote later. Append, labelled and once, the visible
-/// messages it has not seen; the reader's own answers and the messages sent
-/// to it are already in its own turns.
+/// messages it has not seen; the reader's own turns already hold the rest.
 ///
-/// A session seeded before field 71 does not name its events by message.
-/// For it only the entries after the reader's last own entry are appended:
-/// those were all written after its last turn began, so none can be in it.
-/// Either way the session is then marked, and later turns match by id.
+/// A session seeded before field 71 names its seed by ordinal. Its first
+/// reconciliation treats the seeded prefix and everything up to the
+/// reader's last own entry as seen, records those messages in the marker,
+/// and appends only what came after; later turns match by message.
 async fn reconcile_history(
     sessions: &dyn SessionService,
     identity: &AdkIdentity,
     session: &dyn adk_rust::session::Session,
-    chat_history: Vec<Content>,
+    chat_history: &[Content],
     refs: &[super::request::ChatHistoryRef],
     definition_digest: [u8; 32],
 ) -> Result<(), NativeAgentAssemblyError> {
     if refs.is_empty() || refs.len() != chat_history.len() {
         return Ok(());
     }
-    let marked = session.state().get(HISTORY_RECONCILED_KEY).is_some();
-    let present = session
-        .events()
-        .all()
-        .into_iter()
-        .map(|event| event.id)
+    let events = session.events().all();
+    let present = events
+        .iter()
+        .map(|event| event.id.as_str())
         .collect::<BTreeSet<_>>();
-    for (id, content) in unseen_history(&present, marked, refs, chat_history, definition_digest) {
-        append_history_event(sessions, identity, id, content).await?;
+    let marker = session.state().get(HISTORY_RECONCILED_KEY);
+    let (start, covered) = if let Some(marker) = &marker {
+        (0, covered_messages(marker))
+    } else {
+        // The ordinal seed is at most one event per history entry.
+        let seeded = (0..refs.len())
+            .take_while(|ordinal| {
+                u64::try_from(*ordinal).is_ok_and(|ordinal| {
+                    present.contains(frozen_history_event_id(definition_digest, ordinal).as_str())
+                })
+            })
+            .count();
+        let start = refs
+            .iter()
+            .rposition(|reference| reference.readers_own)
+            .map_or(0, |index| index + 1)
+            .max(seeded);
+        let covered = refs[..start]
+            .iter()
+            .filter(|reference| !reference.readers_own)
+            .map(|reference| reference.message_id.clone())
+            .collect();
+        (start, covered)
+    };
+    for (reference, content) in refs.iter().zip(chat_history).skip(start) {
+        if reference.readers_own || covered.contains(&reference.message_id) {
+            continue;
+        }
+        let id = history_message_event_id(definition_digest, &reference.message_id);
+        if !present.contains(id.as_str()) {
+            append_history_event(sessions, identity, id, content.clone()).await?;
+        }
     }
-    if !marked {
-        append_reconciliation_marker(sessions, identity).await?;
+    if marker.is_none() {
+        let covered = covered.iter().map(String::as_str).collect::<Vec<_>>();
+        append_reconciliation_marker(sessions, identity, &covered).await?;
     }
     Ok(())
 }
 
-/// The `(event id, content)` of each history entry the session lacks, in
-/// transcript order.
-fn unseen_history(
-    present: &BTreeSet<String>,
-    marked: bool,
-    refs: &[super::request::ChatHistoryRef],
-    chat_history: Vec<Content>,
-    definition_digest: [u8; 32],
-) -> Vec<(String, Content)> {
-    let start = if marked {
-        0
-    } else {
-        refs.iter()
-            .rposition(|reference| reference.readers_own)
-            .map_or(0, |index| index + 1)
-    };
-    refs.iter()
-        .zip(chat_history)
-        .skip(start)
-        .filter(|(reference, _)| !reference.readers_own)
-        .filter_map(|(reference, content)| {
-            let id = history_message_event_id(definition_digest, &reference.message_id);
-            (!present.contains(&id)).then_some((id, content))
-        })
+fn covered_messages(marker: &Value) -> BTreeSet<String> {
+    marker
+        .get("covered")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
         .collect()
 }
 

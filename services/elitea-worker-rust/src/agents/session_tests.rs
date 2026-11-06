@@ -3659,3 +3659,55 @@ async fn a_restored_session_reconciles_a_peers_later_message_once() {
     assert_eq!(peers, 1, "{third:?}");
     assert_eq!(third.len(), 6, "{third:?}");
 }
+
+/// A session seeded before field 71 (ordinal ids) is reconciled once from its
+/// last own entry; the seeded peer message is never appended again.
+#[tokio::test]
+async fn a_session_seeded_without_references_is_reconciled_without_duplicates() {
+    let ids = (1..=8)
+        .map(|n| format!("00000000-0000-4000-8000-00000000001{n}"))
+        .collect::<Vec<_>>();
+    let text = |role: &str, text: &str| json!({"role": role, "content": [{"type": "text", "text": text}], "additional_kwargs": {}});
+    let peer = |text: &str| {
+        json!({
+            "role": "user",
+            "content": [{"type": "text", "text": text}],
+            "additional_kwargs": {"elitea_author": {"kind": "agent", "name": "CI Doctor"}}
+        })
+    };
+    let sessions = Arc::new(InMemorySessionService::new());
+    let mut history = vec![text("user", "earlier question"), peer("old finding")];
+    // The old worker: no references, ordinal seed.
+    reconciled_turn(&sessions, "first question", history.clone(), Vec::new()).await;
+
+    history.extend([
+        text("user", "first question"),
+        text("assistant", "answer to first question"),
+        peer("new finding"),
+    ]);
+    let mut refs = vec![
+        history_ref(&ids[0], true),
+        history_ref(&ids[1], false),
+        history_ref(&ids[2], true),
+        history_ref(&ids[3], true),
+        history_ref(&ids[4], false),
+    ];
+    let second = role_texts(
+        &reconciled_turn(&sessions, "second question", history.clone(), refs.clone()).await,
+    );
+    history.extend([
+        text("user", "second question"),
+        text("assistant", "answer to second question"),
+    ]);
+    refs.extend([history_ref(&ids[5], true), history_ref(&ids[6], true)]);
+    let third = role_texts(&reconciled_turn(&sessions, "third question", history, refs).await);
+    for turn in [&second, &third] {
+        for finding in ["old finding", "new finding"] {
+            let seen = turn
+                .iter()
+                .filter(|(_, text)| text.contains(finding))
+                .count();
+            assert_eq!(seen, 1, "{finding}: {turn:?}");
+        }
+    }
+}
