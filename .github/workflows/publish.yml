@@ -341,6 +341,12 @@ jobs:
           - name: elitea-workspace-runner
             context: .
             dockerfile: ./libs/rust/workspace-runner/Containerfile
+          # elitea-browser-session (ADR-0049 decisions 2 and 4): the cloud
+          # browser's session pod. Repo ROOT context: the Containerfile COPYs
+          # libs/rust and libs/proto.
+          - name: elitea-browser-session
+            context: .
+            dockerfile: ./libs/rust/browser-session/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -571,6 +577,13 @@ jobs:
           - name: elitea-workspace-runner
             expect_type: debian
             blocking: false
+          # elitea-browser-session (ADR-0049 decisions 2 and 4): Debian 13
+          # with the libraries chrome-headless-shell links, so a `debian`
+          # Result, exempt for the base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-browser-session
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -743,6 +756,13 @@ jobs:
           # is exempt for the Debian base's unfixed findings
           # (.github/image-scan-exempt.txt).
           - name: elitea-workspace-runner
+            expect_type: debian
+            blocking: false
+          # elitea-browser-session (ADR-0049 decisions 2 and 4): Debian 13
+          # with the libraries chrome-headless-shell links, so a `debian`
+          # Result, exempt for the base's unfixed findings
+          # (.github/image-scan-exempt.txt).
+          - name: elitea-browser-session
             expect_type: debian
             blocking: false
 
@@ -1565,7 +1585,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner" "elitea-browser-session")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

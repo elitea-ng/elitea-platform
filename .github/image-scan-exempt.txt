@@ -56,3 +56,19 @@
 #   sandbox moves to a minimal base with toolchains installed per project.
 #   No retirement issue is filed yet; file it and name it here.
 elitea-workspace-runner
+
+# findings — #1594: not measured yet; the first release scan records them
+#   here. The image is debian:trixie-slim plus the desktop libraries
+#   chrome-headless-shell links (glib, NSS, ATK, X11/xcb, libgbm, ALSA,
+#   fontconfig via fonts-liberation), the same Debian 13 base whose "no fix
+#   yet" findings keep elitea-workspace-runner exempt, so no branch here is
+#   expected to clear it: criterion 1. The engine itself is an unpacked
+#   Chrome for Testing zip that trivy does not see as a package; it moves
+#   with CFT_VERSION in the Containerfile, proven by ci-browser-session.yml.
+#   If the first scan reports zero HIGH or CRITICAL findings, the job fails
+#   as stale and this entry goes, with `blocking: true` in publish.yml.
+# retirement — the entry ends when Debian publishes fixes for the base
+#   findings, or when the engine moves to a minimal base that carries only
+#   its NEEDED libraries. No retirement issue is filed yet; file it and name
+#   it here.
+elitea-browser-session

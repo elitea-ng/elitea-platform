@@ -35,6 +35,7 @@ const MIN_RELEASE_LITERALS = 6;
 // that per file instead, and a NEW file that references rust is reported too
 // (it must be added here, deliberately, or stop referencing rust).
 const RUST_IMAGE_FILES = {
+  "libs/rust/browser-session/Containerfile": 1,
   "libs/rust/workspace-runner/Containerfile": 1,
   "services/elitea-code-runner/Containerfile": 2,
   "services/elitea-deepwiki-engine/Containerfile": 2,

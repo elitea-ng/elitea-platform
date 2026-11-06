@@ -1,0 +1,76 @@
+---
+title: "The cloud browser session agent"
+description: "How libs/rust/browser-session runs the cloud browser in its sandbox pod: the elitea-browser-session binary and its supervisor line protocol, the CDP driver over a debugging pipe, the engine flags and hard limits, the session image with its pinned chrome-headless-shell, and how to run the conformance kit against a real engine."
+---
+
+In the cloud, a browser tool call runs in a session pod (ADR-0049). The sandbox supervisor (`elitea-sandbox-supervisor`) starts and owns the pod. Inside it, `elitea-browser-session` drives a headless Chrome. `libs/rust/browser-session` (crate `elitea-browser-session`) holds both the binary and its driver, `CdpDriver`. `CdpDriver` implements the `BrowserDriver` trait from [the browser tool contract](/development/browser-tools/). It passes the same conformance kit as every other driver.
+
+## The binary
+
+| Command | Does |
+| --- | --- |
+| `elitea-browser-session idle` | Holds the container until SIGTERM. This is the image's default command. |
+| `elitea-browser-session serve [--engine <path>] [--engine-log]` | The supervisor execs this into the container. It speaks the agent line protocol on stdin and stdout. |
+
+The protocol is specified in `libs/proto/elitea/runtime/v1/browser_session_agent_v1.md`. Each message is one JSON object on one line, at most 12 MiB, with binary data in base64.
+
+- The supervisor sends `start`, `call`, `view`, `ack`, `input`, `run_ended` and `destroy`.
+- The agent answers with `ready`, `result`, `frame`, `notice`, `error` and `bye`.
+- Calls run one at a time, in order.
+- `view`, `ack` and `input` are handled at once, even while a call is running.
+- The agent sends a new frame only after the previous one is acknowledged, so a slow viewer never queues frames.
+
+The agent writes nothing else to stdout. It logs stable codes to stderr, and logs no page content.
+
+## The engine
+
+The engine is `chrome-headless-shell`, pinned to a Chrome for Testing version. The agent talks to it over the DevTools protocol on `--remote-debugging-pipe`: commands go to the engine's fd 3, and replies and events come back on fd 4. The engine opens no TCP or WebSocket listener, so nothing in the pod can reach CDP, not even on loopback.
+
+The CDP client is small and lives in the crate (`cdp.rs`). It sends a command with an id and an optional flattened session id, matches the reply by id, and broadcasts everything else as an event. The driver names the few dozen methods it uses itself. There are no generated protocol bindings to keep in step with each Chrome release, and no general-purpose browser automation crate, which would want a WebSocket endpoint.
+
+The engine starts with these settings:
+
+- **Network.** All traffic goes through the run's egress proxy (`--proxy-server`, with only loopback bypassed). With no proxy in `start`, the engine has no network at all. The agent answers the proxy's authentication challenge with the run token through `Fetch.authRequired`, so the token is never in argv or the environment. A response carrying the proxy's refusal header, or a refused CONNECT tunnel, is `egress_refused`.
+- **Leaks closed.** WebRTC sends no UDP that bypasses the proxy, and QUIC and DNS over HTTPS are off. Downloads are denied, and there is no extension or component update.
+- **Sandbox.** The engine keeps its own sandbox. `--no-sandbox` is passed only when `start` says `engine_sandbox: false` and the agent sees that it runs under gVisor, which is then the boundary. Without gVisor, it refuses with `isolation_refused`.
+- **One pane.** The viewport is 1280×800 by default. Popups and new windows are folded into the pane: their URL is checked, then opened there.
+
+## What the driver does
+
+| Part | How |
+| --- | --- |
+| Snapshot | `Accessibility.getFullAXTree` for each frame, with out-of-process iframes attached through flattened auto-attach. `DOM.getDocument` with shadow roots pierced supplies the `type` and `autocomplete` attributes that mark secure fields. The result is grafted in place and passed to `Snapshot::build`. |
+| Page scripts | Run in an isolated world, never in the page's own JavaScript world. |
+| Refs | Bound to the snapshot they came from. A new document, DOM churn or the person's input invalidates them, and later calls report `stale_ref` with `refs_stale`. |
+| Hard limits | `call::check_url` runs on every main-frame navigation. A page-started navigation to a refused scheme goes back to `about:blank`, and the call returns `scheme_refused`. Secure fields are refused on the snapshot flag and on the live element, and `browser_press` checks the focused element through frames and shadow roots. `ActRate` applies to every act. |
+| View | `Page.startScreencast` as JPEG starts with the first viewer and stops with the last. Only the newest frame is kept, and acks are paced to `max_fps` (at most 10). |
+| Control | **Take over** and the person's own input pause the agent. While the person drives, acts return `user_in_control`, but `browser_snapshot` and `browser_screenshot` still answer. If the person used the page during a call, the call returns `user_active`. `browser_request_user` waits up to 80 s, under the supervisor's 90 s, for a hand back or a decline. A run with nobody to ask (the `start` line's optional `attended: false`, for a schedule or webhook run) answers `no_person` at once. |
+
+## The image
+
+`libs/rust/browser-session/Containerfile` builds `elitea-browser-session` (bake target `elitea-browser-session`):
+
+- the runtime is Debian 13 (`debian:trixie-slim`, pinned by digest), with the libraries the engine links and `fonts-liberation`;
+- chrome-headless-shell is fetched from Chrome for Testing at `CFT_VERSION` in a separate stage and checked against a SHA-256 for each architecture, then unpacked to `/opt/chrome-headless-shell`;
+- the agent is at `/usr/local/bin/elitea-browser-session`, running as uid and gid 10001 with `HOME=/tmp`;
+- the build fails if `ldd` reports a library the engine needs and the image lacks.
+
+The supervisor runs the container with a read-only root and memory-backed `/tmp` and `/dev/shm`.
+
+The image is a Debian userland, so the release scan reports it but does not block on the base's unfixed findings (`.github/image-scan-exempt.txt`).
+
+To move the engine, change `CFT_VERSION` and both checksums in the Containerfile and the same values in `.github/workflows/ci-browser-session.yml` together. The workflow fails when the two disagree.
+
+## Run the tests
+
+Without an engine, the conformance tests report a skip. Point `ELITEA_BROWSER_ENGINE` at a chrome-headless-shell binary to run them:
+
+```bash
+cd libs/rust
+cargo clippy -p elitea-browser-session --all-targets -- -D warnings
+ELITEA_BROWSER_ENGINE=/path/to/chrome-headless-shell cargo test -p elitea-browser-session
+```
+
+`tests/conformance.rs` serves the contract's fixture pages on loopback. It runs `conformance::run` with no listed differences, then the hard limits and the view stream, then the line protocol against the real binary. `ELITEA_BROWSER_ENGINE_LOG=1` passes the engine's stderr through.
+
+`ci-browser-session.yml` runs the same tests with `ELITEA_REQUIRE_BROWSER_CONFORMANCE=1`, so a skip fails the job. It then builds the image and runs the protocol test inside it under gVisor (`runsc`), read-only, with no network, as uid 10001. The image size and the engine version the image reports go to the job summary.
