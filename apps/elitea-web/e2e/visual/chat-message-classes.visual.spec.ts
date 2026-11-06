@@ -89,14 +89,21 @@ const ROWS: readonly Row[] = [
   { id: 6, role: 'assistant', author: 5, kind: 'system', content: 'Mira handed the floor back to you.', cause: 'system' },
 ];
 
+/**
+ * Three days before the run, a minute apart. The time label is masked, but
+ * the mask takes the label's width, and a fixed date's "about N hours ago"
+ * changes width as the day goes on. Relative to now, every row reads
+ * "3 days ago" whenever the shot runs.
+ */
 function messageRows(): Record<string, unknown>[] {
+  const createdBase = Date.now() - 3 * 24 * 60 * 60_000;
   return ROWS.map((row) => ({
     id: row.id,
     uid: `visual-message-${row.id}`,
     conversation_id: Number(CONVERSATION_ID),
     role: row.role,
     content: row.content,
-    created_at: `2026-11-06T09:0${row.id}:00Z`,
+    created_at: new Date(createdBase + row.id * 60_000).toISOString(),
     author_participant_id: row.author,
     author_kind: row.kind,
     addressed_to: row.addressedTo ?? [],
