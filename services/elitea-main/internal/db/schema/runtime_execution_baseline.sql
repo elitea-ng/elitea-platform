@@ -220,6 +220,9 @@ CREATE TABLE elitea_runtime.agent_execution_jobs (
     -- shared/0218_agent_continuation_paused_writer.sql
     paused_execution_id text,
     paused_generation bigint,
+    -- shared/0227_agent_execution_participant.sql
+    participant_id integer,
+    addressed_to integer[],
     PRIMARY KEY (execution_id, generation),
     FOREIGN KEY (execution_id, generation, capability_id, input_bundle_id)
         REFERENCES elitea_runtime.execution_jobs

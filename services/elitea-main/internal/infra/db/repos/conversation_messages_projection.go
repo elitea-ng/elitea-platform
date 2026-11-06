@@ -37,7 +37,8 @@ func messageSelectSQL(s string, withSync bool) string {
 				JOIN %s.chat_messages_text mt ON mt.id = mi.id
 				WHERE mi.message_group_id = mg.id AND mi.item_type = 'text_message'
 			), ''),
-			mg.is_streaming, mg.task_id%s
+			mg.is_streaming, mg.task_id,
+			mg.author_kind, mg.addressed_to, mg.visibility, mg.cause%s
 		FROM %s.chat_message_group mg
 		JOIN %s.chat_participants p ON p.id = mg.author_participant_id`, s, s, sync, s, s)
 }
@@ -69,8 +70,10 @@ func (r *ConversationsRepo) scanMessageRows(ctx context.Context, s string, rows 
 		// field is: a group that has never been rewritten states no update
 		// time rather than claiming one.
 		var syncAt time.Time
+		var addressedTo []int32
 		dest := []any{&groupID, &m.ConversationID, &m.UUID, &entityName, &meta, &m.CreatedAt,
-			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content, &isStreaming, &taskID}
+			&m.UpdatedAt, &m.AuthorParticipantID, &m.SentToID, &m.ReplyToID, &m.Content, &isStreaming, &taskID,
+			&m.AuthorKind, &addressedTo, &m.Visibility, &m.Cause}
 		if withSync {
 			dest = append(dest, &syncAt)
 		}
@@ -78,6 +81,7 @@ func (r *ConversationsRepo) scanMessageRows(ctx context.Context, s string, rows 
 			return nil, nil, fmt.Errorf("conversations: scan message: %w", err)
 		}
 		m.ID = strconv.Itoa(groupID)
+		m.AddressedTo = participantIDs(addressedTo)
 		if isStreaming {
 			m.IsStreaming = true
 			if taskID != nil && *taskID != "" {
@@ -161,4 +165,14 @@ func (r *ConversationsRepo) scanMessageRows(ctx context.Context, s string, rows 
 		}
 	}
 	return items, positions, nil
+}
+
+// participantIDs is a chat_message_group.addressed_to as the wire reads it:
+// never null, empty is everyone.
+func participantIDs(ids []int32) []int {
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, int(id))
+	}
+	return out
 }

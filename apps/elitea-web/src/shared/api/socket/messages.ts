@@ -740,6 +740,21 @@ const AgentFanoutProgressMessageSchema = z.looseObject({
   threadId: z.string().optional(),
 });
 
+/**
+ * Client contract 1.38 (ADR-0050 decision 7e): a participant moved to a new
+ * state. Derived by the server; never part of the answer.
+ */
+const AgentStateMessageSchema = z.looseObject({
+  type: z.literal("agent_state"),
+  message_id: z.string().optional(),
+  stream_id: z.string().optional(),
+  participant_id: z.number().int().optional(),
+  addressed_to: z.array(z.number().int()).optional(),
+  state: z.string().optional(),
+  execution_generation: z.string().optional(),
+  response_metadata: responseMetadataSchema.optional(),
+});
+
 /** `z.discriminatedUnion('type', [...])` over every `FRAME_TYPE` variant (spec §5.5). */
 export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentStartMessageSchema,
@@ -786,6 +801,7 @@ export const socketMessageSchema = z.discriminatedUnion('type', [
   AgentSwarmAgentStartMessageSchema,
   AgentSwarmAgentResponseMessageSchema,
   AgentSwarmHandoffMessageSchema,
+  AgentStateMessageSchema,
 ]);
 
 /** Not exported: no consumer needs the bare type name yet — SocketMessageParseResult (below, exported) already carries it structurally. Export when a Wave-2 consumer needs to name it directly. */

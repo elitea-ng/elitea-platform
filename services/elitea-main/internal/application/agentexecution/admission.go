@@ -175,6 +175,25 @@ func (a Admission) ApplicationID() int64 {
 	return 0
 }
 
+// ParticipantID is the chat participant the run answers as (shared 0227,
+// ADR-0050 decision 7b): the target participant of a current turn, an ad hoc
+// chat, a regeneration or a continuation; 0 for a fan-out wake, which
+// inherits the participant of the run it wakes in the admission
+// transaction.
+func (a Admission) ParticipantID() int64 {
+	switch {
+	case a.CurrentTurn != nil:
+		return a.CurrentTurn.TargetParticipantID
+	case a.CurrentAdhocTurn != nil:
+		return a.CurrentAdhocTurn.TargetParticipantID
+	case a.CurrentRegenerateTurn != nil:
+		return a.CurrentRegenerateTurn.TargetParticipantID
+	case a.CurrentContinueTurn != nil:
+		return a.CurrentContinueTurn.TargetParticipantID
+	}
+	return 0
+}
+
 type AtomicAdmissionStore interface {
 	AdmitAgentExecution(context.Context, Admission) (executionapp.AdmissionOutcome, error)
 }

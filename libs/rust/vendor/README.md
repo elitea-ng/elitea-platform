@@ -139,6 +139,14 @@ Its default is false. Elitea enables it to use its durable active-history projec
 All stream fragments still reach the caller. Partial fragments do not accumulate in the refreshed session.
 Storage failures stop execution instead of silently using an obsolete session view.
 
+`with_session_event_refresher` (FU-287, `adk-runner/src/runner.rs`) lets a host serve
+that refreshed view itself. A `SessionEventRefresh` object replaces the full
+`SessionService::get` on the refresh path only; its events must equal what the full
+read would return. The Worker implements it over the `PostgreSQL` session service so
+a refresh reads only the rows appended since the last one. Unset (the default, and
+every other session service), the runner re-reads the whole session exactly as before.
+Both refresh call sites (the main loop and the transfer loop) pass the hook.
+
 `with_unanswered_tool_calls_kept` (`adk-runner/src/runner.rs`, `context.rs`)
 keeps every function call in the conversation history, answered or not, as
 2.2.0 did. 2.3.0 drops a call with no result from the model history once a
