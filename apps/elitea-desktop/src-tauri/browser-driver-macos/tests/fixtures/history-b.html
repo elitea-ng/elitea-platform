@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>History B</title>
+<script>
+  // A page that will not let the person leave: every in-page way back,
+  // forward or to stop is replaced. The toolbar's native calls ignore it.
+  const stay = function () {};
+  history.back = stay;
+  history.forward = stay;
+  history.go = stay;
+  History.prototype.back = stay;
+  History.prototype.forward = stay;
+  History.prototype.go = stay;
+  window.stop = stay;
+</script>
+</head>
+<body>
+  <h1>B</h1>
+</body>
+</html>

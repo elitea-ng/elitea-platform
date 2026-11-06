@@ -15,7 +15,7 @@ The Elitea desktop app can show a web page beside a **Local work** thread, in th
 
 The toolbar has **Back**, **Forward**, **Reload** (or **Stop** while a page loads), **Open in browser** (the page's address in your usual browser), and **⋯ ▸ Forget site data**. The × closes the page; its site data stays until you forget it.
 
-**Back**, **Forward** and **Stop** ask the page to move through its history, so a page can ignore them. The address field and the × always work: type an address to leave a page.
+**Back**, **Forward**, **Reload** and **Stop** are the browser's own controls: a page cannot override them. The address field and the × always work too.
 
 The page itself cannot open the app's menus or reach any app function. While a dialog or sheet is open, the page is hidden, and it shows again when the dialog closes.
 
@@ -26,8 +26,10 @@ The page itself cannot open the app's menus or reach any app function. While a d
 - **Refused:** `file:`, `data:`, `javascript:` and other non-web addresses; `localhost` and other names on your own network (`.local`, `.internal`, `.home.arpa`); private and loopback IP addresses (`10.x`, `192.168.x`, `127.0.0.1`, …); and addresses with a user name or password in them. The tab says why a page was refused.
 - **Links that open a new window** open in the same tab instead. **Back** returns to the page that opened them.
 
+- **Loads from your own network are blocked too.** A public page cannot load images, scripts or data, or open a connection, to `localhost`, a name on your own network or a private or loopback address, for example a service on your computer or your router. If the app cannot set up this block, it does not open the page and says so.
+
 <Warning>
-**Not blocked yet.** These rules apply to the pages you open and the frames inside them. A public page can still load images, scripts and data from `localhost` or a private address, for example a service on your computer or your router. A public name that points to a private address is not blocked either. A later release blocks the first case on macOS. Keep sensitive local services behind authentication.
+**Not blocked: public names that point inside.** The app judges an address by how it is written. A public name whose DNS record points to a private address (for example, a name that resolves to `192.168.1.1`) is not blocked. Keep sensitive local services behind authentication.
 </Warning>
 
 The page cannot use your camera, microphone, location or notifications: every request is denied. Password and form autofill are off.
@@ -68,5 +70,6 @@ Private and loopback addresses stay refused either way. A later release replaces
 2. In thread B, open the browser and go to the same site. You are not signed in.
 3. In thread A, choose **⋯ ▸ Forget site data**, then open the site again. You are signed out.
 4. Type `file:///etc/hosts`, then `http://127.0.0.1/`. Both are refused, and the tab says why.
-5. On a page with a `target="_blank"` link, select the link. It opens in the same tab, and **Back** returns.
+5. On a page that has a link back to an earlier page, select **Back**. You go back, even if the page tries to stop it.
+6. On a page with a `target="_blank"` link, select the link. It opens in the same tab, and **Back** returns.
 </Steps>

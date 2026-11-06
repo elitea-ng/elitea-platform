@@ -1026,6 +1026,9 @@ pub struct AgentHost {
     compaction: std::sync::OnceLock<Arc<CompactionSettingsStore>>,
     /// The threads' idle compactions (`super::idle`).
     idle: Arc<IdleCompactor>,
+    /// The browser panes' drivers (ADR-0048, `crate::browser_tools`), set
+    /// once at start-up; unset, no browser tools are offered.
+    browser: std::sync::OnceLock<Arc<crate::browser_tools::BrowserDrivers>>,
     /// How long an unattended chain's next turn may take to start after
     /// the previous turn's commit lands ([`unattended::CONTINUE_WAIT`];
     /// tests shorten it), in milliseconds.
@@ -1247,6 +1250,7 @@ impl AgentHost {
             attachments: Attachments::default(),
             worktrees: std::sync::OnceLock::new(),
             compaction: std::sync::OnceLock::new(),
+            browser: std::sync::OnceLock::new(),
             idle,
             continue_wait_ms: std::sync::atomic::AtomicU64::new(
                 u64::try_from(unattended::CONTINUE_WAIT.as_millis()).unwrap_or(u64::MAX),
@@ -1319,6 +1323,11 @@ impl AgentHost {
     /// The app is quitting: no idle compaction starts or finishes.
     pub fn cancel_idle_compactions(&self) {
         self.idle.cancel_all();
+    }
+
+    /// Offer the browser tools, driving each thread's pane (ADR-0048).
+    pub fn set_browser_drivers(&self, drivers: Arc<crate::browser_tools::BrowserDrivers>) {
+        let _ = self.browser.set(drivers);
     }
 
     /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
@@ -4287,6 +4296,21 @@ impl AgentHost {
                 }),
             )));
         }
+        // The browser pane's tools (ADR-0048 decision 3): a toolset of
+        // their own, never workspace tools. Plan mode and unattended turns
+        // only read the page (`crate::browser_tools::gate`). TODO(#1590):
+        // offered only while the `local_work_browser` and
+        // `local_work_browser_agent` policy keys allow it.
+        if let Some(drivers) = self.browser.get()
+            && let Ok(thread) = conversation_key(&request.conversation_id)
+        {
+            provider = provider.with(Arc::new(crate::browser_tools::BrowserToolProvider::new(
+                &thread,
+                drivers.clone(),
+                workspace.session.vision(),
+                workspace.session.clone(),
+            )));
+        }
         // The nested agents, as cloud child turns of this one (#1239).
         let children_remote = Arc::new(ChildAgentContext::new(
             remote.clone(),
@@ -4357,7 +4381,11 @@ impl AgentHost {
                     toolsets
                         .iter()
                         .filter(|toolset| {
-                            toolset.name() != REMOTE_TOOLSET && toolset.name() != MCP_TOOLSET
+                            // Nor the browser: a child does not drive the
+                            // person's page.
+                            toolset.name() != REMOTE_TOOLSET
+                                && toolset.name() != MCP_TOOLSET
+                                && toolset.name() != crate::browser_tools::TOOLSET_NAME
                         })
                         .cloned()
                         .collect(),
