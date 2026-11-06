@@ -31,7 +31,7 @@ use super::native_agent_lifecycle::NativeAuthorizedAgentLifecycle;
 use super::output_delivery::{
     AgentFailureTerminalError, AgentOutputPreflight, AgentOutputPreflightError,
     AgentOutputPreflightOutcome, AgentOutputRecoveryRequiredKind, AgentProgressConnector,
-    AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay,
+    AgentTerminalRecoveryConfig, AgentTerminalRecoveryError, AgentTerminalReplay, OutputRecovery,
     publish_pre_invocation_terminal, reconcile_empty_agent_output_recovery,
     recover_accepted_terminal,
 };
@@ -483,7 +483,7 @@ where
         }
         let Some(recovery) = self
             .output
-            .prepare_empty_recovery(recovery, true)
+            .prepare_output_recovery(recovery, true)
             .await
             .map_err(AgentDeliveryProcessError::OutputPreflight)?
         else {
@@ -492,11 +492,32 @@ where
                 true,
             ));
         };
+        let recovery = match recovery {
+            OutputRecovery::Empty(recovery) => recovery,
+            OutputRecovery::Terminal(terminal) => {
+                // A terminal is already pending: replay that exact frame (a
+                // refused one is replaced once, never joined by a second).
+                recover_accepted_terminal(
+                    Arc::clone(&self.control),
+                    self.retirer.as_ref(),
+                    self.replay.as_ref(),
+                    *terminal,
+                    Arc::clone(&self.clock),
+                    self.preparation.lease_config(),
+                    self.terminal_recovery,
+                )
+                .await
+                .map_err(AgentDeliveryProcessError::TerminalRecovery)?;
+                return Ok(AgentDeliveryProcessOutcome::completed(
+                    "agent_delivery.output_recovery_terminal_retired",
+                ));
+            }
+        };
         reconcile_empty_agent_output_recovery(
             Arc::clone(&self.control),
             self.retirer.as_ref(),
             self.replay.as_ref(),
-            recovery,
+            *recovery,
             failure,
             Arc::clone(&self.clock),
             self.preparation.lease_config(),

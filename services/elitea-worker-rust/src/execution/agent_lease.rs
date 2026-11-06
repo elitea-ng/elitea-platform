@@ -695,7 +695,6 @@ impl ClaimLeaseMonitor {
     /// The recovery value contains no fresh-input or Begin authority. The
     /// periodic actor still renews the accepted claim while output settlement
     /// is in progress, matching the Python recovery boundary.
-    #[allow(dead_code)] // Called by the disabled terminal-recovery coordinator.
     pub(crate) fn start_recovery<R, K>(
         control: Arc<AgentControlClient<R>>,
         recovery: AcceptedTerminalClaimRecovery,

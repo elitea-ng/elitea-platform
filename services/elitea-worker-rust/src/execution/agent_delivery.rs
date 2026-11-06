@@ -297,6 +297,35 @@ impl OutputRecoveryAgentDelivery {
     pub(crate) fn into_parts(self) -> (CommandDelivery, VerifiedAgentCommand, AgentOutputRecovery) {
         (self.delivery, self.verified, self.recovery)
     }
+
+    /// Semantic kind of a spooled frame, after the claim's command binding.
+    pub(crate) fn validate_output(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<ValidatedAgentOutputFrameKind, ProtocolError> {
+        validate_restored_agent_output_frame(&self.verified, frame)
+    }
+
+    pub(crate) fn terminal_replacement(
+        &self,
+        frame: &crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1,
+    ) -> Result<crate::protocol::elitea::runtime::v1::ExecutionOutputFrameV1, ProtocolError> {
+        self.recovery.terminal_replacement(frame)
+    }
+
+    pub(crate) fn into_terminal_parts(
+        self,
+    ) -> (
+        CommandDelivery,
+        VerifiedAgentCommand,
+        AcceptedTerminalClaimRecovery,
+    ) {
+        (
+            self.delivery,
+            self.verified,
+            self.recovery.into_terminal_recovery(),
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

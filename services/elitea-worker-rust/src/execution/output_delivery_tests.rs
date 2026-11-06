@@ -6186,6 +6186,293 @@ async fn a_stop_settles_cancelled_once_while_output_recovery_is_pending() {
     );
 }
 
+// ---- FU-290 C: output recovery over a PENDING terminal frame ----
+
+/// The fence claim 1 spooled its frames under; the recovery claim is newer.
+fn superseded_claim_fence() -> ExecutionFenceV1 {
+    let mut fence = claim_response()
+        .receipt
+        .expect("receipt")
+        .fence
+        .expect("fence");
+    fence.claim_attempt -= 1;
+    fence.lease_epoch -= 1;
+    fence.fence_token[0] ^= 1;
+    fence
+}
+
+/// Claim 1's completed terminal at `sequence`, unaccepted by Main.
+fn superseded_success_terminal(
+    fresh: &FreshAgentDelivery,
+    sequence: u64,
+) -> ExecutionOutputFrameV1 {
+    let mut frame = terminal_frame(fresh);
+    let from = frame.sequence;
+    frame.event_id = frame
+        .event_id
+        .replace(&format!(":{from}"), &format!(":{sequence}"));
+    frame.sequence = sequence;
+    frame.claim_handoff_watermark = 4.min(sequence - 1);
+    frame.fence = Some(superseded_claim_fence());
+    let proposal = frame.settlement_proposal.as_mut().expect("proposal");
+    proposal.terminal_event_id.clone_from(&frame.event_id);
+    proposal.terminal_sequence = sequence;
+    frame
+}
+
+/// Claim 1's canonical failure terminal at the sequence after the watermark.
+fn superseded_failure_terminal(kind: RuntimeFailureKind) -> ExecutionOutputFrameV1 {
+    let raw = bytes("signed_command");
+    let verified =
+        parse_and_verify_agent_command(&raw, Some(&TestOnlyConformanceHmacAuthenticator))
+            .expect("command");
+    crate::protocol::output::build_agent_terminal_output_frame(
+        &verified,
+        &superseded_claim_fence(),
+        crate::protocol::output::AgentTerminalOutput::Failure(kind),
+        5,
+        NOW,
+        4,
+    )
+    .expect("failure terminal")
+}
+
+async fn seed_pending_terminal(
+    output_root: &std::path::Path,
+    pending: impl FnOnce(&FreshAgentDelivery) -> ExecutionOutputFrameV1,
+) {
+    let seeding = preflight(output_root.to_path_buf(), "worker-1");
+    let AgentOutputPreflightOutcome::Empty(empty) = seeding.prepare(fresh()).await.expect("spool")
+    else {
+        panic!("empty")
+    };
+    let (accepted, prepared) = empty.into_parts();
+    prepared
+        .into_test_spool()
+        .persist(pending(&accepted))
+        .expect("pending terminal");
+}
+
+/// Drive one output-recovery claim through the whole processor. Returns the
+/// trace and every frame the scripted terminal replay was asked to send.
+async fn output_recovery_delivery(
+    output_root: &std::path::Path,
+    claim_fixture: &'static str,
+    observe: Vec<DesiredExecutionStateV1>,
+    replays: Vec<ReplayResult>,
+) -> (Vec<&'static str>, Vec<ExecutionOutputFrameV1>) {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let control = Arc::new(
+        AgentControlClient::new(
+            RecoveryControl {
+                trace: Arc::clone(&trace),
+                claim_fixture,
+                settlement_fails: false,
+                authorize_disposition: None,
+                authorize_unavailable: false,
+                renew_fail_after: None,
+                renew_fail_switch: None,
+                renew_attempts: AtomicUsize::new(0),
+                wrap_up: false,
+                observe_states: Mutex::new(observe.into_iter().map(|state| state as i32).collect()),
+            },
+            ControlGrpcConfig {
+                deadline: Duration::from_secs(1),
+                workload_session_id: "workload-1".to_owned(),
+                producer_id: "worker-1".to_owned(),
+            },
+        )
+        .expect("output recovery control"),
+    );
+    let admission = InvocationAdmission::new(
+        InvocationAdmissionConfig::new(1, Duration::from_secs(1)).expect("invocation admission"),
+    );
+    let terminal = Arc::new(FakeReplay::new(replays, Arc::clone(&trace)));
+    let connector = RefusingTerminalConnector {
+        progress: FakeProgressConnector {
+            state: FakeProgressState::new([], []),
+        },
+        terminal: Arc::clone(&terminal),
+    };
+    let retirer = Arc::new(recovery_retirer(Arc::clone(&trace), Ok(())));
+    let processor = native_agent_delivery_processor(
+        Arc::new(TestOnlyConformanceHmacAuthenticator),
+        preflight(output_root.to_path_buf(), "worker-1"),
+        control,
+        retirer,
+        Arc::new(KindAgentInput {
+            trace: Arc::clone(&trace),
+            kind: AgentExecutionKind::Application,
+        }),
+        Arc::new(|| NOW),
+        admission.clone(),
+        AgentPreparationConfig::new(Duration::from_secs(10)).expect("preparation config"),
+        Arc::new(TestNativeAssembler {
+            trace: Arc::clone(&trace),
+            agent: Arc::new(ImmediateTextAgent),
+            sensitive: false,
+        }),
+        connector,
+        1,
+        recovery_config(2),
+    );
+    processor
+        .process(bus_delivery(signed_command_for_kind(
+            AgentExecutionKind::Application,
+        )))
+        .await;
+    processor.close().await.expect("delivery processor drain");
+    assert_eq!(admission.available_capacity(), 1);
+    let events = trace.lock().expect("trace").clone();
+    let sent = terminal.frames.lock().expect("frames").clone();
+    (events, sent)
+}
+
+fn count(events: &[&'static str], name: &str) -> usize {
+    events.iter().filter(|event| **event == name).count()
+}
+
+fn assert_settled_once(events: &[&'static str]) {
+    assert_eq!(count(events, "settlement"), 1, "{events:?}");
+    assert_eq!(count(events, "retire"), 1, "{events:?}");
+}
+
+/// A stuck run whose terminal Main refused: the user's Stop must end it as
+/// Cancelled, by replacing the exact pending terminal (never a second one).
+#[tokio::test]
+async fn a_stop_replaces_a_pending_terminal_main_refuses_and_settles_cancelled_once() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 5)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_running_noack+cancelled",
+        vec![DesiredExecutionStateV1::Cancelled],
+        vec![ReplayResult::FrameRefused, ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 2, "the exact frame first, then one replacement");
+    assert!(restored_terminal_failure_kind(&sent[0]).is_none());
+    assert_eq!(sent[1].sequence, sent[0].sequence);
+    assert_eq!(failure_code(&sent[1]), RuntimeErrorCodeV1::Cancelled as i32);
+    assert_eq!(sent[1].fence, sent[0].fence, "bound to the recovery claim");
+}
+
+/// Same without a stop (an ambiguous invocation): the internal failure.
+#[tokio::test]
+async fn a_pending_terminal_main_refuses_is_replaced_by_internal_without_a_stop() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 5)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![ReplayResult::FrameRefused, ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(failure_code(&sent[1]), RuntimeErrorCodeV1::Internal as i32);
+}
+
+/// A pending failure terminal Main accepts on replay settles with that very
+/// frame; no second terminal is persisted next to it.
+#[tokio::test]
+async fn a_pending_failure_terminal_is_replayed_and_settled_without_a_second_terminal() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |_| {
+        superseded_failure_terminal(RuntimeFailureKind::Internal)
+    })
+    .await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(failure_code(&sent[0]), RuntimeErrorCodeV1::Internal as i32);
+    assert_eq!(sent[0].sequence, 5);
+}
+
+/// A crash after persisting a Completed terminal and before the ack: Main
+/// accepts the replay and the run settles Completed, once.
+#[tokio::test]
+async fn a_pending_success_terminal_is_replayed_and_settles_completed_once() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 5)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].terminal);
+    assert!(matches!(
+        sent[0].payload,
+        Some(execution_output_frame_v1::Payload::AgentExecution(_))
+    ));
+}
+
+/// Sequence guard: a terminal Main's watermark already covers is reconciled
+/// away and never replayed; one beyond watermark+1 is left for the exact
+/// recovery path (nothing is sent, settled or retired).
+#[tokio::test]
+async fn the_pending_terminal_sequence_guard_matches_the_nonterminal_rule() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 4)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 1, "the covered frame itself is never replayed");
+    assert_eq!(sent[0].sequence, 5);
+
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 6)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![],
+    )
+    .await;
+    assert_eq!(sent.len(), 0);
+    assert!(!events.contains(&"observe"), "{events:?}");
+    assert_eq!(count(&events, "settlement") + count(&events, "retire"), 0);
+}
+
+/// A repeated claim after settlement finds nothing to do: Main answers
+/// SETTLED, the Worker replays and settles nothing.
+#[tokio::test]
+async fn a_repeated_recovery_claim_after_settlement_is_a_no_op() {
+    let (_temporary, output_root) = root();
+    seed_pending_terminal(&output_root, |fresh| superseded_success_terminal(fresh, 5)).await;
+    let (events, sent) = output_recovery_delivery(
+        &output_root,
+        "claim_recover_ambiguous_invocation_noack",
+        vec![],
+        vec![ReplayResult::Acknowledged],
+    )
+    .await;
+    assert_settled_once(&events);
+    assert_eq!(sent.len(), 1);
+
+    let (events, sent) =
+        output_recovery_delivery(&output_root, "claim_settled_ack", vec![], vec![]).await;
+    assert_eq!(sent.len(), 0);
+    assert_eq!(count(&events, "settlement"), 0, "{events:?}");
+}
+
 /// Parks before its first event while holding a marker, like an agent
 /// suspended inside a session write when its claim lease is lost.
 struct ParkedAgent {

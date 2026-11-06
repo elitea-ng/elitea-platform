@@ -112,6 +112,14 @@ impl EmptyAgentOutput {
     }
 }
 
+/// What an output-recovery claim found in its spool.
+pub(crate) enum OutputRecovery {
+    /// Nothing pending (or a nonterminal frame the failure terminal replaces).
+    Empty(Box<EmptyAgentOutputRecovery>),
+    /// One exact terminal, rebound to this claim, to replay and settle.
+    Terminal(Box<AcceptedTerminalOutputRecovery>),
+}
+
 /// Exact current-fence terminal output which must be replayed and settled.
 pub struct AcceptedTerminalOutputRecovery {
     delivery: crate::transport::command_bus::CommandDelivery,
@@ -133,7 +141,6 @@ impl AcceptedTerminalOutputRecovery {
         self.frame.sequence
     }
 
-    #[allow(dead_code)] // Consumed by the next exact output-recovery slice.
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -1554,7 +1561,6 @@ impl AgentOutputSpoolReopener {
 
     /// Atomically replace the exact admitted terminal and advance the sealed
     /// reconnect proof only after the filesystem CAS succeeds.
-    #[allow(dead_code)] // Called by the disabled terminal-recovery coordinator.
     pub(super) async fn replace_expected_terminal(
         &mut self,
         expected: &ExecutionOutputFrameV1,
@@ -2138,7 +2144,6 @@ where
 /// poll before the exact durable terminal's first output attempt. Only a bound
 /// output ACK can mint settlement authority, and only the validated settlement
 /// receipt can retire the bus command.
-#[allow(dead_code)] // Enabled only after real TLS output and command-bus composition lands.
 pub(crate) fn recover_accepted_terminal<'a, R, C, T, K>(
     control: Arc<AgentControlClient<R>>,
     retirer: &'a CommandRetirer<C>,
@@ -2320,7 +2325,6 @@ fn failure_replay_error(error: ExactTerminalReplayError) -> AgentFailureTerminal
     }
 }
 
-#[allow(dead_code)] // Reachable from the gated recovery coordinator above.
 async fn replay_exact_terminal<T: AgentTerminalReplay>(
     replay: &T,
     verified: &VerifiedAgentCommand,
@@ -2346,7 +2350,6 @@ async fn replay_exact_terminal<T: AgentTerminalReplay>(
     ))
 }
 
-#[allow(dead_code)] // Reachable from the gated recovery coordinator above.
 const fn output_winner(error: &OutputGrpcError) -> Option<RuntimeFailureKind> {
     match error {
         OutputGrpcError::Protocol(OutputProtocolError::CancellationWon) => {
@@ -2370,7 +2373,6 @@ const fn reconnectable_output(error: &OutputGrpcError) -> bool {
     )
 }
 
-#[allow(dead_code)] // Reachable from the gated recovery coordinator above.
 fn preflight_as_output_error(error: AgentOutputPreflightError) -> OutputGrpcError {
     match error {
         AgentOutputPreflightError::Output(error) => error,
@@ -2696,15 +2698,7 @@ impl AgentOutputPreflight {
         if replacement != frame {
             let expected = frame;
             frame = replacement.clone();
-            prepared = tokio::task::spawn_blocking(move || {
-                prepared.replace_pending_agent_terminal_recovery(&expected, &replacement)?;
-                Ok::<_, OutputGrpcError>(prepared)
-            })
-            .await
-            .map_err(|_| {
-                AgentOutputPreflightError::Unavailable("terminal rebind did not complete")
-            })?
-            .map_err(AgentOutputPreflightError::Output)?;
+            prepared = rebind_pending_terminal(prepared, expected, replacement).await?;
         }
         let encoded = frame.encode_to_vec();
         let (delivery, verified, claim) = recovery.into_terminal_parts();
@@ -2845,19 +2839,20 @@ impl AgentOutputPreflight {
     /// Open the exact recovery spool without granting fresh execution.
     ///
     /// `None` means durable output is already pending and needs a separate
-    /// exact-frame recovery path. Only an empty spool may receive the bounded
+    /// exact-frame recovery path. An empty spool may receive the bounded
     /// canonical failure used to reconcile a stale ambiguous invocation.
     ///
-    /// With `settle_pending`, one unaccepted nonterminal frame at the sequence
-    /// right after Main's watermark does not block the recovery. The terminal
-    /// the caller binds replaces that exact frame, so a stop or an internal
-    /// failure settles instead of waiting behind a frame nothing can deliver.
-    /// A frame Main already covers is reconciled away first.
-    pub(crate) async fn prepare_empty_recovery(
+    /// With `settle_pending`, one unaccepted frame at the sequence right after
+    /// Main's watermark does not block the recovery; any other pending sequence
+    /// stays `None`. A frame Main already covers is reconciled away first. A
+    /// nonterminal frame is then replaced by the terminal the caller binds. A
+    /// terminal frame is never joined by a second one: it is rebound to this
+    /// claim and returned for exact replay and settlement.
+    pub(crate) async fn prepare_output_recovery(
         &self,
         recovery: OutputRecoveryAgentDelivery,
         settle_pending: bool,
-    ) -> Result<Option<EmptyAgentOutputRecovery>, AgentOutputPreflightError> {
+    ) -> Result<Option<OutputRecovery>, AgentOutputPreflightError> {
         if !recovery.matches_output_transport(
             &self.policy.output_config.workload_session_id,
             &self.policy.output_config.producer_id,
@@ -2880,7 +2875,6 @@ impl AgentOutputPreflight {
         if settle_pending
             && prepared.pending_frame_count() == 1
             && let Some(frame) = prepared.pending_replay_frame()
-            && !frame.terminal
         {
             let watermark = recovery.claim_handoff_watermark();
             if frame.sequence <= watermark {
@@ -2898,6 +2892,34 @@ impl AgentOutputPreflight {
                 prepared = factory.reopen().await?;
             } else if Some(frame.sequence) != watermark.checked_add(1) {
                 return Ok(None);
+            } else if frame.terminal {
+                recovery.validate_output(&frame).map_err(|_| {
+                    AgentOutputPreflightError::InvalidDurableState(
+                        "the pending agent output contract is malformed",
+                    )
+                })?;
+                let replacement = recovery.terminal_replacement(&frame).map_err(|_| {
+                    AgentOutputPreflightError::InvalidDurableState(
+                        "the pending terminal has no recovery authority",
+                    )
+                })?;
+                if replacement != frame {
+                    prepared =
+                        rebind_pending_terminal(prepared, frame.clone(), replacement.clone())
+                            .await?;
+                }
+                let encoded = replacement.encode_to_vec();
+                let (delivery, verified, claim) = recovery.into_terminal_parts();
+                return Ok(Some(OutputRecovery::Terminal(Box::new(
+                    AcceptedTerminalOutputRecovery {
+                        delivery,
+                        verified,
+                        claim,
+                        spool: prepared,
+                        frame: replacement,
+                        reopener: factory.seal_terminal(encoded),
+                    },
+                ))));
             }
         }
         if prepared.pending_frame_count() > 1
@@ -2905,11 +2927,28 @@ impl AgentOutputPreflight {
         {
             return Ok(None);
         }
-        Ok(Some(EmptyAgentOutputRecovery {
-            recovery,
-            output: PreparedAgentOutput { prepared, factory },
-        }))
+        Ok(Some(OutputRecovery::Empty(Box::new(
+            EmptyAgentOutputRecovery {
+                recovery,
+                output: PreparedAgentOutput { prepared, factory },
+            },
+        ))))
     }
+}
+
+/// Move the one pending terminal onto the current claim's fence and watermark.
+async fn rebind_pending_terminal(
+    mut prepared: PreparedOutputSpool,
+    expected: ExecutionOutputFrameV1,
+    replacement: ExecutionOutputFrameV1,
+) -> Result<PreparedOutputSpool, AgentOutputPreflightError> {
+    tokio::task::spawn_blocking(move || {
+        prepared.replace_pending_agent_terminal_recovery(&expected, &replacement)?;
+        Ok::<_, OutputGrpcError>(prepared)
+    })
+    .await
+    .map_err(|_| AgentOutputPreflightError::Unavailable("terminal rebind did not complete"))?
+    .map_err(AgentOutputPreflightError::Output)
 }
 
 /// Set a superseded claim's unaccepted progress frame aside and reopen the

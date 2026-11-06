@@ -286,7 +286,6 @@ pub(crate) fn validate_restored_toolkit_execute_read_output_frame(
 /// established the complete canonical frame shape. It prevents a frame-bound
 /// cancellation or deadline winner from repeatedly replacing the same durable
 /// terminal.
-#[allow(dead_code)] // Used by the disabled accepted-terminal recovery owner.
 pub(crate) fn restored_terminal_failure_kind(
     frame: &ExecutionOutputFrameV1,
 ) -> Option<RuntimeFailureKind> {
