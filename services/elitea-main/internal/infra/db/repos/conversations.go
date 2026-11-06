@@ -232,6 +232,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	q := fmt.Sprintf(`
 		SELECT p.id, p.entity_name, p.entity_meta, p.meta, pm.entity_settings,
+			p.kind, pm.persona,
 			%s
 		FROM %s.chat_participant_mapping pm
 		JOIN %s.chat_participants p ON p.id = pm.participant_id%s
@@ -249,7 +250,8 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 		var p conversations.Participant
 		var entityMeta, meta, entitySettings []byte
 		var authorName, authorEmail string
-		if err := rows.Scan(&p.ID, &p.EntityName, &entityMeta, &meta, &entitySettings, &authorName, &authorEmail); err != nil {
+		var persona []byte
+		if err := rows.Scan(&p.ID, &p.EntityName, &entityMeta, &meta, &entitySettings, &p.Kind, &persona, &authorName, &authorEmail); err != nil {
 			return nil, fmt.Errorf("conversations: scan participant: %w", err)
 		}
 		if entityMeta != nil {
@@ -257,6 +259,9 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 		}
 		if p.EntityMeta == nil {
 			p.EntityMeta = map[string]any{}
+		}
+		if persona != nil {
+			_ = json.Unmarshal(persona, &p.Persona) // best-effort: a CHECK keeps it an object
 		}
 		if meta != nil {
 			_ = json.Unmarshal(meta, &p.Meta) // best-effort: DB column is trusted JSON
@@ -702,7 +707,7 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta FROM %s.chat_conversations WHERE id=$1`, s), id).Scan(&metaBytes); err != nil {
 		return conversations.Conversation{}, err
 	}
-	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT p.id,p.entity_name,p.entity_meta,m.entity_settings,p.meta
+	rows, err := tx.Query(ctx, fmt.Sprintf(`SELECT p.id,p.entity_name,p.entity_meta,m.entity_settings,p.meta,p.kind,m.persona
  FROM %[1]s.chat_participant_mapping m JOIN %[1]s.chat_participants p ON p.id=m.participant_id
  WHERE m.conversation_id=$1 ORDER BY p.id`, s), id)
 	if err != nil {
@@ -710,7 +715,7 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 	}
 	for rows.Next() {
 		var participant conversations.Participant
-		if err := rows.Scan(&participant.ID, &participant.EntityName, &participant.EntityMeta, &participant.EntitySettings, &participant.Meta); err != nil {
+		if err := rows.Scan(&participant.ID, &participant.EntityName, &participant.EntityMeta, &participant.EntitySettings, &participant.Meta, &participant.Kind, &participant.Persona); err != nil {
 			rows.Close()
 			return conversations.Conversation{}, err
 		}
@@ -1966,7 +1971,8 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 	s := schema(projectID)
 
 	// Get message group by UUID
-	q := fmt.Sprintf(`SELECT mg.id, mg.uuid::text, mg.author_participant_id, mg.sent_to_id, mg.reply_to_id, mg.meta
+	q := fmt.Sprintf(`SELECT mg.id, mg.uuid::text, mg.author_participant_id, mg.sent_to_id, mg.reply_to_id, mg.meta,
+		mg.author_kind, mg.addressed_to, mg.visibility, mg.cause
 		FROM %s.chat_message_group mg WHERE mg.uuid::text = $1`, s)
 
 	var groupID int
@@ -1974,7 +1980,9 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 	var authorPID *int
 	var sentToID, replyToID *int
 	var metaBytes []byte
-	err := r.pool.QueryRow(ctx, q, messageUUID).Scan(&groupID, &groupUUID, &authorPID, &sentToID, &replyToID, &metaBytes)
+	var addressing messageAddressing
+	err := r.pool.QueryRow(ctx, q, messageUUID).Scan(&groupID, &groupUUID, &authorPID, &sentToID, &replyToID, &metaBytes,
+		&addressing.authorKind, &addressing.addressedTo, &addressing.visibility, &addressing.cause)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, apierr.NotFound("message not found")
@@ -2041,6 +2049,7 @@ func (r *ConversationsRepo) GetMessageByUUID(ctx context.Context, projectID, mes
 		"meta":                  meta,
 		"message_items":         items,
 	}
+	addressing.apply(result)
 
 	return result, nil
 }
@@ -2909,7 +2918,8 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 		SELECT mg.id, COALESCE(mg.uuid::text, ''), mg.author_participant_id,
 			mg.sent_to_id, mg.reply_to_id, mg.meta, mg.is_streaming,
 			mg.created_at, mg.updated_at, mg.task_id,
-			COALESCE(author.entity_name = 'user', FALSE)
+			COALESCE(author.entity_name = 'user', FALSE),
+			mg.author_kind, mg.addressed_to, mg.visibility, mg.cause
 		FROM %[1]s.chat_message_group mg
 		LEFT JOIN %[1]s.chat_participants author ON author.id = mg.author_participant_id
 		WHERE mg.conversation_id = $1
@@ -2935,8 +2945,10 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 		var updatedAt *time.Time
 		var taskID *string
 		var byUser bool
+		var addressing messageAddressing
 
-		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID, &byUser); err != nil {
+		if err := rows.Scan(&id, &uuid, &authorParticipantID, &sentToID, &replyToID, &meta, &isStreaming, &createdAt, &updatedAt, &taskID, &byUser,
+			&addressing.authorKind, &addressing.addressedTo, &addressing.visibility, &addressing.cause); err != nil {
 			continue
 		}
 
@@ -2977,6 +2989,7 @@ func (r *ConversationsRepo) ListMessageGroups(ctx context.Context, projectID, co
 		if taskID != nil {
 			group["task_id"] = *taskID
 		}
+		addressing.apply(group)
 
 		groups = append(groups, group)
 		groupIDs = append(groupIDs, id)
@@ -3317,4 +3330,19 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	}
 
 	return participantID, nil
+}
+
+// messageAddressing scans a message group's tenant/0162 columns for the
+// map-shaped reads, which serve them as conversations.MessageAddressing does.
+type messageAddressing struct {
+	authorKind  *string
+	addressedTo []int32
+	visibility  string
+	cause       *string
+}
+
+func (a messageAddressing) apply(group map[string]any) {
+	conversations.MessageAddressing{
+		AuthorKind: a.authorKind, AddressedTo: participantIDs(a.addressedTo), Visibility: a.visibility, Cause: a.cause,
+	}.Fields(group)
 }

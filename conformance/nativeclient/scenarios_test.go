@@ -274,6 +274,11 @@ func readFrames(ctx context.Context, stream *client.Stream, stop func([]client.F
 			if got.err != nil {
 				return frames, got.err
 			}
+			// A derived agent_state frame is outside the cursor sequence;
+			// like a native client, the turn reader skips it.
+			if got.frame.Derived {
+				continue
+			}
 			frames = append(frames, got.frame)
 			if stop(frames) {
 				return frames, nil

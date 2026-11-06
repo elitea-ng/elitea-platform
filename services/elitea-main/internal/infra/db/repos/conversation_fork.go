@@ -560,9 +560,13 @@ func forkMessages(ctx context.Context, tx pgx.Tx, s string, tables map[string][]
 		  FROM unnest($2::integer[]) WITH ORDINALITY AS o(id, ord)
 		), ins AS (
 		  INSERT INTO %[1]s.chat_message_group
-		    (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at, updated_at, task_id)
+		    (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at, updated_at, task_id,
+		     author_kind, addressed_to, visibility, cause)
 		  SELECT src.new_uuid, g.author_participant_id, $1, g.sent_to_id, g.meta - $3::text[], FALSE,
-		         g.created_at, g.updated_at, NULL
+		         g.created_at, g.updated_at, NULL,
+		         -- tenant/0162: copied, not re-derived; the reply link is
+		         -- set after the insert, so the trigger could not see it.
+		         g.author_kind, g.addressed_to, g.visibility, g.cause
 		  FROM src JOIN %[1]s.chat_message_group g ON g.id = src.old_id
 		  ORDER BY src.ord
 		  RETURNING id, uuid

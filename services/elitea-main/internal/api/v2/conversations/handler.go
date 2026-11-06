@@ -91,11 +91,12 @@ type Message struct {
 	// captioned with whoever happened to be LOOKING at the conversation.
 	// Pointers with omitempty: a NULL column must read as "states no
 	// author", never as an author the participants list cannot resolve.
-	AuthorParticipantID *int           `json:"author_participant_id,omitempty"`
-	SentToID            *int           `json:"sent_to_id,omitempty"`
-	ReplyToID           *int           `json:"reply_to_id,omitempty"`
-	ContentType         string         `json:"content_type,omitempty"`
-	Metadata            map[string]any `json:"metadata,omitempty"`
+	AuthorParticipantID *int `json:"author_participant_id,omitempty"`
+	SentToID            *int `json:"sent_to_id,omitempty"`
+	ReplyToID           *int `json:"reply_to_id,omitempty"`
+	MessageAddressing
+	ContentType string         `json:"content_type,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 	// The `attachment_message` items of this group, in the shape the
 	// conversation-DETAILS route already embeds (`ListMessageGroups`): one
 	// `{id, item_type, order_index, item_details}` entry per file, whose
@@ -141,6 +142,35 @@ type Message struct {
 	// never been rewritten has no update time. Zero-valued `time.Time` would
 	// serialize as year 1 and read, to every client, as a real timestamp.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// MessageAddressing is who wrote a message and whom it is for (tenant/0162,
+// ADR-0050 decision 7b): the author participant's kind, the addressees
+// (empty is everyone), `all` or `side`, and what started it. The stream
+// frames of a run carry the same author and addressees (participant_id,
+// addressed_to). AuthorKind and Cause are omitted when unknown.
+type MessageAddressing struct {
+	AuthorKind  *string `json:"author_kind,omitempty"`
+	AddressedTo []int   `json:"addressed_to"`
+	Visibility  string  `json:"visibility"`
+	Cause       *string `json:"cause,omitempty"`
+}
+
+// Fields writes the same keys, with the same omissions, into a map-shaped
+// message (the details route's message groups, a single message read).
+func (a MessageAddressing) Fields(group map[string]any) {
+	if a.AuthorKind != nil {
+		group["author_kind"] = *a.AuthorKind
+	}
+	addressedTo := a.AddressedTo
+	if addressedTo == nil {
+		addressedTo = []int{}
+	}
+	group["addressed_to"] = addressedTo
+	group["visibility"] = a.Visibility
+	if a.Cause != nil {
+		group["cause"] = *a.Cause
+	}
 }
 
 type ListResponse struct {
@@ -250,6 +280,13 @@ type Participant struct {
 	EntityMeta     map[string]any `json:"entity_meta"`
 	EntitySettings map[string]any `json:"entity_settings"`
 	Meta           map[string]any `json:"meta"`
+	// Kind is human, agent, ephemeral_agent or system (tenant/0162); omitted
+	// for an attachment (a toolkit, a prompt), which never speaks.
+	Kind *string `json:"kind,omitempty"`
+	// Persona is the agent's persona in this conversation: display_name,
+	// pronouns, role and later avatar_pack, from the soul of the version the
+	// conversation runs (ADR-0050 decision 7a). Omitted when it has none.
+	Persona map[string]any `json:"persona,omitempty"`
 }
 
 type Repository interface {

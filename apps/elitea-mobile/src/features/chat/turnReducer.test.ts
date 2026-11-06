@@ -162,3 +162,24 @@ describe('parseFrame', () => {
     });
   });
 });
+
+describe('turnReducer and client contract 1.38', () => {
+  it('reads the participant keys and leaves an agent_state frame inert', () => {
+    const chunk = parseFrame({
+      id: '1',
+      event: 'execution.node_event',
+      data: '{"type":"agent_llm_chunk","content":"Hi","participant_id":7,"addressed_to":[],"response_metadata":{}}',
+    });
+    expect(chunk).toMatchObject({ kind: 'node', node: { participant_id: 7, addressed_to: [] } });
+    const started = reduceTurn({ ...INITIAL_TURN, phase: 'streaming' }, chunk);
+    const state = parseFrame({
+      id: '1',
+      event: 'execution.node_event',
+      data: '{"type":"agent_state","participant_id":7,"addressed_to":[],"state":"speaking","response_metadata":{}}',
+    });
+    expect(state).toMatchObject({ kind: 'node', node: { type: 'agent_state', state: 'speaking' } });
+    const after = reduceTurn(started, state);
+    expect(after).toEqual(started);
+    expect(isTurnTerminal(state)).toBe(false);
+  });
+});

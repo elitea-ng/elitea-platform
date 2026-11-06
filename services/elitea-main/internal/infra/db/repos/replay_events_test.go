@@ -16,7 +16,7 @@ func TestReplayEventsRepositoryVerifiesDurableDigestAndCopiesData(t *testing.T) 
 	executor := &scriptedExecutor{
 		rowResults: []scriptedRow{{values: []any{int64(0), int64(7), true, true}}},
 		rowsResult: &scriptedRows{rows: []scriptedRow{{values: []any{
-			int64(7), "configuration.validation.completed", data, digest[:], true,
+			int64(7), "configuration.validation.completed", data, digest[:], true, int64(0), nil,
 		}}}},
 	}
 	repository := newReplayEventsRepository(executor)
@@ -41,8 +41,8 @@ func TestReplayEventsRepositoryHidesAgentTerminalUntilProjectionCommits(t *testi
 	executor := &scriptedExecutor{
 		rowResults: []scriptedRow{{values: []any{int64(0), int64(7), true, true}}},
 		rowsResult: &scriptedRows{rows: []scriptedRow{
-			{values: []any{int64(6), replayEventNodeEvent, suggestion, suggestionDigest[:], true}},
-			{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], false}},
+			{values: []any{int64(6), replayEventNodeEvent, suggestion, suggestionDigest[:], true, int64(0), nil}},
+			{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], false, int64(0), nil}},
 		}},
 	}
 	events, err := newReplayEventsRepository(executor).Replay(
@@ -78,7 +78,7 @@ func TestReplayEventsRepositoryReleasesAgentTerminalAfterProjectionCommits(t *te
 	executor := &scriptedExecutor{
 		rowResults: []scriptedRow{{values: []any{int64(0), int64(7), true, true}}},
 		rowsResult: &scriptedRows{rows: []scriptedRow{{values: []any{
-			int64(7), replayEventNodeEvent, terminal, digest[:], true,
+			int64(7), replayEventNodeEvent, terminal, digest[:], true, int64(0), nil,
 		}}}},
 	}
 	events, err := newReplayEventsRepository(executor).Replay(
@@ -111,13 +111,13 @@ func TestReplayEventsRepositoryDoesNotAdvancePastUnprojectedTerminal(t *testing.
 		},
 		rowsResults: []*scriptedRows{
 			{rows: []scriptedRow{
-				{values: []any{int64(6), replayEventNodeEvent, progress, progressDigest[:], true}},
-				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], false}},
-				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true}},
+				{values: []any{int64(6), replayEventNodeEvent, progress, progressDigest[:], true, int64(0), nil}},
+				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], false, int64(0), nil}},
+				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true, int64(0), nil}},
 			}},
 			{rows: []scriptedRow{
-				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], true}},
-				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true}},
+				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], true, int64(0), nil}},
+				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true, int64(0), nil}},
 			}},
 		},
 	}
@@ -154,7 +154,7 @@ func TestReplayEventsRepositoryRejectsTamperedDurableData(t *testing.T) {
 	repository := newReplayEventsRepository(&scriptedExecutor{
 		rowResults: []scriptedRow{{values: []any{int64(0), int64(7), true, true}}},
 		rowsResult: &scriptedRows{rows: []scriptedRow{{values: []any{
-			int64(7), "configuration.validation.completed", data, wrong[:], true,
+			int64(7), "configuration.validation.completed", data, wrong[:], true, int64(0), nil,
 		}}}},
 	})
 	_, err := repository.Replay(context.Background(), "42", "execution-1", 0, 10)
@@ -169,7 +169,7 @@ func TestReplayEventsRepositoryEmitsResetThenRetainedTerminal(t *testing.T) {
 	executor := &scriptedExecutor{
 		rowResults: []scriptedRow{{values: []any{int64(11), int64(15), true, false}}},
 		rowsResult: &scriptedRows{rows: []scriptedRow{{values: []any{
-			int64(15), "index.ingest.completed", terminal, digest[:], true,
+			int64(15), "index.ingest.completed", terminal, digest[:], true, int64(0), nil,
 		}}}},
 	}
 	events, err := newReplayEventsRepository(executor).Replay(context.Background(), "42", "execution-1", 3, 10)
@@ -211,7 +211,7 @@ func TestReplayEventsRepositoryBoundsStaleReconnectStorm(t *testing.T) {
 			values: []any{int64(11), int64(15), true, false},
 		})
 		executor.rowsResults = append(executor.rowsResults, &scriptedRows{rows: []scriptedRow{{values: []any{
-			int64(15), "index.ingest.completed", terminal, digest[:], true,
+			int64(15), "index.ingest.completed", terminal, digest[:], true, int64(0), nil,
 		}}}})
 	}
 	repository := newReplayEventsRepository(executor)

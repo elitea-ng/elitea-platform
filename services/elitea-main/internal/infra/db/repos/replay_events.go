@@ -132,8 +132,15 @@ SELECT replay.cursor,
                  AND terminal.projected_at IS NOT NULL
            )
            ELSE TRUE
-       END AS visible
+       END AS visible,
+       COALESCE(binding.participant_id, 0),
+       COALESCE(binding.addressed_to, '{}'::integer[])
 FROM elitea_runtime.execution_replay_events AS replay
+-- shared/0227: the participant an agent run answers as, stamped on its
+-- frames by the event handler (ADR-0050 decision 7b).
+LEFT JOIN elitea_runtime.agent_execution_jobs AS binding
+  ON binding.execution_id = replay.execution_id
+ AND binding.generation = replay.generation
 WHERE replay.projection_project_id = $1
   AND replay.execution_id = $2
   AND replay.cursor > $3
@@ -149,7 +156,9 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 		var event executionsapi.DurableEvent
 		var digestBytes []byte
 		var visible bool
-		if err := rows.Scan(&cursor, &event.Type, &event.Data, &digestBytes, &visible); err != nil {
+		var participantID int64
+		var addressedTo []int32
+		if err := rows.Scan(&cursor, &event.Type, &event.Data, &digestBytes, &visible, &participantID, &addressedTo); err != nil {
 			return nil, fmt.Errorf("scan durable execution replay: %w", err)
 		}
 		if cursor <= 0 || len(event.Data) == 0 || len(event.Data) > 64*1024 || !json.Valid(event.Data) {
@@ -165,6 +174,9 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 		}
 		event.Cursor = uint64(cursor)
 		event.Data = append(json.RawMessage(nil), event.Data...)
+		if participantID > 0 {
+			event.Participant = &executionsapi.EventParticipant{ID: participantID, AddressedTo: widenParticipantIDs(addressedTo)}
+		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
@@ -177,3 +189,66 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 }
 
 var _ executionsapi.EventRepository = (*ReplayEventsRepository)(nil)
+
+func widenParticipantIDs(ids []int32) []int64 {
+	widened := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		widened = append(widened, int64(id))
+	}
+	return widened
+}
+
+// Preceding reads the newest `limit` agent-run events at and before
+// throughCursor, oldest first, with the run's participant: a resumed event
+// stream restates the participant's state from them. An execution without a
+// participant reads none.
+func (r *ReplayEventsRepository) Preceding(ctx context.Context, projectID, executionID string, throughCursor uint64, limit int) ([]executionsapi.DurableEvent, error) {
+	projectionProjectID, err := parseProjectID(projectID)
+	if err != nil || executionID == "" || throughCursor == 0 || throughCursor > math.MaxInt64 || limit <= 0 || limit > maxReplayBatch {
+		return nil, executionsapi.ErrInvalidEventStream
+	}
+	rows, err := r.store.Query(ctx, `
+SELECT recent.cursor, recent.event_type, recent.event_bytes, recent.participant_id, recent.addressed_to
+FROM (
+    SELECT replay.cursor, replay.event_type, replay.event_bytes,
+           binding.participant_id, COALESCE(binding.addressed_to, '{}'::integer[]) AS addressed_to
+    FROM elitea_runtime.execution_replay_events AS replay
+    JOIN elitea_runtime.agent_execution_jobs AS binding
+      ON binding.execution_id = replay.execution_id
+     AND binding.generation = replay.generation
+     AND binding.participant_id IS NOT NULL
+    WHERE replay.projection_project_id = $1
+      AND replay.execution_id = $2
+      AND replay.cursor <= $3
+      AND replay.event_type IN ('execution.node_event', 'execution.failed')
+    ORDER BY replay.cursor DESC
+    LIMIT $4
+) AS recent
+ORDER BY recent.cursor`, projectionProjectID, executionID, int64(throughCursor), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query preceding execution events: %w", err)
+	}
+	defer rows.Close()
+	events := []executionsapi.DurableEvent{}
+	for rows.Next() {
+		var cursor, participantID int64
+		var addressedTo []int32
+		var event executionsapi.DurableEvent
+		if err := rows.Scan(&cursor, &event.Type, &event.Data, &participantID, &addressedTo); err != nil {
+			return nil, fmt.Errorf("scan preceding execution event: %w", err)
+		}
+		if cursor <= 0 || participantID <= 0 || !json.Valid(event.Data) {
+			continue
+		}
+		event.Cursor = uint64(cursor)
+		event.Data = append(json.RawMessage(nil), event.Data...)
+		event.Participant = &executionsapi.EventParticipant{ID: participantID, AddressedTo: widenParticipantIDs(addressedTo)}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate preceding execution events: %w", err)
+	}
+	return events, nil
+}
+
+var _ executionsapi.EventStateSource = (*ReplayEventsRepository)(nil)

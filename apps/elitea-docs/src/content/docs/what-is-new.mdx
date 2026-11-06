@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Who is speaking in a chat
+
+Every chat participant now has a kind (a person, an agent, a short-lived agent, or the system), and an agent shows its persona's display name, pronouns and role. Each message records whom it is for, whether it is agent-to-agent talk, and what started it. While an agent answers, the chat knows which participant is answering and whether it is thinking, speaking, working, waiting for you, done or failed. Existing messages are filled in when you upgrade. See [Who is speaking](/menus/chat#who-is-speaking).
+
 ## Agent personas
 
 An agent version can now have a persona: a display name, pronouns, a role, a voice, values, boundaries, relationships with other agents and people, and a free-form body. Edit it on the agent editor's new **Persona** tab; the model reads it after the guardrails and before the instructions. A persona shapes how the agent speaks and grants nothing: Save refuses one that names a tool, a credential or a permission. Export, import and fork carry it, and in the desktop app a `SOUL.md` next to a Local work folder's `AGENTS.md` does the same for that folder. **Upgrade every worker before Main.** See [Persona](/menus/agents#persona).

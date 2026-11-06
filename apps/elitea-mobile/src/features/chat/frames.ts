@@ -33,6 +33,14 @@ export const NodeEventSchema = z.looseObject({
   message_id: z.string().nullish(),
   question_id: z.string().nullish(),
   response_metadata: ResponseMetadata.nullish(),
+  /**
+   * Client contract 1.38: the participant the run answers as and the
+   * answer's addressees (empty is everyone), on every frame of a chat run.
+   */
+  participant_id: z.number().int().nullish(),
+  addressed_to: z.array(z.number().int()).nullish(),
+  /** An `agent_state` frame's state (`AGENT_STATE`). */
+  state: z.string().max(32).nullish(),
 });
 export type NodeEvent = z.infer<typeof NodeEventSchema>;
 

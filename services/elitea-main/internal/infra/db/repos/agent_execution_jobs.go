@@ -672,6 +672,31 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's agent: %w", err)
 		}
 	}
+	// The participant the run answers as and its answer's addressees
+	// (shared 0227, ADR-0050 decision 7b): the execution event stream stamps
+	// them on each agent frame it serves. An answer is for everyone until
+	// turn-taking addresses one (#1606), so the addressees start empty.
+	if participantID := admission.ParticipantID(); participantID > 0 && participantID <= math.MaxInt32 {
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs SET participant_id = $3, addressed_to = '{}'
+WHERE execution_id = $1 AND generation = $2`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation), participantID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's participant: %w", err)
+		}
+	} else if wake := admission.CurrentFanoutWakeTurn; wake != nil {
+		// A fan-out wake continues the parked run's answer: it answers as
+		// the same participant, to the same addressees.
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs AS job
+SET participant_id = parked.participant_id, addressed_to = parked.addressed_to
+FROM elitea_runtime.agent_execution_jobs AS parked
+WHERE job.execution_id = $1 AND job.generation = $2
+  AND parked.execution_id = $3 AND parked.generation = $4`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation),
+			wake.ParkedExecutionID, wake.ParkedGeneration); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the woken run's participant: %w", err)
+		}
+	}
 	// The release the run executes (shared 0198, ADR-0040 decision 2), so
 	// audit and incident review can name the exact definition of a run.
 	if admission.ReleaseID > 0 {
