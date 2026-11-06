@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.36",
+  "client_contract": "1.37",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -5461,6 +5461,15 @@
                       "id": {
                         "type": "integer"
                       },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent",
+                          "ephemeral_agent",
+                          "human",
+                          "system"
+                        ]
+                      },
                       "meta": {
                         "type": "object",
                         "nullable": true,
@@ -5473,6 +5482,23 @@
                           }
                         },
                         "open": true
+                      },
+                      "persona": {
+                        "type": "object",
+                        "properties": {
+                          "avatar_pack": {
+                            "type": "string"
+                          },
+                          "display_name": {
+                            "type": "string"
+                          },
+                          "pronouns": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          }
+                        }
                       }
                     }
                   }
@@ -7635,8 +7661,34 @@
                       "uid"
                     ],
                     "properties": {
+                      "addressed_to": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "max_items": 64
+                      },
+                      "author_kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent",
+                          "ephemeral_agent",
+                          "human",
+                          "system"
+                        ]
+                      },
                       "author_participant_id": {
                         "type": "integer"
+                      },
+                      "cause": {
+                        "type": "string",
+                        "enum": [
+                          "agent_mention",
+                          "delegation",
+                          "heartbeat",
+                          "human_message",
+                          "system"
+                        ]
                       },
                       "content": {
                         "type": "string"
@@ -7816,6 +7868,13 @@
                       "updated_at": {
                         "type": "string",
                         "format": "date-time"
+                      },
+                      "visibility": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "side"
+                        ]
                       }
                     }
                   }
@@ -16668,6 +16727,15 @@
                     "id": {
                       "type": "integer"
                     },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "agent",
+                        "ephemeral_agent",
+                        "human",
+                        "system"
+                      ]
+                    },
                     "meta": {
                       "type": "object",
                       "nullable": true,
@@ -16680,6 +16748,23 @@
                         }
                       },
                       "open": true
+                    },
+                    "persona": {
+                      "type": "object",
+                      "properties": {
+                        "avatar_pack": {
+                          "type": "string"
+                        },
+                        "display_name": {
+                          "type": "string"
+                        },
+                        "pronouns": {
+                          "type": "string"
+                        },
+                        "role": {
+                          "type": "string"
+                        }
+                      }
                     }
                   }
                 },
@@ -16781,6 +16866,15 @@
                       "id": {
                         "type": "integer"
                       },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent",
+                          "ephemeral_agent",
+                          "human",
+                          "system"
+                        ]
+                      },
                       "meta": {
                         "type": "object",
                         "nullable": true,
@@ -16793,6 +16887,23 @@
                           }
                         },
                         "open": true
+                      },
+                      "persona": {
+                        "type": "object",
+                        "properties": {
+                          "avatar_pack": {
+                            "type": "string"
+                          },
+                          "display_name": {
+                            "type": "string"
+                          },
+                          "pronouns": {
+                            "type": "string"
+                          },
+                          "role": {
+                            "type": "string"
+                          }
+                        }
                       }
                     }
                   }
@@ -19996,6 +20107,15 @@
                   "id": {
                     "type": "integer"
                   },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "ephemeral_agent",
+                      "human",
+                      "system"
+                    ]
+                  },
                   "meta": {
                     "type": "object",
                     "nullable": true,
@@ -20008,6 +20128,23 @@
                       }
                     },
                     "open": true
+                  },
+                  "persona": {
+                    "type": "object",
+                    "properties": {
+                      "avatar_pack": {
+                        "type": "string"
+                      },
+                      "display_name": {
+                        "type": "string"
+                      },
+                      "pronouns": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string"
+                      }
+                    }
                   }
                 }
               }
@@ -30124,6 +30261,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30134,6 +30277,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30327,6 +30473,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30337,6 +30489,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30358,13 +30513,22 @@
       },
       "open": true
     },
-    "agent_tool_end": {
+    "agent_state": {
       "type": "object",
       "required": [
+        "addressed_to",
+        "participant_id",
         "response_metadata",
+        "state",
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30375,6 +30539,59 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "error",
+            "idle",
+            "speaking",
+            "success",
+            "thinking",
+            "waiting",
+            "waking",
+            "working"
+          ]
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
+    "agent_tool_end": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30503,6 +30720,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30513,6 +30736,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30641,6 +30867,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30651,6 +30883,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30701,6 +30936,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30711,6 +30952,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30839,6 +31083,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30849,6 +31099,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",
@@ -30977,6 +31230,12 @@
         "type"
       ],
       "properties": {
+        "addressed_to": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
         "content": {
           "nullable": true
         },
@@ -30987,6 +31246,9 @@
         "message_id": {
           "type": "string",
           "nullable": true
+        },
+        "participant_id": {
+          "type": "integer"
         },
         "response_metadata": {
           "type": "object",

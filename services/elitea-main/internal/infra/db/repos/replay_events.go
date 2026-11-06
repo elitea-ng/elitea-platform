@@ -132,8 +132,15 @@ SELECT replay.cursor,
                  AND terminal.projected_at IS NOT NULL
            )
            ELSE TRUE
-       END AS visible
+       END AS visible,
+       COALESCE(binding.participant_id, 0),
+       COALESCE(binding.addressed_to, '{}'::integer[])
 FROM elitea_runtime.execution_replay_events AS replay
+-- shared/0227: the participant an agent run answers as, stamped on its
+-- frames by the event handler (ADR-0050 decision 7b).
+LEFT JOIN elitea_runtime.agent_execution_jobs AS binding
+  ON binding.execution_id = replay.execution_id
+ AND binding.generation = replay.generation
 WHERE replay.projection_project_id = $1
   AND replay.execution_id = $2
   AND replay.cursor > $3
@@ -149,7 +156,9 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 		var event executionsapi.DurableEvent
 		var digestBytes []byte
 		var visible bool
-		if err := rows.Scan(&cursor, &event.Type, &event.Data, &digestBytes, &visible); err != nil {
+		var participantID int64
+		var addressedTo []int32
+		if err := rows.Scan(&cursor, &event.Type, &event.Data, &digestBytes, &visible, &participantID, &addressedTo); err != nil {
 			return nil, fmt.Errorf("scan durable execution replay: %w", err)
 		}
 		if cursor <= 0 || len(event.Data) == 0 || len(event.Data) > 64*1024 || !json.Valid(event.Data) {
@@ -165,6 +174,9 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 		}
 		event.Cursor = uint64(cursor)
 		event.Data = append(json.RawMessage(nil), event.Data...)
+		if participantID > 0 {
+			event.Participant = &executionsapi.EventParticipant{ID: participantID, AddressedTo: widenParticipantIDs(addressedTo)}
+		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
@@ -177,3 +189,11 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 }
 
 var _ executionsapi.EventRepository = (*ReplayEventsRepository)(nil)
+
+func widenParticipantIDs(ids []int32) []int64 {
+	widened := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		widened = append(widened, int64(id))
+	}
+	return widened
+}

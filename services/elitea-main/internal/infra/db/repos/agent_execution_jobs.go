@@ -672,6 +672,18 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's agent: %w", err)
 		}
 	}
+	// The participant the run answers as and its answer's addressees
+	// (shared 0227, ADR-0050 decision 7b): the execution event stream stamps
+	// them on each agent frame it serves. An answer is for everyone until
+	// turn-taking addresses one (#1606), so the addressees start empty.
+	if participantID := admission.ParticipantID(); participantID > 0 && participantID <= math.MaxInt32 {
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs SET participant_id = $3, addressed_to = '{}'
+WHERE execution_id = $1 AND generation = $2`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation), participantID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the run's participant: %w", err)
+		}
+	}
 	// The release the run executes (shared 0198, ADR-0040 decision 2), so
 	// audit and incident review can name the exact definition of a run.
 	if admission.ReleaseID > 0 {

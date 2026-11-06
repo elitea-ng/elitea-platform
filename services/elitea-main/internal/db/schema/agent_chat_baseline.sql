@@ -23,7 +23,9 @@ CREATE TABLE chat_participants (
     uuid uuid NOT NULL UNIQUE,
     entity_name varchar NOT NULL,
     entity_meta jsonb NOT NULL DEFAULT '{}'::jsonb,
-    meta json NOT NULL DEFAULT '{}'::json
+    meta json NOT NULL DEFAULT '{}'::json,
+    -- tenant/0161
+    kind text
 );
 
 CREATE TABLE chat_participant_mapping (
@@ -33,6 +35,8 @@ CREATE TABLE chat_participant_mapping (
     entity_settings jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp,
+    -- tenant/0161
+    persona jsonb,
     UNIQUE (participant_id, conversation_id)
 );
 
@@ -47,7 +51,12 @@ CREATE TABLE chat_message_group (
     is_streaming boolean NOT NULL DEFAULT FALSE,
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp,
-    task_id varchar(64)
+    task_id varchar(64),
+    -- tenant/0161
+    author_kind text,
+    addressed_to integer[] NOT NULL DEFAULT '{}',
+    visibility text NOT NULL DEFAULT 'all',
+    cause text
 );
 
 CREATE TABLE chat_message_items (

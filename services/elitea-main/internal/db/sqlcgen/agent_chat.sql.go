@@ -672,7 +672,10 @@ const insertCurrentApplicationTurn = `-- name: InsertCurrentApplicationTurn :one
 WITH resolved AS MATERIALIZED (
     SELECT conversation.id AS conversation_id,
            author_participant.id AS author_participant_id,
-           target_participant.id AS target_participant_id
+           target_participant.id AS target_participant_id,
+           target_mapping.id AS target_mapping_id,
+           application_version.id AS local_version_id,
+           application_version.soul AS target_soul
     FROM chat_conversations AS conversation
     JOIN chat_participant_mapping AS author_mapping
       ON author_mapping.conversation_id = conversation.id
@@ -838,6 +841,26 @@ WITH resolved AS MATERIALIZED (
                 historical_item.item_type = 'context_message'
             )
       )
+), persona_refresh AS (
+    -- ADR-0050 decision 7a: the agent's persona snapshot in this
+    -- conversation, from the soul of the version this turn runs, so a new
+    -- release's name, pronouns and role show from its first answer. Only for
+    -- a same-project version: a catalogue version's row is not visible here
+    -- and the stored snapshot is kept.
+    UPDATE chat_participant_mapping AS mapping
+    SET persona = NULLIF(jsonb_strip_nulls(jsonb_build_object(
+            'display_name', resolved.target_soul ->> 'display_name',
+            'pronouns', resolved.target_soul ->> 'pronouns',
+            'role', resolved.target_soul ->> 'role'
+        )), '{}'::jsonb)
+    FROM resolved
+    WHERE mapping.id = resolved.target_mapping_id
+      AND resolved.local_version_id IS NOT NULL
+      AND mapping.persona IS DISTINCT FROM NULLIF(jsonb_strip_nulls(jsonb_build_object(
+            'display_name', resolved.target_soul ->> 'display_name',
+            'pronouns', resolved.target_soul ->> 'pronouns',
+            'role', resolved.target_soul ->> 'role'
+        )), '{}'::jsonb)
 ), question_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,

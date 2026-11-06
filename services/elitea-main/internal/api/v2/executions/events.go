@@ -37,6 +37,18 @@ type DurableEvent struct {
 	Cursor uint64
 	Type   string
 	Data   json.RawMessage
+	// Participant is the chat participant an agent run answers as (shared
+	// 0226); nil for any other execution and for a run admitted before it.
+	// The handler stamps it on the run's node events and derives the
+	// `agent_state` frames from them (participant_frames.go).
+	Participant *EventParticipant
+}
+
+// EventParticipant is who speaks in an agent run and whom the answer is for.
+type EventParticipant struct {
+	ID int64
+	// AddressedTo is the answer's addressees; empty is everyone.
+	AddressedTo []int64
 }
 
 type EventRepository interface {
@@ -201,6 +213,7 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events := initial
+	var states participantStates
 	for {
 		if len(events) > 0 {
 			if err := stream.writeAndFlush(func() error {
@@ -208,8 +221,17 @@ func (h *EventHandler) Stream(w http.ResponseWriter, r *http.Request) {
 					if event.Cursor <= cursor || validateDurableEvent(event) != nil {
 						return ErrInvalidEventStream
 					}
-					if err := writeDurableEvent(w, event); err != nil {
+					stamped, state := states.stamp(event)
+					if err := writeDurableEvent(w, stamped); err != nil {
 						return err
+					}
+					// The derived state frame shares its cause's cursor and
+					// follows it: a client that resumes after the cause skips
+					// the state, and the next transition restates it.
+					if state != nil {
+						if err := writeDurableEvent(w, *state); err != nil {
+							return err
+						}
 					}
 					cursor = event.Cursor
 				}
