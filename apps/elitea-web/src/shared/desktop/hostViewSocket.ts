@@ -81,6 +81,8 @@ export class HostViewSocket implements BrowserViewSocket {
     this.callbackId = host.transformCallback((envelope) => this.receive(envelope));
     this.chain = host.invoke('browser_view_open', { id: this.id, url, events: `__CHANNEL__:${this.callbackId}` }).catch((error: unknown) => {
       const code = (error as { code?: unknown } | null)?.code;
+      // The host never took the channel: nothing will end it.
+      host.unregisterCallback?.(this.callbackId);
       this.finish(1006, '', code === 'too_many_views' ? BUSY_STATUS : undefined);
     });
   }
@@ -131,7 +133,8 @@ export class HostViewSocket implements BrowserViewSocket {
 
   private handle(envelope: ChannelEnvelope): void {
     if ('end' in envelope) {
-      // The host dropped the channel without a close: the socket is gone.
+      // The host's last word: the channel is gone (after a close, or without one).
+      this.host.unregisterCallback?.(this.callbackId);
       this.finish(1006, '', undefined);
       return;
     }
@@ -164,7 +167,6 @@ export class HostViewSocket implements BrowserViewSocket {
     this.refusedStatus = status;
     this.queue = [];
     this.closeRequest = undefined;
-    this.host.unregisterCallback?.(this.callbackId);
     this.onclose?.(new CloseEvent('close', { code, reason, wasClean: code !== 1006 }));
   }
 }
