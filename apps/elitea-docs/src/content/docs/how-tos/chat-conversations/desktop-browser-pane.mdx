@@ -19,6 +19,24 @@ The toolbar has **Back**, **Forward**, **Reload** (or **Stop** while a page load
 
 The page itself cannot open the app's menus or reach any app function. While a dialog or sheet is open, the page is hidden, and it shows again when the dialog closes.
 
+## Who drives the page
+
+When an agent in the thread uses the browser, the pill in the toolbar says who drives the page:
+
+- **Agent**: the agent is using the page. Select **Take over** to stop it, or just click, type or scroll in the page: the agent stops at once and waits.
+- **You**: you are using the page; the agent cannot click, type or navigate in it. Tick **Let the agent watch** to let it still read the page and take screenshots while you work.
+- **Idle**: no turn is using the page.
+
+When you are done, select **Hand back**. You can add a note for the agent, for example "signed in, continue": the agent reads it as your message. After you used the page, the agent reads it again before it acts.
+
+### When the agent asks for you
+
+An agent can ask you to do something only you should do in the page, such as signing in or solving a check. Its reason shows above the page, and the pill shows **You**. Do it in the page, then select **Done** and **Hand back**, with a note if you like: the note is the agent's answer. Select **Decline** if you do not want to. If you do not answer within 30 minutes, the request is declined.
+
+### What is recorded
+
+Each thing the agent does in the browser is a step of its turn: the site, the page path without the query or fragment, the control it used and how it went. Text the agent types is recorded as its length and a fingerprint only, never the text itself.
+
 ## What the browser opens
 
 - **`https` pages.** Always.

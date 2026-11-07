@@ -2660,6 +2660,7 @@ scales it by the app's zoom).
 | `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
 | `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
 | `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |
+| `browser_control` | `{thread_id, action: "get" \| "take_over" \| "hand_back" \| "decline" \| "watch" \| "unwatch", note?}` | `{control, reason, asked, watch}` — the control pill (below), the state after the action. `note` (hand back only, at most 2048 bytes; trimmed, NUL bytes removed) rejects `browser_invalid` when longer. Take over while no turn drives, Decline with no request, and Hand back while the agent drives change nothing |
 
 `browser://event`, emitted to the `main` webview:
 
@@ -2671,8 +2672,41 @@ type BrowserEvent = { thread_id: string } & (
   | { kind: "download_started"; name: string }
   | { kind: "download_finished"; name: string; size: number | null; success: boolean }
   | { kind: "closed" } // the host closed the page (four live at most)
+  | { kind: "control"; control: "idle" | "agent" | "user"; reason: string | null; asked: boolean; watch: boolean }
 );
 ```
+
+**Control** (ADR-0048 decision 4, #1591; `src/browser_control.rs`). Who
+drives the page: `idle` (no turn uses it), `agent` (from the turn's first
+browser call), `user`. The `control` event fires on every change.
+
+- **The person takes over** with Take over, or by clicking, pressing a key,
+  scrolling or touching the page while the agent drives. On macOS the
+  driver script reports trusted input (`isTrusted`) from its private
+  content world to a message handler only that world can post to; the
+  page can neither forge the report nor reach the handler, and the
+  driver's own trusted clicks are ignored for 300 ms. The agent's pending
+  call answers `user_active` at once (a call already in flight is
+  abandoned); its next calls answer `user_in_control`, except
+  `browser_snapshot` and `browser_screenshot` while `watch` is on. A ref
+  from before the person used the page answers `stale_ref`.
+- **Hand back** returns the page to the agent. Its note becomes the
+  person's message: it is steered into the turn at the next safe point.
+- **The agent asks** with `browser_request_user`: `control: "user"`,
+  `asked: true` and `reason` (at most 500 characters). Hand back answers
+  the call `{status: "ok", note}`; Decline, or no answer within the
+  ADR-0045 question wait (30 minutes), answers `declined`. The person's
+  input does not pause the question.
+- The turn ends: `idle`, `watch` off.
+
+Each browser call's tool step in the turn commit carries `browser_step`
+(ADR-0048 decision 9, client contract 1.42): `v`, `tool`, `outcome` (`ok`
+or the error code), `host` and `path` of the page (no query or fragment),
+`ref` with its `role` and `name`, `text` as `{chars, digest}` for
+`browser_type` (the digest as `computer_step`'s), and `screenshot` as
+`{taken, mime, bytes, width, height}`. The typed text is also replaced by
+`text_chars` and `text_digest` in `args_summary` and `tool_inputs`. The
+platform stores the record as an ADR-0042 run step of toolkit `browser`.
 
 ## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
 
