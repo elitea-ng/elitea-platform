@@ -126,7 +126,45 @@ func (s *AgentMemory) ResolveAgentMemoryRun(ctx context.Context, projectID int64
 	if err != nil {
 		return storage.AgentMemoryRun{}, err
 	}
+	if !run.Tainted {
+		// The taint table records personal memory read through the memory
+		// toolkit. Personal memory recalled into a turn's instructions
+		// (#870) is marked on the response message instead
+		// (meta.memories_used), and the conversation's history carries it
+		// into every later turn: either taints the conversation.
+		if run.Tainted, err = s.personalRecallInConversation(ctx, projectID, run.ConversationUUID); err != nil {
+			return storage.AgentMemoryRun{}, err
+		}
+	}
 	return run, nil
+}
+
+// personalRecallInConversation reports whether any turn of the conversation
+// had personal memories recalled into its instructions.
+func (s *AgentMemory) personalRecallInConversation(ctx context.Context, projectID int64, conversationUUID string) (bool, error) {
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return false, err
+	}
+	var recalled bool
+	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT EXISTS (
+    SELECT 1 FROM %[1]s.chat_message_group AS message
+    JOIN %[1]s.chat_conversations AS conversation ON conversation.id = message.conversation_id
+    WHERE conversation.uuid = $1::uuid
+      AND COALESCE((message.meta ->> 'memories_used') ~ '^[1-9][0-9]*$', false))`, schema), conversationUUID).Scan(&recalled)
+	if err != nil {
+		return false, fmt.Errorf("agent memory: read the conversation's personal recall: %w", err)
+	}
+	return recalled, nil
+}
+
+// lockAgent serialises the writes of one agent's memory: the active limit
+// counts rows the other writers change.
+func lockAgent(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea_agent_memory:' || $1::text || ':' || $2::text, 0))`,
+		projectID, applicationID)
+	return err
 }
 
 // frozenMemorySettings reads the memory block of the version the run
@@ -194,8 +232,7 @@ func (s *AgentMemory) InsertAgentMemory(ctx context.Context, run storage.AgentMe
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// One writer per agent at a time: the limit count and the archive
 		// must see each other's rows.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea_agent_memory:' || $1::text || ':' || $2::text, 0))`,
-			run.ProjectID, run.ApplicationID); err != nil {
+		if err := lockAgent(ctx, tx, run.ProjectID, run.ApplicationID); err != nil {
 			return err
 		}
 		if write.SubjectUserID > 0 {
@@ -571,6 +608,9 @@ func (s *AgentMemory) UpdateMemory(ctx context.Context, projectID, applicationID
 	}
 	var result AgentMemoryEntry
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAgent(ctx, tx, projectID, applicationID); err != nil {
+			return err
+		}
 		entry, err := s.visibleEntry(ctx, tx, schema, applicationID, entryID, viewer, true)
 		if err != nil {
 			return err
@@ -644,6 +684,9 @@ func (s *AgentMemory) DeleteMemory(ctx context.Context, projectID, applicationID
 		return err
 	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAgent(ctx, tx, projectID, applicationID); err != nil {
+			return err
+		}
 		entry, err := s.visibleEntry(ctx, tx, schema, applicationID, entryID, viewer, true)
 		if err != nil {
 			return err
@@ -668,6 +711,9 @@ func (s *AgentMemory) ClearMemory(ctx context.Context, projectID, applicationID,
 	}
 	var cleared int64
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := lockAgent(ctx, tx, projectID, applicationID); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.agent_memory_entries WHERE application_id = $1`, schema), applicationID)
 		if err != nil {
 			return err

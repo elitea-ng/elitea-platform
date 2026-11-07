@@ -3,6 +3,7 @@ package agentexecution
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 )
@@ -45,7 +46,11 @@ func (service *CurrentApplicationStartService) resolveAgentMemoryText(
 		return ""
 	}
 	settings, err := versionMemorySettings(versionDetails)
-	if err != nil || !settings.Enabled {
+	if err != nil {
+		slog.WarnContext(ctx, "agent memory: the version's memory block is not readable; nothing is recalled", "error", err)
+		return ""
+	}
+	if !settings.Enabled {
 		return ""
 	}
 	text, err := service.agentMemory.ResolveAgentMemoryRecall(ctx, AgentMemoryRecallRequest{
@@ -53,6 +58,7 @@ func (service *CurrentApplicationStartService) resolveAgentMemoryText(
 		UserInput: userInput, Settings: settings,
 	})
 	if err != nil {
+		slog.WarnContext(ctx, "agent memory: recall failed; the turn runs without the agent's notes", "error", err)
 		return ""
 	}
 	return text

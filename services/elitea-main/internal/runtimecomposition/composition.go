@@ -729,6 +729,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
+	// The agent's own memory (#1607): one store for the recall at turn
+	// start and the worker's memory tools.
+	var agentMemoryStore *repos.AgentMemory
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
 	var executionInterrupts *repos.ExecutionInterruptRepository
@@ -1031,11 +1034,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
 		// #1607: the agent's own memory, recalled after the person's.
-		agentMemoryRecall, memoryErr := repos.ComposeAgentMemory(dependencies.AdmissionPool)
-		if memoryErr != nil {
-			return nil, fmt.Errorf("construct agent memory recall: %w", memoryErr)
+		var memoryErr error
+		if agentMemoryStore, memoryErr = repos.ComposeAgentMemory(dependencies.AdmissionPool); memoryErr != nil {
+			return nil, fmt.Errorf("construct agent memory: %w", memoryErr)
 		}
-		agentStart = agentStart.WithAgentMemory(agentMemoryRecall)
+		agentStart = agentStart.WithAgentMemory(agentMemoryStore)
 		// The approval policy's pipeline hitl rule (ADR-0041 decision 5).
 		pipelineApproval, targetErr := workerapprovalpolicyapp.NewPipelineAdmission(approvalSettings, egressSources)
 		if targetErr != nil {
@@ -2044,12 +2047,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// The agent memory tools (#1607): the same claim and pool as the
 	// builder writes, absent wherever they are.
 	var agentMemoryTools *storage.RuntimeAgentMemoryService
-	if config.AgentExecutionDispatchEnabled {
-		memorySink, memoryErr := repos.ComposeAgentMemory(dependencies.AdmissionPool)
-		if memoryErr != nil {
-			return nil, fmt.Errorf("construct agent memory store: %w", memoryErr)
-		}
-		agentMemoryTools, err = storage.NewRuntimeAgentMemoryService(contentRepository, memorySink)
+	if agentMemoryStore != nil {
+		agentMemoryTools, err = storage.NewRuntimeAgentMemoryService(contentRepository, agentMemoryStore)
 		if err != nil {
 			return nil, fmt.Errorf("construct agent memory tools: %w", err)
 		}
