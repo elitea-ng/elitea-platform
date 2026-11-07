@@ -12,6 +12,7 @@ class BrowserEngineV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     BROWSER_ENGINE_V1_UNSPECIFIED: _ClassVar[BrowserEngineV1]
     BROWSER_ENGINE_V1_FULL: _ClassVar[BrowserEngineV1]
     BROWSER_ENGINE_V1_LITE: _ClassVar[BrowserEngineV1]
+    BROWSER_ENGINE_V1_AUTO: _ClassVar[BrowserEngineV1]
 
 class BrowserPointerKindV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -41,6 +42,7 @@ class BrowserSessionEndV1(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
 BROWSER_ENGINE_V1_UNSPECIFIED: BrowserEngineV1
 BROWSER_ENGINE_V1_FULL: BrowserEngineV1
 BROWSER_ENGINE_V1_LITE: BrowserEngineV1
+BROWSER_ENGINE_V1_AUTO: BrowserEngineV1
 BROWSER_POINTER_KIND_V1_UNSPECIFIED: BrowserPointerKindV1
 BROWSER_POINTER_KIND_V1_MOVE: BrowserPointerKindV1
 BROWSER_POINTER_KIND_V1_DOWN: BrowserPointerKindV1

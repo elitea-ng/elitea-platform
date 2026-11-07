@@ -73,9 +73,15 @@ pub const TOOLKIT_TYPE: &str = "browser";
 /// The metered provider and operation of a call's engine seconds.
 pub const METERED_PROVIDER: &str = "browser";
 pub const METERED_OPERATION: &str = "engine_seconds";
-/// The engine a cloud session runs (ADR-0049 decision 2): only `full` is
-/// admitted until the bake-off admits `lite`.
+/// The engines a cloud session runs (ADR-0049 decision 2): `full` is the
+/// default; `lite` (Moli) and `auto` (Moli, then Chrome) only where the
+/// platform has admitted Moli after the bake-off (decision 9), which Main
+/// decides before it names them in the runtime context.
 pub const ENGINE_FULL: &str = "full";
+pub const ENGINE_LITE: &str = "lite";
+pub const ENGINE_AUTO: &str = "auto";
+/// Every engine a runtime context may name.
+pub const ENGINES: &[&str] = &[ENGINE_FULL, ENGINE_LITE, ENGINE_AUTO];
 /// The longest screenshot the family passes on (the supervisor's own bound
 /// is the same order).
 const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;

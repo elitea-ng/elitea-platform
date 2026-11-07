@@ -40,6 +40,7 @@ use self::session::{
     BrowserGrants, BrowserSessionShape, ClaimBrowserGrants, GrpcBrowserSession, SessionEgress,
 };
 use crate::protocol::control::{AgentControlClient, ClaimBoundSandboxAuthority};
+use crate::protocol::elitea::runtime::v1::BrowserEngineV1;
 use crate::transport::control_grpc::TonicControlRpc;
 
 /// The toolkit name the browser tools carry when a handed-off thread is
@@ -52,7 +53,10 @@ pub(crate) struct BrowserSessions {
     channel: Channel,
     control: Arc<AgentControlClient<TonicControlRpc>>,
     audience: String,
+    /// The `full` (and `auto`) session size.
     shape: BrowserSessionShape,
+    /// The `lite` size, when the deployment sets one.
+    lite: Option<(u64, u64)>,
 }
 
 impl std::fmt::Debug for BrowserSessions {
@@ -87,7 +91,9 @@ impl BrowserSessions {
             channel,
             control,
             audience: config.audience.clone(),
+            lite: config.lite_cpu_millis.zip(config.lite_memory_bytes),
             shape: BrowserSessionShape {
+                engine: BrowserEngineV1::Full,
                 cpu_millis: config.cpu_millis,
                 memory_bytes: config.memory_bytes,
                 wall_seconds: config.wall_seconds,
@@ -144,7 +150,11 @@ impl BrowserSessions {
             self.channel.clone(),
             grants,
             claim.execution_id,
-            self.shape,
+            shape_for(
+                self.shape,
+                self.lite,
+                field.map(|field| field.engine.as_str()),
+            ),
             egress,
             unattended,
         )
@@ -170,6 +180,32 @@ impl BrowserSessions {
             claim.meter,
             run,
         )
+    }
+}
+
+/// The session shape for the engine Main named: `lite` gets the lite size
+/// (the full one when the deployment sets none), `auto` the full size, since
+/// it may end on Chrome.
+fn shape_for(
+    full: BrowserSessionShape,
+    lite: Option<(u64, u64)>,
+    engine: Option<&str>,
+) -> BrowserSessionShape {
+    match engine {
+        Some(elitea_agent_runtime::toolkits::BROWSER_ENGINE_LITE) => {
+            let (cpu_millis, memory_bytes) = lite.unwrap_or((full.cpu_millis, full.memory_bytes));
+            BrowserSessionShape {
+                engine: BrowserEngineV1::Lite,
+                cpu_millis,
+                memory_bytes,
+                ..full
+            }
+        }
+        Some(elitea_agent_runtime::toolkits::BROWSER_ENGINE_AUTO) => BrowserSessionShape {
+            engine: BrowserEngineV1::Auto,
+            ..full
+        },
+        _ => full,
     }
 }
 
@@ -293,6 +329,42 @@ pub(crate) fn submit_hosts(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The spec engine and size follow the engine Main named.
+    #[test]
+    fn the_session_shape_follows_the_engine() {
+        let full = BrowserSessionShape {
+            engine: BrowserEngineV1::Full,
+            cpu_millis: 2_000,
+            memory_bytes: 2 << 30,
+            wall_seconds: 3_600,
+            max_pages: 3,
+        };
+        let sized = Some((1_000, 512 << 20));
+        assert_eq!(shape_for(full, sized, Some("full")), full);
+        assert_eq!(shape_for(full, sized, None), full);
+        let lite = shape_for(full, sized, Some("lite"));
+        assert_eq!(
+            (
+                lite.engine,
+                lite.cpu_millis,
+                lite.memory_bytes,
+                lite.max_pages
+            ),
+            (BrowserEngineV1::Lite, 1_000, 512 << 20, 3)
+        );
+        let auto = shape_for(full, sized, Some("auto"));
+        assert_eq!(
+            (auto.engine, auto.cpu_millis, auto.memory_bytes),
+            (BrowserEngineV1::Auto, 2_000, 2 << 30)
+        );
+        // No lite size set: lite asks for the full size.
+        let unsized_lite = shape_for(full, None, Some("lite"));
+        assert_eq!(
+            (unsized_lite.engine, unsized_lite.cpu_millis),
+            (BrowserEngineV1::Lite, 2_000)
+        );
+    }
 
     struct Always;
 

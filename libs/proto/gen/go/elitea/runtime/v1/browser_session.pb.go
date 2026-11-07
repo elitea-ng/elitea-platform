@@ -21,16 +21,26 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// The engine a session runs (decision 2). Until the bake-off admits `lite`,
-// the platform offers only FULL.
+// The engine a session runs (decision 2). Until the bake-off admits `lite`
+// (decision 9), the platform offers only FULL: Main refuses a project
+// setting of `lite` or `auto` while the platform's admission is off, and a
+// supervisor profile without a `lite` image answers LITE and AUTO with
+// `browser_engine_unavailable`.
 type BrowserEngineV1 int32
 
 const (
 	BrowserEngineV1_BROWSER_ENGINE_V1_UNSPECIFIED BrowserEngineV1 = 0
 	// chrome-headless-shell at the image's pinned Chrome for Testing version.
 	BrowserEngineV1_BROWSER_ENGINE_V1_FULL BrowserEngineV1 = 1
-	// Moli at the image's pinned commit.
+	// Moli at the `lite` image's pinned release, always.
 	BrowserEngineV1_BROWSER_ENGINE_V1_LITE BrowserEngineV1 = 2
+	// Moli first, in the `lite` image (which also ships chrome-headless-shell):
+	// the session agent moves the session to Chrome, once, on an
+	// unsupported-protocol answer or an empty snapshot of a page with text,
+	// and tells the agent (the call's result) and the viewer (a notice
+	// `engine_switched`). Runs in the `lite` image under the `full` ceilings,
+	// since the session may end on Chrome.
+	BrowserEngineV1_BROWSER_ENGINE_V1_AUTO BrowserEngineV1 = 3
 )
 
 // Enum value maps for BrowserEngineV1.
@@ -39,11 +49,13 @@ var (
 		0: "BROWSER_ENGINE_V1_UNSPECIFIED",
 		1: "BROWSER_ENGINE_V1_FULL",
 		2: "BROWSER_ENGINE_V1_LITE",
+		3: "BROWSER_ENGINE_V1_AUTO",
 	}
 	BrowserEngineV1_value = map[string]int32{
 		"BROWSER_ENGINE_V1_UNSPECIFIED": 0,
 		"BROWSER_ENGINE_V1_FULL":        1,
 		"BROWSER_ENGINE_V1_LITE":        2,
+		"BROWSER_ENGINE_V1_AUTO":        3,
 	}
 )
 
@@ -1849,11 +1861,12 @@ const file_elitea_runtime_v1_browser_session_proto_rawDesc = "" +
 	"\x03end\x18\x03 \x01(\x0e2&.elitea.runtime.v1.BrowserSessionEndV1R\x03endJ\x04\b\x04\x10\x10\"\x80\x01\n" +
 	"\x1fDestroyBrowserSessionResponseV1\x12\x1c\n" +
 	"\tdestroyed\x18\x01 \x01(\bR\tdestroyed\x129\n" +
-	"\x19linger_until_unix_seconds\x18\x02 \x01(\x04R\x16lingerUntilUnixSecondsJ\x04\b\x03\x10\x10*l\n" +
+	"\x19linger_until_unix_seconds\x18\x02 \x01(\x04R\x16lingerUntilUnixSecondsJ\x04\b\x03\x10\x10*\x88\x01\n" +
 	"\x0fBrowserEngineV1\x12!\n" +
 	"\x1dBROWSER_ENGINE_V1_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16BROWSER_ENGINE_V1_FULL\x10\x01\x12\x1a\n" +
-	"\x16BROWSER_ENGINE_V1_LITE\x10\x02*\xa3\x01\n" +
+	"\x16BROWSER_ENGINE_V1_LITE\x10\x02\x12\x1a\n" +
+	"\x16BROWSER_ENGINE_V1_AUTO\x10\x03*\xa3\x01\n" +
 	"\x14BrowserPointerKindV1\x12'\n" +
 	"#BROWSER_POINTER_KIND_V1_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cBROWSER_POINTER_KIND_V1_MOVE\x10\x01\x12 \n" +

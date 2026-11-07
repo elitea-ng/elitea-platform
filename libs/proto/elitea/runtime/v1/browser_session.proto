@@ -62,14 +62,24 @@ option go_package = "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elit
 // file). Nothing a model chose is a selector here: the supervisor renders
 // the container from its own configuration plus the validated spec.
 
-// The engine a session runs (decision 2). Until the bake-off admits `lite`,
-// the platform offers only FULL.
+// The engine a session runs (decision 2). Until the bake-off admits `lite`
+// (decision 9), the platform offers only FULL: Main refuses a project
+// setting of `lite` or `auto` while the platform's admission is off, and a
+// supervisor profile without a `lite` image answers LITE and AUTO with
+// `browser_engine_unavailable`.
 enum BrowserEngineV1 {
   BROWSER_ENGINE_V1_UNSPECIFIED = 0;
   // chrome-headless-shell at the image's pinned Chrome for Testing version.
   BROWSER_ENGINE_V1_FULL = 1;
-  // Moli at the image's pinned commit.
+  // Moli at the `lite` image's pinned release, always.
   BROWSER_ENGINE_V1_LITE = 2;
+  // Moli first, in the `lite` image (which also ships chrome-headless-shell):
+  // the session agent moves the session to Chrome, once, on an
+  // unsupported-protocol answer or an empty snapshot of a page with text,
+  // and tells the agent (the call's result) and the viewer (a notice
+  // `engine_switched`). Runs in the `lite` image under the `full` ceilings,
+  // since the session may end on Chrome.
+  BROWSER_ENGINE_V1_AUTO = 3;
 }
 
 // BrowserSessionSpecV1 is the backend-independent container of one session.

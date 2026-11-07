@@ -67,8 +67,11 @@ pub struct EngineCeiling {
 /// The profile's image and ceilings (ADR-0049 decision 1).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserCeilings {
-    /// The session image, pinned by digest.
+    /// The session image, pinned by digest (chrome-headless-shell).
     pub image: String,
+    /// The `lite` session image (Moli and chrome-headless-shell), pinned by
+    /// digest; `None` when the profile does not run Moli.
+    pub lite_image: Option<String>,
     pub full: EngineCeiling,
     /// `None`: the profile does not run `lite`.
     pub lite: Option<EngineCeiling>,
@@ -83,10 +86,23 @@ pub struct BrowserCeilings {
 }
 
 impl BrowserCeilings {
+    /// The ceiling a session of `engine` runs under: `auto` may end on
+    /// Chrome, so it takes the `full` ceiling, and like `lite` it needs the
+    /// profile to run Moli at all.
     fn engine(&self, engine: Engine) -> Option<EngineCeiling> {
         match engine {
             Engine::Full => Some(self.full),
             Engine::Lite => self.lite,
+            Engine::Auto => self.lite.map(|_| self.full),
+        }
+    }
+
+    /// The image a session of `engine` runs.
+    fn image(&self, engine: Engine) -> Option<&str> {
+        if engine.needs_moli() {
+            self.lite_image.as_deref()
+        } else {
+            Some(self.image.as_str())
         }
     }
 }
@@ -302,14 +318,21 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionSupervis
         let (Some(grant), Some(spec)) = (grant, spec) else {
             return Err(Status::invalid_argument("A grant and a spec are required."));
         };
-        let container = BrowserSessionContainer::from_wire(spec, &self.ceilings.image, egress)
-            .map_err(|_| Status::invalid_argument("The browser session spec is invalid."))?;
-        let Some(ceiling) = self.ceilings.engine(container.engine) else {
-            return Err(coded(
+        let unavailable = || {
+            coded(
                 Code::FailedPrecondition,
                 "browser_engine_unavailable",
                 "This profile does not run that engine.",
-            ));
+            )
+        };
+        // The image follows the engine: Moli is only in the `lite` image.
+        let engine = super::browser_session::Engine::from_wire(spec.engine)
+            .ok_or_else(|| Status::invalid_argument("The browser session spec is invalid."))?;
+        let image = self.ceilings.image(engine).ok_or_else(unavailable)?;
+        let container = BrowserSessionContainer::from_wire(spec, image, egress)
+            .map_err(|_| Status::invalid_argument("The browser session spec is invalid."))?;
+        let Some(ceiling) = self.ceilings.engine(container.engine) else {
+            return Err(unavailable());
         };
         if container.cpu_millis > ceiling.max_cpu_millis
             || container.memory_bytes > ceiling.max_memory_bytes
