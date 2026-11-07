@@ -2703,6 +2703,22 @@ fails with `computer_use_off` and nothing is asked or read.
 `detail: <the reason>`, `bundle_id`, and a 15-minute wait: `approve` means
 "done", and anything else, an `approval_closed` timeout included, declines.
 
+Step records (ADR-0047 decision 9, #1585). Each computer call's tool step
+in the turn commit carries `computer_step`: `v`, `tool`, `outcome` (`ok`,
+an error code, or `declined`), `bundle_id`, `window_title`, `action`, `ref`,
+`text` as `{chars, digest}` for `computer_type` and a `set_value` act, and
+`screenshot` as `{taken, mime, bytes, width, height, zoom, digest}` for a
+call that captured one. The platform stores it as an ADR-0042 run step
+record of the turn. The typed text never leaves the model's context: the
+`tool_call`'s `args_summary`, the stored history and the commit's
+`tool_inputs` carry `text_chars` and `text_digest` (`value_chars` and
+`value_digest`) in its place. A screenshot's thumbnail rides the
+`tool_result` (`thumbnail`, above). The screenshot itself stays on the device
+unless `startLocalTurn` answered `computer_use.upload_screenshots: true` (the
+project setting): then it is uploaded with `uploadLocalTurnScreenshot`
+(contract 1.41) within 20 seconds, and the record adds `uploaded` and
+`artifact` (the stored path), or `uploaded: false` when the upload failed.
+
 ## Events
 
 Eleven event names, all emitted to the `main` window only: `browser://event`
@@ -2763,7 +2779,7 @@ order. Kinds and payloads:
 | `thinking_delta` | `{text}` — the model's reasoning as it streams (the gateway's `reasoning_content` / `reasoning` deltas), sent next to `text_delta` as it arrives; the transcript folds it into a collapsed "Thinking" block of the step (issue 1228). Never logged |
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
 | `tool_call` | `{call_id, tool, args_summary, remote: boolean}` |
-| `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean}` |
+| `tool_result` | `{call_id, ok: boolean, summary, truncated: boolean, thumbnail?}`. `thumbnail` (a `computer` call that took a screenshot, ADR-0047 decision 9): the screenshot as a `data:image/jpeg;base64,` URL, at most 160 px on its long side and 9 KiB. It is for the local transcript only; the commit and the stored history never carry it, and the turn commit records the screenshot as its size and digest in the step's `computer_step`. |
 | `usage` | `{model: string, step: number, prompt_tokens: number, completion_tokens: number, total_tokens: number, cached_tokens?: number, cache_write_tokens?: number, reasoning_tokens?: number, context?: ContextMeter}` — one of the turn's own model calls as the gateway reported it, sent once the call's stream ended (only when the gateway reported usage); `step` counts the turn's calls from 1. `prompt_tokens` is what that call sent, its cached reads (`prompt_tokens_details.cached_tokens`) and cache writes (`…cache_write_tokens`, Anthropic) included; `reasoning_tokens` are part of `completion_tokens` (`completion_tokens_details.reasoning_tokens`); each optional count only when non-zero. A step retried after a context overflow (below) sends the dropped call's usage too: both calls were billed. `context` (below) is that call's request occupancy as the host measured it before sending: the inspector's Context tab. A summary call's and a sub-agent's calls send none; they count in `usage_total` |
 | `usage_total` | `{prompt: number, completion: number, cached: number, cache_write: number, reasoning: number, calls: number, subagents?: {same fields}}` — once the run ended, before `status` `done`/`error`/`cancelled`: every model call made on the turn's execution id (the agent's steps, compaction summaries and sub-agents together: what the gateway's request log holds for it); `subagents` is the sub-agents' share, when any ran. The thread history keeps it past its event cap; a thread's total is the sum of its turns' |
 | `context` | `ContextMeter` (below) — the request occupancy when its `phase` changes: `compacting` as a summary call starts (the Context tab says "Summarizing…" while it runs), `compacted` once the step's request is the compacted one, `measured` again at the next call (or when a summary failed and the request went out uncompacted). A turn starts `measured`; calls that stay `measured` send none, their occupancy rides on `usage` |

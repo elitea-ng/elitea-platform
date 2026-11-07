@@ -50,6 +50,33 @@ describe('TurnTranscript', () => {
     expect(link).toHaveTextContent('Open pull request #7');
   });
 
+  it("shows a computer screenshot's thumbnail under its tool row", () => {
+    const thumbnail = 'data:image/jpeg;base64,/9j/4AAQ';
+    renderWithTheme(
+      <TurnTranscript
+        view={{
+          phase: null,
+          items: [
+            {
+              type: 'tool',
+              key: 'c1',
+              callId: 'c1',
+              tool: 'computer_screenshot',
+              argsSummary: 'com.apple.textedit',
+              remote: false,
+              result: { ok: true, summary: 'screenshot 1280x800', truncated: false, thumbnail },
+            },
+          ],
+          approvals: [],
+        }}
+        busy={false}
+      />,
+    );
+    const image = screen.getByTestId('tool-row-thumbnail');
+    expect(image).toHaveAttribute('src', thumbnail);
+    expect(image).toHaveAccessibleName('Screenshot the agent took');
+  });
+
   it('drops raw HTML the model writes instead of rendering it', () => {
     const text = renderText('before <img src="https://example.invalid/x.png" onerror="alert(1)"> after');
     expect(text.querySelector('img')).toBeNull();

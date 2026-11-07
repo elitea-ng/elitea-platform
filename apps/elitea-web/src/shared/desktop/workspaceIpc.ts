@@ -187,7 +187,7 @@ export type AgentEvent =
   | (EventBase & { kind: 'thinking_delta'; payload: ThinkingDeltaPayload })
   | (EventBase & { kind: 'thinking_end'; payload: ThinkingEndPayload })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
-  | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
+  | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean; /** A computer screenshot's `data:image/jpeg` URL (ADR-0047). */ thumbnail?: string } })
   /** One of the turn's model calls (`turnUsage.ts`): `prompt_tokens` is what it sent (the context in use); `context` its request occupancy (the composer's meter). Absent when the gateway reports no usage. */
   | (EventBase & { kind: 'usage'; payload: UsagePayload })
   | (EventBase & { kind: 'usage_total'; payload: UsageTotalPayload })

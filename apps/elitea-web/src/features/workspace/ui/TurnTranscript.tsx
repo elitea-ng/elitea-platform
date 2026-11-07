@@ -168,6 +168,23 @@ function ToolRow({ item }: { item: ToolItem }): React.JSX.Element {
           </Typography>
         </Collapse>
       )}
+      {result?.thumbnail !== undefined && (
+        <Box
+          component="img"
+          src={result.thumbnail}
+          alt={t('workspace.tool.screenshot', 'Screenshot the agent took')}
+          data-testid="tool-row-thumbnail"
+          sx={(theme: Theme) => ({
+            display: 'block',
+            marginLeft: 3,
+            marginTop: 0.5,
+            maxWidth: 160,
+            maxHeight: 160,
+            borderRadius: theme.vars.shape.radiusSm,
+            border: `1px solid ${theme.vars.palette.divider}`,
+          })}
+        />
+      )}
       {item.link !== undefined && (
         // `target="_blank"`: the desktop hands it to the system browser (`installExternalLinks`), never a webview.
         <Link href={item.link.href} target="_blank" rel="noopener noreferrer" variant="bodySmall" data-testid="tool-row-link" sx={{ display: 'block', marginLeft: 3, fontWeight: 600 }}>
