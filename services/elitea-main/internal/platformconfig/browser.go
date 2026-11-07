@@ -42,6 +42,36 @@ const (
 	MaxBrowserMonthlyQuotaSeconds = 100_000_000
 )
 
+// The cloud browser engines (ADR-0049 decision 2). `full` is
+// chrome-headless-shell, the default. `lite` is Moli. `auto` runs Moli first
+// and moves the session to Chrome on an unsupported protocol or an empty
+// snapshot.
+const (
+	BrowserEngineFull = "full"
+	BrowserEngineLite = "lite"
+	BrowserEngineAuto = "auto"
+)
+
+// BrowserLiteAdmitted says whether the bake-off of ADR-0049 decision 9
+// admitted Moli. It is false until the bake-off passes: Moli succeeds on at
+// least 80% of the read and extract tasks, loses no more than 10 points
+// against `full` overall, and has no crash or hang the session agent cannot
+// recover. The result is recorded as the ADR-0049 appendix
+// (deploy/browser-bakeoff, the browser-bakeoff workflow). Only the change
+// that records a passing appendix may set this to true; until then a
+// project's `browser` setting accepts only `full`, whatever the deployment
+// ships.
+const BrowserLiteAdmitted = false
+
+// BrowserEngines answers the engines a project may choose: `full` only, or
+// all three once Moli is admitted.
+func BrowserEngines(liteAdmitted bool) []string {
+	if liteAdmitted {
+		return []string{BrowserEngineFull, BrowserEngineLite, BrowserEngineAuto}
+	}
+	return []string{BrowserEngineFull}
+}
+
 // BrowserSettings is the platform section.
 type BrowserSettings struct {
 	Egress BrowserEgressMode
