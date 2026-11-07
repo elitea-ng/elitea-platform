@@ -6,6 +6,7 @@ use tonic::{Code, Status};
 
 use super::input_content::content_fake::{ContextAnswer, ContextCall, ContextRoutes, Routes};
 use super::runtime_context::{
+    AgentMemoryForgetRequest, AgentMemoryRecallRequest, AgentMemoryRememberRequest,
     ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest,
     RuntimeContextClient, RuntimeContextConfig, RuntimeContextError,
 };
@@ -769,6 +770,115 @@ async fn a_refused_artifact_document_is_terminal() {
         .await
     else {
         panic!("a refused artifact document was accepted");
+    };
+    assert_eq!(error.code(), "runtime_context.rejected");
+    assert!(!error.retryable());
+}
+
+/// The agent memory tools (#1607): one claim-bound call each, the entry in
+/// the document, and every answer checked against the accepted execution.
+#[tokio::test(flavor = "current_thread")]
+async fn agent_memory_calls_carry_the_entry_under_the_claim() {
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.agent-memory-remember.v1",
+        "project_id": 17,
+        "entry_id": "42",
+        "status": "pending",
+    })
+    .to_string();
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let remembered = client
+        .remember_agent_memory(
+            &test_runtime_context_authority(),
+            &AgentMemoryRememberRequest {
+                kind: "fact".to_owned(),
+                content: "The repo uses pnpm.".to_owned(),
+                about_user: false,
+                from_tool_output: true,
+            },
+        )
+        .await
+        .expect("claim-bound remember");
+    assert_eq!(remembered.entry_id, "42");
+    assert_eq!(remembered.status, "pending");
+    {
+        let captured = captured.lock().expect("captured call");
+        assert_eq!(captured[0].route, "agent-memory/remember");
+        assert_eq!(captured[0].claim, "claim-1");
+        let request: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
+        assert_eq!(request["content"], "The repo uses pnpm.");
+        assert_eq!(request["from_tool_output"], true);
+    }
+
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.agent-memory-recall.v1",
+        "project_id": 17,
+        "entries": [{"entry_id": "42", "kind": "fact", "content": "The repo uses pnpm.", "pinned": false}],
+    })
+    .to_string();
+    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let recalled = client
+        .recall_agent_memory(
+            &test_runtime_context_authority(),
+            &AgentMemoryRecallRequest {
+                query: "pnpm".to_owned(),
+                limit: 0,
+            },
+        )
+        .await
+        .expect("claim-bound recall");
+    assert_eq!(recalled.entries.len(), 1);
+
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.agent-memory-forget.v1",
+        "project_id": 17,
+        "forgotten": true,
+    })
+    .to_string();
+    let (client, _captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let forgotten = client
+        .forget_agent_memory(
+            &test_runtime_context_authority(),
+            &AgentMemoryForgetRequest {
+                entry_id: "42".to_owned(),
+            },
+        )
+        .await
+        .expect("claim-bound forget");
+    assert!(forgotten.forgotten);
+}
+
+/// An answer for another project, or of another schema, is refused; Main's
+/// refusal of the entry is terminal.
+#[tokio::test(flavor = "current_thread")]
+async fn agent_memory_answers_are_checked_and_refusals_are_terminal() {
+    let request = AgentMemoryForgetRequest {
+        entry_id: "42".to_owned(),
+    };
+    for raw in [
+        serde_json::json!({"schema_version": "elitea.runtime.agent-memory-forget.v1", "project_id": 18, "forgotten": true}),
+        serde_json::json!({"schema_version": "elitea.runtime.agent-memory-recall.v1", "project_id": 17, "forgotten": true}),
+    ] {
+        let (client, _captured) =
+            fake_client(ok(&raw.to_string()), Duration::from_secs(1), 32 * 1_024);
+        let Err(error) = client
+            .forget_agent_memory(&test_runtime_context_authority(), &request)
+            .await
+        else {
+            panic!("a mismatched agent memory answer was accepted");
+        };
+        assert_eq!(error.code(), "runtime_context.authorization_failed");
+    }
+    let (client, _captured) = fake_client(
+        Err(Status::failed_precondition("secret")),
+        Duration::from_secs(1),
+        32 * 1_024,
+    );
+    let Err(error) = client
+        .forget_agent_memory(&test_runtime_context_authority(), &request)
+        .await
+    else {
+        panic!("a refused agent memory call was accepted");
     };
     assert_eq!(error.code(), "runtime_context.rejected");
     assert!(!error.retryable());

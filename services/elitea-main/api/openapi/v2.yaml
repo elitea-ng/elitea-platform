@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.42"
+  x-elitea-client-contract: "1.43"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -8501,6 +8501,108 @@ components:
         refused with agent_certification_lapsed (lapse_action suspend).
       example: certified
 
+    AgentMemorySettings:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        write:
+          type: string
+          enum: [auto_attended, auto, review, 'off']
+          description: >
+            auto_attended: active when a person started the turn and nothing
+            came from tool output, else pending (always active in a personal
+            project). auto: always active. review: always pending until a
+            person approves. off: recall only.
+        recall:
+          type: object
+          additionalProperties: false
+          properties:
+            max_entries: { type: integer, minimum: 1, maximum: 50 }
+            max_tokens: { type: integer, minimum: 100, maximum: 8000 }
+      description: >
+        NOTE(W2): internal/domain/agentmemory/agentmemory.go, Parse.
+    AgentMemoryEntryVersion:
+      type: object
+      required: [version, kind, content, status, pinned, written_by_kind, written_by_user_id, created_at]
+      properties:
+        version: { type: integer }
+        kind: { $ref: '#/components/schemas/AgentMemoryKind' }
+        content: { type: string }
+        status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+        pinned: { type: boolean }
+        written_by_kind: { type: string, enum: [agent, person] }
+        written_by_user_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+      description: >
+        NOTE(W2): internal/infra/db/repos/agent_memory.go, AgentMemoryVersion.
+    AgentMemoryKind:
+      type: string
+      enum: [fact, preference, episode, cursor]
+    AgentMemoryStatus:
+      type: string
+      enum: [pending, active, archived]
+    AgentMemoryEntry:
+      type: object
+      required: [id, application_id, kind, content, subject_user_id, pinned, status, version,
+        conversation_uuid, message_id, execution_id, written_by_kind, written_by_user_id,
+        created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        kind: { $ref: '#/components/schemas/AgentMemoryKind' }
+        content: { type: string, maxLength: 2048 }
+        subject_user_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The person the entry is about. Visible only to that person and the agent's managers.
+        pinned: { type: boolean }
+        status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+        version: { type: integer }
+        conversation_uuid: { type: string, nullable: true }
+        message_id: { type: string, nullable: true }
+        execution_id: { type: string, nullable: true }
+        written_by_kind: { type: string, enum: [agent, person] }
+        written_by_user_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/AgentMemoryEntryVersion' }
+          description: Every version, newest first. Only on the single-entry read.
+      description: >
+        NOTE(W2): internal/infra/db/repos/agent_memory.go, AgentMemoryEntry.
+    AgentMemoryList:
+      type: object
+      required: [rows, total, can_manage, can_delete, can_approve, opted_out]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentMemoryEntry' }
+        total: { type: integer }
+        can_manage: { type: boolean, description: "The caller may edit, pin and archive any entry." }
+        can_delete: { type: boolean, description: The caller may delete any entry and clear the memory. }
+        can_approve: { type: boolean, description: The caller may approve or reject pending entries. }
+        opted_out: { type: boolean, description: The caller turned off "remember things about me" for this agent. }
+      description: >
+        NOTE(W2): internal/api/v2/agentmemory/handler.go, List.
+    AgentMemoryUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        content: { type: string, maxLength: 2048 }
+        kind: { type: string, enum: [fact, preference, episode] }
+        pinned: { type: boolean }
+        status: { $ref: '#/components/schemas/AgentMemoryStatus' }
+    AgentMemoryRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [not_found, memory_change_forbidden, memory_entry_invalid] }
+      description: >
+        NOTE(W2): internal/api/v2/agentmemory/handler.go, writeError.
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -11258,6 +11360,15 @@ components:
             RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the
             tier's cap. `step_limit` still bounds each agent loop: with
             `max_model_turns` the lower of the two stops first.
+        memory:
+          allOf: [{ $ref: '#/components/schemas/AgentMemorySettings' }]
+          nullable: true
+          description: >
+            The agent's own memory (ADR-0050 decision 1b). Absent is memory
+            off, which is every agent saved before memory existed; a new
+            agent's first version gets enabled true, write auto_attended. A
+            save with an invalid block is refused with 422
+            memory_block_invalid.
         output_contract:
           allOf: [{ $ref: '#/components/schemas/OutputContract' }]
           nullable: true
@@ -27977,6 +28088,192 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentLifecycleRefusal' }
+
+  /elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentMemory
+      summary: List an agent's memory entries
+      description: >
+        The agent's own memory in this project (ADR-0050 decision 1b),
+        pinned first, then newest. An entry about another person is listed
+        only for that person and the agent's managers (an owner or a holder
+        of `models.applications.memory.update`). Requires
+        `models.applications.memory.list`.
+      tags: [applications]
+      parameters:
+        - { name: kind, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryKind' } }
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryStatus' } }
+        - { name: subject_user_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: query, in: query, required: false, schema: { type: string, maxLength: 256 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The entries the caller may see
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    delete:
+      operationId: clearAgentMemory
+      summary: Delete every memory entry of an agent
+      description: >
+        Clears the agent's memory in this project. The agent's owners and
+        holders of `models.applications.memory.delete` only. Audited as
+        agent.memory.cleared. Requires `models.applications.memory.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: How many entries were deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cleared]
+                properties:
+                  cleared: { type: integer, format: int64 }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code memory_change_forbidden) Neither an owner nor a holder of the delete permission
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+
+  /elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}/{entry_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+      - name: entry_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentMemoryEntry
+      summary: Read one memory entry with its history
+      description: Requires `models.applications.memory.list`. An entry the caller may not see is 404.
+      tags: [applications]
+      responses:
+        '200':
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryEntry' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such entry, or not visible to the caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+    patch:
+      operationId: updateAgentMemoryEntry
+      summary: Edit, pin, archive, approve or reject one memory entry
+      description: >
+        Writes a new version. A manager may change everything; approving or
+        rejecting a pending entry (status active or archived) also needs
+        ownership or `models.applications.memory.approve`. A person may
+        correct the content of an entry about themself. The secret scanner
+        runs on new content. Requires `models.applications.memory.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentMemoryUpdate' }
+      responses:
+        '200':
+          description: The stored entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryEntry' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code memory_change_forbidden) The caller may not make this change
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+        '404':
+          description: (code not_found) No such entry, or not visible to the caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+        '422':
+          description: (code memory_entry_invalid) Empty, too long, a credential, or a status move that is not allowed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+    delete:
+      operationId: deleteAgentMemoryEntry
+      summary: Delete one memory entry
+      description: >
+        A manager with ownership or `models.applications.memory.delete`
+        deletes any entry; anyone deletes an entry about themself. Requires
+        `models.applications.memory.list`.
+      tags: [applications]
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code memory_change_forbidden) The caller may not delete this entry
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+        '404':
+          description: (code not_found) No such entry, or not visible to the caller
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMemoryRefusal' }
+
+  /elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    put:
+      operationId: setAgentMemoryOptOut
+      summary: Turn "remember things about me" off or on for an agent
+      description: >
+        opted_out true deletes what the agent holds about the caller and
+        stops it writing more; false lets it remember again. Requires
+        `models.applications.memory.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [opted_out]
+              properties:
+                opted_out: { type: boolean }
+      responses:
+        '200':
+          description: The stored choice
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [opted_out]
+                properties:
+                  opted_out: { type: boolean }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
 
   /elitea_core/permission_trimming/prompt_lib/{project_id}:
     parameters:

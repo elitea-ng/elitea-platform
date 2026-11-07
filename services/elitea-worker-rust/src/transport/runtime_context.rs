@@ -41,6 +41,9 @@ use crate::protocol::elitea::runtime::v1::{
     RuntimeContentScopeV1, WriteArtifactRequestV1, WriteProjectContextRequestV1,
     WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
+use crate::protocol::elitea::runtime::v1::{
+    ForgetAgentMemoryRequestV1, RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
+};
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
 };
@@ -76,6 +79,13 @@ const ATTACHMENT_UNIT_KINDS: [&str; 5] = ["page", "slide", "sheet", "section", "
 const MAX_ATTACHMENT_UNIT_LABEL_BYTES: usize = 512;
 const SKILL_WRITE_SCHEMA: &str = "elitea.runtime.skill-write.v1";
 const PROJECT_CONTEXT_WRITE_SCHEMA: &str = "elitea.runtime.project-context-write.v1";
+/// The agent memory tools' three schemas (ADR-0050 decision 1b, #1607),
+/// `services/elitea-main/internal/infra/storage/runtime_agent_memory.go`.
+const AGENT_MEMORY_REMEMBER_SCHEMA: &str = "elitea.runtime.agent-memory-remember.v1";
+const AGENT_MEMORY_RECALL_SCHEMA: &str = "elitea.runtime.agent-memory-recall.v1";
+const AGENT_MEMORY_FORGET_SCHEMA: &str = "elitea.runtime.agent-memory-forget.v1";
+/// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
+const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
 /// The `artifact` toolkit family's four schemas (#906).
 const ARTIFACT_LIST_SCHEMA: &str = "elitea.runtime.artifact-list.v1";
 const ARTIFACT_READ_SCHEMA: &str = "elitea.runtime.artifact-read.v1";
@@ -874,6 +884,114 @@ impl RuntimeContextClient {
             .map_err(|_| {
                 RuntimeContextError::Timeout("the project context write request timed out")
             })?
+    }
+
+    /// Store one entry in the claimed run's agent's memory (#1607). Main
+    /// decides the agent, the status the entry lands in and who it may be
+    /// about; the request carries only the entry.
+    pub(crate) async fn remember_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryRememberRequest,
+    ) -> Result<AgentMemoryRemembered, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            RememberAgentMemoryRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            AGENT_MEMORY_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .remember_agent_memory(request)
+                .await
+                .map_err(|status| context_status(status, Some(agent_memory_rejection())))?
+                .into_inner()
+                .response_json;
+            let decoded: AgentMemoryRemembered = agent_memory_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                AGENT_MEMORY_REMEMBER_SCHEMA,
+                &binding,
+            )?;
+            Ok(decoded)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the agent memory write timed out"))?
+    }
+
+    /// Recall the claimed run's agent's entries that match a query.
+    pub(crate) async fn recall_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryRecallRequest,
+    ) -> Result<AgentMemoryRecalled, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            RecallAgentMemoryRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            AGENT_MEMORY_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .recall_agent_memory(request)
+                .await
+                .map_err(|status| context_status(status, Some(agent_memory_rejection())))?
+                .into_inner()
+                .response_json;
+            agent_memory_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                AGENT_MEMORY_RECALL_SCHEMA,
+                &binding,
+            )
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the agent memory recall timed out"))?
+    }
+
+    /// Delete one entry of the claimed run's agent's memory.
+    pub(crate) async fn forget_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryForgetRequest,
+    ) -> Result<AgentMemoryForgotten, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            ForgetAgentMemoryRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            AGENT_MEMORY_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .forget_agent_memory(request)
+                .await
+                .map_err(|status| context_status(status, Some(agent_memory_rejection())))?
+                .into_inner()
+                .response_json;
+            agent_memory_response(
+                &bounded_document(body, self.config.max_response_bytes)?,
+                AGENT_MEMORY_FORGET_SCHEMA,
+                &binding,
+            )
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the agent memory forget timed out"))?
     }
 
     /// One artifact response document, within the artifact family's own
@@ -1687,6 +1805,141 @@ struct AttachmentObjectResponseV2 {
     token_estimate: u64,
     complete: bool,
     partial_reason: String,
+}
+
+/// The remember tool's request (`RuntimeAgentMemoryRememberRequest`).
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AgentMemoryRememberRequest {
+    pub(crate) kind: String,
+    pub(crate) content: String,
+    pub(crate) about_user: bool,
+    /// The run read tool or document output before this write: Main may
+    /// only make the write pending for it, never active.
+    pub(crate) from_tool_output: bool,
+}
+
+/// The recall tool's request.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AgentMemoryRecallRequest {
+    pub(crate) query: String,
+    pub(crate) limit: u32,
+}
+
+/// The forget tool's request.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct AgentMemoryForgetRequest {
+    pub(crate) entry_id: String,
+}
+
+/// Every agent memory response carries these two, checked against the
+/// accepted execution.
+trait AgentMemoryEnvelope {
+    fn schema_version(&self) -> &str;
+    fn project_id(&self) -> u64;
+}
+
+/// Main's answer to a remember call: the entry and the status it landed in
+/// (`active` or `pending`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentMemoryRemembered {
+    schema_version: String,
+    project_id: u64,
+    pub(crate) entry_id: String,
+    pub(crate) status: String,
+}
+
+/// One recalled entry.
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentMemoryRecalledEntry {
+    pub(crate) entry_id: String,
+    pub(crate) kind: String,
+    pub(crate) content: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) about_user: String,
+    pub(crate) pinned: bool,
+}
+
+/// Main's answer to a recall call.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentMemoryRecalled {
+    schema_version: String,
+    project_id: u64,
+    pub(crate) entries: Vec<AgentMemoryRecalledEntry>,
+}
+
+/// Main's answer to a forget call.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentMemoryForgotten {
+    schema_version: String,
+    project_id: u64,
+    pub(crate) forgotten: bool,
+}
+
+macro_rules! agent_memory_envelope {
+    ($($type:ty),*) => {$(
+        impl AgentMemoryEnvelope for $type {
+            fn schema_version(&self) -> &str {
+                &self.schema_version
+            }
+            fn project_id(&self) -> u64 {
+                self.project_id
+            }
+        }
+    )*};
+}
+agent_memory_envelope!(
+    AgentMemoryRemembered,
+    AgentMemoryRecalled,
+    AgentMemoryForgotten
+);
+
+const AGENT_MEMORY_AUTHORITY_MALFORMED: &str = "the agent memory request authority is malformed";
+
+/// `FailedPrecondition` on a memory call means Main refused the ENTRY (a
+/// secret, an agent without memory, a write the taint rule blocks), not
+/// the claim.
+const fn agent_memory_rejection() -> RuntimeContextError {
+    RuntimeContextError::Rejected("the agent memory refused the request")
+}
+
+fn encode_agent_memory_body<T: serde::Serialize>(
+    request: &T,
+) -> Result<Vec<u8>, RuntimeContextError> {
+    let body = serde_json::to_vec(request).map_err(|_| {
+        RuntimeContextError::InvalidConfiguration("the agent memory request is not encodable")
+    })?;
+    if body.len() > MAX_AGENT_MEMORY_REQUEST_BYTES {
+        return Err(RuntimeContextError::ResourceExhausted(
+            "the agent memory request exceeds the approved limit",
+        ));
+    }
+    Ok(body)
+}
+
+fn agent_memory_response<T>(
+    body: &[u8],
+    schema: &str,
+    binding: &RuntimeContextRedemptionBinding<'_>,
+) -> Result<T, RuntimeContextError>
+where
+    T: for<'de> Deserialize<'de> + AgentMemoryEnvelope,
+{
+    let decoded: T = serde_json::from_slice(body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the agent memory response is malformed")
+    })?;
+    if decoded.schema_version() != schema
+        || decoded.project_id() == 0
+        || decoded.project_id().to_string() != binding.resource_project_id
+    {
+        return Err(RuntimeContextError::AuthorizationFailed(
+            "the agent memory response does not match the accepted execution",
+        ));
+    }
+    Ok(decoded)
 }
 
 #[derive(Deserialize)]

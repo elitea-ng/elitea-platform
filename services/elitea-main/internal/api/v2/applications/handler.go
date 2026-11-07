@@ -19,6 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/ownership"
@@ -585,6 +586,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			req.InitialVersion = versionFromBody(vBody, ownerID)
+			// ADR-0050 decision 1b: memory is on for a new agent (and off
+			// for every agent saved before, which has no block).
+			if req.InitialVersion != nil && req.InitialVersion.Meta != nil {
+				if _, present := req.InitialVersion.Meta[agentmemory.MetaKey]; !present {
+					req.InitialVersion.Meta[agentmemory.MetaKey] = agentmemory.DefaultNew.Block()
+				}
+			}
 			if !applySoul(w, vBody, req.InitialVersion) {
 				return
 			}

@@ -30,6 +30,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
+	v2agentmemory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmemory"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
@@ -4680,6 +4681,27 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post(v2agentlifecycle.AttestationsPath, lifecycle.RecordAttestation)
 					r.With(projectPermission(agentlifecycle.AttestationsWritePermission)).
 						Post(v2agentlifecycle.RevokeAttestPath, lifecycle.RevokeAttestation)
+				}
+				// An agent's own memory (ADR-0050 decision 1b, #1607). Every
+				// route takes models.applications.memory.list; the handler
+				// decides edit, delete and approve from ownership and the
+				// update, delete and approve permissions, and keeps an entry
+				// about a person to that person and the agent's managers.
+				{
+					var memoryStore *dbrepos.AgentMemory
+					if cfg.Pool != nil {
+						memoryStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
+					}
+					memory := v2agentmemory.NewHandler(memoryStore, func(r *http.Request, permission string) (bool, error) {
+						return apimw.HoldsResolvedPermission(coreResolver, platformauth.PermissionModeDefault, permission)(r)
+					})
+					readMemory := projectPermission(v2agentmemory.ListPermission)
+					r.With(readMemory).Get(v2agentmemory.EntriesPath, memory.List)
+					r.With(readMemory).Delete(v2agentmemory.EntriesPath, memory.Clear)
+					r.With(readMemory).Get(v2agentmemory.EntryPath, memory.Get)
+					r.With(readMemory).Patch(v2agentmemory.EntryPath, memory.Update)
+					r.With(readMemory).Delete(v2agentmemory.EntryPath, memory.Delete)
+					r.With(readMemory).Put(v2agentmemory.OptOutPath, memory.SetOptOut)
 				}
 				// Run step records (ADR-0042 decisions 1 and 2): every read,
 				// the content's included, takes runs.evidence.read; a content

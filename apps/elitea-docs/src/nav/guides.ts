@@ -49,6 +49,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/agents-pipelines/entity-versioning', title: 'Version agents and pipelines' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/import-export', title: 'Import and export entities' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/forking', title: 'Fork an agent or toolkit' },
+        { kind: 'page', slug: 'how-tos/agents-pipelines/agent-memory', title: 'Agent memory' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/publishing', title: 'Publish agents and skills' },
       ],
     },

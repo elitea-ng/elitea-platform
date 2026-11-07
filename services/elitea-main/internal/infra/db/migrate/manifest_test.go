@@ -1046,7 +1046,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0049 decision 6, #1597): elitea_runtime.browser_sessions, written
 	// by ReportBrowserSession and read by the view relay on any replica. No
 	// data, no permission.
-	require.EqualValues(t, 228, Head(shared))
+	//
+	// 229: shared/0229_agent_memory_permissions.sql, the agent memory
+	// permissions models.applications.memory.{list,update,delete,approve}
+	// (ADR-0050 decision 1b, issue 1607): list to the default-mode admin,
+	// editor and viewer, the other three to the default-mode admin, and the
+	// same on saved project matrices. No table.
+	require.EqualValues(t, 229, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1298,7 +1304,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// addressed_to, visibility and cause, their insert triggers and a
 	// backfill from entity_name and sent_to_id (ADR-0050 decision 7a and 7b,
 	// issue 1605). No permission.
-	require.EqualValues(t, 162, Head(tenant))
+	//
+	// 163: tenant/0163_agent_memory_entries.sql, an agent's own memory per
+	// project: agent_memory_entries, agent_memory_entry_versions and
+	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
+	// data, no permission.
+	require.EqualValues(t, 163, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

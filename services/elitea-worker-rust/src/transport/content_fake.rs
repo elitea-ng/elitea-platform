@@ -71,8 +71,9 @@ pub(crate) struct Served<F>(pub(crate) F);
 pub(crate) struct ContextCall {
     /// A stable name for the call, the route under `runtime-context/` it
     /// replaced: `elitea-client-token`, `applications/{a}/versions/{v}`,
-    /// `attachments/{bucket}/{name}`, `skills`, `project-context` or
-    /// `artifacts/{list,read,write,delete}`.
+    /// `attachments/{bucket}/{name}`, `skills`, `project-context`,
+    /// `artifacts/{list,read,write,delete}` or
+    /// `agent-memory/{remember,recall,forget}`.
     pub(crate) route: String,
     pub(crate) execution_id: String,
     pub(crate) generation: u64,
@@ -244,6 +245,48 @@ impl<R: ContextRoutes> ContentFake for Routes<R> {
             .await?;
         reply(pb::WriteProjectContextResponseV1 { response_json })
     }
+    async fn remember_agent_memory(
+        &self,
+        request: Request<pb::RememberAgentMemoryRequestV1>,
+    ) -> Result<Response<pb::RememberAgentMemoryResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "agent-memory/remember".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::RememberAgentMemoryResponseV1 { response_json })
+    }
+    async fn recall_agent_memory(
+        &self,
+        request: Request<pb::RecallAgentMemoryRequestV1>,
+    ) -> Result<Response<pb::RecallAgentMemoryResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "agent-memory/recall".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::RecallAgentMemoryResponseV1 { response_json })
+    }
+    async fn forget_agent_memory(
+        &self,
+        request: Request<pb::ForgetAgentMemoryRequestV1>,
+    ) -> Result<Response<pb::ForgetAgentMemoryResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "agent-memory/forget".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::ForgetAgentMemoryResponseV1 { response_json })
+    }
     async fn list_artifacts(
         &self,
         request: Request<pb::ListArtifactsRequestV1>,
@@ -380,6 +423,9 @@ content_fake! {
     execute_http_action(ExecuteHttpActionRequestV1) -> ExecuteHttpActionResponseV1;
     write_skill(WriteSkillRequestV1) -> WriteSkillResponseV1;
     write_project_context(WriteProjectContextRequestV1) -> WriteProjectContextResponseV1;
+    remember_agent_memory(RememberAgentMemoryRequestV1) -> RememberAgentMemoryResponseV1;
+    recall_agent_memory(RecallAgentMemoryRequestV1) -> RecallAgentMemoryResponseV1;
+    forget_agent_memory(ForgetAgentMemoryRequestV1) -> ForgetAgentMemoryResponseV1;
     list_artifacts(ListArtifactsRequestV1) -> ListArtifactsResponseV1;
     read_artifact(ReadArtifactRequestV1) -> ReadArtifactResponseV1;
     write_artifact(WriteArtifactRequestV1) -> WriteArtifactResponseV1;

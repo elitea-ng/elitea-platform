@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.42
+ * client contract:    1.43
  * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
  */
 export interface paths {
@@ -2090,6 +2090,19 @@ export interface components {
                 value?: string;
             }[];
             welcome_message?: string;
+        };
+        /** @description NOTE(W2): internal/domain/agentmemory/agentmemory.go, Parse. */
+        AgentMemorySettings: {
+            enabled?: boolean;
+            recall?: {
+                max_entries?: number;
+                max_tokens?: number;
+            };
+            /**
+             * @description auto_attended: active when a person started the turn and nothing came from tool output, else pending (always active in a personal project). auto: always active. review: always pending until a person approves. off: recall only.
+             * @enum {string}
+             */
+            write?: "auto_attended" | "auto" | "review" | "off";
         };
         /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
@@ -4434,6 +4447,8 @@ export interface components {
             };
             /** @description Identifiers of the agent's enabled internal tools (e.g. "internal_mcp"). Client-owned: elitea-main never inspects the key — UpdateVersion assigns the whole meta map it receives (applications/handler.go:826-828) — but the legacy UI writes it here and the replatformed edit page both reads and writes it, so it is modelled rather than left to the passthrough marker below. */
             internal_tools?: string[];
+            /** @description The agent's own memory (ADR-0050 decision 1b). Absent is memory off, which is every agent saved before memory existed; a new agent's first version gets enabled true, write auto_attended. A save with an invalid block is refused with 422 memory_block_invalid. */
+            memory?: components["schemas"]["AgentMemorySettings"] | null;
             /** @description NOTE(#898): the editor's free-text "Editor Notes". It has no column of its own on `application_versions` and is not meant to: the legacy runtime stores it inside this same jsonb (elitea_issues issue 5410 chose the blob over a per-tenant schema migration), folding the top-level `notes` write field in (legacy/plugins/elitea_core/utils/application_utils.py:191-211) and lifting it back out on read (models/pd/version.py:297-307). This service does the same, and additionally leaves the key in place here — the agent editor round-trips `meta` wholesale, so deleting it from the read would make an ordinary save of any other field erase the notes. Documentation only: never sent to the model, to chat, or to execution. */
             notes?: string;
             /** @description The shape the agent's final answer must have (ADR-0043 decision 2). Null or absent is no contract. A save with an invalid contract is refused with 422 OUTPUT_CONTRACT_INVALID. */

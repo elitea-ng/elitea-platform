@@ -729,6 +729,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	var agentJobs *repos.AgentExecutionJobsRepository
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
+	// The agent's own memory (#1607): one store for the recall at turn
+	// start and the worker's memory tools.
+	var agentMemoryStore *repos.AgentMemory
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
 	var executionInterrupts *repos.ExecutionInterruptRepository
@@ -1030,6 +1033,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			agentStart.WithOriginalSourceDefinitions(codeSources)
 		}
 		agentStart = agentStart.WithMemories(repos.NewMemoriesRepo(dependencies.AdmissionPool))
+		// #1607: the agent's own memory, recalled after the person's.
+		var memoryErr error
+		if agentMemoryStore, memoryErr = repos.ComposeAgentMemory(dependencies.AdmissionPool); memoryErr != nil {
+			return nil, fmt.Errorf("construct agent memory: %w", memoryErr)
+		}
+		agentStart = agentStart.WithAgentMemory(agentMemoryStore)
 		// The approval policy's pipeline hitl rule (ADR-0041 decision 5).
 		pipelineApproval, targetErr := workerapprovalpolicyapp.NewPipelineAdmission(approvalSettings, egressSources)
 		if targetErr != nil {
@@ -2035,6 +2044,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// takes, because the write must land in the same database the claimed
 	// execution_jobs row lives in.
 	var entityBuilders *storage.RuntimeEntityBuilderService
+	// The agent memory tools (#1607): the same claim and pool as the
+	// builder writes, absent wherever they are.
+	var agentMemoryTools *storage.RuntimeAgentMemoryService
+	if agentMemoryStore != nil {
+		agentMemoryTools, err = storage.NewRuntimeAgentMemoryService(contentRepository, agentMemoryStore)
+		if err != nil {
+			return nil, fmt.Errorf("construct agent memory tools: %w", err)
+		}
+	}
 	if config.AgentExecutionDispatchEnabled {
 		builderSink, builderErr := repos.NewCurrentRuntimeEntityBuilderRepository(
 			dependencies.AdmissionPool,
@@ -2481,6 +2499,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// branch leaves entityBuilders nil, so the routes are ABSENT rather than
 	// present-and-refusing wherever agent execution is not dispatched.
 	contentServer = contentServer.WithRuntimeEntityBuilders(entityBuilders)
+	contentServer = contentServer.WithRuntimeAgentMemory(agentMemoryTools)
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object
 	// store, leaves them ABSENT rather than present-and-failing. A mixed

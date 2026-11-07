@@ -256,6 +256,8 @@ type CurrentApplicationStartService struct {
 	// long-term memory, exactly its pre-#870 behavior.
 	contextPolicy CurrentContextPolicySource
 	memories      CurrentMemoryRecallResolver
+	// agentMemory is the agent's own memory (#1607, agent_memory.go).
+	agentMemory AgentMemoryRecallResolver
 	// projectContext is optional — attached after construction via
 	// WithProjectContext (#946, projectcontext.go). A service nobody attaches
 	// it to injects no project context, which is what every test that
@@ -407,9 +409,14 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	// admission gate that refused every turn in a context-bearing project;
 	// see projectcontext.go's header.
 	projectContextText := service.resolveCurrentProjectContextText(ctx, request.ProjectID)
+	// #1607: the agent's own notes, after the person's memories.
+	agentMemoryText := service.resolveAgentMemoryText(
+		ctx, request.ProjectID, target.ApplicationID, request.ConversationUUID,
+		currentMemoryRecallUserInputText(request.UserInput), target.VersionDetails,
+	)
 	input, err := currentApplicationInput(
-		request, target, toolkitGuardrails, attachments, memoryRecall.Text,
-		projectContextText,
+		request, target, toolkitGuardrails, attachments,
+		joinRecallText(memoryRecall.Text, agentMemoryText), projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err

@@ -963,6 +963,60 @@ BEGIN
         CREATE INDEX IF NOT EXISTS ix_tenant_personal_memory_entries_user_enabled
             ON %I.personal_memory_entries (user_id, enabled, created_at DESC)', schema_name);
 
+    -- An agent's own memory per project (ADR-0050 decision 1b, issue 1607).
+    -- The same shape as tenant/0163_agent_memory_entries.sql, which carries
+    -- the full account; declared here for the reason the personal memory
+    -- block above gives.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.agent_memory_entries (
+            id BIGSERIAL PRIMARY KEY,
+            application_id BIGINT NOT NULL CHECK (application_id > 0),
+            kind TEXT NOT NULL
+                CHECK (kind IN (''fact'', ''preference'', ''episode'', ''cursor'')),
+            content TEXT NOT NULL
+                CHECK (btrim(content) <> '''' AND octet_length(content) <= 2048),
+            subject_user_id INTEGER CHECK (subject_user_id IS NULL OR subject_user_id > 0),
+            pinned BOOLEAN NOT NULL DEFAULT false,
+            status TEXT NOT NULL DEFAULT ''active''
+                CHECK (status IN (''pending'', ''active'', ''archived'')),
+            version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+            conversation_uuid UUID,
+            message_id TEXT CHECK (message_id IS NULL OR length(message_id) BETWEEN 1 AND 64),
+            execution_id TEXT CHECK (execution_id IS NULL OR length(execution_id) BETWEEN 1 AND 128),
+            written_by_kind TEXT NOT NULL CHECK (written_by_kind IN (''agent'', ''person'')),
+            written_by_user_id INTEGER CHECK (written_by_user_id IS NULL OR written_by_user_id > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+        )', schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS ix_agent_memory_entries_agent_status
+            ON %I.agent_memory_entries (application_id, status, pinned DESC, updated_at DESC)', schema_name);
+    EXECUTE format('
+        CREATE INDEX IF NOT EXISTS ix_agent_memory_entries_subject
+            ON %I.agent_memory_entries (application_id, subject_user_id)
+            WHERE subject_user_id IS NOT NULL', schema_name);
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.agent_memory_entry_versions (
+            entry_id BIGINT NOT NULL REFERENCES %I.agent_memory_entries (id) ON DELETE CASCADE,
+            version INTEGER NOT NULL CHECK (version > 0),
+            content TEXT NOT NULL CHECK (octet_length(content) <= 2048),
+            kind TEXT NOT NULL
+                CHECK (kind IN (''fact'', ''preference'', ''episode'', ''cursor'')),
+            status TEXT NOT NULL CHECK (status IN (''pending'', ''active'', ''archived'')),
+            pinned BOOLEAN NOT NULL,
+            written_by_kind TEXT NOT NULL CHECK (written_by_kind IN (''agent'', ''person'')),
+            written_by_user_id INTEGER CHECK (written_by_user_id IS NULL OR written_by_user_id > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            PRIMARY KEY (entry_id, version)
+        )', schema_name, schema_name);
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.agent_memory_subject_optouts (
+            application_id BIGINT NOT NULL CHECK (application_id > 0),
+            user_id INTEGER NOT NULL CHECK (user_id > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+            PRIMARY KEY (application_id, user_id)
+        )', schema_name);
+
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1321,6 +1375,27 @@ CROSS JOIN (VALUES
     ('models.chat.messages.details')
 ) AS grant_row(permission)
 WHERE role.mode = 'default' AND role.name IN ('admin', 'editor', 'viewer')
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1607, agent memory (ADR-0050 decision 1b): members read an agent's
+-- memory; the project admin edits, deletes and approves entries. Existing
+-- databases get the grants from
+-- migrations/shared/0229_agent_memory_permissions.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'models.applications.memory.list'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name IN ('admin', 'editor', 'viewer')
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, grant_row.permission
+FROM auth_core__role AS role
+CROSS JOIN (VALUES
+    ('models.applications.memory.update'),
+    ('models.applications.memory.delete'),
+    ('models.applications.memory.approve')
+) AS grant_row(permission)
+WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
 -- Default dev user

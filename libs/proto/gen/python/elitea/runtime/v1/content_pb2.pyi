@@ -169,6 +169,48 @@ class WriteProjectContextResponseV1(_message.Message):
     response_json: bytes
     def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
 
+class RememberAgentMemoryRequestV1(_message.Message):
+    __slots__ = ("scope", "request_json")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    request_json: bytes
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class RememberAgentMemoryResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class RecallAgentMemoryRequestV1(_message.Message):
+    __slots__ = ("scope", "request_json")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    request_json: bytes
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class RecallAgentMemoryResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
+class ForgetAgentMemoryRequestV1(_message.Message):
+    __slots__ = ("scope", "request_json")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    request_json: bytes
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class ForgetAgentMemoryResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
 class ListArtifactsRequestV1(_message.Message):
     __slots__ = ("scope", "request_json")
     SCOPE_FIELD_NUMBER: _ClassVar[int]

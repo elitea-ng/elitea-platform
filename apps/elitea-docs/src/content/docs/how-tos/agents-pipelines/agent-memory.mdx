@@ -1,0 +1,70 @@
+---
+title: "Agent memory"
+description: "How an agent keeps notes across conversations in a project, who can see and change them, and how to turn it off."
+---
+
+An agent can keep short notes from one conversation to the next: a fact about the project, a preference someone stated, or what happened in an earlier episode. The notes belong to the agent **in one project**. Another project's copy of the same agent, a fork, or an export never sees them.
+
+This is separate from your personal memory, which follows you across agents. An agent's memory follows the agent.
+
+## What the agent does with it
+
+- **At the start of a turn** the agent is given its most relevant notes: pinned notes first, then the ones that share words with your message, then the newest. By default at most 12 notes and about 1,500 tokens are used. A note is used whole or not at all.
+- **During a turn** the agent has three tools: `remember` saves a note, `recall` looks for notes the start of the turn left out, and `forget` deletes a wrong note.
+- **Notes about a person** are used only when that person is in the conversation. An agent never recalls what it noted about you in a conversation you are not part of.
+
+The notes are given to the agent as its own notes, not as instructions from the agent's author.
+
+## When a note waits for approval
+
+Each agent has a write mode:
+
+| Mode | What happens to a note the agent saves |
+| --- | --- |
+| `auto_attended` (default) | Saved straight away when a person started the run and the agent had not read tool or document output first. Otherwise the note is **pending** until someone approves it. |
+| `auto` | Always saved straight away. |
+| `review` | Always pending until approved. |
+| `off` | The agent cannot save or delete notes. It can still read existing ones. |
+
+In your personal project, notes are always saved straight away (except in `review` mode): nobody else is there to approve them.
+
+A pending note is never given to the agent until it is approved.
+
+## What is never saved
+
+- **Secrets.** A note that looks like a password, API key, token, private key or a connection string with a password is refused, both by the agent and by the platform.
+- **What came from your personal memory.** Once your personal memory has been read in a conversation, the agent can only save notes **about you** in that conversation, so nothing from your personal memory reaches a note others can see.
+- **Notes about you, if you opt out.** Turn off "remember things about me" for an agent and it deletes its notes about you and saves no new ones.
+
+Notes are at most 2,048 bytes. An agent keeps at most 2,000 active notes; past that, its oldest unpinned episodes are archived.
+
+## Turn memory on or off
+
+A new agent has memory on, in `auto_attended` mode. An agent created before this release has it off until you turn it on.
+
+The setting is the `memory` block of the version's `meta`:
+
+```json
+{
+  "memory": {
+    "enabled": true,
+    "write": "auto_attended",
+    "recall": { "max_entries": 12, "max_tokens": 1500 }
+  }
+}
+```
+
+`max_entries` is 1 to 50 and `max_tokens` is 100 to 8,000. A block with another key or a value out of range is refused (`memory_block_invalid`). The agent form's Memory tab, which edits this block and the notes, is coming in a later release; until then, set the block through the API or an export.
+
+## Who can see and change the notes
+
+| Who | Can |
+| --- | --- |
+| A project member who can use the agent (`models.applications.memory.list`) | List the notes, except notes about other people. Correct or delete a note about themself. Opt out. |
+| An agent owner, or a holder of `models.applications.memory.update` | Also see every note, edit, pin and archive notes. |
+| An agent owner, or a holder of `models.applications.memory.delete` | Also delete any note and clear all of them. |
+| An agent owner, or a holder of `models.applications.memory.approve` | Also approve or reject pending notes. |
+
+A project admin holds all four. Every edit keeps the previous text as a version. Every change is written to the [audit trail](/admin/audit-trail) as an `ai.elitea.security.v1.agent.memory.changed` event.
+
+The API routes are under `/api/v2/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}` (list, clear, and `/{entry_id}` to read, edit or delete) and `/api/v2/elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}`.
