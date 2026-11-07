@@ -159,6 +159,21 @@ describe('turnReducer', () => {
     expect(activeView(state).commitFailed).toMatchObject({ message: 'still not saved' });
   });
 
+  it('keeps a computer screenshot thumbnail on its tool row, and only a JPEG data URL', () => {
+    const jpeg = 'data:image/jpeg;base64,/9j/4AAQ';
+    const shot = (seq: number, id: string, thumbnail: string): AgentEvent => ({
+      turn_id: T,
+      seq,
+      kind: 'tool_result',
+      payload: { call_id: id, ok: true, summary: 'screenshot', truncated: false, thumbnail },
+    });
+    const view = activeView(run([call(1, 'c1'), shot(2, 'c1', jpeg), call(3, 'c2'), shot(4, 'c2', 'https://example.com/x.png')]));
+    expect(view.items[0]).toMatchObject({ type: 'tool', result: { thumbnail: jpeg } });
+    expect(view.items[1]).toMatchObject({ type: 'tool', result: { summary: 'screenshot' } });
+    const second = view.items[1];
+    expect(second?.type === 'tool' ? second.result : undefined).not.toHaveProperty('thumbnail');
+  });
+
   it('shows an unmatched tool_result rather than dropping it', () => {
     const view = activeView(run([result(1, 'ghost')]));
     expect(view.items[0]).toMatchObject({ type: 'tool', callId: 'ghost', result: { summary: 'ok' } });

@@ -107,6 +107,8 @@ import type {
   LocalTurnCommitRequest,
   LocalTurnCommitted,
   LocalTurnError,
+  LocalTurnScreenshotStored,
+  LocalTurnScreenshotUpload,
   LocalTurnStartRequest,
   LocalTurnStarted,
   MarkConversationReadRequest,
@@ -8722,6 +8724,383 @@ export function useCommitLocalTurn<
     projectId,
     executionId,
     localTurnCommitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadLocalTurnScreenshotResponse201 = {
+  data: LocalTurnScreenshotStored;
+  status: 201;
+};
+
+export type uploadLocalTurnScreenshotResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type uploadLocalTurnScreenshotResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadLocalTurnScreenshotResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type uploadLocalTurnScreenshotResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type uploadLocalTurnScreenshotResponse409 = {
+  data: LocalTurnError;
+  status: 409;
+};
+
+export type uploadLocalTurnScreenshotResponse410 = {
+  data: LocalTurnError;
+  status: 410;
+};
+
+export type uploadLocalTurnScreenshotResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type uploadLocalTurnScreenshotResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type uploadLocalTurnScreenshotResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type uploadLocalTurnScreenshotResponse429 = {
+  data: LocalTurnError;
+  status: 429;
+};
+
+export type uploadLocalTurnScreenshotResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type uploadLocalTurnScreenshotResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type uploadLocalTurnScreenshotResponseSuccess =
+  uploadLocalTurnScreenshotResponse201 & {
+    headers: Headers;
+  };
+export type uploadLocalTurnScreenshotResponseError = (
+  | uploadLocalTurnScreenshotResponse400
+  | uploadLocalTurnScreenshotResponse401
+  | uploadLocalTurnScreenshotResponse403
+  | uploadLocalTurnScreenshotResponse404
+  | uploadLocalTurnScreenshotResponse409
+  | uploadLocalTurnScreenshotResponse410
+  | uploadLocalTurnScreenshotResponse413
+  | uploadLocalTurnScreenshotResponse415
+  | uploadLocalTurnScreenshotResponse426
+  | uploadLocalTurnScreenshotResponse429
+  | uploadLocalTurnScreenshotResponse500
+  | uploadLocalTurnScreenshotResponse503
+) & {
+  headers: Headers;
+};
+
+export type uploadLocalTurnScreenshotResponse =
+  | uploadLocalTurnScreenshotResponseSuccess
+  | uploadLocalTurnScreenshotResponseError;
+
+export const getUploadLocalTurnScreenshotUrl = (
+  projectId: string,
+  executionId: string,
+) => {
+  return `/elitea_core/local_turn_screenshot/prompt_lib/${projectId}/${executionId}`;
+};
+
+/**
+ * Client contract 1.41 (ADR-0047 decision 9). Only when the project
+ * opted in (`computer_use.upload_screenshots`, which the start answers
+ * as `computer_use`); otherwise 403 `computer_screenshot_upload_off`
+ * and the screenshot stays on the device. Stores the image as an
+ * attachment of the turn's conversation, through the chat attachment
+ * path (its bucket, size limit and retention), and answers its
+ * `filepath`, which the desktop host records in the call's
+ * `computer_step.screenshot.artifact`.
+ *
+ * Only the credential that started the turn, while the turn is not
+ * committed and not past its deadline (404, 409
+ * `local_turn_already_committed`, 410 `local_turn_expired`). The
+ * digest is checked against the decoded content. One turn uploads at
+ * most 64 screenshots (429 `computer_screenshot_limit`) and 64 MiB of
+ * them (413 `computer_screenshot_limit`); the stored name carries the
+ * turn's execution id (`computer-screenshot-<execution_id>-<id>`).
+ * @summary Upload a desktop computer use screenshot as a run artifact
+ */
+export const uploadLocalTurnScreenshot = async (
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadLocalTurnScreenshotResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<uploadLocalTurnScreenshotResponse>(
+    getUploadLocalTurnScreenshotUrl(projectId, executionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localTurnScreenshotUpload),
+    },
+  );
+};
+
+export const getUploadLocalTurnScreenshotQueryKey = (
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload?: LocalTurnScreenshotUpload,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_turn_screenshot/prompt_lib/${projectId}/${executionId}`,
+    localTurnScreenshotUpload,
+  ] as const;
+};
+
+export const getUploadLocalTurnScreenshotQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadLocalTurnScreenshotQueryKey(
+      projectId,
+      executionId,
+      localTurnScreenshotUpload,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>
+  > = ({ signal }) =>
+    uploadLocalTurnScreenshot(
+      projectId,
+      executionId,
+      localTurnScreenshotUpload,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadLocalTurnScreenshotQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>
+>;
+export type UploadLocalTurnScreenshotQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useUploadLocalTurnScreenshot<
+  TData = Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+          TError,
+          Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadLocalTurnScreenshot<
+  TData = Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+          TError,
+          Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadLocalTurnScreenshot<
+  TData = Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Upload a desktop computer use screenshot as a run artifact
+ */
+
+export function useUploadLocalTurnScreenshot<
+  TData = Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnScreenshotUpload: LocalTurnScreenshotUpload,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadLocalTurnScreenshot>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadLocalTurnScreenshotQueryOptions(
+    projectId,
+    executionId,
+    localTurnScreenshotUpload,
     options,
   );
 

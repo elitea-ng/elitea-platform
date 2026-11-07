@@ -1093,5 +1093,6 @@
   "workspace.panel.browser": "Browser",
   "workspace.approval.allowThread": "Allow for this thread",
   "workspace.approval.allowSiteThread": "Allow for {{site}} in this thread",
-  "workspace.panel.allowedThread": "Allowed for this thread"
+  "workspace.panel.allowedThread": "Allowed for this thread",
+  "workspace.tool.screenshot": "Screenshot the agent took"
 }

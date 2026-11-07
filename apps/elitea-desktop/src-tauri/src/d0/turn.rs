@@ -3078,6 +3078,11 @@ impl AgentHost {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
+        // The turn's screenshot uploads (the project's opt-in) ran beside
+        // it; their outcomes go into the step records now, bounded.
+        recorder
+            .settle_uploads(crate::computer_tools::UPLOAD_SETTLE_WAIT)
+            .await;
         // Encoded in the commit's job: a goal check may change the chain's
         // outcome after `done`.
         let commit_body = CommitBody {
@@ -4367,11 +4372,21 @@ impl AgentHost {
                     .unwrap_or_default();
                 policy.allowed && crate::computer_tools::offered(&policy, device_switch())
             });
+            // Screenshots stay on the device unless the project opted in to
+            // uploading them as run artifacts (ADR-0047 decision 9).
+            let uploader = crate::computer_tools::screenshot_uploader(
+                api,
+                request.project_id,
+                &started.execution_id,
+                &started.computer_use,
+            );
             provider = provider.with(Arc::new(crate::computer_tools::ComputerToolProvider::new(
                 computer.host(),
                 &workspace.session,
                 workspace.session.vision(),
                 enabled,
+                Some(recorder.clone()),
+                uploader,
             )));
         }
         // The nested agents, as cloud child turns of this one (#1239).

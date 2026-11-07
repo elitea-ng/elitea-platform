@@ -56,6 +56,36 @@ fn named(key: &str) -> Option<(&'static str, &'static str, u32, &'static str)> {
     })
 }
 
+/// The text a named key types (`"\r"` for Enter), or `""`.
+pub(crate) fn named_text(key: &str) -> &'static str {
+    named(key).map_or("", |(_, _, _, text)| text)
+}
+
+/// The `windowsVirtualKeyCode` of a DOM `key` as the view sends it: a named
+/// key, a modifier, a space, an ASCII letter or digit; 0 for anything else.
+pub(crate) fn virtual_key_code(key: &str) -> u32 {
+    if let Some((_, _, vk, _)) = named(key) {
+        return vk;
+    }
+    let modifier = match key {
+        " " => return 32,
+        "Alt" => Modifier::Alt,
+        "Control" => Modifier::Control,
+        "Meta" => Modifier::Meta,
+        "Shift" => Modifier::Shift,
+        _ => {
+            let mut chars = key.chars();
+            return match (chars.next(), chars.next()) {
+                (Some(ch), None) if ch.is_ascii_alphanumeric() => {
+                    u32::from(ch.to_ascii_uppercase())
+                }
+                _ => 0,
+            };
+        }
+    };
+    modifier_key(modifier).2
+}
+
 /// The events of one key or chord, in order: modifiers down, the key down
 /// and up, modifiers up.
 #[must_use]

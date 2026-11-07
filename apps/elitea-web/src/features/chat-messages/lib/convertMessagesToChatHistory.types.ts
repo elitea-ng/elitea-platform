@@ -85,6 +85,13 @@ export interface ChatMessage {
   readonly requiresConfirmation?: { readonly message: string; readonly buttonText: string } | undefined;
   readonly threadId?: string | undefined;
   readonly taskId?: string | undefined;
+  /**
+   * The run a LIVE answer streams from, stamped by the transport (#1598) so
+   * the chat can find the run's cloud browser. Kept apart from `taskId`,
+   * which only the read rows set: chain follow reads a read row's `taskId`
+   * differing from the live one as "this answer runs again".
+   */
+  readonly executionId?: string | undefined;
   readonly originalId?: string | number | undefined;
   /** How many persistent memories (#870) this turn's recall used — see `AssistantMessage.memoriesUsed`'s own comment. */
   readonly memoriesUsed?: number | undefined;

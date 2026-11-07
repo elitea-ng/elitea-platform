@@ -52,6 +52,9 @@ func TestWorkerEgressSettingNeedsTheProjectSettingsPermission(t *testing.T) {
 	if !editor.projectSettingsWriteForbidden(ctx, "7", "browser") {
 		t.Fatalf("an editor without models.project_settings.edit may write the browser setting")
 	}
+	if !editor.projectSettingsWriteForbidden(ctx, "7", "computer_use") {
+		t.Fatalf("an editor without models.project_settings.edit may write the computer_use setting")
+	}
 	if admin.projectSettingsWriteForbidden(ctx, "7", "browser") {
 		t.Fatalf("a project admin was refused the browser setting")
 	}

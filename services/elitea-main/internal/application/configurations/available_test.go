@@ -53,6 +53,8 @@ func TestPinnedCurrentAvailableCatalogMatchesCurrentFixedRegistry(t *testing.T) 
 		"ai_disclosure",
 		// Registered in Go: the cloud browser project setting (ADR-0049).
 		"browser",
+		// Registered in Go: the desktop computer use project setting (ADR-0047).
+		"computer_use",
 	}
 	gotTypes := make([]string, len(entries))
 	for index, entry := range entries {

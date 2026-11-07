@@ -23,10 +23,17 @@ export type TranscriptItem =
       tool: string;
       argsSummary: string;
       remote: boolean;
-      result?: { ok: boolean; summary: string; truncated: boolean };
+      /** `thumbnail`: a computer screenshot's `data:image/jpeg` URL (ADR-0047 decision 9). */
+      result?: { ok: boolean; summary: string; truncated: boolean; thumbnail?: string };
       /** A page the step produced (a pushed branch, a pull request): an `https:` link the row shows. */
       link?: { href: string; label: string };
       process?: ToolProcess;
     }
   /** A message the person sent while the turn ran (`steer_injected`): the agent got it at this point of the turn. */
   | { type: 'steer'; key: string; steerId: string; text: string };
+
+/** A tool row's result; `thumbnail` kept only when it is a JPEG data URL (a computer screenshot, ADR-0047 decision 9), never a page address. */
+export function toolResult(ok: boolean, summary: string, truncated: boolean, thumbnail?: unknown): NonNullable<Extract<TranscriptItem, { type: 'tool' }>['result']> {
+  const shown = typeof thumbnail === 'string' && thumbnail.startsWith('data:image/jpeg;base64,') && thumbnail.length <= 16 * 1024;
+  return shown ? { ok, summary, truncated, thumbnail } : { ok, summary, truncated };
+}

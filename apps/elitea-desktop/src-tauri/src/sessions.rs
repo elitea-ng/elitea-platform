@@ -1386,6 +1386,15 @@ pub fn bounded(mut event: Event) -> Event {
     if let Some(content) = event.llm_response.content.as_mut() {
         for part in &mut content.parts {
             match part {
+                // What a `computer` call typed is never stored (ADR-0047
+                // decision 9): only the model's request of this turn had
+                // it; the stored call keeps its length.
+                Part::FunctionCall { name, args, .. } => {
+                    let recorded = crate::computer_tools::recorded_inputs(name, args, None);
+                    if recorded != *args {
+                        *args = recorded;
+                    }
+                }
                 Part::FunctionResponse {
                     function_response, ..
                 } => {

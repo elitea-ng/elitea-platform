@@ -120,6 +120,52 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	if !started.Created || started.ParticipantID != int64(fixture.dummyID) {
 		t.Fatalf("start = %+v, want created, answered by the dummy participant %d", started, fixture.dummyID)
 	}
+	// Computer use screenshots (ADR-0047 decision 9): off with no setting
+	// row, on with the opt-in; only the starting credential's open turn
+	// takes an upload.
+	repo := NewLocalTurnsRepo(pool)
+	if on, err := repo.UploadScreenshots(ctx, 1); err != nil || on {
+		t.Fatalf("upload without a setting row = %v, %v; want off", on, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('6b0f9e4c-2a1d-4c3b-9e8f-1585a0470009'::uuid, 1, 'Computer use', 'computer_use', 'computer_use', 'project_settings',
+        '{"upload_screenshots": true}'::jsonb, '{}'::jsonb, false, true, 'user', $1::integer, now() AT TIME ZONE 'UTC')`, user); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := repo.UploadScreenshots(ctx, 1); err != nil || !on {
+		t.Fatalf("upload with the opt-in = %v, %v; want on", on, err)
+	}
+	if conversation, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, desktop); err != nil || conversation != fixture.conversationUUID {
+		t.Fatalf("screenshot turn = %q, %v", conversation, err)
+	}
+	if _, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, localturn.Credential{TokenID: "99"}); !errors.Is(err, localturn.ErrNotFound) {
+		t.Fatalf("another credential's screenshot turn = %v, want ErrNotFound", err)
+	}
+	// A turn's uploads are counted from the conversation's attachment rows
+	// named after it: another turn's, and another bucket type's, are not.
+	var bucket int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type)
+VALUES (1, 'chat-attachments', 'chat-attachments', 'system') RETURNING id`).Scan(&bucket); err != nil {
+		t.Fatal(err)
+	}
+	prefix := fixture.conversationUUID + "/computer-screenshot-" + started.ExecutionID + "-"
+	for key, size := range map[string]int64{
+		prefix + "a.png": 100, prefix + "b.jpg": 50,
+		fixture.conversationUUID + "/computer-screenshot-" + strings.Repeat("f", 32) + "-c.png": 7,
+		fixture.conversationUUID + "/notes.txt":                                                 9,
+	} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_storage.objects (bucket_id, key, byte_length) VALUES ($1::bigint, $2::text, $3::bigint)`,
+			bucket, key, size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, size, err := repo.CountConversationAttachments(ctx, 1, prefix); err != nil || count != 2 || size != 150 {
+		t.Fatalf("turn screenshots = %d, %d bytes, %v; want 2 and 150", count, size, err)
+	}
+
 	// The recall is the cloud resolver's: the memory saved before the user's
 	// first turn in the project is reserved and recalled.
 	if started.Recall.Count != 1 || !strings.Contains(started.Recall.Text, "Prefers tabs over spaces.") {
@@ -195,7 +241,14 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 		AssistantMessage: "Fixed: the assertion compared the wrong field.",
 		ToolCalls: json.RawMessage(`{"run-1": {"run_id": "run-1", "tool_name": "shell",
 			"tool_inputs": {"command": "cargo test"}, "tool_output": "1 failed",
-			"timestamp_start": "2026-10-08T10:00:00Z", "timestamp_finish": "2026-10-08T10:00:05Z"}}`),
+			"timestamp_start": "2026-10-08T10:00:00Z", "timestamp_finish": "2026-10-08T10:00:05Z"},
+			"run-2": {"run_id": "run-2", "tool_name": "computer_type",
+			"tool_inputs": {"bundle_id": "com.apple.TextEdit", "text_chars": 6, "text_digest": "sha256:ab"},
+			"tool_output": "{\"status\":\"ok\"}",
+			"timestamp_start": "2026-10-08T10:00:06Z", "timestamp_finish": "2026-10-08T10:00:07Z",
+			"computer_step": {"v": 1, "tool": "computer_type", "outcome": "ok", "bundle_id": "com.apple.textedit",
+				"window_title": "Notes", "action": "type", "ref": "e4",
+				"text": {"chars": 6, "digest": "sha256:ab", "value": "secret"}, "typed": "secret"}}}`),
 		ThinkingSteps: []json.RawMessage{json.RawMessage(`{"type": "thinking", "thinking": "look at the test",
 			"timestamp_start": "2026-10-08T09:59:59Z"}`)},
 		HITLExchanges: []localturn.HITLExchange{{
@@ -249,6 +302,9 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	if _, err := service.Start(ctx, start); !errors.Is(err, localturn.ErrAlreadyCommitted) {
 		t.Fatalf("a start after the commit = %v, want ErrAlreadyCommitted", err)
 	}
+	if _, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, desktop); !errors.Is(err, localturn.ErrAlreadyCommitted) {
+		t.Fatalf("a screenshot after the commit = %v, want ErrAlreadyCommitted", err)
+	}
 
 	// The delta surfaces both messages to another client.
 	after, err := conversations.ListMessageChanges(ctx, "1", fixture.conversationUUID, before.NextCursor, 100)
@@ -294,6 +350,24 @@ WHERE g.uuid = $1::uuid`, started.ResponseMessageID).Scan(&toolSteps, &thinkingS
 	}
 	if toolSteps != 1 || thinkingSteps != 1 {
 		t.Fatalf("trace rows = %d tool, %d thinking; want 1 and 1", toolSteps, thinkingSteps)
+	}
+
+	// The computer call is an ADR-0042 step record of the turn (ADR-0047
+	// decision 9), written once although the commit was retried; no typed
+	// text reaches it, even when a client sends some.
+	var (
+		stepCount int
+		summary   string
+		name      string
+	)
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), max(summary::text), max(name)
+FROM elitea_runtime.run_steps WHERE run_id = $1::text AND kind = 'tool_call'`, started.ExecutionID).Scan(&stepCount, &summary, &name); err != nil {
+		t.Fatal(err)
+	}
+	if stepCount != 1 || name != "computer_type" || !strings.Contains(summary, `"window_title": "Notes"`) ||
+		!strings.Contains(summary, `"chars": 6`) || strings.Contains(summary, "secret") {
+		t.Fatalf("computer step records = %d (%s %s), want one without the typed text", stepCount, name, summary)
 	}
 
 	// The commit's audit names what the client reported.
