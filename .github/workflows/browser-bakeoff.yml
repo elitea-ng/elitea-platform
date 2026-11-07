@@ -1,0 +1,171 @@
+name: Browser engine bake-off (ADR-0049)
+
+# ADR-0049 decision 9 (#1599): the bake-off that decides whether Moli
+# (`lite`, and `auto`, which starts on it) is offered to projects. Manual
+# only: it reaches about 40 public sites, so it runs when someone moves the
+# Moli pin or wants the numbers, never on a pull request or a schedule.
+#
+#   1. Build the lite session image (libs/rust/browser-session/Containerfile,
+#      --target lite): chrome-headless-shell and Moli, both fetched and
+#      verified by SHA-256 inside the build, never on the runner.
+#   2. Run libs/rust/browser-session/tests/bakeoff.rs INSIDE that image under
+#      gVisor (runsc), the production arrangement: every corpus task on
+#      `full`, `lite` and `auto`, one fresh session each, through the browser
+#      tools, by the same scripted agent.
+#   3. scripts/ci/browser-bakeoff-report.mjs applies the admission rule and
+#      writes the report to the job summary and the `browser-bakeoff`
+#      artifact (results.jsonl, report.md, verdict.json).
+#
+# A passing verdict does NOT admit Moli by itself: the report is recorded as
+# the ADR-0049 appendix (elitea-docs), and that change sets
+# platformconfig.BrowserLiteAdmitted and publishes elitea-browser-session-lite.
+#
+# No push arm (scripts/ci/check-no-push-triggers.mjs) and no schedule. It
+# writes no cache: it only reads (scripts/ci/check-workflow-cache-writes.mjs).
+
+on:
+  workflow_dispatch:
+    inputs:
+      engines:
+        description: "Engines to run, comma-separated (full,lite,auto)"
+        required: false
+        default: "full,lite,auto"
+      only:
+        description: "Only these task ids, comma-separated (empty: the whole corpus)"
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  # gVisor, as ci-browser-session.yml pins it: a dated release, by SHA-512.
+  GVISOR_RELEASE: "20261102"
+  GVISOR_SHA512: "3c400f72be459b57b99b1c4f69be96bcd67eef3caf2078e595fc98e688b6b9a3af7802646b3dde7da8a9aba96d34f86be303e0430c7868ab2d13becdd403c0c1"
+
+jobs:
+  bakeoff:
+    name: Bake-off — full, lite and auto over the corpus, under gVisor
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Assert the pinned toolchain
+        working-directory: libs/rust
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: The workflow inputs are task ids and engine names
+        env:
+          ENGINES: ${{ inputs.engines }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          [[ "${ENGINES}" =~ ^(full|lite|auto)(,(full|lite|auto))*$ ]] \
+            || { echo "::error::engines must be full, lite and auto, comma-separated"; exit 1; }
+          [[ -z "${ONLY}" || "${ONLY}" =~ ^[a-z0-9-]+(,[a-z0-9-]+)*$ ]] \
+            || { echo "::error::only must be task ids, comma-separated"; exit 1; }
+          case ",${ENGINES}," in *,full,*) ;; *) echo "::error::the rule compares lite with full: include full"; exit 1 ;; esac
+
+      # Read only: the bake-off is not a cache writer.
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: browser-session
+          save-if: false
+          cache-targets: false
+          workspaces: libs/rust
+
+      - name: Install gVisor (runsc)
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/gvisor"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+            -o "$dir/gvisor.tar.zstd" \
+            "https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/x86_64/gvisor.tar.zstd"
+          echo "${GVISOR_SHA512}  $dir/gvisor.tar.zstd" | sha512sum -c -
+          tar --zstd -xf "$dir/gvisor.tar.zstd" -C "$dir"
+          runsc="$(find "$dir" -type f -name runsc | head -1)"
+          test -n "$runsc"
+          sudo install -m 0755 "$runsc" /usr/local/bin/runsc
+          sudo /usr/local/bin/runsc install
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | grep -q runsc
+
+      - name: Build the lite session image
+        run: |
+          set -euo pipefail
+          docker build -f libs/rust/browser-session/Containerfile --target lite \
+            -t elitea-browser-session-lite:bakeoff .
+          docker run --rm --entrypoint cat elitea-browser-session-lite:bakeoff /opt/moli/MOLI_VERSION
+
+      - name: Build the bake-off runner
+        working-directory: libs/rust
+        run: |
+          set -euo pipefail
+          bin="$(cargo test --locked -p elitea-browser-session --test bakeoff --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "bakeoff" and .executable != null) | .executable' | tail -1)"
+          test -x "$bin"
+          echo "BAKEOFF_BIN=$bin" >> "$GITHUB_ENV"
+
+      # The image's own pod spec, as near as docker gets: read-only root, uid
+      # 10001, memory-backed /tmp and /dev/shm, gVisor. Unlike production the
+      # container has the runner's network, and the runner's own loopback
+      # forward proxy (in bakeoff.rs) stands in for the egress proxy: the
+      # bake-off measures engines, not egress policy.
+      - name: Run the corpus in the image, under gVisor
+        env:
+          ENGINES: ${{ inputs.engines }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/bakeoff"
+          mkdir -p "$out"
+          chmod 0777 "$out"
+          docker run --rm --runtime=runsc --read-only \
+            --user 10001:10001 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1024m \
+            --tmpfs /dev/shm:rw,nosuid,nodev,size=512m \
+            -v "${BAKEOFF_BIN}:/usr/local/bin/bakeoff:ro" \
+            -v "${GITHUB_WORKSPACE}/libs/rust/browser-session/bakeoff/corpus.json:/bakeoff/corpus.json:ro" \
+            -v "$out:/out" \
+            -e ELITEA_BROWSER_ENGINE=/opt/chrome-headless-shell/chrome-headless-shell \
+            -e ELITEA_BROWSER_MOLI=/opt/moli/moli \
+            -e ELITEA_BAKEOFF_CORPUS=/bakeoff/corpus.json \
+            -e ELITEA_BAKEOFF_OUT=/out/results.jsonl \
+            -e ELITEA_BAKEOFF_ENGINES="${ENGINES}" \
+            -e ELITEA_BAKEOFF_ONLY="${ONLY}" \
+            --entrypoint /usr/local/bin/bakeoff \
+            elitea-browser-session-lite:bakeoff the_bake_off --exact --nocapture
+          test -s "$out/results.jsonl" || { echo "::error::the runner wrote no result"; exit 1; }
+
+      - name: Apply the admission rule
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/bakeoff"
+          node scripts/ci/browser-bakeoff-report.mjs "$out/results.jsonl" --json "$out/verdict.json" > "$out/report.md"
+          {
+            echo "### Browser engine bake-off (ADR-0049 decision 9)"
+            echo ""
+            echo "Commit ${GITHUB_SHA}, run ${GITHUB_RUN_ID}."
+            echo ""
+            cat "$out/report.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-bakeoff
+          path: ${{ runner.temp }}/bakeoff/
+          if-no-files-found: warn
+          retention-days: 90

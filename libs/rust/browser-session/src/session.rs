@@ -154,6 +154,14 @@ impl Session {
         self.driver.lock().await.clone()
     }
 
+    /// The engine the session runs now, its process id and whether it is
+    /// alive; `None` before `start`. For the bake-off's measurements
+    /// (`bakeoff.rs`): an `auto` session reports Chrome after a switch.
+    pub async fn engine_state(&self) -> Option<(EngineKind, Option<u32>, bool)> {
+        let driver = self.driver().await?;
+        Some((driver.kind(), driver.engine_pid(), driver.is_alive()))
+    }
+
     fn notify(&self, code: &'static str) {
         log(code);
         if let Some(notices) = self
