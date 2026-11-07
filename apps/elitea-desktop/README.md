@@ -388,6 +388,12 @@ numeric `X.Y.Z`, CFBundleVersion = the run number), so neither file is bumped by
 hand. The job fails when any secret below is missing; it never publishes an
 unsigned app.
 
+**Keep the bundle id and the team stable.** macOS keys the privacy grants
+computer use needs (Accessibility, Screen Recording, Input Monitoring;
+ADR-0047) to the bundle id `ai.elitea.desktop` (`tauri.conf.json`
+`identifier`) and the signing team. Changing either resets them: every
+person must grant them again in Settings › Computer use.
+
 Repository secrets (Settings › Secrets and variables › Actions):
 
 | Secret | What it holds | How to get it |

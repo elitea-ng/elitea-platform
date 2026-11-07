@@ -11098,3 +11098,73 @@ async fn a_refused_or_expired_resume_ends_the_chain_and_deletes_the_record() {
     assert_eq!(start_bodies(&h.server).len(), before, "nothing started");
     until_records(&h, "the expired record dropped", <[_]>::is_empty).await;
 }
+
+/// Revoke "always for this app" (Settings > Computer use, #1584): every
+/// folder is tried even when one cannot be rewritten, and the failure is
+/// reported with how many were forgotten.
+#[tokio::test]
+async fn revoking_an_app_reaches_every_folder_and_reports_the_one_that_failed() {
+    let server = serve(|_req: &Req| Res::json(404, &json!({}))).await;
+    let h = harness(server, allowed(), UiDecision::Deny).await;
+    let second = tempfile::tempdir().unwrap();
+    let other = h.workspaces.add(second.path()).unwrap().id;
+    let choices = json!([
+        { "tool": "computer_act", "bundle_id": "com.apple.textedit" },
+        { "tool": "computer_read", "bundle_id": "com.apple.textedit" },
+        { "tool": "computer_read", "bundle_id": "com.apple.notes" },
+    ]);
+    let dirs = [
+        h.workspaces.data_dir(&h.workspace_id),
+        h.workspaces.data_dir(&other),
+    ];
+    for dir in &dirs {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("choices.json"), choices.to_string()).unwrap();
+    }
+    assert_eq!(
+        h.host.remembered_apps(),
+        [
+            ("com.apple.notes".to_owned(), true, false),
+            ("com.apple.textedit".to_owned(), true, true),
+        ]
+    );
+    // The first folder cannot be rewritten: its directory is read-only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dirs[0], std::fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    let failed = h.host.forget_remembered_app("com.apple.TextEdit");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dirs[0], std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = failed.unwrap_err();
+        assert_eq!(error.code, "storage");
+        assert!(
+            error
+                .message
+                .starts_with("2 answer(s) forgotten, but 1 folder"),
+            "{}",
+            error.message
+        );
+    }
+    // The other folder lost the answer despite the first one failing.
+    let kept: Value =
+        serde_json::from_slice(&std::fs::read(dirs[1].join("choices.json")).unwrap()).unwrap();
+    let bundles: Vec<&str> = kept
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|choice| choice["bundle_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(bundles, ["com.apple.notes"]);
+    assert_eq!(
+        h.host.forget_remembered_app("com.apple.textedit").unwrap(),
+        2
+    );
+    assert_eq!(
+        h.host.remembered_apps(),
+        [("com.apple.notes".to_owned(), true, false)]
+    );
+}

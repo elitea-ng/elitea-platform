@@ -9,12 +9,27 @@ In the Elitea desktop app on macOS, the agent of a **Local work** thread can see
 
 <Steps>
 1. Your organization's client policy must allow computer use (`local_work_computer_use`). If it does not, the agent has no `computer` tools, and any call is denied.
-2. Turn on the device switch. In the app's `settings.json` (in the app's configuration folder), set `"computer_use": true`. It is off unless it is `true`.
-3. Grant **Accessibility** to Elitea in **System Settings ▸ Privacy & Security ▸ Accessibility**. Without it the agent cannot read or operate any app.
-4. To let the agent take screenshots, also grant **Screen Recording** in **System Settings ▸ Privacy & Security ▸ Screen Recording**, then restart Elitea. Without it, the screenshot and coordinate-click tools are not offered.
+2. Open **Settings ▸ Computer use** in the app. The page shows the policy, the permissions macOS has granted Elitea right now, and the device switch.
+3. Grant **Accessibility**: select **Open System Settings** next to it and turn Elitea on in **Privacy & Security ▸ Accessibility**. Without it the agent cannot read or operate any app, and the switch stays off.
+4. To let the agent take screenshots, also grant **Screen Recording** the same way, then restart Elitea. Without it, `computer_screenshot` and `computer_click_at` are not offered; the page names them.
+5. Turn on **Let the agent use this computer**. It is off until you turn it on.
 </Steps>
 
 The next turn of a thread has the tools. Sub-agents never get them, and a cloud run never has them.
+
+<Note>
+macOS keeps these grants for the app's bundle id (`ai.elitea.desktop`) and its signing team. An Elitea build with another bundle id or team, a self-built one for example, starts with no grants: grant them again.
+</Note>
+
+## While the agent uses your computer
+
+The agent's first `computer` call of a turn starts a session. A small panel stays on top of every window, on every desktop, until the turn ends. It shows the app the agent is in and its last action, with **Pause** and **Stop**. You cannot hide it while the session runs. The menu-bar item shows the same state and the same buttons.
+
+- **Pause.** Select **Pause** in the panel or the menu-bar item. Nothing the agent asks of the computer runs until you select **Resume**; its calls are refused with `user_active` meanwhile.
+- **When you use the computer, it pauses.** If you type, click, drag or scroll in another app while the agent works, the session pauses at once and the panel says **Paused, you are using the computer**. The action the agent was doing stops, and nothing runs until you select **Resume**, so the agent never fights you for the keyboard or the pointer. Moving the pointer alone, and using Elitea's own windows, do not pause it.
+- **Stop.** Select **Stop**, or press **Control-Option-Escape** (⌃⌥⎋) anywhere. The agent's current action fails with `stopped_by_user`, and it has no `computer` tools for the rest of the turn. The next turn can use them again.
+
+If macOS does not let Elitea watch the keyboard and the pointer, the agent can still see apps but cannot act in them (`user_active_guard_unavailable`). Grant Accessibility, and Input Monitoring if macOS asks for it (**Settings ▸ Computer use ▸ Open Input Monitoring**).
 
 ## What the agent can do
 
@@ -78,4 +93,6 @@ The setting is off when the project has none. A turn reads it when it starts, so
 
 ## Turn it off
 
-Set `"computer_use": false` in `settings.json`, or remove the key. The next call of a running turn is refused (`computer_use_off`), and the next turn has no `computer` tools. The same holds when your organization turns the policy off. To forget an **Always for this app** answer, remove it in the app's remembered choices.
+Turn off **Let the agent use this computer** in **Settings ▸ Computer use**. The next call of a running turn is refused (`computer_use_off`), and the next turn has no `computer` tools. The same holds when your organization turns the policy off.
+
+To forget an **Always for this app** answer, select **Revoke** next to the app under **Always allowed apps** in **Settings ▸ Computer use**. It is forgotten for seeing and acting, in every folder, and the agent asks again from its next call.

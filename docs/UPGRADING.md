@@ -19,6 +19,21 @@ worker refuses an input whose view digest does not match its history.
   "share history from: now". Only `since_joined` and `full` are accepted.
 - Saves with an invalid `meta.context` answer `422 context_block_invalid`.
 
+## Desktop: computer use session panel, stop shortcut and Settings page (#1584, ADR-0047 decisions 6 and 7)
+
+No operator action. No migration, no new operation, no contract change.
+
+- The desktop's device switch moves from editing `settings.json` to
+  Settings › Computer use; the key (`"computer_use": true`) is the same,
+  so a switch already on stays on.
+- A session now pauses on the person's own keyboard or pointer input and
+  stops on Control-Option-Escape. Without the input watch (macOS refused
+  it) acts fail with `user_active_guard_unavailable`; reads still run.
+- macOS keeps the Accessibility and Screen Recording grants for the
+  bundle id `ai.elitea.desktop` and its signing team. A rebuilt or
+  re-signed app with another id or team starts with no grants; anyone
+  distributing their own build must tell people to grant them again.
+
 ## Agent memory tab and chip (#1608, ADR-0050 decision 1b)
 
 No operator action. No migration.

@@ -1792,6 +1792,8 @@ version = "0.1.0"
 dependencies = [
  "agent-desktop-core",
  "agent-desktop-macos",
+ "core-foundation",
+ "core-graphics",
  "image",
  "serde",
  "thiserror 2.0.21",

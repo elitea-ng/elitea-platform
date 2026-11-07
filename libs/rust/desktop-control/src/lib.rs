@@ -31,16 +31,20 @@
 mod driver;
 mod error;
 mod guard;
+pub mod input;
 mod model;
 mod policy;
 pub mod snapshot;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_input;
 
 pub use driver::{DesktopDriver, Unsupported};
 pub use error::DesktopError;
 pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlaps};
+pub use input::{Halt, InputFilter, InputWatch, STOP_SHORTCUT, Signal, SignalSink};
 #[cfg(target_os = "macos")]
 pub use macos::MacDriver;
 pub use model::{

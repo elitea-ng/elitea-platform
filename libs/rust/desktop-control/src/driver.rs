@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::{
     Action, ActionOutcome, AppInfo, Capture, CaptureTarget, ClickAt, DesktopError, ElementRef,
-    InputOrigin, KeyChord, OpenedApp, Permissions, ScreenStatus, Snapshot, SnapshotBudget,
-    SyntheticMarker, WaitCondition, WindowInfo, WindowTarget,
+    InputFilter, InputOrigin, InputWatch, KeyChord, OpenedApp, Permissions, ScreenStatus,
+    SignalSink, Snapshot, SnapshotBudget, SyntheticMarker, WaitCondition, WindowInfo, WindowTarget,
 };
 
 /// Control of the person's other applications (ADR-0047 decision 1).
@@ -176,6 +176,34 @@ pub trait DesktopDriver: Send + Sync {
 
     /// Drops every held snapshot: every ref handed out so far is stale.
     fn forget_snapshots(&self);
+
+    /// Watch the person's keyboard and pointer (ADR-0047 decision 6, the
+    /// user-active guard and the stop shortcut): each input that is not the
+    /// driver's own, nor aimed at a process in `filter`, reaches `sink` as a
+    /// [`Signal`](crate::Signal), on the watch's own thread. Dropping the
+    /// handle stops the watch.
+    ///
+    /// # Errors
+    /// [`DesktopError::PermissionDenied`] when the OS refuses the watch;
+    /// [`DesktopError::PlatformNotSupported`] where there is none (the
+    /// default).
+    fn watch_input(
+        &self,
+        filter: InputFilter,
+        sink: SignalSink,
+    ) -> Result<Box<dyn InputWatch>, DesktopError> {
+        let _ = (filter, sink);
+        Err(DesktopError::PlatformNotSupported)
+    }
+
+    /// The halt of the calls from now on (`None`: none), set by the caller
+    /// before each call (calls run one at a time). Once it is raised, the
+    /// call in flight fails with [`DesktopError::Interrupted`] at its next
+    /// step, before it posts any more input; a wait stops polling. The
+    /// default ignores it (a driver that posts nothing).
+    fn set_halt(&self, halt: Option<crate::Halt>) {
+        let _ = halt;
+    }
 }
 
 /// The driver of every OS without an implementation. It compiles
@@ -283,5 +311,11 @@ mod tests {
             "platform_not_supported"
         );
         assert_eq!(d.is_synthetic_event(0), InputOrigin::Physical);
+        assert_eq!(
+            d.watch_input(InputFilter::default(), Box::new(|_| {}))
+                .err()
+                .map(|e| e.code()),
+            Some("platform_not_supported")
+        );
     }
 }

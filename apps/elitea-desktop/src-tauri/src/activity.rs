@@ -32,6 +32,9 @@ const TURN_PREFIX: &str = "tray_turn:";
 const CLOUD_PREFIX: &str = "tray_cloud:";
 const SHOW: &str = "tray_show";
 const QUIT: &str = "tray_quit";
+const COMPUTER_PAUSE: &str = "tray_computer_pause";
+const COMPUTER_RESUME: &str = "tray_computer_resume";
+const COMPUTER_STOP: &str = "tray_computer_stop";
 /// A menu shows at most this many turns; the title says the rest.
 const MAX_ENTRIES: usize = 8;
 
@@ -77,6 +80,11 @@ pub enum Entry {
     Separator,
     Show,
     Quit,
+    /// A computer session control: its menu id and label.
+    Computer {
+        id: &'static str,
+        label: String,
+    },
 }
 
 /// A cloud turn the window is streaming (the web chat transport runs in the
@@ -103,6 +111,9 @@ pub struct ActivityState {
     /// The OS keeps the computer awake for a running turn
     /// (`crate::keep_awake`, ADR-0045 decision 7).
     awake: bool,
+    /// The computer session (ADR-0047 decision 6): the menu-bar item
+    /// mirrors the session panel.
+    computer: crate::computer_control::SessionView,
 }
 
 fn shown(text: &str, limit: usize) -> String {
@@ -281,6 +292,49 @@ impl ActivityState {
         self.awake = awake;
     }
 
+    /// The computer session changed.
+    pub fn set_computer(&mut self, view: &crate::computer_control::SessionView) {
+        self.computer = view.clone();
+    }
+
+    /// The computer session's menu lines: what it does, then its controls.
+    fn computer_entries(&self) -> Vec<Entry> {
+        use crate::computer_control::Phase;
+        let view = &self.computer;
+        let app = view.app.as_deref().map(|app| shown(app, 40));
+        match view.phase {
+            Phase::Active => vec![
+                Entry::Note(match app {
+                    Some(app) => labels::text("computer_using").replace("{app}", &app),
+                    None => labels::text("computer_active"),
+                }),
+                Entry::Computer {
+                    id: COMPUTER_PAUSE,
+                    label: labels::text("computer_pause"),
+                },
+                Entry::Computer {
+                    id: COMPUTER_STOP,
+                    label: labels::text("computer_stop"),
+                },
+            ],
+            Phase::Paused => vec![
+                Entry::Note(labels::text(match view.paused_by {
+                    Some(crate::computer_control::PauseReason::UserActive) => "computer_paused",
+                    _ => "computer_paused_button",
+                })),
+                Entry::Computer {
+                    id: COMPUTER_RESUME,
+                    label: labels::text("computer_resume"),
+                },
+                Entry::Computer {
+                    id: COMPUTER_STOP,
+                    label: labels::text("computer_stop"),
+                },
+            ],
+            Phase::Idle | Phase::Stopped => Vec::new(),
+        }
+    }
+
     /// The tray item's tooltip: the title (or the app's name), and the
     /// keep-awake line while the computer is kept awake.
     #[must_use]
@@ -406,14 +460,31 @@ impl ActivityState {
             }
         }
         list.truncate(MAX_ENTRIES);
-        if list.is_empty() {
+        // The computer session first: Stop is never pushed off the menu.
+        let computer = self.computer_entries();
+        if list.is_empty() && computer.is_empty() {
             list.push(Entry::Note(labels::text("activity_nothing")));
+        }
+        if !computer.is_empty() {
+            list.splice(0..0, computer.into_iter().chain([Entry::Separator]));
         }
         if self.awake {
             list.push(Entry::Note(labels::text("activity_awake")));
         }
         list.extend([Entry::Separator, Entry::Show, Entry::Quit]);
         list
+    }
+}
+
+/// The computer session action a tray menu id names.
+#[must_use]
+pub fn computer_action(menu_id: &str) -> Option<crate::computer_commands::SessionAction> {
+    use crate::computer_commands::SessionAction;
+    match menu_id {
+        COMPUTER_PAUSE => Some(SessionAction::Pause),
+        COMPUTER_RESUME => Some(SessionAction::Resume),
+        COMPUTER_STOP => Some(SessionAction::Stop),
+        _ => None,
     }
 }
 
@@ -521,6 +592,12 @@ impl Activity {
 
     pub fn answered(&self, request_id: &str) {
         self.state().answered(request_id);
+        self.changed();
+    }
+
+    /// The computer session changed (the session panel's state).
+    pub fn computer(&self, view: &crate::computer_control::SessionView) {
+        self.state().set_computer(view);
         self.changed();
     }
 
@@ -683,6 +760,9 @@ fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
                 true,
                 None::<&str>,
             )?)?,
+            Entry::Computer { id, label } => {
+                menu.append(&MenuItem::with_id(app, *id, label, true, None::<&str>)?)?;
+            }
             Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
             Entry::Show => menu.append(&MenuItem::with_id(
                 app,
@@ -725,6 +805,12 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             } else if id == QUIT {
                 // A running turn asks first (`window::confirm_quit`).
                 app.exit(0);
+            } else if let Some(action) = computer_action(id) {
+                if let Some(state) = app.try_state::<crate::local_commands::LocalState>()
+                    && let Some(setup) = state.agents.computer()
+                {
+                    crate::computer_commands::apply(&setup.host().control(), action);
+                }
             } else if let Some(turn) = turn_of(id) {
                 focus_turn(app, turn);
             } else if let Some(uuid) = id.strip_prefix(CLOUD_PREFIX) {
@@ -904,6 +990,83 @@ mod tests {
             state.observe_agent(&event("t2", "status", json!({"phase": phase})), t0);
             assert!(!state.knows("t2"), "{phase}");
         }
+    }
+
+    #[test]
+    fn the_menu_mirrors_the_computer_session_panel_first() {
+        use crate::computer_commands::SessionAction;
+        use crate::computer_control::{Phase, SessionView};
+        let mut state = ActivityState::default();
+        state.set_computer(&SessionView {
+            phase: Phase::Active,
+            app: Some("TextEdit".into()),
+            ..SessionView::default()
+        });
+        let entries = state.entries(&names);
+        assert_eq!(
+            entries[..4],
+            [
+                Entry::Note("Using TextEdit".into()),
+                Entry::Computer {
+                    id: COMPUTER_PAUSE,
+                    label: "Pause".into()
+                },
+                Entry::Computer {
+                    id: COMPUTER_STOP,
+                    label: "Stop".into()
+                },
+                Entry::Separator,
+            ]
+        );
+        assert!(!entries.contains(&Entry::Note("Nothing running".into())));
+        // Paused by the button: the menu says so, not that the person is
+        // using the computer.
+        state.set_computer(&SessionView {
+            phase: Phase::Paused,
+            paused_by: Some(crate::computer_control::PauseReason::Button),
+            ..SessionView::default()
+        });
+        assert_eq!(state.entries(&names)[0], Entry::Note("Paused".into()));
+        state.set_computer(&SessionView {
+            phase: Phase::Paused,
+            paused_by: Some(crate::computer_control::PauseReason::UserActive),
+            ..SessionView::default()
+        });
+        assert_eq!(
+            state.entries(&names)[..3],
+            [
+                Entry::Note("Paused, you are using the computer".into()),
+                Entry::Computer {
+                    id: COMPUTER_RESUME,
+                    label: "Resume".into()
+                },
+                Entry::Computer {
+                    id: COMPUTER_STOP,
+                    label: "Stop".into()
+                },
+            ]
+        );
+        state.set_computer(&SessionView {
+            phase: Phase::Stopped,
+            ..SessionView::default()
+        });
+        assert_eq!(
+            state.entries(&names)[0],
+            Entry::Note("Nothing running".into())
+        );
+        assert!(matches!(
+            computer_action(COMPUTER_PAUSE),
+            Some(SessionAction::Pause)
+        ));
+        assert!(matches!(
+            computer_action(COMPUTER_RESUME),
+            Some(SessionAction::Resume)
+        ));
+        assert!(matches!(
+            computer_action(COMPUTER_STOP),
+            Some(SessionAction::Stop)
+        ));
+        assert!(computer_action("tray_show").is_none());
     }
 
     #[test]

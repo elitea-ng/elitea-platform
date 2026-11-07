@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-computer-app-forget"
+description = "Enables the computer_app_forget command without any pre-configured scope."
+commands.allow = ["computer_app_forget"]
+
+[[permission]]
+identifier = "deny-computer-app-forget"
+description = "Denies the computer_app_forget command without any pre-configured scope."
+commands.deny = ["computer_app_forget"]
