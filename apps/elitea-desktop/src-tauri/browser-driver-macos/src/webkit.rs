@@ -12,12 +12,12 @@
 //! function body ([`CALL_BODY`]) and the operation and its JSON arguments
 //! as ARGUMENTS: no source text is ever built from the model's input.
 //!
-//! **The person's input.** The script reports each trusted pointer, key,
-//! wheel or touch event of the page to [`INPUT_HANDLER`] (same world only),
-//! and the engine calls the host's [`WebKitEngine::on_person_input`]
-//! callback: the control pill's take-over (ADR-0048 decision 4). A click
-//! the driver itself posts as trusted input is not the person's
-//! ([`Shared::posting`]).
+//! **The person's input.** The script reports the type of each trusted
+//! pointer, key, wheel, touch, text input, paste or drop event of the page
+//! to [`INPUT_HANDLER`] (same world only), and the engine calls the host's
+//! [`WebKitEngine::on_person_input`] callback: the control pill's take-over
+//! (ADR-0048 decision 4). The downs of a click the driver itself posts as
+//! trusted input are not the person's ([`crate::input::OwnInput`]).
 //!
 //! **Frames.** The script announces each subframe to [`FRAME_HANDLER`];
 //! the host keeps the `WKFrameInfo` it came with, and calls into a cross-
@@ -80,10 +80,6 @@ const MISSING: &str = "elitea-driver-missing";
 /// world.
 pub const INPUT_HANDLER: &str = "eliteaBrowserInput";
 
-/// How long after the driver posts trusted input an input report is the
-/// driver's own, not the person's.
-const OWN_INPUT_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
-
 /// Frames remembered per page (a page that makes frames without end).
 const MAX_FRAMES: usize = 64;
 
@@ -111,8 +107,8 @@ type InputCallback = Arc<dyn Fn() + Send + Sync>;
 struct Shared {
     frames: Arc<Mutex<Frames>>,
     input: Arc<Mutex<Option<InputCallback>>>,
-    /// When the driver last posted trusted input itself.
-    posting: Arc<Mutex<Option<std::time::Instant>>>,
+    /// The downs of the driver's own trusted clicks, not yet reported.
+    posting: Arc<Mutex<crate::input::OwnInput>>,
 }
 
 impl Shared {
@@ -122,13 +118,17 @@ impl Shared {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The person used the page, unless the driver just posted input.
-    fn person_input(&self) {
+    /// The person used the page (an input of type `kind`), unless it is
+    /// the report of the driver's own click.
+    fn person_input(&self, kind: &str) {
+        if !crate::input::REPORTED.contains(&kind) {
+            return;
+        }
         let own = self
             .posting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some_and(|at| at.elapsed() < OWN_INPUT_GRACE);
+            .is_own(kind, std::time::Instant::now());
         if own {
             return;
         }
@@ -201,7 +201,9 @@ impl FrameHandler {
             return;
         }
         if name.to_string() == INPUT_HANDLER {
-            self.ivars().shared.person_input();
+            if let Ok(kind) = body.downcast::<NSString>() {
+                self.ivars().shared.person_input(&kind.to_string());
+            }
             return;
         }
         // SAFETY: on the main thread; `frame` is a retained WKFrameInfo and
@@ -636,12 +638,13 @@ impl Engine for WebKitEngine {
                 "trusted input needs the Accessibility permission",
             ));
         }
-        // The page reports this click as trusted input: it is the driver's.
-        *self
-            .shared
+        // The page reports this click's downs as trusted input: they are
+        // the driver's.
+        self.shared
             .posting
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .posting(if double { 2 } else { 1 }, std::time::Instant::now());
         self.on_main(move |webview, _mtm, tx| {
             let _ = tx.send(post_click(webview, at, double));
         })

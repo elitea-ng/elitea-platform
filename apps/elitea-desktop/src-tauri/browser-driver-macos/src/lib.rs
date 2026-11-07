@@ -33,6 +33,7 @@
 //! name and JSON arguments to a fixed function body.
 
 pub mod driver;
+pub mod input;
 #[cfg(target_os = "macos")]
 pub mod native;
 pub mod reply;
@@ -96,6 +97,24 @@ mod tests {
             "setTimeout(\"",
         ] {
             assert!(!SCRIPT.contains(banned), "{banned}");
+        }
+    }
+
+    #[test]
+    fn the_script_reports_every_kind_of_the_persons_input_the_host_reads() {
+        let start = SCRIPT
+            .find("['pointerdown'")
+            .expect("the reported input list");
+        let list = &SCRIPT[start..start + SCRIPT[start..].find(']').unwrap() + 1];
+        let reported: Vec<&str> = list
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|item| item.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(reported, super::input::REPORTED);
+        // IME, dictation, paste and drop have no keydown or pointerdown.
+        for kind in ["beforeinput", "paste", "drop"] {
+            assert!(reported.contains(&kind), "{kind}");
         }
     }
 

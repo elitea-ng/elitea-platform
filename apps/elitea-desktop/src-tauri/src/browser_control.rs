@@ -21,18 +21,43 @@
 //! (its tool result carries it); after a plain take-over it goes to the
 //! turn's steering queue ([`NoteSink`]), so it reaches the conversation as
 //! the person's message at the next safe point. A question that nobody
-//! answers within [`ASK_WAIT`] (ADR-0045's wait for a local ask) is
-//! declined, and the agent gets the page back.
+//! answers within [`ASK_WAIT`] is declined, and the agent gets the page
+//! back. Whether a hand back answers a question is decided in the same
+//! state change that ends the question, so a question asked while the
+//! person hands back is never lost: it either takes the note or stays on
+//! screen.
+//!
+//! **One turn owns the control.** Each turn's toolset has a [`TurnId`];
+//! the latest turn to call the pane owns the pill and the note sink, and
+//! only the owner's end ([`PaneControl::agent_ended`]) resets them. An
+//! older turn of the thread finishing late changes nothing.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tokio::sync::watch;
 
-/// How long `browser_request_user` waits for the person: the wait of a
-/// local rule's ask (ADR-0045 decision 3). Past it the question is declined.
-pub const ASK_WAIT: Duration = crate::d0::unattended::RULE_ASK_WAIT;
+/// How long `browser_request_user` waits for the person. ADR-0048 says only
+/// "ADR-0045 timeout and default", and ADR-0045's table has no row for it;
+/// the agent's turn is blocked meanwhile, so it gets a wait of its own,
+/// 10 minutes (the step-limit question's), not a rule ask's 30. Past it the
+/// question is declined. The pane shows the deadline.
+pub const ASK_WAIT: Duration = Duration::from_mins(10);
+
+/// Answers kept for `ask`s that have not taken theirs yet.
+const MAX_ANSWERS: usize = 8;
+
+/// A turn's identity for the control ([`PaneControl::agent_started`]).
+pub type TurnId = u64;
+
+/// A new [`TurnId`], unique for the app session.
+#[must_use]
+pub fn next_turn_id() -> TurnId {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// The most bytes of a hand-back note (the cloud's bound, ADR-0049).
 pub const MAX_NOTE_BYTES: usize = 2048;
@@ -61,6 +86,8 @@ pub struct ControlView {
     /// **Let the agent watch**: snapshots and screenshots still run while
     /// the person drives.
     pub watch: bool,
+    /// When the agent's question is declined unless answered (Unix ms).
+    pub deadline_ms: Option<u64>,
 }
 
 /// The person's answer to `browser_request_user`.
@@ -79,25 +106,53 @@ pub trait NoteSink: Send + Sync {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct State {
-    /// An agent turn drives the pane (how many toolsets of the thread
-    /// called it: one turn at a time, counted to be safe).
-    agent: bool,
+    /// The turn that drives the pane (the latest to call it); `None`: idle.
+    owner: Option<TurnId>,
     /// The person drives.
     person: bool,
     reason: Option<String>,
-    asked: bool,
+    deadline_ms: Option<u64>,
+    /// The pending question's number; `None` when none waits.
+    asked: Option<u64>,
     watch: bool,
     /// Bumped on every input of the person while the agent drives.
     input_epoch: u64,
-    /// Bumped on every answer (hand back, decline, timeout, turn end).
-    answer_epoch: u64,
+    /// The last question's number (kept across turns).
+    questions: u64,
+    /// Answers by question number, until their `ask` takes them.
+    answers: Vec<(u64, Answer)>,
 }
 
 impl State {
+    /// The pending question ends with `answer`; the agent drives again.
+    fn answer(&mut self, answer: Answer) {
+        if let Some(question) = self.asked.take() {
+            self.answers.push((question, answer));
+            if self.answers.len() > MAX_ANSWERS {
+                self.answers.remove(0);
+            }
+        }
+        self.person = false;
+        self.reason = None;
+        self.deadline_ms = None;
+    }
+
+    /// Idle: only the counters and untaken answers stay; a pending
+    /// question is declined.
+    fn reset(&mut self) {
+        self.answer(Answer::Declined);
+        *self = State {
+            input_epoch: self.input_epoch,
+            questions: self.questions,
+            answers: std::mem::take(&mut self.answers),
+            ..State::default()
+        };
+    }
+
     fn view(&self) -> ControlView {
         let control = if self.person {
             Pill::User
-        } else if self.agent {
+        } else if self.owner.is_some() {
             Pill::Agent
         } else {
             Pill::Idle
@@ -105,8 +160,9 @@ impl State {
         ControlView {
             control,
             reason: self.reason.clone(),
-            asked: self.asked,
+            asked: self.asked.is_some(),
             watch: self.watch,
+            deadline_ms: self.deadline_ms,
         }
     }
 }
@@ -116,8 +172,8 @@ type Notify = Arc<dyn Fn(&ControlView) + Send + Sync>;
 /// One pane's control.
 pub struct PaneControl {
     state: watch::Sender<State>,
-    answer: Mutex<Option<Answer>>,
-    sink: Mutex<Option<Arc<dyn NoteSink>>>,
+    /// The owner turn's note sink.
+    sink: Mutex<Option<(TurnId, Arc<dyn NoteSink>)>>,
     notify: Mutex<Option<Notify>>,
     ask_wait: Duration,
 }
@@ -153,7 +209,6 @@ impl PaneControl {
     pub fn new(ask_wait: Duration) -> Self {
         Self {
             state: watch::channel(State::default()).0,
-            answer: Mutex::new(None),
             sink: Mutex::new(None),
             notify: Mutex::new(None),
             ask_wait,
@@ -170,17 +225,26 @@ impl PaneControl {
         self.state.borrow().view()
     }
 
-    /// Change the state; the UI hears it when the view changed.
-    fn change(&self, work: impl FnOnce(&mut State)) {
-        let before = self.state.borrow().view();
-        self.state.send_modify(work);
-        let after = self.state.borrow().view();
-        if before != after {
+    /// Change the state in one step (decide and record together); the UI
+    /// hears it when the view changed. Answers what `work` answers.
+    fn change<R>(&self, work: impl FnOnce(&mut State) -> R) -> R {
+        let mut out = None;
+        let mut changed = None;
+        self.state.send_modify(|state| {
+            let before = state.view();
+            out = Some(work(state));
+            let after = state.view();
+            if before != after {
+                changed = Some(after);
+            }
+        });
+        if let Some(after) = changed {
             let notify = lock(&self.notify).clone();
             if let Some(notify) = notify {
                 notify(&after);
             }
         }
+        out.expect("send_modify runs its closure")
     }
 
     /// The person drives the page now.
@@ -201,29 +265,35 @@ impl PaneControl {
         self.state.borrow().input_epoch
     }
 
-    /// A turn's browser call is about to run: the agent drives (the pill
-    /// says Agent unless the person has the page), and a take-over note
-    /// goes to `sink`.
-    pub fn agent_started(&self, sink: Option<Arc<dyn NoteSink>>) {
-        if let Some(sink) = sink {
-            *lock(&self.sink) = Some(sink);
-        }
-        self.change(|state| state.agent = true);
+    /// Turn `turn`'s browser call is about to run: it owns the control
+    /// now (the pill says Agent unless the person has the page), and a
+    /// take-over note goes to its `sink`.
+    pub fn agent_started(&self, turn: TurnId, sink: Option<Arc<dyn NoteSink>>) {
+        *lock(&self.sink) = sink.map(|sink| (turn, sink));
+        self.change(|state| state.owner = Some(turn));
     }
 
-    /// The turn ended: the pane is idle again, and the person's control,
-    /// a pending question and the watch tick end with it.
-    pub fn agent_ended(&self) {
-        *lock(&self.sink) = None;
-        *lock(&self.answer) = None;
+    /// Turn `turn` ended: when it owns the control, the pane is idle again,
+    /// and the person's control, a pending question (declined) and the
+    /// watch tick end with it. Another turn's end changes nothing.
+    pub fn agent_ended(&self, turn: TurnId) {
+        {
+            let mut sink = lock(&self.sink);
+            if sink.as_ref().is_some_and(|(owner, _)| *owner == turn) {
+                *sink = None;
+            }
+        }
         self.change(|state| {
-            let epoch = state.answer_epoch + 1;
-            *state = State {
-                input_epoch: state.input_epoch,
-                answer_epoch: epoch,
-                ..State::default()
-            };
+            if state.owner == Some(turn) {
+                state.reset();
+            }
         });
+    }
+
+    /// Every turn ends (sign-out): the pane is idle.
+    pub fn reset(&self) {
+        *lock(&self.sink) = None;
+        self.change(State::reset);
     }
 
     /// The person clicked, typed or scrolled in the page. While the agent
@@ -231,7 +301,7 @@ impl PaneControl {
     /// answers `user_active`. While idle it changes nothing.
     pub fn person_input(&self) {
         self.change(|state| {
-            if state.agent {
+            if state.owner.is_some() {
                 state.input_epoch += 1;
                 state.person = true;
             }
@@ -241,7 +311,7 @@ impl PaneControl {
     /// **Take over**: the person drives (only while an agent turn does).
     pub fn take_over(&self) {
         self.change(|state| {
-            if state.agent && !state.person {
+            if state.owner.is_some() && !state.person {
                 state.person = true;
                 state.input_epoch += 1;
             }
@@ -258,38 +328,35 @@ impl PaneControl {
     /// turn's steering queue. `true` when the note reached the agent.
     pub fn hand_back(&self, note: Option<&str>) -> bool {
         let note = clean_note(note);
-        let asked = self.state.borrow().asked;
-        let delivered = if asked {
-            *lock(&self.answer) = Some(Answer::HandedBack(note.clone()));
-            note.is_some()
-        } else {
-            let sink = lock(&self.sink).clone();
-            match (&note, sink) {
-                (Some(text), Some(sink)) => sink.note(text),
-                _ => false,
+        // One step decides whether a question waits and answers it, so a
+        // question asked meanwhile is either answered by this note or
+        // still on screen afterwards, never declined unseen.
+        let answered = self.change(|state| {
+            if state.asked.is_some() {
+                state.answer(Answer::HandedBack(note.clone()));
+                true
+            } else {
+                state.person = false;
+                false
             }
-        };
-        self.change(|state| {
-            state.person = false;
-            state.reason = None;
-            state.asked = false;
-            state.answer_epoch += 1;
         });
-        delivered
+        if answered {
+            return note.is_some();
+        }
+        let sink = lock(&self.sink).as_ref().map(|(_, sink)| sink.clone());
+        match (&note, sink) {
+            (Some(text), Some(sink)) => sink.note(text),
+            _ => false,
+        }
     }
 
     /// **Decline** the agent's question: it is told the person did not take
     /// it, and gets the page back.
     pub fn decline(&self) {
-        if !self.state.borrow().asked {
-            return;
-        }
-        *lock(&self.answer) = Some(Answer::Declined);
         self.change(|state| {
-            state.person = false;
-            state.reason = None;
-            state.asked = false;
-            state.answer_epoch += 1;
+            if state.asked.is_some() {
+                state.answer(Answer::Declined);
+            }
         });
     }
 
@@ -303,34 +370,35 @@ impl PaneControl {
     /// they hand back (with an optional note) or decline, or [`ASK_WAIT`]
     /// passes (declined).
     pub async fn ask(&self, reason: &str) -> Answer {
-        *lock(&self.answer) = None;
         let mut changes = self.state.subscribe();
-        let mut asked_at = 0;
         let reason = reason.trim().chars().take(500).collect::<String>();
-        self.change(|state| {
+        let deadline = SystemTime::now()
+            .checked_add(self.ask_wait)
+            .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+            .and_then(|at| u64::try_from(at.as_millis()).ok());
+        let question = self.change(|state| {
+            // A question still waiting is superseded: declined.
+            state.answer(Answer::Declined);
+            state.questions += 1;
             state.person = true;
-            state.asked = true;
+            state.asked = Some(state.questions);
             state.reason = Some(reason);
-            asked_at = state.answer_epoch;
+            state.deadline_ms = deadline;
+            state.questions
         });
-        let answered = tokio::time::timeout(
-            self.ask_wait,
-            changes.wait_for(|state| state.answer_epoch > asked_at),
-        )
-        .await;
-        if let Ok(Ok(_)) = answered {
-            return lock(&self.answer).take().unwrap_or(Answer::Declined);
-        }
+        let answered = |state: &State| state.asked != Some(question);
+        let _ = tokio::time::timeout(self.ask_wait, changes.wait_for(answered)).await;
         // Nobody answered in time: the agent gets the page back, declined.
         self.change(|state| {
-            if state.asked {
-                state.person = false;
-                state.reason = None;
-                state.asked = false;
-                state.answer_epoch += 1;
+            if state.asked == Some(question) {
+                state.answer(Answer::Declined);
             }
-        });
-        Answer::Declined
+            let at = state
+                .answers
+                .iter()
+                .position(|(number, _)| *number == question);
+            at.map_or(Answer::Declined, |at| state.answers.remove(at).1)
+        })
     }
 }
 
@@ -356,14 +424,14 @@ mod tests {
         control.take_over();
         assert_eq!(control.view().control, Pill::Idle);
         assert_eq!(control.input_epoch(), 0);
-        control.agent_started(None);
+        control.agent_started(1, None);
         assert_eq!(control.view().control, Pill::Agent);
     }
 
     #[test]
     fn input_while_the_agent_drives_hands_the_page_to_the_person() {
         let control = PaneControl::default();
-        control.agent_started(None);
+        control.agent_started(1, None);
         control.person_input();
         assert_eq!(control.view().control, Pill::User);
         assert!(control.person_drives());
@@ -374,7 +442,7 @@ mod tests {
     fn a_take_over_hand_back_note_goes_to_the_turn() {
         let notes = Arc::new(Notes::default());
         let control = PaneControl::default();
-        control.agent_started(Some(notes.clone()));
+        control.agent_started(1, Some(notes.clone()));
         control.take_over();
         assert_eq!(control.view().control, Pill::User);
         assert!(control.hand_back(Some("  signed in, continue  ")));
@@ -389,10 +457,10 @@ mod tests {
     #[test]
     fn the_turn_end_resets_everything_but_the_input_count() {
         let control = PaneControl::default();
-        control.agent_started(Some(Arc::new(Notes::default())));
+        control.agent_started(1, Some(Arc::new(Notes::default())));
         control.set_watch(true);
         control.take_over();
-        control.agent_ended();
+        control.agent_ended(1);
         assert_eq!(control.view(), ControlView::default());
         assert_eq!(control.input_epoch(), 1);
         // No turn: a note has nowhere to go.
@@ -417,12 +485,12 @@ mod tests {
         control.set_notify(Arc::new(move |view: &ControlView| {
             lock(&sink).push(view.control);
         }));
-        control.agent_started(None);
-        control.agent_started(None);
+        control.agent_started(1, None);
+        control.agent_started(1, None);
         control.person_input();
         control.person_input();
         control.hand_back(None);
-        control.agent_ended();
+        control.agent_ended(1);
         assert_eq!(
             *lock(&heard),
             [Pill::Agent, Pill::User, Pill::Agent, Pill::Idle]
@@ -432,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_is_answered_by_hand_back_with_its_note() {
         let control = Arc::new(PaneControl::default());
-        control.agent_started(None);
+        control.agent_started(1, None);
         let asking = control.clone();
         let question = tokio::spawn(async move { asking.ask("sign in to GitHub").await });
         while !control.view().asked {
@@ -453,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn a_question_is_declined_by_the_person_or_by_its_wait() {
         let control = Arc::new(PaneControl::default());
-        control.agent_started(None);
+        control.agent_started(1, None);
         let asking = control.clone();
         let question = tokio::spawn(async move { asking.ask("captcha").await });
         while !control.view().asked {
@@ -464,7 +532,7 @@ mod tests {
         assert_eq!(control.view().control, Pill::Agent);
 
         let quick = PaneControl::new(Duration::from_millis(20));
-        quick.agent_started(None);
+        quick.agent_started(1, None);
         assert_eq!(quick.ask("mfa").await, Answer::Declined);
         assert_eq!(quick.view().control, Pill::Agent);
         assert!(!quick.view().asked);
@@ -473,10 +541,109 @@ mod tests {
         assert_eq!(quick.view().control, Pill::Agent);
     }
 
+    /// A note sink that starts the agent's next question while the hand
+    /// back is under way (the race of review finding 1): the question's
+    /// future is polled once, so its state change lands in the middle.
+    struct AskingSink {
+        control: Arc<PaneControl>,
+        question:
+            Mutex<Option<std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send>>>>,
+    }
+
+    impl NoteSink for AskingSink {
+        fn note(&self, _text: &str) -> bool {
+            let control = self.control.clone();
+            let mut question: std::pin::Pin<Box<dyn std::future::Future<Output = Answer> + Send>> =
+                Box::pin(async move { control.ask("enter the MFA code").await });
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(question.as_mut().poll(&mut cx).is_pending());
+            *lock(&self.question) = Some(question);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn a_question_asked_during_a_hand_back_stays_on_screen_and_takes_its_own_answer() {
+        let control = Arc::new(PaneControl::default());
+        let sink = Arc::new(AskingSink {
+            control: control.clone(),
+            question: Mutex::new(None),
+        });
+        control.agent_started(1, Some(sink.clone()));
+        control.take_over();
+        assert!(control.hand_back(Some("added it, go on")));
+        let view = control.view();
+        assert!(view.asked, "the new question was swallowed: {view:?}");
+        assert_eq!(view.control, Pill::User);
+        assert_eq!(view.reason.as_deref(), Some("enter the MFA code"));
+        let question = lock(&sink.question).take().unwrap();
+        control.hand_back(Some("123456 entered"));
+        assert_eq!(
+            question.await,
+            Answer::HandedBack(Some("123456 entered".to_owned()))
+        );
+    }
+
+    #[test]
+    fn only_the_turn_that_owns_the_control_ends_it() {
+        let older = Arc::new(Notes::default());
+        let newer = Arc::new(Notes::default());
+        let control = PaneControl::default();
+        control.agent_started(1, Some(older.clone()));
+        control.agent_started(2, Some(newer.clone()));
+        control.take_over();
+        // The older turn's tools go away late: the newer turn keeps its
+        // pill, its person's control and its note sink.
+        control.agent_ended(1);
+        assert_eq!(control.view().control, Pill::User);
+        assert!(control.hand_back(Some("over to you")));
+        assert!(lock(&older.0).is_empty());
+        assert_eq!(*lock(&newer.0), ["over to you"]);
+        control.agent_ended(2);
+        assert_eq!(control.view().control, Pill::Idle);
+    }
+
+    #[tokio::test]
+    async fn the_turn_end_declines_its_pending_question() {
+        let control = Arc::new(PaneControl::default());
+        control.agent_started(7, None);
+        let asking = control.clone();
+        let question = tokio::spawn(async move { asking.ask("sign in").await });
+        while !control.view().asked {
+            tokio::task::yield_now().await;
+        }
+        control.agent_ended(7);
+        assert_eq!(question.await.unwrap(), Answer::Declined);
+        assert_eq!(control.view(), ControlView::default());
+    }
+
+    #[tokio::test]
+    async fn a_question_waits_ten_minutes_and_shows_its_deadline() {
+        assert_eq!(ASK_WAIT, Duration::from_mins(10));
+        let control = Arc::new(PaneControl::default());
+        control.agent_started(1, None);
+        let before = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let asking = control.clone();
+        let question = tokio::spawn(async move { asking.ask("captcha").await });
+        while !control.view().asked {
+            tokio::task::yield_now().await;
+        }
+        let deadline = control.view().deadline_ms.expect("a deadline while asked");
+        let wait = u64::try_from(ASK_WAIT.as_millis()).unwrap();
+        let from = u64::try_from(before.as_millis()).unwrap();
+        assert!(
+            (from + wait..from + wait + 5_000).contains(&deadline),
+            "{deadline}"
+        );
+        control.decline();
+        assert_eq!(question.await.unwrap(), Answer::Declined);
+        assert_eq!(control.view().deadline_ms, None);
+    }
+
     #[tokio::test]
     async fn input_after_wakes_on_the_next_input_only() {
         let control = Arc::new(PaneControl::default());
-        control.agent_started(None);
+        control.agent_started(1, None);
         let epoch = control.input_epoch();
         let waiting = control.clone();
         let woken = tokio::spawn(async move { waiting.input_after(epoch).await });

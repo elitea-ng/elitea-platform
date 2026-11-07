@@ -2660,7 +2660,7 @@ scales it by the app's zoom).
 | `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
 | `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
 | `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |
-| `browser_control` | `{thread_id, action: "get" \| "take_over" \| "hand_back" \| "decline" \| "watch" \| "unwatch", note?}` | `{control, reason, asked, watch}` — the control pill (below), the state after the action. `note` (hand back only, at most 2048 bytes; trimmed, NUL bytes removed) rejects `browser_invalid` when longer. Take over while no turn drives, Decline with no request, and Hand back while the agent drives change nothing |
+| `browser_control` | `{thread_id, action: "get" \| "take_over" \| "hand_back" \| "decline" \| "watch" \| "unwatch", note?}` | `{control, reason, asked, watch, deadline_ms}` — the control pill (below), the state after the action. `note` (hand back only, at most 2048 bytes; trimmed, NUL bytes removed) rejects `browser_invalid` when longer. Take over while no turn drives, Decline with no request, and Hand back while the agent drives change nothing |
 
 `browser://event`, emitted to the `main` webview:
 
@@ -2672,7 +2672,7 @@ type BrowserEvent = { thread_id: string } & (
   | { kind: "download_started"; name: string }
   | { kind: "download_finished"; name: string; size: number | null; success: boolean }
   | { kind: "closed" } // the host closed the page (four live at most)
-  | { kind: "control"; control: "idle" | "agent" | "user"; reason: string | null; asked: boolean; watch: boolean }
+  | { kind: "control"; control: "idle" | "agent" | "user"; reason: string | null; asked: boolean; watch: boolean; deadline_ms: number | null }
 );
 ```
 
@@ -2684,8 +2684,10 @@ browser call), `user`. The `control` event fires on every change.
   scrolling or touching the page while the agent drives. On macOS the
   driver script reports trusted input (`isTrusted`) from its private
   content world to a message handler only that world can post to; the
-  page can neither forge the report nor reach the handler, and the
-  driver's own trusted clicks are ignored for 300 ms. The agent's pending
+  page can neither forge the report nor reach the handler. Text input
+  (`beforeinput`, for an input method or dictation), paste and drop count
+  too. Only the downs of the driver's own trusted clicks are ignored,
+  one report each, within 300 ms. The agent's pending
   call answers `user_active` at once (a call already in flight is
   abandoned); its next calls answer `user_in_control`, except
   `browser_snapshot` and `browser_screenshot` while `watch` is on. A ref
@@ -2694,15 +2696,24 @@ browser call), `user`. The `control` event fires on every change.
   person's message: it is steered into the turn at the next safe point.
 - **The agent asks** with `browser_request_user`: `control: "user"`,
   `asked: true` and `reason` (at most 500 characters). Hand back answers
-  the call `{status: "ok", note}`; Decline, or no answer within the
-  ADR-0045 question wait (30 minutes), answers `declined`. The person's
-  input does not pause the question.
-- The turn ends: `idle`, `watch` off.
+  the call `{status: "ok", note}`; Decline, or no answer within 10
+  minutes (`deadline_ms`, Unix ms, shown in the banner; ADR-0048 names no
+  figure, and the turn is blocked meanwhile, so not a rule ask's 30),
+  answers `declined`. The person's input does not pause the question.
+  Whether a hand back answers a question is decided in the same state
+  change that ends it: a question asked during a hand back stays on
+  screen.
+- The turn ends: `idle`, `watch` off, a pending question declined. Each
+  turn's toolset has its own id; only the turn that last called the pane
+  ends its control, so an older turn finishing late leaves a newer one's
+  pill and note sink alone.
 
 Each browser call's tool step in the turn commit carries `browser_step`
 (ADR-0048 decision 9, client contract 1.42): `v`, `tool`, `outcome` (`ok`
 or the error code), `host` and `path` of the page (no query or fragment),
-`ref` with its `role` and `name`, `text` as `{chars, digest}` for
+`ref` with its `role` and `name` (`path` segments that look like tokens,
+a UUID or 16+ characters with a digit or of mixed case, become `{token}`),
+`text` as `{chars, digest}` for
 `browser_type` (the digest as `computer_step`'s), and `screenshot` as
 `{taken, mime, bytes, width, height}`. The typed text is also replaced by
 `text_chars` and `text_digest` in `args_summary` and `tool_inputs`. The

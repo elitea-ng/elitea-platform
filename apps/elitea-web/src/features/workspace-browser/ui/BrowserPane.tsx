@@ -74,6 +74,44 @@ function ToolButton({ label, onClick, disabled = false, testId, children }: { re
   );
 }
 
+/** Whole minutes left until `deadline` (Unix ms), at least 1; refreshed every 15 s. */
+function useMinutesLeft(deadline: number | null): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (deadline === null) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, [deadline]);
+  if (deadline === null) return null;
+  return Math.max(1, Math.ceil((deadline - now) / 60_000));
+}
+
+/** The agent's request for the person, above the page: its reason, the time left, Done and Decline. */
+function RequestBanner({ reason, deadline, handingBack, onDone, onDecline }: { readonly reason: string; readonly deadline: number | null; readonly handingBack: boolean; readonly onDone: () => void; readonly onDecline: () => void }): React.JSX.Element {
+  const minutes = useMinutesLeft(deadline);
+  return (
+    <Box data-testid="browser-request" sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: 1, paddingX: 1.5, paddingY: 0.75, borderBottom: `1px solid ${theme.vars.palette.divider}`, flexShrink: 0 })}>
+      <Typography variant="bodySmall" component="output" data-testid="browser-request-reason" sx={{ flex: 1, minWidth: 0 }}>
+        {t('workspace.browser.request', 'The agent asks you to use the page: {{reason}}', { reason })}
+        {minutes !== null && (
+          <Box component="span" data-testid="browser-request-deadline" sx={(theme: Theme) => ({ display: 'block', color: theme.vars.palette.text.metrics })}>
+            {t('workspace.browser.requestDeadline', 'Declined in {{minutes}} min unless you hand back.', { minutes })}
+          </Box>
+        )}
+      </Typography>
+      {!handingBack && (
+        <Button size="small" variant="contained" onClick={onDone} data-testid="browser-request-done">
+          {t('workspace.browser.requestDone', 'Done')}
+        </Button>
+      )}
+      <Button size="small" onClick={onDecline} data-testid="browser-decline">
+        {t('workspace.browser.decline', 'Decline')}
+      </Button>
+    </Box>
+  );
+}
+
 /** Sends one control action; the answer (and the host's `control` event) lands in the store. */
 function useControl(ipc: BrowserIpc, threadId: string, onError: (message: string | null) => void) {
   return (action: BrowserControlAction, note?: string): void => {
@@ -267,21 +305,7 @@ function Pane({ ipc, threadId, onClose }: BrowserPaneProps & { readonly ipc: Bro
   return (
     <Box data-testid="browser-pane" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Toolbar ipc={ipc} threadId={threadId} onClose={onClose} onError={setError} onNavigate={navigate} onControl={control} onHandBack={() => setHandingBack(true)} />
-      {pane.control.asked && (
-        <Box data-testid="browser-request" sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: 1, paddingX: 1.5, paddingY: 0.75, borderBottom: `1px solid ${theme.vars.palette.divider}`, flexShrink: 0 })}>
-          <Typography variant="bodySmall" component="output" data-testid="browser-request-reason" sx={{ flex: 1, minWidth: 0 }}>
-            {t('workspace.browser.request', 'The agent asks you to use the page: {{reason}}', { reason: pane.control.reason ?? '' })}
-          </Typography>
-          {!handingBack && (
-            <Button size="small" variant="contained" onClick={() => setHandingBack(true)} data-testid="browser-request-done">
-              {t('workspace.browser.requestDone', 'Done')}
-            </Button>
-          )}
-          <Button size="small" onClick={() => control('decline')} data-testid="browser-decline">
-            {t('workspace.browser.decline', 'Decline')}
-          </Button>
-        </Box>
-      )}
+      {pane.control.asked && <RequestBanner reason={pane.control.reason ?? ''} deadline={pane.control.deadline_ms} handingBack={handingBack} onDone={() => setHandingBack(true)} onDecline={() => control('decline')} />}
       {handingBack && (
         <HandBackForm
           testIdPrefix="browser"

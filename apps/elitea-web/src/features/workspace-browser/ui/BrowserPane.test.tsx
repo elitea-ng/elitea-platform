@@ -16,7 +16,7 @@ const RECT = { x: 10, y: 20, width: 300, height: 400 };
 
 const done = Promise.resolve();
 
-const IDLE: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false };
+const IDLE: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false, deadline_ms: null };
 
 /** The host's control, as `browser_control.rs` answers it (the Rust tests cover the agent's side). */
 function hostControl(state: BrowserControlState, action: BrowserControlAction): BrowserControlState {
@@ -26,9 +26,9 @@ function hostControl(state: BrowserControlState, action: BrowserControlAction): 
     case 'take_over':
       return state.control === 'idle' ? state : { ...state, control: 'user' };
     case 'hand_back':
-      return state.control === 'user' ? { ...state, control: 'agent', reason: null, asked: false, watch: false } : state;
+      return state.control === 'user' ? { ...state, control: 'agent', reason: null, asked: false, watch: false, deadline_ms: null } : state;
     case 'decline':
-      return state.asked ? { ...state, control: 'agent', reason: null, asked: false } : state;
+      return state.asked ? { ...state, control: 'agent', reason: null, asked: false, deadline_ms: null } : state;
     case 'watch':
       return { ...state, watch: true };
     case 'unwatch':
@@ -288,6 +288,19 @@ describe('BrowserPane control pill (#1591)', () => {
     expect(fake.spies.control).toHaveBeenLastCalledWith('c1', 'decline', undefined);
   });
 
+  it('shows how long the agent waits, counting down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const now = Date.now();
+    const fake = fakeIpc({ ...IDLE, control: 'user', asked: true, reason: 'Solve the check', deadline_ms: now + 10 * 60_000 });
+    mount(fake.ipc);
+    expect(await screen.findByTestId('browser-request-deadline')).toHaveTextContent('Declined in 10 min unless you hand back.');
+    act(() => {
+      vi.advanceTimersByTime(8 * 60_000 + 30_000);
+    });
+    await waitFor(() => expect(screen.getByTestId('browser-request-deadline')).toHaveTextContent('Declined in 2 min'));
+    vi.useRealTimers();
+  });
+
   it('says why a control action failed', async () => {
     const fake = fakeIpc({ ...IDLE, control: 'agent' });
     fake.spies.control.mockImplementation((_thread: string, action: BrowserControlAction) => (action === 'get' ? Promise.resolve({ ...IDLE, control: 'agent' }) : Promise.reject(new Error('The pane is gone.'))));
@@ -298,7 +311,7 @@ describe('BrowserPane control pill (#1591)', () => {
 
   it('folds control events, and a closed page keeps nothing stale', () => {
     let pane = foldBrowserEvent(EMPTY_PANE, control({ control: 'user', asked: true, reason: 'MFA', watch: true }));
-    expect(pane.control).toEqual({ control: 'user', asked: true, reason: 'MFA', watch: true });
+    expect(pane.control).toEqual({ control: 'user', asked: true, reason: 'MFA', watch: true, deadline_ms: null });
     pane = foldBrowserEvent(pane, control({}));
     expect(pane.control).toEqual(IDLE);
   });

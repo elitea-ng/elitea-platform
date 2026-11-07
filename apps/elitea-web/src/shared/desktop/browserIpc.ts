@@ -33,6 +33,8 @@ export interface BrowserControlState {
   readonly asked: boolean;
   /** Let the agent watch: its snapshots and screenshots run while the person drives. */
   readonly watch: boolean;
+  /** When the agent's request is declined unless answered (Unix ms); `null` when none waits. */
+  readonly deadline_ms: number | null;
 }
 
 /** What the person does with the control pill. */

@@ -74,7 +74,7 @@ use elitea_local_tools::approvals::{
 use elitea_local_tools::session::LocalSession;
 use serde_json::{Value, json};
 
-use crate::browser_control::{ControlView, NoteSink, PaneControl};
+use crate::browser_control::{ControlView, NoteSink, PaneControl, TurnId, next_turn_id};
 use crate::d0::recorder::Recorder;
 
 /// The toolset's name.
@@ -161,7 +161,7 @@ impl BrowserDrivers {
             .map(|(_, control)| control)
             .collect();
         for control in controls {
-            control.agent_ended();
+            control.reset();
         }
     }
 
@@ -478,9 +478,13 @@ struct BrowserTool {
     turn: Arc<TurnLink>,
 }
 
-/// What a turn's browser tools share with the turn.
-#[derive(Default)]
+/// What a turn's browser tools share with the turn. Set when the
+/// provider is made ([`BrowserToolProvider::new`]), never after: the
+/// toolset is shared from its first use on.
 struct TurnLink {
+    /// The turn, as the pane's control knows it: only this turn's end
+    /// resets the control it owns.
+    id: TurnId,
     /// Each call's step record (`browser_step`) and the typed-text digest.
     recorder: Option<Arc<Recorder>>,
     /// Where a hand-back note goes: the turn's steering queue.
@@ -488,6 +492,23 @@ struct TurnLink {
     /// A call of this turn ran on the pane: the pill says Agent until the
     /// turn ends.
     drove: std::sync::atomic::AtomicBool,
+}
+
+impl TurnLink {
+    fn new(recorder: Option<Arc<Recorder>>, notes: Option<Arc<dyn NoteSink>>) -> Self {
+        Self {
+            id: next_turn_id(),
+            recorder,
+            notes,
+            drove: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl Default for TurnLink {
+    fn default() -> Self {
+        Self::new(None, None)
+    }
 }
 
 /// `browser_snapshot` and `browser_screenshot`: what the person may let
@@ -763,7 +784,7 @@ impl BrowserTool {
         if driver.is_some() {
             // From the turn's first call on a live pane the pill says Agent.
             if !self.turn.drove.swap(true, Ordering::SeqCst) {
-                control.agent_started(self.turn.notes.clone());
+                control.agent_started(self.turn.id, self.turn.notes.clone());
             }
             if let Err(error) = self.gate(&control) {
                 seen.url = self.seen_url();
@@ -861,8 +882,50 @@ struct Seen {
     control: Option<(String, String)>,
 }
 
+/// A path segment that reads as a secret: a reset or magic-link token, a
+/// session or an id (16 or more characters with a digit, or of both cases
+/// with no word separator; any UUID). Short ids and words are kept.
+fn token_like(segment: &str) -> bool {
+    let chars = segment.chars().count();
+    if chars < 16 {
+        return false;
+    }
+    let tokenish = segment
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_.~=+%".contains(c));
+    if !tokenish {
+        return false;
+    }
+    let digit = segment.chars().any(|c| c.is_ascii_digit());
+    let upper = segment.chars().any(|c| c.is_ascii_uppercase());
+    let lower = segment.chars().any(|c| c.is_ascii_lowercase());
+    let words = segment.contains('-') || segment.contains('_');
+    digit || (upper && lower && !words)
+}
+
+/// What a token-like path segment is recorded as.
+pub const REDACTED_SEGMENT: &str = "{token}";
+
+/// A URL path as a step record keeps it: token-like segments
+/// ([`token_like`]) replaced by [`REDACTED_SEGMENT`], at most 512
+/// characters.
+fn recorded_path(path: &str) -> String {
+    let redacted: Vec<&str> = path
+        .split('/')
+        .map(|segment| {
+            if token_like(segment) {
+                REDACTED_SEGMENT
+            } else {
+                segment
+            }
+        })
+        .collect();
+    redacted.join("/").chars().take(512).collect()
+}
+
 /// The step record of one browser call (ADR-0048 decision 9, ADR-0042):
-/// the tool, the page's host and URL path (no query, no fragment), the ref
+/// the tool, the page's host and URL path (no query, no fragment, no
+/// token-like segment: [`recorded_path`]), the ref
 /// and its role and name, and the outcome. Typed text is its length and the
 /// turn's keyed digest, never the text; a screenshot is its size only (its
 /// bytes went to the model and stay on the device).
@@ -890,8 +953,7 @@ fn step_record(
         if let Some(host) = url.host_str() {
             record["host"] = json!(host.trim_end_matches('.').to_ascii_lowercase());
         }
-        let path: String = url.path().chars().take(512).collect();
-        record["path"] = json!(path);
+        record["path"] = json!(recorded_path(url.path()));
     }
     if let Some(target) = args.get("ref").and_then(Value::as_str) {
         record["ref"] = json!(target.chars().take(64).collect::<String>());
@@ -968,7 +1030,7 @@ impl Drop for BrowserToolset {
     fn drop(&mut self) {
         self.drivers.end_turn(&self.thread, &self.page);
         if self.turn.drove.load(Ordering::SeqCst) {
-            self.drivers.control(&self.thread).agent_ended();
+            self.drivers.control(&self.thread).agent_ended(self.turn.id);
         }
     }
 }
@@ -1009,37 +1071,45 @@ pub struct BrowserToolProvider {
 }
 
 impl BrowserToolProvider {
+    /// The thread's browser tools for one turn, with the turn's recorder
+    /// (each call's `browser_step`) and steering queue (a hand-back note,
+    /// the person's message). Both are fixed here, before the toolset is
+    /// shared.
     #[must_use]
     pub fn new(
         thread: &str,
         drivers: Arc<BrowserDrivers>,
         vision: bool,
         session: Arc<LocalSession>,
+        recorder: Arc<Recorder>,
+        notes: Arc<dyn NoteSink>,
+    ) -> Self {
+        Self::with_link(
+            thread,
+            drivers,
+            vision,
+            Some(session),
+            TurnLink::new(Some(recorder), Some(notes)),
+        )
+    }
+
+    fn with_link(
+        thread: &str,
+        drivers: Arc<BrowserDrivers>,
+        vision: bool,
+        session: Option<Arc<LocalSession>>,
+        turn: TurnLink,
     ) -> Self {
         Self {
             toolset: Arc::new(BrowserToolset {
                 thread: thread.to_owned(),
                 drivers,
                 vision,
-                session: Some(session),
+                session,
                 page: SharedPage::default(),
-                turn: Arc::default(),
+                turn: Arc::new(turn),
             }),
         }
-    }
-
-    /// The turn's recorder (each call's `browser_step`) and steering queue
-    /// (a hand-back note, the person's message).
-    #[must_use]
-    pub fn with_turn(mut self, recorder: Arc<Recorder>, notes: Arc<dyn NoteSink>) -> Self {
-        if let Some(toolset) = Arc::get_mut(&mut self.toolset) {
-            toolset.turn = Arc::new(TurnLink {
-                recorder: Some(recorder),
-                notes: Some(notes),
-                drove: std::sync::atomic::AtomicBool::new(false),
-            });
-        }
-        self
     }
 }
 
@@ -1779,11 +1849,7 @@ mod tests {
             vision: false,
             session: None,
             page: SharedPage::default(),
-            turn: Arc::new(TurnLink {
-                recorder: Some(recorder.clone()),
-                notes: Some(notes.clone()),
-                drove: std::sync::atomic::AtomicBool::new(false),
-            }),
+            turn: Arc::new(TurnLink::new(Some(recorder.clone()), Some(notes.clone()))),
         };
         Controlled {
             slow,
@@ -1940,6 +2006,141 @@ mod tests {
         assert_eq!(answered["note"], "signed in");
         // A question's note is its answer, not a second message.
         assert!(pane.notes.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn step_records_replace_token_like_path_segments() {
+        for (path, recorded) in [
+            ("/cart", "/cart"),
+            ("/u/12345/orders", "/u/12345/orders"),
+            (
+                "/account/notification-settings",
+                "/account/notification-settings",
+            ),
+            (
+                "/reset/3f2a9c4e-1b2d-4e5f-8a9b-0c1d2e3f4a5b",
+                "/reset/{token}",
+            ),
+            (
+                "/magic-link/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+                "/magic-link/{token}",
+            ),
+            ("/s/aBcDeFgHiJkLmNoPqRsT/view", "/s/{token}/view"),
+            ("/verify/0123456789abcdef0123", "/verify/{token}"),
+        ] {
+            assert_eq!(recorded_path(path), recorded, "{path}");
+        }
+        let seen = Seen {
+            url: Some(
+                "https://id.example.com/password/reset/9c1f4b7a2e6d8f30aa51c7e2/confirm".to_owned(),
+            ),
+            control: None,
+        };
+        let record = step_record(
+            "browser_open",
+            &json!({}),
+            &seen,
+            &json!({"status": "ok"}),
+            |_| String::new(),
+        );
+        assert_eq!(record["host"], "id.example.com");
+        assert_eq!(record["path"], "/password/reset/{token}/confirm");
+        assert!(!record.to_string().contains("9c1f4b7a"));
+    }
+
+    /// Review finding 3: the provider's toolset is shared as soon as a
+    /// turn asks for it; the turn's recorder and steering are set before.
+    #[tokio::test]
+    async fn the_turn_link_is_fixed_when_the_provider_is_made() {
+        let recorder = Arc::new(Recorder::default());
+        let notes = Arc::new(Notes::default());
+        let drivers = Arc::new(BrowserDrivers::new());
+        let control = drivers.control("t1");
+        drivers.attach(
+            "t1",
+            Arc::new(Slow(control.clone(), Mutex::new(String::new()))),
+        );
+        let provider = BrowserToolProvider::with_link(
+            "t1",
+            drivers.clone(),
+            false,
+            None,
+            TurnLink::new(Some(recorder.clone()), Some(notes.clone())),
+        );
+        // The runtime holds the toolset from here on: nothing can set the
+        // link any more, and nothing needs to.
+        let shared = provider.toolset.clone();
+        let open = BrowserTool {
+            spec: elitea_browser_tools::spec::find("browser_open").unwrap(),
+            thread: "t1".to_owned(),
+            drivers,
+            vision: false,
+            session: None,
+            page: shared.page.clone(),
+            turn: shared.turn.clone(),
+        };
+        assert!(recorder.tool_started("c1", "browser_open", &json!({})));
+        open.run_call("c1", &json!({"url": "https://shop.example.com/"}))
+            .await;
+        let step = recorder
+            .tool_calls()
+            .get("c1")
+            .and_then(|entry| entry.get(BROWSER_STEP_KEY).cloned());
+        assert_eq!(step.unwrap()["tool"], "browser_open");
+        control.take_over();
+        assert!(control.hand_back(Some("go on")));
+        assert_eq!(*notes.0.lock().unwrap(), ["go on"]);
+    }
+
+    /// Review finding 2: two turns of one thread, the older one's tools
+    /// dropped after the newer one took the pane.
+    #[tokio::test]
+    async fn an_older_turn_ending_late_leaves_the_newer_turns_control_alone() {
+        let older = controlled();
+        older
+            .call(
+                "c1",
+                "browser_open",
+                json!({"url": "https://shop.example.com/"}),
+            )
+            .await;
+        let newer_notes = Arc::new(Notes::default());
+        let newer = BrowserToolset {
+            thread: "t1".to_owned(),
+            drivers: older.drivers.clone(),
+            vision: false,
+            session: None,
+            page: SharedPage::default(),
+            turn: Arc::new(TurnLink::new(
+                Some(older.recorder.clone()),
+                Some(newer_notes.clone()),
+            )),
+        };
+        let open = BrowserTool {
+            spec: elitea_browser_tools::spec::find("browser_open").unwrap(),
+            thread: "t1".to_owned(),
+            drivers: older.drivers.clone(),
+            vision: false,
+            session: None,
+            page: newer.page.clone(),
+            turn: newer.turn.clone(),
+        };
+        assert!(
+            older
+                .recorder
+                .tool_started("n1", "browser_open", &json!({}))
+        );
+        open.run_call("n1", &json!({"url": "https://shop.example.com/b"}))
+            .await;
+        older.control.take_over();
+        let control = older.control.clone();
+        drop(older.toolset);
+        assert_eq!(control.view().control, Pill::User);
+        assert!(control.hand_back(Some("for the newer turn")));
+        assert_eq!(*newer_notes.0.lock().unwrap(), ["for the newer turn"]);
+        assert!(older.notes.0.lock().unwrap().is_empty());
+        drop(newer);
+        assert_eq!(control.view().control, Pill::Idle);
     }
 
     #[tokio::test]

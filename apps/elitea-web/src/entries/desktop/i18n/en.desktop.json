@@ -1098,5 +1098,6 @@
   "workspace.browser.decline": "Decline",
   "workspace.browser.request": "The agent asks you to use the page: {{reason}}",
   "workspace.browser.requestDone": "Done",
-  "workspace.browser.watch": "Let the agent watch"
+  "workspace.browser.watch": "Let the agent watch",
+  "workspace.browser.requestDeadline": "Declined in {{minutes}} min unless you hand back."
 }

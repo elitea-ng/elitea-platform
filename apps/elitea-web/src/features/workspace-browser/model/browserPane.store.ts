@@ -28,7 +28,7 @@ export interface PaneState {
   readonly control: BrowserControlState;
 }
 
-const IDLE_CONTROL: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false };
+const IDLE_CONTROL: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false, deadline_ms: null };
 
 export const EMPTY_PANE: PaneState = { open: false, live: false, url: '', title: '', loading: false, refused: null, downloads: [], control: IDLE_CONTROL };
 
@@ -67,7 +67,7 @@ export function foldBrowserEvent(pane: PaneState, event: BrowserEvent): PaneStat
     case 'download_finished':
       return { ...pane, downloads: withDownload(pane.downloads, { name: event.name, size: event.size, state: event.success ? 'done' : 'failed' }) };
     case 'control':
-      return { ...pane, control: { control: event.control, reason: event.reason, asked: event.asked, watch: event.watch } };
+      return { ...pane, control: { control: event.control, reason: event.reason, asked: event.asked, watch: event.watch, deadline_ms: event.deadline_ms } };
     case 'closed':
       return { ...pane, live: false, loading: false };
   }
