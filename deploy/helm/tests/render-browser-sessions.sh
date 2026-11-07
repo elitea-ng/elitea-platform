@@ -37,6 +37,20 @@ helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" "${
 # Browser sessions alone (no workspace runs): still the RuntimeClass grant.
 helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" \
   --set sandboxKubernetes.workspaceRuns.enabled=false > "$work/alone.yaml"
+# Moli (#1599): `lite` with its image.
+lite_image="registry.example/elitea-browser-session-lite@sha256:$(printf 'b%.0s' $(seq 64))"
+lite=(--set sandboxKubernetes.browserSessions.profile.lite.maxCpuMillis=1000
+  --set sandboxKubernetes.browserSessions.profile.lite.maxMemoryBytes=536870912
+  --set "sandboxKubernetes.browserSessions.profile.liteImage=$lite_image")
+helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" "${lite[@]}" \
+  --show-only templates/sandbox/browser-profile.yaml > "$work/lite.yaml"
+python3 - "$work/lite.yaml" "$lite_image" <<'PY'
+import json, sys, yaml
+profile = json.loads(yaml.safe_load(open(sys.argv[1]))['data']['browser.json'])
+assert profile['lite'] == dict(max_cpu_millis=1000, max_memory_bytes=536870912), profile
+assert profile['lite_image'] == sys.argv[2], profile
+assert profile['image'] != profile['lite_image']
+PY
 
 python3 - "$work/off.yaml" "$work/on.yaml" "$work/proxy.yaml" "$work/alone.yaml" <<'PY'
 import json, sys, yaml
@@ -60,7 +74,7 @@ profile = json.loads(named['ConfigMap', 'elitea-sandbox-browser-profile']['data'
 expected = json.load(open('deploy/runtime/sandbox-browser.kubernetes.example.json'))
 assert profile == expected, ('regenerate deploy/runtime/sandbox-browser.kubernetes.example.json', profile)
 assert profile['purpose'] == 'browser' and profile['audience'] == 'dns:elitea-sandbox-browser'
-assert profile['engine_sandbox'] is False and 'lite' not in profile
+assert profile['engine_sandbox'] is False and 'lite' not in profile and 'lite_image' not in profile
 assert profile['full'] == dict(max_cpu_millis=2000, max_memory_bytes=2147483648)
 
 sup = named['Deployment', 'elitea-sandbox-supervisor']
@@ -115,6 +129,15 @@ helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/worker-on.yaml"
 helm template sandbox "$chart" "${base[@]}" "${executor[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/worker-off.yaml"
+helm template sandbox "$chart" "${base[@]}" "${executor[@]}" "${browser[@]}" \
+  --set worker.runtime.browserSessions.lite_cpu_millis=1000 \
+  --set worker.runtime.browserSessions.lite_memory_bytes=536870912 \
+  --show-only templates/worker/configmap-runtime.yaml > "$work/worker-lite.yaml"
+python3 - "$work/worker-lite.yaml" <<'PY'
+import json, sys, yaml
+lite = json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])['browser_sessions']
+assert (lite['lite_cpu_millis'], lite['lite_memory_bytes']) == (1000, 536870912), lite
+PY
 python3 - "$work/worker-on.yaml" "$work/worker-off.yaml" <<'PY'
 import json, sys, yaml
 on = json.loads(yaml.safe_load(open(sys.argv[1]))['data']['runtime.json'])
@@ -143,4 +166,12 @@ refuse 'maxPages must be a positive integer' --set sandboxKubernetes.browserSess
 refuse 'lite.maxCpuMillis must be a positive integer' --set sandboxKubernetes.browserSessions.profile.lite.maxMemoryBytes=536870912
 refuse 'worker.runtime.browserSessions.audience must be in main.runtime.sandboxAudiences' --set worker.runtime.browserSessions.audience=dns:other
 refuse 'worker.runtime.browserSessions.max_pages is required' --set worker.runtime.browserSessions.max_pages=null
+refuse 'lite_cpu_millis and lite_memory_bytes are both or neither' --set worker.runtime.browserSessions.lite_cpu_millis=1000
+refuse 'profile.lite requires profile.liteImage' \
+  --set sandboxKubernetes.browserSessions.profile.lite.maxCpuMillis=1000 \
+  --set sandboxKubernetes.browserSessions.profile.lite.maxMemoryBytes=536870912
+refuse 'profile.lite requires profile.liteImage' "${lite[@]}" --set sandboxKubernetes.browserSessions.profile.liteImage=null
+refuse 'profile.liteImage requires profile.lite' --set "sandboxKubernetes.browserSessions.profile.liteImage=$lite_image"
+refuse 'liteImage must be the lite session image by registry SHA-256 digest' "${lite[@]}" \
+  --set sandboxKubernetes.browserSessions.profile.liteImage=registry/lite:latest
 echo "render-browser-sessions: ok"
