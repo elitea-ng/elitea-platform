@@ -639,6 +639,10 @@ CROSS JOIN (VALUES
     -- ADR-0029 decision 5b: the desktop's remote toolkit call (shared 0156).
     ('models.applications.tool.execute'),
     ('models.applications.tools.export'),
+    -- ADR-0050 decision 1b (#1608): reading an agent's memory (shared 0229
+    -- grants it to all three roles centrally; project 1's per-project rows
+    -- suppress that fallback). The manage strings are admin-only, below.
+    ('models.applications.memory.list'),
     -- #6885: the MCP OAuth and DCR proxies (`mcp_oauth_proxy`,
     -- `mcp_dcr_proxy`) are gated on the agent RUN permission, which shared
     -- 0105 grants to all three roles centrally. Project 1 carries per-project
@@ -814,6 +818,20 @@ CROSS JOIN (VALUES
 ) AS p(permission)
 WHERE r.project_id = 1
 ON CONFLICT (project_id, role_id, permission) DO NOTHING;
+
+-- ADR-0050 decision 1b (#1608): editing, deleting and approving an agent's
+-- memory, which shared/0229 grants to the default-mode ADMIN only. Like
+-- the settings write below, project 1's admin role only.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 1, r.id, p.permission
+FROM auth_core__project_role r
+CROSS JOIN (VALUES
+    ('models.applications.memory.update'),
+    ('models.applications.memory.delete'),
+    ('models.applications.memory.approve')
+) AS p(permission)
+WHERE r.project_id = 1 AND r.name = 'admin'
+ON CONFLICT DO NOTHING;
 
 -- #6789: the project settings writes (name, icon) are gated on
 -- `models.project_settings.edit`, which shared/0136 grants to the
