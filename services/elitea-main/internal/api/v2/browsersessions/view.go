@@ -418,6 +418,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "browser session ended", http.StatusGone)
 		return
 	}
+	// A plain GET (a browser client asking why its upgrade was refused,
+	// since it cannot read that status) learns the answer here: 426 means
+	// the view would be admitted. It takes no view slot and never dials
+	// the supervisor.
+	if !isWebSocketUpgrade(r) {
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", "websocket")
+		http.Error(w, "a browser view is a WebSocket", http.StatusUpgradeRequired)
+		return
+	}
 	lingering := session.State == browsersession.StateLingering
 	// A lingering session refuses input: it is opened watch-only.
 	control := access.Control && !lingering
@@ -551,6 +561,23 @@ func (h *Handler) auditControl(ctx context.Context, principal auth.User, session
 		HTTPMethod: http.MethodGet, HTTPRoute: ViewPath, StatusCode: &status, DurationMS: &duration,
 		EntityType: "browser_session", EntityName: session.SessionID,
 	})
+}
+
+// isWebSocketUpgrade reports whether r asks for a WebSocket: a Connection
+// header listing "upgrade" and an Upgrade header of "websocket", both
+// case-insensitive (RFC 6455 section 4.2.1).
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket") {
+		return false
+	}
+	for _, value := range r.Header.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // originAllowed is coder/websocket's rule: no Origin (a native client), the

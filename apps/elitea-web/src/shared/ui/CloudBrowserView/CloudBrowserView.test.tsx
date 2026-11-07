@@ -73,6 +73,48 @@ describe('CloudBrowserView', () => {
     expect(screen.queryByTestId('cloud-browser-hand-back-form')).not.toBeInTheDocument();
   });
 
+  it('sends a drag with its held button, and a hover with none', async () => {
+    const { last } = mount();
+    act(() => {
+      last().hello(true);
+      last().frame(1, { control: 'user' });
+    });
+    const canvas = await screen.findByTestId('cloud-browser-canvas');
+    // A move's own `button` is -1: the held one is in `buttons` (1 left, 2 right, 4 middle).
+    fireEvent.pointerMove(canvas, { clientX: 10, clientY: 10, button: -1, buttons: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 12, clientY: 10, button: -1, buttons: 2 });
+    fireEvent.pointerMove(canvas, { clientX: 14, clientY: 10, button: -1, buttons: 4 });
+    const moves = last().sent.filter((m) => m['type'] === 'pointer' && m['kind'] === 'move').map((m) => m['button']);
+    expect(moves).toEqual([1, 3, 2]);
+  });
+
+  it('scrolls the page without scrolling the panel around it', async () => {
+    const { last } = mount();
+    act(() => {
+      last().hello(true);
+      last().frame(1);
+    });
+    const canvas = await screen.findByTestId('cloud-browser-canvas');
+    const wheel = new WheelEvent('wheel', { deltaY: 120, clientX: 100, clientY: 50, bubbles: true, cancelable: true });
+    canvas.dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(true);
+    expect(last().sent).toContainEqual({ type: 'wheel', x: 200, y: 100, delta_x: 0, delta_y: 120, modifiers: 0 });
+  });
+
+  it('types a character outside the BMP, and sends Enter as one key without a char', async () => {
+    const { last } = mount();
+    act(() => {
+      last().hello(true);
+      last().frame(1, { control: 'user' });
+    });
+    const canvas = await screen.findByTestId('cloud-browser-canvas');
+    fireEvent.keyDown(canvas, { key: '😀', code: '' });
+    expect(last().sent).toContainEqual({ type: 'key', kind: 'char', key: '😀', code: '', text: '😀', modifiers: 0 });
+    fireEvent.keyDown(canvas, { key: 'Enter', code: 'Enter' });
+    const enter = last().sent.filter((m) => m['type'] === 'key' && m['key'] === 'Enter');
+    expect(enter).toEqual([{ type: 'key', kind: 'down', key: 'Enter', code: 'Enter', text: '', modifiers: 0 }]);
+  });
+
   it('is watch-only for a viewer who may not drive: no buttons, no input', async () => {
     const { last } = mount();
     act(() => {

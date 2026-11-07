@@ -97,15 +97,16 @@ export function executionIdOfEvents(eventsUrl: string | undefined): string | und
 }
 
 /**
- * The live answer `responseId` names the run it streams from (`taskId`), as a
- * reloaded transcript's row does: the chat finds the run's cloud browser
- * from it (#1598). The same array when there is nothing to stamp.
+ * The live answer `responseId` names the run it streams from
+ * (`executionId`): the chat finds the run's cloud browser from it (#1598).
+ * Never `taskId`, which chain follow compares with a read row's to tell an
+ * answer that runs again. The same array when there is nothing to stamp.
  */
 export function stampExecution(history: readonly ChatMessage[], responseId: string | undefined, executionId: string | undefined): readonly ChatMessage[] {
   if (responseId === undefined || executionId === undefined) return history;
   const index = history.findIndex((message) => message.id === responseId);
-  if (index === -1 || history[index]?.taskId === executionId) return history;
+  if (index === -1 || history[index]?.executionId === executionId) return history;
   const next = [...history];
-  next[index] = { ...history[index], taskId: executionId } as ChatMessage;
+  next[index] = { ...history[index], executionId } as ChatMessage;
   return next;
 }

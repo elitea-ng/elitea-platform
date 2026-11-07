@@ -12,8 +12,10 @@ an answer whose run used the cloud browser, and opens the view WebSocket
 page only where `main.runtime.browserView` is on; elsewhere the tab shows
 why there is no browser. Whatever fronts `/api/v2` must pass
 WebSocket upgrades through (see the entry below). When an open is refused,
-the tab sends one plain GET to the same route to learn why; with the view
-on it answers 426, which is expected in access logs.
+the tab sends one plain GET to the same route to learn why. Main answers
+it with the upgrade's own refusal, or 426 where the view would be
+admitted, without taking a view slot or reaching the supervisor; the 426
+is expected in access logs.
 
 ## Cloud browser: the live view (#1597, ADR-0049 decision 6)
 

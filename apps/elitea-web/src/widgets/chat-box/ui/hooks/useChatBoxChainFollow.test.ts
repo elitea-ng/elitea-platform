@@ -163,6 +163,15 @@ describe('mergeChainSnapshot', () => {
     expect(mergeChainSnapshot(streaming, [question, { ...answer, runBrief: ready }])).toBe(streaming);
   });
 
+  it('takes the read row of an answer that runs again under the run the live stream was stamped with', () => {
+    // The transport stamps the live answer with its run (#1598) and settles it; an output-limit continuation
+    // reuses the response AND the execution, so the read row streams again with the same id.
+    const settled = [question, { ...answer, executionId: 'exec-1' }];
+    const again: ChatMessage = { ...answer, content: 'done, and more', isStreaming: true, taskId: 'exec-1' };
+    const merged = mergeChainSnapshot(settled, [question, again]);
+    expect(merged[1]).toMatchObject({ isStreaming: true, taskId: 'exec-1', content: 'done, and more' });
+  });
+
   it('appends nothing it cannot anchor to the live history', () => {
     const live = [question, answer];
     expect(mergeChainSnapshot(live, [{ ...question, id: 'x' }])).toBe(live);

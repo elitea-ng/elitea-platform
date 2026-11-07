@@ -647,6 +647,40 @@ fn input_line(event: &BrowserInputEventV1) -> Option<Value> {
     })
 }
 
+#[cfg(test)]
+mod input_line_tests {
+    use super::input_line;
+    use crate::protocol::elitea::runtime::v1::{
+        BrowserInputEventV1, BrowserPointerEventV1, BrowserPointerKindV1, browser_input_event_v1,
+    };
+
+    fn pointer(kind: BrowserPointerKindV1, button: u32) -> BrowserInputEventV1 {
+        BrowserInputEventV1 {
+            event: Some(browser_input_event_v1::Event::Pointer(
+                BrowserPointerEventV1 {
+                    kind: kind.into(),
+                    x: 1.0,
+                    y: 2.0,
+                    button,
+                    click_count: 1,
+                    modifiers: 0,
+                },
+            )),
+        }
+    }
+
+    // The proto's numbering (0 none, 1 left, 2 middle, 3 right) reaches the
+    // agent unchanged: the agent, not the supervisor, maps it to CDP's names.
+    #[test]
+    fn pointer_buttons_pass_through_in_the_protos_numbering() {
+        for button in 0..=3 {
+            let line = input_line(&pointer(BrowserPointerKindV1::Down, button)).unwrap();
+            assert_eq!(line["button"], button);
+        }
+        assert!(input_line(&pointer(BrowserPointerKindV1::Down, 4)).is_none());
+    }
+}
+
 fn frame_out(frame: &Frame) -> BrowserViewOutputV1 {
     BrowserViewOutputV1 {
         frame: Some(browser_view_output_v1::Frame::Screen(BrowserFrameV1 {

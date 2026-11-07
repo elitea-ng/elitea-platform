@@ -16,7 +16,7 @@
  *
  * Positions are scaled from the canvas box to the frame's logical pixels.
  */
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type WheelEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -69,8 +69,34 @@ function modifiersOf(event: { altKey: boolean; ctrlKey: boolean; metaKey: boolea
   return (event.altKey ? MODIFIER.alt : 0) | (event.ctrlKey ? MODIFIER.ctrl : 0) | (event.metaKey ? MODIFIER.meta : 0) | (event.shiftKey ? MODIFIER.shift : 0);
 }
 
-/** DOM button (0 left, 1 middle, 2 right) to CDP's (1 left, 2 middle, 3 right). */
+/** DOM button (0 left, 1 middle, 2 right) to the view's (1 left, 2 middle, 3 right). */
 const BUTTON: Readonly<Record<number, number>> = { 0: 1, 1: 2, 2: 3 };
+
+/**
+ * The held button of a move, from DOM `buttons` (bit 1 left, 2 right, 4
+ * middle): a move's own `button` is -1, so a drag would read as a hover.
+ * 0 when none is held.
+ */
+export function heldButton(buttons: number): number {
+  if ((buttons & 1) !== 0) return 1;
+  if ((buttons & 4) !== 0) return 2;
+  if ((buttons & 2) !== 0) return 3;
+  return 0;
+}
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * Whether a DOM `key` is one printable character: one grapheme, so a
+ * character outside the BMP (two UTF-16 units) or a joined emoji counts,
+ * and a named key such as `Enter` does not.
+ */
+function isPrintable(key: string): boolean {
+  if (key === '') return false;
+  const segments = GRAPHEMES.segment(key)[Symbol.iterator]();
+  segments.next();
+  return segments.next().done === true;
+}
 
 function Pill({ state }: { readonly state: BrowserViewState }): React.JSX.Element {
   const ended = state.phase === 'ended' || state.phase === 'failed';
@@ -165,6 +191,18 @@ function useInput(connection: BrowserViewConnection | null, state: BrowserViewSt
     return [((event.clientX - box.left) / box.width) * state.width, ((event.clientY - box.top) / box.height) * state.height];
   }, [canvas, state.width, state.height]);
   const lastMove = useRef(0);
+  // React's onWheel is passive and cannot keep the panel from scrolling with the page: a native, non-passive listener can.
+  useEffect(() => {
+    const element = canvas.current;
+    if (!enabled || element === null) return undefined;
+    const onWheel = (event: globalThis.WheelEvent): void => {
+      event.preventDefault();
+      const [x, y] = at(event);
+      connection.wheel(x, y, event.deltaX, event.deltaY, modifiersOf(event));
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [enabled, canvas, at, connection]);
   if (!enabled) return {};
   return {
     onPointerDown: (event: PointerEvent<HTMLCanvasElement>) => {
@@ -182,17 +220,14 @@ function useInput(connection: BrowserViewConnection | null, state: BrowserViewSt
       if (event.buttons === 0 && (state.control !== 'user' || now - lastMove.current < 50)) return;
       lastMove.current = now;
       const [x, y] = at(event);
-      connection.pointer('move', x, y, BUTTON[event.button] ?? 0, 0, modifiersOf(event));
-    },
-    onWheel: (event: WheelEvent<HTMLCanvasElement>) => {
-      const [x, y] = at(event);
-      connection.wheel(x, y, event.deltaX, event.deltaY, modifiersOf(event));
+      connection.pointer('move', x, y, heldButton(event.buttons), 0, modifiersOf(event));
     },
     onKeyDown: (event: KeyboardEvent<HTMLCanvasElement>) => {
       event.preventDefault();
       const modifiers = modifiersOf(event);
+      // A named key (Enter) types its own text on the down; only a printable character gets a separate char.
       connection.key('down', event.key, event.code, '', modifiers);
-      if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) connection.key('char', event.key, event.code, event.key, modifiers);
+      if (isPrintable(event.key) && !event.ctrlKey && !event.metaKey) connection.key('char', event.key, event.code, event.key, modifiers);
     },
     onKeyUp: (event: KeyboardEvent<HTMLCanvasElement>) => {
       event.preventDefault();

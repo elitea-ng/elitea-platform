@@ -75,10 +75,12 @@ describe('the live answer names its run (#1598)', () => {
     expect(executionIdOfEvents(undefined)).toBeUndefined();
   });
 
-  it('stamps taskId on the response row only, and keeps the array when nothing changes', () => {
+  it('stamps executionId on the response row only, never taskId, and keeps the array when nothing changes', () => {
     const history = [question, { ...inFlight, taskId: undefined }];
     const stamped = stampExecution(history, 'a1', 'exec-9');
-    expect(stamped[1]?.taskId).toBe('exec-9');
+    expect(stamped[1]?.executionId).toBe('exec-9');
+    // Chain follow reads taskId differing from a read row's as a resumed answer.
+    expect(stamped[1]?.taskId).toBeUndefined();
     expect(stamped[0]).toBe(question);
     expect(stampExecution(stamped, 'a1', 'exec-9')).toBe(stamped);
     expect(stampExecution(history, 'missing', 'exec-9')).toBe(history);

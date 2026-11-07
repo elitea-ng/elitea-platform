@@ -17,6 +17,12 @@ describe('cloudBrowserSessionOf', () => {
     expect(cloudBrowserSessionOf(messages)).toBe(browserSessionNameFor('exec-new'));
   });
 
+  it("reads a live answer's stamped run before a read row's taskId", () => {
+    const live = { role: 'assistant', executionId: 'exec-live', toolActions: [browserCall('browser_open')] };
+    expect(cloudBrowserSessionOf([live])).toBe(browserSessionNameFor('exec-live'));
+    expect(cloudBrowserSessionOf([{ ...live, taskId: 'exec-read' }])).toBe(browserSessionNameFor('exec-live'));
+  });
+
   it('is nothing without a browser call, or without the run id', () => {
     expect(cloudBrowserSessionOf([{ role: 'assistant', taskId: 'e', toolActions: [browserCall('search')] }])).toBeUndefined();
     expect(cloudBrowserSessionOf([{ role: 'assistant', toolActions: [browserCall('browser_snapshot')] }])).toBeUndefined();
