@@ -533,6 +533,12 @@ runs:
     # big to hand to a step. The tag is unique to this run and attempt
     # (push-tag), so nothing else can have pushed to it: it names exactly
     # what this step's bake pushed.
+    #
+    # The read is retried: ghcr answers a tag pushed a moment ago with
+    # "not found" now and then (measured on PR 1661, deepwiki-engine-native:
+    # the bake reported the digest, the inspect right after it did not see
+    # the tag). Six tries over about a minute; a tag still absent after that
+    # is a real failure and stops the leg.
     - name: Record the pushed digests
       if: inputs.push-prefix != ''
       shell: bash
@@ -545,7 +551,16 @@ runs:
         echo '{}' > "$meta"
         node -e 'const fs = require("fs"); for (const e of JSON.parse(fs.readFileSync(process.argv[1], "utf8"))) console.log(e.service, e.ref + ":" + e.tag)' "$plan" \
           | while read -r service image; do
-              digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+              digest=""
+              for attempt in 1 2 3 4 5 6; do
+                if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest.Digest}}' | tr -d '"')" && [ -n "$digest" ]; then
+                  break
+                fi
+                digest=""
+                echo "::warning::$image is not readable yet (attempt $attempt); retrying"
+                sleep $((attempt * 4))
+              done
+              [ -n "$digest" ] || { echo "::error::$image was pushed but cannot be read back"; exit 1; }
               node -e 'const fs = require("fs"); const [file, service, digest] = process.argv.slice(1); const m = JSON.parse(fs.readFileSync(file, "utf8")); m[service] = { "containerimage.digest": digest }; fs.writeFileSync(file, JSON.stringify(m))' \
                 "$meta" "$service" "$digest"
             done

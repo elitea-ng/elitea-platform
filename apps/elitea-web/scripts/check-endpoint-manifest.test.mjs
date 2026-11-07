@@ -898,7 +898,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 471 -> 472 (issue 1585, ADR-0047 decision 9): uploadLocalTurnScreenshot,
 // a computer use screenshot the desktop host uploads when the project opted
 // in. The desktop host calls it, so the web manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 472;
+// 472 -> 478 (issue 1607, ADR-0050 decision 1b): listAgentMemory,
+// clearAgentMemory, getAgentMemoryEntry, updateAgentMemoryEntry,
+// deleteAgentMemoryEntry and setAgentMemoryOptOut, an agent's Memory routes.
+// The Memory tab is a later story (issue 1608), so they are not in the
+// manifest yet.
+const GENERATED_OPERATION_COUNT = 478;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

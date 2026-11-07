@@ -144,5 +144,5 @@ func overlap(content string, keywords map[string]struct{}) int {
 }
 
 func notWordRune(r rune) bool {
-	return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r < utf8.RuneSelf
+	return (r < 'a' || r > 'z') && (r < '0' || r > '9') && r < utf8.RuneSelf
 }
