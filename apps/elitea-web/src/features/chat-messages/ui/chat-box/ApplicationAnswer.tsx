@@ -108,7 +108,7 @@ export function ApplicationAnswer({
   toolActions = [],
   isSpeakingMode = false,
   isLastMessage = false,
-  author: { participantName, showCaption = false, isSwarmChild = false, swarmAgentName = '' } = {},
+  author: { participantName, showCaption = false, isSwarmChild = false, swarmAgentName = '', motion } = {},
   status: { isLoading = false, isStreaming = false, isRegenerating = false } = {},
   actions: { onCopy, onDelete, onRegenerate, onFork, shouldDisableRegenerate = false, onEditCanvas, selectedCodeBlockInfo, onCreateCanvasFromSelection } = {},
   tts: { onAutoSpeak, speakingMessageId, spokenRange } = {},
@@ -266,7 +266,13 @@ export function ApplicationAnswer({
           {swarmAgentName}
         </Typography>
       ) : showCaption && participantName ? (
-        <AssistantCaption name={participantName} />
+        <AssistantCaption
+          name={participantName}
+          personaRole={answer.authorRole}
+          iconUrl={answer.authorIconUrl}
+          messageClass={answer.messageClass}
+          motion={motion}
+        />
       ) : null}
       {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
       <RunBriefCard value={answer.runBrief} />

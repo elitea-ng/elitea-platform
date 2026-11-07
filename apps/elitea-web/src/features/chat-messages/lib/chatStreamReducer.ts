@@ -89,8 +89,10 @@ export function applyChatStreamFrame(
   const type = frame.type;
   if (!type) return history;
   // A participant state (client contract 1.38) is not part of the answer:
-  // the participant presence reads it (#1606), the transcript never does.
-  if (type === SocketMessageType.AgentState) return history;
+  // the avatar store reads it (`model/agentAvatar.store.ts`). It only names
+  // the answering participant, often before any other frame of the turn does,
+  // so the avatar that moves is the live answer's.
+  if (type === SocketMessageType.AgentState) return withAnswerParticipant(history, frame);
   if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
   // Resolved ONCE, here, and handed to every family: `index === -1` means "no
@@ -125,7 +127,26 @@ export function applyChatStreamFrame(
     applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
     frame,
   ), frame);
-  if (!isTurnTerminalFrame(frame)) return next;
+  const stamped = withAnswerParticipant(next, frame);
+  if (!isTurnTerminalFrame(frame)) return stamped;
+  return settleTerminal(stamped, frame);
+}
+
+/**
+ * Client contract 1.38: the stream names the participant that answers (the
+ * run's, on every frame of its tree), so a live answer knows whose avatar it
+ * shows before the reload does.
+ */
+function withAnswerParticipant(history: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {
+  const id = frame.participant_id;
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return history;
+  const target = findTarget(history, frame);
+  const message = history[target];
+  if (!message || message.role === 'user' || message.authorParticipantId === id) return history;
+  return replaceAt(history, target, { authorParticipantId: id });
+}
+
+function settleTerminal(next: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {
   const target = findTarget(next, frame);
   const message = next[target];
   if (!message) return next;

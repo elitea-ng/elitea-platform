@@ -25,7 +25,8 @@ import { projectScope } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { parseFrame } from '@/features/chat/frames';
 import { INITIAL_TURN, isTurnTerminal, reduceTurn, withSteering, type TurnState } from '@/features/chat/turnReducer';
-import { STEERING_ERROR, STEERING_STATE, isSteeringCarryOver, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
+import { FRAME_TYPE, STEERING_ERROR, STEERING_STATE, isSteeringCarryOver, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
+import { applyAgentStateFrame, type AvatarStates } from '@elitea/client-core/conversation';
 import { registerWipeHook } from '@/security/endSession';
 import { getSession } from '@/state/session';
 
@@ -91,6 +92,11 @@ export interface LiveTurn {
   steeringUnsupported?: boolean;
   /** A rate-limited steering message goes again at this time (epoch ms); null when none waits. */
   steeringRetryAt?: number | null;
+  /**
+   * The avatar state of each participant of this turn, from its `agent_state`
+   * frames (client contract 1.38, ADR-0050 decision 6).
+   */
+  avatars?: AvatarStates;
 }
 
 /** What a message sent while the answer runs came to (client contract 1.27). */
@@ -845,6 +851,12 @@ export class TurnController {
       onEvent: (event) => {
         if (generation !== this.generation) return 'stop';
         const frame = parseFrame(event);
+        if (frame.kind === 'node' && frame.node.type === FRAME_TYPE.AgentState) {
+          const avatars = this.state.avatars ?? {};
+          const next = applyAgentStateFrame(avatars, frame.node, Date.now());
+          if (next !== avatars) this.update({ avatars: next });
+          return undefined;
+        }
         const before = this.state.turn;
         const turn = reduceTurn(before, frame);
         if (turn !== before) this.update({ turn });

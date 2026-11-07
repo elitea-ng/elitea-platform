@@ -92,6 +92,19 @@ export interface ChatMessageListPagination {
 }
 
 /** @public Props for `ChatMessageList`. */
+export interface ChatMessageListAssistant {
+  /**
+   * The fallback name for assistant rows that state no persisted author.
+   * A persisted authorName takes precedence over the composer selection.
+   */
+  readonly name?: string | undefined;
+  /**
+   * The conversation whose `agent_state` frames drive the answer avatars
+   * (ADR-0050 decision 6). Omitted, every avatar shows its still.
+   */
+  readonly conversationUuid?: string | undefined;
+}
+
 export interface ChatMessageListProps {
   /** The list of messages to render. */
   readonly chatHistory: readonly ChatMessage[];
@@ -120,11 +133,8 @@ export interface ChatMessageListProps {
    * name to greet. Omitted, the plain fallback line below is used.
    */
   readonly emptyState?: ReactNode;
-  /**
-   * The fallback name for assistant rows that state no persisted author.
-   * A persisted authorName takes precedence over the composer selection.
-   */
-  readonly assistantName?: string | undefined;
+  /** The conversation's assistant (`ChatMessageListAssistant`). */
+  readonly assistant?: ChatMessageListAssistant | undefined;
   /**
    * Steering during execution (contract 1.27): shows each answer's delivered steering messages under it, and
    * someone else's that still wait. The reader's own waiting ones are the composer's queue.

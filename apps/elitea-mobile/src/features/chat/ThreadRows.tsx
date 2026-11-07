@@ -6,6 +6,7 @@ import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
+import { MESSAGE_CLASS, type MessageClass } from '@elitea/client-core/conversation';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
 import { ToolActivity } from '@/features/chat/ToolCalls';
 import type { ToolStep } from '@/features/chat/toolActivity';
@@ -31,6 +32,17 @@ export function messageMeta(author: string | null, createdAt: number | null, now
     ? at.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     : at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return author ? `${author} · ${time}` : time;
+}
+
+/**
+ * The author line of an answer (ADR-0050 decisions 6 and 7e): the persona's
+ * role after the name, and "temporary" for an ephemeral sub-agent or "woke
+ * up" for a heartbeat, as the web caption shows them.
+ */
+export function answerAuthorLine(author: string | null, role: string | null | undefined, messageClass: MessageClass | undefined): string | null {
+  const marker = messageClass === MESSAGE_CLASS.Ephemeral ? 'temporary' : messageClass === MESSAGE_CLASS.Heartbeat ? 'woke up' : null;
+  const parts = [author, role ?? null, marker].filter((part): part is string => part !== null && part !== '');
+  return parts.length === 0 ? null : parts.join(' · ');
 }
 
 /** A row of text buttons under a bubble (Retry, Dismiss, Send again). */
@@ -79,7 +91,7 @@ export function PersistedMessage({
       role={message.role}
       mine={message.mine}
       author={message.author}
-      meta={answer || !message.mine ? messageMeta(message.author, message.createdAt) : null}
+      meta={answer || !message.mine ? messageMeta(answer ? answerAuthorLine(message.author, message.authorRole, message.messageClass) : message.author, message.createdAt) : null}
       avatar={answer ? avatar : undefined}
       status={status}
       error={message.error}

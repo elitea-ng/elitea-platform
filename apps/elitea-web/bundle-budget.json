@@ -52,8 +52,8 @@
         }
       },
       "workerNote": [
-        "400: the pdf.js worker (pdfjs-dist 6.4.299, pdf.worker.min.mjs) that the",
-        "Artifacts PDF preview starts, measured 2026-10-23 at ~375 KiB gzip. It",
+        "400: the pdf.js worker (pdfjs-dist 6.5.438, pdf.worker.min.mjs) that the",
+        "Artifacts PDF preview starts, measured 2026-11-06 at ~371 KiB gzip. It",
         "is the package's own prebuilt file, runs off the main thread and is",
         "fetched only when a PDF is opened, so it is not held to the route-chunk",
         "budget."

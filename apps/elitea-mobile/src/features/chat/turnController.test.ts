@@ -179,6 +179,24 @@ describe('TurnController', () => {
     expect(live.settled).toBe(true);
   });
 
+  it('folds agent_state into the avatars, never into the answer', async () => {
+    const h = harness([() => started()]);
+    const done = h.controller.start();
+    await flush();
+    const connection = h.stream.connections[0];
+    connection.push(
+      'id: 1\nevent: execution.node_event\ndata: {"type":"agent_llm_chunk","content":"Hi","participant_id":12,"addressed_to":[]}\n\n' +
+        'event: execution.node_event\ndata: {"type":"agent_state","participant_id":12,"addressed_to":[],"state":"speaking","response_metadata":{}}\n\n',
+    );
+    await flush();
+    const live = h.controller.getSnapshot();
+    expect(live.avatars?.[12]?.state).toBe('speaking');
+    expect(live.turn.content).toBe('Hi');
+    expect(live.turn.unknownFrames).toBe(0);
+    connection.push(loadFixtureText('simple-answer'));
+    await done;
+  });
+
   it('sends a model turn with the adhoc contract', async () => {
     const sent: Sent[] = [];
     const fetch: BaseFetch = async (input) => {

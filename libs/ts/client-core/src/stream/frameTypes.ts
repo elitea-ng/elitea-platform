@@ -136,8 +136,8 @@ export const FRAME_TYPE = {
   AgentSwarmHandoff: 'agent_swarm_handoff',
   /**
    * Client contract 1.38 (ADR-0050 decision 7e): the participant moved to a
-   * new state (`AGENT_STATE`). Derived by the server; it carries the SSE id
-   * of the frame that caused it. Not part of the answer.
+   * new state (`AGENT_STATE`). Derived by the server and served without an
+   * SSE id, so it never moves the resume cursor. Not part of the answer.
    */
   AgentState: 'agent_state',
 } as const;

@@ -89,6 +89,8 @@ import { canReadAloud, readAloud, stopReading, useReading } from '@/features/spe
 import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
+import { AgentMotion, useAvatarClock } from '@/features/chat/AgentMotion';
+import { activeAnimatedParticipant, avatarMotion, type AvatarStates } from '@elitea/client-core/conversation';
 import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
 import { useSteeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
@@ -665,10 +667,22 @@ export function ThreadView({
   // it (or a model chat), the Elitea mark; another agent of the conversation gets a monogram.
   const agentIcon = useAgentIconUri(targetAgent ? (targetAgent.agentProjectId ?? projectId) : null, agentVersion.data?.iconPath ?? null);
   const primaryParticipant = target.ok ? target.participantId : null;
-  const avatarFor = (participantId: number | null, name: string | null) => {
+  // ADR-0050 decision 6: one avatar per list moves. The states are the live turn's, so only the
+  // live reply can move; persisted answers show their still.
+  const avatarStates = live && !live.settled ? (live.avatars ?? NO_AVATARS) : NO_AVATARS;
+  const avatarNow = useAvatarClock(avatarStates);
+  // The live reply is the participant its frames name (another agent of the conversation can answer),
+  // else the conversation's own target.
+  const liveParticipant = activeAnimatedParticipant(avatarStates, avatarNow) ?? primaryParticipant;
+  const avatarFor = (participantId: number | null, name: string | null, newest = false) => {
     const primary = participantId === null || participantId === primaryParticipant;
     const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
-    return <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mark={primary} />;
+    const motion = avatarMotion({ participantId: participantId ?? undefined, newest }, avatarStates, avatarNow, { reducedMotion: design.reduceMotion });
+    return (
+      <AgentMotion motion={motion} size={design.size.avatar.sm}>
+        <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mark={primary} />
+      </AgentMotion>
+    );
   };
   const [draft, setDraft] = useState<{ text: string; key: number } | null>(null);
   const list = useRef<ComponentRef<typeof FlatList<Row>>>(null);
@@ -739,6 +753,10 @@ export function ThreadView({
           : 'This project has no model to chat with.';
 
   const targetName = target.ok ? target.name : null;
+  const liveAuthor =
+    liveParticipant === primaryParticipant
+      ? targetName
+      : (participantName((detail?.participants ?? []).find((p) => Number(p.id) === liveParticipant)) ?? targetName);
   const pauseCard =
     pause && !(live && (live.turn.phase === 'sending' || live.turn.phase === 'streaming')) ? (
       <PauseCard
@@ -882,8 +900,8 @@ export function ThreadView({
                       return (
                         <LiveReply
                           live={item.live}
-                          author={targetName}
-                          avatar={avatarFor(primaryParticipant, targetName)}
+                          author={liveAuthor}
+                          avatar={avatarFor(liveParticipant, liveAuthor, true)}
                           onRetry={localWork.blockedReason === null ? turn.retry : null}
                           onReconnect={turn.reconnect}
                           onDismiss={turn.dismiss}
@@ -1015,6 +1033,8 @@ export function ThreadView({
     </>
   );
 }
+
+const NO_AVATARS: AvatarStates = {};
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

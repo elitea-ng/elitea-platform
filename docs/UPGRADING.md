@@ -76,6 +76,22 @@ Nothing to migrate. Upgrade Main before the desktops: an earlier Main
 sends no browser keys, and a desktop of this release then keeps the pane
 and its tools off (absent is off).
 
+## Agent avatars in chat (#1606, ADR-0050 decision 6)
+
+No action is needed. This is a client change only: the web app, the desktop
+app and the mobile app read the participant `kind` and `persona`, the
+message `author_kind`, `addressed_to`, `visibility` and `cause`, and the
+`agent_state` frame of client contract 1.38 (#1605). Upgrade Main first.
+Against an earlier Main, the clients show every answer with the Elitea mark
+and no motion, as before. The shared view model is the new
+`@elitea/client-core/conversation` entry point.
+
+The Rust worker's Kubernetes client moves to kube 5 and the Kubernetes 1.33
+API (`k8s-openapi` `v1_33`, was `v1_32`). It is used only by the
+`sandbox-supervisor` feature (workspace runs and browser sessions). Pod,
+exec and attach calls are unchanged; run those features on Kubernetes 1.33
+or newer.
+
 ## Typed chat participants and message addressing (#1605, ADR-0050 decision 7)
 
 No action is needed. Workers and Main can be upgraded in any order.

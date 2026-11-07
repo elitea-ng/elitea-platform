@@ -26,6 +26,8 @@ import { UserMessage } from './UserMessage';
 import { useStickToBottom } from './useStickToBottom';
 
 import { useChatSessionStore } from '@/entities/conversation';
+import { useAgentAvatarMotion } from '../../model/agentAvatar.store';
+import { answerHasIdentity, newestAnswerByParticipant } from './answerAvatars';
 import { WELCOME_MESSAGE_ID } from '@/shared/lib/enums';
 import { ScrollableContainer } from '@/shared/ui/ScrollableContainer';
 import type { SimpleBarInstance } from '@/shared/ui/ScrollableContainer';
@@ -149,7 +151,7 @@ export function ChatMessageList({
   } = {},
   pagination: { isLoadingMore = false, onScrollToTop } = {},
   emptyState,
-  assistantName,
+  assistant: { name: assistantName, conversationUuid } = {},
   steering,
 }: ChatMessageListProps): ReactNode {
   const scrollRef = useRef<SimpleBarInstance | null>(null);
@@ -179,6 +181,9 @@ export function ChatMessageList({
     names.delete('');
     return names.size > 1;
   }, [chatHistory, assistantName]);
+  // One avatar per list moves: the active participant's newest answer (ADR-0050 decision 6).
+  const motionOf = useAgentAvatarMotion(conversationUuid);
+  const newestAnswerIds = useMemo(() => newestAnswerByParticipant(chatHistory), [chatHistory]);
   const lastUserMessageIndex = useMemo(
     () => chatHistory.reduce((last, msg, i) => (msg.role === 'user' ? i : last), -1),
     [chatHistory],
@@ -337,7 +342,11 @@ export function ChatMessageList({
                   // the answers — the mode's whole point (reading the reply
                   // back) could not happen.
                   isSpeakingMode={autoSpeak}
-                  author={{ participantName: message.authorName ?? assistantName, showCaption: isMultiAssistant }}
+                  author={{
+                    participantName: message.authorName ?? assistantName,
+                    showCaption: isMultiAssistant || answerHasIdentity(message),
+                    motion: motionOf({ participantId: message.authorParticipantId, newest: newestAnswerIds.has(message.id) }),
+                  }}
                   toolActions={message.toolActions}
                   status={{ isLoading: Boolean(message.isLoading), isStreaming: messageIsStreaming }}
                   actions={{
