@@ -20,8 +20,9 @@ name: Release & Publish
 # that tag's patch + 1. Pre-release tags never feed the bump: semantic-release
 # ignores pre-release versions when it looks for the last release of `main`.
 #
-# A pre-release builds, scans, signs and publishes the same images, charts and
-# signed macOS app (the `desktop` job) a release does, under its own version only — the manifest step never gives a
+# A pre-release builds, scans, signs and publishes the same images and charts a
+# release does, and runs the same macOS signing check (the `desktop` job, which
+# publishes nothing), under its own version only — the manifest step never gives a
 # version with a `-` the moving tags. The `prune` job keeps the newest
 # PRERELEASE_KEEP of each pre-release channel and deletes the rest; after a
 # stable release it deletes every pre-release cut before it. Stable releases
@@ -1255,11 +1256,15 @@ jobs:
           VERSION="${{ needs.release.outputs.new_release_version }}"
           helm show chart "oci://${REGISTRY}/charts/${{ matrix.chart }}" --version "$VERSION"
 
-  # ── Job 5: Desktop — the signed, notarised macOS app (Apple silicon) ────────
+  # ── Job 5: Desktop — build, sign and notarise the macOS app; publish nothing ─
   #
-  # Every channel ships it, attached to the GitHub release the `release` job
-  # created: `Elitea_<version>_aarch64.dmg` and the `.app` as a zip. A job here
-  # and not a tag-triggered workflow: a tag created with GITHUB_TOKEN starts no
+  # A release check, not a distribution channel. The desktop app is not
+  # attached to the GitHub release: ELITEA's desktop builds reach clients
+  # through their device management, signed by the brand owner (ADR-0052
+  # decision 8), and the certificate this job signs with is not that owner's.
+  # The job proves at every release that the tagged code still builds, signs,
+  # notarises and staples, then discards the app. A job here and not a
+  # tag-triggered workflow: a tag created with GITHUB_TOKEN starts no
   # workflow, and no workflow here may start on a push at all.
   #
   # THE VERSION IS STAMPED, NOT COMMITTED, as the chart's is. Cargo.toml takes
@@ -1271,10 +1276,14 @@ jobs:
   #
   # NOT IN ROLLBACK'S `needs`. The images and charts are the release; a failed
   # notarisation (Apple's service, an expired certificate) must not delete
-  # them. Re-run this job alone: the upload uses --clobber.
+  # them. Re-run this job alone.
   #
   # Signing never degrades in silence: with any signing secret missing the job
-  # fails, and an unsigned app is never attached to a release.
+  # fails.
+  #
+  # NOTHING LEAVES THE RUNNER. No release asset, no workflow artifact (a
+  # public repository's artifacts are downloadable), no attestation (it would
+  # name a file nobody can get).
   desktop:
     name: Desktop (macOS arm64)
     needs: release
@@ -1282,9 +1291,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1412,56 +1419,6 @@ jobs:
           spctl --assess --type execute --verbose=4 macos/Elitea.app
           xcrun stapler validate macos/Elitea.app
 
-      - name: Package the release assets
-        working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
-        env:
-          VERSION: ${{ needs.release.outputs.new_release_version }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/assets"
-          # ditto keeps the code signature and the stapled ticket; zip(1) does not.
-          ditto -c -k --keepParent macos/Elitea.app "$RUNNER_TEMP/assets/Elitea_${VERSION}_aarch64.app.zip"
-          dmg="$(ls dmg/*.dmg)"
-          cp "$dmg" "$RUNNER_TEMP/assets/Elitea_${VERSION}_aarch64.dmg"
-
-      # The SBOM is read from the lockfiles the app is built from: the Tauri
-      # shell's and the document sidecar's Cargo.lock, and elitea-web's
-      # package-lock.json (the bundle the shell serves). npm dev dependencies
-      # are left out, so the desktop's own package.json (the Tauri CLI, a
-      # build tool) contributes nothing. Every other app is skipped by name;
-      # a new app under apps/ that the desktop does not ship needs a line here.
-      - name: SBOM of the desktop app
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: apps
-          skip-dirs: apps/elitea-mobile,apps/elitea-docs,**/node_modules,**/target
-          format: cyclonedx
-          output: ${{ runner.temp }}/sbom-desktop.cdx.json
-
-      # Provenance and the SBOM for the exact files the release gets, before
-      # they are attached: an asset never sits on a release unattested.
-      - name: Attest the app — build provenance
-        uses: actions/attest@v4
-        with:
-          subject-path: ${{ runner.temp }}/assets/*
-
-      - name: Attest the app — SBOM
-        uses: actions/attest@v4
-        with:
-          subject-path: ${{ runner.temp }}/assets/*
-          sbom-path: ${{ runner.temp }}/sbom-desktop.cdx.json
-
-      - name: Attach the app to the release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release.outputs.new_release_git_tag }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$RUNNER_TEMP"/assets/* "$RUNNER_TEMP/sbom-desktop.cdx.json"
-          echo "Attached $(cd "$RUNNER_TEMP/assets" && echo *) and sbom-desktop.cdx.json to ${TAG}" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Remove the notarisation key
         if: always()
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
@@ -1490,8 +1447,7 @@ jobs:
   # counted among the kept. After a pre-release, deletes each older pre-release
   # of its channel beyond PRERELEASE_KEEP; after a stable release, every
   # pre-release cut before it. Each goes with its tag, its images (the manifest,
-  # both platform tags and the signature) and its charts; the desktop app goes
-  # with the GitHub release it is attached to. Never a stable release:
+  # both platform tags and the signature) and its charts. Never a stable release:
   # scripts/ci/prune-prereleases.mjs, unit-tested in no-binaries.yml.
   prune:
     name: Prune old pre-releases

@@ -10,7 +10,7 @@
 // newest `keepPrereleases` of each pre-release channel cut after the newest
 // stable one, and deletes the rest:
 //
-//   * every other GitHub release (with the desktop app attached to it) and its
+//   * every other GitHub release (with any assets attached to it) and its
 //     tag. A tag without a release is not touched.
 //   * in every release image and chart, the versions whose tags all belong to
 //     a deleted release, with their cosign signatures, and every UNTAGGED

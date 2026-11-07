@@ -1,6 +1,6 @@
 ---
 title: "Verify release artifacts"
-description: "Check that an Elitea image, chart or desktop app was built by the Elitea release workflow, and read its software bill of materials, before you run it."
+description: "Check that an Elitea image or chart was built by the Elitea release workflow, and read its software bill of materials, before you run it."
 ---
 
 Every Elitea release publishes evidence you can check yourself, without trusting the registry or the download page. Each artifact is signed, and each carries a signed record of how it was built (build provenance) and what is inside it (a software bill of materials, SBOM). The release workflow, `.github/workflows/publish.yml`, signs them with its GitHub Actions identity through [Sigstore](https://www.sigstore.dev/). No long-lived signing key exists to leak.
@@ -13,7 +13,8 @@ Use this page to verify an install by hand, and to configure your cluster to ref
 |---|---|---|---|---|
 | Images (`elitea-main`, `elitea-web`, …) | `ghcr.io/elitea-ng/<image>:<version>` | cosign, on the multi-arch index | On the multi-arch index | CycloneDX, one per platform image (`linux/amd64`, `linux/arm64`) |
 | Charts (`elitea`, `elitea-sandbox-runtime`) | `oci://ghcr.io/elitea-ng/charts/<chart>` | cosign | Yes | No |
-| macOS desktop app | The GitHub release: `Elitea_<version>_aarch64.dmg` and `.app.zip` | Apple Developer ID, notarised and stapled | On each file | CycloneDX, `sbom-desktop.cdx.json` on the release |
+
+The GitHub release carries no desktop or mobile app. Those reach your devices through your organization's device management, signed by the app's publisher; check them with your MDM and the operating system's own signature checks.
 
 Build provenance follows the [SLSA v1](https://slsa.dev/spec/v1.0/) format. It records the repository, the commit, the workflow file and the run that built the artifact. The attestations are stored in GitHub's attestation store and pushed next to the image in the registry. Every signature is recorded in the public Sigstore transparency log, Rekor.
 
@@ -56,14 +57,6 @@ A chart verifies the same way:
 gh attestation verify "oci://ghcr.io/elitea-ng/charts/elitea:${VERSION}" \
   --repo elitea-ng/elitea-platform \
   --signer-workflow elitea-ng/elitea-platform/.github/workflows/publish.yml
-```
-
-For the desktop app, download the file from the release and verify it by path:
-
-```bash
-gh release download "v${VERSION}" --repo elitea-ng/elitea-platform \
-  --pattern "Elitea_${VERSION}_aarch64.dmg"
-gh attestation verify "Elitea_${VERSION}_aarch64.dmg" --repo elitea-ng/elitea-platform
 ```
 
 Without network access, download the trust root once with `gh attestation trusted-root`, and the attestation bundle with `gh attestation download`. Then pass both to `gh attestation verify` with `--custom-trusted-root` and `--bundle`.
