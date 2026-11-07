@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { LocalTurnComputerUse } from "./localTurnComputerUse.zod";
 import { LocalTurnMemoryRecall } from "./localTurnMemoryRecall.zod";
 import { LocalTurnUnattendedStarted } from "./localTurnUnattendedStarted.zod";
 
@@ -71,6 +72,7 @@ export const LocalTurnStarted = zod
       ),
     memory_recall: LocalTurnMemoryRecall,
     unattended: LocalTurnUnattendedStarted.optional(),
+    computer_use: LocalTurnComputerUse.optional(),
   })
   .describe(
     "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158 (`start`).",

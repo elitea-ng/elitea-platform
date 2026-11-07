@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	localturnsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/localturns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"

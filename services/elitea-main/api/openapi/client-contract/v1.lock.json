@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.40",
+  "client_contract": "1.41",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -18084,6 +18084,17 @@
                 "response_message_id"
               ],
               "properties": {
+                "computer_use": {
+                  "type": "object",
+                  "required": [
+                    "upload_screenshots"
+                  ],
+                  "properties": {
+                    "upload_screenshots": {
+                      "type": "boolean"
+                    }
+                  }
+                },
                 "conversation_uuid": {
                   "type": "string",
                   "format": "uuid"
@@ -19188,6 +19199,441 @@
               ],
               "properties": {
                 "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/local_turn_screenshot/prompt_lib/{project_id}/{execution_id}": {
+      "operation_id": "uploadLocalTurnScreenshot",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:execution_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "content",
+              "digest",
+              "media_type",
+              "name"
+            ],
+            "properties": {
+              "content": {
+                "type": "string",
+                "format": "byte"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "media_type": {
+                "type": "string",
+                "enum": [
+                  "image/jpeg",
+                  "image/png"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "pattern": "^computer-screenshot-[A-Za-z0-9_-]{1,64}\\.(png|jpg)$"
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "201": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "file_size",
+                "filepath"
+              ],
+              "properties": {
+                "file_size": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "filepath": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
                   "type": "string"
                 }
               }
