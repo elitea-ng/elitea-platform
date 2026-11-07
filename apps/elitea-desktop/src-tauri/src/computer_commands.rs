@@ -251,6 +251,7 @@ pub fn apply(control: &ComputerControl, action: SessionAction) {
 /// mirrors it.
 pub fn wire(app: &AppHandle, control: &Arc<ComputerControl>) {
     let handle = app.clone();
+    let visibility = PanelVisibility::default();
     control.set_notify(Arc::new(move |view: &SessionView| {
         let payload = event_payload(view);
         for target in [crate::window::MAIN, PANEL] {
@@ -261,11 +262,34 @@ pub fn wire(app: &AppHandle, control: &Arc<ComputerControl>) {
         if let Some(activity) = handle.try_state::<Arc<crate::activity::Activity>>() {
             activity.computer(view);
         }
-        let shown = view.shown();
-        let app = handle.clone();
-        // Windows are made and shown on the main thread.
-        let _ = handle.run_on_main_thread(move || show_panel(&app, shown));
+        // Only a change of the panel's visibility touches the window: each
+        // show orders it front, and the panel's state changes with every call.
+        if let Some(shown) = visibility.update(view.shown()) {
+            let app = handle.clone();
+            // Windows are made and shown on the main thread.
+            let _ = handle.run_on_main_thread(move || show_panel(&app, shown));
+        }
     }));
+}
+
+/// Whether the panel is on screen, so the window is shown or hidden only
+/// when that changes (not on every new action).
+#[derive(Default)]
+pub struct PanelVisibility(std::sync::Mutex<bool>);
+
+impl PanelVisibility {
+    /// The session's view says the panel is `shown`: `Some(shown)` when the
+    /// window must change, `None` when it already is so.
+    pub fn update(&self, shown: bool) -> Option<bool> {
+        let mut current = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (*current != shown).then(|| {
+            *current = shown;
+            shown
+        })
+    }
 }
 
 /// A `computer://event` of kind `computer_session`.
@@ -310,7 +334,12 @@ fn build_panel(app: &AppHandle) -> tauri::Result<()> {
     .always_on_top(true)
     .visible_on_all_workspaces(true)
     .skip_taskbar(true)
+    // Never the key window: the agent's keystrokes go to the app it drives,
+    // never into the panel. A non-key window still takes a click on its
+    // buttons (first mouse).
     .focused(false)
+    .focusable(false)
+    .accept_first_mouse(true)
     .on_navigation(move |url| crate::window::is_bundled_origin(url, dev))
     .build()?;
     // Top right of the main display, out of the way of most windows.
@@ -347,6 +376,31 @@ mod tests {
             assert!(url.starts_with("x-apple.systempreferences:"), "{url}");
             assert!(url.ends_with(anchor), "{url}");
         }
+    }
+
+    #[test]
+    fn the_panel_window_changes_only_when_it_appears_or_goes() {
+        let control = ComputerControl::default();
+        let visibility = PanelVisibility::default();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::new()));
+        {
+            let heard = heard.clone();
+            control.set_notify(Arc::new(move |view: &SessionView| {
+                if let Some(shown) = visibility.update(view.shown()) {
+                    heard.lock().unwrap().push(shown);
+                }
+            }));
+        }
+        control.begin(1);
+        // Every call shows a new action; the window is not shown again.
+        for action in ["press", "type 3 characters", "key cmd+s"] {
+            control.acted(1, Some("TextEdit"), action);
+        }
+        control.pause_pressed();
+        control.resume();
+        control.end(1);
+        control.begin(2);
+        assert_eq!(*heard.lock().unwrap(), [true, false, true]);
     }
 
     #[test]

@@ -318,7 +318,10 @@ impl ActivityState {
                 },
             ],
             Phase::Paused => vec![
-                Entry::Note(labels::text("computer_paused")),
+                Entry::Note(labels::text(match view.paused_by {
+                    Some(crate::computer_control::PauseReason::UserActive) => "computer_paused",
+                    _ => "computer_paused_button",
+                })),
                 Entry::Computer {
                     id: COMPUTER_RESUME,
                     label: labels::text("computer_resume"),
@@ -1016,8 +1019,17 @@ mod tests {
             ]
         );
         assert!(!entries.contains(&Entry::Note("Nothing running".into())));
+        // Paused by the button: the menu says so, not that the person is
+        // using the computer.
         state.set_computer(&SessionView {
             phase: Phase::Paused,
+            paused_by: Some(crate::computer_control::PauseReason::Button),
+            ..SessionView::default()
+        });
+        assert_eq!(state.entries(&names)[0], Entry::Note("Paused".into()));
+        state.set_computer(&SessionView {
+            phase: Phase::Paused,
+            paused_by: Some(crate::computer_control::PauseReason::UserActive),
             ..SessionView::default()
         });
         assert_eq!(

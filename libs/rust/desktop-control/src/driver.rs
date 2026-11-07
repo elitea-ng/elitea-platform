@@ -195,6 +195,15 @@ pub trait DesktopDriver: Send + Sync {
         let _ = (filter, sink);
         Err(DesktopError::PlatformNotSupported)
     }
+
+    /// The halt of the calls from now on (`None`: none), set by the caller
+    /// before each call (calls run one at a time). Once it is raised, the
+    /// call in flight fails with [`DesktopError::Interrupted`] at its next
+    /// step, before it posts any more input; a wait stops polling. The
+    /// default ignores it (a driver that posts nothing).
+    fn set_halt(&self, halt: Option<crate::Halt>) {
+        let _ = halt;
+    }
 }
 
 /// The driver of every OS without an implementation. It compiles

@@ -35,6 +35,13 @@ struct Fake {
     no_watch: std::sync::atomic::AtomicBool,
     /// A driver call blocks this long (a call in flight).
     delay: Mutex<Duration>,
+    /// The caller's halt (`set_halt`): a call in flight posts its input
+    /// only while it is not raised, as the real driver's lease does.
+    halt: Mutex<Option<elitea_desktop_control::Halt>>,
+    /// While a call is in the driver (entered, not yet returned).
+    inside: AtomicUsize,
+    /// The most calls ever inside the driver at once.
+    most_inside: AtomicUsize,
 }
 
 impl Fake {
@@ -52,20 +59,32 @@ impl Fake {
             watches: AtomicUsize::new(0),
             no_watch: std::sync::atomic::AtomicBool::new(false),
             delay: Mutex::new(Duration::ZERO),
+            halt: Mutex::new(None),
+            inside: AtomicUsize::new(0),
+            most_inside: AtomicUsize::new(0),
         })
     }
 
     fn hit(&self) {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let now = self.inside.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most_inside.fetch_max(now, Ordering::SeqCst);
         let delay = *self.delay.lock().unwrap();
         if !delay.is_zero() {
             std::thread::sleep(delay);
         }
+        self.inside.fetch_sub(1, Ordering::SeqCst);
     }
 
-    fn input(&self) {
+    /// An input post: after the call's work (the delay), and only while the
+    /// halt is down, as the real driver checks it at its lease.
+    fn input(&self) -> Result<(), DesktopError> {
         self.hit();
+        if let Some(halt) = self.halt.lock().unwrap().as_ref() {
+            halt.check()?;
+        }
         self.inputs.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 
     fn calls(&self) -> usize {
@@ -242,7 +261,7 @@ impl DesktopDriver for Fake {
         _r: &ElementRef,
         action: &Action,
     ) -> Result<ActionOutcome, DesktopError> {
-        self.input();
+        self.input()?;
         Ok(ok(action.name()))
     }
     fn type_text(
@@ -251,15 +270,15 @@ impl DesktopDriver for Fake {
         _r: Option<&ElementRef>,
         _t: &str,
     ) -> Result<ActionOutcome, DesktopError> {
-        self.input();
+        self.input()?;
         Ok(ok("type"))
     }
     fn key(&self, _t: &WindowTarget, _c: &KeyChord) -> Result<ActionOutcome, DesktopError> {
-        self.input();
+        self.input()?;
         Ok(ok("key"))
     }
     fn click_at(&self, c: &ClickAt) -> Result<ActionOutcome, DesktopError> {
-        self.input();
+        self.input()?;
         *self.clicked.lock().unwrap() = Some(c.clone());
         Ok(ok("click_at"))
     }
@@ -306,6 +325,10 @@ impl DesktopDriver for Fake {
         *self.sink.lock().unwrap() = Some(sink);
         self.watches.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeWatch))
+    }
+
+    fn set_halt(&self, halt: Option<elitea_desktop_control::Halt>) {
+        *self.halt.lock().unwrap() = halt;
     }
 }
 
@@ -1813,4 +1836,70 @@ async fn without_the_guard_no_act_runs_but_reads_do() {
     assert_eq!(rig.fake.inputs(), 0);
     let read = rig.call(COMPUTER_APPS, json!({})).await;
     assert_eq!(read["status"], "ok", "{read}");
+}
+
+/// An interrupted call's driver work goes on on its blocking thread; it
+/// posts no input once the person paused, and no next call enters the
+/// driver until it returned (the serial lock goes with it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_interrupted_call_posts_nothing_more_and_holds_the_driver_until_it_returns() {
+    let rig = Arc::new(rig(PermissionProfile::Build));
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    let inputs = rig.fake.inputs();
+    *rig.fake.delay.lock().unwrap() = Duration::from_millis(300);
+    let calling = rig.clone();
+    let call = tokio::spawn(async move { calling.call(COMPUTER_KEY, key_args()).await });
+    while rig.fake.inside.load(Ordering::SeqCst) == 0 {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    rig.fake.signal(elitea_desktop_control::Signal::UserActive);
+    let result = call.await.unwrap();
+    assert_eq!(result["code"], "user_active", "{result}");
+    // The person resumes at once and the agent calls again, while the first
+    // call's driver work is still running.
+    rig.host.control().resume();
+    *rig.fake.delay.lock().unwrap() = Duration::ZERO;
+    let next = rig.call(COMPUTER_KEY, key_args()).await;
+    assert_eq!(next["status"], "ok", "{next}");
+    assert_eq!(
+        rig.fake.most_inside.load(Ordering::SeqCst),
+        1,
+        "the next call waited for the interrupted one to leave the driver"
+    );
+    assert_eq!(
+        rig.fake.inputs(),
+        inputs + 1,
+        "the interrupted call posted nothing, the next one its key"
+    );
+}
+
+/// The gate and the pause count are one read: a pause landing between the
+/// gate and the driver call is seen as an interruption (with the count read
+/// after the gate, the call ran to completion while paused).
+#[tokio::test]
+async fn a_pause_right_after_the_gate_still_interrupts_the_call() {
+    let rig = Arc::new(rig(PermissionProfile::Build));
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    let inputs = rig.fake.inputs();
+    let control = rig.host.control();
+    // `acted` runs after the gate and before the driver call: the person's
+    // input lands there.
+    let pausing = control.clone();
+    control.set_notify(Arc::new(
+        move |view: &crate::computer_control::SessionView| {
+            if view.phase == crate::computer_control::Phase::Active && view.action.is_some() {
+                pausing.person_input();
+            }
+        },
+    ));
+    // Another chord, so the panel's action changes and the notify runs.
+    let result = rig
+        .call(COMPUTER_KEY, json!({ "bundle_id": APP, "chord": "cmd+a" }))
+        .await;
+    assert_eq!(result["code"], "user_active", "{result}");
+    assert_eq!(
+        rig.fake.inputs(),
+        inputs,
+        "nothing reached the app while paused"
+    );
 }

@@ -1144,5 +1144,6 @@
   "desktop.nativeMenu.computerPaused": "Paused, you are using the computer",
   "desktop.nativeMenu.computerResume": "Resume",
   "desktop.nativeMenu.computerStop": "Stop",
-  "desktop.nativeMenu.computerUsing": "Using {app}"
+  "desktop.nativeMenu.computerUsing": "Using {app}",
+  "desktop.nativeMenu.computerPausedButton": "Paused"
 }

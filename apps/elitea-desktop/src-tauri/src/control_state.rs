@@ -12,7 +12,14 @@
 //! **One turn owns the control** in both: each turn's toolset has a
 //! [`TurnId`], and only the owner's end resets the state, so an older turn
 //! of the thread finishing late changes nothing.
+//!
+//! **The UI hears the views in the order of the changes.** Each change
+//! queues its view while it still holds the state's lock; one thread at a
+//! time delivers the queue, outside every lock. Two threads changing the
+//! state at once never deliver an older view last, and a notify that
+//! changes the state again only queues its view (delivered next).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -41,10 +48,18 @@ pub trait Viewed {
 /// Who hears each change of the view.
 pub type Notify<V> = Arc<dyn Fn(&V) + Send + Sync>;
 
+/// The views not yet delivered, in the order of their changes.
+struct Delivery<V> {
+    queue: VecDeque<V>,
+    /// A thread is delivering the queue: the others only add to it.
+    draining: bool,
+}
+
 /// A state, its UI and its waiters.
 pub struct Observed<S: Viewed> {
     state: watch::Sender<S>,
     notify: Mutex<Option<Notify<S::View>>>,
+    delivery: Mutex<Delivery<S::View>>,
 }
 
 impl<S: Viewed> Observed<S> {
@@ -52,6 +67,10 @@ impl<S: Viewed> Observed<S> {
         Self {
             state: watch::channel(state).0,
             notify: Mutex::new(None),
+            delivery: Mutex::new(Delivery {
+                queue: VecDeque::new(),
+                draining: false,
+            }),
         }
     }
 
@@ -69,26 +88,51 @@ impl<S: Viewed> Observed<S> {
     }
 
     /// Change the state in one step; the UI hears it when the view
-    /// changed, after the change (never under the state's lock). Answers
-    /// what `work` answers.
+    /// changed, after the change (never under the state's lock), in the
+    /// order of the changes. Answers what `work` answers.
     pub fn change<R>(&self, work: impl FnOnce(&mut S) -> R) -> R {
         let mut out = None;
-        let mut changed = None;
+        let mut changed = false;
         self.state.send_modify(|state| {
             let before = state.view();
             out = Some(work(state));
             let after = state.view();
             if before != after {
-                changed = Some(after);
+                // Queued under the state's lock: the queue keeps the order.
+                lock(&self.delivery).queue.push_back(after);
+                changed = true;
             }
         });
-        if let Some(after) = changed {
-            let notify = lock(&self.notify).clone();
-            if let Some(notify) = notify {
-                notify(&after);
-            }
+        if changed {
+            self.deliver();
         }
         out.expect("send_modify runs its closure")
+    }
+
+    /// Deliver the queued views, unless another thread is delivering them
+    /// (it delivers this one too, after the ones before it).
+    fn deliver(&self) {
+        {
+            let mut delivery = lock(&self.delivery);
+            if delivery.draining {
+                return;
+            }
+            delivery.draining = true;
+        }
+        loop {
+            let next = {
+                let mut delivery = lock(&self.delivery);
+                let Some(next) = delivery.queue.pop_front() else {
+                    delivery.draining = false;
+                    return;
+                };
+                next
+            };
+            let notify = lock(&self.notify).clone();
+            if let Some(notify) = notify {
+                notify(&next);
+            }
+        }
     }
 
     /// Resolves once `holds` holds (at once when it does now).
@@ -126,6 +170,56 @@ mod tests {
         assert_eq!(observed.change(|c| c.shown), 1);
         assert_eq!(*lock(&heard), [1]);
         assert_eq!(observed.read(|c| c.hidden), 1);
+    }
+
+    #[test]
+    fn two_threads_changing_at_once_never_deliver_an_older_view_last() {
+        use std::time::{Duration, Instant};
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::new(Observed::new(Count::default()));
+        let (entered, in_notify) = std::sync::mpsc::channel::<()>();
+        let entered = Mutex::new(Some(entered));
+        let sink = heard.clone();
+        let reader = Arc::downgrade(&observed);
+        observed.set_notify(Arc::new(move |view: &u32| {
+            if *view == 1 {
+                // The first change's delivery is slow: the second change
+                // lands while it runs.
+                if let Some(entered) = lock(&entered).take() {
+                    entered.send(()).unwrap();
+                }
+                let observed = reader.upgrade().unwrap();
+                let until = Instant::now() + Duration::from_secs(5);
+                while observed.read(|c| c.shown) < 2 && Instant::now() < until {
+                    std::thread::yield_now();
+                }
+            }
+            lock(&sink).push(*view);
+        }));
+        let first = {
+            let observed = observed.clone();
+            std::thread::spawn(move || observed.change(|c| c.shown = 1))
+        };
+        in_notify.recv().unwrap();
+        observed.change(|c| c.shown = 2);
+        first.join().unwrap();
+        assert_eq!(*lock(&heard), [1, 2], "the last view heard is the state's");
+    }
+
+    #[test]
+    fn a_notify_that_changes_the_state_again_is_heard_next() {
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::new(Observed::new(Count::default()));
+        let sink = heard.clone();
+        let again = Arc::downgrade(&observed);
+        observed.set_notify(Arc::new(move |view: &u32| {
+            lock(&sink).push(*view);
+            if *view == 1 {
+                again.upgrade().unwrap().change(|c| c.shown = 2);
+            }
+        }));
+        observed.change(|c| c.shown = 1);
+        assert_eq!(*lock(&heard), [1, 2]);
     }
 
     #[tokio::test]

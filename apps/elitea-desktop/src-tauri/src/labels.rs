@@ -72,6 +72,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("computer_using", "Using {app}"),
     ("computer_active", "Using the computer"),
     ("computer_paused", "Paused, you are using the computer"),
+    ("computer_paused_button", "Paused"),
     ("computer_pause", "Pause"),
     ("computer_resume", "Resume"),
     ("computer_stop", "Stop"),

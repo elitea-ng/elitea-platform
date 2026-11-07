@@ -1420,6 +1420,17 @@ impl RulesEngine {
             .forget(&|choice| is_app_choice(choice, bundle_id))
     }
 
+    /// The "always for this app" answers this engine holds (seeing and
+    /// acting), from its choice store's cache: nothing is read from disk.
+    #[must_use]
+    pub fn remembered_computer_choices(&self) -> Vec<RememberedChoice> {
+        self.choices
+            .list()
+            .into_iter()
+            .filter(|choice| choice.tool.is_computer())
+            .collect()
+    }
+
     /// Switch the permission profile (a turn's start, or the person
     /// accepting the plan).
     pub fn set_profile(&self, profile: PermissionProfile) {

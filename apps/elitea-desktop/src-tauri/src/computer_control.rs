@@ -4,7 +4,7 @@
 //! It is the browser control pill's machine (`browser_control`) adapted to
 //! the whole desktop, on the same mechanism (`crate::control_state`: one
 //! step per change, the UI told only when the view changed, calls woken
-//! when the person acts, one turn owning the control):
+//! when the person acts):
 //!
 //! - **Idle**: no turn holds a computer session. Input changes nothing.
 //! - **Active**: a turn's `computer` call ran ([`ComputerControl::begin`],
@@ -21,6 +21,13 @@
 //!   The pending call and every later call of the turn answer
 //!   `stopped_by_user`: the session is over and the turn goes on without the
 //!   tools. The next turn starts Idle.
+//!
+//! **One desktop, one session.** Two threads may use the computer at once:
+//! each turn joins the session ([`ComputerControl::begin`]) and leaves it
+//! when it ends; the session is Idle again only when the last one left. What
+//! the person pressed holds for all of them — no turn's call undoes a
+//! pause, a pause gates every turn, and Stop ends every turn using the
+//! computer at that moment. A turn starting after the stop has it again.
 //!
 //! Where the browser pane hands the page to the person and back (take over
 //! / hand back, with a note), the computer has no hand-back: the person is
@@ -86,11 +93,18 @@ pub enum Gate {
     Stopped,
 }
 
+/// One session: every turn using the computer while it runs (two threads
+/// of the desktop may at once), and what the person pressed, which holds
+/// for all of them until the last one ends.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct State {
-    owner: Option<TurnId>,
+    /// The turns in the session (it is Idle without one). The first one's
+    /// app and action are the panel's until it ends; then the next one's.
+    turns: Vec<TurnId>,
     paused: Option<PauseReason>,
-    stopped: bool,
+    /// The turns **Stop** ended: they have no tools left. A turn that
+    /// starts using the computer after the stop is not one of them.
+    stopped: Vec<TurnId>,
     app: Option<String>,
     action: Option<String>,
     /// Bumped on every pause or stop while a session runs: a call in flight
@@ -98,15 +112,29 @@ struct State {
     epoch: u64,
 }
 
+impl State {
+    fn running(&self) -> bool {
+        !self.turns.is_empty()
+    }
+
+    /// Every turn of the session was stopped.
+    fn all_stopped(&self) -> bool {
+        self.running() && self.turns.iter().all(|turn| self.stopped.contains(turn))
+    }
+}
+
 impl Viewed for State {
     type View = SessionView;
 
     fn view(&self) -> SessionView {
-        let phase = match (self.owner, self.stopped, self.paused) {
-            (None, _, _) => Phase::Idle,
-            (Some(_), true, _) => Phase::Stopped,
-            (Some(_), false, Some(_)) => Phase::Paused,
-            (Some(_), false, None) => Phase::Active,
+        let phase = if !self.running() {
+            Phase::Idle
+        } else if self.all_stopped() {
+            Phase::Stopped
+        } else if self.paused.is_some() {
+            Phase::Paused
+        } else {
+            Phase::Active
         };
         SessionView {
             phase,
@@ -121,9 +149,12 @@ impl Viewed for State {
     }
 }
 
+/// An app's name or an action as the panel and the menu-bar item show it:
+/// controls, bidi and invisible format characters dropped
+/// (`notices::sanitize`, so a name cannot read as another), cut.
 fn shown(text: &str) -> String {
-    text.chars()
-        .filter(|c| !c.is_control())
+    crate::notices::sanitize(text)
+        .chars()
         .take(MAX_SHOWN_CHARS)
         .collect()
 }
@@ -153,56 +184,77 @@ impl ComputerControl {
         self.state.view()
     }
 
-    /// Turn `turn`'s `computer` call is about to run: it holds the session
-    /// now. A newer turn takes it over (Idle again, not paused or stopped by
-    /// an older turn's person); the same turn keeps its state.
+    /// Turn `turn`'s `computer` call is about to run: it joins the session
+    /// (a new one when none runs). Joining never undoes what the person
+    /// pressed: a paused session stays paused for every turn, the joiner
+    /// included, until **Resume**. The same turn joining again is nothing.
     pub fn begin(&self, turn: TurnId) {
         self.state.change(|state| {
-            if state.owner != Some(turn) {
+            if !state.running() {
                 *state = State {
-                    owner: Some(turn),
                     epoch: state.epoch,
                     ..State::default()
                 };
             }
+            if !state.turns.contains(&turn) {
+                state.turns.push(turn);
+            }
         });
     }
 
-    /// The turn's call acted on `app`: the panel shows it.
+    /// The turn's call acted on `app`: the panel shows it, for the turn the
+    /// panel follows (the session's first one still using it).
     pub fn acted(&self, turn: TurnId, app: Option<&str>, action: &str) {
         self.state.change(|state| {
-            if state.owner == Some(turn) {
+            if state.turns.first() == Some(&turn) {
                 state.app = app.map(shown);
                 state.action = Some(shown(action));
             }
         });
     }
 
-    /// Turn `turn` ended: when it holds the session, the panel goes away.
+    /// Turn `turn` ended: it leaves the session. With the last turn gone,
+    /// the session ends and the panel goes away; until then, the pause and
+    /// the stop stay as they are.
     pub fn end(&self, turn: TurnId) {
         self.state.change(|state| {
-            if state.owner == Some(turn) {
+            let Some(at) = state.turns.iter().position(|t| *t == turn) else {
+                return;
+            };
+            state.turns.remove(at);
+            if !state.running() {
                 *state = State {
                     epoch: state.epoch,
                     ..State::default()
                 };
+            } else if at == 0 {
+                // The panel follows the next turn from its next call.
+                state.app = None;
+                state.action = None;
             }
         });
     }
 
-    /// What a call of `turn` may do now.
+    /// What a call of `turn` may do now. A pause holds for every turn,
+    /// in the session or not; a stop for the turns it ended.
     #[must_use]
     pub fn gate(&self, turn: TurnId) -> Gate {
+        self.gate_at(turn).0
+    }
+
+    /// The pause-and-stop count and the gate of `turn`, read together:
+    /// a pause or a stop after this read bumps the count past it.
+    #[must_use]
+    pub fn gate_at(&self, turn: TurnId) -> (Gate, u64) {
         self.state.read(|state| {
-            if state.owner != Some(turn) {
-                Gate::Go
-            } else if state.stopped {
+            let gate = if state.stopped.contains(&turn) {
                 Gate::Stopped
             } else if state.paused.is_some() {
                 Gate::Paused
             } else {
                 Gate::Go
-            }
+            };
+            (gate, state.epoch)
         })
     }
 
@@ -219,7 +271,7 @@ impl ComputerControl {
 
     fn pause(&self, reason: PauseReason) {
         self.state.change(|state| {
-            if state.owner.is_some() && !state.stopped {
+            if state.running() && !state.all_stopped() {
                 if state.paused.is_none() {
                     state.epoch += 1;
                 }
@@ -246,17 +298,22 @@ impl ComputerControl {
     /// **Resume**: the only way out of a pause.
     pub fn resume(&self) {
         self.state.change(|state| {
-            if !state.stopped {
+            if !state.all_stopped() {
                 state.paused = None;
             }
         });
     }
 
-    /// **Stop**, or the stop shortcut: the session is over for this turn.
+    /// **Stop**, or the stop shortcut: the session is over for every turn
+    /// using the computer now.
     pub fn stop(&self) {
         self.state.change(|state| {
-            if state.owner.is_some() && !state.stopped {
-                state.stopped = true;
+            if state.running() && !state.all_stopped() {
+                for turn in state.turns.clone() {
+                    if !state.stopped.contains(&turn) {
+                        state.stopped.push(turn);
+                    }
+                }
                 state.paused = None;
                 state.epoch += 1;
             }
@@ -341,26 +398,106 @@ mod tests {
     }
 
     #[test]
-    fn only_the_turn_that_holds_the_session_ends_it_or_is_gated() {
+    fn another_turns_call_never_undoes_a_pause_and_is_paused_too() {
+        let control = ComputerControl::default();
+        control.begin(1);
+        control.pause_pressed();
+        // A second thread's turn starts using the computer meanwhile.
+        control.begin(2);
+        assert_eq!(control.view().phase, Phase::Paused);
+        assert_eq!(control.gate(1), Gate::Paused);
+        assert_eq!(
+            control.gate(2),
+            Gate::Paused,
+            "the pause holds for every turn"
+        );
+        // A turn that has not joined is paused as well.
+        assert_eq!(control.gate(3), Gate::Paused);
+        // Turn 1 ends: the session goes on, still paused, for turn 2.
+        control.end(1);
+        assert_eq!(control.view().phase, Phase::Paused);
+        assert_eq!(control.gate(2), Gate::Paused);
+        control.resume();
+        assert_eq!(control.gate(2), Gate::Go);
+        control.end(2);
+        assert_eq!(control.view().phase, Phase::Idle);
+    }
+
+    #[test]
+    fn another_turns_call_never_undoes_a_stop() {
         let control = ComputerControl::default();
         control.begin(1);
         control.begin(2);
         control.stop();
-        // Turn 1 no longer holds it: its late end and its calls are not 2's.
-        control.end(1);
         assert_eq!(control.view().phase, Phase::Stopped);
-        assert_eq!(control.gate(1), Gate::Go);
-        control.acted(1, Some("Notes"), "press");
-        assert_eq!(control.view().app, None);
+        // Both turns were using it: both are stopped, and joining again or
+        // a new call of either changes nothing.
+        control.begin(2);
+        control.begin(1);
+        assert_eq!(control.gate(1), Gate::Stopped);
+        assert_eq!(control.gate(2), Gate::Stopped);
+        assert_eq!(control.view().phase, Phase::Stopped);
+        // Turn 1's late end leaves turn 2 stopped.
+        control.end(1);
+        assert_eq!(control.gate(2), Gate::Stopped);
+        assert_eq!(control.view().phase, Phase::Stopped);
+        // A turn that starts after the stop has the computer.
+        control.begin(3);
+        assert_eq!(control.gate(3), Gate::Go);
+        assert_eq!(control.gate(2), Gate::Stopped);
+        assert_eq!(control.view().phase, Phase::Active);
         control.end(2);
+        control.end(3);
         assert_eq!(control.view().phase, Phase::Idle);
+    }
+
+    #[test]
+    fn the_panel_follows_the_first_turn_and_ignores_turns_not_in_the_session() {
+        let control = ComputerControl::default();
+        control.begin(1);
+        control.begin(2);
+        control.acted(2, Some("Notes"), "press");
+        assert_eq!(control.view().app, None);
+        control.acted(1, Some("TextEdit"), "type");
+        assert_eq!(control.view().app.as_deref(), Some("TextEdit"));
+        control.end(9);
+        assert_eq!(control.view().app.as_deref(), Some("TextEdit"));
+        control.end(1);
+        assert_eq!(control.view().app, None);
+        control.acted(2, Some("Notes"), "press");
+        assert_eq!(control.view().app.as_deref(), Some("Notes"));
+    }
+
+    #[test]
+    fn the_gate_and_its_epoch_are_one_read() {
+        let control = ComputerControl::default();
+        control.begin(1);
+        assert_eq!(control.gate_at(1), (Gate::Go, 0));
+        control.person_input();
+        assert_eq!(control.gate_at(1), (Gate::Paused, 1));
+    }
+
+    #[test]
+    fn app_names_cannot_hide_or_reorder_characters() {
+        let control = ComputerControl::default();
+        control.begin(1);
+        // A right-to-left override and zero-width marks would make the name
+        // read as another app's.
+        control.acted(
+            1,
+            Some("Bank\u{202E}gnp.\u{200F}\u{200B}App"),
+            "press\u{2066}",
+        );
+        let view = control.view();
+        assert_eq!(view.app.as_deref(), Some("Bankgnp.App"));
+        assert_eq!(view.action.as_deref(), Some("press"));
     }
 
     #[test]
     fn the_panel_shows_the_app_and_the_last_action_cleaned_and_cut() {
         let control = ComputerControl::default();
         control.begin(1);
-        control.acted(1, Some("Text\nEdit"), &"x".repeat(500));
+        control.acted(1, Some("Text\u{7}Edit\n"), &"x".repeat(500));
         let view = control.view();
         assert_eq!(view.app.as_deref(), Some("TextEdit"));
         assert_eq!(view.action.unwrap().chars().count(), MAX_SHOWN_CHARS);

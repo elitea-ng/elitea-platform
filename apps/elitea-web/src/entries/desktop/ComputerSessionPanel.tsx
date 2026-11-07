@@ -17,9 +17,6 @@ import Typography from '@mui/material/Typography';
 import { IDLE_SESSION, type ComputerIpc, type SessionAction, type SessionView } from '@/shared/desktop/computerIpc';
 import { t } from '@/shared/i18n';
 
-/** The panel's hash in the bundled UI (`computer_commands::build_panel`). */
-export const COMPUTER_PANEL_HASH = '#computer-panel';
-
 /** What the panel says, by state. */
 export function panelText(view: SessionView): { title: string; detail: string | null } {
   if (view.phase === 'paused') {

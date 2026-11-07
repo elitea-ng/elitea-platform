@@ -543,8 +543,10 @@ struct TurnState {
 pub struct ComputerHost {
     driver: Arc<dyn DesktopDriver>,
     rate: Mutex<Rate>,
-    /// One call at a time, whichever thread makes it.
-    serial: tokio::sync::Mutex<()>,
+    /// One call at a time, whichever thread makes it: held until the
+    /// driver call really returned, also when the agent was answered early
+    /// (an interrupted call).
+    serial: Arc<tokio::sync::Mutex<()>>,
     /// The person in charge (ADR-0047 decision 6): the session panel's
     /// state and the user-active guard.
     session: Arc<ComputerSession>,
@@ -560,7 +562,7 @@ impl ComputerHost {
         Self {
             driver,
             rate: Mutex::new(Rate::default()),
-            serial: tokio::sync::Mutex::new(()),
+            serial: Arc::new(tokio::sync::Mutex::new(())),
             session,
         }
     }
@@ -1294,7 +1296,7 @@ impl ComputerTool {
         // 5. The driver, one call at a time, while the person lets it: the
         // session starts (the panel shows, the guard listens), and the
         // person's input or Stop during the call answers at once.
-        let _one = self.host.serial.lock().await;
+        let one = self.host.serial.clone().lock_owned().await;
         let session = &self.host.session;
         let turn_id = self.context.turn_id;
         if let Err(why) = session.begin(turn_id)
@@ -1306,14 +1308,26 @@ impl ComputerTool {
             )
             .into());
         }
-        self.gate()?;
+        // The gate and the pause count in one read: a pause landing after it
+        // bumps the count, so the race below sees it.
         let control = self.host.control();
+        let epoch = match control.gate_at(turn_id) {
+            (Gate::Go, epoch) => epoch,
+            (Gate::Paused, _) => return Err(user_active().into()),
+            (Gate::Stopped, _) => return Err(stopped_by_user().into()),
+        };
         control.acted(
             turn_id,
             target.app_name.as_deref().or(target.bundle_id.as_deref()),
             &call.action_label(),
         );
-        let epoch = control.epoch();
+        // A pause since the gate: nothing reaches the driver.
+        if control.epoch() != epoch {
+            return Err(self.interrupted().into());
+        }
+        // The driver stops at its next step once this is raised.
+        let halt = elitea_desktop_control::Halt::new();
+        self.host.driver.set_halt(Some(halt.clone()));
         let host = self.host.clone();
         let turn = self.context.turn.clone();
         let driver_call = call.clone();
@@ -1323,19 +1337,33 @@ impl ComputerTool {
             window_title: meta.window_title.take(),
             screenshot: None,
         };
-        let work = tokio::task::spawn_blocking(move || {
+        let mut work = tokio::task::spawn_blocking(move || {
             let outcome = execute(&host, &turn, &driver_call, vision, &policy, &mut step);
             (outcome, step)
         });
-        let (outcome, step) = tokio::select! {
+        let finished = tokio::select! {
             biased;
-            () = control.interrupted_after(epoch) => {
-                // The driver call finishes on its own thread; the agent is
-                // told now. Its result is dropped.
-                return Err(self.interrupted().into());
-            }
-            done = work => done.map_err(|_| CallError::new("internal", "the computer call stopped"))?,
+            () = control.interrupted_after(epoch) => None,
+            done = &mut work => Some(done),
         };
+        let Some(done) = finished else {
+            // The person paused or stopped: the driver stops at its next
+            // step, and the agent is told now. The blocking call still owns
+            // the driver until it returns, so the serial lock goes with it
+            // to a task of its own and is released only then: no next call
+            // posts input while this one may still be posting.
+            halt.raise();
+            let driver = self.host.driver.clone();
+            tokio::spawn(async move {
+                let _ = work.await;
+                driver.set_halt(None);
+                drop(one);
+            });
+            return Err(self.interrupted().into());
+        };
+        self.host.driver.set_halt(None);
+        let (outcome, step) =
+            done.map_err(|_| CallError::new("internal", "the computer call stopped"))?;
         *meta = step;
         if control.epoch() != epoch {
             return Err(self.interrupted().into());

@@ -64,6 +64,7 @@ export function nativeMenuLabels(): Record<string, string> {
     computer_using: t('desktop.nativeMenu.computerUsing', 'Using {app}'),
     computer_active: t('desktop.nativeMenu.computerActive', 'Using the computer'),
     computer_paused: t('desktop.nativeMenu.computerPaused', 'Paused, you are using the computer'),
+    computer_paused_button: t('desktop.nativeMenu.computerPausedButton', 'Paused'),
     computer_pause: t('desktop.nativeMenu.computerPause', 'Pause'),
     computer_resume: t('desktop.nativeMenu.computerResume', 'Resume'),
     computer_stop: t('desktop.nativeMenu.computerStop', 'Stop'),

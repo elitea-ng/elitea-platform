@@ -1381,23 +1381,36 @@ impl AgentHost {
 
     /// The "always for this app" answers of every workspace (ADR-0047
     /// decision 4): `(bundle id, sees, acts)`, sorted by bundle id.
+    ///
+    /// An open session's choices come from its engine's cache; only the
+    /// files of the folders with no open session are read, and only the
+    /// computer answers of each are kept.
     pub fn remembered_apps(&self) -> Vec<(String, bool, bool)> {
         let mut apps: std::collections::BTreeMap<String, (bool, bool)> =
             std::collections::BTreeMap::new();
-        for path in self.choice_files() {
-            let Ok(choices) = JsonFileChoices::open(path) else {
+        let (live, files) = self.choice_stores();
+        let mut choices: Vec<elitea_local_tools::approvals::RememberedChoice> = live
+            .iter()
+            .flat_map(|session| session.session.rules().remembered_computer_choices())
+            .collect();
+        for path in files {
+            if let Ok(store) = JsonFileChoices::open(path) {
+                choices.extend(
+                    elitea_local_tools::approvals::ChoiceStore::list(&store)
+                        .into_iter()
+                        .filter(|choice| choice.tool.is_computer()),
+                );
+            }
+        }
+        for choice in choices {
+            let Some(bundle) = choice.bundle_id.as_deref() else {
                 continue;
             };
-            for choice in elitea_local_tools::approvals::ChoiceStore::list(&choices) {
-                let Some(bundle) = choice.bundle_id.as_deref() else {
-                    continue;
-                };
-                let entry = apps.entry(bundle.to_ascii_lowercase()).or_default();
-                match choice.tool {
-                    elitea_local_tools::approvals::ToolKind::ComputerRead => entry.0 = true,
-                    elitea_local_tools::approvals::ToolKind::ComputerAct => entry.1 = true,
-                    _ => {}
-                }
+            let entry = apps.entry(bundle.to_ascii_lowercase()).or_default();
+            match choice.tool {
+                elitea_local_tools::approvals::ToolKind::ComputerRead => entry.0 = true,
+                elitea_local_tools::approvals::ToolKind::ComputerAct => entry.1 = true,
+                _ => {}
             }
         }
         apps.into_iter()
@@ -1410,53 +1423,65 @@ impl AgentHost {
     /// open sessions' engines (their cached choices) and the files of the
     /// others. Answers how many answers were forgotten.
     ///
+    /// Every workspace is tried, whichever fails: one that cannot be
+    /// rewritten does not keep the answer in the others.
+    ///
     /// # Errors
-    /// A choices file that cannot be rewritten.
+    /// The choices that could not be rewritten (the others are forgotten):
+    /// `storage`, naming how many failed, the first reason.
     pub fn forget_remembered_app(&self, bundle_id: &str) -> Result<usize, TurnError> {
-        let storage = |e: elitea_local_tools::error::ToolError| {
-            TurnError::new("storage", e.message().to_owned())
-        };
-        let live: Vec<(String, Arc<WorkspaceSession>)> = self
-            .sessions
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|(id, session)| (id.clone(), session.clone()))
-            .collect();
+        let (live, files) = self.choice_stores();
         let mut forgotten = 0;
-        for (_, session) in &live {
-            forgotten += session
-                .session
-                .rules()
-                .forget_app(bundle_id)
-                .map_err(storage)?;
-        }
-        let live_files: Vec<std::path::PathBuf> = live
-            .iter()
-            .map(|(id, _)| self.deps.workspaces.data_dir(id).join("choices.json"))
-            .collect();
-        for path in self.choice_files() {
-            if live_files.contains(&path) {
-                continue;
+        let mut failed: Vec<String> = Vec::new();
+        for session in &live {
+            match session.session.rules().forget_app(bundle_id) {
+                Ok(n) => forgotten += n,
+                Err(e) => failed.push(e.message().to_owned()),
             }
-            let Ok(choices) = JsonFileChoices::open(path) else {
-                continue;
-            };
-            forgotten += elitea_local_tools::approvals::ChoiceStore::forget(&choices, &|choice| {
-                elitea_local_tools::approvals::is_app_choice(choice, bundle_id)
-            })
-            .map_err(storage)?;
         }
-        Ok(forgotten)
+        for path in files {
+            let result = JsonFileChoices::open(path).and_then(|choices| {
+                elitea_local_tools::approvals::ChoiceStore::forget(&choices, &|choice| {
+                    elitea_local_tools::approvals::is_app_choice(choice, bundle_id)
+                })
+            });
+            match result {
+                Ok(n) => forgotten += n,
+                Err(e) => failed.push(e.message().to_owned()),
+            }
+        }
+        match failed.first() {
+            None => Ok(forgotten),
+            Some(first) => {
+                log::warn!(target: "computer", "{} remembered-choice store(s) not rewritten: {failed:?}", failed.len());
+                Err(TurnError::new(
+                    "storage",
+                    format!(
+                        "{forgotten} answer(s) forgotten, but {} folder(s) could not be changed: {first}",
+                        failed.len()
+                    ),
+                ))
+            }
+        }
     }
 
-    /// Every workspace's `choices.json` that exists.
-    fn choice_files(&self) -> Vec<std::path::PathBuf> {
-        self.deps
+    /// The choice stores of every workspace: the open sessions (their
+    /// engines hold the cached choices) and the `choices.json` files of the
+    /// folders with no open session, which exist. The workspaces are read
+    /// as stored (no file-system probe per folder).
+    fn choice_stores(&self) -> (Vec<Arc<WorkspaceSession>>, Vec<std::path::PathBuf>) {
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let live: Vec<Arc<WorkspaceSession>> = sessions.values().cloned().collect();
+        let files = self
+            .deps
             .workspaces
-            .list()
+            .all()
             .unwrap_or_default()
             .iter()
+            .filter(|workspace| !sessions.contains_key(&workspace.id))
             .map(|workspace| {
                 self.deps
                     .workspaces
@@ -1464,7 +1489,8 @@ impl AgentHost {
                     .join("choices.json")
             })
             .filter(|path| path.is_file())
-            .collect()
+            .collect();
+        (live, files)
     }
 
     /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.

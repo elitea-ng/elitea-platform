@@ -130,6 +130,41 @@ pub trait InputWatch: Send {}
 /// Hears each [`Signal`], on the watch's own thread.
 pub type SignalSink = Box<dyn Fn(Signal) + Send + Sync>;
 
+/// The caller's "stop now" for the call in flight: raised when the person
+/// pauses or stops the session. A driver checks it before each step that
+/// posts input ([`Halt::check`]), so a call that was interrupted posts
+/// nothing more, even while its blocking thread runs on.
+#[derive(Debug, Clone, Default)]
+pub struct Halt(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Halt {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stop the call at its next check.
+    pub fn raise(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[must_use]
+    pub fn raised(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// # Errors
+    /// [`DesktopError::Interrupted`](crate::DesktopError::Interrupted) once
+    /// raised.
+    pub fn check(&self) -> Result<(), crate::DesktopError> {
+        if self.raised() {
+            Err(crate::DesktopError::Interrupted)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
