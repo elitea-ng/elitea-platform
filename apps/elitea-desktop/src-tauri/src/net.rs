@@ -127,7 +127,11 @@ impl Default for FetchLimits {
 #[derive(Clone)]
 pub struct SharedHttp {
     client: Arc<OnceCell<reqwest::Client>>,
+    /// HTTP/1.1 only, for a WebSocket upgrade (`view_socket.rs`): on the
+    /// pooled client TLS negotiates h2, where an upgrade does not exist.
+    upgrade: Arc<OnceCell<reqwest::Client>>,
     user_agent: Arc<str>,
+    client_version: Arc<str>,
 }
 
 impl SharedHttp {
@@ -135,8 +139,29 @@ impl SharedHttp {
     pub fn new(client_version: &str) -> Self {
         Self {
             client: Arc::new(OnceCell::new()),
+            upgrade: Arc::new(OnceCell::new()),
             user_agent: format!("elitea-desktop/{client_version}").into(),
+            client_version: client_version.into(),
         }
+    }
+
+    /// The app's version, for `X-Client-Version`.
+    #[must_use]
+    pub fn client_version(&self) -> &str {
+        &self.client_version
+    }
+
+    /// The HTTP/1.1 client a WebSocket upgrade goes through, built on first
+    /// use as the pooled one is (the root-store load blocks).
+    pub async fn upgrade_client(&self) -> &reqwest::Client {
+        self.upgrade
+            .get_or_init(|| async {
+                let user_agent = self.user_agent.clone();
+                tokio::task::spawn_blocking(move || build_upgrade_client(&user_agent))
+                    .await
+                    .unwrap_or_default()
+            })
+            .await
     }
 
     /// Start building the client now, so the first request (or the setup
@@ -198,6 +223,22 @@ fn build_client(user_agent: &str) -> reqwest::Client {
             built_in_roots(user_agent)
         }
     }
+}
+
+fn build_upgrade_client(user_agent: &str) -> reqwest::Client {
+    builder(user_agent)
+        .http1_only()
+        .build()
+        .unwrap_or_else(|error| {
+            log::warn!(
+                "http/1.1 client with the system roots failed ({error}); using the built-in roots"
+            );
+            builder(user_agent)
+                .http1_only()
+                .tls_built_in_native_certs(false)
+                .build()
+                .unwrap_or_default()
+        })
 }
 
 // ---- scope -------------------------------------------------------------

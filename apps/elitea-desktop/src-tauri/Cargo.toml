@@ -44,6 +44,10 @@ rand = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "time", "sync"] }
 # The one HTTP client (src/net.rs): host calls and the webview's fetch share its pool.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "http2"] }
+# The cloud browser view's WebSocket (src/view_socket.rs): the framing only.
+# The upgrade itself goes through reqwest (its TLS and roots), so no TLS or
+# connect feature. Already in the platform's locks (elitea-worker-rust).
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tauri-plugin-dialog = "2"
 # Turn notifications when the window is not focused (src/attention.rs);
 # Rust-side only, no webview permission is granted.

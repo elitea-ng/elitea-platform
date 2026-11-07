@@ -411,6 +411,13 @@ impl AuthService {
         self.refresh_inner(stale).await
     }
 
+    /// Exchange the refresh token because `failed` was refused, unless a
+    /// refresh since already replaced it: for the host's own requests
+    /// (the browser view socket), which know the token they sent.
+    pub async fn refresh_from(&self, failed: &str) -> Result<RefreshResult, HostError> {
+        self.refresh_inner(Some(failed.to_owned())).await
+    }
+
     async fn refresh_inner(&self, stale: Option<String>) -> Result<RefreshResult, HostError> {
         let _gate = self.refresh_gate.lock().await;
         // And against the other process on the credentials file (the ACP
