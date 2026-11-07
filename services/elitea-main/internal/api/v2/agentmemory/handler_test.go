@@ -15,6 +15,8 @@ import (
 
 // fakeStore answers like repos.AgentMemory for one entry about user 9.
 type fakeStore struct {
+	filter    repos.AgentMemoryFilter
+	asked     []int64
 	owner     bool
 	updated   *repos.AgentMemoryUpdate
 	approver  bool
@@ -23,9 +25,15 @@ type fakeStore struct {
 	deleteErr error
 }
 
-func (f *fakeStore) ListMemory(_ context.Context, _, _ int64, viewer repos.AgentMemoryViewer, _ repos.AgentMemoryFilter) ([]repos.AgentMemoryEntry, int, error) {
-	f.viewers = append(f.viewers, viewer)
-	return []repos.AgentMemoryEntry{}, 0, nil
+func (f *fakeStore) ListMemory(_ context.Context, _, _ int64, viewer repos.AgentMemoryViewer, filter repos.AgentMemoryFilter) ([]repos.AgentMemoryEntry, int, error) {
+	f.viewers, f.filter = append(f.viewers, viewer), filter
+	subject, writer := int64(9), int64(4)
+	return []repos.AgentMemoryEntry{{ID: 5, SubjectUserID: &subject, WrittenByUserID: &writer}, {ID: 6, WrittenByUserID: &subject}}, 2, nil
+}
+
+func (f *fakeStore) PeopleNames(_ context.Context, ids []int64) ([]repos.AgentMemoryPerson, error) {
+	f.asked = ids
+	return []repos.AgentMemoryPerson{}, nil
 }
 
 func (f *fakeStore) GetMemory(_ context.Context, _, _, _ int64, viewer repos.AgentMemoryViewer) (repos.AgentMemoryEntry, error) {
@@ -131,5 +139,28 @@ func TestUpdateRefusesBadBodies(t *testing.T) {
 	}
 	if got := serve(t, &fakeStore{}, nil, "9", http.MethodGet, "/agent_memory/prompt_lib/7/11?kind=secret", ""); got.Code != http.StatusBadRequest {
 		t.Fatalf("bad kind: %d", got.Code)
+	}
+}
+
+func TestListFiltersAndNamesItsPeople(t *testing.T) {
+	store := &fakeStore{}
+	got := serve(t, store, nil, "9", http.MethodGet,
+		"/agent_memory/prompt_lib/7/11?source=agent&created_after=2026-11-01T00:00:00Z&created_before=2026-11-08T00:00:00%2B01:00", "")
+	if got.Code != http.StatusOK {
+		t.Fatalf("filtered list: %d %s", got.Code, got.Body)
+	}
+	if store.filter.Source != "agent" || store.filter.CreatedAfter.IsZero() || store.filter.CreatedBefore.IsZero() {
+		t.Fatalf("filter: %+v", store.filter)
+	}
+	if len(store.asked) != 2 || store.asked[0] != 4 || store.asked[1] != 9 {
+		t.Fatalf("people asked for: %v", store.asked)
+	}
+	if !strings.Contains(got.Body.String(), `"people":[]`) {
+		t.Fatalf("the answer names its people: %s", got.Body)
+	}
+	for _, query := range []string{"source=bot", "created_after=yesterday"} {
+		if got := serve(t, &fakeStore{}, nil, "9", http.MethodGet, "/agent_memory/prompt_lib/7/11?"+query, ""); got.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", query, got.Code)
+		}
 	}
 }

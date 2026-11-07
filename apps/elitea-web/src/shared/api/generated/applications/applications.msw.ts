@@ -1350,6 +1350,13 @@ export const getListAgentMemoryResponseMock = (
     ]),
   })),
   total: faker.number.int(),
+  people: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
   can_manage: faker.datatype.boolean(),
   can_delete: faker.datatype.boolean(),
   can_approve: faker.datatype.boolean(),

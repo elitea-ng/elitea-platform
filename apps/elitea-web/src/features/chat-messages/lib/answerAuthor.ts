@@ -16,6 +16,8 @@ export interface AnswerAuthor {
   readonly personaName?: string;
   readonly authorRole?: string;
   readonly authorIconUrl?: string;
+  /** The answering agent's application id (`entity_meta.id` of an `application` participant): its memory's key (ADR-0050 1b). */
+  readonly authorApplicationId?: number;
 }
 
 function trimmed(value: unknown): string | undefined {
@@ -67,11 +69,13 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
   const personaName = trimmed(author?.persona?.display_name);
   const authorRole = trimmed(author?.persona?.role);
   const authorIconUrl = participantIconUrl(author);
+  const authorApplicationId = author?.entity_name === 'application' ? participantIdOf(author.entity_meta?.id) : undefined;
   return {
     messageClass,
     ...(authorParticipantId !== undefined ? { authorParticipantId } : {}),
     ...(personaName !== undefined ? { personaName } : {}),
     ...(authorRole !== undefined ? { authorRole } : {}),
     ...(authorIconUrl !== undefined ? { authorIconUrl } : {}),
+    ...(authorApplicationId !== undefined ? { authorApplicationId } : {}),
   };
 }

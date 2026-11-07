@@ -3682,6 +3682,79 @@
       "responseSchema": null,
       "fixture": null,
       "usedBy": ["features/notifications"]
+    },
+    {
+      "$comment": "Agent memory Memory tab and remembered chip (ADR-0050 1b, #1608). Routes landed in #1607.",
+      "id": "agentMemory.list",
+      "method": "GET",
+      "path": "/elitea_core/agent_memory/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "listAgentMemory",
+      "source": "generated",
+      "responseSchema": "AgentMemoryList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
+    },
+    {
+      "id": "agentMemory.clear",
+      "method": "DELETE",
+      "path": "/elitea_core/agent_memory/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "clearAgentMemory",
+      "source": "generated",
+      "responseSchema": "ClearAgentMemory200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
+    },
+    {
+      "id": "agentMemory.get",
+      "method": "GET",
+      "path": "/elitea_core/agent_memory/prompt_lib/{projectId}/{applicationId}/{entryId}",
+      "operationId": "getAgentMemoryEntry",
+      "source": "generated",
+      "responseSchema": "AgentMemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
+    },
+    {
+      "id": "agentMemory.update",
+      "method": "PATCH",
+      "path": "/elitea_core/agent_memory/prompt_lib/{projectId}/{applicationId}/{entryId}",
+      "operationId": "updateAgentMemoryEntry",
+      "source": "generated",
+      "responseSchema": "AgentMemoryEntry",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
+    },
+    {
+      "id": "agentMemory.delete",
+      "method": "DELETE",
+      "path": "/elitea_core/agent_memory/prompt_lib/{projectId}/{applicationId}/{entryId}",
+      "operationId": "deleteAgentMemoryEntry",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
+    },
+    {
+      "id": "agentMemory.optOut",
+      "method": "PUT",
+      "path": "/elitea_core/agent_memory_opt_out/prompt_lib/{projectId}/{applicationId}",
+      "operationId": "setAgentMemoryOptOut",
+      "source": "generated",
+      "responseSchema": "SetAgentMemoryOptOut200",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-memory"
+      ]
     }
   ]
 }

@@ -4,6 +4,18 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Agent memory tab and chip (#1608, ADR-0050 decision 1b)
+
+No operator action. No migration.
+
+- The agent editor has a Memory tab (web and desktop) and a chat answer
+  shows a "remembered" line for each note its agent saved, with Approve,
+  Edit and Forget.
+- `GET /api/v2/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}`
+  takes three more optional filters (`source`, `created_after`,
+  `created_before`) and answers a new `people` array (`{id, name}` of the
+  people its rows name). A client that does not read it is unaffected.
+
 ## Agent memory (#1607, ADR-0050 decision 1b)
 
 Nothing to do. Migrations tenant 0163 and shared 0229 run on start.

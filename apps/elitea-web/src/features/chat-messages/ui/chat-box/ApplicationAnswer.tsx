@@ -49,6 +49,7 @@ import { AssistantCaption } from './MessageAvatar';
 import { actionKey, asDraft, ApplicationAnswerThinking, swarmChildContent } from './ApplicationAnswerThinking';
 import { ChatContinue } from '../chat-continue/ChatContinue';
 import { AskUserAnswerSummary } from '../chat-hitl-actions/AskUserAnswerSummary';
+import { AnswerRememberedChips } from './AnswerRememberedChips';
 import { ErrorTrace } from '../error-trace/ErrorTrace';
 import { BudgetUsageLink } from '../error-trace/BudgetUsageLink';
 import { CapOverrideAction } from '../error-trace/CapOverrideAction';
@@ -313,6 +314,7 @@ export function ApplicationAnswer({
         >
           {recovery && <NodeRecoveryNotice binding={recovery} />}
           {canRenderContent && toolActions.length > 0 && <AskUserAnswerSummary toolActions={toolActions} />}
+          {canRenderContent && <AnswerRememberedChips toolActions={toolActions} projectId={feedbackProjectId} applicationId={answer.authorApplicationId} agentName={participantName ?? answer.authorName} />}
           {continuationFailed ? (
             <ContinuationError error={exception} partialOutput={partialOutput}>
               {renderedContent}

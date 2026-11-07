@@ -26,8 +26,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -62,6 +64,7 @@ type Store interface {
 	SetSubjectOptOut(ctx context.Context, projectID, applicationID, userID int64, optOut bool) error
 	SubjectOptedOut(ctx context.Context, projectID, applicationID, userID int64) (bool, error)
 	IsAgentOwner(ctx context.Context, projectID, applicationID, userID int64) (bool, error)
+	PeopleNames(ctx context.Context, ids []int64) ([]repos.AgentMemoryPerson, error)
 }
 
 var _ Store = (*repos.AgentMemory)(nil)
@@ -147,13 +150,23 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	filter := repos.AgentMemoryFilter{
 		Kind: query.Get("kind"), Status: query.Get("status"), Query: strings.TrimSpace(query.Get("query")),
+		Source: query.Get("source"),
 	}
 	if filter.Kind != "" && !oneOf(filter.Kind, "fact", "preference", "episode", "cursor") ||
-		filter.Status != "" && !oneOf(filter.Status, "pending", "active", "archived") || len(filter.Query) > 256 {
-		apierr.Write(w, apierr.BadRequest("kind, status or query is not valid"))
+		filter.Status != "" && !oneOf(filter.Status, "pending", "active", "archived") || len(filter.Query) > 256 ||
+		filter.Source != "" && !oneOf(filter.Source, "agent", "person") {
+		apierr.Write(w, apierr.BadRequest("kind, status, source or query is not valid"))
 		return
 	}
 	var err error
+	for name, target := range map[string]*time.Time{"created_after": &filter.CreatedAfter, "created_before": &filter.CreatedBefore} {
+		if raw := query.Get(name); raw != "" {
+			if *target, err = time.Parse(time.RFC3339, raw); err != nil {
+				apierr.Write(w, apierr.BadRequest(name+" is not an RFC 3339 date-time"))
+				return
+			}
+		}
+	}
 	for name, target := range map[string]*int{"limit": &filter.Limit, "offset": &filter.Offset} {
 		if raw := query.Get(name); raw != "" {
 			if *target, err = strconv.Atoi(raw); err != nil || *target < 0 {
@@ -178,8 +191,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
+	// Only the people of rows the caller may see are named.
+	people, err := h.store.PeopleNames(r.Context(), peopleOf(entries))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"rows": entries, "total": total, "can_manage": c.viewer().Manager,
+		"rows": entries, "total": total, "people": people, "can_manage": c.viewer().Manager,
 		"can_delete": c.owner || c.del, "can_approve": c.owner || c.approve, "opted_out": optedOut,
 	})
 }
@@ -335,6 +354,20 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// peopleOf answers the distinct subjects and writers of entries, sorted.
+func peopleOf(entries []repos.AgentMemoryEntry) []int64 {
+	ids := []int64{}
+	for _, entry := range entries {
+		for _, id := range []*int64{entry.SubjectUserID, entry.WrittenByUserID} {
+			if id != nil && *id > 0 && !slices.Contains(ids, *id) {
+				ids = append(ids, *id)
+			}
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func oneOf(value string, allowed ...string) bool {

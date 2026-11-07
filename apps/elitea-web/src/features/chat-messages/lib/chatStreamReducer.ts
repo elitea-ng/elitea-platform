@@ -69,6 +69,9 @@ import { reduceSummaryFrame } from './chatStreamSummaryFrames';
 import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
 import { isRootAnswerFrame, reduceFinalResultFrame } from './chatStreamFinalResult';
 
+import type { MessageGroupWire } from '@/entities/message/lib/wire';
+
+import { answerAuthor } from './answerAuthor';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 
@@ -92,7 +95,7 @@ export function applyChatStreamFrame(
   // the avatar store reads it (`model/agentAvatar.store.ts`). It only names
   // the answering participant, often before any other frame of the turn does,
   // so the avatar that moves is the live answer's.
-  if (type === SocketMessageType.AgentState) return withAnswerParticipant(history, frame);
+  if (type === SocketMessageType.AgentState) return withAnswerParticipant(history, frame, context);
   if (type === 'full_message' && !isRootAnswerFrame(frame)) return history;
 
   // Resolved ONCE, here, and handed to every family: `index === -1` means "no
@@ -127,7 +130,7 @@ export function applyChatStreamFrame(
     applyNodeRecoveryFrame(applyStaticPauseFrame(reduced, frame, context), frame, context),
     frame,
   ), frame);
-  const stamped = withAnswerParticipant(next, frame);
+  const stamped = withAnswerParticipant(next, frame, context);
   if (!isTurnTerminalFrame(frame)) return stamped;
   return settleTerminal(stamped, frame);
 }
@@ -137,13 +140,16 @@ export function applyChatStreamFrame(
  * run's, on every frame of its tree), so a live answer knows whose avatar it
  * shows before the reload does.
  */
-function withAnswerParticipant(history: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {
+function withAnswerParticipant(history: readonly ChatMessage[], frame: ChatStreamFrame, context: ChatStreamContext): readonly ChatMessage[] {
   const id = frame.participant_id;
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return history;
   const target = findTarget(history, frame);
   const message = history[target];
   if (!message || message.role === 'user' || message.authorParticipantId === id) return history;
-  return replaceAt(history, target, { authorParticipantId: id });
+  // The agent behind the participant keys its memory (ADR-0050 1b): a live
+  // "remembered" chip needs it before the reload brings it.
+  const applicationId = answerAuthor({ author_participant_id: id } as MessageGroupWire, context.participants ?? []).authorApplicationId;
+  return replaceAt(history, target, { authorParticipantId: id, ...(applicationId !== undefined ? { authorApplicationId: applicationId } : {}) });
 }
 
 function settleTerminal(next: readonly ChatMessage[], frame: ChatStreamFrame): readonly ChatMessage[] {

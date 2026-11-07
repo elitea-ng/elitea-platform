@@ -30,7 +30,14 @@ describe('answerAuthor', () => {
       personaName: 'Mira',
       authorRole: 'Release manager',
       authorIconUrl: '/api/v2/artifacts/mira.png',
+      authorApplicationId: 41,
     });
+  });
+
+  it('the application id is read only from an application participant', () => {
+    const user = { id: '7', entity_name: 'user', kind: 'human', entity_meta: { id: 5 } } as MessageParticipantWire;
+    expect(answerAuthor(group({ author_participant_id: 7 }), [user]).authorApplicationId).toBeUndefined();
+    expect(answerAuthor(group({ author_participant_id: 3 }), participants).authorApplicationId).toBe(42);
   });
 
   it('classes agent-to-agent talk from visibility or the roster', () => {
@@ -40,7 +47,7 @@ describe('answerAuthor', () => {
   });
 
   it('a row from before contract 1.38 is an answer to people with no persona', () => {
-    expect(answerAuthor(group({ author_participant_id: 3 }), participants)).toEqual({ authorParticipantId: 3, messageClass: 'agent_to_humans' });
+    expect(answerAuthor(group({ author_participant_id: 3 }), participants)).toEqual({ authorParticipantId: 3, messageClass: 'agent_to_humans', authorApplicationId: 42 });
     expect(answerAuthor(group({}), participants)).toEqual({ messageClass: 'agent_to_humans' });
   });
 });

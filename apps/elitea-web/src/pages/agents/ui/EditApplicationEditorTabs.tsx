@@ -1,5 +1,9 @@
 /**
- * The agent editor's tab strip: Configuration, Persona, Evaluation, then History.
+ * The agent editor's tab strip: Configuration, Persona, Evaluation, Memory, then History.
+ *
+ * MEMORY (ADR-0050 decision 1b, issue 1608) is what the agent remembers in
+ * this project — `features/agent-memory`'s `MemoryPanel`; the server decides
+ * what the caller sees and may change.
  *
  * The baseline puts Evaluation SECOND on this page
  * (`apps/elitea-ui/src/pages/Applications/EditApplication.jsx:103-113`), and
@@ -43,6 +47,7 @@ import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EvaluationPanel } from '@/features/agent-evaluation';
+import { MemoryPanel } from '@/features/agent-memory';
 import { RunHistoryPanel } from '@/entities/run-history';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
@@ -52,6 +57,7 @@ const EDITOR_TABS = {
   configuration: 'configuration',
   persona: 'persona',
   evaluation: 'evaluation',
+  memory: 'memory',
   history: 'history',
 } as const;
 type EditorTab = (typeof EDITOR_TABS)[keyof typeof EDITOR_TABS];
@@ -117,6 +123,11 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
           data-testid="edit-application-tab-evaluation"
         />
         <BaseTab
+          value={EDITOR_TABS.memory}
+          label={t('pages.agents.editApplication.tabs.memory', 'Memory')}
+          data-testid="edit-application-tab-memory"
+        />
+        <BaseTab
           value={EDITOR_TABS.history}
           label={t('pages.agents.editApplication.tabs.history', 'History')}
           data-testid="edit-application-tab-history"
@@ -143,6 +154,9 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
             applicationVersionId={applicationVersionId}
           />
         )}
+      </Box>
+      <Box hidden={tab !== EDITOR_TABS.memory}>
+        {tab === EDITOR_TABS.memory && <MemoryPanel projectId={projectId} applicationId={applicationId} />}
       </Box>
       <Box hidden={tab !== EDITOR_TABS.history} sx={historyPanelSx}>
         {tab === EDITOR_TABS.history && (

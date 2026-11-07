@@ -8575,12 +8575,21 @@ components:
         NOTE(W2): internal/infra/db/repos/agent_memory.go, AgentMemoryEntry.
     AgentMemoryList:
       type: object
-      required: [rows, total, can_manage, can_delete, can_approve, opted_out]
+      required: [rows, total, people, can_manage, can_delete, can_approve, opted_out]
       properties:
         rows:
           type: array
           items: { $ref: '#/components/schemas/AgentMemoryEntry' }
         total: { type: integer }
+        people:
+          type: array
+          description: The names of the people the rows are about or were written by, by user id. A user without a name is left out.
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id: { type: integer, format: int64 }
+              name: { type: string }
         can_manage: { type: boolean, description: "The caller may edit, pin and archive any entry." }
         can_delete: { type: boolean, description: The caller may delete any entry and clear the memory. }
         can_approve: { type: boolean, description: The caller may approve or reject pending entries. }
@@ -28111,6 +28120,21 @@ paths:
         - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryStatus' } }
         - { name: subject_user_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
         - { name: query, in: query, required: false, schema: { type: string, maxLength: 256 } }
+        - name: source
+          in: query
+          required: false
+          description: "Who wrote the entry's current version: agent or person (another value is 400)."
+          schema: { type: string, maxLength: 16 }
+        - name: created_after
+          in: query
+          required: false
+          description: Only entries created at or after this time.
+          schema: { type: string, format: date-time }
+        - name: created_before
+          in: query
+          required: false
+          description: Only entries created before this time.
+          schema: { type: string, format: date-time }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
       responses:
