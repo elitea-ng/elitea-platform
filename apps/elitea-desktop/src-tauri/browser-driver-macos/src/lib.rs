@@ -33,6 +33,7 @@
 //! name and JSON arguments to a fixed function body.
 
 pub mod driver;
+pub mod input;
 #[cfg(target_os = "macos")]
 pub mod native;
 pub mod reply;
@@ -50,6 +51,8 @@ pub const SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/driver.js"));
 
 /// The driver of a Tauri child webview (the pane's page): installs the
 /// driver world in it. Call once per webview, right after it is made.
+/// `person_input` runs on each trusted input of the person in the page
+/// (the control pill's take-over, ADR-0048 decision 4).
 ///
 /// # Errors
 ///
@@ -60,6 +63,7 @@ pub async fn attach(
     webview: &tauri::Webview,
     check: NavigationCheck,
     hand_over: std::sync::Arc<dyn HandOver>,
+    person_input: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<WebDriver<WebKitEngine>, elitea_browser_tools::BrowserError> {
     use elitea_browser_tools::{BrowserError, ErrorCode};
     let unavailable =
@@ -71,6 +75,7 @@ pub async fn attach(
         })
         .map_err(|_| unavailable())?;
     let engine = rx.await.ok().flatten().ok_or_else(unavailable)?;
+    engine.on_person_input(person_input);
     Ok(WebDriver::new(engine, check, hand_over))
 }
 
@@ -92,6 +97,24 @@ mod tests {
             "setTimeout(\"",
         ] {
             assert!(!SCRIPT.contains(banned), "{banned}");
+        }
+    }
+
+    #[test]
+    fn the_script_reports_every_kind_of_the_persons_input_the_host_reads() {
+        let start = SCRIPT
+            .find("['pointerdown'")
+            .expect("the reported input list");
+        let list = &SCRIPT[start..start + SCRIPT[start..].find(']').unwrap() + 1];
+        let reported: Vec<&str> = list
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|item| item.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(reported, super::input::REPORTED);
+        // IME, dictation, paste and drop have no keydown or pointerdown.
+        for kind in ["beforeinput", "paste", "drop"] {
+            assert!(reported.contains(&kind), "{kind}");
         }
     }
 

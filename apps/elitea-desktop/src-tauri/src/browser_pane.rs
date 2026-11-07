@@ -91,9 +91,14 @@ use url::{Host, Url};
 use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
+use crate::browser_control::ControlView;
+#[cfg(target_os = "macos")]
+use crate::browser_control::{Answer, PaneControl};
 use crate::browser_tools::{BrowserDrivers, DownloadVerdict};
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
+#[cfg(target_os = "macos")]
+use elitea_browser_tools::driver::Handback;
 use elitea_local_tools::policy::{LocalWorkPolicy, browser_domains_refusal};
 
 /// The event every pane reports on, to the `main` webview only.
@@ -1147,14 +1152,35 @@ fn agent_check(
 /// only, and the browser tools say so.
 #[cfg(target_os = "macos")]
 async fn attach_driver(panes: &Arc<BrowserPanes>, thread_id: &str, webview: &Webview) {
-    // TODO(#1591): the hand-over (`browser_request_user`) and the control
-    // pill; until then the request answers `unsupported`.
-    let hand_over = Arc::new(elitea_browser_driver_macos::NoHandOver);
+    let control = panes.drivers.control(thread_id);
+    let hand_over = Arc::new(PaneHandOver(control.clone()));
+    let person_input = Arc::new(move || control.person_input());
     let check = Arc::new(agent_check(Arc::downgrade(panes)));
-    match elitea_browser_driver_macos::attach(webview, check, hand_over).await {
+    match elitea_browser_driver_macos::attach(webview, check, hand_over, person_input).await {
         Ok(driver) => panes.drivers.attach(thread_id, Arc::new(driver)),
         Err(error) => {
             log::warn!(target: "browser", "the agent cannot drive this page: {error}");
+        }
+    }
+}
+
+/// `browser_request_user` on a desktop pane (ADR-0048 decision 4): the
+/// person drives with the reason shown above the page, until they hand back
+/// (the note is the call's answer) or decline, or the question's wait
+/// passes (declined, and the agent is told the person did not take it).
+#[cfg(target_os = "macos")]
+struct PaneHandOver(Arc<PaneControl>);
+
+#[cfg(target_os = "macos")]
+#[async_trait::async_trait]
+impl elitea_browser_driver_macos::HandOver for PaneHandOver {
+    async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError> {
+        match self.0.ask(reason).await {
+            Answer::HandedBack(note) => Ok(Handback { note }),
+            Answer::Declined => Err(BrowserError::new(
+                ErrorCode::Declined,
+                "the person did not take the page: they declined, or did not answer in time",
+            )),
         }
     }
 }
@@ -1192,6 +1218,73 @@ async fn arm_pane(webview: &Webview, policy: &GuardPolicy) -> Result<(), IpcErro
 #[cfg(not(target_os = "macos"))]
 async fn arm_pane(_webview: &Webview, _policy: &GuardPolicy) -> Result<(), IpcError> {
     Ok(())
+}
+
+/// The pane's control as a `browser://event` (kind `control`).
+pub fn emit_control(app: &AppHandle, thread_id: &str, view: &ControlView) {
+    emit(
+        app,
+        thread_id,
+        "control",
+        serde_json::to_value(view).unwrap_or_else(|_| json!({})),
+    );
+}
+
+/// The pane's control, as `browser_control` answers it.
+#[derive(Debug, Serialize)]
+pub struct BrowserControlState {
+    #[serde(flatten)]
+    view: ControlView,
+}
+
+/// What the person does with the control pill.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlAction {
+    /// Read the control state (the pane mounts).
+    Get,
+    TakeOver,
+    HandBack,
+    /// Decline the agent's `browser_request_user`.
+    Decline,
+    /// Let the agent watch (snapshots and screenshots while the person drives).
+    Watch,
+    /// Stop letting it watch.
+    Unwatch,
+}
+
+/// The control pill (ADR-0048 decision 4, #1591): take over, hand back
+/// (with an optional note for the agent), decline the agent's question,
+/// tick Let the agent watch. Answers the state after the action; the
+/// change is also a `control` event.
+#[tauri::command(rename_all = "snake_case")]
+pub fn browser_control(
+    panes: State<'_, Arc<BrowserPanes>>,
+    thread_id: String,
+    action: ControlAction,
+    note: Option<String>,
+) -> Result<BrowserControlState, IpcError> {
+    thread_label(&thread_id)?;
+    let control = panes.drivers.control(&thread_id);
+    match action {
+        ControlAction::Get => {}
+        ControlAction::TakeOver => control.take_over(),
+        ControlAction::HandBack => {
+            if note
+                .as_deref()
+                .is_some_and(|n| n.len() > crate::browser_control::MAX_NOTE_BYTES)
+            {
+                return Err(invalid("The note is too long."));
+            }
+            control.hand_back(note.as_deref());
+        }
+        ControlAction::Decline => control.decline(),
+        ControlAction::Watch => control.set_watch(true),
+        ControlAction::Unwatch => control.set_watch(false),
+    }
+    Ok(BrowserControlState {
+        view: control.view(),
+    })
 }
 
 #[derive(Debug, Serialize)]

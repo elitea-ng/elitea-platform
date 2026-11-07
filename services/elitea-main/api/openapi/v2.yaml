@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.42"
+  x-elitea-client-contract: "1.43"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -5611,7 +5611,16 @@ components:
             typed text reaches the record, and a record that is not an object
             or is too large is dropped without refusing the commit. A computer call's `tool_inputs`
             hold `text_chars` and `text_digest` (or `value_chars` and
-            `value_digest`) instead of the typed text.
+            `value_digest`) instead of the typed text. Client contract 1.42
+            (ADR-0048 decision 9): a desktop browser pane call's entry may
+            carry `browser_step` instead, its step record (`v`, `tool`,
+            `outcome` (`ok` or the browser error code, such as `user_active`
+            or `user_in_control`), `host`, `path` (the URL path, never its
+            query or fragment), `ref`, `role`, `name`, `text` as `{chars,
+            digest}` only, `screenshot` as `{taken, mime, bytes, width,
+            height}`), stored the same way (toolkit `browser`); a
+            `browser_type` call's `tool_inputs` hold `text_chars` and
+            `text_digest` instead of the text.
           additionalProperties:
             type: object
             additionalProperties: true

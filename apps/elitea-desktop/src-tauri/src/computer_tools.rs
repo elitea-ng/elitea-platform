@@ -2109,8 +2109,8 @@ fn step_record(
 }
 
 /// A tool step's arguments as the commit, the history and the session
-/// store keep them: a `computer_type`'s `text` and a `computer_act`
-/// `set_value`'s `value` become their length and the turn's keyed digest
+/// store keep them: a `computer_type`'s or `browser_type`'s `text` (ADR-0048
+/// decision 9) and a `computer_act` `set_value`'s `value` become their length and the turn's keyed digest
 /// (`text_digest`, ADR-0047 decision 9; `None` keeps the length only, as
 /// the session store does, which has no turn key). The model still had
 /// them; nothing the device stores or sends does.
@@ -2121,7 +2121,7 @@ pub fn recorded_inputs(
     text_digest: Option<&dyn Fn(&str) -> String>,
 ) -> Value {
     let key = match tool {
-        COMPUTER_TYPE => "text",
+        COMPUTER_TYPE | elitea_browser_tools::spec::BROWSER_TYPE => "text",
         COMPUTER_ACT if args.get("action").and_then(Value::as_str) == Some("set_value") => "value",
         _ => return args.clone(),
     };

@@ -10,6 +10,7 @@ mod activity;
 mod app_events;
 mod attention;
 mod auth;
+mod browser_control;
 mod browser_pane;
 mod browser_tools;
 mod commands;
@@ -450,6 +451,14 @@ pub fn run() {
             // The agent's drivers of the browser panes (ADR-0048 decision
             // 6): one per open pane, attached by `browser_pane`.
             let browser_drivers = Arc::new(browser_tools::BrowserDrivers::new());
+            // The control pill (ADR-0048 decision 4): each pane's control
+            // change reaches the UI as a `browser://event` of kind `control`.
+            {
+                let app = app.handle().clone();
+                browser_drivers.set_notify(Arc::new(move |thread: &str, view| {
+                    browser_pane::emit_control(&app, thread, view);
+                }));
+            }
             agents.set_browser_drivers(browser_drivers.clone());
             // Computer use (ADR-0047): one desktop driver for the app's
             // lifetime; the toolset is offered per turn while the policy
@@ -613,6 +622,7 @@ pub fn run() {
             browser_pane::browser_close,
             browser_pane::browser_forget,
             browser_pane::browser_reveal_download,
+            browser_pane::browser_control,
         ])
         .build(tauri::generate_context!());
     let app = match built {

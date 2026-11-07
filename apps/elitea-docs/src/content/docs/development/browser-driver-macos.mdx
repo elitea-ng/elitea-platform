@@ -42,6 +42,8 @@ The host calls the script through `callAsyncJavaScript:arguments:inFrame:inConte
 
 A frame announces itself by posting to a message handler (`eliteaBrowserFrame`) that exists only in the driver world. The host keeps a `WKFrameInfo` for each announced frame. It accepts only messages that come from the driver world and from a subframe.
 
+The person's input reaches the host the same way (#1591). The script listens, in the capture phase, for `pointerdown`, `keydown`, `wheel`, `touchstart`, `beforeinput` (input methods and dictation), `paste` and `drop`. It keeps only trusted events (`isTrusted`: a page script cannot make one), except while it inserts text itself, at most one every 50 ms per type. It posts the event type to a second driver-world handler, `eliteaBrowserInput`. Each trusted-input click the driver posts is remembered as the `pointerdown` reports it will cause (`src/input.rs`); such a report consumes one, within 300 ms, and every other report is the person's. The host passes those to the callback that `attach` takes: the desktop host's pane control, which pauses the agent (`user_active`). Who drives the page, take over and hand back are the host's (`src/browser_control.rs`), not the driver's.
+
 ## The snapshot
 
 The script walks the DOM and builds the tree from:

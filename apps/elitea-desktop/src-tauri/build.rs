@@ -123,6 +123,7 @@ fn main() {
             "browser_close",
             "browser_forget",
             "browser_reveal_download",
+            "browser_control",
         ]),
     ))
     .expect("tauri build configuration is valid");

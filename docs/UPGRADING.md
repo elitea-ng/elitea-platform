@@ -31,9 +31,23 @@ Nothing to do. Migrations tenant 0163 and shared 0229 run on start.
   the recall.
 - Every change writes an `ai.elitea.security.v1.agent.memory.changed`
   audit event without the note text.
-- Client contract 1.42: `VersionMeta.memory` and the six web routes under
+- Client contract 1.43: `VersionMeta.memory` and the six web routes under
   `/api/v2/elitea_core/agent_memory/...` and
   `/api/v2/elitea_core/agent_memory_opt_out/...`.
+
+## Desktop: browser pane control and step records (#1591, ADR-0048 decisions 4 and 9)
+
+No operator action. No migration, no new operation.
+
+- Client contract 1.42: a local turn commit's tool step may carry
+  `browser_step`, which Main stores as an ADR-0042 step record of toolkit
+  `browser`: the tool, outcome, host, URL path (no query or fragment),
+  ref with its role and name, typed text as length and HMAC digest only,
+  and the screenshot's size. Other keys are dropped. An older Main
+  ignores the key; the turn still commits.
+- The desktop pane's control pill (Agent / You / Idle, take over, hand
+  back with a note, Let the agent watch) and `browser_request_user` are
+  on-device only.
 
 ## Desktop: computer use step records and the screenshot upload (#1585, ADR-0047 decision 9)
 
