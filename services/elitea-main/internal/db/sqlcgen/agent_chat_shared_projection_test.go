@@ -139,3 +139,44 @@ func firstProjectionDifference(turn, nested string) string {
 	return "  block lengths differ: turn has " + strconv.Itoa(len(turnLines)) +
 		" lines, nested has " + strconv.Itoa(len(nestedLines))
 }
+
+// TestReaderViewFactsAreIdenticalInBothResolvers pins the reader view facts
+// (ADR-0050 decision 9, issue 1609) of the application and ad-hoc history
+// projections: Main filters both resolvers' references with one rule, so a
+// fact that drifts in one copy filters ad-hoc and application readers
+// differently.
+func TestReaderViewFactsAreIdenticalInBothResolvers(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "queries", "agent_chat.sql"))
+	if err != nil {
+		t.Fatalf("read agent_chat.sql: %v", err)
+	}
+	const begin, end = "-- BEGIN shared reader view facts", "-- END shared reader view facts"
+	var blocks []string
+	rest := string(source)
+	for {
+		start := strings.Index(rest, begin)
+		if start < 0 {
+			break
+		}
+		stop := strings.Index(rest[start:], end)
+		if stop < 0 {
+			t.Fatalf("%q is never closed", begin)
+		}
+		blocks = append(blocks, rest[start:start+stop])
+		rest = rest[start+stop+len(end):]
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("expected 2 reader view fact blocks, found %d", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "AS answered_by_reader") || blocks[0] != blocks[1] {
+		t.Fatalf("the reader view facts differ:\n%s", firstProjectionDifference(blocks[0], blocks[1]))
+	}
+	for name, query := range map[string]string{
+		"resolveCurrentApplicationTurn": resolveCurrentApplicationTurn,
+		"resolveCurrentAdhocTurn":       resolveCurrentAdhocTurn,
+	} {
+		if !strings.Contains(query, blocks[0]) {
+			t.Fatalf("generated %s does not carry the reader view facts", name)
+		}
+	}
+}

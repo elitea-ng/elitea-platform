@@ -24,6 +24,7 @@ func TestCurrentAdhocStartBuildsCurrentMainChatInputAndTurn(t *testing.T) {
 		Instructions:        "Project chat instructions\n\nUser defaults",
 		Tools:               toolJSON,
 		ChatHistory:         json.RawMessage(`[{"role":"user","content":[{"type":"text","text":"earlier"}],"additional_kwargs":{}}]`),
+		ChatHistoryRefs:     []ChatHistoryRef{{MessageID: "00000000-0000-4000-8000-000000000001"}},
 		ConversationMeta:    json.RawMessage(`{"persona":"qa","steps_limit":12,"internal_tools":["internal_mcp","ask_user"]}`),
 	}}
 	admittedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)

@@ -598,7 +598,7 @@ func currentApplicationInput(
 	}
 	// ADR-0050 decision 9 (issue 1609): the history is this reader's view.
 	view, err := BuildReaderView(
-		readerViewSettings(skills.versionDetails, target.ParticipantContextHistory),
+		readerViewSettings(version, target.ParticipantContextHistory),
 		target.ChatHistory, target.ChatHistoryRefs,
 	)
 	if err != nil {

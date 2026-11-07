@@ -84,17 +84,10 @@ type ReaderView struct {
 // talk and the eligibility mode. history and refs must already agree
 // (DecodeChatHistoryRefs).
 func BuildReaderView(settings contextview.Settings, history json.RawMessage, refs []ChatHistoryRef) (ReaderView, error) {
-	if refs == nil {
-		// A target without references (one built before ADR-0050 decision
-		// 9c) has no facts to filter on: its history goes as it was, except
-		// that `none` still sends none.
-		if settings.History == contextview.HistoryNone {
-			return ReaderView{Settings: settings, History: json.RawMessage(`[]`)}, nil
-		}
-		return ReaderView{Settings: settings, History: bytes.Clone(history)}, nil
-	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(history, &entries); err != nil || len(entries) != len(refs) {
+		// History without the references that carry its facts is refused,
+		// never sent unfiltered: a view fails closed.
 		return ReaderView{}, ErrMalformedChatHistoryRefs
 	}
 	keptEntries := make([]json.RawMessage, 0, len(entries))
@@ -122,13 +115,10 @@ func BuildReaderView(settings contextview.Settings, history json.RawMessage, ref
 // `meta.context` under the participant's own mode. A malformed stored block
 // reads as the default, as a malformed `session_compaction` does: an
 // authored typo never fails a turn, and the save path refuses new ones.
-func readerViewSettings(versionDetails json.RawMessage, participantMode string) contextview.Settings {
+func readerViewSettings(version map[string]any, participantMode string) contextview.Settings {
 	settings := contextview.Default
-	var version struct {
-		Meta map[string]any `json:"meta"`
-	}
-	if len(versionDetails) != 0 && json.Unmarshal(versionDetails, &version) == nil {
-		if parsed, err := contextview.Parse(version.Meta[contextview.MetaKey]); err == nil {
+	if meta, _ := version["meta"].(map[string]any); meta != nil {
+		if parsed, err := contextview.Parse(meta[contextview.MetaKey]); err == nil {
 			settings = parsed
 		}
 	}

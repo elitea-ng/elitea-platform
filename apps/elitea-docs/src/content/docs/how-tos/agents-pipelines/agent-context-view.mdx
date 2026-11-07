@@ -27,7 +27,7 @@ context:
 | `full` (default) | Every visible message it may see. |
 | `since_joined` | What was said after it joined the conversation, and its own answers. |
 | `addressed_only` | Messages addressed to it, its own answers, and the messages those replied to. |
-| `none` | Only the current message. |
+| `none` | No other messages: only the current message and the agent's own earlier exchanges with the person asking, which its own session keeps. |
 
 `include_side_talk: none` leaves out even the side talk the agent took part in.
 
@@ -36,6 +36,10 @@ A version without the block is `full` and `party`. A save with an invalid block 
 ## "Share history from: now"
 
 When you add an agent to a conversation that is already going, you can set the participant's `entity_settings.context_history` to `since_joined`. The agent then sees only what is said from that moment on, plus its own answers. This only narrows: an agent whose version already sees less keeps its own mode. Any value other than `since_joined` or `full` is refused with 422.
+
+## What the filter does not undo
+
+The view decides what is sent to the agent on each turn. The agent's own session keeps what it already received. If an agent's mode is narrowed later, or a conversation started before this release, the session can still hold messages it saw earlier. Start a new conversation when that matters.
 
 ## How the worker checks it
 

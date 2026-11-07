@@ -370,6 +370,7 @@ LEFT JOIN LATERAL (
                         WHERE own_question.id = message_group.reply_to_id
                           AND own_question.author_participant_id = author_participant.id
                     ))) AS readers_own,
+               -- BEGIN shared reader view facts
                -- The reader wrote it.
                (author.id = target_participant.id) AS own_agent,
                -- It is addressed to the reader (addressed_to, which the
@@ -381,14 +382,17 @@ LEFT JOIN LATERAL (
                (message_group.created_at >= target_mapping.created_at) AS after_joined,
                -- The reader answered it, or a message to the reader replied
                -- to it: `addressed_only` keeps the message each one replied to.
-               EXISTS (
-                   SELECT 1
+               -- The ARRAY names no column of message_group, so it is one
+               -- InitPlan read once per resolve, not a probe per history row.
+               (message_group.id = ANY(ARRAY(
+                   SELECT reader_reply.reply_to_id
                    FROM chat_message_group AS reader_reply
                    WHERE reader_reply.conversation_id = conversation.id
-                     AND reader_reply.reply_to_id = message_group.id
+                     AND reader_reply.reply_to_id IS NOT NULL
                      AND (reader_reply.author_participant_id = target_participant.id
                           OR target_participant.id = ANY(reader_reply.addressed_to))
-               ) AS answered_by_reader,
+               ))) AS answered_by_reader,
+               -- END shared reader view facts
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are `assistant`. Before this, every non-user author
                -- was an unnamed `assistant`, so in a conversation with several
@@ -1422,6 +1426,7 @@ LEFT JOIN LATERAL (
                         WHERE own_question.id = message_group.reply_to_id
                           AND own_question.author_participant_id = author_participant.id
                     ))) AS readers_own,
+               -- BEGIN shared reader view facts
                -- The reader wrote it.
                (author.id = target_participant.id) AS own_agent,
                -- It is addressed to the reader (addressed_to, which the
@@ -1433,14 +1438,17 @@ LEFT JOIN LATERAL (
                (message_group.created_at >= target_mapping.created_at) AS after_joined,
                -- The reader answered it, or a message to the reader replied
                -- to it: `addressed_only` keeps the message each one replied to.
-               EXISTS (
-                   SELECT 1
+               -- The ARRAY names no column of message_group, so it is one
+               -- InitPlan read once per resolve, not a probe per history row.
+               (message_group.id = ANY(ARRAY(
+                   SELECT reader_reply.reply_to_id
                    FROM chat_message_group AS reader_reply
                    WHERE reader_reply.conversation_id = conversation.id
-                     AND reader_reply.reply_to_id = message_group.id
+                     AND reader_reply.reply_to_id IS NOT NULL
                      AND (reader_reply.author_participant_id = target_participant.id
                           OR target_participant.id = ANY(reader_reply.addressed_to))
-               ) AS answered_by_reader,
+               ))) AS answered_by_reader,
+               -- END shared reader view facts
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are `assistant`. Before this, every non-user author
                -- was an unnamed `assistant`, so in a conversation with several

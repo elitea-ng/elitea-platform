@@ -99,22 +99,34 @@ func TestBuildReaderViewThreeAgents(t *testing.T) {
 	if _, err := BuildReaderView(contextview.Default, history, forC[:2]); !errors.Is(err, ErrMalformedChatHistoryRefs) {
 		t.Fatalf("mismatched refs: %v", err)
 	}
-	legacy, err := BuildReaderView(contextview.Default, history, nil)
-	if err != nil || !bytes.Equal(legacy.History, history) {
-		t.Fatalf("no refs: %s %v", legacy.History, err)
+	if _, err := BuildReaderView(contextview.Default, history, nil); !errors.Is(err, ErrMalformedChatHistoryRefs) {
+		t.Fatalf("history without refs must fail closed: %v", err)
+	}
+	empty, err := BuildReaderView(contextview.Default, json.RawMessage(`[]`), nil)
+	if err != nil || string(empty.History) != `[]` {
+		t.Fatalf("empty history: %s %v", empty.History, err)
 	}
 }
 
 func TestReaderViewSettingsReadsTheVersionAndParticipant(t *testing.T) {
-	details := json.RawMessage(`{"meta":{"context":{"history":"addressed_only"}}}`)
-	if got := readerViewSettings(details, ""); got.History != contextview.HistoryAddressedOnly {
+	decode := func(raw string) map[string]any {
+		var version map[string]any
+		if err := json.Unmarshal([]byte(raw), &version); err != nil {
+			t.Fatal(err)
+		}
+		return version
+	}
+	if got := readerViewSettings(decode(`{"meta":{"context":{"history":"addressed_only"}}}`), ""); got.History != contextview.HistoryAddressedOnly {
 		t.Fatalf("version mode: %+v", got)
 	}
-	if got := readerViewSettings(json.RawMessage(`{"meta":{}}`), "since_joined"); got.History != contextview.HistorySinceJoined {
+	if got := readerViewSettings(decode(`{"meta":{}}`), "since_joined"); got.History != contextview.HistorySinceJoined {
 		t.Fatalf("participant mode: %+v", got)
 	}
-	if got := readerViewSettings(json.RawMessage(`{"meta":{"context":{"history":"bogus"}}}`), ""); got != contextview.Default {
+	if got := readerViewSettings(decode(`{"meta":{"context":{"history":"bogus"}}}`), ""); got != contextview.Default {
 		t.Fatalf("malformed block must read as default: %+v", got)
+	}
+	if got := readerViewSettings(nil, ""); got != contextview.Default {
+		t.Fatalf("no version: %+v", got)
 	}
 	input := contextViewInput(contextview.Default, &runtimev1.ModelContextLimitsV1{ContextWindowTokens: 8192}, []byte(`[]`), nil)
 	if input.GetHistory() != "full" || input.GetWindowTokens() != 8192 ||
