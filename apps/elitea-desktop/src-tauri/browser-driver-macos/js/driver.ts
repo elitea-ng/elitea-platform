@@ -169,6 +169,7 @@ interface Window {
   readonly webkit: {
     readonly messageHandlers: {
       readonly eliteaBrowserFrame: { postMessage(message: string): void };
+      readonly eliteaBrowserInput: { postMessage(message: string): void };
     };
   };
 }
@@ -932,6 +933,27 @@ interface Window {
   // Tell the host this frame exists, so it can call into a cross-origin
   // frame. The handler is registered in THIS world only: the page world's
   // `webkit.messageHandlers` has no such name.
+  // The person's own input (ADR-0048 decision 4): a click, a key, a scroll
+  // in the page while the agent drives pauses it. Only trusted events count
+  // (the page's scripts cannot make one, and the driver's own actions are
+  // untrusted DOM events); listened for in the capture phase of this world,
+  // so the page cannot stop them first. At most one message every 50 ms.
+  let lastInput = 0;
+  const reportInput = (event: Event): void => {
+    if (!event.isTrusted) return;
+    const now = Date.now();
+    if (now - lastInput < 50) return;
+    lastInput = now;
+    try {
+      window.webkit.messageHandlers.eliteaBrowserInput.postMessage(event.type);
+    } catch (_) {
+      // A host without the handler (the lazy install of a call).
+    }
+  };
+  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.addEventListener(type, reportInput, { capture: true, passive: true });
+  }
+
   if (window !== window.top) {
     const announce = (): void => {
       try {

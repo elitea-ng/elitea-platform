@@ -50,6 +50,8 @@ pub const SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/driver.js"));
 
 /// The driver of a Tauri child webview (the pane's page): installs the
 /// driver world in it. Call once per webview, right after it is made.
+/// `person_input` runs on each trusted input of the person in the page
+/// (the control pill's take-over, ADR-0048 decision 4).
 ///
 /// # Errors
 ///
@@ -60,6 +62,7 @@ pub async fn attach(
     webview: &tauri::Webview,
     check: NavigationCheck,
     hand_over: std::sync::Arc<dyn HandOver>,
+    person_input: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Result<WebDriver<WebKitEngine>, elitea_browser_tools::BrowserError> {
     use elitea_browser_tools::{BrowserError, ErrorCode};
     let unavailable =
@@ -71,6 +74,7 @@ pub async fn attach(
         })
         .map_err(|_| unavailable())?;
     let engine = rx.await.ok().flatten().ok_or_else(unavailable)?;
+    engine.on_person_input(person_input);
     Ok(WebDriver::new(engine, check, hand_over))
 }
 

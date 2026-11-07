@@ -12,6 +12,13 @@
 //! function body ([`CALL_BODY`]) and the operation and its JSON arguments
 //! as ARGUMENTS: no source text is ever built from the model's input.
 //!
+//! **The person's input.** The script reports each trusted pointer, key,
+//! wheel or touch event of the page to [`INPUT_HANDLER`] (same world only),
+//! and the engine calls the host's [`WebKitEngine::on_person_input`]
+//! callback: the control pill's take-over (ADR-0048 decision 4). A click
+//! the driver itself posts as trusted input is not the person's
+//! ([`Shared::posting`]).
+//!
 //! **Frames.** The script announces each subframe to [`FRAME_HANDLER`];
 //! the host keeps the `WKFrameInfo` it came with, and calls into a cross-
 //! origin frame with it. A same-origin frame is read by its parent's walk.
@@ -69,6 +76,14 @@ return await driver.run(op, args);";
 /// script itself in that frame, in the driver world, and calls again.
 const MISSING: &str = "elitea-driver-missing";
 
+/// The message handler the person's input is reported on, in the driver
+/// world.
+pub const INPUT_HANDLER: &str = "eliteaBrowserInput";
+
+/// How long after the driver posts trusted input an input report is the
+/// driver's own, not the person's.
+const OWN_INPUT_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Frames remembered per page (a page that makes frames without end).
 const MAX_FRAMES: usize = 64;
 
@@ -88,15 +103,43 @@ impl Frames {
     }
 }
 
-/// What the frame handler shares with the engine.
+/// The host's callback for the person's input.
+type InputCallback = Arc<dyn Fn() + Send + Sync>;
+
+/// What the handler shares with the engine.
 #[derive(Clone)]
-struct Shared(Arc<Mutex<Frames>>);
+struct Shared {
+    frames: Arc<Mutex<Frames>>,
+    input: Arc<Mutex<Option<InputCallback>>>,
+    /// When the driver last posted trusted input itself.
+    posting: Arc<Mutex<Option<std::time::Instant>>>,
+}
 
 impl Shared {
     fn lock(&self) -> std::sync::MutexGuard<'_, Frames> {
-        self.0
+        self.frames
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The person used the page, unless the driver just posted input.
+    fn person_input(&self) {
+        let own = self
+            .posting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some_and(|at| at.elapsed() < OWN_INPUT_GRACE);
+        if own {
+            return;
+        }
+        let callback = self
+            .input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(callback) = callback {
+            callback();
+        }
     }
 }
 
@@ -119,7 +162,7 @@ define_class!(
     unsafe impl WKScriptMessageHandler for FrameHandler {
         #[unsafe(method(userContentController:didReceiveScriptMessage:))]
         fn did_receive(&self, _controller: &WKUserContentController, message: &WKScriptMessage) {
-            self.frame_announced(message);
+            self.received(message);
         }
     }
 );
@@ -135,22 +178,35 @@ impl FrameHandler {
     }
 
     #[allow(unsafe_code)]
-    fn frame_announced(&self, message: &WKScriptMessage) {
+    fn received(&self, message: &WKScriptMessage) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
         // SAFETY: on the main thread (`mtm` above); `message` is the live
         // message WebKit passed in, and these getters take no arguments and
         // return retained, non-null objects.
-        let (world, frame, body) =
-            unsafe { (message.world(), message.frameInfo(), message.body()) };
+        let (world, frame, body, name) = unsafe {
+            (
+                message.world(),
+                message.frameInfo(),
+                message.body(),
+                message.name(),
+            )
+        };
         // SAFETY: on the main thread; `world` is a retained WKContentWorld
         // and `name` returns a retained NSString or nil.
         let from_driver =
             unsafe { world.name() }.is_some_and(|name| name.to_string() == WORLD_NAME);
+        if !from_driver {
+            return;
+        }
+        if name.to_string() == INPUT_HANDLER {
+            self.ivars().shared.person_input();
+            return;
+        }
         // SAFETY: on the main thread; `frame` is a retained WKFrameInfo and
         // `isMainFrame` is a plain BOOL getter.
-        if !from_driver || unsafe { frame.isMainFrame() } {
+        if unsafe { frame.isMainFrame() } {
             return;
         }
         let Ok(text) = body.downcast::<NSString>() else {
@@ -174,10 +230,14 @@ impl FrameHandler {
 /// thread.
 #[allow(unsafe_code)]
 unsafe fn install(webview: &WKWebView, mtm: MainThreadMarker) -> Shared {
-    let shared = Shared(Arc::new(Mutex::new(Frames {
-        next: TOP,
-        known: Vec::new(),
-    })));
+    let shared = Shared {
+        frames: Arc::new(Mutex::new(Frames {
+            next: TOP,
+            known: Vec::new(),
+        })),
+        input: Arc::default(),
+        posting: Arc::default(),
+    };
     // SAFETY: the caller guarantees a live WKWebView on the main thread
     // (`mtm`). Every argument is a live, retained object of the declared
     // class (the NSStrings, the world, the user script, the handler, which
@@ -199,6 +259,11 @@ unsafe fn install(webview: &WKWebView, mtm: MainThreadMarker) -> Shared {
             ProtocolObject::from_ref(&*handler),
             &world,
             &NSString::from_str(FRAME_HANDLER),
+        );
+        controller.addScriptMessageHandler_contentWorld_name(
+            ProtocolObject::from_ref(&*handler),
+            &world,
+            &NSString::from_str(INPUT_HANDLER),
         );
     }
     shared
@@ -225,6 +290,16 @@ impl WebKitEngine {
             shared,
             trusted: Arc::new(accessibility_granted),
         }
+    }
+
+    /// The person used the page (a trusted click, key, scroll or touch):
+    /// `callback` runs on the main thread, once per report.
+    pub fn on_person_input(&self, callback: Arc<dyn Fn() + Send + Sync>) {
+        *self
+            .shared
+            .input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(callback);
     }
 
     /// Replace the grant check (tests: a page that needs trusted input).
@@ -561,6 +636,12 @@ impl Engine for WebKitEngine {
                 "trusted input needs the Accessibility permission",
             ));
         }
+        // The page reports this click as trusted input: it is the driver's.
+        *self
+            .shared
+            .posting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::time::Instant::now());
         self.on_main(move |webview, _mtm, tx| {
             let _ = tx.send(post_click(webview, at, double));
         })

@@ -29,6 +29,18 @@
 //! ref it cannot resolve, or Enter/Space on a focus nobody could read,
 //! asks every time).
 //!
+//! Control (ADR-0048 decision 4, #1591): each pane has a
+//! [`crate::browser_control::PaneControl`]. A turn's first call makes the
+//! pill say Agent; while the person drives, a call answers
+//! `user_in_control` (snapshots and screenshots run when they ticked **Let
+//! the agent watch**), and a call during which they used the page answers
+//! `user_active` as soon as the input arrives. `browser_request_user` hands
+//! the page to them through the driver's hand-over; a note they hand back
+//! with goes to the turn's steering queue, the person's message. Each call
+//! is a step record (`browser_step`, ADR-0048 decision 9): the host, the URL
+//! path, the ref's role and name, the outcome; typed text only as its length
+//! and the turn's keyed digest.
+//!
 //! Downloads: from a turn's first browser call until the turn ends, the
 //! pane's downloads are the agent's ([`BrowserDrivers::download_requested`]):
 //! one starts only when the call that caused it was approved as a download.
@@ -38,6 +50,7 @@
 //! the rules engine denies every call when they are off as well.
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
@@ -61,6 +74,9 @@ use elitea_local_tools::approvals::{
 use elitea_local_tools::session::LocalSession;
 use serde_json::{Value, json};
 
+use crate::browser_control::{ControlView, NoteSink, PaneControl};
+use crate::d0::recorder::Recorder;
+
 /// The toolset's name.
 pub const TOOLSET_NAME: &str = "browser";
 
@@ -70,7 +86,15 @@ pub const TOOLSET_NAME: &str = "browser";
 pub struct BrowserDrivers {
     drivers: Mutex<HashMap<String, Arc<dyn BrowserDriver>>>,
     drives: Mutex<HashMap<String, Drive>>,
+    /// Who drives each thread's pane (made on first use, kept for the app
+    /// session: the pill outlives a closed page).
+    controls: Mutex<HashMap<String, Arc<PaneControl>>>,
+    /// Who hears a pane's control change (the pane's UI).
+    notify: Mutex<Option<ControlNotify>>,
 }
+
+/// Hears a thread's control change: the thread and its new view.
+pub type ControlNotify = Arc<dyn Fn(&str, &ControlView) + Send + Sync>;
 
 /// An agent turn driving a thread's pane (from its first browser call to
 /// the end of the turn): the pane's downloads are the agent's then
@@ -129,6 +153,48 @@ impl BrowserDrivers {
     pub fn detach_all(&self) {
         self.lock().clear();
         self.drives().clear();
+        let controls: Vec<_> = self
+            .controls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain()
+            .map(|(_, control)| control)
+            .collect();
+        for control in controls {
+            control.agent_ended();
+        }
+    }
+
+    /// Who hears every pane's control change from now on.
+    pub fn set_notify(&self, notify: ControlNotify) {
+        *self
+            .notify
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(notify);
+    }
+
+    /// The control of `thread`'s pane (made on first use).
+    #[must_use]
+    pub fn control(&self, thread: &str) -> Arc<PaneControl> {
+        let mut controls = self
+            .controls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(control) = controls.get(thread) {
+            return control.clone();
+        }
+        let control = Arc::new(PaneControl::default());
+        let notify = self
+            .notify
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(notify) = notify {
+            let thread = thread.to_owned();
+            control.set_notify(Arc::new(move |view: &ControlView| notify(&thread, view)));
+        }
+        controls.insert(thread.to_owned(), control.clone());
+        control
     }
 
     #[must_use]
@@ -224,6 +290,12 @@ impl BrowserDrivers {
 struct Page {
     snapshot: Option<Snapshot>,
     url: Option<String>,
+    /// The person's input count when the agent last looked
+    /// ([`PaneControl::input_epoch`]).
+    input_epoch: u64,
+    /// The person used the page since the agent's latest snapshot: a ref
+    /// act is `stale_ref` until it snapshots again.
+    refs_dropped: bool,
 }
 
 /// The pages of a toolset's tools, shared by its tools.
@@ -401,6 +473,42 @@ struct BrowserTool {
     session: Option<Arc<LocalSession>>,
     /// What the pane last showed the agent.
     page: SharedPage,
+    /// The turn's: its recorder, its steering queue, and whether it drove
+    /// the pane yet.
+    turn: Arc<TurnLink>,
+}
+
+/// What a turn's browser tools share with the turn.
+#[derive(Default)]
+struct TurnLink {
+    /// Each call's step record (`browser_step`) and the typed-text digest.
+    recorder: Option<Arc<Recorder>>,
+    /// Where a hand-back note goes: the turn's steering queue.
+    notes: Option<Arc<dyn NoteSink>>,
+    /// A call of this turn ran on the pane: the pill says Agent until the
+    /// turn ends.
+    drove: std::sync::atomic::AtomicBool,
+}
+
+/// `browser_snapshot` and `browser_screenshot`: what the person may let
+/// the agent do while they drive (**Let the agent watch**).
+fn watchable(name: &str) -> bool {
+    name == elitea_browser_tools::spec::BROWSER_SNAPSHOT
+        || name == elitea_browser_tools::spec::BROWSER_SCREENSHOT
+}
+
+fn user_in_control() -> BrowserError {
+    BrowserError::new(
+        ErrorCode::UserInControl,
+        "the person is driving the page: wait for them to hand it back, or ask with browser_request_user",
+    )
+}
+
+fn user_active() -> BrowserError {
+    BrowserError::new(
+        ErrorCode::UserActive,
+        "the person used the page during this call: the agent is paused until they hand it back",
+    )
 }
 
 #[async_trait]
@@ -471,6 +579,16 @@ impl BrowserTool {
         );
         if !ref_act {
             return Ok(());
+        }
+        if self
+            .page
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .refs_dropped
+        {
+            return Err(BrowserError::stale_ref(
+                "the person used the page since your latest snapshot: snapshot again",
+            ));
         }
         let Some(live_host) = live.url.as_deref().and_then(host_of) else {
             return Ok(());
@@ -584,6 +702,7 @@ impl BrowserTool {
             && result.get("snapshot").is_some()
         {
             page.snapshot = Snapshot::parse(content).ok();
+            page.refs_dropped = false;
         } else if self.spec.kind != ToolKind::BrowserRead {
             page.snapshot = None;
         }
@@ -593,8 +712,70 @@ impl BrowserTool {
     }
 
     async fn run_call(&self, call_id: &str, args: &Value) -> Value {
+        let mut seen = Seen::default();
+        let result = self.run_controlled(args, call_id, &mut seen).await;
+        if let Some(recorder) = &self.turn.recorder {
+            let record = step_record(self.spec.name, args, &seen, &result, |text| {
+                recorder.text_digest(text)
+            });
+            recorder.step_record_under(BROWSER_STEP_KEY, call_id, record);
+        }
+        result
+    }
+
+    /// The pane's control (ADR-0048 decision 4): `user_in_control` while
+    /// the person drives, unless the call is a watch they allowed.
+    fn gate(&self, control: &PaneControl) -> Result<(), BrowserError> {
+        if control.person_drives() && !(watchable(self.spec.name) && control.watching()) {
+            return Err(user_in_control());
+        }
+        Ok(())
+    }
+
+    /// Forget the agent's last view of the page when the person used it
+    /// since: its refs are not the page's any more (as on a cloud thread).
+    fn sync_with_person(&self, control: &PaneControl) {
+        let epoch = control.input_epoch();
+        let mut page = self
+            .page
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if page.input_epoch != epoch {
+            page.input_epoch = epoch;
+            if page.snapshot.take().is_some() {
+                page.refs_dropped = true;
+            }
+        }
+    }
+
+    fn seen_url(&self) -> Option<String> {
+        self.page
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .url
+            .clone()
+    }
+
+    async fn run_controlled(&self, args: &Value, call_id: &str, seen: &mut Seen) -> Value {
         let driver = self.drivers.get(&self.thread);
+        let control = self.drivers.control(&self.thread);
+        let question = self.spec.kind == ToolKind::Question;
+        if driver.is_some() {
+            // From the turn's first call on a live pane the pill says Agent.
+            if !self.turn.drove.swap(true, Ordering::SeqCst) {
+                control.agent_started(self.turn.notes.clone());
+            }
+            if let Err(error) = self.gate(&control) {
+                seen.url = self.seen_url();
+                return error.to_result();
+            }
+            self.sync_with_person(&control);
+        }
         let live = self.read_live(driver.as_deref(), args).await;
+        seen.url = match BrowserCall::parse(self.spec.name, args) {
+            Ok(BrowserCall::Open { url }) => Some(url),
+            _ => live.url.clone().or_else(|| self.seen_url()),
+        };
         if let Err(error) = self.stale_page(args, &live) {
             return error.to_result();
         }
@@ -602,6 +783,10 @@ impl BrowserTool {
             Ok(call) => call,
             Err(error) => return error.to_result(),
         };
+        let target = call.as_ref().and_then(|call| call.browser.as_ref());
+        seen.control = target
+            .and_then(|target| target.control.as_ref())
+            .and_then(|control| Some((control.role.clone()?, control.name.clone()?)));
         let Some(driver) = driver else {
             return BrowserError::new(
                 ErrorCode::Unsupported,
@@ -609,17 +794,48 @@ impl BrowserTool {
             )
             .to_result();
         };
+        // The person may have taken the page while the call was asked.
+        if let Err(error) = self.gate(&control) {
+            return error.to_result();
+        }
+        let epoch = control.input_epoch();
+        // A watch the person allowed runs beside their input, and the
+        // question is theirs to answer. Every other call stops at their
+        // first input.
+        let pausable = !question && !control.person_drives();
         // From here the pane's downloads are this turn's: one starts only
         // when this call was approved as a download (`browser_pane`).
-        let target = call.as_ref().and_then(|call| call.browser.as_ref());
         self.drivers.begin_call(
             &self.thread,
             &self.page,
             target.and_then(control_key),
             target.is_some_and(|target| target.effect == Some(BrowserEffect::Download)),
         );
-        let output = dispatch(driver.as_ref(), self.spec.name, args).await;
+        let output = if pausable {
+            tokio::select! {
+                biased;
+                () = control.input_after(epoch) => None,
+                output = dispatch(driver.as_ref(), self.spec.name, args) => Some(output),
+            }
+        } else {
+            Some(dispatch(driver.as_ref(), self.spec.name, args).await)
+        };
         let refused_download = self.drivers.take_blocked(&self.thread);
+        let output = match output {
+            Some(output) if !pausable || control.input_epoch() == epoch => output,
+            // The person used the page meanwhile: the agent is paused now,
+            // whatever the call would have answered.
+            _ => {
+                self.sync_with_person(&control);
+                return user_active().to_result();
+            }
+        };
+        if question {
+            // The URL the agent finds on hand-back is the step's (decision 9).
+            seen.url = driver.current_url().await.ok().or(seen.url.take());
+            // The person had the page: whatever the agent knew of it is stale.
+            self.sync_with_person(&control);
+        }
         let mut output = output;
         if let ToolOutput::Json(result) = &mut output {
             self.observe(result);
@@ -631,6 +847,74 @@ impl BrowserTool {
         }
         tool_result(output, self.vision)
     }
+}
+
+/// The key of a browser call's step record on its tool step.
+pub const BROWSER_STEP_KEY: &str = "browser_step";
+
+/// What a call showed of the page, for its step record.
+#[derive(Default)]
+struct Seen {
+    /// The page the call acted on (the URL it opens, for `browser_open`).
+    url: Option<String>,
+    /// The control's role and name, for an act on one.
+    control: Option<(String, String)>,
+}
+
+/// The step record of one browser call (ADR-0048 decision 9, ADR-0042):
+/// the tool, the page's host and URL path (no query, no fragment), the ref
+/// and its role and name, and the outcome. Typed text is its length and the
+/// turn's keyed digest, never the text; a screenshot is its size only (its
+/// bytes went to the model and stay on the device).
+fn step_record(
+    tool: &str,
+    args: &Value,
+    seen: &Seen,
+    result: &Value,
+    text_digest: impl Fn(&str) -> String,
+) -> Value {
+    let outcome = if result.get("status").and_then(Value::as_str) == Some("ok") {
+        "ok"
+    } else {
+        result
+            .get("code")
+            .and_then(Value::as_str)
+            .unwrap_or("error")
+    };
+    let mut record = json!({ "v": 1, "tool": tool, "outcome": outcome });
+    if let Some(url) = seen
+        .url
+        .as_deref()
+        .and_then(|url| url::Url::parse(url).ok())
+    {
+        if let Some(host) = url.host_str() {
+            record["host"] = json!(host.trim_end_matches('.').to_ascii_lowercase());
+        }
+        let path: String = url.path().chars().take(512).collect();
+        record["path"] = json!(path);
+    }
+    if let Some(target) = args.get("ref").and_then(Value::as_str) {
+        record["ref"] = json!(target.chars().take(64).collect::<String>());
+    }
+    if let Some((role, name)) = &seen.control {
+        record["role"] = json!(role.chars().take(64).collect::<String>());
+        record["name"] = json!(elitea_agent_runtime::text::clip_bytes(name, 512));
+    }
+    if tool == elitea_browser_tools::spec::BROWSER_TYPE
+        && let Some(text) = args.get("text").and_then(Value::as_str)
+    {
+        record["text"] = json!({ "chars": text.chars().count(), "digest": text_digest(text) });
+    }
+    if result.get("kind").and_then(Value::as_str) == Some(IMAGE_KIND) {
+        record["screenshot"] = json!({
+            "taken": true,
+            "mime": result.get("mime").cloned().unwrap_or(Value::Null),
+            "bytes": result.get("bytes").cloned().unwrap_or(Value::Null),
+            "width": result.get("width").cloned().unwrap_or(Value::Null),
+            "height": result.get("height").cloned().unwrap_or(Value::Null),
+        });
+    }
+    record
 }
 
 /// A browser act's control as the turn's download memory keys it: the
@@ -675,12 +959,17 @@ pub struct BrowserToolset {
     vision: bool,
     session: Option<Arc<LocalSession>>,
     page: SharedPage,
+    turn: Arc<TurnLink>,
 }
 
 impl Drop for BrowserToolset {
-    /// The turn ended: the pane's downloads are the person's again.
+    /// The turn ended: the pane's downloads are the person's again, and
+    /// the pill goes back to Idle.
     fn drop(&mut self) {
         self.drivers.end_turn(&self.thread, &self.page);
+        if self.turn.drove.load(Ordering::SeqCst) {
+            self.drivers.control(&self.thread).agent_ended();
+        }
     }
 }
 
@@ -707,6 +996,7 @@ impl BrowserToolset {
                     vision: self.vision,
                     session: self.session.clone(),
                     page: self.page.clone(),
+                    turn: self.turn.clone(),
                 }) as Arc<dyn Tool>
             })
             .collect()
@@ -733,8 +1023,23 @@ impl BrowserToolProvider {
                 vision,
                 session: Some(session),
                 page: SharedPage::default(),
+                turn: Arc::default(),
             }),
         }
+    }
+
+    /// The turn's recorder (each call's `browser_step`) and steering queue
+    /// (a hand-back note, the person's message).
+    #[must_use]
+    pub fn with_turn(mut self, recorder: Arc<Recorder>, notes: Arc<dyn NoteSink>) -> Self {
+        if let Some(toolset) = Arc::get_mut(&mut self.toolset) {
+            toolset.turn = Arc::new(TurnLink {
+                recorder: Some(recorder),
+                notes: Some(notes),
+                drove: std::sync::atomic::AtomicBool::new(false),
+            });
+        }
+        self
     }
 }
 
@@ -758,6 +1063,7 @@ mod tests {
     use elitea_browser_tools::snapshot::Snapshot;
 
     use super::*;
+    use crate::browser_control::Pill;
 
     #[test]
     fn the_host_exposes_exactly_the_contract() {
@@ -767,6 +1073,7 @@ mod tests {
             vision: true,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         let exposed: Vec<(String, String, Value)> = toolset
             .current()
@@ -800,6 +1107,7 @@ mod tests {
             vision: false,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         let result = tool.run(&json!({ "url": "https://example.com/" })).await;
         assert_eq!(result["code"], "unsupported");
@@ -871,6 +1179,7 @@ mod tests {
             vision: true,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         let mut result = seeing.run(&json!({})).await;
         let image = elitea_agent_runtime::image_result::take_image(&mut result).unwrap();
@@ -884,6 +1193,7 @@ mod tests {
             vision: false,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         let result = blind.run(&json!({})).await;
         assert!(result.get(IMAGE_FIELD).is_none());
@@ -910,6 +1220,7 @@ mod tests {
         Page {
             url: Some(snapshot.url.clone()),
             snapshot: Some(snapshot),
+            ..Page::default()
         }
     }
 
@@ -1060,6 +1371,7 @@ mod tests {
                 .unwrap(),
             ),
             url: Some("https://shop.example.com/".to_owned()),
+            ..Page::default()
         };
         let click = |r: &str, inspected: Option<ControlInfo>| {
             target_live(
@@ -1251,6 +1563,7 @@ mod tests {
             vision: false,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         (drivers, pane, toolset)
     }
@@ -1263,6 +1576,7 @@ mod tests {
             vision: false,
             session: toolset.session.clone(),
             page: toolset.page.clone(),
+            turn: toolset.turn.clone(),
         }
     }
 
@@ -1343,6 +1657,7 @@ mod tests {
             vision: false,
             session: None,
             page: SharedPage::default(),
+            turn: Arc::default(),
         };
         let tool = |name: &str| BrowserTool {
             spec: elitea_browser_tools::spec::find(name).unwrap(),
@@ -1351,6 +1666,7 @@ mod tests {
             vision: false,
             session: None,
             page: toolset.page.clone(),
+            turn: toolset.turn.clone(),
         };
         let opened = tool("browser_open")
             .run(&json!({"url": "https://shop.example.com/"}))
@@ -1368,5 +1684,319 @@ mod tests {
         let page = toolset.page.lock().unwrap();
         assert!(page.snapshot.is_none(), "an act forgets the controls");
         assert_eq!(page.url.as_deref(), Some("https://shop.example.com/done"));
+    }
+
+    // ── control (ADR-0048 decision 4, #1591) ─────────────────────────────
+
+    /// A pane whose `browser_wait` never ends and whose question is the
+    /// control's hand-over, as the desktop wires it.
+    struct Slow(Arc<PaneControl>);
+
+    #[async_trait]
+    impl BrowserDriver for Slow {
+        async fn open(&self, url: &str) -> Result<PageInfo, BrowserError> {
+            Pane.open(url).await
+        }
+        async fn snapshot(&self, max: usize) -> Result<Snapshot, BrowserError> {
+            Pane.snapshot(max).await
+        }
+        async fn text(&self, max: usize) -> Result<PageText, BrowserError> {
+            Pane.text(max).await
+        }
+        async fn screenshot(&self, _t: Option<&ElementRef>) -> Result<Screenshot, BrowserError> {
+            Shot.screenshot(None).await
+        }
+        async fn click(&self, t: &ElementRef, d: bool) -> Result<PageInfo, BrowserError> {
+            Pane.click(t, d).await
+        }
+        async fn type_text(
+            &self,
+            t: &ElementRef,
+            x: &str,
+            c: bool,
+            s: bool,
+        ) -> Result<PageInfo, BrowserError> {
+            Pane.type_text(t, x, c, s).await
+        }
+        async fn select(&self, t: &ElementRef, v: &[String]) -> Result<PageInfo, BrowserError> {
+            Pane.select(t, v).await
+        }
+        async fn scroll(&self, t: &ScrollTarget) -> Result<PageInfo, BrowserError> {
+            Pane.scroll(t).await
+        }
+        async fn press(&self, k: &Key) -> Result<PageInfo, BrowserError> {
+            Pane.press(k).await
+        }
+        async fn history(&self, s: HistoryStep) -> Result<PageInfo, BrowserError> {
+            Pane.history(s).await
+        }
+        async fn wait(&self, _c: &WaitCondition, _t: Duration) -> Result<PageInfo, BrowserError> {
+            std::future::pending().await
+        }
+        async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError> {
+            match self.0.ask(reason).await {
+                crate::browser_control::Answer::HandedBack(note) => Ok(Handback { note }),
+                crate::browser_control::Answer::Declined => {
+                    Err(BrowserError::new(ErrorCode::Declined, "declined"))
+                }
+            }
+        }
+        async fn current_url(&self) -> Result<String, BrowserError> {
+            Ok("https://login.example.com/welcome?session=1".to_owned())
+        }
+    }
+
+    #[derive(Default)]
+    struct Notes(Mutex<Vec<String>>);
+
+    impl NoteSink for Notes {
+        fn note(&self, text: &str) -> bool {
+            self.0.lock().unwrap().push(text.to_owned());
+            true
+        }
+    }
+
+    struct Controlled {
+        drivers: Arc<BrowserDrivers>,
+        control: Arc<PaneControl>,
+        toolset: BrowserToolset,
+        recorder: Arc<Recorder>,
+        notes: Arc<Notes>,
+    }
+
+    fn controlled() -> Controlled {
+        let drivers = Arc::new(BrowserDrivers::new());
+        let control = drivers.control("t1");
+        drivers.attach("t1", Arc::new(Slow(control.clone())));
+        let recorder = Arc::new(Recorder::default());
+        let notes = Arc::new(Notes::default());
+        let toolset = BrowserToolset {
+            thread: "t1".to_owned(),
+            drivers: drivers.clone(),
+            vision: false,
+            session: None,
+            page: SharedPage::default(),
+            turn: Arc::new(TurnLink {
+                recorder: Some(recorder.clone()),
+                notes: Some(notes.clone()),
+                drove: std::sync::atomic::AtomicBool::new(false),
+            }),
+        };
+        Controlled {
+            drivers,
+            control,
+            toolset,
+            recorder,
+            notes,
+        }
+    }
+
+    impl Controlled {
+        fn tool(&self, name: &str) -> BrowserTool {
+            BrowserTool {
+                spec: elitea_browser_tools::spec::find(name).unwrap(),
+                thread: "t1".to_owned(),
+                drivers: self.drivers.clone(),
+                vision: false,
+                session: None,
+                page: self.toolset.page.clone(),
+                turn: self.toolset.turn.clone(),
+            }
+        }
+
+        async fn call(&self, run_id: &str, name: &str, args: Value) -> Value {
+            assert!(self.recorder.tool_started(run_id, name, &args));
+            self.tool(name).run_call(run_id, &args).await
+        }
+
+        fn step(&self, run_id: &str) -> Value {
+            self.recorder
+                .tool_calls()
+                .get(run_id)
+                .and_then(|entry| entry.get(BROWSER_STEP_KEY).cloned())
+                .unwrap_or(Value::Null)
+        }
+    }
+
+    #[tokio::test]
+    async fn person_input_during_a_call_answers_user_active_within_100_ms() {
+        let pane = controlled();
+        let opened = pane
+            .call(
+                "c1",
+                "browser_open",
+                json!({"url": "https://shop.example.com/"}),
+            )
+            .await;
+        assert_eq!(opened["status"], "ok", "{opened}");
+        assert_eq!(pane.control.view().control, Pill::Agent);
+        let waiting = pane.tool("browser_wait");
+        let call = tokio::spawn(async move {
+            waiting
+                .run_call("c2", &json!({"text": "never", "timeout_ms": 30000}))
+                .await
+        });
+        // Let the call reach the page, then the person clicks (a synthetic
+        // input, as the page script reports a trusted one).
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let input_at = std::time::Instant::now();
+        pane.control.person_input();
+        let result = tokio::time::timeout(Duration::from_millis(100), call)
+            .await
+            .expect("the paused call answers within 100 ms")
+            .unwrap();
+        assert!(input_at.elapsed() < Duration::from_millis(100));
+        assert_eq!(result["code"], "user_active", "{result}");
+        assert_eq!(pane.control.view().control, Pill::User);
+    }
+
+    #[tokio::test]
+    async fn while_the_person_drives_calls_are_refused_but_a_permitted_watch() {
+        let pane = controlled();
+        pane.call(
+            "c1",
+            "browser_open",
+            json!({"url": "https://shop.example.com/"}),
+        )
+        .await;
+        let snap = pane.call("c2", "browser_snapshot", json!({})).await;
+        assert_eq!(snap["status"], "ok", "{snap}");
+        pane.control.take_over();
+        for (id, name, args) in [
+            ("c3", "browser_click", json!({"ref": "e4"})),
+            ("c4", "browser_snapshot", json!({})),
+            ("c5", "browser_screenshot", json!({})),
+            (
+                "c6",
+                "browser_open",
+                json!({"url": "https://other.example/"}),
+            ),
+        ] {
+            let refused = pane.call(id, name, args).await;
+            assert_eq!(refused["code"], "user_in_control", "{name}: {refused}");
+            assert_eq!(pane.step(id)["outcome"], "user_in_control");
+        }
+        // Let the agent watch: snapshots and screenshots run, acts do not.
+        pane.control.set_watch(true);
+        let watched = pane.call("c7", "browser_snapshot", json!({})).await;
+        assert_eq!(watched["status"], "ok", "{watched}");
+        let shot = pane.call("c8", "browser_screenshot", json!({})).await;
+        assert_eq!(shot["status"], "ok", "{shot}");
+        assert_eq!(pane.step("c8")["screenshot"]["taken"], true);
+        let act = pane.call("c9", "browser_click", json!({"ref": "e4"})).await;
+        assert_eq!(act["code"], "user_in_control");
+        // Hand back with a note: the agent drives again; the note is the
+        // person's message of the turn.
+        assert!(pane.control.hand_back(Some("added the item, go on")));
+        assert_eq!(*pane.notes.0.lock().unwrap(), ["added the item, go on"]);
+        assert_eq!(pane.control.view().control, Pill::Agent);
+        // The person used the page: the agent's refs are not the page's.
+        let stale = pane
+            .call("c10", "browser_click", json!({"ref": "e4"}))
+            .await;
+        assert_eq!(stale["code"], "stale_ref", "{stale}");
+        pane.call("c11", "browser_snapshot", json!({})).await;
+        let clicked = pane
+            .call("c12", "browser_click", json!({"ref": "e4"}))
+            .await;
+        assert_eq!(clicked["status"], "ok", "{clicked}");
+        // The turn ends with its toolset: the pill is Idle.
+        drop(pane.toolset);
+        assert_eq!(pane.control.view().control, Pill::Idle);
+    }
+
+    #[tokio::test]
+    async fn request_user_hands_over_and_its_note_answers_the_call() {
+        let pane = controlled();
+        pane.call(
+            "c1",
+            "browser_open",
+            json!({"url": "https://login.example.com/"}),
+        )
+        .await;
+        let asking = pane.tool("browser_request_user");
+        let question = tokio::spawn(async move {
+            asking
+                .run_call("c2", &json!({"reason": "Sign in with your account"}))
+                .await
+        });
+        while !pane.control.view().asked {
+            tokio::task::yield_now().await;
+        }
+        let view = pane.control.view();
+        assert_eq!(view.control, Pill::User);
+        assert_eq!(view.reason.as_deref(), Some("Sign in with your account"));
+        // The person types in the page: the question is not paused by it.
+        pane.control.person_input();
+        pane.control.hand_back(Some("signed in"));
+        let answered = question.await.unwrap();
+        assert_eq!(answered["status"], "ok", "{answered}");
+        assert_eq!(answered["note"], "signed in");
+        // A question's note is its answer, not a second message.
+        assert!(pane.notes.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn step_records_name_the_page_without_query_and_typed_text_as_a_digest() {
+        let pane = controlled();
+        pane.call(
+            "c1",
+            "browser_open",
+            json!({"url": "https://Shop.Example.com./cart?id=7#top"}),
+        )
+        .await;
+        let open = pane.step("c1");
+        assert_eq!(open["tool"], "browser_open");
+        assert_eq!(open["outcome"], "ok");
+        assert_eq!(open["host"], "shop.example.com");
+        assert_eq!(open["path"], "/cart");
+        pane.call("c2", "browser_snapshot", json!({})).await;
+        pane.call(
+            "c3",
+            "browser_type",
+            json!({"ref": "e1", "text": "hunter2 secret"}),
+        )
+        .await;
+        let typed = pane.step("c3");
+        assert_eq!(typed["ref"], "e1");
+        assert_eq!(typed["role"], "textbox");
+        assert_eq!(typed["name"], "Search");
+        assert_eq!(typed["text"]["chars"], 14);
+        assert!(
+            typed["text"]["digest"]
+                .as_str()
+                .unwrap()
+                .starts_with("hmac-sha256:")
+        );
+        assert!(!typed.to_string().contains("hunter2"));
+        // The question's step names the page the person handed back.
+        let asking = pane.tool("browser_request_user");
+        let recorder = pane.recorder.clone();
+        assert!(recorder.tool_started("c4", "browser_request_user", &json!({})));
+        let question =
+            tokio::spawn(async move { asking.run_call("c4", &json!({"reason": "MFA"})).await });
+        while !pane.control.view().asked {
+            tokio::task::yield_now().await;
+        }
+        pane.control.decline();
+        assert_eq!(question.await.unwrap()["code"], "declined");
+        let asked = pane.step("c4");
+        assert_eq!(asked["outcome"], "declined");
+        assert_eq!(asked["host"], "login.example.com");
+        assert_eq!(asked["path"], "/welcome");
+    }
+
+    #[test]
+    fn typed_text_is_redacted_in_the_recorded_inputs_too() {
+        let digest = |text: &str| format!("d:{}", text.len());
+        let recorded = crate::computer_tools::recorded_inputs(
+            "browser_type",
+            &json!({"ref": "e1", "text": "secret"}),
+            Some(&digest),
+        );
+        assert_eq!(
+            recorded,
+            json!({"ref": "e1", "text_chars": 6, "text_digest": "d:6"})
+        );
     }
 }

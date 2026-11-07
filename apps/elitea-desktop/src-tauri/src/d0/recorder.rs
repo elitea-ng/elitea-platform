@@ -286,9 +286,16 @@ impl Recorder {
     /// tool step as `computer_step`: the platform keeps it as the call's
     /// run step. It never holds typed text (`computer_tools::step_record`).
     pub fn step_record(&self, run_id: &str, record: Value) {
+        self.step_record_under(STEP_RECORD_KEY, run_id, record);
+    }
+
+    /// A step record under `key` on `run_id`'s tool step: `computer_step`
+    /// (ADR-0047 decision 9) or `browser_step` (ADR-0048 decision 9,
+    /// contract 1.42). Neither ever holds typed text.
+    pub fn step_record_under(&self, key: &str, run_id: &str, record: Value) {
         self.with(|state| {
             if let Some((_, entry)) = state.steps.iter_mut().rev().find(|(id, _)| id == run_id) {
-                entry.insert(STEP_RECORD_KEY.into(), record);
+                entry.insert(key.into(), record);
             }
         });
     }
