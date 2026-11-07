@@ -19,6 +19,12 @@ agent-desktop-macos = { path = "../vendor/agent-desktop/macos", version = "=1.2.
 # Cropping a display capture to a region and re-encoding it. PNG only, no
 # default features (MIT OR Apache-2.0); local-tools pins the same line.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# The user-active guard's listen-only event tap (ADR-0047 decision 6,
+# src/macos_input.rs), through these crates' safe API. Both are already in
+# every lock through the vendored adapter, at these versions (MIT OR
+# Apache-2.0).
+core-foundation = "0.10.1"
+core-graphics = { version = "0.25.0", features = ["elcapitan", "highsierra"] }
 
 [lints]
 workspace = true

@@ -905,6 +905,14 @@ impl DesktopDriver for MacDriver {
     fn forget_snapshots(&self) {
         self.registry().clear();
     }
+
+    fn watch_input(
+        &self,
+        filter: crate::InputFilter,
+        sink: crate::SignalSink,
+    ) -> Result<Box<dyn crate::InputWatch>, DesktopError> {
+        crate::macos_input::watch(self.marker, filter, sink)
+    }
 }
 
 fn deadline(ms: u64) -> Result<ad::Deadline, DesktopError> {

@@ -27,17 +27,19 @@
 //! person hands back is never lost: it either takes the note or stays on
 //! screen.
 //!
-//! **One turn owns the control.** Each turn's toolset has a [`TurnId`];
+//! **One turn owns the control** (the mechanism is `crate::control_state`,
+//! shared with the computer session). Each turn's toolset has a [`TurnId`];
 //! the latest turn to call the pane owns the pill and the note sink, and
 //! only the owner's end ([`PaneControl::agent_ended`]) resets them. An
 //! older turn of the thread finishing late changes nothing.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tokio::sync::watch;
+
+use crate::control_state::{Observed, Viewed, lock};
+pub use crate::control_state::{TurnId, next_turn_id};
 
 /// How long `browser_request_user` waits for the person. ADR-0048 says only
 /// "ADR-0045 timeout and default", and ADR-0045's table has no row for it;
@@ -48,16 +50,6 @@ pub const ASK_WAIT: Duration = Duration::from_mins(10);
 
 /// Answers kept for `ask`s that have not taken theirs yet.
 const MAX_ANSWERS: usize = 8;
-
-/// A turn's identity for the control ([`PaneControl::agent_started`]).
-pub type TurnId = u64;
-
-/// A new [`TurnId`], unique for the app session.
-#[must_use]
-pub fn next_turn_id() -> TurnId {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
 
 /// The most bytes of a hand-back note (the cloud's bound, ADR-0049).
 pub const MAX_NOTE_BYTES: usize = 2048;
@@ -149,6 +141,11 @@ impl State {
         };
     }
 
+}
+
+impl Viewed for State {
+    type View = ControlView;
+
     fn view(&self) -> ControlView {
         let control = if self.person {
             Pill::User
@@ -167,14 +164,13 @@ impl State {
     }
 }
 
-type Notify = Arc<dyn Fn(&ControlView) + Send + Sync>;
+type Notify = crate::control_state::Notify<ControlView>;
 
 /// One pane's control.
 pub struct PaneControl {
-    state: watch::Sender<State>,
+    state: Observed<State>,
     /// The owner turn's note sink.
     sink: Mutex<Option<(TurnId, Arc<dyn NoteSink>)>>,
-    notify: Mutex<Option<Notify>>,
     ask_wait: Duration,
 }
 
@@ -182,10 +178,6 @@ impl Default for PaneControl {
     fn default() -> Self {
         Self::new(ASK_WAIT)
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Cut `note` (trimmed) to [`MAX_NOTE_BYTES`] at a character boundary;
@@ -208,61 +200,42 @@ impl PaneControl {
     #[must_use]
     pub fn new(ask_wait: Duration) -> Self {
         Self {
-            state: watch::channel(State::default()).0,
+            state: Observed::new(State::default()),
             sink: Mutex::new(None),
-            notify: Mutex::new(None),
             ask_wait,
         }
     }
 
     /// Who hears each change (the pane's UI).
     pub fn set_notify(&self, notify: Notify) {
-        *lock(&self.notify) = Some(notify);
+        self.state.set_notify(notify);
     }
 
     #[must_use]
     pub fn view(&self) -> ControlView {
-        self.state.borrow().view()
+        self.state.view()
     }
 
-    /// Change the state in one step (decide and record together); the UI
-    /// hears it when the view changed. Answers what `work` answers.
     fn change<R>(&self, work: impl FnOnce(&mut State) -> R) -> R {
-        let mut out = None;
-        let mut changed = None;
-        self.state.send_modify(|state| {
-            let before = state.view();
-            out = Some(work(state));
-            let after = state.view();
-            if before != after {
-                changed = Some(after);
-            }
-        });
-        if let Some(after) = changed {
-            let notify = lock(&self.notify).clone();
-            if let Some(notify) = notify {
-                notify(&after);
-            }
-        }
-        out.expect("send_modify runs its closure")
+        self.state.change(work)
     }
 
     /// The person drives the page now.
     #[must_use]
     pub fn person_drives(&self) -> bool {
-        self.state.borrow().person
+        self.state.read(|state| state.person)
     }
 
     /// The person lets the agent watch (snapshots and screenshots).
     #[must_use]
     pub fn watching(&self) -> bool {
-        self.state.borrow().watch
+        self.state.read(|state| state.watch)
     }
 
     /// The person's input count, for [`Self::input_after`].
     #[must_use]
     pub fn input_epoch(&self) -> u64 {
-        self.state.borrow().input_epoch
+        self.state.read(|state| state.input_epoch)
     }
 
     /// Turn `turn`'s browser call is about to run: it owns the control
@@ -362,15 +335,15 @@ impl PaneControl {
 
     /// Resolves once the person's input count is past `epoch`.
     pub async fn input_after(&self, epoch: u64) {
-        let mut changes = self.state.subscribe();
-        let _ = changes.wait_for(|state| state.input_epoch > epoch).await;
+        self.state
+            .wait_for(|state| state.input_epoch > epoch)
+            .await;
     }
 
     /// `browser_request_user`: the person drives with `reason` shown, until
     /// they hand back (with an optional note) or decline, or [`ASK_WAIT`]
     /// passes (declined).
     pub async fn ask(&self, reason: &str) -> Answer {
-        let mut changes = self.state.subscribe();
         let reason = reason.trim().chars().take(500).collect::<String>();
         let deadline = SystemTime::now()
             .checked_add(self.ask_wait)
@@ -387,7 +360,7 @@ impl PaneControl {
             state.questions
         });
         let answered = |state: &State| state.asked != Some(question);
-        let _ = tokio::time::timeout(self.ask_wait, changes.wait_for(answered)).await;
+        let _ = tokio::time::timeout(self.ask_wait, self.state.wait_for(answered)).await;
         // Nobody answered in time: the agent gets the page back, declined.
         self.change(|state| {
             if state.asked == Some(question) {
