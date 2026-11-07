@@ -46,6 +46,8 @@ import { AgentMemoryStatus } from "./agentMemoryStatus.zod";
 
 export const listAgentMemoryParamsQueryMax = 256;
 
+export const listAgentMemoryParamsSourceMax = 16;
+
 export const listAgentMemoryParamsLimitMax = 200;
 
 export const listAgentMemoryParamsOffsetMin = 0;
@@ -55,6 +57,9 @@ export const ListAgentMemoryParams = zod.object({
   status: AgentMemoryStatus.optional(),
   subject_user_id: zod.int().min(1).optional(),
   query: zod.string().max(listAgentMemoryParamsQueryMax).optional(),
+  source: zod.string().max(listAgentMemoryParamsSourceMax).optional(),
+  created_after: zod.iso.datetime({ offset: true }).optional(),
+  created_before: zod.iso.datetime({ offset: true }).optional(),
   limit: zod.int().min(1).max(listAgentMemoryParamsLimitMax).optional(),
   offset: zod.int().min(listAgentMemoryParamsOffsetMin).optional(),
 });

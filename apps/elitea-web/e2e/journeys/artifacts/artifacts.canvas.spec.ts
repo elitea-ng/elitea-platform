@@ -50,7 +50,14 @@ test('a stored file opens in the canvas editor, and saving it writes the edit ba
   await seedBucketWithFile(request, projectId, bucket);
 
   try {
+    // The second entry waits for the first document's boot traffic (the OIDC
+    // session probe) to finish: a `goto` started inside it is cancelled by
+    // WebKit and can leave the frame on the identity provider's authorize
+    // redirect instead of the app (measured on this test;
+    // `artifacts.bucket-access.spec.ts` `reenterArtifacts` documents the race).
+    await page.waitForLoadState('networkidle');
     await page.goto(`${BASE_URL}/app/artifacts?bucket=${bucket}&file=${FILE_NAME}`);
+    await page.waitForURL('**/app/artifacts**', { timeout: 15_000 });
     // A `.md` file's preview defaults to "Rendered" (FilePreviewCanvas's
     // `supportsRendered` mode for markdown/csv/tsv/mermaid), so the raw
     // `# Notes` source is not literal DOM text yet — it is an `<h1>`. Switch

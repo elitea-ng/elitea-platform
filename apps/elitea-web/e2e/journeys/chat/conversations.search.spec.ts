@@ -112,9 +112,13 @@ test('the rail’s search control narrows the list to the conversation it names'
   // back — including the row the query had removed.
   await input.press('Escape');
   await expect(input).toHaveCount(0);
+  // The full list comes back folded: Today shows its newest rows and hides
+  // the rest behind "more", and other runs' conversations can push either
+  // row there. Reveal each the way the start of the test did, rather than
+  // expecting both above the fold.
   await openTodayGroup(page);
-  await expect(droppedRow).toBeVisible({ timeout: 15_000 });
-  await expect(keptRow).toBeVisible();
+  await revealInToday(page, droppedRow);
+  await revealInToday(page, keptRow);
 
   await deleteConversation(page.request, kept);
   await deleteConversation(page.request, dropped);

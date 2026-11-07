@@ -54,7 +54,26 @@ The setting is the `memory` block of the version's `meta`:
 }
 ```
 
-`max_entries` is 1 to 50 and `max_tokens` is 100 to 8,000. A block with another key or a value out of range is refused (`memory_block_invalid`). The agent form's Memory tab, which edits this block and the notes, is coming in a later release; until then, set the block through the API or an export.
+`max_entries` is 1 to 50 and `max_tokens` is 100 to 8,000. A block with another key or a value out of range is refused (`memory_block_invalid`). The agent form does not edit this block yet; set it through the API or an export.
+
+## The Memory tab
+
+Open an agent and select **Memory**, next to **Evaluation**. The tab lists what the agent remembers in this project. The desktop app has the same tab. The mobile app does not show agent memory yet.
+
+- **Search and filter** by text, kind (fact, preference, episode, heartbeat state), status (waiting for approval, active, archived), the person a note is about, who wrote it (the agent or a person), and the day it was created. The person filter offers only the people whose notes you can see.
+- **Approve** or **Reject** a note that waits for approval. A rejected note is archived.
+- **Edit** the text of a note. A manager can also change its kind.
+- **Pin** a note so it is recalled first, **Archive** it so it is no longer recalled, or **Restore** an archived note.
+- **History** shows every earlier version of a note and who wrote it.
+- **Delete** one note, or **Clear all** to delete every note the agent keeps in this project, for everyone.
+- **Export** downloads the notes the filters match, as JSON.
+- **Remember things about me** is your opt-out. Turn it off and the agent deletes its notes about you and saves no new ones; turn it back on to let it remember again.
+
+The tab offers only what you may do: someone who is not a manager sees **Edit** and **Delete** only on notes about themself, and no **Clear all**.
+
+## In the chat
+
+When the agent saves a note during a turn, its answer shows a line such as **Mira remembered: Prefers short answers**. A note that waits for approval says so, and offers **Approve** if you may approve notes. **Edit** corrects the text and **Forget** deletes the note. A person who is not a manager can edit or forget only a note about themself; for any other note the platform refuses, and the line shows why.
 
 ## Who can see and change the notes
 
@@ -67,4 +86,4 @@ The setting is the `memory` block of the version's `meta`:
 
 A project admin holds all four. Every edit keeps the previous text as a version. Every change is written to the [audit trail](/admin/audit-trail) as an `ai.elitea.security.v1.agent.memory.changed` event.
 
-The API routes are under `/api/v2/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}` (list, clear, and `/{entry_id}` to read, edit or delete) and `/api/v2/elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}`.
+The API routes are under `/api/v2/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}` (list, clear, and `/{entry_id}` to read, edit or delete) and `/api/v2/elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}`. The list takes `query`, `kind`, `status`, `subject_user_id`, `source` (`agent` or `person`), `created_after` and `created_before` (RFC 3339), `limit` (at most 200) and `offset`. It answers the rows, the `total`, the `people` the rows name (`{id, name}`, only those the caller can see), what the caller may do (`can_manage`, `can_delete`, `can_approve`) and whether they opted out.

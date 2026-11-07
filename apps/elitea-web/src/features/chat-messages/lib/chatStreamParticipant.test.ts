@@ -32,4 +32,14 @@ describe('the answer participant', () => {
     expect(next[0]).toEqual({ ...pending, authorParticipantId: 4 });
     expect(applyChatStreamFrame(next, { type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, state: 'speaking' }, CONTEXT)).toBe(next);
   });
+
+  it('stamps the agent behind the participant, even when the participants arrive after the first frame', () => {
+    const frame = { type: 'agent_state', message_id: MESSAGE_ID, participant_id: 4, state: 'thinking' } as const;
+    const early = applyChatStreamFrame([pending], frame, CONTEXT);
+    expect(early[0]?.authorApplicationId).toBeUndefined();
+    const participants = [{ id: 4, entity_name: 'application', entity_meta: { id: 41 } }] as unknown as ChatStreamContext['participants'];
+    const late = applyChatStreamFrame(early, frame, { ...CONTEXT, participants });
+    expect(late[0]).toEqual({ ...pending, authorParticipantId: 4, authorApplicationId: 41 });
+    expect(applyChatStreamFrame(late, frame, { ...CONTEXT, participants })).toBe(late);
+  });
 });

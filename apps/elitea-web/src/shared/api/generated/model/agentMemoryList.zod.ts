@@ -47,6 +47,16 @@ export const AgentMemoryList = zod
   .object({
     rows: zod.array(AgentMemoryEntry),
     total: zod.int(),
+    people: zod
+      .array(
+        zod.object({
+          id: zod.int(),
+          name: zod.string(),
+        }),
+      )
+      .describe(
+        "The names of the people the rows are about or were written by, by user id. A user without a name is left out.",
+      ),
     can_manage: zod
       .boolean()
       .describe("The caller may edit, pin and archive any entry."),

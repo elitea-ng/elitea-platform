@@ -460,7 +460,11 @@ type AgentMemoryFilter struct {
 	Status        string
 	SubjectUserID int64
 	Query         string
-	Limit, Offset int
+	// Source is agent or person: who wrote the current version.
+	Source string
+	// CreatedAfter and CreatedBefore bound created_at; zero is no bound.
+	CreatedAfter, CreatedBefore time.Time
+	Limit, Offset               int
 }
 
 const agentMemoryColumns = `id, application_id, kind, content, subject_user_id, pinned, status, version,
@@ -499,14 +503,22 @@ func (s *AgentMemory) ListMemory(ctx context.Context, projectID, applicationID i
   AND ($2::boolean OR subject_user_id IS NULL OR subject_user_id = $3)
   AND ($4 = '' OR kind = $4) AND ($5 = '' OR status = $5)
   AND ($6::bigint = 0 OR subject_user_id = $6)
-  AND ($7 = '' OR content ILIKE '%' || $7 || '%')`
-	args := []any{applicationID, viewer.Manager, viewer.UserID, filter.Kind, filter.Status, filter.SubjectUserID, likeEscape(filter.Query)}
+  AND ($7 = '' OR content ILIKE '%' || $7 || '%')
+  AND ($8 = '' OR written_by_kind = $8)
+  AND ($9::timestamptz IS NULL OR created_at >= $9) AND ($10::timestamptz IS NULL OR created_at < $10)`
+	args := []any{applicationID, viewer.Manager, viewer.UserID, filter.Kind, filter.Status, filter.SubjectUserID, likeEscape(filter.Query),
+		filter.Source, optionalTime(filter.CreatedAfter), optionalTime(filter.CreatedBefore)}
 	var total int
-	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s.agent_memory_entries WHERE `+where, schema), args...).Scan(&total); err != nil {
+	// The schema is spliced with + and never through a format string: the
+	// WHERE text carries the ILIKE wildcards ('%'), which fmt would read as
+	// verbs and turn into SQL that does not parse.
+	table := schema + `.agent_memory_entries`
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("agent memory: count: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT `+agentMemoryColumns+` FROM %s.agent_memory_entries WHERE `+where+`
-ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT %d OFFSET %d`, schema, filter.Limit, max(filter.Offset, 0)), args...)
+	rows, err := s.pool.Query(ctx, `SELECT `+agentMemoryColumns+` FROM `+table+` WHERE `+where+
+		fmt.Sprintf(`
+ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT %d OFFSET %d`, filter.Limit, max(filter.Offset, 0)), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent memory: list: %w", err)
 	}
@@ -520,6 +532,51 @@ ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT %d OFFSET %d`, schema, filt
 		entries = append(entries, entry)
 	}
 	return entries, total, rows.Err()
+}
+
+func optionalTime(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	return &value
+}
+
+// AgentMemoryPerson names a person an entry is about or was written by.
+type AgentMemoryPerson struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// PeopleNames answers the display names of the given users, in id order. A
+// user with no row or no name is left out (the email is never a fallback:
+// the list is read by every project member, and an address is not theirs to
+// see), and so is every user where the user table is absent (it is another
+// corpus's).
+func (s *AgentMemory) PeopleNames(ctx context.Context, ids []int64) ([]AgentMemoryPerson, error) {
+	people := []AgentMemoryPerson{}
+	if len(ids) == 0 {
+		return people, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT u.id, btrim(u.name)
+FROM public.auth_core__user AS u
+WHERE u.id = ANY($1) AND btrim(COALESCE(u.name, '')) <> ''
+ORDER BY u.id`, ids)
+	if err != nil {
+		if missingRelation(err) {
+			return people, nil
+		}
+		return nil, fmt.Errorf("agent memory: people: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var person AgentMemoryPerson
+		if err := rows.Scan(&person.ID, &person.Name); err != nil {
+			return nil, fmt.Errorf("agent memory: people scan: %w", err)
+		}
+		people = append(people, person)
+	}
+	return people, rows.Err()
 }
 
 func likeEscape(value string) string {
