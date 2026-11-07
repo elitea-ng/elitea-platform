@@ -509,11 +509,16 @@ func (s *AgentMemory) ListMemory(ctx context.Context, projectID, applicationID i
 	args := []any{applicationID, viewer.Manager, viewer.UserID, filter.Kind, filter.Status, filter.SubjectUserID, likeEscape(filter.Query),
 		filter.Source, optionalTime(filter.CreatedAfter), optionalTime(filter.CreatedBefore)}
 	var total int
-	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT count(*) FROM %s.agent_memory_entries WHERE `+where, schema), args...).Scan(&total); err != nil {
+	// The schema is spliced with + and never through a format string: the
+	// WHERE text carries the ILIKE wildcards ('%'), which fmt would read as
+	// verbs and turn into SQL that does not parse.
+	table := schema + `.agent_memory_entries`
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("agent memory: count: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT `+agentMemoryColumns+` FROM %s.agent_memory_entries WHERE `+where+`
-ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT %d OFFSET %d`, schema, filter.Limit, max(filter.Offset, 0)), args...)
+	rows, err := s.pool.Query(ctx, `SELECT `+agentMemoryColumns+` FROM `+table+` WHERE `+where+
+		fmt.Sprintf(`
+ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT %d OFFSET %d`, filter.Limit, max(filter.Offset, 0)), args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent memory: list: %w", err)
 	}
