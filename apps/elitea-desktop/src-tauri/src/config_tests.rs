@@ -152,7 +152,11 @@ fn no_capability_reaches_a_browser_pane() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
-    assert_eq!(files.len(), 1, "one capability file: {files:?}");
+    assert_eq!(
+        files.len(),
+        2,
+        "the main webview's and the computer session panel's: {files:?}"
+    );
     for path in files {
         let capability: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -174,6 +178,28 @@ fn no_capability_reaches_a_browser_pane() {
         crate::browser_pane::pane_label("t1").as_deref(),
         Some("browser-t1")
     );
+}
+
+/// The computer session panel (`computer-panel`, ADR-0047 decision 6) gets
+/// only its own command and event listening: it reads the session and
+/// presses Pause, Resume and Stop, nothing else.
+#[test]
+fn the_session_panel_gets_only_the_session_command() {
+    let capability = json("capabilities/computer-panel.json");
+    assert_eq!(
+        capability["webviews"],
+        serde_json::json!([crate::computer_commands::PANEL])
+    );
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!([
+            "allow-computer-session",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+        ])
+    );
+    assert!(capability.get("remote").is_none());
+    assert!(capability.get("windows").is_none());
 }
 
 /// With Tauri's `unstable` feature the main window stops being a

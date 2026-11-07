@@ -69,6 +69,12 @@ pub const KEYS: &[(&str, &str)] = &[
     ("activity_approve_cloud", "Approve in cloud"),
     ("activity_running_cloud", "Running in cloud"),
     ("activity_awake", "Keeping the computer awake"),
+    ("computer_using", "Using {app}"),
+    ("computer_active", "Using the computer"),
+    ("computer_paused", "Paused, you are using the computer"),
+    ("computer_pause", "Pause"),
+    ("computer_resume", "Resume"),
+    ("computer_stop", "Stop"),
     ("quit_running_title", "Quit Elitea?"),
     (
         "quit_running_message",

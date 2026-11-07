@@ -140,7 +140,6 @@ impl State {
             ..State::default()
         };
     }
-
 }
 
 impl Viewed for State {
@@ -335,9 +334,7 @@ impl PaneControl {
 
     /// Resolves once the person's input count is past `epoch`.
     pub async fn input_after(&self, epoch: u64) {
-        self.state
-            .wait_for(|state| state.input_epoch > epoch)
-            .await;
+        self.state.wait_for(|state| state.input_epoch > epoch).await;
     }
 
     /// `browser_request_user`: the person drives with `reason` shown, until

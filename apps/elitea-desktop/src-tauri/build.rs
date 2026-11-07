@@ -124,6 +124,11 @@ fn main() {
             "browser_forget",
             "browser_reveal_download",
             "browser_control",
+            "computer_settings_get",
+            "computer_settings_set",
+            "computer_app_forget",
+            "computer_open_privacy",
+            "computer_session",
         ]),
     ))
     .expect("tauri build configuration is valid");

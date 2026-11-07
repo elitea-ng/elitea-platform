@@ -1085,6 +1085,25 @@ pub trait ChoiceStore: Send + Sync {
     ///
     /// When the choice cannot be stored.
     fn remember(&self, choice: RememberedChoice) -> ToolResult<()>;
+
+    /// Forget every choice `drop` matches (a revoke in Settings). Answers
+    /// how many were forgotten.
+    ///
+    /// # Errors
+    ///
+    /// When the store cannot be rewritten.
+    fn forget(&self, drop: &dyn Fn(&RememberedChoice) -> bool) -> ToolResult<usize>;
+}
+
+/// Whether `choice` is an "always for this app" answer (ADR-0047 decision
+/// 4) for `bundle_id` (any case), seeing or acting.
+#[must_use]
+pub fn is_app_choice(choice: &RememberedChoice, bundle_id: &str) -> bool {
+    choice.tool.is_computer()
+        && choice
+            .bundle_id
+            .as_deref()
+            .is_some_and(|b| b.eq_ignore_ascii_case(bundle_id))
 }
 
 /// Choices kept for the life of the process.
@@ -1108,6 +1127,16 @@ impl ChoiceStore for MemoryChoices {
             choices.push(choice);
         }
         Ok(())
+    }
+
+    fn forget(&self, drop: &dyn Fn(&RememberedChoice) -> bool) -> ToolResult<usize> {
+        let mut choices = self
+            .0
+            .lock()
+            .map_err(|_| ToolError::new(ErrorCode::Io, "the choice store is unavailable"))?;
+        let before = choices.len();
+        choices.retain(|choice| !drop(choice));
+        Ok(before - choices.len())
     }
 }
 
@@ -1149,6 +1178,20 @@ impl ChoiceStore for JsonFileChoices {
 
     fn remember(&self, choice: RememberedChoice) -> ToolResult<()> {
         self.cache.remember(choice)?;
+        self.write()
+    }
+
+    fn forget(&self, drop: &dyn Fn(&RememberedChoice) -> bool) -> ToolResult<usize> {
+        let forgotten = self.cache.forget(drop)?;
+        if forgotten > 0 {
+            self.write()?;
+        }
+        Ok(forgotten)
+    }
+}
+
+impl JsonFileChoices {
+    fn write(&self) -> ToolResult<()> {
         let bytes = serde_json::to_vec_pretty(&self.cache.list())
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode remembered choices"))?;
         if let Some(parent) = self.path.parent() {
@@ -1363,6 +1406,18 @@ impl RulesEngine {
     #[must_use]
     pub fn policy(&self) -> &LocalWorkPolicy {
         &self.policy
+    }
+
+    /// Revoke every "always for this app" answer for `bundle_id` (seeing
+    /// and acting; ADR-0047 owner decision 2, Settings > Computer use).
+    /// Answers how many were forgotten.
+    ///
+    /// # Errors
+    ///
+    /// When the choice store cannot be rewritten.
+    pub fn forget_app(&self, bundle_id: &str) -> ToolResult<usize> {
+        self.choices
+            .forget(&|choice| is_app_choice(choice, bundle_id))
     }
 
     /// Switch the permission profile (a turn's start, or the person
@@ -4503,6 +4558,36 @@ mod tests {
             .expect("remember");
         let reopened = JsonFileChoices::open(path).expect("reopen");
         assert_eq!(reopened.list().len(), 1);
+    }
+
+    #[test]
+    fn an_always_for_this_app_answer_is_revoked_seeing_and_acting_alike() {
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("choices.json");
+        let store = JsonFileChoices::open(path.clone()).expect("open");
+        for tool in [ToolKind::ComputerRead, ToolKind::ComputerAct] {
+            store
+                .remember(super::RememberedChoice {
+                    bundle_id: Some("com.apple.textedit".into()),
+                    ..super::RememberedChoice::of(tool)
+                })
+                .expect("remember");
+        }
+        store
+            .remember(super::RememberedChoice {
+                bundle_id: Some("com.apple.notes".into()),
+                ..super::RememberedChoice::of(ToolKind::ComputerRead)
+            })
+            .expect("remember");
+        let textedit = |c: &super::RememberedChoice| super::is_app_choice(c, "com.apple.TextEdit");
+        assert_eq!(store.forget(&textedit).expect("forget"), 2);
+        assert_eq!(store.forget(&textedit).expect("again"), 0);
+        let reopened = JsonFileChoices::open(path).expect("reopen");
+        assert_eq!(reopened.list().len(), 1, "Notes stays");
+        assert!(!super::is_app_choice(
+            &super::RememberedChoice::of(ToolKind::RunCommand),
+            "com.apple.notes"
+        ));
     }
 
     struct ScriptedPrompt {

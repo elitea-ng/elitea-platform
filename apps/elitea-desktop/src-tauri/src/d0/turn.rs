@@ -1365,6 +1365,108 @@ impl AgentHost {
         let _ = self.computer.set(setup);
     }
 
+    /// The computer use setup, once set.
+    pub fn computer(&self) -> Option<&crate::computer_tools::ComputerSetup> {
+        self.computer.get()
+    }
+
+    /// The `local_work` policy as the server sent it (defaults when none).
+    pub fn local_work_policy(&self) -> LocalWorkPolicy {
+        self.deps
+            .policy
+            .local_work()
+            .and_then(|section| serde_json::from_value(section).ok())
+            .unwrap_or_default()
+    }
+
+    /// The "always for this app" answers of every workspace (ADR-0047
+    /// decision 4): `(bundle id, sees, acts)`, sorted by bundle id.
+    pub fn remembered_apps(&self) -> Vec<(String, bool, bool)> {
+        let mut apps: std::collections::BTreeMap<String, (bool, bool)> =
+            std::collections::BTreeMap::new();
+        for path in self.choice_files() {
+            let Ok(choices) = JsonFileChoices::open(path) else {
+                continue;
+            };
+            for choice in elitea_local_tools::approvals::ChoiceStore::list(&choices) {
+                let Some(bundle) = choice.bundle_id.as_deref() else {
+                    continue;
+                };
+                let entry = apps.entry(bundle.to_ascii_lowercase()).or_default();
+                match choice.tool {
+                    elitea_local_tools::approvals::ToolKind::ComputerRead => entry.0 = true,
+                    elitea_local_tools::approvals::ToolKind::ComputerAct => entry.1 = true,
+                    _ => {}
+                }
+            }
+        }
+        apps.into_iter()
+            .filter(|(_, (sees, acts))| *sees || *acts)
+            .map(|(bundle, (sees, acts))| (bundle, sees, acts))
+            .collect()
+    }
+
+    /// Revoke "always for this app" for `bundle_id` in every workspace: the
+    /// open sessions' engines (their cached choices) and the files of the
+    /// others. Answers how many answers were forgotten.
+    ///
+    /// # Errors
+    /// A choices file that cannot be rewritten.
+    pub fn forget_remembered_app(&self, bundle_id: &str) -> Result<usize, TurnError> {
+        let storage = |e: elitea_local_tools::error::ToolError| {
+            TurnError::new("storage", e.message().to_owned())
+        };
+        let live: Vec<(String, Arc<WorkspaceSession>)> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|(id, session)| (id.clone(), session.clone()))
+            .collect();
+        let mut forgotten = 0;
+        for (_, session) in &live {
+            forgotten += session
+                .session
+                .rules()
+                .forget_app(bundle_id)
+                .map_err(storage)?;
+        }
+        let live_files: Vec<std::path::PathBuf> = live
+            .iter()
+            .map(|(id, _)| self.deps.workspaces.data_dir(id).join("choices.json"))
+            .collect();
+        for path in self.choice_files() {
+            if live_files.contains(&path) {
+                continue;
+            }
+            let Ok(choices) = JsonFileChoices::open(path) else {
+                continue;
+            };
+            forgotten += elitea_local_tools::approvals::ChoiceStore::forget(&choices, &|choice| {
+                elitea_local_tools::approvals::is_app_choice(choice, bundle_id)
+            })
+            .map_err(storage)?;
+        }
+        Ok(forgotten)
+    }
+
+    /// Every workspace's `choices.json` that exists.
+    fn choice_files(&self) -> Vec<std::path::PathBuf> {
+        self.deps
+            .workspaces
+            .list()
+            .unwrap_or_default()
+            .iter()
+            .map(|workspace| {
+                self.deps
+                    .workspaces
+                    .data_dir(&workspace.id)
+                    .join("choices.json")
+            })
+            .filter(|path| path.is_file())
+            .collect()
+    }
+
     /// Give sub-agents task worktrees (#1235): `isolation: "worktree"`.
     pub fn set_worktrees(&self, worktrees: &Arc<crate::worktrees::WorktreeHost>) {
         let _ = self.worktrees.set(Arc::downgrade(worktrees));

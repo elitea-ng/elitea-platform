@@ -73,6 +73,10 @@ use elitea_local_tools::session::{
 };
 use serde_json::{Value, json};
 
+use crate::computer_control::{ComputerControl as SessionControl, Gate};
+use crate::computer_session::ComputerSession;
+use crate::control_state::{TurnId, next_turn_id};
+
 /// The toolset's name.
 pub const TOOLSET_NAME: &str = "computer";
 /// The frame tag of screen-controlled text.
@@ -441,6 +445,22 @@ impl From<DesktopError> for CallError {
     }
 }
 
+/// The person is using the computer (the user-active guard, or Pause).
+fn user_active() -> CallError {
+    CallError::new(
+        "user_active",
+        "paused: the person is using the computer. Nothing more runs until they press Resume on the session panel; wait for their message, do not retry",
+    )
+}
+
+/// The person stopped the session (Stop, or Control-Option-Escape).
+fn stopped_by_user() -> CallError {
+    CallError::new(
+        "stopped_by_user",
+        "the person stopped computer use for this turn: go on without the computer tools",
+    )
+}
+
 /// The rolling-second limits of one session (ADR-0047 decision 5): acts
 /// and screenshots apart. The rate is checked before the secure-input
 /// gate, the hard limits and the approvals, so a call they refuse still
@@ -525,16 +545,37 @@ pub struct ComputerHost {
     rate: Mutex<Rate>,
     /// One call at a time, whichever thread makes it.
     serial: tokio::sync::Mutex<()>,
+    /// The person in charge (ADR-0047 decision 6): the session panel's
+    /// state and the user-active guard.
+    session: Arc<ComputerSession>,
 }
 
 impl ComputerHost {
     #[must_use]
     pub fn new(driver: Arc<dyn DesktopDriver>) -> Self {
+        let session = Arc::new(ComputerSession::new(
+            driver.clone(),
+            Arc::new(SessionControl::default()),
+        ));
         Self {
             driver,
             rate: Mutex::new(Rate::default()),
             serial: tokio::sync::Mutex::new(()),
+            session,
         }
+    }
+
+    /// The session panel's control (the panel, the menu-bar item, the
+    /// `computer_session` command).
+    #[must_use]
+    pub fn control(&self) -> Arc<SessionControl> {
+        self.session.control().clone()
+    }
+
+    /// The OS grants, read live (Settings > Computer use).
+    #[must_use]
+    pub fn permissions(&self) -> elitea_desktop_control::Permissions {
+        self.driver.permissions()
     }
 
     fn rate(&self) -> std::sync::MutexGuard<'_, Rate> {
@@ -560,6 +601,8 @@ pub struct CallContext {
     /// The client policy and the device switch, read again at every call.
     pub enabled: Switch,
     turn: Arc<Mutex<TurnState>>,
+    /// The turn's identity for the session control (one per toolset).
+    turn_id: TurnId,
     /// The turn's recorder: each call's step record and a screenshot's
     /// thumbnail go to it (ADR-0047 decision 9). `None` records nothing.
     pub recorder: Option<Arc<crate::d0::recorder::Recorder>>,
@@ -1221,6 +1264,9 @@ impl ComputerTool {
         if let Some(why) = self.host.driver.screen().unavailable_reason() {
             return Err(CallError::from(DesktopError::ScreenUnavailable(why.to_owned())).into());
         }
+        // The person in charge (decision 6): a stopped session refuses every
+        // call of the turn, a paused one until the person presses Resume.
+        self.gate()?;
         if self.spec.kind == Kind::Ask {
             return self.request_user(call_id, call).await;
         }
@@ -1245,8 +1291,29 @@ impl ComputerTool {
         }
         // 4. The approvals: the rules engine decides, the person answers.
         self.authorize(call_id, target.clone()).await?;
-        // 5. The driver, one call at a time.
+        // 5. The driver, one call at a time, while the person lets it: the
+        // session starts (the panel shows, the guard listens), and the
+        // person's input or Stop during the call answers at once.
         let _one = self.host.serial.lock().await;
+        let session = &self.host.session;
+        let turn_id = self.context.turn_id;
+        if let Err(why) = session.begin(turn_id)
+            && self.spec.kind == Kind::Act
+        {
+            return Err(CallError::new(
+                "user_active_guard_unavailable",
+                format!("Elitea cannot notice the person's input ({why}), so it does not act: ask the person to grant Accessibility (and Input Monitoring) and restart Elitea"),
+            )
+            .into());
+        }
+        self.gate()?;
+        let control = self.host.control();
+        control.acted(
+            turn_id,
+            target.app_name.as_deref().or(target.bundle_id.as_deref()),
+            &call.action_label(),
+        );
+        let epoch = control.epoch();
         let host = self.host.clone();
         let turn = self.context.turn.clone();
         let driver_call = call.clone();
@@ -1256,13 +1323,23 @@ impl ComputerTool {
             window_title: meta.window_title.take(),
             screenshot: None,
         };
-        let (outcome, step) = tokio::task::spawn_blocking(move || {
+        let work = tokio::task::spawn_blocking(move || {
             let outcome = execute(&host, &turn, &driver_call, vision, &policy, &mut step);
             (outcome, step)
-        })
-        .await
-        .map_err(|_| CallError::new("internal", "the computer call stopped"))?;
+        });
+        let (outcome, step) = tokio::select! {
+            biased;
+            () = control.interrupted_after(epoch) => {
+                // The driver call finishes on its own thread; the agent is
+                // told now. Its result is dropped.
+                return Err(self.interrupted().into());
+            }
+            done = work => done.map_err(|_| CallError::new("internal", "the computer call stopped"))?,
+        };
         *meta = step;
+        if control.epoch() != epoch {
+            return Err(self.interrupted().into());
+        }
         let outcome = outcome?;
         let value = match outcome {
             Outcome::Json(mut value) => {
@@ -1279,6 +1356,24 @@ impl ComputerTool {
             }
         };
         Ok((value, StepOutcome::Done))
+    }
+
+    /// `user_active` while the session is paused, `stopped_by_user` once
+    /// it was stopped (ADR-0047 decision 6).
+    fn gate(&self) -> Result<(), CallError> {
+        match self.host.control().gate(self.context.turn_id) {
+            Gate::Go => Ok(()),
+            Gate::Paused => Err(user_active()),
+            Gate::Stopped => Err(stopped_by_user()),
+        }
+    }
+
+    /// The person paused or stopped the session during the call.
+    fn interrupted(&self) -> CallError {
+        match self.host.control().gate(self.context.turn_id) {
+            Gate::Stopped => stopped_by_user(),
+            _ => user_active(),
+        }
     }
 
     /// The call as the approvals see it: the app, the window's title and
@@ -1974,8 +2069,20 @@ impl Toolset for ComputerToolset {
     }
 }
 
+impl Drop for ComputerToolset {
+    /// The turn ended: its session ends, the panel goes away and the guard
+    /// stops listening.
+    fn drop(&mut self) {
+        self.host.session.end(self.context.turn_id);
+    }
+}
+
 impl ComputerToolset {
     fn current(&self) -> Vec<Arc<dyn Tool>> {
+        // Stopped: the turn goes on without the tools (decision 6).
+        if self.host.control().gate(self.context.turn_id) == Gate::Stopped {
+            return Vec::new();
+        }
         let capture = self.host.can_capture();
         TOOLS
             .iter()
@@ -2020,6 +2127,7 @@ impl ComputerToolProvider {
                     rules: session.rules().clone(),
                     enabled,
                     turn: Arc::default(),
+                    turn_id: next_turn_id(),
                     recorder,
                     uploader,
                 },

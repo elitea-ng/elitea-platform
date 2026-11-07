@@ -28,6 +28,13 @@ struct Fake {
     bounds: Mutex<Rect>,
     captured: Mutex<Option<CaptureTarget>>,
     clicked: Mutex<Option<ClickAt>>,
+    /// The input watch's sink, while one runs.
+    sink: Mutex<Option<elitea_desktop_control::SignalSink>>,
+    watches: AtomicUsize,
+    /// The OS refuses the watch.
+    no_watch: std::sync::atomic::AtomicBool,
+    /// A driver call blocks this long (a call in flight).
+    delay: Mutex<Duration>,
 }
 
 impl Fake {
@@ -41,11 +48,19 @@ impl Fake {
             bounds: Mutex::new(FRAME),
             captured: Mutex::new(None),
             clicked: Mutex::new(None),
+            sink: Mutex::new(None),
+            watches: AtomicUsize::new(0),
+            no_watch: std::sync::atomic::AtomicBool::new(false),
+            delay: Mutex::new(Duration::ZERO),
         })
     }
 
     fn hit(&self) {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let delay = *self.delay.lock().unwrap();
+        if !delay.is_zero() {
+            std::thread::sleep(delay);
+        }
     }
 
     fn input(&self) {
@@ -279,6 +294,30 @@ impl DesktopDriver for Fake {
         InputOrigin::Physical
     }
     fn forget_snapshots(&self) {}
+
+    fn watch_input(
+        &self,
+        _filter: elitea_desktop_control::InputFilter,
+        sink: elitea_desktop_control::SignalSink,
+    ) -> Result<Box<dyn elitea_desktop_control::InputWatch>, DesktopError> {
+        if self.no_watch.load(Ordering::SeqCst) {
+            return Err(DesktopError::PermissionDenied("no input monitoring".into()));
+        }
+        *self.sink.lock().unwrap() = Some(sink);
+        self.watches.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(FakeWatch))
+    }
+}
+
+struct FakeWatch;
+impl elitea_desktop_control::InputWatch for FakeWatch {}
+
+impl Fake {
+    /// The person's input (or the stop shortcut), as the watch reports it.
+    fn signal(&self, signal: elitea_desktop_control::Signal) {
+        let sink = self.sink.lock().unwrap();
+        (sink.as_ref().expect("a watch runs"))(signal);
+    }
 }
 
 /// The person: answers every question with `answer`, and counts them.
@@ -378,6 +417,7 @@ fn turn_context(
         rules: rules.clone(),
         enabled: Arc::new(move || switch.load(Ordering::SeqCst)),
         turn: Arc::default(),
+        turn_id: next_turn_id(),
         recorder: None,
         uploader: None,
     }
@@ -1656,4 +1696,121 @@ async fn a_completed_hand_over_is_recorded_as_done() {
         recorder.tool_calls().get("hand-2").unwrap()[STEP_RECORD_KEY]["outcome"],
         "declined"
     );
+}
+
+// The person is always in charge (ADR-0047 decision 6, #1584).
+
+fn key_args() -> Value {
+    json!({ "bundle_id": APP, "chord": "cmd+s" })
+}
+
+#[tokio::test]
+async fn the_first_call_starts_the_session_panel_and_the_guard() {
+    use crate::computer_control::Phase;
+    let rig = rig(PermissionProfile::Build);
+    let control = rig.host.control();
+    assert_eq!(control.view().phase, Phase::Idle);
+    let result = rig.call(COMPUTER_KEY, key_args()).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    let view = control.view();
+    assert_eq!(view.phase, Phase::Active);
+    assert!(view.shown());
+    assert_eq!(view.action.as_deref(), Some("key cmd+s"));
+    assert_eq!(view.app.as_deref(), Some(APP));
+    assert_eq!(rig.fake.watches.load(Ordering::SeqCst), 1);
+    rig.call(COMPUTER_KEY, key_args()).await;
+    assert_eq!(rig.fake.watches.load(Ordering::SeqCst), 1, "one watch");
+    // The turn's toolset goes away: the session ends.
+    drop(rig.toolset());
+    assert_eq!(control.view().phase, Phase::Idle);
+}
+
+#[tokio::test]
+async fn person_input_pauses_and_every_call_answers_user_active_until_resume() {
+    let rig = rig(PermissionProfile::Bypass);
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    let before = rig.fake.inputs();
+    rig.fake.signal(elitea_desktop_control::Signal::UserActive);
+    for (name, args) in [
+        (COMPUTER_KEY, key_args()),
+        (COMPUTER_SNAPSHOT, json!({ "bundle_id": APP })),
+        (COMPUTER_REQUEST_USER, json!({ "reason": "sign in" })),
+    ] {
+        let result = rig.call(name, args).await;
+        assert_eq!(result["code"], "user_active", "{name}: {result}");
+    }
+    assert_eq!(rig.fake.inputs(), before, "nothing reached the apps");
+    rig.host.control().resume();
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+}
+
+#[tokio::test]
+async fn input_during_a_call_answers_user_active_within_100_ms() {
+    let rig = Arc::new(rig(PermissionProfile::Build));
+    // A first call starts the session (and the watch).
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    *rig.fake.delay.lock().unwrap() = Duration::from_secs(2);
+    let calling = rig.clone();
+    let call = tokio::spawn(async move { calling.call(COMPUTER_KEY, key_args()).await });
+    while rig.fake.calls() < 2 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let at = Instant::now();
+    rig.fake.signal(elitea_desktop_control::Signal::UserActive);
+    let result = tokio::time::timeout(Duration::from_millis(100), call)
+        .await
+        .expect("answered within 100 ms")
+        .unwrap();
+    assert!(at.elapsed() < Duration::from_millis(100));
+    assert_eq!(result["code"], "user_active", "{result}");
+    *rig.fake.delay.lock().unwrap() = Duration::ZERO;
+}
+
+#[tokio::test]
+async fn the_stop_shortcut_fails_the_pending_call_and_ends_the_tools_for_the_turn() {
+    let rig = Arc::new(rig(PermissionProfile::Build));
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    *rig.fake.delay.lock().unwrap() = Duration::from_secs(2);
+    let calling = rig.clone();
+    let call = tokio::spawn(async move { calling.call(COMPUTER_KEY, key_args()).await });
+    while rig.fake.calls() < 2 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    rig.fake.signal(elitea_desktop_control::Signal::Stop);
+    let result = tokio::time::timeout(Duration::from_millis(100), call)
+        .await
+        .expect("answered within 100 ms")
+        .unwrap();
+    assert_eq!(result["code"], "stopped_by_user", "{result}");
+    *rig.fake.delay.lock().unwrap() = Duration::ZERO;
+    // Resume does not undo a stop; the turn has no tools left.
+    rig.host.control().resume();
+    let again = rig.call(COMPUTER_APPS, json!({})).await;
+    assert_eq!(again["code"], "stopped_by_user", "{again}");
+    assert!(rig.toolset().current().is_empty());
+}
+
+#[tokio::test]
+async fn the_next_turn_starts_a_fresh_session_after_a_stop() {
+    use crate::computer_control::Phase;
+    let rig = rig(PermissionProfile::Build);
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    rig.fake.signal(elitea_desktop_control::Signal::Stop);
+    assert_eq!(rig.host.control().view().phase, Phase::Stopped);
+    drop(rig.toolset());
+    let rig = rig.next_turn();
+    assert_eq!(rig.toolset().current().len(), TOOLS.len());
+    assert_eq!(rig.call(COMPUTER_KEY, key_args()).await["status"], "ok");
+    assert_eq!(rig.host.control().view().phase, Phase::Active);
+}
+
+#[tokio::test]
+async fn without_the_guard_no_act_runs_but_reads_do() {
+    let rig = rig(PermissionProfile::Bypass);
+    rig.fake.no_watch.store(true, Ordering::SeqCst);
+    let act = rig.call(COMPUTER_KEY, key_args()).await;
+    assert_eq!(act["code"], "user_active_guard_unavailable", "{act}");
+    assert_eq!(rig.fake.inputs(), 0);
+    let read = rig.call(COMPUTER_APPS, json!({})).await;
+    assert_eq!(read["status"], "ok", "{read}");
 }
