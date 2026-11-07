@@ -880,11 +880,14 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
         };
         let _ = tx.send(Ok(notice(admitted))).await;
         // Down: the latest frame, one at a time, each after the viewer
-        // acknowledged the one before it.
+        // acknowledged the one before it, and the agent's viewer notices
+        // (an `auto` session's engine_switched) as they come.
         let mut frames = agent.frames();
+        let mut notices = agent.notices();
         let down = tx.clone();
         tokio::spawn(async move {
             let mut sent: Option<u64> = None;
+            let mut notices_open = true;
             let interval = Duration::from_millis(1_000 / u64::from(max_fps));
             loop {
                 let ready = sent.is_none_or(|seq| *acked.borrow() >= seq);
@@ -914,6 +917,19 @@ impl<R: Ed25519PublicKeyResolver + Send + Sync + 'static> BrowserSessionService
                             return;
                         }
                     }
+                    shown = notices.recv(), if notices_open => match shown {
+                        Ok(code) => {
+                            if down.send(Ok(notice(code))).await.is_err() {
+                                return;
+                            }
+                        }
+                        // A viewer too slow for the notices misses some;
+                        // the agent's log has them all.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            notices_open = false;
+                        }
+                    },
                     () = down.closed() => return,
                 }
             }

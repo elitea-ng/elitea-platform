@@ -20,7 +20,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt as _, AsyncRead, AsyncWrite, AsyncWriteExt as _, BufReader};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// The protocol revision the supervisor speaks.
 pub const PROTOCOL_REVISION: u32 = 1;
@@ -193,6 +193,9 @@ pub trait SessionAgent: Send + Sync + 'static {
     async fn viewer_detached(&self);
     /// The latest frame, for viewers.
     fn frames(&self) -> watch::Receiver<Option<Arc<Frame>>>;
+    /// The agent's notices a viewer is shown ([`VIEWER_NOTICES`]), from
+    /// subscription on.
+    fn notices(&self) -> broadcast::Receiver<&'static str>;
     /// A viewer showed frame `seq`.
     async fn ack(&self, seq: u64);
     /// A driving viewer's input event (the line's `event` object).
@@ -207,11 +210,17 @@ pub trait SessionAgent: Send + Sync + 'static {
 
 type Pending = Arc<Mutex<HashMap<String, oneshot::Sender<Result<CallResult, AgentError>>>>>;
 
+/// The agent notices a viewer is shown, beside the log line every notice
+/// gets: `engine_switched`, an `auto` session moved from Moli to Chrome
+/// (ADR-0049 decision 2, #1599). Any other code is logged only.
+pub const VIEWER_NOTICES: &[&str] = &["engine_switched"];
+
 /// [`SessionAgent`] over a pipe pair: the exec's stdin and stdout.
 pub struct LineAgent {
     lines: mpsc::Sender<String>,
     pending: Pending,
     frames: watch::Receiver<Option<Arc<Frame>>>,
+    notices: broadcast::Sender<&'static str>,
     gone: watch::Receiver<bool>,
     viewers: AtomicUsize,
     sequence: AtomicU64,
@@ -232,6 +241,8 @@ impl LineAgent {
         let (lines, mut queue) = mpsc::channel::<String>(QUEUE);
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (frame_tx, frames) = watch::channel(None);
+        let (notices, _) = broadcast::channel(8);
+        let reader_notices = notices.clone();
         let (gone_tx, gone) = watch::channel(false);
         let gone_tx = Arc::new(gone_tx);
         let writer_gone = Arc::clone(&gone_tx);
@@ -248,7 +259,7 @@ impl LineAgent {
         });
         let reader_pending = Arc::clone(&pending);
         tokio::spawn(async move {
-            read_replies(stdout, &reader_pending, &frame_tx).await;
+            read_replies(stdout, &reader_pending, &frame_tx, &reader_notices).await;
             gone_tx.send_replace(true);
             let waiting: Vec<_> = reader_pending
                 .lock()
@@ -263,6 +274,7 @@ impl LineAgent {
             lines,
             pending,
             frames,
+            notices,
             gone,
             viewers: AtomicUsize::new(0),
             sequence: AtomicU64::new(0),
@@ -312,6 +324,7 @@ async fn read_replies(
     stdout: impl AsyncRead + Unpin,
     pending: &Pending,
     frames: &watch::Sender<Option<Arc<Frame>>>,
+    notices: &broadcast::Sender<&'static str>,
 ) {
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::new();
@@ -406,6 +419,10 @@ async fn read_replies(
                 {
                     tracing::info!(event = "browser_agent_notice", code = code.as_str());
                 }
+                // No viewer subscribed is not an error.
+                if let Some(shown) = VIEWER_NOTICES.iter().find(|shown| **shown == code) {
+                    let _ = notices.send(shown);
+                }
             }
             Reply::Unknown => {}
         }
@@ -470,6 +487,10 @@ impl SessionAgent for LineAgent {
         self.frames.clone()
     }
 
+    fn notices(&self) -> broadcast::Receiver<&'static str> {
+        self.notices.subscribe()
+    }
+
     async fn ack(&self, seq: u64) {
         let _ = self.send(&Command::Ack { seq }).await;
     }
@@ -521,6 +542,15 @@ pub(crate) mod fake {
                 }
                 Some("call") if value["name"] == "browser_hang" => continue,
                 Some("call") if value["name"] == "browser_die" => return,
+                // An `auto` session moving to Chrome: a logged-only notice,
+                // the viewer notice, then the call's result.
+                Some("call") if value["args"]["switch"] == true => {
+                    let _ = stdout
+                        .write_all(b"{\"op\":\"notice\",\"code\":\"cdp_reconnected\"}\n{\"op\":\"notice\",\"code\":\"engine_switched\"}\n")
+                        .await;
+                    serde_json::json!({"op":"result","id":value["id"],
+                        "result":{"status":"ok","engine_switched":{"from":"lite","to":"full","reason":"empty_snapshot"}}})
+                }
                 Some("call") if value["name"] == "browser_screenshot" => {
                     serde_json::json!({"op":"result","id":value["id"],
                         "result":{"status":"ok","media_type":"image/png"},
@@ -640,6 +670,28 @@ mod tests {
             .map(|line| line["on"].as_bool().unwrap())
             .collect();
         assert_eq!(views, [true, false]);
+    }
+
+    /// Only the viewer notices reach a subscriber; every notice is logged.
+    #[tokio::test]
+    async fn only_viewer_notices_reach_a_viewer() {
+        let (agent, _) = pair();
+        agent.start(&start_line()).await.expect("ready");
+        let mut notices = agent.notices();
+        let result = agent
+            .call(
+                "s",
+                "browser_snapshot",
+                &serde_json::json!({"switch": true}),
+            )
+            .await
+            .expect("result");
+        assert_eq!(result.result["engine_switched"]["to"], "full");
+        assert_eq!(notices.recv().await.expect("notice"), "engine_switched");
+        assert!(
+            notices.try_recv().is_err(),
+            "a logged-only notice reached a viewer"
+        );
     }
 
     #[tokio::test(start_paused = true)]

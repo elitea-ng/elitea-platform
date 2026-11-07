@@ -147,6 +147,16 @@ describe('CloudBrowserView', () => {
     expect(screen.getByTestId('cloud-browser-notice')).toHaveTextContent('no longer take over');
   });
 
+  it('says so when an auto session moves to the full browser', async () => {
+    const { last } = mount();
+    act(() => {
+      last().hello(false);
+      last().frame(1);
+    });
+    act(() => last().text({ type: 'notice', code: 'engine_switched' }));
+    expect(await screen.findByTestId('cloud-browser-notice')).toHaveTextContent('reopened there');
+  });
+
   it('shows the end of the session', () => {
     const { last } = mount();
     act(() => {

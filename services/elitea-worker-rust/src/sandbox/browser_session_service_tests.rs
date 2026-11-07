@@ -797,6 +797,25 @@ async fn the_view_streams_frames_ack_paced_and_refuses_watch_only_input() {
         Some(browser_view_output_v1::Frame::Notice(ref notice)) if notice.code == "input_refused"
     ));
     up.send(ack(frame.seq)).await.unwrap();
+    // An `auto` session's engine switch reaches the viewer as a notice
+    // (#1599); the agent's logged-only notices do not.
+    let mut switch = call_request("run-1", &s, 1);
+    switch.get_mut().call_id = "toolu_switch".into();
+    switch.get_mut().name = "browser_snapshot".into();
+    switch.get_mut().arguments_json = r#"{"switch":true}"#.into();
+    let answered = h.service.browser_call(switch).await.expect("answered");
+    assert!(answered.get_ref().result_json.contains("engine_switched"));
+    let switched = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let message = down.message().await.expect("ok").expect("a message");
+            if let Some(browser_view_output_v1::Frame::Notice(notice)) = message.frame {
+                return notice.code;
+            }
+        }
+    })
+    .await
+    .expect("the notice");
+    assert_eq!(switched, "engine_switched");
     drop(up);
 
     // A watch-only grant cannot open a driving stream.

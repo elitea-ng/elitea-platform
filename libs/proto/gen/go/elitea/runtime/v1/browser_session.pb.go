@@ -1452,7 +1452,9 @@ func (x *BrowserFrameV1) GetControl() BrowserControlV1 {
 
 // A non-fatal notice on the view stream, by stable code:
 // `input_refused` (watch-only stream or a lingering session),
-// `session_lingering` (the run ended; the page stays for the linger).
+// `session_lingering` (the run ended; the page stays for the linger),
+// `engine_switched` (an `auto` session moved from Moli to Chrome and
+// reopened the page).
 type BrowserViewNoticeV1 struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
