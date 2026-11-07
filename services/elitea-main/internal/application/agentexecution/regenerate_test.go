@@ -30,6 +30,7 @@ func TestCurrentApplicationRegenerationReusesResponseWithFreshGeneration(t *test
 			ChatHistory: json.RawMessage(`[{
   "role":"user","content":[{"type":"text","text":"earlier"}],"additional_kwargs":{}
 }]`),
+			ChatHistoryRefs: []ChatHistoryRef{{MessageID: "00000000-0000-4000-8000-000000000001"}},
 		},
 	}
 	admittedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)

@@ -15,6 +15,7 @@ import (
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
@@ -459,6 +460,13 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	// ADR-0050 decision 9 (issue 1609): a model participant has no version,
+	// so its view is the default one (every visible message, side talk only
+	// when it is a party).
+	view, err := BuildReaderView(contextview.Default, target.ChatHistory, target.ChatHistoryRefs)
+	if err != nil {
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
@@ -468,8 +476,8 @@ func currentAdhocInput(
 		ModelContextLimits: modelContextLimits,
 		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
-		Llm:                llm, ChatHistory: bytes.Clone(target.ChatHistory), UserInput: userInput,
-		ChatHistoryRefs: chatHistoryRefsInput(target.ChatHistoryRefs),
+		Llm:                llm, ChatHistory: view.History, UserInput: userInput,
+		ChatHistoryRefs: chatHistoryRefsInput(view.Refs),
 		ThreadId:        &threadID, Tools: toolsJSON, Application: application,
 		InternalTools: internalTools, McpTokens: currentMCPTokens(request.MCPTokens),
 		IgnoredMcpServers: []byte(`[]`), UserDeclinedMcpServers: []byte(`[]`),
@@ -486,6 +494,7 @@ func currentAdhocInput(
 	if stepsLimit != nil {
 		input.StepsLimit = stepsLimit
 	}
+	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
 	return input, nil
 }
 

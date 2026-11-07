@@ -121,10 +121,11 @@ type runtimeAgentInput = runtimev1.AgentExecutionInputV1
 func TestCurrentApplicationStartBuildsAuthoritativeParityInputAndTurn(t *testing.T) {
 	resolver := &currentApplicationResolverStub{target: CurrentApplicationTarget{
 		ApplicationID: 31, ApplicationVersionID: 41,
-		Variables:      json.RawMessage(`[{"name":"region","value":"eu"}]`),
-		VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"agent","instructions":"Be concise","llm_settings":{"model_name":"test"},"meta":{},"tools":[]}`),
-		ChatHistory:    json.RawMessage(`[{"role":"user","content":[{"type":"text","text":"earlier"}],"additional_kwargs":{}}]`),
-		InternalTools:  json.RawMessage(`["internal_mcp","ask_user"]`),
+		Variables:       json.RawMessage(`[{"name":"region","value":"eu"}]`),
+		VersionDetails:  json.RawMessage(`{"id":41,"application_id":31,"agent_type":"agent","instructions":"Be concise","llm_settings":{"model_name":"test"},"meta":{},"tools":[]}`),
+		ChatHistory:     json.RawMessage(`[{"role":"user","content":[{"type":"text","text":"earlier"}],"additional_kwargs":{}}]`),
+		ChatHistoryRefs: []ChatHistoryRef{{MessageID: "00000000-0000-4000-8000-000000000001"}},
+		InternalTools:   json.RawMessage(`["internal_mcp","ask_user"]`),
 	}}
 	admittedAt := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
@@ -311,6 +312,10 @@ func TestCurrentApplicationStartKeepsStableThreadAndProjectsHistoryAcrossDistinc
 	secondHistory := json.RawMessage(`[{"role":"user","content":[{"type":"text","text":"hello"}],"additional_kwargs":{}},{"role":"assistant","content":[{"type":"text","text":"hi"}],"additional_kwargs":{}}]`)
 	secondTarget := firstTarget
 	secondTarget.ChatHistory = secondHistory
+	secondTarget.ChatHistoryRefs = []ChatHistoryRef{
+		{MessageID: "00000000-0000-4000-8000-000000000001"},
+		{MessageID: "00000000-0000-4000-8000-000000000002", OwnAgent: true, ReadersOwn: true},
+	}
 	resolver := &currentApplicationResolverStub{targets: []CurrentApplicationTarget{firstTarget, secondTarget}}
 	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{
 		ExecutionID: "execution", CommandID: "command", Created: true,

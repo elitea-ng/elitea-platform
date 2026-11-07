@@ -2986,6 +2986,16 @@ components:
               description: >-
                 The application or pipeline version a chat send to this
                 participant runs.
+            context_history:
+              type: string
+              nullable: true
+              description: >
+                One of since_joined or full (no enum: the values collide with
+                generated constants). ADR-0050 decision 9b: `since_joined` is "share history from:
+                now" when an agent is added; the agent sees only what was said
+                after it joined, plus its own answers. Absent or `full` is the
+                version's own `meta.context.history`. It only narrows a
+                version that sees everything. Any other value is refused 422.
         meta:
           type: object
           nullable: true
@@ -3494,6 +3504,16 @@ components:
             version_id:
               type: integer
               description: The application or pipeline version to run.
+            context_history:
+              type: string
+              nullable: true
+              description: >
+                One of since_joined or full (no enum: the values collide with
+                generated constants). ADR-0050 decision 9b: `since_joined` is "share history from:
+                now" when an agent is added; the agent sees only what was said
+                after it joined, plus its own answers. Absent or `full` is the
+                version's own `meta.context.history`. It only narrows a
+                version that sees everything. Any other value is refused 422.
 
     ConversationCreateRequest:
       type: object
@@ -8501,6 +8521,29 @@ components:
         refused with agent_certification_lapsed (lapse_action suspend).
       example: certified
 
+    AgentContextSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        history:
+          type: string
+          description: >
+            One of full, since_joined, addressed_only, none (validated by Main,
+            no enum: the values collide with generated constants). Which visible messages of the conversation the agent sees (ADR-0050
+            decision 9b). full: all of them. since_joined: what was said after
+            the agent joined, and its own answers. addressed_only: messages
+            addressed to it, its own answers, and the messages those replied
+            to. none: the current message only.
+        include_side_talk:
+          type: string
+          description: >
+            One of party, none. party: side talk the agent wrote or was addressed in. none: no side
+            talk. Side talk between two other agents is never in its view.
+        activity_notes:
+          type: boolean
+          description: Stored and validated; the notes come with turn taking (issue 1611).
+      description: >
+        NOTE(W2): internal/domain/contextview/contextview.go, Parse.
     AgentMemorySettings:
       type: object
       additionalProperties: false
@@ -11369,6 +11412,16 @@ components:
             RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the
             tier's cap. `step_limit` still bounds each agent loop: with
             `max_model_turns` the lower of the two stops first.
+        context:
+          allOf: [{ $ref: '#/components/schemas/AgentContextSettings' }]
+          nullable: true
+          description: >
+            What the agent sees of a conversation (ADR-0050 decision 9). The
+            history it gets on each turn is its own view: visible messages
+            only, each peer labelled, never another agent's tool calls,
+            results or thinking, sized by its own model's window. Absent is
+            history full, include_side_talk party. A save with an invalid
+            block is refused with 422 context_block_invalid.
         memory:
           allOf: [{ $ref: '#/components/schemas/AgentMemorySettings' }]
           nullable: true

@@ -7,11 +7,15 @@ import (
 	"strconv"
 
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 )
 
 func normalizeParticipantSettings(body map[string]any) error {
 	if body == nil {
 		return fmt.Errorf("settings must be an object")
+	}
+	if err := validParticipantContextHistory(body); err != nil {
+		return err
 	}
 	if raw, present := body["version_id"]; present && raw != nil {
 		id, err := participantPositiveID(raw)
@@ -22,6 +26,22 @@ func normalizeParticipantSettings(body map[string]any) error {
 	}
 	return nil
 }
+
+// validParticipantContextHistory checks entity_settings.context_history
+// (ADR-0050 decision 9b, issue 1609): "share history from: now" when a
+// person adds an agent is `since_joined`; `full` (or null) is the version's
+// own mode.
+func validParticipantContextHistory(settings map[string]any) error {
+	raw, present := settings[contextview.ParticipantKey]
+	if !present || raw == nil {
+		return nil
+	}
+	if mode, ok := raw.(string); !ok || (contextview.History(mode) != contextview.HistorySinceJoined && contextview.History(mode) != contextview.HistoryFull) {
+		return fmt.Errorf("context_history must be since_joined or full")
+	}
+	return nil
+}
+
 func participantPositiveID(raw any) (int64, error) {
 	value, err := participantInteger(raw)
 	if err != nil || value <= 0 {
@@ -158,6 +178,9 @@ func (p Participant) Validate() error {
 			return fmt.Errorf("LLM participant requires model_name")
 		}
 	case "application", "toolkit", "pipeline":
+		if err := validParticipantContextHistory(p.EntitySettings); err != nil {
+			return err
+		}
 		if _, err := participantPositiveID(p.EntityMeta["id"]); err != nil {
 			return fmt.Errorf("entity participant requires a positive id")
 		}

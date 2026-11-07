@@ -159,6 +159,32 @@ message AgentExecutionInputV1 {
   // upgraded before Main, because a worker from an earlier release refuses
   // this tag.
   repeated ChatHistoryRefV1 chat_history_refs = 71;
+  // ADR-0050 decision 9 (#1609): `chat_history` and `chat_history_refs` are
+  // the conversation as THIS reader may see it, built by Main for this turn,
+  // and this says how. ABSENT: an input from before the view, whose history
+  // is the shared projection. Workers are upgraded before Main, because a
+  // worker from an earlier release refuses this tag.
+  ContextViewV1 context_view = 72;
+}
+
+// How one reader's view of the conversation was built (ADR-0050 decision 9).
+// The view itself is `chat_history` with its `chat_history_refs`: visible
+// messages only (text, attachments, canvases), each peer and other person
+// labelled; never another agent's tool calls, results or thinking, and side
+// talk only when the reader is a party to it.
+message ContextViewV1 {
+  // The eligibility mode applied: full, since_joined, addressed_only or
+  // none.
+  string history = 1;
+  // The reader's model context window, from the authorized catalogue. The
+  // reader's own compaction fits the view into it. 0: not frozen.
+  uint32 window_tokens = 2;
+  // Lowercase hex SHA-256 over the domain `elitea.context-view.v1`, the
+  // mode, the window, the exact `chat_history` bytes and every reference
+  // (each variable-length field prefixed with its big-endian 64-bit
+  // length). The worker refuses a view whose digest does not match.
+  string digest = 3;
+  reserved 4 to 15;
 }
 
 // Where one `chat_history` entry came from (ADR-0050 decision 9c).

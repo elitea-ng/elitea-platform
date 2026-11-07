@@ -121,8 +121,11 @@ type CurrentApplicationTarget struct {
 	// decision 9c): the worker reconciles the reader's durable session with
 	// them on every turn.
 	ChatHistoryRefs []ChatHistoryRef
-	InternalTools   json.RawMessage
-	OriginalSource  *scope.SourceReference
+	// ParticipantContextHistory is the participant's own eligibility mode
+	// (entity_settings.context_history: "share history from: now"), or "".
+	ParticipantContextHistory string
+	InternalTools             json.RawMessage
+	OriginalSource            *scope.SourceReference
 	// Release is the agent release the run executes (release.go); nil for
 	// a run of a draft, of a version published before releases existed, or
 	// of the catalogue. When set, VersionDetails and SourceVersionDetails
@@ -593,6 +596,14 @@ func currentApplicationInput(
 	if err != nil {
 		return nil, err
 	}
+	// ADR-0050 decision 9 (issue 1609): the history is this reader's view.
+	view, err := BuildReaderView(
+		readerViewSettings(version, target.ParticipantContextHistory),
+		target.ChatHistory, target.ChatHistoryRefs,
+	)
+	if err != nil {
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
 	threadID := request.ConversationUUID
 	conversationID := request.ConversationUUID
 	executionGeneration := request.QuestionID
@@ -605,8 +616,8 @@ func currentApplicationInput(
 		// Current chat history remains authoritative for ordinary turns. The
 		// shared LangGraph checkpoint stores resumable graph state for this stable
 		// thread; it does not replace the current chat-history projection.
-		Llm: llm, ChatHistory: bytes.Clone(target.ChatHistory),
-		ChatHistoryRefs: chatHistoryRefsInput(target.ChatHistoryRefs),
+		Llm: llm, ChatHistory: view.History,
+		ChatHistoryRefs: chatHistoryRefsInput(view.Refs),
 		UserInput:       userInput, ThreadId: &threadID, Tools: []byte(`[]`),
 		Application: application, InternalTools: internalTools,
 		McpTokens: currentMCPTokens(request.MCPTokens), IgnoredMcpServers: []byte(`[]`),
@@ -623,6 +634,7 @@ func currentApplicationInput(
 	if stepsLimit != nil {
 		input.StepsLimit = stepsLimit
 	}
+	input.ContextView = contextViewInput(view.Settings, modelContextLimits, input.ChatHistory, input.ChatHistoryRefs)
 	return input, nil
 }
 

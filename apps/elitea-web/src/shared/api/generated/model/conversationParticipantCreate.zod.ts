@@ -76,6 +76,12 @@ export const ConversationParticipantCreate = zod
           .int()
           .optional()
           .describe("The application or pipeline version to run."),
+        context_history: zod
+          .string()
+          .nullish()
+          .describe(
+            'One of since_joined or full (no enum: the values collide with generated constants). ADR-0050 decision 9b: `since_joined` is "share history from: now" when an agent is added; the agent sees only what was said after it joined, plus its own answers. Absent or `full` is the version\'s own `meta.context.history`. It only narrows a version that sees everything. Any other value is refused 422.\n',
+          ),
       })
       .optional(),
   })

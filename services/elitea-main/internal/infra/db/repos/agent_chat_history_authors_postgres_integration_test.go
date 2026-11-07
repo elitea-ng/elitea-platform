@@ -12,10 +12,12 @@ package repos
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -224,6 +226,107 @@ WHERE id BETWEEN 1603021 AND 1603026`).Scan(&uuids); err != nil {
 	for index, ref := range refs {
 		if ref.MessageID != uuids[index] || ref.ReadersOwn != own[index] {
 			t.Fatalf("refs[%d]=%+v, want %s own=%v", index, ref, uuids[index], own[index])
+		}
+	}
+}
+
+// ADR-0050 decision 9 (#1609): the facts the reader's view is filtered on,
+// in the three-agent fixture. Reader 21 joined after the person's first
+// question; Planner (26) and Coder (28) talk on the side; then Coder asks
+// the reader on the side and the reader answers. The projection never
+// carries tool or thinking content, and once the reader's filter drops the
+// foreign side thread nothing of Planner's or Coder's activity with each
+// other reaches it.
+func TestPostgresChatHistoryRefsCarryTheReadersViewFacts(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+	if _, err := tx.Exec(t.Context(), `
+INSERT INTO chat_participants (id, uuid, entity_name, entity_meta, meta) VALUES
+    (26, 'a0000000-0000-4000-8000-000000001609', 'application', '{"id":32,"project_id":1}'::jsonb, '{"name":"Planner"}'::json),
+    (28, 'a1000000-0000-4000-8000-000000001609', 'application', '{"id":33,"project_id":1}'::jsonb, '{"name":"Coder"}'::json);
+INSERT INTO chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at) VALUES
+    (1, 26, '{}'::jsonb, now() AT TIME ZONE 'UTC'),
+    (1, 28, '{}'::jsonb, now() AT TIME ZONE 'UTC');
+UPDATE chat_participant_mapping
+SET created_at = (statement_timestamp() AT TIME ZONE 'UTC') - interval '330 seconds',
+    entity_settings = entity_settings || '{"context_history":"since_joined"}'::jsonb
+WHERE conversation_id = 1 AND participant_id = 21;`); err != nil {
+		t.Fatal(err)
+	}
+	question := insertPostgresHistoryGroup(t, tx, 1609001, 20, 0, "plan the release", 6)
+	insertPostgresHistoryGroup(t, tx, 1609002, 21, question, "Three steps.", 5)
+	foreign := insertPostgresHistoryGroup(t, tx, 1609003, 26, 0, "can you code step 1?", 4)
+	insertPostgresHistoryGroup(t, tx, 1609004, 28, foreign, "Done.", 3)
+	party := insertPostgresHistoryGroup(t, tx, 1609005, 28, 0, "is step 2 tests?", 2)
+	insertPostgresHistoryGroup(t, tx, 1609006, 21, party, "Yes.", 1)
+	if _, err := tx.Exec(t.Context(), `
+UPDATE chat_message_group SET sent_to_id = 21, addressed_to = '{21}' WHERE id = 1609001;
+UPDATE chat_message_group SET visibility = 'side', addressed_to = '{28}' WHERE id = 1609003;
+UPDATE chat_message_group SET visibility = 'side', addressed_to = '{26}' WHERE id = 1609004;
+UPDATE chat_message_group SET visibility = 'side', addressed_to = '{21}' WHERE id = 1609005;
+UPDATE chat_message_group SET visibility = 'side', addressed_to = '{28}' WHERE id = 1609006;`); err != nil {
+		t.Fatal(err)
+	}
+	target, err := queries.ResolveCurrentApplicationTurn(t.Context(), sqlcgen.ResolveCurrentApplicationTurnParams{
+		ActorUserID: 11, TargetParticipantID: 21, ProjectID: 1,
+		QuestionID:       mustCurrentPGUUID(t, "50000000-0000-4000-8000-000000001609"),
+		ConversationUuid: mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031"),
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if target.ParticipantContextHistory != "since_joined" {
+		t.Fatalf("participant mode %q", target.ParticipantContextHistory)
+	}
+	history := json.RawMessage(target.ChatHistoryJson)
+	refs, err := agentexecutionapp.DecodeChatHistoryRefs(history, json.RawMessage(target.ChatHistoryRefsJson))
+	if err != nil || len(refs) != 6 {
+		t.Fatalf("refs: %s %v", target.ChatHistoryRefsJson, err)
+	}
+	type facts struct{ own, addressed, side, after, answered bool }
+	want := []facts{
+		{addressed: true, answered: true},
+		{own: true, after: true},
+		{side: true, after: true},
+		{side: true, after: true},
+		{addressed: true, side: true, after: true, answered: true},
+		{own: true, side: true, after: true},
+	}
+	for index, expected := range want {
+		ref := refs[index]
+		if got := (facts{ref.OwnAgent, ref.Addressed, ref.Side, ref.AfterJoined, ref.AnsweredByReader}); got != expected {
+			t.Errorf("refs[%d]=%+v, want %+v", index, got, expected)
+		}
+	}
+	texts := func(settings contextview.Settings) string {
+		t.Helper()
+		view, err := agentexecutionapp.BuildReaderView(settings, history, refs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var groups []postgresHistoryGroup
+		if err := json.Unmarshal(view.History, &groups); err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(groups))
+		for _, group := range groups {
+			text, _ := group.Content[0]["text"].(string)
+			out = append(out, text)
+		}
+		return strings.Join(out, "|")
+	}
+	for _, c := range []struct {
+		settings contextview.Settings
+		want     string
+	}{
+		{contextview.Default, "plan the release|Three steps.|is step 2 tests?|Yes."},
+		{contextview.Default.WithParticipant(target.ParticipantContextHistory), "Three steps.|is step 2 tests?|Yes."},
+		{contextview.Settings{History: contextview.HistoryAddressedOnly, SideTalk: contextview.SideTalkNone}, "plan the release|Three steps."},
+	} {
+		if got := texts(c.settings); got != c.want {
+			t.Errorf("%+v: view %q, want %q", c.settings, got, c.want)
 		}
 	}
 }

@@ -482,12 +482,13 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 						versionID:     row.ApplicationVersionID,
 					}
 					target = agentexecutionapp.CurrentApplicationTarget{
-						ApplicationID:        int64(row.ApplicationID),
-						ApplicationVersionID: int64(row.ApplicationVersionID),
-						Variables:            variables,
-						ChatHistory:          chatHistory,
-						ChatHistoryRefs:      historyRefs,
-						InternalTools:        internalTools,
+						ApplicationID:             int64(row.ApplicationID),
+						ApplicationVersionID:      int64(row.ApplicationVersionID),
+						Variables:                 variables,
+						ChatHistory:               chatHistory,
+						ChatHistoryRefs:           historyRefs,
+						ParticipantContextHistory: row.ParticipantContextHistory,
+						InternalTools:             internalTools,
 					}
 					return nil
 				}
@@ -551,15 +552,16 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentApplication(
 					return fmt.Errorf("materialize current nested skills: %w", queryErr)
 				}
 				target = agentexecutionapp.CurrentApplicationTarget{
-					ApplicationID:        int64(row.ApplicationID),
-					ApplicationVersionID: int64(row.ApplicationVersionID),
-					Variables:            variables,
-					VersionDetails:       versionDetails,
-					SourceVersionDetails: sourceVersionDetails,
-					ChatHistory:          chatHistory,
-					ChatHistoryRefs:      historyRefs,
-					InternalTools:        internalTools,
-					Release:              release,
+					ApplicationID:             int64(row.ApplicationID),
+					ApplicationVersionID:      int64(row.ApplicationVersionID),
+					Variables:                 variables,
+					VersionDetails:            versionDetails,
+					SourceVersionDetails:      sourceVersionDetails,
+					ChatHistory:               chatHistory,
+					ChatHistoryRefs:           historyRefs,
+					InternalTools:             internalTools,
+					Release:                   release,
+					ParticipantContextHistory: row.ParticipantContextHistory,
 				}
 				return nil
 			},

@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentContextSettings } from "./agentContextSettings.zod";
 import { AgentMemorySettings } from "./agentMemorySettings.zod";
 import { OutputContract } from "./outputContract.zod";
 import { VersionRunCaps } from "./versionRunCaps.zod";
@@ -85,6 +86,12 @@ export const VersionMeta = zod.object({
     .optional()
     .describe(
       "The author's run caps of this agent (ADR-0041 decision 3). Each key LOWERS the platform's cap for the agent's risk tier (Configuration › Run caps); the lower value applies. A save that sets a value above the tier's cap is refused with 422 RUN_CAP_ABOVE_TIER. Omit a key, or set it to null, to keep the tier's cap. `step_limit` still bounds each agent loop: with `max_model_turns` the lower of the two stops first.\n",
+    ),
+  context: zod
+    .union([AgentContextSettings, zod.null()])
+    .optional()
+    .describe(
+      "What the agent sees of a conversation (ADR-0050 decision 9). The history it gets on each turn is its own view: visible messages only, each peer labelled, never another agent's tool calls, results or thinking, sized by its own model's window. Absent is history full, include_side_talk party. A save with an invalid block is refused with 422 context_block_invalid.\n",
     ),
   memory: zod
     .union([AgentMemorySettings, zod.null()])

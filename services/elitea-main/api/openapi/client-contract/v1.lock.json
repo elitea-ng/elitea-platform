@@ -3890,6 +3890,21 @@
                             "required"
                           ]
                         },
+                        "context": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "activity_notes": {
+                              "type": "boolean"
+                            },
+                            "history": {
+                              "type": "string"
+                            },
+                            "include_side_talk": {
+                              "type": "string"
+                            }
+                          }
+                        },
                         "icon_meta": {
                           "type": "object",
                           "open": true
@@ -4263,6 +4278,21 @@
                               "off",
                               "required"
                             ]
+                          },
+                          "context": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "activity_notes": {
+                                "type": "boolean"
+                              },
+                              "history": {
+                                "type": "string"
+                              },
+                              "include_side_talk": {
+                                "type": "string"
+                              }
+                            }
                           },
                           "icon_meta": {
                             "type": "object",
@@ -5638,6 +5668,10 @@
                         "type": "object",
                         "nullable": true,
                         "properties": {
+                          "context_history": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "version_id": {
                             "type": "integer"
                           }
@@ -8803,6 +8837,21 @@
                               "off",
                               "required"
                             ]
+                          },
+                          "context": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "activity_notes": {
+                                "type": "boolean"
+                              },
+                              "history": {
+                                "type": "string"
+                              },
+                              "include_side_talk": {
+                                "type": "string"
+                              }
+                            }
                           },
                           "icon_meta": {
                             "type": "object",
@@ -16966,6 +17015,10 @@
                       "type": "object",
                       "nullable": true,
                       "properties": {
+                        "context_history": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "version_id": {
                           "type": "integer"
                         }
@@ -17105,6 +17158,10 @@
                         "type": "object",
                         "nullable": true,
                         "properties": {
+                          "context_history": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "version_id": {
                             "type": "integer"
                           }
@@ -20757,6 +20814,10 @@
                     "entity_settings": {
                       "type": "object",
                       "properties": {
+                        "context_history": {
+                          "type": "string",
+                          "nullable": true
+                        },
                         "version_id": {
                           "type": "integer"
                         }
@@ -20801,6 +20862,10 @@
                   "entity_settings": {
                     "type": "object",
                     "properties": {
+                      "context_history": {
+                        "type": "string",
+                        "nullable": true
+                      },
                       "version_id": {
                         "type": "integer"
                       }
@@ -20848,6 +20913,10 @@
                     "type": "object",
                     "nullable": true,
                     "properties": {
+                      "context_history": {
+                        "type": "string",
+                        "nullable": true
+                      },
                       "version_id": {
                         "type": "integer"
                       }

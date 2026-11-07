@@ -534,7 +534,7 @@ func defaultForkName(source string) string {
 func forkParticipants(ctx context.Context, tx pgx.Tx, s string, sourceID, newID, actorID int64) error {
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO %[1]s.chat_participant_mapping
 		(conversation_id, participant_id, entity_settings, created_at)
-		SELECT $1, m.participant_id, m.entity_settings, now() AT TIME ZONE 'UTC'
+		SELECT $1, m.participant_id, m.entity_settings, m.created_at
 		FROM %[1]s.chat_participant_mapping m JOIN %[1]s.chat_participants p ON p.id = m.participant_id
 		WHERE m.conversation_id = $2 AND (p.entity_name <> 'user' OR p.entity_meta->>'id' = $3)
 		ORDER BY m.id

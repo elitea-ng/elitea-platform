@@ -2973,6 +2973,26 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            context: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  history: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  include_side_talk: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  activity_notes: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             memory: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3335,6 +3355,26 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            context: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  history: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  include_side_talk: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  activity_notes: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             memory: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3632,6 +3672,26 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        context: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              history: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              include_side_talk: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              activity_notes: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         memory: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -3841,6 +3901,26 @@ export const getGetApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          context: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                history: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                include_side_talk: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                activity_notes: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -4106,6 +4186,26 @@ export const getGetApplicationResponseMock = (
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            context: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  history: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  include_side_talk: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  activity_notes: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -4484,6 +4584,26 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            context: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  history: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  include_side_talk: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  activity_notes: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             memory: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -4841,6 +4961,26 @@ export const getGetPublicApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          context: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                history: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                include_side_talk: faker.helpers.arrayElement([
+                  faker.string.alpha({ length: { min: 10, max: 20 } }),
+                  undefined,
+                ]),
+                activity_notes: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -5429,6 +5569,26 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        context: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              history: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              include_side_talk: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              activity_notes: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         memory: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -5773,6 +5933,26 @@ export const getUpdateApplicationVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        context: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              history: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              include_side_talk: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              activity_notes: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -6127,6 +6307,26 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            context: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  history: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  include_side_talk: faker.helpers.arrayElement([
+                    faker.string.alpha({ length: { min: 10, max: 20 } }),
+                    undefined,
+                  ]),
+                  activity_notes: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -6503,6 +6703,26 @@ export const getSaveApplicationNewVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        context: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              history: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              include_side_talk: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+              activity_notes: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -6990,6 +7210,30 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    context: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          history: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          include_side_talk: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          activity_notes: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                     memory: faker.helpers.arrayElement([
                       faker.helpers.arrayElement([
                         {
@@ -7427,6 +7671,30 @@ export const getImportWizardResponseMock = (
                               }),
                               null,
                             ]),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    context: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          history: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          include_side_talk: faker.helpers.arrayElement([
+                            faker.string.alpha({
+                              length: { min: 10, max: 20 },
+                            }),
+                            undefined,
+                          ]),
+                          activity_notes: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
                             undefined,
                           ]),
                         },
@@ -8043,6 +8311,26 @@ export const getForkAgentResponseMock = (
                           }),
                           null,
                         ]),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                context: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      history: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      include_side_talk: faker.helpers.arrayElement([
+                        faker.string.alpha({ length: { min: 10, max: 20 } }),
+                        undefined,
+                      ]),
+                      activity_notes: faker.helpers.arrayElement([
+                        faker.datatype.boolean(),
                         undefined,
                       ]),
                     },

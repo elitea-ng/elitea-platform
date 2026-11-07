@@ -648,6 +648,13 @@ export const getCreateConversationResponseMock = (
               faker.number.int(),
               undefined,
             ]),
+            context_history: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -825,6 +832,13 @@ export const getGetConversationResponseMock = (
             faker.number.int(),
             undefined,
           ]),
+          context_history: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              null,
+            ]),
+            undefined,
+          ]),
         },
         null,
       ]),
@@ -998,6 +1012,13 @@ export const getAddConversationParticipantsResponseMock =
           {
             version_id: faker.helpers.arrayElement([
               faker.number.int(),
+              undefined,
+            ]),
+            context_history: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                null,
+              ]),
               undefined,
             ]),
           },
