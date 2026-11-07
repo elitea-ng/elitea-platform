@@ -88,7 +88,7 @@ type localTurnComputerUse struct {
 func (c localTurnComputerUse) ScreenshotUsage(
 	ctx context.Context, projectID int64, conversationUUID, executionID string,
 ) (localturnsapi.ScreenshotUsage, error) {
-	count, bytes, err := c.LocalTurnsRepo.CountConversationAttachments(ctx, projectID,
+	count, bytes, err := c.CountConversationAttachments(ctx, projectID,
 		conversationUUID+"/"+localturnsapi.TurnScreenshotPrefix(executionID))
 	return localturnsapi.ScreenshotUsage{Count: count, Bytes: bytes}, err
 }
