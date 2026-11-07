@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 )
 
@@ -32,6 +33,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 		return false
 	}
 	if !checkMemoryBlock(w, body) {
+		return false
+	}
+	if !checkContextBlock(w, body) {
 		return false
 	}
 	var err error
@@ -102,6 +106,22 @@ func checkMemoryBlock(w http.ResponseWriter, body map[string]any) bool {
 	if _, err := agentmemory.Parse(meta[agentmemory.MetaKey]); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 			"error": err.Error(), "code": "memory_block_invalid",
+		})
+		return false
+	}
+	return true
+}
+
+// checkContextBlock refuses an invalid meta.context (ADR-0050 decision 9b,
+// issue 1609) with a typed 422. It answers false when it wrote the refusal.
+func checkContextBlock(w http.ResponseWriter, body map[string]any) bool {
+	meta, _ := body["meta"].(map[string]any)
+	if meta == nil {
+		return true
+	}
+	if _, err := contextview.Parse(meta[contextview.MetaKey]); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(), "code": "context_block_invalid",
 		})
 		return false
 	}

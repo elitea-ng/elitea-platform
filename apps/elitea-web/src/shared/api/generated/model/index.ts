@@ -63,6 +63,7 @@ export * from "./agentChangeRequestApproval.zod";
 export * from "./agentChangeRequestCreate.zod";
 export * from "./agentChangeRequestGate.zod";
 export * from "./agentChangeRequestList.zod";
+export * from "./agentContextSettings.zod";
 export * from "./agentDefinition.zod";
 export * from "./agentGateOverride.zod";
 export * from "./agentIdentityBinding.zod";

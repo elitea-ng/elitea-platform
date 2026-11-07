@@ -1,0 +1,46 @@
+---
+title: "What an agent sees of a conversation"
+description: "How each agent in a multi-agent conversation gets its own view of the history, sized by its own model, and how to narrow it."
+---
+
+When several agents take part in one conversation, each one gets **its own view** of it on every turn. Main builds that view for the agent that answers, just before the turn starts.
+
+## What is in a view
+
+- **Visible messages only.** People's messages and agents' answers: text, attachments and canvases. Another agent's tool calls, tool results and thinking are never in it.
+- **Labelled.** A message from another agent or another person comes with its author's name, so the agent never takes a peer's words for its own.
+- **Side talk only for its party.** Messages two agents exchange on the side are in the view of those two agents only. A third agent never sees them.
+- **Sized by the agent's own model.** The budget is the context window of the agent's model, frozen into its version. When the conversation is longer than that, the agent's own compaction summarises the older part. Two agents on models with different windows get different summaries.
+
+## Narrowing the view
+
+An agent's version can narrow what it sees with a `context` block in its meta:
+
+```yaml
+context:
+  history: full              # full | since_joined | addressed_only | none
+  include_side_talk: party   # party | none
+```
+
+| `history` | The agent sees |
+| --- | --- |
+| `full` (default) | Every visible message it may see. |
+| `since_joined` | What was said after it joined the conversation, and its own answers. |
+| `addressed_only` | Messages addressed to it, its own answers, and the messages those replied to. |
+| `none` | Only the current message. |
+
+`include_side_talk: none` leaves out even the side talk the agent took part in.
+
+A version without the block is `full` and `party`. A save with an invalid block is refused with `422 context_block_invalid`.
+
+## "Share history from: now"
+
+When you add an agent to a conversation that is already going, you can set the participant's `entity_settings.context_history` to `since_joined`. The agent then sees only what is said from that moment on, plus its own answers. This only narrows: an agent whose version already sees less keeps its own mode. Any value other than `since_joined` or `full` is refused with 422.
+
+## How the worker checks it
+
+Main sends the view with a digest over its mode, its window, and the exact history and references. The worker recomputes the digest and refuses a turn whose history does not match it, so a view is never widened on the way.
+
+## Related
+
+- [Agent memory](/how-tos/agents-pipelines/agent-memory/)

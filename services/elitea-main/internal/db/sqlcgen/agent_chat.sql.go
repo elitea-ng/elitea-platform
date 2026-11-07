@@ -1337,7 +1337,17 @@ LEFT JOIN LATERAL (
            jsonb_agg(
                jsonb_build_object(
                    'message_id', history_group.uuid,
-                   'readers_own', history_group.readers_own
+                   'readers_own', history_group.readers_own,
+                   -- ADR-0050 decision 9 (issue 1609): what Main needs to
+                   -- build the reader's view from this projection. The
+                   -- eligibility mode lives on the agent version (a
+                   -- catalogue version is read after this query), so Main
+                   -- applies it; these flags are the facts it reads.
+                   'own_agent', history_group.own_agent,
+                   'addressed', history_group.addressed,
+                   'side', history_group.side,
+                   'after_joined', history_group.after_joined,
+                   'answered_by_reader', history_group.answered_by_reader
                )
                ORDER BY history_group.created_at, history_group.id
            ) AS chat_history_refs
@@ -1358,6 +1368,25 @@ LEFT JOIN LATERAL (
                         WHERE own_question.id = message_group.reply_to_id
                           AND own_question.author_participant_id = author_participant.id
                     ))) AS readers_own,
+               -- The reader wrote it.
+               (author.id = target_participant.id) AS own_agent,
+               -- It is addressed to the reader (addressed_to, which the
+               -- tenant/0162 trigger fills from sent_to_id).
+               (target_participant.id = ANY(message_group.addressed_to)) AS addressed,
+               -- Agent-to-agent side talk (ADR-0050 decision 7d).
+               (message_group.visibility = 'side') AS side,
+               -- Written after the reader joined the conversation.
+               (message_group.created_at >= target_mapping.created_at) AS after_joined,
+               -- The reader answered it, or a message to the reader replied
+               -- to it: ` + "`" + `addressed_only` + "`" + ` keeps the message each one replied to.
+               EXISTS (
+                   SELECT 1
+                   FROM chat_message_group AS reader_reply
+                   WHERE reader_reply.conversation_id = conversation.id
+                     AND reader_reply.reply_to_id = message_group.id
+                     AND (reader_reply.author_participant_id = target_participant.id
+                          OR target_participant.id = ANY(reader_reply.addressed_to))
+               ) AS answered_by_reader,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
                -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
@@ -1661,7 +1690,8 @@ LEFT JOIN LATERAL (
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
-                 message_group.sent_to_id, message_group.reply_to_id, author.id
+                 message_group.sent_to_id, message_group.reply_to_id, author.id,
+                 message_group.addressed_to, message_group.visibility
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -2033,6 +2063,9 @@ SELECT conversation.id AS conversation_id,
        COALESCE(target_mapping.entity_settings -> 'variables', '[]'::jsonb)::text AS application_variables_json,
        COALESCE(current_history.chat_history, '[]'::jsonb)::text AS chat_history_json,
        COALESCE(current_history.chat_history_refs, '[]'::jsonb)::text AS chat_history_refs_json,
+       -- ADR-0050 decision 9b: "share history from: now" on this
+       -- participant (` + "`" + `since_joined` + "`" + `), else '' (the version decides).
+       COALESCE(target_mapping.entity_settings ->> 'context_history', '')::text AS participant_context_history,
        COALESCE(conversation.meta -> 'internal_tools', '[]'::jsonb)::text AS internal_tools_json,
        -- BEGIN shared application_version_details_json projection
        -- ADR-0050 decision 1a: ` + "`" + `soul` + "`" + ` joins the object only when the version
@@ -2302,7 +2335,17 @@ LEFT JOIN LATERAL (
            jsonb_agg(
                jsonb_build_object(
                    'message_id', history_group.uuid,
-                   'readers_own', history_group.readers_own
+                   'readers_own', history_group.readers_own,
+                   -- ADR-0050 decision 9 (issue 1609): what Main needs to
+                   -- build the reader's view from this projection. The
+                   -- eligibility mode lives on the agent version (a
+                   -- catalogue version is read after this query), so Main
+                   -- applies it; these flags are the facts it reads.
+                   'own_agent', history_group.own_agent,
+                   'addressed', history_group.addressed,
+                   'side', history_group.side,
+                   'after_joined', history_group.after_joined,
+                   'answered_by_reader', history_group.answered_by_reader
                )
                ORDER BY history_group.created_at, history_group.id
            ) AS chat_history_refs
@@ -2323,6 +2366,25 @@ LEFT JOIN LATERAL (
                         WHERE own_question.id = message_group.reply_to_id
                           AND own_question.author_participant_id = author_participant.id
                     ))) AS readers_own,
+               -- The reader wrote it.
+               (author.id = target_participant.id) AS own_agent,
+               -- It is addressed to the reader (addressed_to, which the
+               -- tenant/0162 trigger fills from sent_to_id).
+               (target_participant.id = ANY(message_group.addressed_to)) AS addressed,
+               -- Agent-to-agent side talk (ADR-0050 decision 7d).
+               (message_group.visibility = 'side') AS side,
+               -- Written after the reader joined the conversation.
+               (message_group.created_at >= target_mapping.created_at) AS after_joined,
+               -- The reader answered it, or a message to the reader replied
+               -- to it: ` + "`" + `addressed_only` + "`" + ` keeps the message each one replied to.
+               EXISTS (
+                   SELECT 1
+                   FROM chat_message_group AS reader_reply
+                   WHERE reader_reply.conversation_id = conversation.id
+                     AND reader_reply.reply_to_id = message_group.id
+                     AND (reader_reply.author_participant_id = target_participant.id
+                          OR target_participant.id = ANY(reader_reply.addressed_to))
+               ) AS answered_by_reader,
                -- ADR-0050 decision 9a (issue 1603): only the READER's own
                -- answers are ` + "`" + `assistant` + "`" + `. Before this, every non-user author
                -- was an unnamed ` + "`" + `assistant` + "`" + `, so in a conversation with several
@@ -2630,7 +2692,8 @@ LEFT JOIN LATERAL (
               )
           )
         GROUP BY message_group.id, message_group.created_at, message_group.uuid,
-                 message_group.sent_to_id, message_group.reply_to_id, author.id
+                 message_group.sent_to_id, message_group.reply_to_id, author.id,
+                 message_group.addressed_to, message_group.visibility
     ) AS history_group
     WHERE jsonb_array_length(history_group.content) > 0
 ) AS current_history ON TRUE
@@ -2843,6 +2906,7 @@ type ResolveCurrentApplicationTurnRow struct {
 	ApplicationVariablesJson      string `db:"application_variables_json" json:"application_variables_json"`
 	ChatHistoryJson               string `db:"chat_history_json" json:"chat_history_json"`
 	ChatHistoryRefsJson           string `db:"chat_history_refs_json" json:"chat_history_refs_json"`
+	ParticipantContextHistory     string `db:"participant_context_history" json:"participant_context_history"`
 	InternalToolsJson             string `db:"internal_tools_json" json:"internal_tools_json"`
 	ApplicationVersionDetailsJson string `db:"application_version_details_json" json:"application_version_details_json"`
 }
@@ -2926,6 +2990,7 @@ func (q *Queries) ResolveCurrentApplicationTurn(ctx context.Context, arg Resolve
 		&i.ApplicationVariablesJson,
 		&i.ChatHistoryJson,
 		&i.ChatHistoryRefsJson,
+		&i.ParticipantContextHistory,
 		&i.InternalToolsJson,
 		&i.ApplicationVersionDetailsJson,
 	)

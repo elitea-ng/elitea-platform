@@ -133,6 +133,65 @@ mod chat_history_ref_tests {
         assert!(chat_history_refs(&[reference(id)], 2).is_err());
         assert!(chat_history_refs(&[reference("not-a-uuid")], 1).is_err());
     }
+
+    /// Main's contextview test pins the same vector.
+    #[test]
+    fn context_view_digest_matches_main() {
+        assert_eq!(
+            super::context_view_digest("since_joined", 8192, b"[]", &[]),
+            "98c87e67997f565a4d27a3a984ac5d8e9aa3353c0457a2222ac27566fd08b5dc"
+        );
+    }
+
+    /// A view whose digest, mode or window is not the history's is refused;
+    /// no view is the input from before the view.
+    #[test]
+    fn context_view_is_checked_against_the_history() {
+        use crate::protocol::elitea::runtime::v1::{
+            AgentExecutionInputV1, ContextViewV1, ModelContextLimitsV1,
+        };
+        let id = "00000000-0000-4000-8000-0000000000ab";
+        let mut message = AgentExecutionInputV1 {
+            chat_history: br#"[{"role":"user","content":"hi"}]"#.to_vec(),
+            chat_history_refs: vec![reference(id)],
+            model_context_limits: Some(ModelContextLimitsV1 {
+                context_window_tokens: 32000,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(super::check_context_view(&message).is_ok());
+        let digest = super::context_view_digest(
+            "full",
+            32000,
+            &message.chat_history,
+            &message.chat_history_refs,
+        );
+        message.context_view = Some(ContextViewV1 {
+            history: "full".to_owned(),
+            window_tokens: 32000,
+            digest: digest.clone(),
+        });
+        assert!(super::check_context_view(&message).is_ok());
+
+        let mut widened = message.clone();
+        widened.chat_history =
+            br#"[{"role":"user","content":"hi"},{"role":"user","content":"x"}]"#.to_vec();
+        assert!(super::check_context_view(&widened).is_err());
+        let mut other_window = message.clone();
+        if let Some(limits) = other_window.model_context_limits.as_mut() {
+            limits.context_window_tokens = 8192;
+        }
+        assert!(super::check_context_view(&other_window).is_err());
+        let mut other_mode = message.clone();
+        if let Some(view) = other_mode.context_view.as_mut() {
+            view.history = "everything".to_owned();
+        }
+        assert!(super::check_context_view(&other_mode).is_err());
+        let mut flipped = message;
+        flipped.chat_history_refs[0].readers_own = false;
+        assert!(super::check_context_view(&flipped).is_err());
+    }
 }
 
 /// Validate every semantic field and bind it to the exact materialized input.
@@ -154,6 +213,7 @@ pub fn request_from(
     grant_from_input(&message)?;
 
     let llm = json_object(&message.llm, "the agent llm must be an object")?;
+    check_context_view(&message)?;
     // History is data-plane content. Let the model context policy compact it
     // after admission; do not apply the smaller control-field budget here.
     let Value::Array(chat_history) = parse_history(&message.chat_history)
@@ -350,6 +410,77 @@ pub fn request_from(
             }),
         },
     })
+}
+
+/// ADR-0050 decision 9 (#1609): Main builds `chat_history` and its
+/// references as this reader's view and says how in `context_view`. The
+/// worker recomputes the view's digest over the exact bytes it received and
+/// refuses an input whose history, references, mode or window are not the
+/// ones Main described: a view is never widened or swapped on the way. An
+/// input without a view is one from before the view and is read as before.
+fn check_context_view(message: &AgentExecutionInputV1) -> Result<(), AgentProtocolError> {
+    let Some(view) = message.context_view.as_ref() else {
+        return Ok(());
+    };
+    if !matches!(
+        view.history.as_str(),
+        "full" | "since_joined" | "addressed_only" | "none"
+    ) {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent context view mode is unknown",
+        ));
+    }
+    let window = message
+        .model_context_limits
+        .as_ref()
+        .map_or(0, |limits| limits.context_window_tokens);
+    if view.window_tokens != window
+        || view.digest
+            != context_view_digest(
+                &view.history,
+                view.window_tokens,
+                &message.chat_history,
+                &message.chat_history_refs,
+            )
+    {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent context view does not match its history",
+        ));
+    }
+    Ok(())
+}
+
+/// Main's `contextview.Digest`: SHA-256 over the domain, the mode, the
+/// window, the history bytes and each reference, every variable-length field
+/// prefixed with its big-endian 64-bit length, as lowercase hex.
+fn context_view_digest(
+    history: &str,
+    window_tokens: u32,
+    chat_history: &[u8],
+    refs: &[crate::protocol::elitea::runtime::v1::ChatHistoryRefV1],
+) -> String {
+    use sha2::Digest as _;
+    fn field(hash: &mut sha2::Sha256, value: &[u8]) {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value);
+    }
+    let mut hash = sha2::Sha256::new();
+    field(&mut hash, b"elitea.context-view.v1");
+    field(&mut hash, history.as_bytes());
+    hash.update(window_tokens.to_be_bytes());
+    field(&mut hash, chat_history);
+    hash.update((refs.len() as u64).to_be_bytes());
+    for reference in refs {
+        field(&mut hash, reference.message_id.as_bytes());
+        hash.update([u8::from(reference.readers_own)]);
+    }
+    hash.finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// ADR-0050 decision 9c: one reference per history entry, each a uuid, or

@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Per-agent context view (#1609, ADR-0050 decision 9)
+
+No migration. Upgrade the workers before Main, as usual: a worker from
+before this release ignores the new `context_view` input field, and a new
+worker refuses an input whose view digest does not match its history.
+
+- Each agent in a conversation now gets its own history: side talk between
+  two other agents is no longer in it, and the version's new
+  `meta.context` block (`history`: full, since_joined, addressed_only or
+  none; `include_side_talk`: party or none) narrows it further. A version
+  without the block sees what it saw before, minus foreign side talk.
+- A participant's `entity_settings.context_history: since_joined` is
+  "share history from: now". Only `since_joined` and `full` are accepted.
+- Saves with an invalid `meta.context` answer `422 context_block_invalid`.
+
 ## Agent memory tab and chip (#1608, ADR-0050 decision 1b)
 
 No operator action. No migration.
