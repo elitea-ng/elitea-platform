@@ -306,7 +306,16 @@ func TestMeteredSettleRejectsForeignAdmission(t *testing.T) {
 	admission := admissionID(t, admit(t, h, "tavily", "web_search"))
 	other := newMeteredHandler(gate, defaultMeteredPrices())
 	other.admissionKey = meteredAdmissionKey([]byte("another deployment's secret"))
-	tampered := admission[:len(admission)-2] + "AA"
+	// Change the signature's second-to-last character to one it is not.
+	// A fixed "AA" suffix left the admission untouched whenever the real
+	// signature already ended in it (about 1 run in 256), and the case
+	// answered 200. The last character carries padding bits, so it is not
+	// the one changed.
+	flip := byte('A')
+	if admission[len(admission)-2] == flip {
+		flip = 'B'
+	}
+	tampered := admission[:len(admission)-2] + string(flip) + admission[len(admission)-1:]
 	cases := map[string]struct {
 		h                           *Handler
 		project, user, execution    string

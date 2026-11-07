@@ -2041,6 +2041,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description NOTE(W2): internal/domain/contextview/contextview.go, Parse. */
+        AgentContextSettings: {
+            /** @description Stored and validated; the notes come with turn taking (issue 1611). */
+            activity_notes?: boolean;
+            /** @description One of full, since_joined, addressed_only, none (validated by Main, no enum: the values collide with generated constants). Which visible messages of the conversation the agent sees (ADR-0050 decision 9b). full: all of them. since_joined: what was said after the agent joined, and its own answers. addressed_only: messages addressed to it, its own answers, and the messages those replied to. none: the current message only. */
+            history?: string;
+            /** @description One of party, none. party: side talk the agent wrote or was addressed in. none: no side talk. Side talk between two other agents is never in its view. */
+            include_side_talk?: string;
+        };
         /**
          * @description ADR-0037 decision 5: the intended cloud agent, as a conversational builder produces it. It is NOT the database passthrough (ApplicationVersionDetail); the review form maps it onto the reviewed create-application body. Served as JSON Schema by getAgentSchema and compiled into the validator both draft routes run before they answer (internal/api/v2/drafts/schema.go), so this component is the one source. No `nullable`, so it is valid JSON Schema as written; its one $ref (`soul`, to the self-contained AgentSoulV1) is inlined by the schema route.
          * @example {
@@ -3169,6 +3178,8 @@ export interface components {
             /** @description `user`, `application`, `toolkit`, `llm` and similar; read it, do not enumerate it. */
             entity_name: string;
             entity_settings?: ({
+                /** @description One of since_joined or full (no enum: the values collide with generated constants). ADR-0050 decision 9b: `since_joined` is "share history from: now" when an agent is added; the agent sees only what was said after it joined, plus its own answers. Absent or `full` is the version's own `meta.context.history`. It only narrows a version that sees everything. Any other value is refused 422. */
+                context_history?: string | null;
                 /** @description The application or pipeline version a chat send to this participant runs. */
                 version_id?: number;
             } & {
@@ -3209,6 +3220,8 @@ export interface components {
             /** @description `user`, `application`, `pipeline`, `toolkit`, `llm` or `dummy`. */
             entity_name: string;
             entity_settings?: {
+                /** @description One of since_joined or full (no enum: the values collide with generated constants). ADR-0050 decision 9b: `since_joined` is "share history from: now" when an agent is added; the agent sees only what was said after it joined, plus its own answers. Absent or `full` is the version's own `meta.context.history`. It only narrows a version that sees everything. Any other value is refused 422. */
+                context_history?: string | null;
                 /** @description The application or pipeline version to run. */
                 version_id?: number;
             } & {
@@ -4442,6 +4455,8 @@ export interface components {
              * @enum {string|null}
              */
             citations?: "off" | "required" | null;
+            /** @description What the agent sees of a conversation (ADR-0050 decision 9). The history it gets on each turn is its own view: visible messages only, each peer labelled, never another agent's tool calls, results or thinking, sized by its own model's window. Absent is history full, include_side_talk party. A save with an invalid block is refused with 422 context_block_invalid. */
+            context?: components["schemas"]["AgentContextSettings"] | null;
             icon_meta?: {
                 [key: string]: unknown;
             };
