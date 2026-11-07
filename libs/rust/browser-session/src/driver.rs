@@ -48,7 +48,7 @@ use serde_json::{Value, json};
 use crate::ax::{self, FrameTree, Handle};
 use crate::cdp::{CdpError, Connection};
 use crate::control::{Answer, Control, Driver};
-use crate::engine::{Engine, EngineConfig};
+use crate::engine::{Engine, EngineConfig, EngineKind};
 use crate::keys;
 use crate::page::{self, Marks, TUNNEL_FAILED, Tracker, Watch};
 use crate::screencast::Screencast;
@@ -187,6 +187,7 @@ pub struct CdpDriver {
     screencast: Screencast,
     width: u32,
     height: u32,
+    kind: EngineKind,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -216,7 +217,7 @@ impl CdpDriver {
     ///
     /// The engine did not start or did not answer.
     pub async fn start(config: &EngineConfig, control: Arc<Control>) -> Result<Self, BrowserError> {
-        let (engine, cdp) = Engine::start(config).map_err(|error| {
+        let (engine, cdp) = Engine::start(config).await.map_err(|error| {
             BrowserError::new(
                 ErrorCode::Internal,
                 format!("the browser did not start: {error}"),
@@ -322,7 +323,27 @@ impl CdpDriver {
             screencast,
             width: config.width,
             height: config.height,
+            kind: config.kind,
         })
+    }
+
+    /// Which engine this driver drives.
+    #[must_use]
+    pub const fn kind(&self) -> EngineKind {
+        self.kind
+    }
+
+    /// How many commands the engine refused as unsupported so far (`auto`
+    /// switches on a rise).
+    #[must_use]
+    pub fn unsupported_errors(&self) -> u64 {
+        self.cdp.unsupported_errors()
+    }
+
+    /// The engine's process id, while it runs.
+    #[must_use]
+    pub fn engine_pid(&self) -> Option<u32> {
+        lock(&self.engine).as_ref().and_then(Engine::pid)
     }
 
     /// The view stream (#1597 relays it).
@@ -345,7 +366,8 @@ impl CdpDriver {
         (state.url.clone(), state.title.clone())
     }
 
-    /// The engine's product, `chrome-headless-shell/<version>`.
+    /// The engine's product, `chrome-headless-shell/<version>` or
+    /// `moli/<version>`.
     ///
     /// # Errors
     ///
@@ -357,8 +379,15 @@ impl CdpDriver {
             .await
             .map_err(|error| engine_error(&error))?;
         let product = version["product"].as_str().unwrap_or_default();
-        let number = product.rsplit('/').next().unwrap_or_default();
-        Ok(format!("chrome-headless-shell/{number}"))
+        let number: String = product
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+            .take(64)
+            .collect();
+        Ok(format!("{}/{number}", self.kind.product()))
     }
 
     /// A viewer's input event (the agent line protocol's `input` `event`):
