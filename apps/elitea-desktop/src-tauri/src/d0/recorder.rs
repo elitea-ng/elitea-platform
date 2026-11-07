@@ -56,6 +56,8 @@ pub const MAX_THINKING_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_HITL_EXCHANGES: usize = 64;
 /// The `source` of an exchange that bypass mode answered.
 const SOURCE_BYPASS: &str = super::unattended::SOURCE_BYPASS;
+/// The key of a tool step's step record (`computer_step`, contract 1.41).
+pub const STEP_RECORD_KEY: &str = "computer_step";
 /// The `done` status note of a turn stopped at [`MAX_TOOL_CALLS`].
 pub const TOOL_CALL_LIMIT_REACHED: &str = "tool_call_limit_reached";
 
@@ -138,6 +140,9 @@ struct State {
     /// What each changed file held when the turn ended ([`Recorder::seal`]);
     /// a file that could not be read then is missing.
     after: BTreeMap<String, PostState>,
+    /// A `computer_screenshot` call's thumbnail (a JPEG data URL), by run
+    /// id, until its `tool_result` takes it (the local transcript only).
+    thumbnails: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -252,6 +257,29 @@ impl Recorder {
                 }
             }
         });
+    }
+
+    /// The step record of a `computer` call (ADR-0047 decision 9), on its
+    /// tool step as `computer_step`: the platform keeps it as the call's
+    /// run step. It never holds typed text (`computer_tools::step_record`).
+    pub fn step_record(&self, run_id: &str, record: Value) {
+        self.with(|state| {
+            if let Some((_, entry)) = state.steps.iter_mut().rev().find(|(id, _)| id == run_id) {
+                entry.insert(STEP_RECORD_KEY.into(), record);
+            }
+        });
+    }
+
+    /// A screenshot's thumbnail for the local transcript (ADR-0047
+    /// decision 9): its `tool_result` carries it, the commit never does.
+    pub fn screenshot_thumbnail(&self, run_id: &str, data_url: String) {
+        self.with(|state| state.thumbnails.insert(run_id.to_owned(), data_url));
+    }
+
+    /// The thumbnail of `run_id`'s screenshot, taken once.
+    #[must_use]
+    pub fn take_thumbnail(&self, run_id: &str) -> Option<String> {
+        self.with(|state| state.thumbnails.remove(run_id)).flatten()
     }
 
     /// One model step's reasoning (#1228), as the runtime's

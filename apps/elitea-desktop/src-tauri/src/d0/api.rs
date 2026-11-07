@@ -235,6 +235,19 @@ pub struct LocalTurnStarted {
     /// The chain of an unattended turn, as the platform admitted it.
     #[serde(default)]
     pub unattended: Option<super::unattended::StartedChain>,
+    /// The project's computer use settings (contract 1.41); absent from an
+    /// older platform, which never uploads screenshots.
+    #[serde(default)]
+    pub computer_use: ComputerUseStarted,
+}
+
+/// `LocalTurnStarted.computer_use` (ADR-0047 decision 9).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ComputerUseStarted {
+    /// The project's `computer_use_upload_screenshots`: upload each
+    /// screenshot as a run artifact. Default off.
+    #[serde(default)]
+    pub upload_screenshots: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -674,6 +687,39 @@ impl PlatformApi {
         )
         .await?
         .into_ok()
+    }
+
+    /// `uploadComputerScreenshot` (ADR-0047 decision 9, contract 1.41): one
+    /// screenshot of a turn whose project opted in, as a run artifact. It
+    /// answers the stored artifact's path.
+    ///
+    /// # Errors
+    ///
+    /// Refused (403 `computer_screenshot_upload_off` when the project does
+    /// not opt in) or failed.
+    pub async fn upload_screenshot(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        body: &Value,
+    ) -> Result<String, ApiError> {
+        #[derive(Deserialize)]
+        struct Stored {
+            filepath: String,
+        }
+        let stored: Stored = self
+            .send(
+                Method::POST,
+                &format!(
+                    "/api/v2/elitea_core/local_turn_screenshot/prompt_lib/{project_id}/{}",
+                    path_segment(execution_id)?
+                ),
+                Some(body),
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        Ok(stored.filepath)
     }
 
     /// `runBrief` (ADR-0045 decision 11): the chain's brief, written by

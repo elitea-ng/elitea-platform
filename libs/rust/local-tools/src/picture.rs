@@ -256,6 +256,22 @@ pub fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
         .find(|out| out.len() <= MAX_THUMBNAIL_BYTES)
 }
 
+/// A JPEG of `bytes` whose longest side is at most `side` pixels and whose
+/// size is at most `max_bytes`; `None` when `bytes` is not a decodable
+/// image or no quality brings it under `max_bytes`. The computer tools'
+/// screenshot thumbnails use it: the thread history keeps one event string
+/// within 16 KiB, so they must be smaller than [`thumbnail`]'s.
+#[must_use]
+pub fn thumbnail_within(bytes: &[u8], side: u32, max_bytes: usize) -> Option<Vec<u8>> {
+    let kind = sniff(bytes)?;
+    let decoded = reader(bytes, kind).decode().ok()?;
+    let small = flattened(&decoded.thumbnail(side.max(1), side.max(1)));
+    [60, 45, 30, 20]
+        .into_iter()
+        .filter_map(|quality| jpeg(&small, quality))
+        .find(|out| out.len() <= max_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use image::{ImageBuffer, Rgba};
@@ -353,6 +369,11 @@ mod tests {
         let (width, height) = dimensions(&thumb).expect("size");
         assert!(width.max(height) <= THUMBNAIL_SIDE);
         assert!(thumbnail(b"not an image").is_none());
+        let small = thumbnail_within(&png(800, 600), 160, 9 * 1024).expect("small thumbnail");
+        assert!(small.len() <= 9 * 1024);
+        assert_eq!(sniff(&small), Some(Kind::Jpeg));
+        assert!(dimensions(&small).is_some_and(|(w, h)| w <= 160 && h <= 160));
+        assert!(thumbnail_within(b"not an image", 160, 9 * 1024).is_none());
     }
 
     #[test]

@@ -319,9 +319,13 @@ impl Tool for ObservedTool {
             .child
             .as_ref()
             .map_or_else(|| call_id.clone(), |child| child.run_id(&call_id));
+        // A `computer` tool's typed text is recorded as its length and
+        // digest only (ADR-0047 decision 9): the model has it, the commit
+        // and the thread history do not.
+        let recorded = crate::computer_tools::recorded_inputs(&tool, &args);
         if !observer
             .recorder
-            .tool_started_under(&run_id, &tool, &args, hierarchy)
+            .tool_started_under(&run_id, &tool, &recorded, hierarchy)
         {
             return Ok(json!({
                 "status": "error",
@@ -334,7 +338,7 @@ impl Tool for ObservedTool {
         let call = json!({
             "call_id": call_id,
             "tool": tool,
-            "args_summary": args_summary(&args),
+            "args_summary": args_summary(&recorded),
             "remote": self.remote,
         });
         self.send("tool_call", call);
@@ -417,15 +421,18 @@ impl Tool for ObservedTool {
             observed.as_ref().map_or(&Value::Null, |value| &**value),
             error.as_deref(),
         );
-        self.send(
-            "tool_result",
-            json!({
-                "call_id": call_id,
-                "ok": ok,
-                "summary": summary,
-                "truncated": truncated,
-            }),
-        );
+        let mut done = json!({
+            "call_id": call_id,
+            "ok": ok,
+            "summary": summary,
+            "truncated": truncated,
+        });
+        // A screenshot of another app: its thumbnail, for this device's
+        // transcript only.
+        if let Some(thumbnail) = observer.recorder.take_thumbnail(&call_id) {
+            done["thumbnail"] = json!(thumbnail);
+        }
+        self.send("tool_result", done);
         result
     }
 }
