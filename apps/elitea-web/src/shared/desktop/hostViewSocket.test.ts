@@ -129,6 +129,9 @@ describe('the host view socket', () => {
     expect(socket.readyState).toBe(3);
     expect(closes.map((event) => [event.code, event.reason, event.wasClean])).toEqual([[4000, 'done', true]]);
     expect(socket.refusedStatus).toBeUndefined();
+    // The callback stays until the channel's end, which Tauri sends after the last message.
+    expect(host.unregistered).toHaveLength(0);
+    host.end();
     expect(host.unregistered).toHaveLength(1);
     // Nothing after the close.
     host.emit({ t: 'close', code: 1000, reason: '', status: null });
