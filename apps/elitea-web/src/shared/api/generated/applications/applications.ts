@@ -66,6 +66,10 @@ import type {
   AgentGateOverride,
   AgentLifecycleReason,
   AgentLifecycleRefusal,
+  AgentMemoryEntry,
+  AgentMemoryList,
+  AgentMemoryRefusal,
+  AgentMemoryUpdate,
   AgentRegistryRecord,
   AgentRegistryUpdate,
   AgentSchemaResponse,
@@ -90,6 +94,7 @@ import type {
   AuthorDetail,
   BatchReplaceVersionReferencesParams,
   CapabilityUnavailableResponse,
+  ClearAgentMemory200,
   ClientUpgradeRequiredResponse,
   ConversationRunList,
   CredentialReviewRefusal,
@@ -134,6 +139,7 @@ import type {
   InvalidClientVersionResponse,
   InvalidQueryParameterError,
   ListAgentAttestationsParams,
+  ListAgentMemoryParams,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -197,6 +203,8 @@ import type {
   RunStepsVerification,
   SaveApplicationNewVersionBody,
   SetAgentAttachmentStorageBody,
+  SetAgentMemoryOptOut200,
+  SetAgentMemoryOptOutBody,
   SetDefaultVersionRequest,
   SetProjectQuotaParams,
   TrendingAuthor,
@@ -5039,6 +5047,1562 @@ export function useUpdateAgentRegistry<
     projectId,
     applicationId,
     agentRegistryUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentMemoryResponse200 = {
+  data: AgentMemoryList;
+  status: 200;
+};
+
+export type listAgentMemoryResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAgentMemoryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentMemoryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentMemoryResponseSuccess = listAgentMemoryResponse200 & {
+  headers: Headers;
+};
+export type listAgentMemoryResponseError = (
+  | listAgentMemoryResponse400
+  | listAgentMemoryResponse401
+  | listAgentMemoryResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentMemoryResponse =
+  listAgentMemoryResponseSuccess | listAgentMemoryResponseError;
+
+export const getListAgentMemoryUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}?${stringifiedParams}`
+    : `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * The agent's own memory in this project (ADR-0050 decision 1b), pinned first, then newest. An entry about another person is listed only for that person and the agent's managers (an owner or a holder of `models.applications.memory.update`). Requires `models.applications.memory.list`.
+ * @summary List an agent's memory entries
+ */
+export const listAgentMemory = async (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentMemoryResponse> => {
+  return eliteaFetch<listAgentMemoryResponse>(
+    getListAgentMemoryUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentMemoryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+) => {
+  return [
+    `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentMemoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentMemory>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentMemoryQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listAgentMemory>>> = ({
+    signal,
+  }) =>
+    listAgentMemory(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentMemory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentMemoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentMemory>>
+>;
+export type ListAgentMemoryQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListAgentMemory<
+  TData = Awaited<ReturnType<typeof listAgentMemory>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | ListAgentMemoryParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentMemory<
+  TData = Awaited<ReturnType<typeof listAgentMemory>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentMemory<
+  TData = Awaited<ReturnType<typeof listAgentMemory>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List an agent's memory entries
+ */
+
+export function useListAgentMemory<
+  TData = Awaited<ReturnType<typeof listAgentMemory>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentMemoryParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentMemoryQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type clearAgentMemoryResponse200 = {
+  data: ClearAgentMemory200;
+  status: 200;
+};
+
+export type clearAgentMemoryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type clearAgentMemoryResponse403 = {
+  data: AgentMemoryRefusal;
+  status: 403;
+};
+
+export type clearAgentMemoryResponseSuccess = clearAgentMemoryResponse200 & {
+  headers: Headers;
+};
+export type clearAgentMemoryResponseError = (
+  clearAgentMemoryResponse401 | clearAgentMemoryResponse403
+) & {
+  headers: Headers;
+};
+
+export type clearAgentMemoryResponse =
+  clearAgentMemoryResponseSuccess | clearAgentMemoryResponseError;
+
+export const getClearAgentMemoryUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Clears the agent's memory in this project. The agent's owners and holders of `models.applications.memory.delete` only. Audited as agent.memory.cleared. Requires `models.applications.memory.list`.
+ * @summary Delete every memory entry of an agent
+ */
+export const clearAgentMemory = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<clearAgentMemoryResponse> => {
+  return eliteaFetch<clearAgentMemoryResponse>(
+    getClearAgentMemoryUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getClearAgentMemoryQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getClearAgentMemoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof clearAgentMemory>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getClearAgentMemoryQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof clearAgentMemory>>
+  > = ({ signal }) =>
+    clearAgentMemory(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof clearAgentMemory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ClearAgentMemoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof clearAgentMemory>>
+>;
+export type ClearAgentMemoryQueryError = N401Response | AgentMemoryRefusal;
+
+export function useClearAgentMemory<
+  TData = Awaited<ReturnType<typeof clearAgentMemory>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof clearAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearAgentMemory<
+  TData = Awaited<ReturnType<typeof clearAgentMemory>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof clearAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof clearAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useClearAgentMemory<
+  TData = Awaited<ReturnType<typeof clearAgentMemory>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete every memory entry of an agent
+ */
+
+export function useClearAgentMemory<
+  TData = Awaited<ReturnType<typeof clearAgentMemory>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof clearAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getClearAgentMemoryQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentMemoryEntryResponse200 = {
+  data: AgentMemoryEntry;
+  status: 200;
+};
+
+export type getAgentMemoryEntryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentMemoryEntryResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentMemoryEntryResponse404 = {
+  data: AgentMemoryRefusal;
+  status: 404;
+};
+
+export type getAgentMemoryEntryResponseSuccess =
+  getAgentMemoryEntryResponse200 & {
+    headers: Headers;
+  };
+export type getAgentMemoryEntryResponseError = (
+  | getAgentMemoryEntryResponse401
+  | getAgentMemoryEntryResponse403
+  | getAgentMemoryEntryResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentMemoryEntryResponse =
+  getAgentMemoryEntryResponseSuccess | getAgentMemoryEntryResponseError;
+
+export const getGetAgentMemoryEntryUrl = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+) => {
+  return `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`;
+};
+
+/**
+ * Requires `models.applications.memory.list`. An entry the caller may not see is 404.
+ * @summary Read one memory entry with its history
+ */
+export const getAgentMemoryEntry = async (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentMemoryEntryResponse> => {
+  return eliteaFetch<getAgentMemoryEntryResponse>(
+    getGetAgentMemoryEntryUrl(projectId, applicationId, entryId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentMemoryEntryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+) => {
+  return [
+    `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`,
+  ] as const;
+};
+
+export const getGetAgentMemoryEntryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+  TError = N401Response | N403Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentMemoryEntryQueryKey(projectId, applicationId, entryId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentMemoryEntry>>
+  > = ({ signal }) =>
+    getAgentMemoryEntry(projectId, applicationId, entryId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      entryId !== null &&
+      entryId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentMemoryEntryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentMemoryEntry>>
+>;
+export type GetAgentMemoryEntryQueryError =
+  N401Response | N403Response | AgentMemoryRefusal;
+
+export function useGetAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+  TError = N401Response | N403Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+  TError = N401Response | N403Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+  TError = N401Response | N403Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one memory entry with its history
+ */
+
+export function useGetAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+  TError = N401Response | N403Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentMemoryEntryQueryOptions(
+    projectId,
+    applicationId,
+    entryId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateAgentMemoryEntryResponse200 = {
+  data: AgentMemoryEntry;
+  status: 200;
+};
+
+export type updateAgentMemoryEntryResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type updateAgentMemoryEntryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateAgentMemoryEntryResponse403 = {
+  data: AgentMemoryRefusal;
+  status: 403;
+};
+
+export type updateAgentMemoryEntryResponse404 = {
+  data: AgentMemoryRefusal;
+  status: 404;
+};
+
+export type updateAgentMemoryEntryResponse422 = {
+  data: AgentMemoryRefusal;
+  status: 422;
+};
+
+export type updateAgentMemoryEntryResponseSuccess =
+  updateAgentMemoryEntryResponse200 & {
+    headers: Headers;
+  };
+export type updateAgentMemoryEntryResponseError = (
+  | updateAgentMemoryEntryResponse400
+  | updateAgentMemoryEntryResponse401
+  | updateAgentMemoryEntryResponse403
+  | updateAgentMemoryEntryResponse404
+  | updateAgentMemoryEntryResponse422
+) & {
+  headers: Headers;
+};
+
+export type updateAgentMemoryEntryResponse =
+  updateAgentMemoryEntryResponseSuccess | updateAgentMemoryEntryResponseError;
+
+export const getUpdateAgentMemoryEntryUrl = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+) => {
+  return `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`;
+};
+
+/**
+ * Writes a new version. A manager may change everything; approving or rejecting a pending entry (status active or archived) also needs ownership or `models.applications.memory.approve`. A person may correct the content of an entry about themself. The secret scanner runs on new content. Requires `models.applications.memory.list`.
+ * @summary Edit, pin, archive, approve or reject one memory entry
+ */
+export const updateAgentMemoryEntry = async (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateAgentMemoryEntryResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateAgentMemoryEntryResponse>(
+    getUpdateAgentMemoryEntryUrl(projectId, applicationId, entryId),
+    {
+      ...options,
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentMemoryUpdate),
+    },
+  );
+};
+
+export const getUpdateAgentMemoryEntryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate?: AgentMemoryUpdate,
+) => {
+  return [
+    "PATCH",
+    `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`,
+    agentMemoryUpdate,
+  ] as const;
+};
+
+export const getUpdateAgentMemoryEntryQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+  TError = N400Response | N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateAgentMemoryEntryQueryKey(
+      projectId,
+      applicationId,
+      entryId,
+      agentMemoryUpdate,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof updateAgentMemoryEntry>>
+  > = ({ signal }) =>
+    updateAgentMemoryEntry(
+      projectId,
+      applicationId,
+      entryId,
+      agentMemoryUpdate,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      entryId !== null &&
+      entryId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateAgentMemoryEntryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateAgentMemoryEntry>>
+>;
+export type UpdateAgentMemoryEntryQueryError =
+  N400Response | N401Response | AgentMemoryRefusal;
+
+export function useUpdateAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+  TError = N400Response | N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+  TError = N400Response | N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+  TError = N400Response | N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Edit, pin, archive, approve or reject one memory entry
+ */
+
+export function useUpdateAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+  TError = N400Response | N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  agentMemoryUpdate: AgentMemoryUpdate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateAgentMemoryEntryQueryOptions(
+    projectId,
+    applicationId,
+    entryId,
+    agentMemoryUpdate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteAgentMemoryEntryResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteAgentMemoryEntryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteAgentMemoryEntryResponse403 = {
+  data: AgentMemoryRefusal;
+  status: 403;
+};
+
+export type deleteAgentMemoryEntryResponse404 = {
+  data: AgentMemoryRefusal;
+  status: 404;
+};
+
+export type deleteAgentMemoryEntryResponseSuccess =
+  deleteAgentMemoryEntryResponse204 & {
+    headers: Headers;
+  };
+export type deleteAgentMemoryEntryResponseError = (
+  | deleteAgentMemoryEntryResponse401
+  | deleteAgentMemoryEntryResponse403
+  | deleteAgentMemoryEntryResponse404
+) & {
+  headers: Headers;
+};
+
+export type deleteAgentMemoryEntryResponse =
+  deleteAgentMemoryEntryResponseSuccess | deleteAgentMemoryEntryResponseError;
+
+export const getDeleteAgentMemoryEntryUrl = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+) => {
+  return `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`;
+};
+
+/**
+ * A manager with ownership or `models.applications.memory.delete` deletes any entry; anyone deletes an entry about themself. Requires `models.applications.memory.list`.
+ * @summary Delete one memory entry
+ */
+export const deleteAgentMemoryEntry = async (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteAgentMemoryEntryResponse> => {
+  return eliteaFetch<deleteAgentMemoryEntryResponse>(
+    getDeleteAgentMemoryEntryUrl(projectId, applicationId, entryId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteAgentMemoryEntryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/agent_memory/prompt_lib/${projectId}/${applicationId}/${entryId}`,
+  ] as const;
+};
+
+export const getDeleteAgentMemoryEntryQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDeleteAgentMemoryEntryQueryKey(projectId, applicationId, entryId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof deleteAgentMemoryEntry>>
+  > = ({ signal }) =>
+    deleteAgentMemoryEntry(projectId, applicationId, entryId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      entryId !== null &&
+      entryId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteAgentMemoryEntryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAgentMemoryEntry>>
+>;
+export type DeleteAgentMemoryEntryQueryError =
+  N401Response | AgentMemoryRefusal;
+
+export function useDeleteAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof deleteAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+          TError,
+          Awaited<ReturnType<typeof deleteAgentMemoryEntry>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete one memory entry
+ */
+
+export function useDeleteAgentMemoryEntry<
+  TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+  TError = N401Response | AgentMemoryRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  entryId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteAgentMemoryEntryQueryOptions(
+    projectId,
+    applicationId,
+    entryId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setAgentMemoryOptOutResponse200 = {
+  data: SetAgentMemoryOptOut200;
+  status: 200;
+};
+
+export type setAgentMemoryOptOutResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type setAgentMemoryOptOutResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type setAgentMemoryOptOutResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type setAgentMemoryOptOutResponseSuccess =
+  setAgentMemoryOptOutResponse200 & {
+    headers: Headers;
+  };
+export type setAgentMemoryOptOutResponseError = (
+  | setAgentMemoryOptOutResponse400
+  | setAgentMemoryOptOutResponse401
+  | setAgentMemoryOptOutResponse403
+) & {
+  headers: Headers;
+};
+
+export type setAgentMemoryOptOutResponse =
+  setAgentMemoryOptOutResponseSuccess | setAgentMemoryOptOutResponseError;
+
+export const getSetAgentMemoryOptOutUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_memory_opt_out/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * opted_out true deletes what the agent holds about the caller and stops it writing more; false lets it remember again. Requires `models.applications.memory.list`.
+ * @summary Turn "remember things about me" off or on for an agent
+ */
+export const setAgentMemoryOptOut = async (
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setAgentMemoryOptOutResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setAgentMemoryOptOutResponse>(
+    getSetAgentMemoryOptOutUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(setAgentMemoryOptOutBody),
+    },
+  );
+};
+
+export const getSetAgentMemoryOptOutQueryKey = (
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody?: SetAgentMemoryOptOutBody,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/agent_memory_opt_out/prompt_lib/${projectId}/${applicationId}`,
+    setAgentMemoryOptOutBody,
+  ] as const;
+};
+
+export const getSetAgentMemoryOptOutQueryOptions = <
+  TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetAgentMemoryOptOutQueryKey(
+      projectId,
+      applicationId,
+      setAgentMemoryOptOutBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setAgentMemoryOptOut>>
+  > = ({ signal }) =>
+    setAgentMemoryOptOut(projectId, applicationId, setAgentMemoryOptOutBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetAgentMemoryOptOutQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setAgentMemoryOptOut>>
+>;
+export type SetAgentMemoryOptOutQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useSetAgentMemoryOptOut<
+  TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+          TError,
+          Awaited<ReturnType<typeof setAgentMemoryOptOut>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetAgentMemoryOptOut<
+  TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+          TError,
+          Awaited<ReturnType<typeof setAgentMemoryOptOut>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetAgentMemoryOptOut<
+  TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Turn "remember things about me" off or on for an agent
+ */
+
+export function useSetAgentMemoryOptOut<
+  TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  setAgentMemoryOptOutBody: SetAgentMemoryOptOutBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetAgentMemoryOptOutQueryOptions(
+    projectId,
+    applicationId,
+    setAgentMemoryOptOutBody,
     options,
   );
 

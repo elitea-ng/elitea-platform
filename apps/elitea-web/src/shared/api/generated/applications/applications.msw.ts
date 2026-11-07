@@ -45,7 +45,11 @@ import { faker } from "@faker-js/faker";
 import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
-import { PermissionTrimmingItemKind } from "../model";
+import {
+  AgentMemoryKind,
+  AgentMemoryStatus,
+  PermissionTrimmingItemKind,
+} from "../model";
 import type {
   AgentAttestation,
   AgentAttestationList,
@@ -53,6 +57,8 @@ import type {
   AgentChangeApprovalOutcome,
   AgentChangeRequest,
   AgentChangeRequestList,
+  AgentMemoryEntry,
+  AgentMemoryList,
   AgentRegistryRecord,
   AgentSchemaResponse,
   ApplicationCreatedResponse,
@@ -69,6 +75,7 @@ import type {
   ApplicationVersionDetail,
   ApplicationVersionDetailExpanded,
   AuthorDetail,
+  ClearAgentMemory200,
   ConversationRunList,
   DefaultIcon,
   DocumentLoadersResponse,
@@ -112,6 +119,7 @@ import type {
   RunStepContent,
   RunStepsPage,
   RunStepsVerification,
+  SetAgentMemoryOptOut200,
   TrendingAuthor,
   UnpublishResponse,
   UploadedIconsList,
@@ -1285,6 +1293,180 @@ export const getUpdateAgentRegistryResponseMock = (): AgentRegistryRecord => ({
   suspension_id: null,
   circuit_breaker: { error_rate_percent: 30 },
   updated_at: "2026-10-29T09:00:00Z",
+});
+
+export const getListAgentMemoryResponseMock = (
+  overrideResponse: Partial<Extract<AgentMemoryList, object>> = {},
+): AgentMemoryList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    application_id: faker.number.int(),
+    kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+    content: faker.string.alpha({ length: { min: 10, max: 2048 } }),
+    subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    pinned: faker.datatype.boolean(),
+    status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+    version: faker.number.int(),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    message_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    execution_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    written_by_kind: faker.helpers.arrayElement(["agent", "person"] as const),
+    written_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    history: faker.helpers.arrayElement([
+      Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        version: faker.number.int(),
+        kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+        content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+        pinned: faker.datatype.boolean(),
+        written_by_kind: faker.helpers.arrayElement([
+          "agent",
+          "person",
+        ] as const),
+        written_by_user_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          null,
+        ]),
+        created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      })),
+      undefined,
+    ]),
+  })),
+  total: faker.number.int(),
+  can_manage: faker.datatype.boolean(),
+  can_delete: faker.datatype.boolean(),
+  can_approve: faker.datatype.boolean(),
+  opted_out: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getClearAgentMemoryResponseMock = (
+  overrideResponse: Partial<Extract<ClearAgentMemory200, object>> = {},
+): ClearAgentMemory200 => ({
+  cleared: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAgentMemoryEntryResponseMock = (
+  overrideResponse: Partial<Extract<AgentMemoryEntry, object>> = {},
+): AgentMemoryEntry => ({
+  id: faker.number.int(),
+  application_id: faker.number.int(),
+  kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+  content: faker.string.alpha({ length: { min: 10, max: 2048 } }),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  pinned: faker.datatype.boolean(),
+  status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+  version: faker.number.int(),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  message_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  written_by_kind: faker.helpers.arrayElement(["agent", "person"] as const),
+  written_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  history: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      version: faker.number.int(),
+      kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+      pinned: faker.datatype.boolean(),
+      written_by_kind: faker.helpers.arrayElement(["agent", "person"] as const),
+      written_by_user_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        null,
+      ]),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getUpdateAgentMemoryEntryResponseMock = (
+  overrideResponse: Partial<Extract<AgentMemoryEntry, object>> = {},
+): AgentMemoryEntry => ({
+  id: faker.number.int(),
+  application_id: faker.number.int(),
+  kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+  content: faker.string.alpha({ length: { min: 10, max: 2048 } }),
+  subject_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  pinned: faker.datatype.boolean(),
+  status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+  version: faker.number.int(),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  message_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  execution_id: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  written_by_kind: faker.helpers.arrayElement(["agent", "person"] as const),
+  written_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  history: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      version: faker.number.int(),
+      kind: faker.helpers.arrayElement(Object.values(AgentMemoryKind)),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      status: faker.helpers.arrayElement(Object.values(AgentMemoryStatus)),
+      pinned: faker.datatype.boolean(),
+      written_by_kind: faker.helpers.arrayElement(["agent", "person"] as const),
+      written_by_user_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        null,
+      ]),
+      created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    })),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
+export const getSetAgentMemoryOptOutResponseMock = (
+  overrideResponse: Partial<Extract<SetAgentMemoryOptOut200, object>> = {},
+): SetAgentMemoryOptOut200 => ({
+  opted_out: faker.datatype.boolean(),
+  ...overrideResponse,
 });
 
 export const getListProjectPermissionTrimmingResponseMock = (
@@ -2784,6 +2966,40 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            memory: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  enabled: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  write: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "auto_attended",
+                      "auto",
+                      "review",
+                      "off",
+                    ] as const),
+                    undefined,
+                  ]),
+                  recall: faker.helpers.arrayElement([
+                    {
+                      max_entries: faker.helpers.arrayElement([
+                        faker.number.int({ min: 1, max: 50 }),
+                        undefined,
+                      ]),
+                      max_tokens: faker.helpers.arrayElement([
+                        faker.number.int({ min: 100, max: 8000 }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             output_contract: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3112,6 +3328,40 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            memory: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  enabled: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  write: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "auto_attended",
+                      "auto",
+                      "review",
+                      "off",
+                    ] as const),
+                    undefined,
+                  ]),
+                  recall: faker.helpers.arrayElement([
+                    {
+                      max_entries: faker.helpers.arrayElement([
+                        faker.number.int({ min: 1, max: 50 }),
+                        undefined,
+                      ]),
+                      max_tokens: faker.helpers.arrayElement([
+                        faker.number.int({ min: 100, max: 8000 }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             output_contract: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3375,6 +3625,40 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        memory: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              enabled: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              write: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "auto_attended",
+                  "auto",
+                  "review",
+                  "off",
+                ] as const),
+                undefined,
+              ]),
+              recall: faker.helpers.arrayElement([
+                {
+                  max_entries: faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 50 }),
+                    undefined,
+                  ]),
+                  max_tokens: faker.helpers.arrayElement([
+                    faker.number.int({ min: 100, max: 8000 }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         output_contract: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -3550,6 +3834,40 @@ export const getGetApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          memory: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                enabled: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
+                  undefined,
+                ]),
+                write: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    "auto_attended",
+                    "auto",
+                    "review",
+                    "off",
+                  ] as const),
+                  undefined,
+                ]),
+                recall: faker.helpers.arrayElement([
+                  {
+                    max_entries: faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 50 }),
+                      undefined,
+                    ]),
+                    max_tokens: faker.helpers.arrayElement([
+                      faker.number.int({ min: 100, max: 8000 }),
+                      undefined,
+                    ]),
+                  },
                   undefined,
                 ]),
               },
@@ -3781,6 +4099,40 @@ export const getGetApplicationResponseMock = (
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            memory: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  enabled: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  write: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "auto_attended",
+                      "auto",
+                      "review",
+                      "off",
+                    ] as const),
+                    undefined,
+                  ]),
+                  recall: faker.helpers.arrayElement([
+                    {
+                      max_entries: faker.helpers.arrayElement([
+                        faker.number.int({ min: 1, max: 50 }),
+                        undefined,
+                      ]),
+                      max_tokens: faker.helpers.arrayElement([
+                        faker.number.int({ min: 100, max: 8000 }),
+                        undefined,
+                      ]),
+                    },
                     undefined,
                   ]),
                 },
@@ -4125,6 +4477,40 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            memory: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  enabled: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  write: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "auto_attended",
+                      "auto",
+                      "review",
+                      "off",
+                    ] as const),
+                    undefined,
+                  ]),
+                  recall: faker.helpers.arrayElement([
+                    {
+                      max_entries: faker.helpers.arrayElement([
+                        faker.number.int({ min: 1, max: 50 }),
+                        undefined,
+                      ]),
+                      max_tokens: faker.helpers.arrayElement([
+                        faker.number.int({ min: 100, max: 8000 }),
+                        undefined,
+                      ]),
+                    },
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             output_contract: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -4448,6 +4834,40 @@ export const getGetPublicApplicationResponseMock = (
                     }),
                     null,
                   ]),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          memory: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                enabled: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
+                  undefined,
+                ]),
+                write: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    "auto_attended",
+                    "auto",
+                    "review",
+                    "off",
+                  ] as const),
+                  undefined,
+                ]),
+                recall: faker.helpers.arrayElement([
+                  {
+                    max_entries: faker.helpers.arrayElement([
+                      faker.number.int({ min: 1, max: 50 }),
+                      undefined,
+                    ]),
+                    max_tokens: faker.helpers.arrayElement([
+                      faker.number.int({ min: 100, max: 8000 }),
+                      undefined,
+                    ]),
+                  },
                   undefined,
                 ]),
               },
@@ -5002,6 +5422,40 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        memory: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              enabled: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              write: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "auto_attended",
+                  "auto",
+                  "review",
+                  "off",
+                ] as const),
+                undefined,
+              ]),
+              recall: faker.helpers.arrayElement([
+                {
+                  max_entries: faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 50 }),
+                    undefined,
+                  ]),
+                  max_tokens: faker.helpers.arrayElement([
+                    faker.number.int({ min: 100, max: 8000 }),
+                    undefined,
+                  ]),
+                },
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         output_contract: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -5312,6 +5766,40 @@ export const getUpdateApplicationVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        memory: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              enabled: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              write: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "auto_attended",
+                  "auto",
+                  "review",
+                  "off",
+                ] as const),
+                undefined,
+              ]),
+              recall: faker.helpers.arrayElement([
+                {
+                  max_entries: faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 50 }),
+                    undefined,
+                  ]),
+                  max_tokens: faker.helpers.arrayElement([
+                    faker.number.int({ min: 100, max: 8000 }),
+                    undefined,
+                  ]),
+                },
                 undefined,
               ]),
             },
@@ -5632,6 +6120,40 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                       }),
                       null,
                     ]),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            memory: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  enabled: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                  write: faker.helpers.arrayElement([
+                    faker.helpers.arrayElement([
+                      "auto_attended",
+                      "auto",
+                      "review",
+                      "off",
+                    ] as const),
+                    undefined,
+                  ]),
+                  recall: faker.helpers.arrayElement([
+                    {
+                      max_entries: faker.helpers.arrayElement([
+                        faker.number.int({ min: 1, max: 50 }),
+                        undefined,
+                      ]),
+                      max_tokens: faker.helpers.arrayElement([
+                        faker.number.int({ min: 100, max: 8000 }),
+                        undefined,
+                      ]),
+                    },
                     undefined,
                   ]),
                 },
@@ -5974,6 +6496,40 @@ export const getSaveApplicationNewVersionResponseMock = (
                   }),
                   null,
                 ]),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        memory: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              enabled: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+              write: faker.helpers.arrayElement([
+                faker.helpers.arrayElement([
+                  "auto_attended",
+                  "auto",
+                  "review",
+                  "off",
+                ] as const),
+                undefined,
+              ]),
+              recall: faker.helpers.arrayElement([
+                {
+                  max_entries: faker.helpers.arrayElement([
+                    faker.number.int({ min: 1, max: 50 }),
+                    undefined,
+                  ]),
+                  max_tokens: faker.helpers.arrayElement([
+                    faker.number.int({ min: 100, max: 8000 }),
+                    undefined,
+                  ]),
+                },
                 undefined,
               ]),
             },
@@ -6427,6 +6983,40 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    memory: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          enabled: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                          write: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              "auto_attended",
+                              "auto",
+                              "review",
+                              "off",
+                            ] as const),
+                            undefined,
+                          ]),
+                          recall: faker.helpers.arrayElement([
+                            {
+                              max_entries: faker.helpers.arrayElement([
+                                faker.number.int({ min: 1, max: 50 }),
+                                undefined,
+                              ]),
+                              max_tokens: faker.helpers.arrayElement([
+                                faker.number.int({ min: 100, max: 8000 }),
+                                undefined,
+                              ]),
+                            },
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                     output_contract: faker.helpers.arrayElement([
                       faker.helpers.arrayElement([
                         {
@@ -6830,6 +7420,40 @@ export const getImportWizardResponseMock = (
                               }),
                               null,
                             ]),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    memory: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          enabled: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                          write: faker.helpers.arrayElement([
+                            faker.helpers.arrayElement([
+                              "auto_attended",
+                              "auto",
+                              "review",
+                              "off",
+                            ] as const),
+                            undefined,
+                          ]),
+                          recall: faker.helpers.arrayElement([
+                            {
+                              max_entries: faker.helpers.arrayElement([
+                                faker.number.int({ min: 1, max: 50 }),
+                                undefined,
+                              ]),
+                              max_tokens: faker.helpers.arrayElement([
+                                faker.number.int({ min: 100, max: 8000 }),
+                                undefined,
+                              ]),
+                            },
                             undefined,
                           ]),
                         },
@@ -7412,6 +8036,40 @@ export const getForkAgentResponseMock = (
                           }),
                           null,
                         ]),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                memory: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      enabled: faker.helpers.arrayElement([
+                        faker.datatype.boolean(),
+                        undefined,
+                      ]),
+                      write: faker.helpers.arrayElement([
+                        faker.helpers.arrayElement([
+                          "auto_attended",
+                          "auto",
+                          "review",
+                          "off",
+                        ] as const),
+                        undefined,
+                      ]),
+                      recall: faker.helpers.arrayElement([
+                        {
+                          max_entries: faker.helpers.arrayElement([
+                            faker.number.int({ min: 1, max: 50 }),
+                            undefined,
+                          ]),
+                          max_tokens: faker.helpers.arrayElement([
+                            faker.number.int({ min: 100, max: 8000 }),
+                            undefined,
+                          ]),
+                        },
                         undefined,
                       ]),
                     },
@@ -8629,6 +9287,158 @@ export const getUpdateAgentRegistryMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getUpdateAgentRegistryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentMemoryMockHandler = (
+  overrideResponse?:
+    | AgentMemoryList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentMemoryList> | AgentMemoryList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_memory/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentMemoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getClearAgentMemoryMockHandler = (
+  overrideResponse?:
+    | ClearAgentMemory200
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<ClearAgentMemory200> | ClearAgentMemory200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/agent_memory/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getClearAgentMemoryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentMemoryEntryMockHandler = (
+  overrideResponse?:
+    | AgentMemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentMemoryEntry> | AgentMemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_memory/prompt_lib/:projectId/:applicationId/:entryId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentMemoryEntryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateAgentMemoryEntryMockHandler = (
+  overrideResponse?:
+    | AgentMemoryEntry
+    | ((
+        info: Parameters<Parameters<typeof http.patch>[1]>[0],
+      ) => Promise<AgentMemoryEntry> | AgentMemoryEntry),
+  options?: RequestHandlerOptions,
+) => {
+  return http.patch(
+    "*/elitea_core/agent_memory/prompt_lib/:projectId/:applicationId/:entryId",
+    async (info: Parameters<Parameters<typeof http.patch>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateAgentMemoryEntryResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteAgentMemoryEntryMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/agent_memory/prompt_lib/:projectId/:applicationId/:entryId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getSetAgentMemoryOptOutMockHandler = (
+  overrideResponse?:
+    | SetAgentMemoryOptOut200
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<SetAgentMemoryOptOut200> | SetAgentMemoryOptOut200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_memory_opt_out/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetAgentMemoryOptOutResponseMock(),
         { status: 200 },
       );
     },
@@ -10974,6 +11784,12 @@ export const getApplicationsMock = () => [
   getRollbackApplicationReleaseMockHandler(),
   getGetAgentRegistryMockHandler(),
   getUpdateAgentRegistryMockHandler(),
+  getListAgentMemoryMockHandler(),
+  getClearAgentMemoryMockHandler(),
+  getGetAgentMemoryEntryMockHandler(),
+  getUpdateAgentMemoryEntryMockHandler(),
+  getDeleteAgentMemoryEntryMockHandler(),
+  getSetAgentMemoryOptOutMockHandler(),
   getListProjectPermissionTrimmingMockHandler(),
   getRemoveProjectPermissionTrimmingItemMockHandler(),
   getMarkAgentDueMockHandler(),

@@ -8572,7 +8572,7 @@ components:
           type: array
           items: { $ref: '#/components/schemas/AgentMemoryEntry' }
         total: { type: integer }
-        can_manage: { type: boolean, description: The caller may edit, pin and archive any entry. }
+        can_manage: { type: boolean, description: "The caller may edit, pin and archive any entry." }
         can_delete: { type: boolean, description: The caller may delete any entry and clear the memory. }
         can_approve: { type: boolean, description: The caller may approve or reject pending entries. }
         opted_out: { type: boolean, description: The caller turned off "remember things about me" for this agent. }
