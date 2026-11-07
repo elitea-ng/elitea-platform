@@ -1690,11 +1690,12 @@ mod tests {
 
     /// A pane whose `browser_wait` never ends and whose question is the
     /// control's hand-over, as the desktop wires it.
-    struct Slow(Arc<PaneControl>);
+    struct Slow(Arc<PaneControl>, Mutex<String>);
 
     #[async_trait]
     impl BrowserDriver for Slow {
         async fn open(&self, url: &str) -> Result<PageInfo, BrowserError> {
+            url.clone_into(&mut self.1.lock().unwrap());
             Pane.open(url).await
         }
         async fn snapshot(&self, max: usize) -> Result<Snapshot, BrowserError> {
@@ -1742,7 +1743,7 @@ mod tests {
             }
         }
         async fn current_url(&self) -> Result<String, BrowserError> {
-            Ok("https://login.example.com/welcome?session=1".to_owned())
+            Ok(self.1.lock().unwrap().clone())
         }
     }
 
@@ -1757,6 +1758,7 @@ mod tests {
     }
 
     struct Controlled {
+        slow: Arc<Slow>,
         drivers: Arc<BrowserDrivers>,
         control: Arc<PaneControl>,
         toolset: BrowserToolset,
@@ -1767,7 +1769,8 @@ mod tests {
     fn controlled() -> Controlled {
         let drivers = Arc::new(BrowserDrivers::new());
         let control = drivers.control("t1");
-        drivers.attach("t1", Arc::new(Slow(control.clone())));
+        let slow = Arc::new(Slow(control.clone(), Mutex::new(String::new())));
+        drivers.attach("t1", slow.clone());
         let recorder = Arc::new(Recorder::default());
         let notes = Arc::new(Notes::default());
         let toolset = BrowserToolset {
@@ -1783,6 +1786,7 @@ mod tests {
             }),
         };
         Controlled {
+            slow,
             drivers,
             control,
             toolset,
@@ -1885,6 +1889,8 @@ mod tests {
         assert_eq!(pane.step("c8")["screenshot"]["taken"], true);
         let act = pane.call("c9", "browser_click", json!({"ref": "e4"})).await;
         assert_eq!(act["code"], "user_in_control");
+        // The person goes on using the page after the agent's last look.
+        pane.control.person_input();
         // Hand back with a note: the agent drives again; the note is the
         // person's message of the turn.
         assert!(pane.control.hand_back(Some("added the item, go on")));
@@ -1978,6 +1984,8 @@ mod tests {
         while !pane.control.view().asked {
             tokio::task::yield_now().await;
         }
+        // The person signed in elsewhere meanwhile.
+        "https://login.example.com/welcome?session=1".clone_into(&mut pane.slow.1.lock().unwrap());
         pane.control.decline();
         assert_eq!(question.await.unwrap()["code"], "declined");
         let asked = pane.step("c4");
