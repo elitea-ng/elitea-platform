@@ -378,6 +378,8 @@ fn turn_context(
         rules: rules.clone(),
         enabled: Arc::new(move || switch.load(Ordering::SeqCst)),
         turn: Arc::default(),
+        recorder: None,
+        uploader: None,
     }
 }
 
@@ -1272,4 +1274,386 @@ fn the_toolset_lists_every_tool_with_a_schema() {
         let schema = tool.parameters_schema().unwrap();
         assert_eq!(schema["type"], "object", "{}", tool.name());
     }
+}
+
+// --- Step records, thumbnails and the upload opt-in (ADR-0047 decision 9) ---
+
+/// An uploader that keeps what it was given.
+#[derive(Default)]
+struct Uploads {
+    taken: Mutex<Vec<(String, String, usize)>>,
+}
+
+#[async_trait]
+impl ScreenshotUploader for Uploads {
+    async fn upload(&self, name: &str, mime: &str, bytes: Vec<u8>) -> Result<String, String> {
+        self.taken
+            .lock()
+            .unwrap()
+            .push((name.to_owned(), mime.to_owned(), bytes.len()));
+        Ok(format!("/computer-screenshots/run/{name}"))
+    }
+}
+
+impl Rig {
+    /// The rig's turn records to a recorder, as `ObservedTool` does: the
+    /// step starts with the recorded (redacted) inputs, then the call runs.
+    fn recording(mut self, uploader: Option<Arc<dyn ScreenshotUploader>>) -> (Self, Arc<Recorder>) {
+        let recorder = Arc::new(Recorder::default());
+        self.context.recorder = Some(recorder.clone());
+        self.context.uploader = uploader;
+        (self, recorder)
+    }
+
+    async fn recorded_call(&self, recorder: &Recorder, id: &str, name: &str, args: Value) -> Value {
+        let digest = |text: &str| recorder.text_digest(text);
+        let inputs = recorded_inputs(name, &args, Some(&digest));
+        assert!(recorder.tool_started(id, name, &inputs));
+        let result = self.tool(name).run(id, &args).await;
+        // As `ObservedTool` does: the image goes to the model only.
+        let observed = elitea_agent_runtime::image_result::without_image(&result);
+        recorder.tool_finished(id, &observed, None);
+        result
+    }
+}
+
+use crate::d0::recorder::{Recorder, STEP_RECORD_KEY};
+
+#[tokio::test]
+async fn no_typed_text_reaches_the_step_record_or_the_commit() {
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(None);
+    rig.snapshot().await;
+    const SECRET: &str = "correct horse battery staple";
+    let typed = rig
+        .recorded_call(
+            &recorder,
+            "call-type",
+            COMPUTER_TYPE,
+            json!({ "bundle_id": APP, "ref": "@s1:e2", "text": SECRET }),
+        )
+        .await;
+    assert_eq!(typed["status"], "ok", "{typed}");
+    let set = rig
+        .recorded_call(
+            &recorder,
+            "call-set",
+            COMPUTER_ACT,
+            json!({ "bundle_id": APP, "ref": "@s1:e2", "action": "set_value", "value": SECRET }),
+        )
+        .await;
+    assert_eq!(set["status"], "ok", "{set}");
+    // A refused write is recorded too, and still without its text.
+    let refused = rig
+        .recorded_call(
+            &recorder,
+            "call-secure",
+            COMPUTER_TYPE,
+            json!({ "bundle_id": APP, "ref": "@s1:e3", "text": SECRET }),
+        )
+        .await;
+    assert_eq!(refused["code"], "secure_field_refused");
+
+    let calls = recorder.tool_calls();
+    let committed = serde_json::to_string(&calls).unwrap();
+    assert!(!committed.contains(SECRET), "{committed}");
+    assert!(!committed.contains("horse"), "{committed}");
+    // The turn's keyed digest: two writes of one text agree, and it is not
+    // the text's plain SHA-256 (a short PIN could be brute-forced from it).
+    let expected_digest = recorder.text_digest(SECRET);
+    assert!(
+        expected_digest.starts_with("hmac-sha256:"),
+        "{expected_digest}"
+    );
+    assert_ne!(expected_digest, digest(SECRET.as_bytes()));
+    assert!(
+        !committed.contains(&elitea_workspace_store::digest::sha256_hex(
+            SECRET.as_bytes()
+        ))
+    );
+    for (id, outcome) in [
+        ("call-type", "ok"),
+        ("call-set", "ok"),
+        ("call-secure", "secure_field_refused"),
+    ] {
+        let entry = calls.get(id).unwrap();
+        let record = &entry[STEP_RECORD_KEY];
+        assert_eq!(record["v"], 1);
+        assert_eq!(record["bundle_id"], APP.to_ascii_lowercase());
+        assert_eq!(
+            record["ref"],
+            if id == "call-secure" {
+                "@s1:e3"
+            } else {
+                "@s1:e2"
+            }
+        );
+        assert_eq!(record["outcome"], outcome, "{record}");
+        assert_eq!(record["text"]["chars"], SECRET.chars().count());
+        assert_eq!(record["text"]["digest"], expected_digest);
+        assert_eq!(record["window_title"], "Untitled");
+        // The tool inputs keep the length and digest, not the text.
+        let inputs = &entry["tool_inputs"];
+        assert!(
+            inputs.get("text").is_none() && inputs.get("value").is_none(),
+            "{inputs}"
+        );
+    }
+    assert_eq!(
+        calls.get("call-type").unwrap()[STEP_RECORD_KEY]["action"],
+        "type"
+    );
+    assert_eq!(
+        calls.get("call-set").unwrap()[STEP_RECORD_KEY]["action"],
+        "set_value"
+    );
+}
+
+#[test]
+fn recorded_inputs_keep_only_the_length_and_digest_of_typed_text() {
+    let recorder = Recorder::default();
+    let keyed = |text: &str| recorder.text_digest(text);
+    let typed = recorded_inputs(
+        COMPUTER_TYPE,
+        &json!({ "bundle_id": APP, "text": "héllo" }),
+        Some(&keyed),
+    );
+    assert_eq!(
+        typed,
+        json!({ "bundle_id": APP, "text_chars": 5, "text_digest": recorder.text_digest("héllo") })
+    );
+    let set = recorded_inputs(
+        COMPUTER_ACT,
+        &json!({ "bundle_id": APP, "ref": "@s1:e2", "action": "set_value", "value": "x" }),
+        Some(&keyed),
+    );
+    assert!(set.get("value").is_none());
+    assert_eq!(set["value_chars"], 1);
+    // Without a turn key (the session store) only the length is kept.
+    let stored = recorded_inputs(
+        COMPUTER_TYPE,
+        &json!({ "bundle_id": APP, "text": "1234" }),
+        None,
+    );
+    assert_eq!(stored, json!({ "bundle_id": APP, "text_chars": 4 }));
+    // A select's option and any other tool's arguments are kept as they are.
+    let select = json!({ "bundle_id": APP, "ref": "@s1:e2", "action": "select", "value": "Large" });
+    assert_eq!(recorded_inputs(COMPUTER_ACT, &select, Some(&keyed)), select);
+    let read = json!({ "path": "a.txt", "text": "kept" });
+    assert_eq!(recorded_inputs("write_file", &read, Some(&keyed)), read);
+}
+
+/// The typed-text digest is keyed per turn (ADR-0047 decision 9): another
+/// turn's digest of the same PIN differs, so the platform cannot match or
+/// brute-force it.
+#[test]
+fn a_typed_text_digest_is_keyed_per_turn_and_never_a_plain_hash() {
+    let one = Recorder::default();
+    let two = Recorder::default();
+    assert_eq!(one.text_digest("1234"), one.text_digest("1234"));
+    assert_ne!(one.text_digest("1234"), one.text_digest("1235"));
+    assert_ne!(one.text_digest("1234"), two.text_digest("1234"));
+    assert!(
+        !one.text_digest("1234")
+            .contains(&elitea_workspace_store::digest::sha256_hex(b"1234"))
+    );
+}
+
+#[tokio::test]
+async fn a_screenshot_is_recorded_by_size_and_digest_and_stays_on_the_device_by_default() {
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(None);
+    let shot = rig
+        .recorded_call(
+            &recorder,
+            "call-shot",
+            COMPUTER_SCREENSHOT,
+            json!({ "bundle_id": APP }),
+        )
+        .await;
+    assert_eq!(shot["status"], "ok", "{shot}");
+    let calls = recorder.tool_calls();
+    let entry = calls.get("call-shot").unwrap();
+    let screenshot = &entry[STEP_RECORD_KEY]["screenshot"];
+    assert_eq!(screenshot["taken"], true);
+    assert!(screenshot["bytes"].as_u64().is_some_and(|b| b > 0));
+    assert!(
+        screenshot["digest"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("sha256:") && d.len() == 71),
+        "{screenshot}"
+    );
+    // Not uploaded: no upload was attempted, and the commit has no image.
+    assert!(screenshot.get("uploaded").is_none(), "{screenshot}");
+    let committed = serde_json::to_string(&calls).unwrap();
+    assert!(!committed.contains(IMAGE_FIELD), "{committed}");
+    // The local transcript gets a small thumbnail, once.
+    let thumbnail = recorder.take_thumbnail("call-shot").expect("a thumbnail");
+    assert!(thumbnail.starts_with("data:image/jpeg;base64,"));
+    assert!(thumbnail.len() < crate::history::MAX_EVENT_STRING);
+    assert!(recorder.take_thumbnail("call-shot").is_none());
+}
+
+#[test]
+fn the_upload_is_off_unless_the_platform_says_the_project_opted_in() {
+    let started: crate::d0::api::LocalTurnStarted = serde_json::from_value(json!({
+        "execution_id": "e",
+        "question_id": "q",
+        "response_message_id": "r",
+        "memory_recall": { "text": "", "count": 0, "memory_ids": [] },
+    }))
+    .unwrap();
+    assert!(!started.computer_use.upload_screenshots);
+    let off: crate::d0::api::ComputerUseStarted = serde_json::from_value(json!({})).unwrap();
+    assert!(!off.upload_screenshots);
+    let on: crate::d0::api::ComputerUseStarted =
+        serde_json::from_value(json!({ "upload_screenshots": true })).unwrap();
+    assert!(on.upload_screenshots);
+}
+
+#[tokio::test]
+async fn with_the_opt_in_a_screenshot_is_uploaded_and_its_artifact_recorded() {
+    let uploads = Arc::new(Uploads::default());
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(Some(uploads.clone()));
+    let shot = rig
+        .recorded_call(
+            &recorder,
+            "call-up",
+            COMPUTER_SCREENSHOT,
+            json!({ "bundle_id": APP }),
+        )
+        .await;
+    assert_eq!(shot["status"], "ok", "{shot}");
+    recorder.settle_uploads(Duration::from_secs(5)).await;
+    let taken = uploads.taken.lock().unwrap().clone();
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].0, "computer-screenshot-call-up.png");
+    let calls = recorder.tool_calls();
+    let screenshot = &calls.get("call-up").unwrap()[STEP_RECORD_KEY]["screenshot"];
+    assert_eq!(screenshot["uploaded"], true);
+    assert_eq!(
+        screenshot["artifact"],
+        "/computer-screenshots/run/computer-screenshot-call-up.png"
+    );
+    assert_eq!(screenshot["bytes"], taken[0].2);
+    // A refused screenshot uploads nothing.
+    *rig.fake.screen.lock().unwrap() = ScreenStatus {
+        locked: true,
+        ..ScreenStatus::available()
+    };
+    let refused = rig
+        .recorded_call(
+            &recorder,
+            "call-locked",
+            COMPUTER_SCREENSHOT,
+            json!({ "bundle_id": APP }),
+        )
+        .await;
+    assert_eq!(refused["code"], "screen_unavailable");
+    recorder.settle_uploads(Duration::from_secs(5)).await;
+    assert_eq!(uploads.taken.lock().unwrap().len(), 1);
+    let calls = recorder.tool_calls();
+    let record = &calls.get("call-locked").unwrap()[STEP_RECORD_KEY];
+    assert_eq!(record["outcome"], "screen_unavailable");
+    assert!(record.get("screenshot").is_none());
+}
+
+/// An uploader that holds every upload until the test lets it go.
+#[derive(Default)]
+struct SlowUploads {
+    gate: tokio::sync::Notify,
+    order: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ScreenshotUploader for SlowUploads {
+    async fn upload(&self, name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<String, String> {
+        self.gate.notified().await;
+        self.order.lock().unwrap().push(name.to_owned());
+        Ok(format!("/stored/{name}"))
+    }
+}
+
+/// The upload runs beside the turn (ADR-0047 decision 9): the call answers
+/// while its upload still waits, uploads keep call order, and the commit
+/// gets the outcome once the turn settles them; one not done in time is
+/// `uploaded: false`.
+#[tokio::test]
+async fn a_screenshot_upload_never_holds_the_call_and_settles_before_the_commit() {
+    let uploads = Arc::new(SlowUploads::default());
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(Some(uploads.clone()));
+    for id in ["shot-1", "shot-2"] {
+        let shot = tokio::time::timeout(
+            Duration::from_secs(5),
+            rig.recorded_call(
+                &recorder,
+                id,
+                COMPUTER_SCREENSHOT,
+                json!({ "bundle_id": APP }),
+            ),
+        )
+        .await
+        .expect("the call waited for its upload");
+        assert_eq!(shot["status"], "ok", "{shot}");
+    }
+    let pending = recorder.tool_calls();
+    assert!(
+        pending.get("shot-1").unwrap()[STEP_RECORD_KEY]["screenshot"]
+            .get("uploaded")
+            .is_none()
+    );
+    // Let one go: the first is stored, the second does not finish in time.
+    uploads.gate.notify_one();
+    recorder.settle_uploads(Duration::from_millis(500)).await;
+    assert_eq!(
+        *uploads.order.lock().unwrap(),
+        vec!["computer-screenshot-shot-1.png".to_owned()]
+    );
+    let calls = recorder.tool_calls();
+    let first = &calls.get("shot-1").unwrap()[STEP_RECORD_KEY]["screenshot"];
+    assert_eq!(first["uploaded"], true);
+    assert_eq!(first["artifact"], "/stored/computer-screenshot-shot-1.png");
+    assert_eq!(
+        calls.get("shot-2").unwrap()[STEP_RECORD_KEY]["screenshot"]["uploaded"],
+        false
+    );
+}
+
+/// A hand-over the person answered done is recorded as done, carried out
+/// of the call rather than guessed from its result.
+#[tokio::test]
+async fn a_completed_hand_over_is_recorded_as_done() {
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(None);
+    *rig.person.answer.lock().unwrap() = ApprovalOutcome::Decided {
+        action: "approve".into(),
+        value: json!({}),
+    };
+    let done = rig
+        .recorded_call(
+            &recorder,
+            "hand-1",
+            COMPUTER_REQUEST_USER,
+            json!({ "reason": "sign in" }),
+        )
+        .await;
+    assert_eq!(done["status"], "ok", "{done}");
+    assert_eq!(
+        recorder.tool_calls().get("hand-1").unwrap()[STEP_RECORD_KEY]["outcome"],
+        "ok"
+    );
+    *rig.person.answer.lock().unwrap() = ApprovalOutcome::Decided {
+        action: "reject".into(),
+        value: json!({}),
+    };
+    let declined = rig
+        .recorded_call(
+            &recorder,
+            "hand-2",
+            COMPUTER_REQUEST_USER,
+            json!({ "reason": "sign in" }),
+        )
+        .await;
+    assert_eq!(declined["code"], "declined", "{declined}");
+    assert_eq!(
+        recorder.tool_calls().get("hand-2").unwrap()[STEP_RECORD_KEY]["outcome"],
+        "declined"
+    );
 }

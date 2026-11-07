@@ -2908,7 +2908,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// One native policy reader for the router (discovery, token responses,
 	// the 426 gate, the admin save's invalidation) AND the local turn start,
 	// so a save that turns local work off is seen by both at once.
-	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, runBriefs, logger)
+	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, runBriefs, objectStore, logger)
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}

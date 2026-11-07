@@ -57,6 +57,25 @@ These hold in every mode, bypass included, and no answer lifts them:
 
 Window titles, control names and screenshots are what the screen shows, so another app can put text there. The agent treats them as untrusted content: they come back in a marked block, and the agent follows no instruction in them. Only the last three screenshots stay in the agent's context. Older ones are replaced by a short note. Text the agent types is not echoed back in the tool result.
 
+## What is recorded
+
+Each `computer` call is recorded with the turn, as a step record of the run: the tool, the app's bundle id, the window title, the action, the control it acted on, and the outcome (done, the refusal code, or declined). The questions you were asked and your answers go to the approval ledger with the turn.
+
+- **Typed text.** What the agent types is recorded only as its length and a keyed digest, never as text. The key is drawn for each turn and never leaves your computer, so the digest tells two texts of one turn apart but cannot be turned back into a PIN or password. The tool row in the transcript, the thread history and the saved turn show the length and digest in its place; the agent's stored conversation on your computer keeps the length only.
+- **Screenshots.** A screenshot appears in the transcript as a small thumbnail under its tool row. The saved turn records that a screenshot was taken, its size and its digest. The picture itself stays on your computer.
+- **Uploading screenshots.** A project admin can turn on **Upload screenshots** for the project (the `computer_use` project setting, below). Screenshots are then also saved in the conversation as attachments, under the turn's run, and the step record names the stored file. Uploads run in the background, so the agent does not wait for them; the turn waits up to 30 seconds for the last ones before it is saved. One turn uploads at most 64 screenshots and 64 MiB. If an upload fails or is over the limit, the step record says so and the turn goes on.
+
+Turning on the upload, as a project admin (permission `models.project_settings.edit`):
+
+```bash
+curl -X POST "$DEPLOYMENT_URL/api/v2/configurations/configurations/$PROJECT_ID" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"elitea_title":"computer_use","label":"Computer use","type":"computer_use",
+       "section":"project_settings","data":{"upload_screenshots":true}}'
+```
+
+The setting is off when the project has none. A turn reads it when it starts, so a change applies from the next turn.
+
 ## Turn it off
 
 Set `"computer_use": false` in `settings.json`, or remove the key. The next call of a running turn is refused (`computer_use_off`), and the next turn has no `computer` tools. The same holds when your organization turns the policy off. To forget an **Always for this app** answer, remove it in the app's remembered choices.

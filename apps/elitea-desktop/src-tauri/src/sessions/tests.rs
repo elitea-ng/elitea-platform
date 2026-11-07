@@ -1294,3 +1294,49 @@ async fn an_idle_marker_joins_the_last_committed_turn_and_survives_a_reopen() {
     // A reopen keeps it: it is a committed turn's event.
     assert_eq!(sessions.open_session(&me, "fp").await.unwrap().events, 2);
 }
+
+/// What a `computer` call typed never reaches sessions.db (ADR-0047
+/// decision 9): the model's function call is stored with the text's length
+/// only, for `computer_type` and a `set_value` act alike.
+#[tokio::test]
+async fn a_computer_calls_typed_text_is_never_stored() {
+    const SECRET: &str = "hunter2-pin-0451";
+    let (_dir, state) = open();
+    let me = identity(1, "https://a.example");
+    let key = me.key();
+    state.store().open_session(&me, "fp").await.unwrap();
+    let scope = state.store().begin_turn(&key, "exec-1").unwrap();
+    let service = state.sessions();
+    for (id, name, args) in [
+        (
+            "c1",
+            "computer_type",
+            json!({"bundle_id": "com.apple.TextEdit", "text": SECRET}),
+        ),
+        (
+            "c2",
+            "computer_act",
+            json!({"bundle_id": "com.apple.TextEdit", "ref": "@s1:e2", "action": "set_value", "value": SECRET}),
+        ),
+    ] {
+        let mut event = call_event("inv", id);
+        event.llm_response.content = Some(Content {
+            role: "model".into(),
+            parts: vec![Part::FunctionCall {
+                name: name.into(),
+                args,
+                id: Some(id.to_owned()),
+                thought_signature: None,
+            }],
+        });
+        service.append_event(&key, event).await.unwrap();
+    }
+    drop(scope);
+    let rows = state.store().rows(&key).await.unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let stored =
+        serde_json::to_string(&rows.iter().map(|row| &row.event).collect::<Vec<_>>()).unwrap();
+    assert!(!stored.contains(SECRET), "{stored}");
+    assert!(stored.contains("\"text_chars\":16"), "{stored}");
+    assert!(stored.contains("\"value_chars\":16"), "{stored}");
+}

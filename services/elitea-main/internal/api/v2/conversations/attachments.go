@@ -568,10 +568,37 @@ func numberedAttachmentName(name string, attempt int) string {
 // the chunked and the plain-multipart paths above, mirroring the legacy runtime's own
 // process_uploaded_files, which both call identically.
 func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context, projectID int64, projectIDStr, conversationID, fileName, contentType string, content []byte) {
+	created, err := h.storeAttachment(ctx, projectID, projectIDStr, conversationID, fileName, contentType, content)
+	if err != nil {
+		apierr.Write(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, []attachmentCreated{created})
+}
+
+// StoreConversationAttachment stores content as an attachment of the
+// conversation (its UUID), the way an upload does, and answers its filepath
+// (`/{bucket}/{key}`). The desktop computer use screenshot upload (ADR-0047
+// decision 9) stores through it.
+func StoreConversationAttachment(ctx context.Context, store storage.ObjectStore, attachments AttachmentStore,
+	projectID int64, conversationUUID, fileName, contentType string, content []byte) (string, error) {
+	if store == nil || attachments == nil {
+		return "", apierr.Internal("attachment storage is not configured")
+	}
+	h := &Handler{store: store, attachments: attachments}
+	created, err := h.storeAttachment(ctx, projectID, strconv.FormatInt(projectID, 10), conversationUUID, fileName, contentType, content)
+	if err != nil {
+		return "", err
+	}
+	return created.Filepath, nil
+}
+
+// storeAttachment is finalizeAttachment without the answer: the error is an
+// apierr error.
+func (h *Handler) storeAttachment(ctx context.Context, projectID int64, projectIDStr, conversationID, fileName, contentType string, content []byte) (attachmentCreated, error) {
 	bucketName, policyMaxFileBytes, policyRetentionDays, err := h.attachments.AttachmentPolicy(ctx, projectID)
 	if err != nil {
-		apierr.Write(w, apierr.Internal("get project storage policy: "+err.Error()))
-		return
+		return attachmentCreated{}, apierr.Internal("get project storage policy: " + err.Error())
 	}
 	if bucketName == "" {
 		bucketName = storage.DefaultAttachmentBucket
@@ -593,12 +620,10 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 		kind = "Image"
 	}
 	if int64(len(content)) > maxFileBytes {
-		apierr.Write(w, apierr.BadRequest(fmt.Sprintf("%s %q exceeds the %d MB limit", kind, fileName, maxFileBytes>>20)))
-		return
+		return attachmentCreated{}, apierr.BadRequest(fmt.Sprintf("%s %q exceeds the %d MB limit", kind, fileName, maxFileBytes>>20))
 	}
 	if int64(len(content)) > attachmentMaxTotalBytes() {
-		apierr.Write(w, apierr.BadRequest(fmt.Sprintf("Total upload size exceeds the limit of %d MB", attachmentMaxTotalBytes()>>20)))
-		return
+		return attachmentCreated{}, apierr.BadRequest(fmt.Sprintf("Total upload size exceeds the limit of %d MB", attachmentMaxTotalBytes()>>20))
 	}
 
 	retentionDays := attachmentRetentionDays()
@@ -607,13 +632,11 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	}
 	bucketID, err := h.attachments.RequireAttachmentBucket(ctx, projectID, bucketName, retentionDays)
 	if errors.Is(err, storage.ErrSystemBucketNameTaken) {
-		apierr.Write(w, apierr.Conflict(fmt.Sprintf(
-			"the attachment bucket %q of this project is a bucket a person created, not the platform's attachment bucket; rename or delete it (Artifacts page) and upload again", bucketName)))
-		return
+		return attachmentCreated{}, apierr.Conflict(fmt.Sprintf(
+			"the attachment bucket %q of this project is a bucket a person created, not the platform's attachment bucket; rename or delete it (Artifacts page) and upload again", bucketName))
 	}
 	if err != nil {
-		apierr.Write(w, apierr.Internal("get or create attachment bucket: "+err.Error()))
-		return
+		return attachmentCreated{}, apierr.Internal("get or create attachment bucket: " + err.Error())
 	}
 	// The retention window of this attachment starts now, not when the
 	// bucket was created.
@@ -637,8 +660,7 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	// was given, so stored objects and their paths are untouched.
 	key, ref, err := h.reserveAttachmentKey(ctx, bucketID, projectIDStr, bucketName, conversationID, sanitizeAttachmentFilename(fileName), contentType, &attachmentExpiresAt)
 	if err != nil {
-		apierr.Write(w, err)
-		return
+		return attachmentCreated{}, err
 	}
 
 	info, err := h.store.Put(ctx, ref, bytes.NewReader(content), storage.PutOptions{
@@ -648,8 +670,7 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	if err != nil {
 		// Free the key: the placeholder names bytes that were never stored.
 		_ = h.attachments.DeleteAttachmentObjects(ctx, bucketID, []string{key})
-		apierr.Write(w, apierr.Internal("store attachment: "+err.Error()))
-		return
+		return attachmentCreated{}, apierr.Internal("store attachment: " + err.Error())
 	}
 	if info.Key != key {
 		// A store that chose its own key: the reservation names nothing.
@@ -657,16 +678,15 @@ func (h *Handler) finalizeAttachment(w http.ResponseWriter, ctx context.Context,
 	}
 
 	if err := h.attachments.RecordAttachmentObject(ctx, bucketID, info.Key, info.Size, contentType, &attachmentExpiresAt); err != nil {
-		apierr.Write(w, apierr.Internal("record attachment metadata: "+err.Error()))
-		return
+		return attachmentCreated{}, apierr.Internal("record attachment metadata: " + err.Error())
 	}
 	// Extract the text now, in the background (issue 1062): the first turn
 	// that carries the file then reads the filed result. It never blocks or
 	// fails the upload.
 	h.warmAttachmentExtraction(projectID, bucketName, info.Key, fileName)
 
-	writeJSON(w, http.StatusCreated, []attachmentCreated{{
+	return attachmentCreated{
 		Filepath: fmt.Sprintf("/%s/%s", bucketName, info.Key),
 		FileSize: info.Size,
-	}})
+	}, nil
 }

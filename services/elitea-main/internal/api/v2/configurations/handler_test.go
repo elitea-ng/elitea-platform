@@ -577,9 +577,13 @@ func TestAvailableServesPinnedRegistrySnapshot(t *testing.T) {
 	// retired), plus the Go-registered cloud_executor project setting
 	// (ADR-0034 decision 11), worker_egress project setting (ADR-0044
 	// decision 2), ai_disclosure project setting (ADR-0043 decision 3) and
-	// browser project setting (ADR-0049).
-	if len(types) != 60 {
-		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress, ai_disclosure and browser, got %d", len(types))
+	// browser project setting (ADR-0049) and computer_use project setting
+	// (ADR-0047).
+	if len(types) != 61 {
+		t.Errorf("expected the 51 pinned entries, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser and computer_use, got %d", len(types))
+	}
+	if got := found["computer_use"].Section; got != "project_settings" {
+		t.Errorf("computer_use section = %q, want project_settings", got)
 	}
 	if got := found["browser"].Section; got != "project_settings" {
 		t.Errorf("browser section = %q, want project_settings", got)

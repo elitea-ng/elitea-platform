@@ -66,6 +66,7 @@ import type {
   LocalChildTurnStarted,
   LocalChildTurnState,
   LocalTurnCommitted,
+  LocalTurnScreenshotStored,
   LocalTurnStarted,
   MemoryEntry,
   MemoryEntryList,
@@ -1279,6 +1280,10 @@ export const getStartLocalTurnResponseMock = (
     },
     undefined,
   ]),
+  computer_use: faker.helpers.arrayElement([
+    { upload_screenshots: faker.datatype.boolean() },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -1329,6 +1334,14 @@ export const getCommitLocalTurnResponseMock = (
   memories_used: faker.number.int(),
   committed_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   created: faker.datatype.boolean(),
+  ...overrideResponse,
+});
+
+export const getUploadLocalTurnScreenshotResponseMock = (
+  overrideResponse: Partial<Extract<LocalTurnScreenshotStored, object>> = {},
+): LocalTurnScreenshotStored => ({
+  filepath: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  file_size: faker.number.int(),
   ...overrideResponse,
 });
 
@@ -3187,6 +3200,32 @@ export const getCommitLocalTurnMockHandler = (
   );
 };
 
+export const getUploadLocalTurnScreenshotMockHandler = (
+  overrideResponse?:
+    | LocalTurnScreenshotStored
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalTurnScreenshotStored> | LocalTurnScreenshotStored),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_turn_screenshot/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUploadLocalTurnScreenshotResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetWorkspaceHandoffPolicyMockHandler = (
   overrideResponse?:
     | WorkspaceHandoffPolicy
@@ -4368,6 +4407,7 @@ export const getChatMock = () => [
   getGetRunBriefMockHandler(),
   getCheckRunGoalMockHandler(),
   getCommitLocalTurnMockHandler(),
+  getUploadLocalTurnScreenshotMockHandler(),
   getGetWorkspaceHandoffPolicyMockHandler(),
   getBeginWorkspaceHandoffMockHandler(),
   getGetWorkspaceHandoffMockHandler(),

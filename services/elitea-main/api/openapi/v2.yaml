@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.40"
+  x-elitea-client-contract: "1.41"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -5393,6 +5393,54 @@ components:
           $ref: '#/components/schemas/LocalTurnMemoryRecall'
         unattended:
           $ref: '#/components/schemas/LocalTurnUnattendedStarted'
+        computer_use:
+          $ref: '#/components/schemas/LocalTurnComputerUse'
+    LocalTurnComputerUse:
+      type: object
+      description: >-
+        Client contract 1.41 (ADR-0047 decision 9). The project's desktop
+        computer use setting (configuration type `computer_use`, section
+        `project_settings`). With `upload_screenshots` false (the default,
+        and the answer when the setting cannot be read), the screenshots a
+        turn's computer tools take stay on the device: the commit records
+        only that each was taken, its size and its digest. With it true, the
+        desktop host uploads each one with uploadLocalTurnScreenshot. Absent
+        from a server older than 1.41: read it as false.
+        NOTE(W2): internal/api/v2/localturns/screenshot.go
+        (`computerUseStarted`).
+      required: [upload_screenshots]
+      properties:
+        upload_screenshots: { type: boolean }
+    LocalTurnScreenshotUpload:
+      type: object
+      description: >-
+        Client contract 1.41 (ADR-0047 decision 9). One screenshot a desktop
+        turn's computer tools took.
+      required: [name, media_type, digest, content]
+      properties:
+        name:
+          type: string
+          pattern: '^computer-screenshot-[A-Za-z0-9_-]{1,64}\.(png|jpg)$'
+          description: The attachment name; `.png` with `image/png`, `.jpg` with `image/jpeg`.
+        media_type:
+          type: string
+          enum: [image/png, image/jpeg]
+        digest:
+          type: string
+          description: '`sha256:` and the lowercase hex SHA-256 of the decoded content.'
+        content:
+          type: string
+          format: byte
+          description: The image, standard base64. At most the project's image attachment limit (3 MiB by default).
+    LocalTurnScreenshotStored:
+      type: object
+      description: Client contract 1.41. Where the screenshot is stored.
+      required: [filepath, file_size]
+      properties:
+        filepath:
+          type: string
+          description: '`/{bucket}/{conversation_uuid}/computer-screenshot-{execution_id}-{id}.png|.jpg`, the chat attachment path; a taken name gets a number.'
+        file_size: { type: integer, format: int64 }
     LocalTurnHITLExchange:
       type: object
       description: >-
@@ -5550,7 +5598,20 @@ components:
             the runtime streams as `response_metadata.tool_calls`: `run_id`,
             `tool_name`, `tool_inputs`, `tool_output`, `finish_reason`,
             `error`, `timestamp_start`, `timestamp_finish`, `metadata`,
-            `tool_meta`. Stored as trace steps (listMessageTraces).
+            `tool_meta`. Stored as trace steps (listMessageTraces). Client
+            contract 1.41 (ADR-0047 decision 9): a desktop computer call's
+            entry may carry `computer_step`, its step record (`v`, `tool`,
+            `outcome`, `bundle_id`, `window_title`, `action`, `ref`, `text`
+            as `{chars, digest}` only (`digest` is `hmac-sha256:` under a
+            random per-turn key that never leaves the device, so it cannot
+            be brute-forced into the text), `screenshot` as `{taken, mime, bytes,
+            width, height, zoom, digest, uploaded, artifact}`). It is stored as
+            an ADR-0042 run step record of the turn (kind `tool_call`, the
+            object as its summary); keys outside that list are dropped, so no
+            typed text reaches the record, and a record that is not an object
+            or is too large is dropped without refusing the commit. A computer call's `tool_inputs`
+            hold `text_chars` and `text_digest` (or `value_chars` and
+            `value_digest`) instead of the typed text.
           additionalProperties:
             type: object
             additionalProperties: true
@@ -27275,6 +27336,122 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/local_turn_screenshot/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The `execution_id` startLocalTurn answered.
+    post:
+      operationId: uploadLocalTurnScreenshot
+      summary: Upload a desktop computer use screenshot as a run artifact
+      description: |
+        Client contract 1.41 (ADR-0047 decision 9). Only when the project
+        opted in (`computer_use.upload_screenshots`, which the start answers
+        as `computer_use`); otherwise 403 `computer_screenshot_upload_off`
+        and the screenshot stays on the device. Stores the image as an
+        attachment of the turn's conversation, through the chat attachment
+        path (its bucket, size limit and retention), and answers its
+        `filepath`, which the desktop host records in the call's
+        `computer_step.screenshot.artifact`.
+
+        Only the credential that started the turn, while the turn is not
+        committed and not past its deadline (404, 409
+        `local_turn_already_committed`, 410 `local_turn_expired`). The
+        digest is checked against the decoded content. One turn uploads at
+        most 64 screenshots (429 `computer_screenshot_limit`) and 64 MiB of
+        them (413 `computer_screenshot_limit`); the stored name carries the
+        turn's execution id (`computer-screenshot-<execution_id>-<id>`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalTurnScreenshotUpload'
+            example:
+              name: computer-screenshot-call_1.png
+              media_type: image/png
+              digest: sha256:4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6
+              content: iVBORw0KGgo=
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '201':
+          description: The screenshot is stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnScreenshotStored'
+        '400':
+          description: >-
+            A malformed body, name, media type or digest
+            (`invalid_computer_screenshot`, `invalid_local_turn`), an image
+            over the limit (`computer_screenshot_refused`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a session caller
+            (`local_turn_requires_token`), or the project keeps screenshots
+            on the device (`computer_screenshot_upload_off`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: No such turn for this caller and credential (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '409':
+          description: The turn is committed (`local_turn_already_committed`), or the attachment bucket name is taken (`computer_screenshot_refused`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '410':
+          description: The turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 6 MiB, or the turn's screenshots would pass 64 MiB (`computer_screenshot_limit`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '429':
+          description: The turn uploaded 64 screenshots already (`computer_screenshot_limit`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The setting or the store cannot be read right now (`local_turn_unavailable`); retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
 
   /elitea_core/workspace_handoff_policy/prompt_lib/{project_id}:
     parameters:

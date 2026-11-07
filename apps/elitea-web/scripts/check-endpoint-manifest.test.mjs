@@ -895,7 +895,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 470 -> 471 (issue 1597, ADR-0049 decision 6): viewBrowserSession, the
 // cloud browser view WebSocket. The web viewer is a later story (issue
 // 1598), so it is not in the manifest yet.
-const GENERATED_OPERATION_COUNT = 471;
+// 471 -> 472 (issue 1585, ADR-0047 decision 9): uploadLocalTurnScreenshot,
+// a computer use screenshot the desktop host uploads when the project opted
+// in. The desktop host calls it, so the web manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 472;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
