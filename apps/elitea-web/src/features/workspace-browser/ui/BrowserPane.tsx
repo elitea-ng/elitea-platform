@@ -1,8 +1,16 @@
 /**
  * The browser pane's body (ADR-0048 decision 1): a toolbar — address field,
- * back, forward, reload or stop, the control pill's place (#1591), Open in
- * browser, a ⋯ menu (Forget site data) and close — above the page
- * rectangle. The page itself is a native child webview the host lays over
+ * back, forward, reload or stop, the control pill, Open in browser, a ⋯
+ * menu (Forget site data) and close — above the page rectangle.
+ *
+ * The control pill (ADR-0048 decision 4, #1591) says who drives the page:
+ * **Agent**, **You** or **Idle**. **Take over** (or any click, key or scroll
+ * of the person's in the page) pauses the agent: its pending call answers
+ * `user_active`, the next ones `user_in_control`, except its snapshots and
+ * screenshots while **Let the agent watch** is ticked. **Hand back** returns
+ * the page with an optional note, the person's message to the agent. When
+ * the agent asks for the person (`browser_request_user`), its reason shows
+ * above the page until they hand back (the note answers it) or decline. The page itself is a native child webview the host lays over
  * that rectangle (`usePageRect`): nothing can be drawn over it, so every
  * control, menu and notice of the pane sits outside it, and the page is
  * hidden while a modal sheet is open.
@@ -17,6 +25,8 @@ import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import InputBase from '@mui/material/InputBase';
 import Menu from '@mui/material/Menu';
@@ -24,9 +34,11 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import type { BrowserGoAction, BrowserIpc } from '@/shared/desktop/browserIpc';
+import type { BrowserControlAction, BrowserGoAction, BrowserIpc } from '@/shared/desktop/browserIpc';
 import { toWorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
+import { BrowserControlPill, HandBackForm } from '@/shared/ui/BrowserControl';
 import { MenuRow, MenuRowText } from '@/shared/ui/native-menu';
 
 import { useBrowserPane, useBrowserPanes } from '../model/browserPane.store';
@@ -62,12 +74,40 @@ function ToolButton({ label, onClick, disabled = false, testId, children }: { re
   );
 }
 
-/** The control pill's place (Agent / You / Idle, #1591): reserved so the toolbar does not move when it lands. */
-function PillSlot(): React.JSX.Element {
-  return <Box data-testid="browser-pill-slot" aria-hidden sx={{ width: '3.5rem', flexShrink: 0 }} />;
+/** Sends one control action; the answer (and the host's `control` event) lands in the store. */
+function useControl(ipc: BrowserIpc, threadId: string, onError: (message: string | null) => void) {
+  return (action: BrowserControlAction, note?: string): void => {
+    ipc.control(threadId, action, note).then(
+      (control) => {
+        onError(null);
+        useBrowserPanes.getState().update(threadId, { control });
+      },
+      (error: unknown) => onError(toWorkspaceIpcError(error).message),
+    );
+  };
 }
 
-function Toolbar({ ipc, threadId, onClose, onError, onNavigate }: { readonly ipc: BrowserIpc; readonly threadId: string; readonly onClose: () => void; readonly onError: (message: string | null) => void; readonly onNavigate: (address: string) => void }): React.JSX.Element {
+/** The pill and its one button: Take over while the agent drives, Hand back while the person does. */
+function ControlPill({ threadId, onAction, onHandBack }: { readonly threadId: string; readonly onAction: (action: BrowserControlAction) => void; readonly onHandBack: () => void }): React.JSX.Element {
+  const { control } = useBrowserPane(threadId).control;
+  return (
+    <>
+      <BrowserControlPill state={control} testId="browser-pill" />
+      {control === 'agent' && (
+        <Button size="small" variant="outlined" onClick={() => onAction('take_over')} data-testid="browser-take-over" sx={{ flexShrink: 0 }}>
+          {t('cloudBrowser.takeOver', 'Take over')}
+        </Button>
+      )}
+      {control === 'user' && (
+        <Button size="small" variant="contained" onClick={onHandBack} data-testid="browser-hand-back" sx={{ flexShrink: 0 }}>
+          {t('cloudBrowser.handBack', 'Hand back')}
+        </Button>
+      )}
+    </>
+  );
+}
+
+function Toolbar({ ipc, threadId, onClose, onError, onNavigate, onControl, onHandBack }: { readonly ipc: BrowserIpc; readonly threadId: string; readonly onClose: () => void; readonly onError: (message: string | null) => void; readonly onNavigate: (address: string) => void; readonly onControl: (action: BrowserControlAction) => void; readonly onHandBack: () => void }): React.JSX.Element {
   const pane = useBrowserPane(threadId);
   const { openExternal } = useBrowserHost();
   const [address, setAddress] = useState(pane.url);
@@ -143,7 +183,7 @@ function Toolbar({ ipc, threadId, onClose, onError, onNavigate }: { readonly ipc
         inputProps={{ 'aria-label': t('workspace.browser.address', 'Address'), spellCheck: false, autoCapitalize: 'off', autoCorrect: 'off', 'data-testid': 'browser-address' }}
         sx={(theme: Theme) => ({ flex: 1, minWidth: 0, fontSize: '0.8125rem', paddingX: 1, height: '1.75rem', borderRadius: '6px', background: theme.vars.palette.background.default })}
       />
-      <PillSlot />
+      <ControlPill threadId={threadId} onAction={onControl} onHandBack={onHandBack} />
       <ToolButton label={t('workspace.browser.openExternal', 'Open in browser')} onClick={() => void (external === undefined ? undefined : openExternal?.(external).catch(() => undefined))} disabled={external === undefined || openExternal === undefined} testId="browser-open-external">
         <OpenInNewIcon fontSize="inherit" />
       </ToolButton>
@@ -182,6 +222,20 @@ function Notice({ children, testId }: { readonly children: React.ReactNode; read
 function Pane({ ipc, threadId, onClose }: BrowserPaneProps & { readonly ipc: BrowserIpc }): React.JSX.Element {
   const pane = useBrowserPane(threadId);
   const [error, setError] = useState<string | null>(null);
+  const [handingBack, setHandingBack] = useState(false);
+  const control = useControl(ipc, threadId, setError);
+  // The pane mounts: who drives the page now (a turn may already use it).
+  useEffect(() => {
+    ipc.control(threadId, 'get').then(
+      (state) => useBrowserPanes.getState().update(threadId, { control: state }),
+      () => undefined,
+    );
+  }, [ipc, threadId]);
+  // The person handed back, or the turn ended: the note form goes.
+  const driving = pane.control.control === 'user';
+  useEffect(() => {
+    if (!driving) setHandingBack(false);
+  }, [driving]);
   // The latest rectangle, kept for the next open; once the page is live the host hears every change.
   const rect = useRef<PageRectReport | null>(null);
   const live = useRef(pane.live);
@@ -212,7 +266,40 @@ function Pane({ ipc, threadId, onClose }: BrowserPaneProps & { readonly ipc: Bro
 
   return (
     <Box data-testid="browser-pane" sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Toolbar ipc={ipc} threadId={threadId} onClose={onClose} onError={setError} onNavigate={navigate} />
+      <Toolbar ipc={ipc} threadId={threadId} onClose={onClose} onError={setError} onNavigate={navigate} onControl={control} onHandBack={() => setHandingBack(true)} />
+      {pane.control.asked && (
+        <Box data-testid="browser-request" sx={(theme: Theme) => ({ display: 'flex', alignItems: 'center', gap: 1, paddingX: 1.5, paddingY: 0.75, borderBottom: `1px solid ${theme.vars.palette.divider}`, flexShrink: 0 })}>
+          <Typography variant="bodySmall" component="output" data-testid="browser-request-reason" sx={{ flex: 1, minWidth: 0 }}>
+            {t('workspace.browser.request', 'The agent asks you to use the page: {{reason}}', { reason: pane.control.reason ?? '' })}
+          </Typography>
+          {!handingBack && (
+            <Button size="small" variant="contained" onClick={() => setHandingBack(true)} data-testid="browser-request-done">
+              {t('workspace.browser.requestDone', 'Done')}
+            </Button>
+          )}
+          <Button size="small" onClick={() => control('decline')} data-testid="browser-decline">
+            {t('workspace.browser.decline', 'Decline')}
+          </Button>
+        </Box>
+      )}
+      {handingBack && (
+        <HandBackForm
+          testIdPrefix="browser"
+          onSend={(note) => {
+            control('hand_back', note);
+            setHandingBack(false);
+          }}
+          onCancel={() => setHandingBack(false)}
+        />
+      )}
+      {driving && (
+        <FormControlLabel
+          data-testid="browser-watch"
+          sx={{ marginX: 1, flexShrink: 0 }}
+          control={<BaseCheckbox size="small" checked={pane.control.watch} onChange={(event) => control(event.target.checked ? 'watch' : 'unwatch')} aria-label={t('workspace.browser.watch', 'Let the agent watch')} />}
+          label={<Typography variant="bodySmall">{t('workspace.browser.watch', 'Let the agent watch')}</Typography>}
+        />
+      )}
       {error !== null && <Notice testId="browser-error">{error}</Notice>}
       {pane.refused !== null && <Notice testId="browser-refused">{pane.refused.message}</Notice>}
       <Box ref={pageRef} data-testid="browser-page" sx={{ flex: 1, minHeight: 0, position: 'relative' }}>

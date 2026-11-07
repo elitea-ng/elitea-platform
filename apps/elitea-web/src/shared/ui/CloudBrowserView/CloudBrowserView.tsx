@@ -20,16 +20,15 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Poin
 
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import TextField from '@mui/material/TextField';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import type { BrowserViewConnection, OpenBrowserViewOptions } from '@/shared/api/browserView/client';
-import { MAX_NOTE_BYTES, MODIFIER } from '@/shared/api/browserView/protocol';
+import { MODIFIER } from '@/shared/api/browserView/protocol';
 import type { BrowserViewFrameHeader } from '@/shared/api/browserView/protocol';
 import { t } from '@/shared/i18n';
+import { BrowserControlPill, HandBackForm, type BrowserPillState } from '@/shared/ui/BrowserControl';
 
 import { describeEnd, describeFailure, describeNotice } from './describe';
 import { useBrowserView, type BrowserViewState } from './useBrowserView';
@@ -98,49 +97,10 @@ function isPrintable(key: string): boolean {
   return segments.next().done === true;
 }
 
-function Pill({ state }: { readonly state: BrowserViewState }): React.JSX.Element {
-  const ended = state.phase === 'ended' || state.phase === 'failed';
-  const label = ended
-    ? t('cloudBrowser.pill.ended', 'Ended')
-    : state.phase === 'connecting'
-      ? t('cloudBrowser.pill.idle', 'Idle')
-      : state.control === 'user'
-        ? t('cloudBrowser.pill.you', 'You')
-        : t('cloudBrowser.pill.agent', 'Agent');
-  const color = !ended && state.control === 'user' && state.phase !== 'connecting' ? 'warning' : 'default';
-  return <Chip size="small" label={label} color={color} data-testid="cloud-browser-pill" data-control={ended ? 'ended' : state.control} sx={{ flexShrink: 0 }} />;
-}
-
-function HandBack({ connection, onDone }: { readonly connection: BrowserViewConnection; readonly onDone: () => void }): React.JSX.Element {
-  const [note, setNote] = useState('');
-  const tooLong = new TextEncoder().encode(note).length > MAX_NOTE_BYTES;
-  return (
-    <Box component="form" data-testid="cloud-browser-hand-back-form" onSubmit={(event) => {
-      event.preventDefault();
-      if (tooLong) return;
-      connection.handBack(note.trim());
-      onDone();
-    }} sx={(theme: Theme) => ({ display: 'flex', gap: 1, alignItems: 'flex-start', paddingX: 1, paddingY: 0.75, borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-      <TextField
-        size="small"
-        fullWidth
-        multiline
-        maxRows={4}
-        value={note}
-        onChange={(event) => setNote(event.target.value)}
-        placeholder={t('cloudBrowser.handBack.placeholder', 'A note for the agent, for example "signed in, continue"')}
-        error={tooLong}
-        helperText={tooLong ? t('cloudBrowser.handBack.tooLong', 'The note is too long.') : undefined}
-        slotProps={{ htmlInput: { 'aria-label': t('cloudBrowser.handBack.note', 'Note for the agent'), 'data-testid': 'cloud-browser-note' } }}
-      />
-      <Button type="submit" size="small" variant="contained" disabled={tooLong} data-testid="cloud-browser-hand-back-send">
-        {t('cloudBrowser.handBack', 'Hand back')}
-      </Button>
-      <Button size="small" onClick={onDone} data-testid="cloud-browser-hand-back-cancel">
-        {t('cloudBrowser.cancel', 'Cancel')}
-      </Button>
-    </Box>
-  );
+function pillState(state: BrowserViewState): BrowserPillState {
+  if (state.phase === 'ended' || state.phase === 'failed') return 'ended';
+  if (state.phase === 'connecting') return 'idle';
+  return state.control;
 }
 
 function Toolbar({ state, connection, onHandBack }: { readonly state: BrowserViewState; readonly connection: BrowserViewConnection | null; readonly onHandBack: () => void }): React.JSX.Element {
@@ -152,7 +112,7 @@ function Toolbar({ state, connection, onHandBack }: { readonly state: BrowserVie
           {state.url}
         </Typography>
       </Tooltip>
-      <Pill state={state} />
+      <BrowserControlPill state={pillState(state)} testId="cloud-browser-pill" />
       {driving && state.control === 'agent' && (
         <Button size="small" variant="outlined" onClick={() => connection.takeOver()} data-testid="cloud-browser-take-over">
           {t('cloudBrowser.takeOver', 'Take over')}
@@ -272,7 +232,16 @@ export function CloudBrowserView({ sessionId, streamOptions }: CloudBrowserViewP
   return (
     <Box data-testid="cloud-browser" data-phase={state.phase} sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <Toolbar state={state} connection={connection} onHandBack={() => setHandingBack(true)} />
-      {handingBack && connection !== null && <HandBack connection={connection} onDone={() => setHandingBack(false)} />}
+      {handingBack && connection !== null && (
+        <HandBackForm
+          testIdPrefix="cloud-browser"
+          onSend={(note) => {
+            connection.handBack(note);
+            setHandingBack(false);
+          }}
+          onCancel={() => setHandingBack(false)}
+        />
+      )}
       {status !== null && <Notice testId="cloud-browser-status">{status}</Notice>}
       {notice !== null && <Notice testId="cloud-browser-notice">{notice}</Notice>}
       <Box sx={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflow: 'hidden' }}>
