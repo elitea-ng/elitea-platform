@@ -53,7 +53,38 @@ When the agent asks, the run pauses for approval as it does for any sensitive to
 
 ## Watch and take over
 
-A person can watch a run's browser live, and take it over, for example to sign in. The view is a stream of screenshots from the session, sent only while somebody watches it. The app's viewer is coming in a later release. A native client or an integration can open the stream now with `viewBrowserSession` (client contract 1.39).
+A person can watch a run's browser live, and take it over, for example to sign in. The view is a stream of screenshots from the session, sent only while somebody watches it.
+
+### Open the browser
+
+1. Open the conversation in the web app.
+2. When an answer in the conversation used a browser tool, the side panel gets a **Browser** tab. Select it.
+3. The tab shows the page the agent is on, its address, and the control pill:
+
+   | Pill | Meaning |
+   |---|---|
+   | **Agent** | The agent drives the browser |
+   | **You** | You took over: the agent waits |
+   | **Idle** | Connected, waiting for the first page |
+   | **Ended** | The session has ended |
+
+The tab shows the browser of the newest answer that used it. Each run has its own browser, so a new run shows a new one. If the run has not opened a page yet, the tab says so and tries again by itself.
+
+### Take over and hand back
+
+1. Select **Take over**. You can also just click, type or scroll in the page: any input while the agent drives takes over too.
+2. Use the page as you would in a browser, for example to sign in or answer a CAPTCHA.
+3. Select **Hand back**. Optional: write a note for the agent, for example "signed in, continue from the inbox". Then select **Hand back** again.
+
+While you have control, the agent may still take snapshots and screenshots, and every other browser tool answers `user_in_control`. The agent continues after you hand back, and reads your note.
+
+### Watching only
+
+If you may watch but not take over, the tab says **Watching only** and has no **Take over** button. Your clicks and keys do nothing. After the run ends, the session stays up to 10 minutes so the last page can still be watched. In that time nobody can take over.
+
+The desktop app shows the tab in a later release (#1592). A native client or an integration can open the same stream with `viewBrowserSession` (client contract 1.40).
+
+### Who may watch and take over
 
 | Who | Watch | Take over |
 |---|---|---|
@@ -62,7 +93,7 @@ A person can watch a run's browser live, and take it over, for example to sign i
 | Anyone else who may read the conversation | Yes | No. Their input is refused |
 | Anyone else | No. The session reads as not found | No |
 
-While the person has control, the agent may still take snapshots and screenshots, and every other browser tool answers `user_in_control`. Input from the person while the agent drives also takes control. When the person hands back, they can leave a note for the agent, for example "signed in, continue from the inbox". After the run ends, the session stays up to 10 minutes so the last page can still be watched. In that time nobody can take over. Several people can watch the same session at once, from any replica of the platform.
+Several people can watch the same session at once, from any replica of the platform. The tab finds the browser from the answer's run while the answer streams; after you reload the page, a finished answer no longer offers the tab.
 
 Treat the view like the conversation itself: whoever may read the conversation sees what the agent's browser shows, including what a person types into it.
 

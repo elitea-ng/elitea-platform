@@ -4,6 +4,17 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: the web app's Browser tab (#1598, ADR-0049 decision 6)
+
+No operator action. The web chat's side panel shows a **Browser** tab for
+an answer whose run used the cloud browser, and opens the view WebSocket
+`GET /api/v2/browser_sessions/{session_id}/view` from #1597. It shows a
+page only where `main.runtime.browserView` is on; elsewhere the tab shows
+why there is no browser. Whatever fronts `/api/v2` must pass
+WebSocket upgrades through (see the entry below). When an open is refused,
+the tab sends one plain GET to the same route to learn why; with the view
+on it answers 426, which is expected in access logs.
+
 ## Cloud browser: the live view (#1597, ADR-0049 decision 6)
 
 Nothing changes unless you turn it on. Upgrade Main before the workers:
