@@ -3078,6 +3078,11 @@ impl AgentHost {
             assistant["is_error"] = json!(true);
             assistant["error"] = json!(error.message.chars().take(4000).collect::<String>());
         }
+        // The turn's screenshot uploads (the project's opt-in) ran beside
+        // it; their outcomes go into the step records now, bounded.
+        recorder
+            .settle_uploads(crate::computer_tools::UPLOAD_SETTLE_WAIT)
+            .await;
         // Encoded in the commit's job: a goal check may change the chain's
         // outcome after `done`.
         let commit_body = CommitBody {

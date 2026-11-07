@@ -1754,6 +1754,7 @@ dependencies = [
  "elitea-workspace-store",
  "futures",
  "glob",
+ "hmac",
  "keepawake",
  "log",
  "objc2-foundation",

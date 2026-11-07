@@ -512,6 +512,9 @@ struct TurnState {
     shots: HashMap<(String, String), Shot>,
     /// The window of each app's latest screenshot, by bundle id.
     latest_shot: HashMap<String, String>,
+    /// Closed when the turn's latest screenshot upload ended: the next one
+    /// waits for it, so uploads keep call order.
+    last_upload: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// The state one desktop session (the app's lifetime) shares across turns:
@@ -577,9 +580,12 @@ pub const THUMBNAIL_SIDE: u32 = 160;
 /// The most bytes of a screenshot's thumbnail: its data URL fits the thread
 /// history's 16 KiB event string.
 pub const MAX_THUMBNAIL_BYTES: usize = 9 * 1024;
-/// How long one screenshot upload may take; past it the step records
-/// `uploaded: false` and the call goes on.
+/// How long one screenshot upload may take (it runs beside the turn,
+/// never in the call); past it the step records `uploaded: false`.
 const UPLOAD_WAIT: Duration = Duration::from_secs(20);
+/// How long a finished turn waits, in all, for the screenshot uploads still
+/// running before it commits; one not done by then is `uploaded: false`.
+pub const UPLOAD_SETTLE_WAIT: Duration = Duration::from_secs(30);
 
 /// What a call learned that its step record keeps and its result does not
 /// say: the window's title and a screenshot's size and digest.
@@ -1111,21 +1117,18 @@ impl ComputerTool {
             Err(error) => Err(Refusal::Error(error.clone())),
         };
         let (value, outcome) = match result {
-            Ok(value) => {
-                // A hand-over answers ok only when the person says done.
-                let outcome = if value["status"] == "ok" {
-                    "ok".to_owned()
-                } else {
-                    value["code"].as_str().unwrap_or("declined").to_owned()
-                };
-                (value, outcome)
-            }
-            Err(Refusal::Error(error)) => (error.to_result(), error.code.to_owned()),
-            Err(Refusal::Declined(value)) => (value, "declined".to_owned()),
+            Ok((value, outcome)) => (value, outcome),
+            Err(Refusal::Error(error)) => (error.to_result(), StepOutcome::Refused(error.code)),
+            Err(Refusal::Declined(value)) => (value, StepOutcome::Declined),
         };
         if let Some(recorder) = &self.context.recorder {
-            self.record(recorder, call_id, parsed.as_ref().ok(), &meta, &outcome)
-                .await;
+            self.record(
+                recorder,
+                call_id,
+                parsed.as_ref().ok(),
+                meta,
+                outcome.label(),
+            );
         }
         value
     }
@@ -1133,12 +1136,12 @@ impl ComputerTool {
     /// The call's step record and its screenshot's thumbnail, to the turn's
     /// recorder; the screenshot itself is uploaded only with the project's
     /// opt-in.
-    async fn record(
+    fn record(
         &self,
-        recorder: &crate::d0::recorder::Recorder,
+        recorder: &Arc<crate::d0::recorder::Recorder>,
         call_id: &str,
         call: Option<&Call>,
-        meta: &StepMeta,
+        meta: StepMeta,
         outcome: &str,
     ) {
         let shot = meta.screenshot.as_ref();
@@ -1157,8 +1160,16 @@ impl ComputerTool {
                 ),
             );
         }
-        let mut record = step_record(self.spec.name, call, meta, outcome);
-        if let (Some(shot), Some(uploader)) = (shot, &self.context.uploader) {
+        let record = step_record(self.spec.name, call, &meta, outcome, |text| {
+            recorder.text_digest(text)
+        });
+        recorder.step_record(call_id, record);
+        // The upload (the project's opt-in) runs beside the turn, never in
+        // the call: the agent goes on at once. Each waits for the one before
+        // it, so the turn's screenshots arrive in call order; the recorder
+        // writes the outcomes into the step records before the commit
+        // (`Recorder::settle_uploads`).
+        if let (Some(shot), Some(uploader)) = (meta.screenshot, self.context.uploader.clone()) {
             let name = format!(
                 "computer-screenshot-{}.{}",
                 artifact_name_part(call_id),
@@ -1168,20 +1179,26 @@ impl ComputerTool {
                     "png"
                 }
             );
-            let stored = tokio::time::timeout(
-                UPLOAD_WAIT,
-                uploader.upload(&name, shot.mime, shot.bytes.clone()),
-            )
-            .await;
-            match stored {
-                Ok(Ok(artifact)) => {
-                    record["screenshot"]["uploaded"] = json!(true);
-                    record["screenshot"]["artifact"] = json!(artifact);
+            let before = self.context.turn().last_upload.take();
+            let (done, after) = tokio::sync::oneshot::channel::<()>();
+            self.context.turn().last_upload = Some(after);
+            let upload = tokio::spawn(async move {
+                if let Some(before) = before {
+                    let _ = before.await;
                 }
-                _ => record["screenshot"]["uploaded"] = json!(false),
-            }
+                let stored = tokio::time::timeout(
+                    UPLOAD_WAIT,
+                    uploader.upload(&name, shot.mime, shot.bytes),
+                )
+                .await;
+                drop(done);
+                match stored {
+                    Ok(Ok(artifact)) => Some(artifact),
+                    _ => None,
+                }
+            });
+            recorder.upload_started(call_id, upload);
         }
-        recorder.step_record(call_id, record);
     }
 
     async fn run_inner(
@@ -1189,7 +1206,7 @@ impl ComputerTool {
         call_id: &str,
         call: &Call,
         meta: &mut StepMeta,
-    ) -> Result<Value, Refusal> {
+    ) -> Result<(Value, StepOutcome), Refusal> {
         // 0. The switches, read now: the person or the organisation may
         // have turned computer use off since the turn started.
         if !(self.context.enabled)() {
@@ -1247,7 +1264,7 @@ impl ComputerTool {
         .map_err(|_| CallError::new("internal", "the computer call stopped"))?;
         *meta = step;
         let outcome = outcome?;
-        Ok(match outcome {
+        let value = match outcome {
             Outcome::Json(mut value) => {
                 if let Some(text) = value.get("content").and_then(Value::as_str) {
                     let framed = self.frame(text);
@@ -1260,7 +1277,8 @@ impl ComputerTool {
                 value["status"] = json!("ok");
                 value
             }
-        })
+        };
+        Ok((value, StepOutcome::Done))
     }
 
     /// The call as the approvals see it: the app, the window's title and
@@ -1346,7 +1364,11 @@ impl ComputerTool {
     /// `computer_request_user`: an ordinary question to the person, with the
     /// ADR-0045 wait and its default, decline. In an unattended turn it
     /// still goes to the person; nobody answering is a decline.
-    async fn request_user(&self, call_id: &str, call: &Call) -> Result<Value, Refusal> {
+    async fn request_user(
+        &self,
+        call_id: &str,
+        call: &Call,
+    ) -> Result<(Value, StepOutcome), Refusal> {
         let Call::RequestUser { reason, bundle_id } = call else {
             return Err(CallError::invalid("not a hand-over").into());
         };
@@ -1371,11 +1393,14 @@ impl ComputerTool {
             .await
             .map_err(|error| CallError::new("approval_pending", error.to_string()))?;
         match outcome {
-            ApprovalOutcome::Decided { action, .. } if action == "approve" => Ok(json!({
-                "status": "ok",
-                "done": true,
-                "message": "The person says they are done. Take a new computer_snapshot before you go on.",
-            })),
+            ApprovalOutcome::Decided { action, .. } if action == "approve" => Ok((
+                json!({
+                    "status": "ok",
+                    "done": true,
+                    "message": "The person says they are done. Take a new computer_snapshot before you go on.",
+                }),
+                StepOutcome::Done,
+            )),
             ApprovalOutcome::Decided { action, value } => {
                 let timed_out = action == crate::d0::approvals::TIMEOUT_ACTION;
                 let mut result = json!({
@@ -1393,13 +1418,21 @@ impl ComputerTool {
                         map.extend(declined_details(feedback.as_deref()));
                     }
                 }
-                Ok(result)
+                let outcome = if timed_out {
+                    StepOutcome::Refused("no_person")
+                } else {
+                    StepOutcome::Declined
+                };
+                Ok((result, outcome))
             }
-            ApprovalOutcome::Deferred => Ok(json!({
-                "status": "error",
-                "code": "no_person",
-                "message": "nobody can be asked now: do not go on with this step",
-            })),
+            ApprovalOutcome::Deferred => Ok((
+                json!({
+                    "status": "error",
+                    "code": "no_person",
+                    "message": "nobody can be asked now: do not go on with this step",
+                }),
+                StepOutcome::Refused("no_person"),
+            )),
         }
     }
 }
@@ -1460,6 +1493,28 @@ fn refuse_hard_limits(call: &Call, seen: &SeenSnapshots) -> Result<(), DesktopEr
 enum Refusal {
     Error(CallError),
     Declined(Value),
+}
+
+/// How a call ended, as its step record says it (ADR-0047 decision 9):
+/// carried out of the call, never read back from its result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StepOutcome {
+    /// The call did what it asked; a hand-over the person answered done.
+    Done,
+    /// The person declined (an approval or a hand-over).
+    Declined,
+    /// Refused or failed, with the code its result carries.
+    Refused(&'static str),
+}
+
+impl StepOutcome {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Done => "ok",
+            Self::Declined => "declined",
+            Self::Refused(code) => code,
+        }
+    }
 }
 
 impl From<CallError> for Refusal {
@@ -1992,7 +2047,13 @@ const MAX_TITLE_BYTES: usize = 512;
 /// Text the agent typed or set is a length and a digest only, never the
 /// text; a screenshot is its size and digest (its bytes stay on the
 /// device unless the project opted in to uploading them).
-fn step_record(tool: &str, call: Option<&Call>, meta: &StepMeta, outcome: &str) -> Value {
+fn step_record(
+    tool: &str,
+    call: Option<&Call>,
+    meta: &StepMeta,
+    outcome: &str,
+    text_digest: impl Fn(&str) -> String,
+) -> Value {
     let mut record = json!({
         "v": 1,
         "tool": tool,
@@ -2030,7 +2091,7 @@ fn step_record(tool: &str, call: Option<&Call>, meta: &StepMeta, outcome: &str) 
     if let Some(text) = typed {
         record["text"] = json!({
             "chars": text.chars().count(),
-            "digest": digest(text.as_bytes()),
+            "digest": text_digest(text),
         });
     }
     if let Some(shot) = &meta.screenshot {
@@ -2047,12 +2108,18 @@ fn step_record(tool: &str, call: Option<&Call>, meta: &StepMeta, outcome: &str) 
     record
 }
 
-/// A tool step's arguments as the commit and the history keep them: a
-/// `computer_type`'s `text` and a `computer_act` `set_value`'s `value`
-/// become their length and digest (ADR-0047 decision 9). The model still
-/// had them; nothing the device stores or sends does.
+/// A tool step's arguments as the commit, the history and the session
+/// store keep them: a `computer_type`'s `text` and a `computer_act`
+/// `set_value`'s `value` become their length and the turn's keyed digest
+/// (`text_digest`, ADR-0047 decision 9; `None` keeps the length only, as
+/// the session store does, which has no turn key). The model still had
+/// them; nothing the device stores or sends does.
 #[must_use]
-pub fn recorded_inputs(tool: &str, args: &Value) -> Value {
+pub fn recorded_inputs(
+    tool: &str,
+    args: &Value,
+    text_digest: Option<&dyn Fn(&str) -> String>,
+) -> Value {
     let key = match tool {
         COMPUTER_TYPE => "text",
         COMPUTER_ACT if args.get("action").and_then(Value::as_str) == Some("set_value") => "value",
@@ -2064,7 +2131,9 @@ pub fn recorded_inputs(tool: &str, args: &Value) -> Value {
     {
         let text = text.as_str().unwrap_or_default();
         map.insert(format!("{key}_chars"), json!(text.chars().count()));
-        map.insert(format!("{key}_digest"), json!(digest(text.as_bytes())));
+        if let Some(text_digest) = text_digest {
+            map.insert(format!("{key}_digest"), json!(text_digest(text)));
+        }
     }
     args
 }

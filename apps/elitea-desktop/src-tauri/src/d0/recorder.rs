@@ -143,11 +143,34 @@ struct State {
     /// A `computer_screenshot` call's thumbnail (a JPEG data URL), by run
     /// id, until its `tool_result` takes it (the local transcript only).
     thumbnails: BTreeMap<String, String>,
+    /// Screenshot uploads still running (the project's opt-in), by run id,
+    /// in call order: [`Recorder::settle_uploads`] writes their outcome
+    /// into the step records before the commit is built.
+    uploads: Vec<(String, tokio::task::JoinHandle<Option<String>>)>,
 }
 
-#[derive(Default)]
 pub struct Recorder {
     state: Mutex<State>,
+    /// The key of this turn's typed-text digests (ADR-0047 decision 9): 256
+    /// random bits, drawn with the recorder and never stored or sent, so a
+    /// digest compares two texts of one turn and cannot be brute-forced
+    /// back into a short PIN or password.
+    text_key: [u8; 32],
+}
+
+impl Default for Recorder {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            text_key: rand::random(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Recorder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Recorder").finish_non_exhaustive()
+    }
 }
 
 pub(crate) fn now() -> String {
@@ -274,6 +297,72 @@ impl Recorder {
     /// decision 9): its `tool_result` carries it, the commit never does.
     pub fn screenshot_thumbnail(&self, run_id: &str, data_url: String) {
         self.with(|state| state.thumbnails.insert(run_id.to_owned(), data_url));
+    }
+
+    /// The typed-text digest of this turn: `hmac-sha256:<hex>` under the
+    /// turn's own key (never stored or sent).
+    #[must_use]
+    pub fn text_digest(&self, text: &str) -> String {
+        use hmac::{KeyInit as _, Mac as _};
+        let mut mac = <hmac::Hmac<sha2::Sha256>>::new_from_slice(&self.text_key)
+            .expect("an HMAC takes a key of any length");
+        mac.update(text.as_bytes());
+        let tag = mac.finalize().into_bytes();
+        let mut hex = String::with_capacity(tag.len() * 2);
+        for byte in tag {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+        }
+        format!("hmac-sha256:{hex}")
+    }
+
+    /// A screenshot upload of `run_id` started; its outcome (the stored
+    /// path, or `None`) lands in the step record at
+    /// [`Recorder::settle_uploads`].
+    pub fn upload_started(&self, run_id: &str, upload: tokio::task::JoinHandle<Option<String>>) {
+        let mut upload = Some(upload);
+        self.with(|state| {
+            if let Some(upload) = upload.take() {
+                state.uploads.push((run_id.to_owned(), upload));
+            }
+        });
+        // A poisoned recorder records nothing: the upload stops.
+        if let Some(upload) = upload {
+            upload.abort();
+        }
+    }
+
+    /// Wait for the turn's screenshot uploads, at most `wait` in all, and
+    /// record each: `uploaded` and `artifact`, or `uploaded: false` for one
+    /// that failed or did not finish in time (it is stopped). Called once
+    /// the turn's run ended, before the commit body is built.
+    pub async fn settle_uploads(&self, wait: std::time::Duration) {
+        let Some(uploads) = self.with(|state| std::mem::take(&mut state.uploads)) else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + wait;
+        for (run_id, mut upload) in uploads {
+            let stored = match tokio::time::timeout_at(deadline, &mut upload).await {
+                Ok(Ok(stored)) => stored,
+                Ok(Err(_)) => None,
+                Err(_) => {
+                    upload.abort();
+                    None
+                }
+            };
+            self.with(|state| {
+                if let Some((_, entry)) = state.steps.iter_mut().rev().find(|(id, _)| *id == run_id)
+                    && let Some(Value::Object(shot)) = entry
+                        .get_mut(STEP_RECORD_KEY)
+                        .and_then(|record| record.get_mut("screenshot"))
+                {
+                    shot.insert("uploaded".into(), json!(stored.is_some()));
+                    if let Some(artifact) = stored {
+                        shot.insert("artifact".into(), json!(artifact));
+                    }
+                }
+            });
+        }
     }
 
     /// The thumbnail of `run_id`'s screenshot, taken once.

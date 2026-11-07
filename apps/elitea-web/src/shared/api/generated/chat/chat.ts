@@ -8785,6 +8785,11 @@ export type uploadLocalTurnScreenshotResponse426 = {
   status: 426;
 };
 
+export type uploadLocalTurnScreenshotResponse429 = {
+  data: LocalTurnError;
+  status: 429;
+};
+
 export type uploadLocalTurnScreenshotResponse500 = {
   data: N500Response;
   status: 500;
@@ -8809,6 +8814,7 @@ export type uploadLocalTurnScreenshotResponseError = (
   | uploadLocalTurnScreenshotResponse413
   | uploadLocalTurnScreenshotResponse415
   | uploadLocalTurnScreenshotResponse426
+  | uploadLocalTurnScreenshotResponse429
   | uploadLocalTurnScreenshotResponse500
   | uploadLocalTurnScreenshotResponse503
 ) & {
@@ -8839,7 +8845,10 @@ export const getUploadLocalTurnScreenshotUrl = (
  * Only the credential that started the turn, while the turn is not
  * committed and not past its deadline (404, 409
  * `local_turn_already_committed`, 410 `local_turn_expired`). The
- * digest is checked against the decoded content.
+ * digest is checked against the decoded content. One turn uploads at
+ * most 64 screenshots (429 `computer_screenshot_limit`) and 64 MiB of
+ * them (413 `computer_screenshot_limit`); the stored name carries the
+ * turn's execution id (`computer-screenshot-<execution_id>-<id>`).
  * @summary Upload a desktop computer use screenshot as a run artifact
  */
 export const uploadLocalTurnScreenshot = async (

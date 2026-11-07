@@ -322,7 +322,8 @@ impl Tool for ObservedTool {
         // A `computer` tool's typed text is recorded as its length and
         // digest only (ADR-0047 decision 9): the model has it, the commit
         // and the thread history do not.
-        let recorded = crate::computer_tools::recorded_inputs(&tool, &args);
+        let digest = |text: &str| observer.recorder.text_digest(text);
+        let recorded = crate::computer_tools::recorded_inputs(&tool, &args, Some(&digest));
         if !observer
             .recorder
             .tool_started_under(&run_id, &tool, &recorded, hierarchy)

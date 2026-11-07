@@ -9,14 +9,13 @@ package repos
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runevidence"
 )
 
@@ -46,9 +45,9 @@ var (
 
 // localTurnStepRecords builds the run_steps records of the commit's computer
 // calls, in tool call order. A step record that is not an object, or is
-// larger than a step summary may be, refuses the commit.
-func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToolCall, now time.Time) ([]runevidence.Record, error) {
-	var records []runevidence.Record
+// still larger than a step summary may be once its strings are cut, is
+// dropped (and named in dropped): the turn itself is committed.
+func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToolCall, now time.Time) (records []runevidence.Record, dropped []string) {
 	for _, call := range toolCalls {
 		raw, present := call.entry[LocalTurnStepRecordKey]
 		if !present || raw == nil {
@@ -56,11 +55,13 @@ func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToo
 		}
 		object, ok := raw.(map[string]any)
 		if !ok {
-			return nil, errors.New("a computer step record is not an object")
+			dropped = append(dropped, call.key)
+			continue
 		}
 		summary, err := json.Marshal(cleanLocalTurnStep(object))
 		if err != nil || len(summary) > runevidence.MaxSummaryBytes {
-			return nil, errors.New("a computer step record is too large")
+			dropped = append(dropped, call.key)
+			continue
 		}
 		started, ended := now, now
 		if at := parseCurrentAgentTime(call.entry["timestamp_start"]); at != nil {
@@ -89,7 +90,7 @@ func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToo
 			CitedDocumentIDs: []string{},
 		})
 	}
-	return records, nil
+	return records, dropped
 }
 
 // cleanLocalTurnStep keeps the step record's allowed keys (and those of its
@@ -132,11 +133,12 @@ func keepScalarFields(object map[string]any, allowed map[string]bool) map[string
 }
 
 // localTurnStepScalar is value when it is a string (NUL bytes removed, at
-// most 1 KiB), a number or a boolean.
+// most 512 bytes: the record's 16 strings then fit a step summary), a
+// number or a boolean.
 func localTurnStepScalar(value any) (any, bool) {
 	switch typed := value.(type) {
 	case string:
-		return truncateEvidence(currentAgentString(typed), 1024), true
+		return truncateEvidence(currentAgentString(typed), 512), true
 	case json.Number, bool, float64:
 		return typed, true
 	}
@@ -152,16 +154,18 @@ type localTurnStepScope struct {
 	messageID        string
 }
 
-// appendLocalTurnSteps writes the commit's computer step records into tx.
+// appendLocalTurnSteps writes the commit's computer step records into tx. A
+// record it cannot keep is dropped with a warning, never the turn.
 func appendLocalTurnSteps(ctx context.Context, tx pgx.Tx, scope localTurnStepScope, toolCalls []currentAgentToolCall) error {
-	records, err := localTurnStepRecords(scope, toolCalls, time.Now().UTC())
-	if err != nil {
-		return errors.Join(localturn.ErrInvalid, err)
+	records, dropped := localTurnStepRecords(scope, toolCalls, time.Now().UTC())
+	if len(dropped) > 0 {
+		slog.WarnContext(ctx, "local turn: computer step records dropped (not an object, or too large)",
+			"execution_id", scope.executionID, "tool_calls", dropped)
 	}
 	if len(records) == 0 {
 		return nil
 	}
-	_, err = appendRunSteps(ctx, tx, runevidence.RunContext{
+	_, err := appendRunSteps(ctx, tx, runevidence.RunContext{
 		RunID: scope.executionID, Generation: 1, ProjectID: scope.projectID,
 		Actor:       "user:" + strconv.FormatInt(scope.actorUserID, 10),
 		ActorUserID: &scope.actorUserID, ConversationUUID: scope.conversationUUID, MessageID: scope.messageID,

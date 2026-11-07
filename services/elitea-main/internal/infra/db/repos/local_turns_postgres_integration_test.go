@@ -142,6 +142,29 @@ VALUES ('6b0f9e4c-2a1d-4c3b-9e8f-1585a0470009'::uuid, 1, 'Computer use', 'comput
 	if _, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, localturn.Credential{TokenID: "99"}); !errors.Is(err, localturn.ErrNotFound) {
 		t.Fatalf("another credential's screenshot turn = %v, want ErrNotFound", err)
 	}
+	// A turn's uploads are counted from the conversation's attachment rows
+	// named after it: another turn's, and another bucket type's, are not.
+	var bucket int64
+	if err := pool.QueryRow(ctx, `
+INSERT INTO elitea_storage.buckets (project_id, name, display_name, bucket_type)
+VALUES (1, 'chat-attachments', 'chat-attachments', 'system') RETURNING id`).Scan(&bucket); err != nil {
+		t.Fatal(err)
+	}
+	prefix := fixture.conversationUUID + "/computer-screenshot-" + started.ExecutionID + "-"
+	for key, size := range map[string]int64{
+		prefix + "a.png": 100, prefix + "b.jpg": 50,
+		fixture.conversationUUID + "/computer-screenshot-" + strings.Repeat("f", 32) + "-c.png": 7,
+		fixture.conversationUUID + "/notes.txt":                                                 9,
+	} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_storage.objects (bucket_id, key, byte_length) VALUES ($1::bigint, $2::text, $3::bigint)`,
+			bucket, key, size); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count, size, err := repo.CountConversationAttachments(ctx, 1, prefix); err != nil || count != 2 || size != 150 {
+		t.Fatalf("turn screenshots = %d, %d bytes, %v; want 2 and 150", count, size, err)
+	}
 
 	// The recall is the cloud resolver's: the memory saved before the user's
 	// first turn in the project is reserved and recalled.

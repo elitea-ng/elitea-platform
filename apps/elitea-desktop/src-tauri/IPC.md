@@ -2706,18 +2706,24 @@ fails with `computer_use_off` and nothing is asked or read.
 Step records (ADR-0047 decision 9, #1585). Each computer call's tool step
 in the turn commit carries `computer_step`: `v`, `tool`, `outcome` (`ok`,
 an error code, or `declined`), `bundle_id`, `window_title`, `action`, `ref`,
-`text` as `{chars, digest}` for `computer_type` and a `set_value` act, and
+`text` as `{chars, digest}` for `computer_type` and a `set_value` act
+(`digest`: `hmac-sha256:` under a random key the recorder draws for the
+turn and never stores or sends), and
 `screenshot` as `{taken, mime, bytes, width, height, zoom, digest}` for a
 call that captured one. The platform stores it as an ADR-0042 run step
 record of the turn. The typed text never leaves the model's context: the
 `tool_call`'s `args_summary`, the stored history and the commit's
 `tool_inputs` carry `text_chars` and `text_digest` (`value_chars` and
-`value_digest`) in its place. A screenshot's thumbnail rides the
+`value_digest`) in its place, and sessions.db stores the model's function
+call with `text_chars` (`value_chars`) only. A screenshot's thumbnail rides the
 `tool_result` (`thumbnail`, above). The screenshot itself stays on the device
 unless `startLocalTurn` answered `computer_use.upload_screenshots: true` (the
 project setting): then it is uploaded with `uploadLocalTurnScreenshot`
-(contract 1.41) within 20 seconds, and the record adds `uploaded` and
-`artifact` (the stored path), or `uploaded: false` when the upload failed.
+(contract 1.41) in the background, in call order, each within 20 seconds;
+the call never waits for it. When the run ends the turn waits up to 30
+seconds in all for the uploads still running, then the record adds
+`uploaded` and `artifact` (the stored path), or `uploaded: false` for one
+that failed, was refused or did not finish.
 
 ## Events
 

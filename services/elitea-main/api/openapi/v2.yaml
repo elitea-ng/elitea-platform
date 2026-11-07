@@ -5439,7 +5439,7 @@ components:
       properties:
         filepath:
           type: string
-          description: '`/{bucket}/{conversation_uuid}/{name}`, the chat attachment path; a taken name gets a number.'
+          description: '`/{bucket}/{conversation_uuid}/computer-screenshot-{execution_id}-{id}.png|.jpg`, the chat attachment path; a taken name gets a number.'
         file_size: { type: integer, format: int64 }
     LocalTurnHITLExchange:
       type: object
@@ -5602,11 +5602,14 @@ components:
             contract 1.41 (ADR-0047 decision 9): a desktop computer call's
             entry may carry `computer_step`, its step record (`v`, `tool`,
             `outcome`, `bundle_id`, `window_title`, `action`, `ref`, `text`
-            as `{chars, digest}` only, `screenshot` as `{taken, mime, bytes,
+            as `{chars, digest}` only (`digest` is `hmac-sha256:` under a
+            random per-turn key that never leaves the device, so it cannot
+            be brute-forced into the text), `screenshot` as `{taken, mime, bytes,
             width, height, zoom, digest, uploaded, artifact}`). It is stored as
             an ADR-0042 run step record of the turn (kind `tool_call`, the
             object as its summary); keys outside that list are dropped, so no
-            typed text reaches the record. A computer call's `tool_inputs`
+            typed text reaches the record, and a record that is not an object
+            or is too large is dropped without refusing the commit. A computer call's `tool_inputs`
             hold `text_chars` and `text_digest` (or `value_chars` and
             `value_digest`) instead of the typed text.
           additionalProperties:
@@ -27358,7 +27361,10 @@ paths:
         Only the credential that started the turn, while the turn is not
         committed and not past its deadline (404, 409
         `local_turn_already_committed`, 410 `local_turn_expired`). The
-        digest is checked against the decoded content.
+        digest is checked against the decoded content. One turn uploads at
+        most 64 screenshots (429 `computer_screenshot_limit`) and 64 MiB of
+        them (413 `computer_screenshot_limit`); the stored name carries the
+        turn's execution id (`computer-screenshot-<execution_id>-<id>`).
       tags: [chat, client]
       parameters:
         - $ref: '#/components/parameters/XClientVersion'
@@ -27422,13 +27428,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '413':
-          description: The body is larger than 6 MiB.
+          description: The body is larger than 6 MiB, or the turn's screenshots would pass 64 MiB (`computer_screenshot_limit`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '415':
           description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '429':
+          description: The turn uploaded 64 screenshots already (`computer_screenshot_limit`).
           content:
             application/json:
               schema:

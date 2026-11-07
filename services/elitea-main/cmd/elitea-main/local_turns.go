@@ -83,6 +83,16 @@ type localTurnComputerUse struct {
 	attachments v2convs.AttachmentStore
 }
 
+// ScreenshotUsage counts the conversation's attachment rows named after the
+// turn (TurnScreenshotPrefix): no column of its own, so no migration.
+func (c localTurnComputerUse) ScreenshotUsage(
+	ctx context.Context, projectID int64, conversationUUID, executionID string,
+) (localturnsapi.ScreenshotUsage, error) {
+	count, bytes, err := c.LocalTurnsRepo.CountConversationAttachments(ctx, projectID,
+		conversationUUID+"/"+localturnsapi.TurnScreenshotPrefix(executionID))
+	return localturnsapi.ScreenshotUsage{Count: count, Bytes: bytes}, err
+}
+
 func (c localTurnComputerUse) StoreScreenshot(
 	ctx context.Context, projectID int64, conversationUUID, name, mediaType string, content []byte,
 ) (string, error) {

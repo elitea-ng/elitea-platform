@@ -23,9 +23,9 @@ func TestLocalTurnStepRecordsKeepNoTypedText(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := localTurnStepScope{executionID: strings.Repeat("a", 32), projectID: 1, actorUserID: 7}
-	records, err := localTurnStepRecords(scope, calls, time.Now())
-	if err != nil {
-		t.Fatal(err)
+	records, dropped := localTurnStepRecords(scope, calls, time.Now())
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %v", dropped)
 	}
 	if len(records) != 1 {
 		t.Fatalf("records = %d, want only the computer call", len(records))
@@ -46,7 +46,31 @@ func TestLocalTurnStepRecordsKeepNoTypedText(t *testing.T) {
 	if again[0].StepID != got.StepID {
 		t.Fatal("a retried commit names another step")
 	}
-	if _, err := localTurnStepRecords(scope, []currentAgentToolCall{{key: "x", entry: map[string]any{"computer_step": "text"}}}, time.Now()); err == nil {
-		t.Fatal("a step record that is not an object was accepted")
+}
+
+// A step record the commit cannot keep is dropped, and only it: the other
+// calls' records, and the turn, are kept.
+func TestLocalTurnStepRecordsDropABadRecordNotTheTurn(t *testing.T) {
+	t.Parallel()
+	huge := map[string]any{"v": 1, "tool": "computer_type"}
+	for _, key := range []string{"window_title", "action", "ref", "bundle_id", "outcome", "tool"} {
+		huge[key] = strings.Repeat("w", 64*1024)
+	}
+	huge["text"] = map[string]any{"chars": 1, "digest": strings.Repeat("d", 1024)}
+	huge["screenshot"] = map[string]any{"mime": strings.Repeat("m", 1024), "digest": strings.Repeat("d", 1024),
+		"artifact": strings.Repeat("p", 1024)}
+	calls := []currentAgentToolCall{
+		{key: "bad", entry: map[string]any{"computer_step": "text"}},
+		{key: "good", entry: map[string]any{"computer_step": map[string]any{"v": 1, "tool": "computer_apps"}}},
+	}
+	scope := localTurnStepScope{executionID: strings.Repeat("a", 32), projectID: 1, actorUserID: 7}
+	records, dropped := localTurnStepRecords(scope, calls, time.Now())
+	if len(records) != 1 || records[0].NodeID != "good" || len(dropped) != 1 || dropped[0] != "bad" {
+		t.Fatalf("records = %+v, dropped = %v", records, dropped)
+	}
+	// Bounded strings keep even a record of long values within a summary.
+	records, dropped = localTurnStepRecords(scope, []currentAgentToolCall{{key: "huge", entry: map[string]any{"computer_step": huge}}}, time.Now())
+	if len(dropped) != 0 || len(records) != 1 {
+		t.Fatalf("a long record was dropped: %v", dropped)
 	}
 }

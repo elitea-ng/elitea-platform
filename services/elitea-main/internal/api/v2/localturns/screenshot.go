@@ -32,6 +32,18 @@ const ScreenshotPath = "/api/v2/elitea_core/local_turn_screenshot/prompt_lib/{pr
 // attachment limit, 3 MiB by default) as base64, and its fields.
 const maxScreenshotBody = int64(6 * 1024 * 1024)
 
+// The most one turn may upload: screenshots, and their bytes in all.
+const (
+	MaxTurnScreenshots     = 64
+	MaxTurnScreenshotBytes = int64(64 * 1024 * 1024)
+)
+
+// ScreenshotUsage is what one turn has uploaded so far.
+type ScreenshotUsage struct {
+	Count int
+	Bytes int64
+}
+
 // ErrScreenshotUploadOff is a project without the opt-in.
 var ErrScreenshotUploadOff = errors.New("computer use screenshot upload is off for this project")
 
@@ -49,6 +61,9 @@ type ComputerUse interface {
 	// StoreScreenshot stores content as an attachment of the conversation and
 	// answers its filepath (`/{bucket}/{key}`). Errors are apierr errors.
 	StoreScreenshot(ctx context.Context, projectID int64, conversationUUID, name, mediaType string, content []byte) (string, error)
+	// ScreenshotUsage counts what the turn uploaded: the conversation's
+	// screenshot attachments named after this turn's calls are this turn's.
+	ScreenshotUsage(ctx context.Context, projectID int64, conversationUUID, executionID string) (ScreenshotUsage, error)
 }
 
 // WithComputerUse serves the start's `computer_use` and the screenshot
@@ -148,7 +163,24 @@ func (h *handler) uploadScreenshot(writer http.ResponseWriter, request *http.Req
 		writeUseCaseError(ctx, writer, "screenshot", err)
 		return
 	}
-	filepath, err := h.computer.StoreScreenshot(ctx, projectID, conversationUUID, body.Name, body.MediaType, content)
+	executionID := chi.URLParam(request, "executionID")
+	usage, err := h.computer.ScreenshotUsage(ctx, projectID, conversationUUID, executionID)
+	if err != nil {
+		slog.ErrorContext(ctx, "local turn: count a turn's screenshots", "project_id", projectID, "err", err)
+		writeUseCaseError(ctx, writer, "screenshot", localturn.ErrUnavailable)
+		return
+	}
+	if usage.Count >= MaxTurnScreenshots {
+		desktopwire.WriteError(writer, http.StatusTooManyRequests, "computer_screenshot_limit",
+			"This turn uploaded the most screenshots one turn may (64); later ones stay on the device.")
+		return
+	}
+	if usage.Bytes+int64(len(content)) > MaxTurnScreenshotBytes {
+		desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "computer_screenshot_limit",
+			"This turn's screenshots would pass the 64 MiB one turn may upload; later ones stay on the device.")
+		return
+	}
+	filepath, err := h.computer.StoreScreenshot(ctx, projectID, conversationUUID, turnScreenshotName(executionID, body.Name), body.MediaType, content)
 	if err != nil {
 		var refused *apierr.APIError
 		if errors.As(err, &refused) && refused.Status < http.StatusInternalServerError {
@@ -162,6 +194,18 @@ func (h *handler) uploadScreenshot(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	desktopwire.WriteJSON(writer, http.StatusCreated, map[string]any{"filepath": filepath, "file_size": len(content)})
+}
+
+// turnScreenshotName stores a screenshot under its turn's execution id, so
+// the conversation's attachments say which turn uploaded it (and count it
+// against the turn's cap) without a column of their own.
+func turnScreenshotName(executionID, name string) string {
+	return strings.Replace(name, "computer-screenshot-", TurnScreenshotPrefix(executionID), 1)
+}
+
+// TurnScreenshotPrefix is the name prefix of a turn's stored screenshots.
+func TurnScreenshotPrefix(executionID string) string {
+	return "computer-screenshot-" + executionID + "-"
 }
 
 func writeScreenshotOff(writer http.ResponseWriter) {

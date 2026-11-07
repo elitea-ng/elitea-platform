@@ -47,7 +47,7 @@ export const LocalTurnScreenshotStored = zod
     filepath: zod
       .string()
       .describe(
-        "`/{bucket}/{conversation_uuid}/{name}`, the chat attachment path; a taken name gets a number.",
+        "`/{bucket}/{conversation_uuid}/computer-screenshot-{execution_id}-{id}.png|.jpg`, the chat attachment path; a taken name gets a number.",
       ),
     file_size: zod.int(),
   })

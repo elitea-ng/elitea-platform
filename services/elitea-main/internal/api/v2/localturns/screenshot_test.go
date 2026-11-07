@@ -20,6 +20,11 @@ type fakeComputer struct {
 	stored    []byte
 	storedFor string
 	turnCred  localturn.Credential
+	usage     ScreenshotUsage
+}
+
+func (f *fakeComputer) ScreenshotUsage(context.Context, int64, string, string) (ScreenshotUsage, error) {
+	return f.usage, nil
 }
 
 func (f *fakeComputer) UploadScreenshots(context.Context, int64) (bool, error) {
@@ -91,7 +96,7 @@ func TestComputerScreenshotUploadStoresWithTheOptIn(t *testing.T) {
 	}
 	var body map[string]any
 	_ = json.Unmarshal(response.Body.Bytes(), &body)
-	if body["filepath"] != "/chat-attachments/6f1c2d3e-4a5b-4c6d-8e7f-901234567890/computer-screenshot-call_1.png" {
+	if body["filepath"] != "/chat-attachments/6f1c2d3e-4a5b-4c6d-8e7f-901234567890/computer-screenshot-0123456789abcdef0123456789abcdef-call_1.png" {
 		t.Fatalf("filepath = %v", body["filepath"])
 	}
 }
@@ -134,4 +139,24 @@ func containsJSON(raw []byte, key string, want map[string]any) bool {
 	got, _ := json.Marshal(body[key])
 	expected, _ := json.Marshal(want)
 	return string(got) == string(expected)
+}
+
+// One turn uploads at most 64 screenshots and 64 MiB of them.
+func TestComputerScreenshotUploadIsCappedPerTurn(t *testing.T) {
+	for usage, want := range map[ScreenshotUsage]int{
+		{Count: MaxTurnScreenshots - 1}:               http.StatusCreated,
+		{Count: MaxTurnScreenshots}:                   http.StatusTooManyRequests,
+		{Count: 1, Bytes: MaxTurnScreenshotBytes - 3}: http.StatusCreated,
+		{Count: 1, Bytes: MaxTurnScreenshotBytes - 2}: http.StatusRequestEntityTooLarge,
+	} {
+		computer := &fakeComputer{upload: true, usage: usage}
+		h := &handler{computer: computer}
+		response := serve(t, h.uploadScreenshot, tokenUser(), screenshotURL, ScreenshotPath, screenshotJSON(t, []byte("png"), ""))
+		if response.Code != want {
+			t.Errorf("usage %+v: status = %d, want %d (%s)", usage, response.Code, want, response.Body)
+		}
+		if want != http.StatusCreated && (computer.stored != nil || !containsCode(response.Body.Bytes(), "computer_screenshot_limit")) {
+			t.Errorf("usage %+v: stored past the cap, or answered %s", usage, response.Body)
+		}
+	}
 }

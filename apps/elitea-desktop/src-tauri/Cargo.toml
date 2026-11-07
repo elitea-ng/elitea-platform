@@ -34,6 +34,8 @@ serde_json = "1"
 thiserror = "2"
 url = "2"
 sha2 = "0.11"
+# The per-turn keyed digest of typed text (computer use, ADR-0047 decision 9).
+hmac = "0.13.0"
 base64 = "0.23"
 bytes = "1"
 percent-encoding = "2"

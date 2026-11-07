@@ -78,3 +78,24 @@ WHERE execution_id = $1::text AND project_id = $2::integer AND actor_id = $3::te
 	}
 	return conversationUUID, nil
 }
+
+// CountConversationAttachments counts the project's chat attachment objects
+// (system buckets) whose key starts with keyPrefix, and their bytes: a
+// turn's screenshots are keyed `{conversation}/computer-screenshot-{execution}-…`.
+// A placeholder reserved by an upload in flight counts too.
+func (r *LocalTurnsRepo) CountConversationAttachments(ctx context.Context, projectID int64, keyPrefix string) (int, int64, error) {
+	var (
+		count int
+		bytes int64
+	)
+	err := r.pool.QueryRow(ctx, `
+SELECT count(*)::integer, coalesce(sum(o.byte_length), 0)::bigint
+FROM elitea_storage.objects o
+JOIN elitea_storage.buckets b ON b.id = o.bucket_id
+WHERE b.project_id = $1::bigint AND b.bucket_type = 'system'
+  AND starts_with(o.key, $2::text)`, projectID, keyPrefix).Scan(&count, &bytes)
+	if err != nil {
+		return 0, 0, fmt.Errorf("computer use: count the turn's screenshots: %w", err)
+	}
+	return count, bytes, nil
+}

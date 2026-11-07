@@ -1306,7 +1306,8 @@ impl Rig {
     }
 
     async fn recorded_call(&self, recorder: &Recorder, id: &str, name: &str, args: Value) -> Value {
-        let inputs = recorded_inputs(name, &args);
+        let digest = |text: &str| recorder.text_digest(text);
+        let inputs = recorded_inputs(name, &args, Some(&digest));
         assert!(recorder.tool_started(id, name, &inputs));
         let result = self.tool(name).run(id, &args).await;
         // As `ObservedTool` does: the image goes to the model only.
@@ -1356,7 +1357,19 @@ async fn no_typed_text_reaches_the_step_record_or_the_commit() {
     let committed = serde_json::to_string(&calls).unwrap();
     assert!(!committed.contains(SECRET), "{committed}");
     assert!(!committed.contains("horse"), "{committed}");
-    let expected_digest = digest(SECRET.as_bytes());
+    // The turn's keyed digest: two writes of one text agree, and it is not
+    // the text's plain SHA-256 (a short PIN could be brute-forced from it).
+    let expected_digest = recorder.text_digest(SECRET);
+    assert!(
+        expected_digest.starts_with("hmac-sha256:"),
+        "{expected_digest}"
+    );
+    assert_ne!(expected_digest, digest(SECRET.as_bytes()));
+    assert!(
+        !committed.contains(&elitea_workspace_store::digest::sha256_hex(
+            SECRET.as_bytes()
+        ))
+    );
     for (id, outcome) in [
         ("call-type", "ok"),
         ("call-set", "ok"),
@@ -1397,22 +1410,52 @@ async fn no_typed_text_reaches_the_step_record_or_the_commit() {
 
 #[test]
 fn recorded_inputs_keep_only_the_length_and_digest_of_typed_text() {
-    let typed = recorded_inputs(COMPUTER_TYPE, &json!({ "bundle_id": APP, "text": "héllo" }));
+    let recorder = Recorder::default();
+    let keyed = |text: &str| recorder.text_digest(text);
+    let typed = recorded_inputs(
+        COMPUTER_TYPE,
+        &json!({ "bundle_id": APP, "text": "héllo" }),
+        Some(&keyed),
+    );
     assert_eq!(
         typed,
-        json!({ "bundle_id": APP, "text_chars": 5, "text_digest": digest("héllo".as_bytes()) })
+        json!({ "bundle_id": APP, "text_chars": 5, "text_digest": recorder.text_digest("héllo") })
     );
     let set = recorded_inputs(
         COMPUTER_ACT,
         &json!({ "bundle_id": APP, "ref": "@s1:e2", "action": "set_value", "value": "x" }),
+        Some(&keyed),
     );
     assert!(set.get("value").is_none());
     assert_eq!(set["value_chars"], 1);
+    // Without a turn key (the session store) only the length is kept.
+    let stored = recorded_inputs(
+        COMPUTER_TYPE,
+        &json!({ "bundle_id": APP, "text": "1234" }),
+        None,
+    );
+    assert_eq!(stored, json!({ "bundle_id": APP, "text_chars": 4 }));
     // A select's option and any other tool's arguments are kept as they are.
     let select = json!({ "bundle_id": APP, "ref": "@s1:e2", "action": "select", "value": "Large" });
-    assert_eq!(recorded_inputs(COMPUTER_ACT, &select), select);
+    assert_eq!(recorded_inputs(COMPUTER_ACT, &select, Some(&keyed)), select);
     let read = json!({ "path": "a.txt", "text": "kept" });
-    assert_eq!(recorded_inputs("write_file", &read), read);
+    assert_eq!(recorded_inputs("write_file", &read, Some(&keyed)), read);
+}
+
+/// The typed-text digest is keyed per turn (ADR-0047 decision 9): another
+/// turn's digest of the same PIN differs, so the platform cannot match or
+/// brute-force it.
+#[test]
+fn a_typed_text_digest_is_keyed_per_turn_and_never_a_plain_hash() {
+    let one = Recorder::default();
+    let two = Recorder::default();
+    assert_eq!(one.text_digest("1234"), one.text_digest("1234"));
+    assert_ne!(one.text_digest("1234"), one.text_digest("1235"));
+    assert_ne!(one.text_digest("1234"), two.text_digest("1234"));
+    assert!(
+        !one.text_digest("1234")
+            .contains(&elitea_workspace_store::digest::sha256_hex(b"1234"))
+    );
 }
 
 #[tokio::test]
@@ -1479,6 +1522,7 @@ async fn with_the_opt_in_a_screenshot_is_uploaded_and_its_artifact_recorded() {
         )
         .await;
     assert_eq!(shot["status"], "ok", "{shot}");
+    recorder.settle_uploads(Duration::from_secs(5)).await;
     let taken = uploads.taken.lock().unwrap().clone();
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].0, "computer-screenshot-call-up.png");
@@ -1504,9 +1548,112 @@ async fn with_the_opt_in_a_screenshot_is_uploaded_and_its_artifact_recorded() {
         )
         .await;
     assert_eq!(refused["code"], "screen_unavailable");
+    recorder.settle_uploads(Duration::from_secs(5)).await;
     assert_eq!(uploads.taken.lock().unwrap().len(), 1);
     let calls = recorder.tool_calls();
     let record = &calls.get("call-locked").unwrap()[STEP_RECORD_KEY];
     assert_eq!(record["outcome"], "screen_unavailable");
     assert!(record.get("screenshot").is_none());
+}
+
+/// An uploader that holds every upload until the test lets it go.
+#[derive(Default)]
+struct SlowUploads {
+    gate: tokio::sync::Notify,
+    order: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ScreenshotUploader for SlowUploads {
+    async fn upload(&self, name: &str, _mime: &str, _bytes: Vec<u8>) -> Result<String, String> {
+        self.gate.notified().await;
+        self.order.lock().unwrap().push(name.to_owned());
+        Ok(format!("/stored/{name}"))
+    }
+}
+
+/// The upload runs beside the turn (ADR-0047 decision 9): the call answers
+/// while its upload still waits, uploads keep call order, and the commit
+/// gets the outcome once the turn settles them; one not done in time is
+/// `uploaded: false`.
+#[tokio::test]
+async fn a_screenshot_upload_never_holds_the_call_and_settles_before_the_commit() {
+    let uploads = Arc::new(SlowUploads::default());
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(Some(uploads.clone()));
+    for id in ["shot-1", "shot-2"] {
+        let shot = tokio::time::timeout(
+            Duration::from_secs(5),
+            rig.recorded_call(
+                &recorder,
+                id,
+                COMPUTER_SCREENSHOT,
+                json!({ "bundle_id": APP }),
+            ),
+        )
+        .await
+        .expect("the call waited for its upload");
+        assert_eq!(shot["status"], "ok", "{shot}");
+    }
+    let pending = recorder.tool_calls();
+    assert!(
+        pending.get("shot-1").unwrap()[STEP_RECORD_KEY]["screenshot"]
+            .get("uploaded")
+            .is_none()
+    );
+    // Let one go: the first is stored, the second does not finish in time.
+    uploads.gate.notify_one();
+    recorder.settle_uploads(Duration::from_millis(500)).await;
+    assert_eq!(
+        *uploads.order.lock().unwrap(),
+        vec!["computer-screenshot-shot-1.png".to_owned()]
+    );
+    let calls = recorder.tool_calls();
+    let first = &calls.get("shot-1").unwrap()[STEP_RECORD_KEY]["screenshot"];
+    assert_eq!(first["uploaded"], true);
+    assert_eq!(first["artifact"], "/stored/computer-screenshot-shot-1.png");
+    assert_eq!(
+        calls.get("shot-2").unwrap()[STEP_RECORD_KEY]["screenshot"]["uploaded"],
+        false
+    );
+}
+
+/// A hand-over the person answered done is recorded as done, carried out
+/// of the call rather than guessed from its result.
+#[tokio::test]
+async fn a_completed_hand_over_is_recorded_as_done() {
+    let (rig, recorder) = rig(PermissionProfile::Build).recording(None);
+    *rig.person.answer.lock().unwrap() = ApprovalOutcome::Decided {
+        action: "approve".into(),
+        value: json!({}),
+    };
+    let done = rig
+        .recorded_call(
+            &recorder,
+            "hand-1",
+            COMPUTER_REQUEST_USER,
+            json!({ "reason": "sign in" }),
+        )
+        .await;
+    assert_eq!(done["status"], "ok", "{done}");
+    assert_eq!(
+        recorder.tool_calls().get("hand-1").unwrap()[STEP_RECORD_KEY]["outcome"],
+        "ok"
+    );
+    *rig.person.answer.lock().unwrap() = ApprovalOutcome::Decided {
+        action: "reject".into(),
+        value: json!({}),
+    };
+    let declined = rig
+        .recorded_call(
+            &recorder,
+            "hand-2",
+            COMPUTER_REQUEST_USER,
+            json!({ "reason": "sign in" }),
+        )
+        .await;
+    assert_eq!(declined["code"], "declined", "{declined}");
+    assert_eq!(
+        recorder.tool_calls().get("hand-2").unwrap()[STEP_RECORD_KEY]["outcome"],
+        "declined"
+    );
 }
