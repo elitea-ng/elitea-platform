@@ -24,6 +24,7 @@ import { tauriInvoke, type HostBridge, type HostState } from '@/shared/desktop/h
 import { installExternalLinks } from '@/shared/desktop/externalLinks';
 import { createHostFetch, type RawInvoke } from '@/shared/desktop/hostFetch';
 import { createHostTransport } from '@/shared/desktop/hostTransport';
+import { tauriViewSocketHost } from '@/shared/desktop/hostViewSocket';
 
 export interface LaunchOptions {
   bridge: HostBridge;
@@ -50,6 +51,7 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
   if (state.origin === null) throw new Error('desktop: launchApp needs a configured deployment origin');
 
   const noRedirectFetch = desktopFetch();
+  const viewSockets = tauriViewSocketHost();
   const transport = createHostTransport({
     bridge,
     clientVersion: state.clientVersion,
@@ -57,6 +59,8 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
     origin: state.origin,
     onSignedOut: options.onSignedOut,
     onUpgradeRequired: options.onUpgradeRequired,
+    // The cloud browser view's socket, opened by the host with the bearer (#1592).
+    ...(viewSockets !== undefined ? { viewSocketHost: viewSockets } : {}),
   });
   setNativeTransport(transport);
   // The app's first requests all need the token: read it (the host started
