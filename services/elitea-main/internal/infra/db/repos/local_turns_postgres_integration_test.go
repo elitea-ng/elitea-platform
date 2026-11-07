@@ -120,6 +120,29 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	if !started.Created || started.ParticipantID != int64(fixture.dummyID) {
 		t.Fatalf("start = %+v, want created, answered by the dummy participant %d", started, fixture.dummyID)
 	}
+	// Computer use screenshots (ADR-0047 decision 9): off with no setting
+	// row, on with the opt-in; only the starting credential's open turn
+	// takes an upload.
+	repo := NewLocalTurnsRepo(pool)
+	if on, err := repo.UploadScreenshots(ctx, 1); err != nil || on {
+		t.Fatalf("upload without a setting row = %v, %v; want off", on, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.configuration (uuid, project_id, label, elitea_title, type, section, data, meta, shared, status_ok, source, author_id, created_at)
+VALUES ('6b0f9e4c-2a1d-4c3b-9e8f-1585a0470009'::uuid, 1, 'Computer use', 'computer_use', 'computer_use', 'project_settings',
+        '{"upload_screenshots": true}'::jsonb, '{}'::jsonb, false, true, 'user', $1::integer, now() AT TIME ZONE 'UTC')`, user); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := repo.UploadScreenshots(ctx, 1); err != nil || !on {
+		t.Fatalf("upload with the opt-in = %v, %v; want on", on, err)
+	}
+	if conversation, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, desktop); err != nil || conversation != fixture.conversationUUID {
+		t.Fatalf("screenshot turn = %q, %v", conversation, err)
+	}
+	if _, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, localturn.Credential{TokenID: "99"}); !errors.Is(err, localturn.ErrNotFound) {
+		t.Fatalf("another credential's screenshot turn = %v, want ErrNotFound", err)
+	}
+
 	// The recall is the cloud resolver's: the memory saved before the user's
 	// first turn in the project is reserved and recalled.
 	if started.Recall.Count != 1 || !strings.Contains(started.Recall.Text, "Prefers tabs over spaces.") {
@@ -255,6 +278,9 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 	}
 	if _, err := service.Start(ctx, start); !errors.Is(err, localturn.ErrAlreadyCommitted) {
 		t.Fatalf("a start after the commit = %v, want ErrAlreadyCommitted", err)
+	}
+	if _, err := repo.ScreenshotTurn(ctx, 1, user, started.ExecutionID, desktop); !errors.Is(err, localturn.ErrAlreadyCommitted) {
+		t.Fatalf("a screenshot after the commit = %v, want ErrAlreadyCommitted", err)
 	}
 
 	// The delta surfaces both messages to another client.

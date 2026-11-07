@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
@@ -9,12 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	localturnsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/localturns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -32,6 +36,7 @@ func composeLocalTurns(
 	recorder audit.Recorder,
 	groupAuth apimw.AuthConfig,
 	runBriefs *runbrief.Service,
+	objectStore storage.ObjectStore,
 	logger *slog.Logger,
 ) (http.Handler, error) {
 	// No database, or no credential plane at all (the zero group AuthConfig):
@@ -39,8 +44,9 @@ func composeLocalTurns(
 	if pool == nil || groupAuth.PrincipalValidator == nil {
 		return nil, nil
 	}
+	repo := dbrepos.NewLocalTurnsRepo(pool)
 	service, err := localturn.NewService(
-		dbrepos.NewLocalTurnsRepo(pool),
+		repo,
 		policy,
 		dbrepos.NewMemoriesRepo(pool),
 		recorder,
@@ -60,7 +66,27 @@ func composeLocalTurns(
 		// The desktop run brief and goal check (ADR-0045 decision 11).
 		route.WithRunBriefs(runBriefs)
 	}
+	// The computer use setting and screenshot upload (ADR-0047 decision 9).
+	// Without an object store a screenshot has nowhere to go: the start
+	// still answers the setting, and the upload answers 503.
+	route.WithComputerUse(localTurnComputerUse{
+		LocalTurnsRepo: repo, objects: objectStore, attachments: api.NewConversationAttachmentStore(pool),
+	})
 	return route, nil
+}
+
+// localTurnComputerUse stores a desktop turn's screenshots as attachments of
+// its conversation, through the chat attachment path.
+type localTurnComputerUse struct {
+	*dbrepos.LocalTurnsRepo
+	objects     storage.ObjectStore
+	attachments v2convs.AttachmentStore
+}
+
+func (c localTurnComputerUse) StoreScreenshot(
+	ctx context.Context, projectID int64, conversationUUID, name, mediaType string, content []byte,
+) (string, error) {
+	return v2convs.StoreConversationAttachment(ctx, c.objects, c.attachments, projectID, conversationUUID, name, mediaType, content)
 }
 
 // newLocalTurnExecutionID mints the runtime's execution id shape: 16 random

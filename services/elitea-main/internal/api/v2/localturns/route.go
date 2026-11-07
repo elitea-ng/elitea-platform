@@ -73,6 +73,7 @@ func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.Per
 	router := chi.NewRouter()
 	router.Method(http.MethodPost, StartPath, gate(h.start))
 	router.Method(http.MethodPost, CommitPath, gate(h.commit))
+	router.Method(http.MethodPost, ScreenshotPath, gate(h.uploadScreenshot))
 	router.Method(http.MethodPost, RunBriefPath, gate(h.runBrief))
 	router.Method(http.MethodPost, RunCheckPath, gate(h.runCheck))
 	return &Route{handler: router, h: h}, nil
@@ -96,8 +97,9 @@ func (route *Route) ServeHTTP(writer http.ResponseWriter, request *http.Request)
 }
 
 type handler struct {
-	useCase UseCase
-	goals   RunBriefs
+	useCase  UseCase
+	goals    RunBriefs
+	computer ComputerUse
 }
 
 type startBody struct {
@@ -222,6 +224,8 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 	if outcome.Unattended != nil {
 		started["unattended"] = unattendedStarted(*outcome.Unattended)
 	}
+	// The project's computer use setting (ADR-0047 decision 9, contract 1.41).
+	started["computer_use"] = h.computerUseStarted(request.Context(), projectID)
 	desktopwire.WriteJSON(writer, http.StatusOK, started)
 }
 
