@@ -69,9 +69,7 @@ import { reduceSummaryFrame } from './chatStreamSummaryFrames';
 import { reduceMessageSyncFrame } from './chatStreamMessageSyncFrames';
 import { isRootAnswerFrame, reduceFinalResultFrame } from './chatStreamFinalResult';
 
-import type { MessageGroupWire } from '@/entities/message/lib/wire';
-
-import { answerAuthor } from './answerAuthor';
+import { participantApplicationId } from './answerAuthor';
 import type { ChatMessage } from './convertMessagesToChatHistory';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
 
@@ -145,10 +143,13 @@ function withAnswerParticipant(history: readonly ChatMessage[], frame: ChatStrea
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) return history;
   const target = findTarget(history, frame);
   const message = history[target];
-  if (!message || message.role === 'user' || message.authorParticipantId === id) return history;
+  if (!message || message.role === 'user') return history;
   // The agent behind the participant keys its memory (ADR-0050 1b): a live
-  // "remembered" chip needs it before the reload brings it.
-  const applicationId = answerAuthor({ author_participant_id: id } as MessageGroupWire, context.participants ?? []).authorApplicationId;
+  // "remembered" chip needs it before the reload brings it. Looked up on
+  // every frame, so a participants list that arrives after the first frame
+  // still stamps it.
+  const applicationId = participantApplicationId(context.participants ?? [], id);
+  if (message.authorParticipantId === id && (applicationId === undefined || message.authorApplicationId === applicationId)) return history;
   return replaceAt(history, target, { authorParticipantId: id, ...(applicationId !== undefined ? { authorApplicationId: applicationId } : {}) });
 }
 

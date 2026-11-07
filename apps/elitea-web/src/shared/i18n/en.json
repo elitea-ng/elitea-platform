@@ -5859,5 +5859,6 @@
   "features.agentMemory.unsaved": "Save the agent first: its memory starts with its first conversation.",
   "features.agentMemory.writer.agent": "The agent",
   "features.agentMemory.writer.person": "A person",
-  "pages.agents.editApplication.tabs.memory": "Memory"
+  "pages.agents.editApplication.tabs.memory": "Memory",
+  "features.agentMemory.chip.archived": "archived"
 }

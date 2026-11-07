@@ -12,7 +12,7 @@
  */
 import { ToolActionStatus } from '@/shared/lib/chat';
 
-export const REMEMBER_TOOL_NAME = 'remember';
+const REMEMBER_TOOL_NAME = 'remember';
 
 /** The tool-action fields read here (a `ToolActionDraft`). */
 export interface RememberToolAction {

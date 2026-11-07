@@ -68,7 +68,7 @@ function MemoryPanelBody({ projectId, applicationId }: { readonly projectId: str
           {t('features.agentMemory.optedOut', 'This agent does not remember anything about you. Turn the switch back on to let it.')}
         </Alert>
       )}
-      <MemoryFiltersBar filters={panel.filters} people={[...panel.names].map(([id, name]) => ({ id, name }))} onChange={panel.setFilters} />
+      <MemoryFiltersBar filters={panel.filters} people={panel.subjectPeople} onChange={panel.setFilters} />
       {list.isLoading && <CircularProgress size="1.5rem" />}
       {list.isError && (
         <Alert severity="error" data-testid="agent-memory-error">

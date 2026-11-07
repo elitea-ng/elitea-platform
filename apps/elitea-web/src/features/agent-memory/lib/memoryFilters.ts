@@ -14,7 +14,7 @@ export const MEMORY_PAGE_SIZE = 50;
 /** The route's own bound on one page; the export reads in pages of it. */
 export const MEMORY_EXPORT_PAGE_SIZE = 200;
 
-export type MemorySource = 'agent' | 'person';
+type MemorySource = 'agent' | 'person';
 
 export interface MemoryFilters {
   readonly query: string;
@@ -75,4 +75,9 @@ export function memoryErrorMessage(error: unknown, fallback: string): string {
     if (typeof body === 'string' && body !== '') return body;
   }
   return fallback;
+}
+
+/** The route answered 404: the entry is gone, or it is not one this caller may see. */
+export function isMemoryNotFound(error: unknown): boolean {
+  return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 404;
 }

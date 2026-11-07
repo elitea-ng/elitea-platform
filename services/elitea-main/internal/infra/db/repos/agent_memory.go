@@ -542,17 +542,21 @@ type AgentMemoryPerson struct {
 	Name string `json:"name"`
 }
 
-// PeopleNames answers the display names of the given users, the name or
-// else the email, in id order. A user with no row is left out, and so is
-// every user where the user table is absent (it is another corpus's).
+// PeopleNames answers the display names of the given users, in id order. A
+// user with no row or no name is left out (the email is never a fallback:
+// the list is read by every project member, and an address is not theirs to
+// see), and so is every user where the user table is absent (it is another
+// corpus's).
 func (s *AgentMemory) PeopleNames(ctx context.Context, ids []int64) ([]AgentMemoryPerson, error) {
 	people := []AgentMemoryPerson{}
 	if len(ids) == 0 {
 		return people, nil
 	}
 	rows, err := s.pool.Query(ctx, `
-SELECT u.id, COALESCE(NULLIF(btrim(u.name), ''), NULLIF(btrim(u.email), ''), '')
-FROM public.auth_core__user AS u WHERE u.id = ANY($1) ORDER BY u.id`, ids)
+SELECT u.id, btrim(u.name)
+FROM public.auth_core__user AS u
+WHERE u.id = ANY($1) AND btrim(COALESCE(u.name, '')) <> ''
+ORDER BY u.id`, ids)
 	if err != nil {
 		if missingRelation(err) {
 			return people, nil

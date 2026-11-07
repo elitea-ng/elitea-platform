@@ -1168,8 +1168,12 @@ const GENERATED_OPERATION_COUNT = 478;
  * 314 -> 317 (issue 1437, ADR-0045 decision 6): getPushConfig,
  * createPushSubscription and deletePushSubscription, the web push opt-in
  * (features/notifications WebPushToggle) and the sign-out teardown. Generated.
+ *
+ * 317 -> 323 (issue 1608, ADR-0050 decision 1b): agentMemory.list, get,
+ * update, delete, clear and optOut, the agent editor's Memory tab and the
+ * chat's "remembered" chip (features/agent-memory). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 317;
+const MANIFEST_ENTRY_COUNT = 323;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -24,7 +24,7 @@ import {
 import { filtersToParams, MEMORY_EXPORT_PAGE_SIZE, type MemoryFilters } from '../lib/memoryFilters';
 
 /** The prefix every read of one agent's memory is cached under. */
-export function agentMemoryKey(projectId: string, applicationId: number): readonly unknown[] {
+function agentMemoryKey(projectId: string, applicationId: number): readonly unknown[] {
   return getListAgentMemoryQueryKey(projectId, applicationId);
 }
 
@@ -79,6 +79,9 @@ export function useAgentMemoryWrites(projectId: string, applicationId: number) {
   const update = useMutation({
     mutationFn: ({ entryId, change }: { readonly entryId: number; readonly change: AgentMemoryUpdate }) =>
       changeAgentMemoryEntry(projectId, applicationId, entryId, change),
+    // The saved entry is the answer: the chip shows it at once, before the
+    // refetch the invalidation starts.
+    onSuccess: (saved) => queryClient.setQueryData([...agentMemoryKey(projectId, applicationId), 'entry', saved.id], saved),
     onSettled: invalidate,
   });
   const remove = useMutation({

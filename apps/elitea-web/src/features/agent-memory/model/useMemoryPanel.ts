@@ -3,7 +3,7 @@
  * dialogs that are open, and what each row action does. Split out of
  * `ui/MemoryPanel.tsx` so the component holds only the layout (§3.5).
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { AgentMemoryEntry, SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
@@ -37,13 +37,34 @@ export function useMemoryPanel(projectId: string, applicationId: number) {
   const [exporting, setExporting] = useState(false);
 
   // Every name the list has answered stays known, so the person filter keeps
-  // offering someone after a filter or a page leaves them off the rows.
-  const known = useRef(new Map<number, string>());
-  const people = list.data?.people;
-  const names = useMemo(() => {
-    for (const person of people ?? []) known.current.set(person.id, person.name);
-    return new Map(known.current);
-  }, [people]);
+  // offering someone after a filter or a page leaves them off the rows. The
+  // filter is on the person a note is ABOUT, so it offers only subjects;
+  // `people` also names writers, for the rows and the history.
+  const [names, setNames] = useState<ReadonlyMap<number, string>>(() => new Map());
+  const [subjects, setSubjects] = useState<ReadonlySet<number>>(() => new Set());
+  const page = list.data;
+  useEffect(() => {
+    if (page === undefined) return;
+    setNames((previous) => {
+      const next = new Map(previous);
+      for (const person of page.people) next.set(person.id, person.name);
+      return next;
+    });
+    setSubjects((previous) => {
+      const next = new Set(previous);
+      for (const row of page.rows) if (row.subject_user_id !== null && row.subject_user_id !== undefined) next.add(row.subject_user_id);
+      return next;
+    });
+  }, [page]);
+  const subjectPeople = useMemo(() => [...names].filter(([id]) => subjects.has(id)).map(([id, name]) => ({ id, name })), [names, subjects]);
+
+  // A delete or a clear can leave the page past the end: step back to the
+  // last page that has rows.
+  const total = list.data?.total ?? 0;
+  useEffect(() => {
+    if (list.data === undefined || offset === 0 || offset < total) return;
+    setOffset(Math.max(0, Math.ceil(total / MEMORY_PAGE_SIZE) - 1) * MEMORY_PAGE_SIZE);
+  }, [list.data, offset, total]);
 
   const setFilters = useCallback((next: MemoryFilters) => {
     setFiltersState(next);
@@ -103,7 +124,6 @@ export function useMemoryPanel(projectId: string, applicationId: number) {
     }
   }, [projectId, applicationId, filters, fail]);
 
-  const total = list.data?.total ?? 0;
   return {
     userId,
     filters,
@@ -112,6 +132,7 @@ export function useMemoryPanel(projectId: string, applicationId: number) {
     rows: list.data?.rows ?? NO_ROWS,
     total,
     names,
+    subjectPeople,
     abilities: {
       userId,
       canManage: list.data?.can_manage === true,

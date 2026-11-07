@@ -49,6 +49,17 @@ export function participantIconUrl(participant: MessageParticipantWire | undefin
   return undefined;
 }
 
+/**
+ * The agent (application id) behind participant `participantId`, whose
+ * memory a "remembered" chip addresses (ADR-0050 decision 1b); `undefined`
+ * for a person, a system row or an unknown participant.
+ */
+export function participantApplicationId(participants: readonly MessageParticipantWire[], participantId: unknown): number | undefined {
+  const id = participantIdOf(participantId);
+  const row = id === undefined ? undefined : participants.find((candidate) => participantIdOf(candidate.id) === id);
+  return row?.entity_name === 'application' ? participantIdOf(row.entity_meta?.id) : undefined;
+}
+
 /** The author view of one answer row. */
 export function answerAuthor(group: MessageGroupWire, participants: readonly MessageParticipantWire[]): AnswerAuthor {
   const authorParticipantId = participantIdOf(group.author_participant_id);
@@ -69,7 +80,7 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
   const personaName = trimmed(author?.persona?.display_name);
   const authorRole = trimmed(author?.persona?.role);
   const authorIconUrl = participantIconUrl(author);
-  const authorApplicationId = author?.entity_name === 'application' ? participantIdOf(author.entity_meta?.id) : undefined;
+  const authorApplicationId = participantApplicationId(participants, authorParticipantId);
   return {
     messageClass,
     ...(authorParticipantId !== undefined ? { authorParticipantId } : {}),

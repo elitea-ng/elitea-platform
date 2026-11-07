@@ -9,6 +9,12 @@
  * once through `useTraceStepDetail` when it has a trace-step identity (and
  * nothing is fetched without a `TraceStepDetailProvider` above).
  *
+ * WHAT IT SHOWS is the entry as the server holds it now (`getAgentMemoryEntry`),
+ * so a reload shows an approved, corrected or archived note as it is, not as
+ * the agent first saved it; the call's own output fills in while that loads.
+ * A 404 (deleted, or a note about someone else) shows nothing, unless this
+ * reader just forgot it here.
+ *
  * WHAT THE READER MAY DO is the server's decision. Edit and Forget are offered
  * to everyone: the server lets the person a note is about correct or delete
  * it, and a manager any note; anyone else gets its refusal, shown on the chip.
@@ -26,9 +32,9 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-import { memoryErrorMessage } from '../lib/memoryFilters';
+import { isMemoryNotFound, memoryErrorMessage } from '../lib/memoryFilters';
 import { rememberActions, rememberedEntryOf, type RememberToolAction, type RememberedEntry } from '../lib/rememberedEntries';
-import { useAgentMemoryAbilities, useAgentMemoryWrites } from '../model/useAgentMemory';
+import { useAgentMemoryAbilities, useAgentMemoryEntry, useAgentMemoryWrites } from '../model/useAgentMemory';
 import { MemoryEditDialog } from './MemoryEditDialog';
 
 /** Loads a reloaded step's body (`useTraceStepDetail`), injected by the chat so this slice does not import it. */
@@ -100,19 +106,32 @@ interface RememberedEntryChipProps {
   readonly agentName: string | undefined;
 }
 
+type ChipStatus = 'active' | 'pending' | 'archived';
+
+function chipStatusOf(status: string | undefined, fallback: RememberedEntry['status']): ChipStatus {
+  return status === 'active' || status === 'pending' || status === 'archived' ? status : fallback;
+}
+
+function chipText(name: string, content: string, status: ChipStatus): string {
+  const text = t('features.agentMemory.chip.remembered', '{{name}} remembered: {{content}}', { name, content });
+  if (status === 'pending') return `${text} (${t('features.agentMemory.chip.pending', 'waiting for approval')})`;
+  if (status === 'archived') return `${text} (${t('features.agentMemory.chip.archived', 'archived')})`;
+  return text;
+}
+
 function RememberedEntryChip({ entry, projectId, applicationId, agentName }: RememberedEntryChipProps): ReactNode {
   const { update, remove } = useAgentMemoryWrites(projectId, applicationId);
-  const { canApprove } = useAgentMemoryAbilities(projectId, applicationId, entry.status === 'pending');
-  const [state, setState] = useState<{ readonly content: string; readonly status: RememberedEntry['status'] | 'forgotten' }>({
-    content: entry.content,
-    status: entry.status,
-  });
+  const current = useAgentMemoryEntry(projectId, applicationId, entry.entryId);
+  const content = current.data?.content ?? entry.content;
+  const status = chipStatusOf(current.data?.status, entry.status);
+  const { canApprove } = useAgentMemoryAbilities(projectId, applicationId, status === 'pending');
+  const [forgotten, setForgotten] = useState(false);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const name = agentName ?? t('features.agentMemory.chip.theAgent', 'The agent');
   const testId = `agent-memory-chip-${entry.entryId}`;
 
-  if (state.status === 'forgotten') {
+  if (forgotten) {
     return (
       <Box sx={chipSx} data-testid={testId} data-state="forgotten">
         <Typography variant="bodySmall" color="text.secondary">
@@ -121,11 +140,12 @@ function RememberedEntryChip({ entry, projectId, applicationId, agentName }: Rem
       </Box>
     );
   }
+  if (isMemoryNotFound(current.error)) return null;
 
   const forget = (): void => {
     setError(undefined);
     remove.mutate(entry.entryId, {
-      onSuccess: () => setState((previous) => ({ ...previous, status: 'forgotten' })),
+      onSuccess: () => setForgotten(true),
       onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.chip.forgetFailed', 'It was not forgotten. Try again.'))),
     });
   };
@@ -133,21 +153,17 @@ function RememberedEntryChip({ entry, projectId, applicationId, agentName }: Rem
     setError(undefined);
     update.mutate(
       { entryId: entry.entryId, change: { status: 'active' } },
-      {
-        onSuccess: (saved) => setState({ content: saved.content, status: 'active' }),
-        onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.chip.approveFailed', 'It was not approved. Try again.'))),
-      },
+      { onError: (cause) => setError(memoryErrorMessage(cause, t('features.agentMemory.chip.approveFailed', 'It was not approved. Try again.'))) },
     );
   };
 
   return (
-    <Box sx={chipSx} data-testid={testId} data-state={state.status}>
+    <Box sx={chipSx} data-testid={testId} data-state={status}>
       <BookmarkAddedOutlinedIcon fontSize="small" color="action" />
       <Typography variant="bodySmall" sx={{ flex: '1 1 12rem', minWidth: 0, overflowWrap: 'anywhere' }} data-testid={`${testId}-text`}>
-        {t('features.agentMemory.chip.remembered', '{{name}} remembered: {{content}}', { name, content: state.content })}
-        {state.status === 'pending' && ` (${t('features.agentMemory.chip.pending', 'waiting for approval')})`}
+        {chipText(name, content, status)}
       </Typography>
-      {state.status === 'pending' && canApprove && (
+      {status === 'pending' && canApprove && (
         <Button size="small" onClick={approve} disabled={update.isPending} data-testid={`${testId}-approve`}>
           {t('features.agentMemory.action.approve', 'Approve')}
         </Button>
@@ -166,10 +182,9 @@ function RememberedEntryChip({ entry, projectId, applicationId, agentName }: Rem
       <MemoryEditDialog
         projectId={projectId}
         applicationId={applicationId}
-        entry={editing ? { id: entry.entryId, content: state.content } : undefined}
+        entry={editing ? { id: entry.entryId, content } : undefined}
         canChangeKind={false}
         onClose={() => setEditing(false)}
-        onSaved={(saved) => setState({ content: saved.content, status: saved.status === 'pending' ? 'pending' : 'active' })}
       />
     </Box>
   );
