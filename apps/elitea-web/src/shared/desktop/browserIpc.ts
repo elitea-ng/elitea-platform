@@ -21,6 +21,25 @@ export type BrowserGoAction = 'back' | 'forward' | 'reload' | 'stop';
 /** Why the guard refused a navigation. */
 export type BrowserRefusal = 'scheme' | 'http' | 'private_network' | 'forbidden' | 'credentials';
 
+/** Who drives the page (ADR-0048 decision 4): no turn uses it, the agent, or the person. */
+type BrowserControl = 'idle' | 'agent' | 'user';
+
+/** The pane's control state, as `browser_control` answers it and the `control` event carries it. */
+export interface BrowserControlState {
+  readonly control: BrowserControl;
+  /** The agent's `browser_request_user` reason while it waits for the person; `null` otherwise. */
+  readonly reason: string | null;
+  /** The agent asked for the person (`browser_request_user`) and waits for the hand back. */
+  readonly asked: boolean;
+  /** Let the agent watch: its snapshots and screenshots run while the person drives. */
+  readonly watch: boolean;
+  /** When the agent's request is declined unless answered (Unix ms); `null` when none waits. */
+  readonly deadline_ms: number | null;
+}
+
+/** What the person does with the control pill. */
+export type BrowserControlAction = 'get' | 'take_over' | 'hand_back' | 'decline' | 'watch' | 'unwatch';
+
 /** One `browser://event`. */
 export type BrowserEvent =
   | { thread_id: string; kind: 'loading' | 'loaded'; url: string }
@@ -28,6 +47,8 @@ export type BrowserEvent =
   | { thread_id: string; kind: 'refused'; url: string; reason: BrowserRefusal; message: string }
   | { thread_id: string; kind: 'download_started'; name: string }
   | { thread_id: string; kind: 'download_finished'; name: string; size: number | null; success: boolean }
+  /** Who drives the page changed. */
+  | ({ thread_id: string; kind: 'control' } & BrowserControlState)
   /** The host closed the pane to keep at most four alive; the next open makes a new page. */
   | { thread_id: string; kind: 'closed' };
 
@@ -45,6 +66,13 @@ export interface BrowserIpc {
   forget(threadId: string): Promise<boolean>;
   /** Show a finished download in Finder. */
   revealDownload(threadId: string, name: string): Promise<void>;
+  /**
+   * The control pill (#1591): read the state, take over, hand back (with an
+   * optional note: the person's message to the agent, or the answer to its
+   * `browser_request_user`), decline the agent's request, Let the agent watch.
+   * Resolves with the state after the action.
+   */
+  control(threadId: string, action: BrowserControlAction, note?: string): Promise<BrowserControlState>;
   /** Subscribe to `browser://event`; resolves once live, with its unsubscribe. */
   onEvent(handler: (event: BrowserEvent) => void): Promise<() => void>;
 }
@@ -61,6 +89,7 @@ function createBrowserIpc(hostInvoke: HostInvoke, listen: ListenFn): BrowserIpc 
     close: (threadId) => invoke<void>('browser_close', { thread_id: threadId }),
     forget: async (threadId) => (await invoke<{ forgotten: boolean }>('browser_forget', { thread_id: threadId })).forgotten,
     revealDownload: (threadId, name) => invoke<void>('browser_reveal_download', { thread_id: threadId, name }),
+    control: (threadId, action, note) => invoke<BrowserControlState>('browser_control', { thread_id: threadId, action, note: note === undefined || note === '' ? null : note }),
     onEvent: (handler) => listen(BROWSER_EVENT_CHANNEL, (payload) => handler(payload as BrowserEvent)),
   };
 }

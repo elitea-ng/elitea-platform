@@ -6,7 +6,7 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
-import type { BrowserEvent, BrowserRefusal } from '@/shared/desktop/browserIpc';
+import type { BrowserControlState, BrowserEvent, BrowserRefusal } from '@/shared/desktop/browserIpc';
 
 export interface BrowserDownload {
   readonly name: string;
@@ -24,9 +24,13 @@ export interface PaneState {
   readonly loading: boolean;
   readonly refused: { readonly url: string; readonly reason: BrowserRefusal; readonly message: string } | null;
   readonly downloads: readonly BrowserDownload[];
+  /** Who drives the page, and the agent's request for the person (#1591). */
+  readonly control: BrowserControlState;
 }
 
-export const EMPTY_PANE: PaneState = { open: false, live: false, url: '', title: '', loading: false, refused: null, downloads: [] };
+const IDLE_CONTROL: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false, deadline_ms: null };
+
+export const EMPTY_PANE: PaneState = { open: false, live: false, url: '', title: '', loading: false, refused: null, downloads: [], control: IDLE_CONTROL };
 
 /** The downloads a thread keeps on screen (the newest). */
 const MAX_DOWNLOADS = 20;
@@ -62,6 +66,8 @@ export function foldBrowserEvent(pane: PaneState, event: BrowserEvent): PaneStat
       return { ...pane, downloads: withDownload(pane.downloads, { name: event.name, size: null, state: 'running' }) };
     case 'download_finished':
       return { ...pane, downloads: withDownload(pane.downloads, { name: event.name, size: event.size, state: event.success ? 'done' : 'failed' }) };
+    case 'control':
+      return { ...pane, control: { control: event.control, reason: event.reason, asked: event.asked, watch: event.watch, deadline_ms: event.deadline_ms } };
     case 'closed':
       return { ...pane, live: false, loading: false };
   }

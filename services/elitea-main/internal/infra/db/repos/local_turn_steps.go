@@ -1,9 +1,10 @@
 package repos
 
-// The step records of a desktop turn's computer calls (ADR-0047 decision 9,
-// #1585): each tool step of the commit that carries a `computer_step` object
-// becomes an ADR-0042 run_steps row (kind tool_call) of the turn's execution,
-// in the commit's transaction. The run_step_anchor sweep anchors the run like
+// The step records of a desktop turn's computer and browser calls (ADR-0047
+// decision 9, #1585; ADR-0048 decision 9, #1591): each tool step of the
+// commit that carries a `computer_step` or `browser_step` object becomes an
+// ADR-0042 run_steps row (kind tool_call) of the turn's execution, in the
+// commit's transaction. The run_step_anchor sweep anchors the run like
 // any settled run: a local turn has no execution_jobs row that keeps it live.
 
 import (
@@ -23,6 +24,21 @@ import (
 // computer call's step record under.
 const LocalTurnStepRecordKey = "computer_step"
 
+// LocalTurnBrowserStepKey is the tool step key the desktop host writes a
+// browser pane call's step record under (client contract 1.42).
+const LocalTurnBrowserStepKey = "browser_step"
+
+// localTurnStepKinds is each step record key with the fields it keeps and
+// the toolkit its run step names.
+var localTurnStepKinds = []struct {
+	key     string
+	toolkit string
+	fields  map[string]bool
+}{
+	{key: LocalTurnStepRecordKey, toolkit: "computer", fields: localTurnStepFields},
+	{key: LocalTurnBrowserStepKey, toolkit: "browser", fields: localTurnBrowserStepFields},
+}
+
 // localTurnStepNamespace names a local turn step's step_id: one per
 // (execution, tool call key), so a step is the same row however often the
 // commit is retried.
@@ -35,6 +51,13 @@ var (
 	localTurnStepFields = map[string]bool{
 		"v": true, "tool": true, "outcome": true, "bundle_id": true, "window_title": true,
 		"action": true, "ref": true, "text": true, "screenshot": true,
+	}
+	// A browser call's record: the host and the URL path (no query or
+	// fragment), the ref with its role and name, the outcome; typed text as
+	// its length and digest, a screenshot as its size.
+	localTurnBrowserStepFields = map[string]bool{
+		"v": true, "tool": true, "outcome": true, "host": true, "path": true,
+		"ref": true, "role": true, "name": true, "text": true, "screenshot": true,
 	}
 	localTurnStepTextFields       = map[string]bool{"chars": true, "digest": true}
 	localTurnStepScreenshotFields = map[string]bool{
@@ -49,8 +72,15 @@ var (
 // dropped (and named in dropped): the turn itself is committed.
 func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToolCall, now time.Time) (records []runevidence.Record, dropped []string) {
 	for _, call := range toolCalls {
-		raw, present := call.entry[LocalTurnStepRecordKey]
-		if !present || raw == nil {
+		var raw any
+		kind := localTurnStepKinds[0]
+		for _, candidate := range localTurnStepKinds {
+			if value, present := call.entry[candidate.key]; present && value != nil {
+				raw, kind = value, candidate
+				break
+			}
+		}
+		if raw == nil {
 			continue
 		}
 		object, ok := raw.(map[string]any)
@@ -58,7 +88,7 @@ func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToo
 			dropped = append(dropped, call.key)
 			continue
 		}
-		summary, err := json.Marshal(cleanLocalTurnStep(object))
+		summary, err := json.Marshal(cleanLocalTurnStep(object, kind.fields))
 		if err != nil || len(summary) > runevidence.MaxSummaryBytes {
 			dropped = append(dropped, call.key)
 			continue
@@ -82,7 +112,7 @@ func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToo
 			ConversationUUID: record.conversationUUID,
 			NodeID:           truncateEvidence(call.key, runevidence.MaxNodeIDBytes),
 			Name:             name,
-			ToolkitID:        "computer",
+			ToolkitID:        kind.toolkit,
 			StartedAt:        started,
 			EndedAt:          ended,
 			Summary:          summary,
@@ -95,10 +125,10 @@ func localTurnStepRecords(record localTurnStepScope, toolCalls []currentAgentToo
 
 // cleanLocalTurnStep keeps the step record's allowed keys (and those of its
 // `text` and `screenshot` objects); strings lose NUL bytes.
-func cleanLocalTurnStep(object map[string]any) map[string]any {
+func cleanLocalTurnStep(object map[string]any, fields map[string]bool) map[string]any {
 	out := make(map[string]any, len(object))
 	for key, value := range object {
-		if !localTurnStepFields[key] {
+		if !fields[key] {
 			continue
 		}
 		switch key {
@@ -154,12 +184,13 @@ type localTurnStepScope struct {
 	messageID        string
 }
 
-// appendLocalTurnSteps writes the commit's computer step records into tx. A
+// appendLocalTurnSteps writes the commit's computer and browser step records
+// into tx. A
 // record it cannot keep is dropped with a warning, never the turn.
 func appendLocalTurnSteps(ctx context.Context, tx pgx.Tx, scope localTurnStepScope, toolCalls []currentAgentToolCall) error {
 	records, dropped := localTurnStepRecords(scope, toolCalls, time.Now().UTC())
 	if len(dropped) > 0 {
-		slog.WarnContext(ctx, "local turn: computer step records dropped (not an object, or too large)",
+		slog.WarnContext(ctx, "local turn: step records dropped (not an object, or too large)",
 			"execution_id", scope.executionID, "tool_calls", dropped)
 	}
 	if len(records) == 0 {

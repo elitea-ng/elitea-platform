@@ -4352,6 +4352,10 @@ impl AgentHost {
                 drivers.clone(),
                 workspace.session.vision(),
                 workspace.session.clone(),
+                // Each call's step record, and a hand-back note as the
+                // person's message of this turn (decisions 4 and 9).
+                recorder.clone(),
+                steering.clone(),
             )));
         }
         // The `computer` tools (ADR-0047): a toolset of their own, never

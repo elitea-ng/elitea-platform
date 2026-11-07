@@ -28,8 +28,10 @@
 //!   person gave Elitea the Accessibility grant (ADR-0047); without it the
 //!   model is told to hand the page to the person (`browser_request_user`).
 //!
-//! The control pill (`user_active`, `user_in_control`) and the hand-over
-//! question are #1591's ([`HandOver`]).
+//! The control pill (`user_active`, `user_in_control`) is the host's
+//! (`src/browser_control.rs`, #1591): it hears the person's input from the
+//! engine and gates every call before it reaches this driver. The
+//! hand-over question is [`HandOver`], the host's too.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -98,14 +100,15 @@ pub trait Engine: Send + Sync {
 /// and its domain policy): `scheme_refused` or `egress_refused`.
 pub type NavigationCheck = Arc<dyn Fn(&str) -> Result<(), BrowserError> + Send + Sync>;
 
-/// `browser_request_user` (#1591: the control pill and the hand-over).
+/// `browser_request_user`: the host hands the page to the person and waits
+/// for their hand-back (`src/browser_control.rs`, #1591).
 #[async_trait]
 pub trait HandOver: Send + Sync {
     async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError>;
 }
 
-/// Until #1591: there is no hand-over yet, so the model is told to ask in
-/// the conversation.
+/// No person to hand the page to (the driver's tests and its WebKit runs):
+/// the model is told to ask in the conversation.
 pub struct NoHandOver;
 
 #[async_trait]

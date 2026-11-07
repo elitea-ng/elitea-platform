@@ -2,7 +2,7 @@ import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { BrowserEvent, BrowserIpc, PaneRect } from '@/shared/desktop/browserIpc';
+import type { BrowserControlAction, BrowserControlState, BrowserEvent, BrowserIpc, PaneRect } from '@/shared/desktop/browserIpc';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { EMPTY_PANE, foldBrowserEvent, useBrowserPanes } from '../model/browserPane.store';
@@ -16,8 +16,29 @@ const RECT = { x: 10, y: 20, width: 300, height: 400 };
 
 const done = Promise.resolve();
 
-function fakeIpc() {
+const IDLE: BrowserControlState = { control: 'idle', reason: null, asked: false, watch: false, deadline_ms: null };
+
+/** The host's control, as `browser_control.rs` answers it (the Rust tests cover the agent's side). */
+function hostControl(state: BrowserControlState, action: BrowserControlAction): BrowserControlState {
+  switch (action) {
+    case 'get':
+      return state;
+    case 'take_over':
+      return state.control === 'idle' ? state : { ...state, control: 'user' };
+    case 'hand_back':
+      return state.control === 'user' ? { ...state, control: 'agent', reason: null, asked: false, watch: false, deadline_ms: null } : state;
+    case 'decline':
+      return state.asked ? { ...state, control: 'agent', reason: null, asked: false, deadline_ms: null } : state;
+    case 'watch':
+      return { ...state, watch: true };
+    case 'unwatch':
+      return { ...state, watch: false };
+  }
+}
+
+function fakeIpc(start: BrowserControlState = IDLE) {
   const rects: { rect: PaneRect; visible: boolean }[] = [];
+  let state = start;
   const spies = {
     open: vi.fn((_thread: string, address: string) => Promise.resolve({ url: address.includes('://') ? address : `https://${address}/` })),
     setRect: vi.fn((_thread: string, rect: PaneRect, visible: boolean) => {
@@ -28,6 +49,10 @@ function fakeIpc() {
     close: vi.fn(() => done),
     forget: vi.fn(() => Promise.resolve(true)),
     revealDownload: vi.fn(() => done),
+    control: vi.fn((_thread: string, action: BrowserControlAction, _note?: string) => {
+      state = hostControl(state, action);
+      return Promise.resolve(state);
+    }),
   };
   const ipc: BrowserIpc = { ...spies, onEvent: () => Promise.resolve(() => undefined) };
   // The session page subscribes (`useBrowserEvents`); here an event lands in the store as it would.
@@ -94,16 +119,18 @@ describe('modalOpen', () => {
 });
 
 describe('BrowserPane', () => {
-  it('has every control in a toolbar outside the page box, and the pill’s place', () => {
+  it('has every control in a toolbar outside the page box, and the pill', () => {
     mount(fakeIpc().ipc);
     const toolbar = screen.getByTestId('browser-toolbar');
     const page = screen.getByTestId('browser-page');
-    for (const id of ['browser-back', 'browser-forward', 'browser-reload', 'browser-address', 'browser-pill-slot', 'browser-open-external', 'browser-more', 'browser-close']) {
+    for (const id of ['browser-back', 'browser-forward', 'browser-reload', 'browser-address', 'browser-pill', 'browser-open-external', 'browser-more', 'browser-close']) {
       const control = screen.getByTestId(id);
       expect(toolbar.contains(control)).toBe(true);
       expect(page.contains(control)).toBe(false);
     }
     expect(screen.getByTestId('browser-back')).toBeDisabled();
+    expect(screen.getByTestId('browser-pill')).toHaveAttribute('data-control', 'idle');
+    expect(screen.queryByTestId('browser-take-over')).toBeNull();
   });
 
   it('opens a typed address over the page rectangle and follows the host’s events', async () => {
@@ -184,6 +211,109 @@ describe('BrowserPane', () => {
     act(() => fake.emit({ thread_id: 'c1', kind: 'download_finished', name: 'report.pdf', size: 2048, success: true }));
     await userEvent.setup().click(await screen.findByTestId('browser-download-reveal'));
     expect(fake.spies.revealDownload).toHaveBeenCalledWith('c1', 'report.pdf');
+  });
+});
+
+describe('BrowserPane control pill (#1591)', () => {
+  const control = (state: Partial<BrowserControlState>): BrowserEvent => ({ thread_id: 'c1', kind: 'control', ...IDLE, ...state });
+
+  it('reads who drives the page when it mounts, and follows the host’s control events', async () => {
+    const fake = fakeIpc({ ...IDLE, control: 'agent' });
+    mount(fake.ipc);
+    expect(fake.spies.control).toHaveBeenCalledWith('c1', 'get');
+    await waitFor(() => expect(screen.getByTestId('browser-pill')).toHaveAttribute('data-control', 'agent'));
+    expect(screen.getByTestId('browser-pill')).toHaveTextContent('Agent');
+    // The person clicked in the page (the host saw it): You.
+    act(() => fake.emit(control({ control: 'user' })));
+    expect(screen.getByTestId('browser-pill')).toHaveTextContent('You');
+    expect(screen.getByTestId('browser-hand-back')).toBeInTheDocument();
+    act(() => fake.emit(control({ control: 'idle' })));
+    expect(screen.getByTestId('browser-pill')).toHaveTextContent('Idle');
+    expect(screen.queryByTestId('browser-hand-back')).toBeNull();
+  });
+
+  it('takes over, lets the agent watch, and hands back with a note', async () => {
+    const fake = fakeIpc({ ...IDLE, control: 'agent' });
+    mount(fake.ipc);
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('browser-take-over'));
+    expect(fake.spies.control).toHaveBeenCalledWith('c1', 'take_over', undefined);
+    await waitFor(() => expect(screen.getByTestId('browser-pill')).toHaveAttribute('data-control', 'user'));
+    const watch = screen.getByRole('checkbox', { name: 'Let the agent watch' });
+    expect(watch).not.toBeChecked();
+    await user.click(watch);
+    expect(fake.spies.control).toHaveBeenCalledWith('c1', 'watch', undefined);
+    await waitFor(() => expect(watch).toBeChecked());
+    await user.click(screen.getByTestId('browser-hand-back'));
+    await user.type(screen.getByTestId('browser-note'), '  added it to the cart  ');
+    await user.click(screen.getByTestId('browser-hand-back-send'));
+    expect(fake.spies.control).toHaveBeenLastCalledWith('c1', 'hand_back', 'added it to the cart');
+    await waitFor(() => expect(screen.getByTestId('browser-pill')).toHaveAttribute('data-control', 'agent'));
+    expect(screen.queryByTestId('browser-hand-back-form')).toBeNull();
+    expect(screen.queryByTestId('browser-watch')).toBeNull();
+  });
+
+  it('refuses a note over the limit, and Cancel keeps the person driving', async () => {
+    const fake = fakeIpc({ ...IDLE, control: 'user' });
+    mount(fake.ipc);
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('browser-hand-back'));
+    const note = screen.getByTestId('browser-note');
+    await user.click(note);
+    await user.paste('é'.repeat(1025));
+    expect(screen.getByTestId('browser-hand-back-send')).toBeDisabled();
+    expect(screen.getByTestId('browser-hand-back-form')).toHaveTextContent('The note is too long.');
+    await user.click(screen.getByTestId('browser-hand-back-cancel'));
+    expect(screen.queryByTestId('browser-hand-back-form')).toBeNull();
+    expect(fake.spies.control).not.toHaveBeenCalledWith('c1', 'hand_back', expect.anything());
+    expect(screen.getByTestId('browser-pill')).toHaveAttribute('data-control', 'user');
+  });
+
+  it('shows the agent’s request above the page; Done hands back with the answer, Decline declines', async () => {
+    const asked = { ...IDLE, control: 'user' as const, asked: true, reason: 'Sign in with your account' };
+    const fake = fakeIpc(asked);
+    mount(fake.ipc);
+    const request = await screen.findByTestId('browser-request');
+    expect(request).toHaveTextContent('The agent asks you to use the page: Sign in with your account');
+    expect(screen.getByTestId('browser-page').contains(request)).toBe(false);
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('browser-request-done'));
+    await user.type(screen.getByTestId('browser-note'), 'signed in');
+    await user.click(screen.getByTestId('browser-hand-back-send'));
+    expect(fake.spies.control).toHaveBeenLastCalledWith('c1', 'hand_back', 'signed in');
+    await waitFor(() => expect(screen.queryByTestId('browser-request')).toBeNull());
+    // Asked again: Decline.
+    act(() => fake.emit(control(asked)));
+    await user.click(await screen.findByTestId('browser-decline'));
+    expect(fake.spies.control).toHaveBeenLastCalledWith('c1', 'decline', undefined);
+  });
+
+  it('shows how long the agent waits, counting down', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const now = Date.now();
+    const fake = fakeIpc({ ...IDLE, control: 'user', asked: true, reason: 'Solve the check', deadline_ms: now + 10 * 60_000 });
+    mount(fake.ipc);
+    expect(await screen.findByTestId('browser-request-deadline')).toHaveTextContent('Declined in 10 min unless you hand back.');
+    act(() => {
+      vi.advanceTimersByTime(8 * 60_000 + 30_000);
+    });
+    await waitFor(() => expect(screen.getByTestId('browser-request-deadline')).toHaveTextContent('Declined in 2 min'));
+    vi.useRealTimers();
+  });
+
+  it('says why a control action failed', async () => {
+    const fake = fakeIpc({ ...IDLE, control: 'agent' });
+    fake.spies.control.mockImplementation((_thread: string, action: BrowserControlAction) => (action === 'get' ? Promise.resolve({ ...IDLE, control: 'agent' }) : Promise.reject(new Error('The pane is gone.'))));
+    mount(fake.ipc);
+    await userEvent.setup().click(await screen.findByTestId('browser-take-over'));
+    expect(await screen.findByTestId('browser-error')).toHaveTextContent('The pane is gone.');
+  });
+
+  it('folds control events, and a closed page keeps nothing stale', () => {
+    let pane = foldBrowserEvent(EMPTY_PANE, control({ control: 'user', asked: true, reason: 'MFA', watch: true }));
+    expect(pane.control).toEqual({ control: 'user', asked: true, reason: 'MFA', watch: true, deadline_ms: null });
+    pane = foldBrowserEvent(pane, control({}));
+    expect(pane.control).toEqual(IDLE);
   });
 });
 

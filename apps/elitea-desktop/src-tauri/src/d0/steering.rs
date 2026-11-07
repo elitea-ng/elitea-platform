@@ -415,6 +415,15 @@ impl SteeringSource for SteeringInjector {
     }
 }
 
+/// A browser pane hand-back note (ADR-0048 decision 4): queued as the
+/// person's steering message, so the agent reads it at the next safe point
+/// and the conversation keeps it, like a message sent mid-turn.
+impl crate::browser_control::NoteSink for TurnSteering {
+    fn note(&self, text: &str) -> bool {
+        self.queue(text).is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

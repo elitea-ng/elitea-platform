@@ -169,6 +169,7 @@ interface Window {
   readonly webkit: {
     readonly messageHandlers: {
       readonly eliteaBrowserFrame: { postMessage(message: string): void };
+      readonly eliteaBrowserInput: { postMessage(message: string): void };
     };
   };
 }
@@ -281,6 +282,8 @@ interface Window {
   const elements = new Map<unknown, Element>();
   const ids = new WeakMap<Element, number>();
   let nextId = 1;
+  /** The driver itself is inserting text (synchronously). */
+  let driverTyping = false;
 
   function idFor(el: Element): number {
     let id = ids.get(el);
@@ -774,7 +777,14 @@ interface Window {
     const allowed = el.dispatchEvent(new view.InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertText', data: text }));
     if (!allowed) return;
     if (contentEditable(el)) {
-      el.ownerDocument.execCommand('insertText', false, text);
+      // WebKit may mark the editing events of execCommand trusted: they
+      // are the driver's, not the person's (`reportInput`).
+      driverTyping = true;
+      try {
+        el.ownerDocument.execCommand('insertText', false, text);
+      } finally {
+        driverTyping = false;
+      }
     } else {
       setValue(el, getValue(el) + text);
       el.dispatchEvent(new view.InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: text }));
@@ -932,6 +942,32 @@ interface Window {
   // Tell the host this frame exists, so it can call into a cross-origin
   // frame. The handler is registered in THIS world only: the page world's
   // `webkit.messageHandlers` has no such name.
+  // The person's own input (ADR-0048 decision 4): a click, a key, a scroll,
+  // text from an input method or dictation (`beforeinput`, which has no
+  // keydown), a paste or a drop in the page while the agent drives pauses
+  // it. Only trusted events count (the page's scripts cannot make one, and
+  // the driver's own actions are untrusted DOM events); listened for in the
+  // capture phase of this world, so the page cannot stop them first. At
+  // most one message every 50 ms per event type, so a click's down is
+  // never hidden by a key just before it (the host matches the driver's
+  // own posted clicks by their downs).
+  const lastInput = new Map<string, number>();
+  const reportInput = (event: Event): void => {
+    if (!event.isTrusted || driverTyping) return;
+    const now = Date.now();
+    if (now - (lastInput.get(event.type) ?? 0) < 50) return;
+    lastInput.set(event.type, now);
+    try {
+      window.webkit.messageHandlers.eliteaBrowserInput.postMessage(event.type);
+    } catch (_) {
+      // A host without the handler (the lazy install of a call).
+    }
+  };
+  // The same list as the host's `input::REPORTED`.
+  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'beforeinput', 'paste', 'drop']) {
+    window.addEventListener(type, reportInput, { capture: true, passive: true });
+  }
+
   if (window !== window.top) {
     const announce = (): void => {
       try {
