@@ -25,13 +25,15 @@ fn only_the_view_route_of_the_connected_deployment_is_opened() {
     let ok = view_url(
         &format!("wss://elitea.example.com/api/v2/browser_sessions/{SESSION}/view"),
         &scope,
+        Some("https://elitea.example.com"),
     )
     .expect("the view route");
     assert_eq!(ok.scheme(), "https");
     assert_eq!(
         view_url(
             "ws://elitea.example.com/x/browser_sessions/s/view",
-            &scope_for("http://elitea.example.com")
+            &scope_for("http://elitea.example.com"),
+            Some("http://elitea.example.com")
         )
         .expect("plain http deployment")
         .scheme(),
@@ -49,11 +51,81 @@ fn only_the_view_route_of_the_connected_deployment_is_opened() {
         "not a url".to_owned(),
     ] {
         assert_eq!(
-            view_url(&refused, &scope).map(|_| ()).unwrap_err().code,
+            view_url(&refused, &scope, Some("https://elitea.example.com"))
+                .map(|_| ())
+                .unwrap_err()
+                .code,
             "url_not_allowed",
             "{refused}"
         );
     }
+}
+
+#[test]
+fn a_deployment_granted_earlier_is_not_the_connected_one() {
+    // The scope keeps every deployment granted since launch; the bearer is
+    // the current one's, so only the current deployment's view opens.
+    let scope = scope_for("https://old.example.com");
+    scope.grant("https://new.example.com").unwrap();
+    let old = format!("wss://old.example.com/api/v2/browser_sessions/{SESSION}/view");
+    let new = format!("wss://new.example.com/api/v2/browser_sessions/{SESSION}/view");
+    assert_eq!(
+        view_url(&old, &scope, Some("https://new.example.com"))
+            .unwrap_err()
+            .code,
+        "url_not_allowed"
+    );
+    view_url(&new, &scope, Some("https://new.example.com")).expect("the connected deployment");
+    // The port is part of the origin; not connected at all opens nothing.
+    assert!(view_url(&new, &scope, Some("https://new.example.com:8443")).is_err());
+    assert!(view_url(&new, &scope, None).is_err());
+}
+
+#[test]
+fn a_refused_open_closes_on_the_channel_with_a_status() {
+    let close = |status| Down::Close {
+        code: 1006,
+        reason: String::new(),
+        status: Some(status),
+    };
+    let scope = scope_for("https://elitea.example.com");
+    let current = Some("https://elitea.example.com");
+    let sockets = ViewSockets::default();
+    let url = format!("wss://elitea.example.com/api/v2/browser_sessions/{SESSION}/view");
+
+    // Another deployment's view: forbidden, never retried.
+    let error = admit(
+        &sockets,
+        1,
+        &format!("wss://other.example.com/api/v2/browser_sessions/{SESSION}/view"),
+        &scope,
+        current,
+    )
+    .unwrap_err();
+    assert_eq!(refusal(&error), Some(close(403)));
+
+    // One view too many: busy.
+    let mut keep = Vec::new();
+    for id in 0..MAX_SOCKETS as u64 {
+        keep.push(admit(&sockets, id, &url, &scope, current).unwrap().1);
+    }
+    let error = admit(&sockets, 99, &url, &scope, current).unwrap_err();
+    assert_eq!(refusal(&error), Some(close(429)));
+
+    // An id in use is the page's bug: the call rejects.
+    let error = admit(&sockets, 0, &url, &scope, current).unwrap_err();
+    assert_eq!(error.code, "invalid_request");
+    assert_eq!(refusal(&error), None);
+}
+
+#[test]
+fn a_close_reason_is_cut_to_123_bytes_at_a_character_boundary() {
+    assert_eq!(clip_reason("bye".to_owned()), "bye");
+    // 62 two-byte characters are 124 bytes: the last one does not fit.
+    let reason = clip_reason("é".repeat(62));
+    assert_eq!(reason.len(), 122);
+    assert_eq!(reason, "é".repeat(61));
+    assert_eq!(clip_reason("a".repeat(200)).len(), 123);
 }
 
 #[test]
@@ -84,6 +156,9 @@ fn a_binary_message_reaches_the_page_as_raw_bytes() {
     );
 }
 
+/// The token a [`FakeBearer`] reads as `Err(HostError::UpgradeRequired)`.
+const UPGRADE_REQUIRED: &str = "!upgrade-required";
+
 /// Hands out `tokens` in turn; counts the refreshes.
 struct FakeBearer {
     tokens: StdMutex<Vec<&'static str>>,
@@ -110,6 +185,10 @@ impl Bearer for FakeBearer {
         } else {
             tokens.last().copied()
         };
+        // A refresh this build is too old for, as `access_token` reports it.
+        if token == Some(UPGRADE_REQUIRED) {
+            return Err(HostError::UpgradeRequired);
+        }
         Ok(token.map(str::to_owned))
     }
 
@@ -197,6 +276,7 @@ async fn open(
             origin.replacen("http", "ws", 1)
         ),
         &scope_for(origin),
+        Some(origin),
     )
     .expect("view url");
     let (sender, receiver) = mpsc::channel(UP_QUEUE);
@@ -374,6 +454,20 @@ async fn a_401_is_answered_by_one_refresh_and_one_retry() {
             status: Some(426)
         }]
     );
+
+    // Refreshed, but reading the new token says this build is too old: 426 too.
+    let (origin, seen) = server(|_| Some(401), |_| async {}).await;
+    let bearer = FakeBearer::new(&["stale", UPGRADE_REQUIRED], RefreshResult::Refreshed);
+    let heard = open(&origin, &bearer, std::mem::forget).await;
+    assert_eq!(
+        heard,
+        [Down::Close {
+            code: 1006,
+            reason: String::new(),
+            status: Some(426)
+        }]
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -451,6 +545,7 @@ async fn the_page_closes_with_its_code_and_a_dropped_handle_closes_too() {
             origin.replacen("http", "ws", 1)
         ),
         &scope_for(&origin),
+        Some(&origin),
     )
     .unwrap();
     let client = reqwest::Client::builder().http1_only().build().unwrap();
@@ -477,11 +572,26 @@ async fn the_page_closes_with_its_code_and_a_dropped_handle_closes_too() {
 
 #[tokio::test]
 async fn a_page_that_stops_listening_ends_the_socket() {
+    const REPLY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+    let closed = Arc::new(AtomicUsize::new(0));
+    let saw = Arc::clone(&closed);
     let (origin, _) = server(
         |_| None,
-        |mut socket| async move {
-            socket.send(Message::text("{}")).await.unwrap();
-            while socket.next().await.is_some() {}
+        move |mut socket| {
+            let saw = Arc::clone(&saw);
+            async move {
+                socket.send(Message::text("{}")).await.unwrap();
+                while let Some(Ok(message)) = socket.next().await {
+                    if let Message::Close(_) = message {
+                        saw.fetch_add(1, Ordering::SeqCst);
+                        // A slow deployment: its reply (queued by the library) goes out late.
+                        tokio::time::sleep(REPLY_DELAY).await;
+                        let _ = socket.flush().await;
+                        while socket.next().await.is_some() {}
+                        return;
+                    }
+                }
+            }
         },
     )
     .await;
@@ -493,10 +603,12 @@ async fn a_page_that_stops_listening_ends_the_socket() {
             origin.replacen("http", "ws", 1)
         ),
         &scope_for(&origin),
+        Some(&origin),
     )
     .unwrap();
     let client = reqwest::Client::builder().http1_only().build().unwrap();
     let calls = AtomicUsize::new(0);
+    let started = std::time::Instant::now();
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
         run(&client, &bearer, url, "0.1.0", receiver, |event| {
@@ -508,6 +620,51 @@ async fn a_page_that_stops_listening_ends_the_socket() {
     .expect("ends");
     // Open, then the text nobody took: no close event after that.
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+    // The host closed and waited for the deployment's reply (the close
+    // handshake), not dropped the socket on sending its frame; and within
+    // its bound.
+    let took = started.elapsed();
+    assert_eq!(closed.load(Ordering::SeqCst), 1);
+    assert!(took >= REPLY_DELAY, "{took:?}");
+    assert!(took < DROP_CLOSE_TIMEOUT, "{took:?}");
+}
+
+#[tokio::test]
+async fn a_deployment_that_never_answers_the_close_is_dropped_after_the_bound() {
+    let (origin, _) = server(
+        |_| None,
+        |mut socket| async move {
+            socket.send(Message::text("{}")).await.unwrap();
+            // Never reads again: the host's close goes unanswered.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            drop(socket);
+        },
+    )
+    .await;
+    let bearer = FakeBearer::new(&["good"], RefreshResult::Refreshed);
+    let (_sender, receiver) = mpsc::channel(UP_QUEUE);
+    let url = view_url(
+        &format!(
+            "{}/api/v2/browser_sessions/{SESSION}/view",
+            origin.replacen("http", "ws", 1)
+        ),
+        &scope_for(&origin),
+        Some(&origin),
+    )
+    .unwrap();
+    let client = reqwest::Client::builder().http1_only().build().unwrap();
+    let started = std::time::Instant::now();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        run(&client, &bearer, url, "0.1.0", receiver, |event| {
+            matches!(event, Down::Open)
+        }),
+    )
+    .await
+    .expect("ends");
+    let took = started.elapsed();
+    assert!(took >= DROP_CLOSE_TIMEOUT, "{took:?}");
+    assert!(took < DROP_CLOSE_TIMEOUT * 2, "{took:?}");
 }
 
 #[test]

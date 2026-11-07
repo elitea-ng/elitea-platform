@@ -31,8 +31,10 @@
 //! person); an incoming message is at most [`MAX_MESSAGE`]; one send carries
 //! at most [`MAX_SEND_BATCH`] messages of at most [`MAX_UP_MESSAGE`] each
 //! (the route's own bound is 4 KiB). A page load closes every socket, as it
-//! drops the page's fetches. The URL must be the view route of the connected
-//! deployment ([`view_url`]): no other path, no query, no userinfo.
+//! drops the page's fetches. The URL must be the view route of the deployment
+//! the app is connected to now ([`view_url`]): no other origin (not even one
+//! granted earlier), no other path, no query, no userinfo. A refused open
+//! closes on the channel with a status ([`refusal`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -75,6 +77,10 @@ const ABNORMAL: u16 = 1006;
 const UPGRADE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// How long a close waits for the deployment's answer.
 const CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a socket nobody reads any more gets to finish its close.
+const DROP_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// The longest close reason in bytes: a control frame's 125 less the code.
+const MAX_CLOSE_REASON: usize = 123;
 /// The route's path: `/…/browser_sessions/{session_id}/view`.
 const ROUTE_SEGMENT: &str = "browser_sessions";
 
@@ -95,13 +101,15 @@ impl ViewError {
 }
 
 /// The `http(s)` URL of a page's `ws(s)` view URL, if it is the view route
-/// of an origin `scope` allows.
+/// of `current`, the deployment the app is connected to now, and `scope`
+/// allows it. `scope` alone is not enough: it keeps every deployment
+/// granted since launch, and the bearer is the current deployment's.
 ///
 /// # Errors
 ///
 /// `url_not_allowed`: not `ws`/`wss`, userinfo, a query or fragment, another
-/// path, or an origin the app is not connected to.
-pub fn view_url(raw: &str, scope: &HttpScope) -> Result<Url, ViewError> {
+/// path, or an origin other than the connected deployment's.
+pub fn view_url(raw: &str, scope: &HttpScope, current: Option<&str>) -> Result<Url, ViewError> {
     let refused = || {
         ViewError::new(
             "url_not_allowed",
@@ -116,6 +124,9 @@ pub fn view_url(raw: &str, scope: &HttpScope) -> Result<Url, ViewError> {
     };
     url.set_scheme(scheme).map_err(|()| refused())?;
     if url.query().is_some() || url.fragment().is_some() || !scope.allows(&url) {
+        return Err(refused());
+    }
+    if current.and_then(crate::net::scope_origin) != Some(url.origin().ascii_serialization()) {
         return Err(refused());
     }
     let segments: Vec<&str> = url
@@ -271,6 +282,7 @@ async fn connect(
     let token = match bearer.token().await {
         Ok(Some(token)) => token,
         Ok(None) => return Err(Some(401)),
+        Err(HostError::UpgradeRequired) => return Err(Some(426)),
         Err(_) => return Err(None),
     };
     match attempt(client, url, Some(&token), client_version).await {
@@ -310,7 +322,7 @@ pub async fn run(
         }
     };
     if !down(Down::Open) {
-        let _ = socket.send(Message::Close(None)).await;
+        close_unread(&mut socket).await;
         return;
     }
     let mut closing = false;
@@ -323,13 +335,13 @@ pub async fn run(
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if !down(Down::Text(text.as_str().to_owned())) {
-                        let _ = socket.send(Message::Close(None)).await;
+                        close_unread(&mut socket).await;
                         return;
                     }
                 }
                 Some(Ok(Message::Binary(bytes))) => {
                     if !down(Down::Binary(bytes)) {
-                        let _ = socket.send(Message::Close(None)).await;
+                        close_unread(&mut socket).await;
                         return;
                     }
                 }
@@ -368,6 +380,19 @@ pub async fn run(
         reason,
         status: None,
     });
+}
+
+/// Close a socket nobody reads any more: send the close, then read on until
+/// the deployment answers it (the close handshake), within
+/// [`DROP_CLOSE_TIMEOUT`]. Sending the frame alone and dropping the socket
+/// leaves the deployment's answer unread and the connection reset under it.
+async fn close_unread(socket: &mut WebSocketStream<reqwest::Upgraded>) {
+    let _ = tokio::time::timeout(DROP_CLOSE_TIMEOUT, async {
+        if socket.send(Message::Close(None)).await.is_ok() {
+            while let Some(Ok(_)) = socket.next().await {}
+        }
+    })
+    .await;
 }
 
 /// Resolves when the page closes the socket (or drops it) before it opened.
@@ -428,12 +453,50 @@ impl ViewSockets {
     }
 }
 
+/// The close a refused open delivers on the socket's channel, with the
+/// status the page reads it by: a host that will not open one more view is
+/// busy (429, retried later), a URL that is not the connected deployment's
+/// view is forbidden (403, never retried). `None` for a page bug (an id in
+/// use), which rejects the call instead.
+///
+/// The close has to go on the channel: the channel's end reaches the page
+/// before the call's rejection does, so a page that waited for the
+/// rejection would already have closed without a status.
+fn refusal(error: &ViewError) -> Option<Down> {
+    let status = match error.code {
+        "too_many_views" => 429,
+        "url_not_allowed" => 403,
+        _ => return None,
+    };
+    Some(Down::Close {
+        code: ABNORMAL,
+        reason: String::new(),
+        status: Some(status),
+    })
+}
+
+/// Admit one view: its URL against the connected deployment, its slot in the table.
+fn admit(
+    sockets: &ViewSockets,
+    id: u64,
+    url: &str,
+    scope: &HttpScope,
+    current: Option<&str>,
+) -> Result<(Url, mpsc::Receiver<Up>), ViewError> {
+    let url = view_url(url, scope, current)?;
+    let (sender, receiver) = mpsc::channel(UP_QUEUE);
+    sockets.insert(id, sender)?;
+    Ok((url, receiver))
+}
+
 /// `browser_view_open`: open the view at `url` (`ws(s)://`); its events
-/// arrive on `events`. Resolves once the socket is under way, not open.
+/// arrive on `events`. Resolves once the socket is under way, not open. A
+/// view the host refuses (another deployment's URL, too many views) closes
+/// on `events` with a status ([`refusal`]) and resolves.
 ///
 /// # Errors
 ///
-/// `url_not_allowed`, `invalid_request` (the id is in use), `too_many_views`.
+/// `invalid_request` (the id is in use).
 #[tauri::command]
 pub fn browser_view_open(
     id: u64,
@@ -443,23 +506,43 @@ pub fn browser_view_open(
     web: State<'_, WebFetch>,
     app: State<'_, AppState>,
 ) -> Result<(), ViewError> {
-    let url = view_url(&url, &web.scope)?;
-    let (sender, receiver) = mpsc::channel(UP_QUEUE);
-    sockets.insert(id, sender)?;
+    let current = app.auth.state().ok().and_then(|state| state.origin);
+    let (url, receiver) = match admit(&sockets, id, &url, &web.scope, current.as_deref()) {
+        Ok(admitted) => admitted,
+        Err(error) => {
+            let Some(close) = refusal(&error) else {
+                return Err(error);
+            };
+            let _ = events.send(close.body());
+            return Ok(());
+        }
+    };
     let sockets = Arc::clone(&sockets);
     let http = web.http.clone();
     let auth = Arc::clone(&app.auth);
     tauri::async_runtime::spawn(async move {
-        let client = http.upgrade_client().await;
-        run(
-            client,
-            auth.as_ref(),
-            url,
-            http.client_version(),
-            receiver,
-            |event| events.send(event.body()).is_ok(),
-        )
-        .await;
+        if let Some(client) = http.upgrade_client().await {
+            run(
+                client,
+                auth.as_ref(),
+                url,
+                http.client_version(),
+                receiver,
+                |event| events.send(event.body()).is_ok(),
+            )
+            .await;
+        } else {
+            // No HTTP/1.1 client could be built (net.rs logged why): the
+            // pooled one would negotiate h2, where an upgrade does not exist.
+            let _ = events.send(
+                Down::Close {
+                    code: ABNORMAL,
+                    reason: String::new(),
+                    status: None,
+                }
+                .body(),
+            );
+        }
         sockets.remove(id);
     });
     Ok(())
@@ -497,13 +580,24 @@ pub async fn browser_view_send(
         } else {
             1000
         };
-        let reason: String = reason.chars().take(123).collect();
+        let reason = clip_reason(reason);
         sender
             .send(Up::Close(code, reason))
             .await
             .map_err(|_| gone())?;
     }
     Ok(())
+}
+
+/// A close reason fits a control frame: at most [`MAX_CLOSE_REASON`] bytes,
+/// cut at a character boundary.
+fn clip_reason(mut reason: String) -> String {
+    let mut end = reason.len().min(MAX_CLOSE_REASON);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason.truncate(end);
+    reason
 }
 
 #[cfg(test)]

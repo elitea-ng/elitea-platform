@@ -191,18 +191,27 @@ describe('the host view socket', () => {
     other.emit(new ArrayBuffer(1));
   });
 
-  it('reads a host that would not open one more view as busy, and any other refusal as unreachable', async () => {
-    const busy = fakeHost({ openError: Object.assign(new Error('too many'), { code: 'too_many_views' }) });
-    const socket = new HostViewSocket(URL_, busy.host);
+  it.each([403, 429])('keeps the status of a view the host refused (%i), though the channel ends before the call settles', async (status) => {
+    // Tauri's order for a refused open: the close on the channel, the
+    // channel's end, then the call resolves.
+    const host = fakeHost();
+    const socket = new HostViewSocket(URL_, host.host);
+    const closes: number[] = [];
+    socket.onclose = (event) => closes.push(event.code);
+    host.emit({ t: 'close', code: 1006, reason: '', status });
+    host.end();
     await flush();
-    expect(socket.readyState).toBe(3);
-    expect(socket.refusedStatus).toBe(429);
+    expect(closes).toEqual([1006]);
+    expect(socket.refusedStatus).toBe(status);
+  });
 
-    const refused = fakeHost({ openError: new Error('no') });
+  it('reads an open the IPC itself rejected as unreachable', async () => {
+    const refused = fakeHost({ openError: Object.assign(new Error('no'), { code: 'invalid_request' }) });
     const other = new HostViewSocket(URL_, refused.host);
     await flush();
     expect(other.readyState).toBe(3);
     expect(other.refusedStatus).toBeUndefined();
+    expect(refused.unregistered).toHaveLength(1);
   });
 
   it('ignores a send whose socket the host already closed', async () => {
@@ -308,6 +317,7 @@ describe('the shared view client on the host socket', () => {
   });
 
   it.each<[number, BrowserViewFailure, boolean]>([
+    [403, 'forbidden', false],
     [404, 'not_found', false],
     [410, 'ended', false],
     [429, 'busy', true],
@@ -323,6 +333,23 @@ describe('the shared view client on the host socket', () => {
     expect(result.failures).toEqual([[failure, retryable]]);
     expect(result.onUpgradeRequired).toHaveBeenCalledTimes(status === 426 ? 1 : 0);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('reads a view the host refused as final (403) or busy (429), in the order Tauri delivers it', async () => {
+    for (const [status, failure, retryable] of [
+      [403, 'forbidden', false],
+      [429, 'busy', true],
+    ] as const) {
+      const host = fakeHost();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal('fetch', fetchSpy);
+      const result = client(host);
+      host.emit({ t: 'close', code: 1006, reason: '', status });
+      host.end();
+      await flush();
+      expect(result.failures).toEqual([[failure, retryable]]);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
   });
 
   it('reads an unreachable deployment as transient', async () => {

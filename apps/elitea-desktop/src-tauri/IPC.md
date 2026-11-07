@@ -2734,8 +2734,8 @@ TLS roots as the pooled client, no h2, which has no upgrade), with
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `browser_view_open` | `{id, url, events}`: the page's id, the `wss://` (or `ws://`) view URL, and a channel (`__CHANNEL__:<callback>`) | `null` once the socket is under way. Refused: `url_not_allowed` (not the view route `…/browser_sessions/{id}/view` of the connected deployment, or with userinfo, a query or a fragment), `invalid_request` (the id is open), `too_many_views` (8 open; the page reads it as the route's 429). |
-| `browser_view_send` | `{id, messages: string[], close: [code, reason] \| null}` | `null` once queued in order. Text only (the view's JSON), at most 256 messages of 8 KiB each; `close` last (1000 or 3000–4999, else 1000; the reason cut to 123 characters). `unknown_view` once the socket is gone. |
+| `browser_view_open` | `{id, url, events}`: the page's id, the `wss://` (or `ws://`) view URL, and a channel (`__CHANNEL__:<callback>`) | `null` once the socket is under way. A view the host refuses also resolves, and closes on the channel with a status instead (the channel's end reaches the page before a rejection would): **403** when the URL is not the view route `…/browser_sessions/{id}/view` of the deployment the app is connected to **now** (its origin, scheme, host and port, must equal the current deployment's; the fetch scope, which keeps every deployment granted since launch, is not enough), or has userinfo, a query or a fragment; **429** with 8 open. Rejected: `invalid_request` (the id is open). |
+| `browser_view_send` | `{id, messages: string[], close: [code, reason] \| null}` | `null` once queued in order. Text only (the view's JSON), at most 256 messages of 8 KiB each; `close` last (1000 or 3000–4999, else 1000; the reason cut to 123 bytes at a character boundary). `unknown_view` once the socket is gone. |
 
 Events on the channel, numbered by Tauri and put back in order by the page:
 
@@ -2749,8 +2749,10 @@ Events on the channel, numbered by Tauri and put back in order by the page:
 - `{"t":"close","code":…,"reason":"…","status":…}` last. `status` is the
   HTTP status of a refused upgrade (404, 410, 429, 502, 503; 401 after one
   refresh and retry, or when signed out; 426 for a build under the
-  deployment's minimum), `null` when it opened or the deployment was not
-  reached (the page reads that as transient). A page's `WebSocket` cannot
+  deployment's minimum, also when the token read after a refresh says so),
+  or of a view the host refused (403, 429, above); `null` when it opened,
+  the deployment was not reached, or no HTTP/1.1 client could be built
+  (the page reads that as transient). A page's `WebSocket` cannot
   read that status, so the browser asks the route over plain HTTP; the
   desktop does not.
 
@@ -2759,8 +2761,13 @@ skips the exchange when a refresh already replaced that token) and
 retries once. Pings are answered by the host. A message from the
 deployment is at most 16 MiB. The upgrade must answer in 30 s (the route
 waits up to 10 s for the browser service's first message); a close waits
-5 s for the deployment's answer. A page load closes every socket of the
-old page, as it drops its fetches.
+5 s for the deployment's answer. A socket nobody reads any more (the page
+stopped listening) sends its close and reads on for the deployment's
+answer for at most 2 s before it is dropped. A page load closes every
+socket of the old page, as it drops its fetches. The upgrade goes through
+an HTTP/1.1-only client (system roots, else the built-in ones); if neither
+builds, the open closes with no status rather than use a client that
+would negotiate h2.
 
 ## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
 

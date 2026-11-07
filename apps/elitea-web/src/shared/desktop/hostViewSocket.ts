@@ -15,6 +15,8 @@
  *
  * `refusedStatus` is the HTTP status of a refused upgrade (404, 410, 429,
  * 502, 503, 401, 426): the reason a browser's own `WebSocket` cannot read.
+ * The host refusing the view itself reads the same way: 403 for a URL that
+ * is not the connected deployment's view, 429 for one view too many.
  */
 import type { BrowserViewSocket } from '@/shared/api/browserView/socket';
 
@@ -25,8 +27,6 @@ const CLOSED = 3;
 
 /** The host refuses a message past this (view_socket.rs `MAX_UP_MESSAGE`); the route's own bound is lower. */
 const MAX_SEND_BATCH = 256;
-/** The host refused to open one more (`too_many_views`): read as the route's 429. */
-const BUSY_STATUS = 429;
 
 type ViewSocketInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -79,11 +79,13 @@ export class HostViewSocket implements BrowserViewSocket {
     lastId = (lastId + 1) % 2 ** 31;
     this.id = lastId;
     this.callbackId = host.transformCallback((envelope) => this.receive(envelope));
-    this.chain = host.invoke('browser_view_open', { id: this.id, url, events: `__CHANNEL__:${this.callbackId}` }).catch((error: unknown) => {
-      const code = (error as { code?: unknown } | null)?.code;
-      // The host never took the channel: nothing will end it.
+    // A view the host refuses (another deployment's URL: 403; too many views:
+    // 429) closes on the channel with its status and resolves: Tauri ends a
+    // channel before the call's rejection arrives, so a status carried by
+    // the rejection would come too late. A rejection is an IPC failure.
+    this.chain = host.invoke('browser_view_open', { id: this.id, url, events: `__CHANNEL__:${this.callbackId}` }).catch(() => {
       host.unregisterCallback?.(this.callbackId);
-      this.finish(1006, '', code === 'too_many_views' ? BUSY_STATUS : undefined);
+      this.finish(1006, '', undefined);
     });
   }
 
