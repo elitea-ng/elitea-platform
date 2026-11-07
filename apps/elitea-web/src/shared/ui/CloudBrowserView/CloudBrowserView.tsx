@@ -77,7 +77,7 @@ const BUTTON: Readonly<Record<number, number>> = { 0: 1, 1: 2, 2: 3 };
  * middle): a move's own `button` is -1, so a drag would read as a hover.
  * 0 when none is held.
  */
-export function heldButton(buttons: number): number {
+function heldButton(buttons: number): number {
   if ((buttons & 1) !== 0) return 1;
   if ((buttons & 4) !== 0) return 2;
   if ((buttons & 2) !== 0) return 3;

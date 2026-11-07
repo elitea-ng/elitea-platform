@@ -16,7 +16,7 @@ import {
 } from '@/shared/api/browserView/client';
 import type { BrowserControl, BrowserViewFrameHeader } from '@/shared/api/browserView/protocol';
 
-export type BrowserViewPhase = 'connecting' | 'live' | 'lingering' | 'ended' | 'failed';
+type BrowserViewPhase = 'connecting' | 'live' | 'lingering' | 'ended' | 'failed';
 
 export interface BrowserViewState {
   readonly phase: BrowserViewPhase;

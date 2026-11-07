@@ -28,6 +28,7 @@ import { getViewBrowserSessionUrl } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { getNativeTransport } from '@/shared/api/nativeTransport';
 
+import type { BrowserViewSocketFactory } from './socket';
 import {
   CLOSE_ACCESS_REVOKED,
   CLOSE_TRY_AGAIN_LATER,
@@ -41,21 +42,10 @@ import {
   type BrowserViewUp,
 } from './protocol';
 
-/** The part of `WebSocket` the client touches; a desktop host socket implements the same. */
-export interface BrowserViewSocket {
-  binaryType: BinaryType;
-  readonly readyState: number;
-  send(data: string): void;
-  close(code?: number, reason?: string): void;
-  onopen: ((event: Event) => void) | null;
-  onmessage: ((event: MessageEvent) => void) | null;
-  onclose: ((event: CloseEvent) => void) | null;
-  onerror: ((event: Event) => void) | null;
-}
-
-export type BrowserViewSocketFactory = (url: string) => BrowserViewSocket;
 
 /** Why a view is not (or no longer) open. */
+export type { BrowserViewSocket, BrowserViewSocketFactory } from './socket';
+
 export type BrowserViewFailure =
   /** No browser for this run, or one this person may not watch (the two are not told apart). */
   | 'not_found'
@@ -132,7 +122,7 @@ function failureOfStatus(status: number): { failure: BrowserViewFailure; retryab
 }
 
 /** Why the view route refuses `sessionId` now, from its HTTP status (see the module comment). */
-export async function diagnose(sessionId: string): Promise<{ failure: BrowserViewFailure; retryable: boolean }> {
+async function diagnose(sessionId: string): Promise<{ failure: BrowserViewFailure; retryable: boolean }> {
   // A desktop host reports its own socket's refusal, and a 426 there reads as "update the app".
   if (getNativeTransport() !== undefined) return { failure: 'unavailable', retryable: true };
   try {

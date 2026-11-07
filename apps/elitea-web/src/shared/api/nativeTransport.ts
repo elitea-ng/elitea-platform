@@ -67,7 +67,7 @@ export interface NativeTransport {
    * cannot send: the cloud browser view (`shared/api/browserView`). Without
    * it the desktop app does not offer the view.
    */
-  readonly createWebSocket?: (url: string) => import('./browserView/client').BrowserViewSocket;
+  readonly createWebSocket?: (url: string) => import('./browserView/socket').BrowserViewSocket;
   /** A request answered 426: this build is older than the deployment's minimum. */
   onUpgradeRequired?(): void;
 }
