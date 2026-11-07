@@ -402,6 +402,14 @@ RETURNING committed_at`, record.ExecutionID, record.Digest[:]).Scan(&turn.Commit
 	}); err != nil {
 		return localturn.CommittedTurn{}, err
 	}
+	// The turn's computer calls as ADR-0042 step records (ADR-0047
+	// decision 9), with the commit.
+	if err := appendLocalTurnSteps(ctx, tx, localTurnStepScope{
+		executionID: record.ExecutionID, projectID: record.ProjectID, actorUserID: record.ActorUserID,
+		conversationUUID: turn.ConversationUUID, messageID: turn.ResponseMessageID,
+	}, toolCalls); err != nil {
+		return localturn.CommittedTurn{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return localturn.CommittedTurn{}, fmt.Errorf("local turn: commit: %w", err)
 	}

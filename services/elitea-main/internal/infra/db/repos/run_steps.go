@@ -212,6 +212,22 @@ func (s *RunSteps) Append(ctx context.Context, run runevidence.RunContext, recor
 		return 0, fmt.Errorf("run steps: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	accepted, err := appendRunSteps(ctx, tx, run, records)
+	if err != nil || accepted == 0 {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("run steps: commit: %w", err)
+	}
+	return accepted, nil
+}
+
+// appendRunSteps stores records in tx under the run's head lock: it skips
+// step_ids already stored, assigns seq and the chain fields, moves the head
+// and clears the content journal of the rows it stored. Append runs it in a
+// transaction of its own; a desktop turn's commit runs it in the commit's
+// (appendLocalTurnSteps).
+func appendRunSteps(ctx context.Context, tx pgx.Tx, run runevidence.RunContext, records []runevidence.Record) (int, error) {
 	var (
 		headProject int64
 		lastSeq     int64
@@ -268,12 +284,9 @@ UPDATE elitea_runtime.run_step_heads SET last_seq = $2, last_hash = $3, updated_
 	// The rows now name their objects: their journal entries go in the same
 	// transaction.
 	if len(journalled) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_step_content_pending WHERE object_key = ANY($1)`, journalled); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_step_content_pending WHERE object_key = ANY($1::text[])`, journalled); err != nil {
 			return 0, fmt.Errorf("run steps: clear the content journal: %w", err)
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("run steps: commit: %w", err)
 	}
 	return accepted, nil
 }

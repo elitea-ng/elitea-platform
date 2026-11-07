@@ -22,8 +22,8 @@ func TestCurrentConfigurationDataNormalizerOwnsEveryPinnedTypeExactlyOnce(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 60 {
-		t.Fatalf("catalog entries = %d, want 51 pinned, the five web providers, cloud_executor, worker_egress, ai_disclosure and browser", len(entries))
+	if len(entries) != 61 {
+		t.Fatalf("catalog entries = %d, want 51 pinned, the five web providers, cloud_executor, worker_egress, ai_disclosure, browser and computer_use", len(entries))
 	}
 
 	sdkTypes := 0

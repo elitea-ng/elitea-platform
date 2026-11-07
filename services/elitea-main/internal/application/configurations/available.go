@@ -109,6 +109,9 @@ func LoadPinnedCurrentAvailableCatalog() (*CurrentAvailableCatalog, error) {
 	if err := catalog.addBrowserProjectSetting(); err != nil {
 		return nil, err
 	}
+	if err := catalog.addComputerUseProjectSetting(); err != nil {
+		return nil, err
+	}
 	return catalog, nil
 }
 

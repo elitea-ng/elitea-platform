@@ -195,7 +195,14 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, creat
 		AssistantMessage: "Fixed: the assertion compared the wrong field.",
 		ToolCalls: json.RawMessage(`{"run-1": {"run_id": "run-1", "tool_name": "shell",
 			"tool_inputs": {"command": "cargo test"}, "tool_output": "1 failed",
-			"timestamp_start": "2026-10-08T10:00:00Z", "timestamp_finish": "2026-10-08T10:00:05Z"}}`),
+			"timestamp_start": "2026-10-08T10:00:00Z", "timestamp_finish": "2026-10-08T10:00:05Z"},
+			"run-2": {"run_id": "run-2", "tool_name": "computer_type",
+			"tool_inputs": {"bundle_id": "com.apple.TextEdit", "text_chars": 6, "text_digest": "sha256:ab"},
+			"tool_output": "{\"status\":\"ok\"}",
+			"timestamp_start": "2026-10-08T10:00:06Z", "timestamp_finish": "2026-10-08T10:00:07Z",
+			"computer_step": {"v": 1, "tool": "computer_type", "outcome": "ok", "bundle_id": "com.apple.textedit",
+				"window_title": "Notes", "action": "type", "ref": "e4",
+				"text": {"chars": 6, "digest": "sha256:ab", "value": "secret"}, "typed": "secret"}}}`),
 		ThinkingSteps: []json.RawMessage{json.RawMessage(`{"type": "thinking", "thinking": "look at the test",
 			"timestamp_start": "2026-10-08T09:59:59Z"}`)},
 		HITLExchanges: []localturn.HITLExchange{{
@@ -294,6 +301,24 @@ WHERE g.uuid = $1::uuid`, started.ResponseMessageID).Scan(&toolSteps, &thinkingS
 	}
 	if toolSteps != 1 || thinkingSteps != 1 {
 		t.Fatalf("trace rows = %d tool, %d thinking; want 1 and 1", toolSteps, thinkingSteps)
+	}
+
+	// The computer call is an ADR-0042 step record of the turn (ADR-0047
+	// decision 9), written once although the commit was retried; no typed
+	// text reaches it, even when a client sends some.
+	var (
+		stepCount int
+		summary   string
+		name      string
+	)
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), max(summary::text), max(name)
+FROM elitea_runtime.run_steps WHERE run_id = $1::text AND kind = 'tool_call'`, started.ExecutionID).Scan(&stepCount, &summary, &name); err != nil {
+		t.Fatal(err)
+	}
+	if stepCount != 1 || name != "computer_type" || !strings.Contains(summary, `"window_title": "Notes"`) ||
+		!strings.Contains(summary, `"chars": 6`) || strings.Contains(summary, "secret") {
+		t.Fatalf("computer step records = %d (%s %s), want one without the typed text", stepCount, name, summary)
 	}
 
 	// The commit's audit names what the client reported.

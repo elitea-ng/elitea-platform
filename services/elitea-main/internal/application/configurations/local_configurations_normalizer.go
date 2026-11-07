@@ -29,7 +29,7 @@ func currentLocalConfigurationType(typeName string) bool {
 	case "llm_model", "embedding_model", "image_generation_model", "asr_model", "tts_model",
 		"service_prompt", "environment_settings", "project_context", "project_icon",
 		CloudExecutorConfigurationType, WorkerEgressConfigurationType, AIDisclosureConfigurationType,
-		BrowserConfigurationType:
+		BrowserConfigurationType, ComputerUseConfigurationType:
 		return true
 	default:
 		return false
@@ -67,6 +67,8 @@ func (CurrentLocalConfigurationCreateNormalizer) NormalizeCreate(
 		normalized, err = normalizeAIDisclosureSetting(data)
 	case BrowserConfigurationType:
 		normalized, err = normalizeBrowserSetting(data)
+	case ComputerUseConfigurationType:
+		normalized, err = normalizeComputerUseSetting(data)
 	default:
 		return CurrentConfigurationNormalizationResult{Complete: false}, nil
 	}
