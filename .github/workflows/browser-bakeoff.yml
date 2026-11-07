@@ -116,6 +116,30 @@ jobs:
             | jq -r 'select(.reason == "compiler-artifact" and .target.name == "bakeoff" and .executable != null) | .executable' | tail -1)"
           test -x "$bin"
           echo "BAKEOFF_BIN=$bin" >> "$GITHUB_ENV"
+          moli="$(cargo test --locked -p elitea-browser-session --test moli --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "moli" and .executable != null) | .executable' | tail -1)"
+          test -x "$moli"
+          echo "MOLI_TEST_BIN=$moli" >> "$GITHUB_ENV"
+
+      # The agent's own Moli tests first (tests/moli.rs): Moli starts, its
+      # snapshot gives refs, the hard limits hold, and `auto` answers on one
+      # engine. With no network: the fixtures are on the container's
+      # loopback. The conformance kit's differences are printed for the
+      # appendix, not asserted.
+      - name: The agent on Moli, in the image, under gVisor
+        run: |
+          set -euo pipefail
+          docker run --rm --runtime=runsc --network=none --read-only \
+            --user 10001:10001 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --tmpfs /dev/shm:rw,nosuid,nodev,size=256m \
+            -v "${MOLI_TEST_BIN}:/usr/local/bin/moli-test:ro" \
+            -e ELITEA_BROWSER_ENGINE=/opt/chrome-headless-shell/chrome-headless-shell \
+            -e ELITEA_BROWSER_MOLI=/opt/moli/moli \
+            -e ELITEA_BROWSER_SESSION_BIN=/usr/local/bin/elitea-browser-session \
+            -e ELITEA_REQUIRE_BROWSER_MOLI=1 \
+            --entrypoint /usr/local/bin/moli-test \
+            elitea-browser-session-lite:bakeoff --nocapture --test-threads=1 2>&1 | tee "${RUNNER_TEMP}/moli-test.log"
 
       # The image's own pod spec, as near as docker gets: read-only root, uid
       # 10001, memory-backed /tmp and /dev/shm, gVisor. Unlike production the

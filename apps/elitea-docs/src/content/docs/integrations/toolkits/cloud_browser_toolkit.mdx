@@ -1,6 +1,6 @@
 ---
 title: "Cloud Browser"
-description: "Let an agent open, read and act on web pages in a cloud browser: what the toolkit does, when it asks a person, egress, time limits and unattended runs."
+description: "Let an agent open, read and act on web pages in a cloud browser: what the toolkit does, the browser engine, when it asks a person, egress, time limits and unattended runs."
 ---
 
 The **Cloud Browser** toolkit (`browser`) gives an agent that runs on the platform a real browser. The agent opens pages, reads them, clicks, types and fills in forms. The tools are the same as the desktop app's browser pane, with the same names and arguments. Each run gets its own browser session. The session is never shared and never used again.
@@ -12,6 +12,29 @@ An operator must first install the browser on the cluster. See [Cloud browser on
 1. In the project's settings, open **Cloud browser** and set **Enabled**.
 2. Optional: add **Allowed domains**, the hosts the browser may reach when the platform limits browser egress. You can add at most 128.
 3. Add the **Cloud Browser** toolkit to an agent, or hand a thread off to the cloud. A handed-off thread gets the browser tools automatically when its project has the browser enabled.
+
+## The engine
+
+The project's **Cloud browser** setting has an **Engine**:
+
+| Engine | What runs | Size |
+|---|---|---|
+| `full` (the default) | Chrome (chrome-headless-shell) | up to 2 CPUs and 2 GiB |
+| `lite` | Moli, a smaller browser engine, for pages that are mostly read | up to 1 CPU and 512 MiB |
+| `auto` | Moli first. If the page needs Chrome, the session moves to Chrome once and stays there | up to 2 CPUs and 2 GiB |
+
+Today only `full` is offered. `lite` and `auto` are not offered until Moli passes the engine bake-off (ADR-0049 decision 9). The bake-off runs about 40 tasks on real sites, from Atlassian, Microsoft 365, Salesforce, ServiceNow, GitHub, documentation sites, government forms and single-page apps. Moli is admitted only if:
+
+- it succeeds on at least 80% of the read and extract tasks,
+- it is no more than 10 points behind `full` overall, and
+- it never crashes or hangs.
+
+Until then, a project setting that names `lite` or `auto` is refused, and Main serves every session on `full`.
+
+When an `auto` session moves to Chrome, the page opens again in Chrome, and anything typed into a form that was not sent is lost. The agent's tool result says `engine_switched`, with the reason. A person who is watching sees *The page needed the full browser, so it was reopened there.* Two things cause a switch:
+
+- Moli does not support a command the page needs.
+- A snapshot comes back empty on a page that has text.
 
 ## Available tools
 
