@@ -80,6 +80,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// The version's `meta.citations` (ADR-0043 decision 5). Only a root
     /// agent's binding uses it.
     citations: elitea_agent_runtime::grounding::CitationMode,
+    /// The version's `meta.memory` (ADR-0050 decision 1b, #1607): binds the
+    /// agent memory tools. Only a root application agent has it; Main
+    /// recalls no agent memory for a nested agent or a pipeline.
+    agent_memory: Option<super::agent_memory_tools::AgentMemoryBinding>,
     /// The run's unattended grant (ADR-0045). Only the root agent of a run
     /// has it; a nested agent pauses as before.
     unattended: Option<Arc<super::unattended::UnattendedGrant>>,
@@ -277,6 +281,7 @@ impl OrdinaryNoToolProfile {
             edit_format: application_edit_format(request),
             output_contract: None,
             citations: elitea_agent_runtime::grounding::CitationMode::Off,
+            agent_memory: None,
             unattended: None,
         })
     }
@@ -331,6 +336,7 @@ impl OrdinaryNoToolProfile {
             edit_format: application_edit_format(request),
             output_contract: application_output_contract(request)?,
             citations: application_citations(request),
+            agent_memory: application_agent_memory(request),
             unattended: None,
         })
     }
@@ -442,6 +448,7 @@ impl OrdinaryNoToolProfile {
             },
             // A nested agent's answer goes to its parent, not to the chat.
             citations: elitea_agent_runtime::grounding::CitationMode::Off,
+            agent_memory: None,
             unattended: None,
         })
     }
@@ -483,6 +490,14 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) fn unattended_grant(&self) -> Option<&super::unattended::UnattendedGrant> {
         self.unattended.as_deref()
+    }
+
+    /// The agent memory tools the version binds (`meta.memory`).
+    #[must_use]
+    pub(crate) const fn agent_memory(
+        &self,
+    ) -> Option<super::agent_memory_tools::AgentMemoryBinding> {
+        self.agent_memory
     }
 
     /// The agent's citation setting (`meta.citations`).
@@ -912,6 +927,19 @@ fn application_output_contract(
 /// warning. It does not refuse the turn: citations are a reading aid, and a
 /// refusal would stop every chat turn of the agent. The warning names no
 /// stored value.
+fn application_agent_memory(
+    request: &AgentExecutionRequest,
+) -> Option<super::agent_memory_tools::AgentMemoryBinding> {
+    if request.kind != AgentExecutionKind::Application {
+        return None;
+    }
+    let meta = match request.payload.application.get("version_details") {
+        Some(Value::Object(version)) => version.get("meta").and_then(Value::as_object),
+        _ => None,
+    };
+    super::agent_memory_tools::AgentMemoryBinding::from_meta(meta)
+}
+
 fn application_citations(
     request: &AgentExecutionRequest,
 ) -> elitea_agent_runtime::grounding::CitationMode {

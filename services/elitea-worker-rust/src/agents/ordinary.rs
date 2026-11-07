@@ -763,6 +763,19 @@ impl OrdinaryNativeAgentAssembler {
             internal_tools = internal_tools.serving_data_analysis();
         }
         toolsets.extend(internal_tools.toolsets(Some(&BuilderToolAuthority::new(platform_writer))));
+        // The agent's own memory (#1607), on the version's `meta.memory`.
+        // Main admits every call against the claim; `untrusted` tells it
+        // whether tool output came before a write.
+        if let Some(binding) = profile.agent_memory() {
+            toolsets.push(super::agent_memory_tools::toolset(
+                binding,
+                &super::agent_memory_tools::AgentMemoryAuthority::new(
+                    Arc::clone(&self.platform),
+                    Arc::clone(runtime_context),
+                    Arc::clone(tool_policy.content_controls().untrusted()),
+                ),
+            ));
+        }
         toolsets.extend(data_toolset);
         toolsets.extend(profile.instruction_plan().toolsets());
         // The attachment tools exist only when a document of this turn was

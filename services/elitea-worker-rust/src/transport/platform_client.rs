@@ -10,11 +10,13 @@ use std::sync::Arc;
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 
 use super::runtime_context::{
-    ArtifactDeleteOutcome, ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest,
-    ArtifactReadOutcome, ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest,
-    ClaimScopedEliteaContext, ProjectContextWriteOutcome, ProjectContextWriteRequest,
-    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
-    SkillWriteOutcome, SkillWriteRequest,
+    AgentMemoryForgetRequest, AgentMemoryForgotten, AgentMemoryRecallRequest, AgentMemoryRecalled,
+    AgentMemoryRememberRequest, AgentMemoryRemembered, ArtifactDeleteOutcome,
+    ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
+    ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
+    ProjectContextWriteOutcome, ProjectContextWriteRequest, RuntimeApplicationVersion,
+    RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError, SkillWriteOutcome,
+    SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -125,6 +127,38 @@ impl PlatformClient {
     ) -> Result<ProjectContextWriteOutcome, RuntimeContextError> {
         self.runtime_context
             .write_project_context(authority, request)
+            .await
+    }
+
+    /// The agent memory tools (#1607): remember, recall and forget, under
+    /// the same non-fatal error contract as the builder writes above.
+    pub(crate) async fn remember_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryRememberRequest,
+    ) -> Result<AgentMemoryRemembered, RuntimeContextError> {
+        self.runtime_context
+            .remember_agent_memory(authority, request)
+            .await
+    }
+
+    pub(crate) async fn recall_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryRecallRequest,
+    ) -> Result<AgentMemoryRecalled, RuntimeContextError> {
+        self.runtime_context
+            .recall_agent_memory(authority, request)
+            .await
+    }
+
+    pub(crate) async fn forget_agent_memory(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &AgentMemoryForgetRequest,
+    ) -> Result<AgentMemoryForgotten, RuntimeContextError> {
+        self.runtime_context
+            .forget_agent_memory(authority, request)
             .await
     }
 

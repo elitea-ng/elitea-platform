@@ -1,5 +1,6 @@
 //! Language-neutral agent execution contracts.
 
+pub(crate) mod agent_memory_tools;
 pub(crate) mod application_pipeline;
 pub(crate) mod application_tools;
 pub(crate) mod approved_calls;
