@@ -47,6 +47,7 @@ const RETRY_MS: Readonly<Record<BrowserViewFailure, number | null>> = {
   access_revoked: null,
   signed_out: null,
   forbidden: null,
+  upgrade_required: null,
 };
 
 export type FrameSink = (header: BrowserViewFrameHeader, jpeg: Blob) => Promise<void>;

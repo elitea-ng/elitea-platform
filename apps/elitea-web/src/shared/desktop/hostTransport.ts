@@ -14,6 +14,7 @@ import type { NativeSignOutReason, NativeTransport, RefreshOutcome } from '@/sha
 
 import { fetchEventSourceFactory } from './fetchEventSource';
 import type { HostBridge } from './hostBridge';
+import { hostViewSocketFactory, type ViewSocketHost } from './hostViewSocket';
 import { clearAllLocalData } from './localData';
 
 /** Renew this long before the token's stated expiry, so a request never races it. */
@@ -32,6 +33,8 @@ export interface HostTransportOptions {
   /** Called after the host has dropped the session; the shell returns to the connect screen. */
   onSignedOut: (reason: NativeSignOutReason) => void;
   onUpgradeRequired?: () => void;
+  /** The host's IPC for the cloud browser view's socket (`hostViewSocket.ts`); without it the desktop offers no view. */
+  viewSocketHost?: ViewSocketHost;
   now?: () => number;
 }
 
@@ -127,5 +130,9 @@ export function createHostTransport(options: HostTransportOptions): NativeTransp
     ...(options.onUpgradeRequired !== undefined ? { onUpgradeRequired: options.onUpgradeRequired } : {}),
   } satisfies NativeTransport;
 
-  return { ...base, createEventSource: fetchEventSourceFactory({ transport: base }) };
+  return {
+    ...base,
+    createEventSource: fetchEventSourceFactory({ transport: base }),
+    ...(options.viewSocketHost !== undefined ? { createWebSocket: hostViewSocketFactory(options.viewSocketHost) } : {}),
+  };
 }

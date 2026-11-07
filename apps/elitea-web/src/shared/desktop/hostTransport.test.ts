@@ -124,6 +124,22 @@ describe('createHostTransport', () => {
     const { transport } = make(bridge());
     expect(transport.headers).toEqual({ 'X-Client-Version': '0.1.0' });
     expect(typeof transport.createEventSource).toBe('function');
+    // No host IPC for the view socket: the desktop offers no cloud browser view.
+    expect(transport.createWebSocket).toBeUndefined();
+  });
+
+  it("opens the cloud browser view through the host's socket when it has one", () => {
+    const invoke = vi.fn(() => Promise.resolve(null));
+    const transport = createHostTransport({
+      bridge: bridge(),
+      clientVersion: '0.1.0',
+      origin: 'https://h.example',
+      onSignedOut: vi.fn(),
+      viewSocketHost: { invoke, transformCallback: () => 3 },
+    });
+    const socket = transport.createWebSocket?.('wss://h.example/api/v2/browser_sessions/s/view');
+    expect(socket?.readyState).toBe(0);
+    expect(invoke).toHaveBeenCalledWith('browser_view_open', expect.objectContaining({ url: 'wss://h.example/api/v2/browser_sessions/s/view', events: '__CHANNEL__:3' }));
   });
 
   it('device_revoked wipes the webview data as well as the host', async () => {

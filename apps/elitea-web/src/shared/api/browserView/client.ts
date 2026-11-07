@@ -20,8 +20,11 @@
  * AUTHENTICATION. In a browser the session cookie rides on the upgrade. The
  * desktop app authenticates with a bearer token, which the WebSocket
  * constructor cannot send; there the host supplies the socket
- * (`NativeTransport.createWebSocket`), and without one the view is not
- * available (`browserViewAvailable`).
+ * (`NativeTransport.createWebSocket`, `shared/desktop/hostViewSocket.ts`),
+ * and without one the view is not available (`browserViewAvailable`). The
+ * host's socket reads the refused upgrade's status itself
+ * (`refusedStatus`), so the desktop needs no `diagnose` request: the status
+ * is the reason, and a 426 there means this app is too old.
  */
 import { getConfig } from '@/shared/config';
 import { getViewBrowserSessionUrl } from '@/shared/api/generated/chat/chat';
@@ -62,7 +65,9 @@ export type BrowserViewFailure =
   /** The page's origin is not the deployment's. */
   | 'forbidden'
   /** The connection dropped after it opened. */
-  | 'disconnected';
+  | 'disconnected'
+  /** This desktop app is older than the deployment allows (426 from the host's socket). */
+  | 'upgrade_required';
 
 export interface BrowserViewHandlers {
   readonly onHello?: (hello: BrowserViewHello) => void;
@@ -121,9 +126,21 @@ function failureOfStatus(status: number): { failure: BrowserViewFailure; retryab
   }
 }
 
+/**
+ * Why a desktop host socket's upgrade was refused, from its status. Unlike a
+ * diagnosing GET's, a 426 here is the upgrade itself refused: this build is
+ * older than the deployment allows, and the shell says so as it does for
+ * every other request answered 426.
+ */
+function failureOfUpgrade(status: number): { failure: BrowserViewFailure; retryable: boolean } {
+  if (status !== 426) return failureOfStatus(status);
+  getNativeTransport()?.onUpgradeRequired?.();
+  return { failure: 'upgrade_required', retryable: false };
+}
+
 /** Why the view route refuses `sessionId` now, from its HTTP status (see the module comment). */
 async function diagnose(sessionId: string): Promise<{ failure: BrowserViewFailure; retryable: boolean }> {
-  // A desktop host reports its own socket's refusal, and a 426 there reads as "update the app".
+  // A desktop host socket reports its own refusal (`refusedStatus`); one with none was not reached.
   if (getNativeTransport() !== undefined) return { failure: 'unavailable', retryable: true };
   try {
     // `background`: a 401 here means the view is not available, not "sign in again" mid-chat.
@@ -211,7 +228,12 @@ export function openBrowserView(sessionId: string, handlers: BrowserViewHandlers
       handlers.onFailure?.(event.code === CLOSE_TRY_AGAIN_LATER ? 'unavailable' : 'disconnected', true);
       return;
     }
-    // Refused before the upgrade: ask the route why.
+    // Refused before the upgrade. A host socket read the status itself; otherwise ask the route why.
+    if (socket.refusedStatus !== undefined) {
+      const { failure, retryable } = failureOfUpgrade(socket.refusedStatus);
+      handlers.onFailure?.(failure, retryable);
+      return;
+    }
     void (options.diagnose ?? diagnose)(sessionId).then(({ failure, retryable }) => {
       if (!closedByUs) handlers.onFailure?.(failure, retryable);
     });
