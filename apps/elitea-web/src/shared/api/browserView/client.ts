@@ -157,7 +157,7 @@ export interface OpenBrowserViewOptions {
 
 function defaultFactory(): BrowserViewSocketFactory {
   const native = getNativeTransport()?.createWebSocket;
-  return native ?? ((url) => new WebSocket(url) as unknown as BrowserViewSocket);
+  return native ?? ((url) => new WebSocket(url));
 }
 
 function defaultUrl(sessionId: string): string {

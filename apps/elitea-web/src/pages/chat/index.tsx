@@ -48,6 +48,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { ChatBox, toParticipant } from '@/widgets/chat-box';
 
 import { ForkErrorSnackbar, ForkedFromLink, useChatFork } from './ChatFork';
+import { ChatCloudBrowserTab, useCloudBrowserSession } from './ChatCloudBrowserTab';
 import { ChatParticipantsPanel } from './ChatParticipantsPanel';
 import { handoffExtensions } from './handoffExtensions';
 import { useAutoConversationName } from './useAutoConversationName';
@@ -197,6 +198,8 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
   // The panel's add-participant picker — see `useAddParticipants` for what
   // was missing and why `open` can be `undefined`.
   const addParticipants = useAddParticipants({ projectId, conversationId });
+  // The run's cloud browser (#1598); a Local work thread running on the desktop has the desktop's own pane.
+  const cloudBrowser = useCloudBrowserSession(localWork === undefined || handoff.executor !== 'local');
 
   /**
    * A conversation is written by the FIRST SEND, not by a button
@@ -296,6 +299,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
           }}
           {...(projectId !== undefined ? { projectId } : {})}
           {...(user ? { user } : {})}
+          setChatHistory={cloudBrowser.onHistory}
           llm={{ settings: llm.settings, onSetSettings: llm.onSetSettings }}
           participant={{ active: activeParticipant, onChange: handleChangeParticipant }}
           extensions={{
@@ -336,6 +340,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
           onAddParticipants: addParticipants.open,
         }}
       />
+      <ChatCloudBrowserTab sessionId={cloudBrowser.sessionId} conversationName={activeConversation?.name ?? ''} />
       <AddNewUserModal
         open={addParticipants.isOpen}
         onClose={addParticipants.close}

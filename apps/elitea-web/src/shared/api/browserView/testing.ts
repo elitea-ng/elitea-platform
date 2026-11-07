@@ -15,7 +15,11 @@ export class FakeBrowserViewSocket implements BrowserViewSocket {
   onclose: ((event: CloseEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
 
-  constructor(readonly url: string) {}
+  readonly url: string;
+
+  constructor(url: string) {
+    this.url = url;
+  }
 
   send(data: string): void {
     this.sent.push(JSON.parse(data) as Record<string, unknown>);

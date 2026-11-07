@@ -24,6 +24,31 @@ const K = new Uint32Array([
 
 const rotr = (value: number, bits: number): number => (value >>> bits) | (value << (32 - bits));
 
+/** The message schedule of one 64-byte block. */
+function schedule(w: Uint32Array, view: DataView, block: number): void {
+  for (let i = 0; i < 16; i += 1) w[i] = view.getUint32(block + i * 4);
+  for (let i = 16; i < 64; i += 1) {
+    const a = w[i - 15] ?? 0;
+    const b = w[i - 2] ?? 0;
+    const s0 = rotr(a, 7) ^ rotr(a, 18) ^ (a >>> 3);
+    const s1 = rotr(b, 17) ^ rotr(b, 19) ^ (b >>> 10);
+    w[i] = ((w[i - 16] ?? 0) + s0 + (w[i - 7] ?? 0) + s1) >>> 0;
+  }
+}
+
+/** One compression round over the block at `block`, into `hash`. */
+function compress(hash: Uint32Array, w: Uint32Array, view: DataView, block: number): void {
+  schedule(w, view, block);
+  const v = Array.from(hash);
+  for (let i = 0; i < 64; i += 1) {
+    const [a, b, c, d, e, f, g, h] = v as [number, number, number, number, number, number, number, number];
+    const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + (K[i] ?? 0) + (w[i] ?? 0)) >>> 0;
+    const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+    v.splice(0, 8, (t1 + t2) >>> 0, a, b, c, (d + t1) >>> 0, e, f, g);
+  }
+  for (let i = 0; i < 8; i += 1) hash[i] = ((hash[i] ?? 0) + (v[i] ?? 0)) >>> 0;
+}
+
 /** The SHA-256 of `bytes`, as lowercase hex. */
 export function sha256Hex(bytes: Uint8Array): string {
   const bitLength = bytes.length * 8;
@@ -35,24 +60,7 @@ export function sha256Hex(bytes: Uint8Array): string {
   view.setUint32(padded.length - 4, bitLength >>> 0);
   const hash = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
   const w = new Uint32Array(64);
-  for (let block = 0; block < padded.length; block += 64) {
-    for (let i = 0; i < 16; i += 1) w[i] = view.getUint32(block + i * 4);
-    for (let i = 16; i < 64; i += 1) {
-      const a = w[i - 15] ?? 0;
-      const b = w[i - 2] ?? 0;
-      const s0 = rotr(a, 7) ^ rotr(a, 18) ^ (a >>> 3);
-      const s1 = rotr(b, 17) ^ rotr(b, 19) ^ (b >>> 10);
-      w[i] = ((w[i - 16] ?? 0) + s0 + (w[i - 7] ?? 0) + s1) >>> 0;
-    }
-    let [a, b, c, d, e, f, g, h] = [hash[0] ?? 0, hash[1] ?? 0, hash[2] ?? 0, hash[3] ?? 0, hash[4] ?? 0, hash[5] ?? 0, hash[6] ?? 0, hash[7] ?? 0];
-    for (let i = 0; i < 64; i += 1) {
-      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + (K[i] ?? 0) + (w[i] ?? 0)) >>> 0;
-      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
-      [h, g, f, e, d, c, b, a] = [g, f, e, (d + t1) >>> 0, c, b, a, (t1 + t2) >>> 0];
-    }
-    const next = [a, b, c, d, e, f, g, h];
-    for (let i = 0; i < 8; i += 1) hash[i] = ((hash[i] ?? 0) + (next[i] ?? 0)) >>> 0;
-  }
+  for (let block = 0; block < padded.length; block += 64) compress(hash, w, view, block);
   return Array.from(hash, (word) => word.toString(16).padStart(8, '0')).join('');
 }
 

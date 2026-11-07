@@ -67,6 +67,15 @@ function record(value: unknown): Record<string, unknown> | undefined {
 const num = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) ? value : undefined);
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
+function parseFrame(value: Record<string, unknown>): BrowserViewFrameHeader | undefined {
+  const seq = num(value['seq']);
+  const width = num(value['width']);
+  const height = num(value['height']);
+  const bytes = num(value['bytes']);
+  if (seq === undefined || width === undefined || height === undefined || bytes === undefined) return undefined;
+  return { type: 'frame', seq, width, height, bytes, url: str(value['url']), title: str(value['title']), control: value['control'] === 'user' ? 'user' : 'agent' };
+}
+
 /** One down text message, or `undefined` for anything this client does not know. */
 export function parseDown(raw: string): BrowserViewDown | undefined {
   let value: Record<string, unknown> | undefined;
@@ -79,14 +88,8 @@ export function parseDown(raw: string): BrowserViewDown | undefined {
   switch (value['type']) {
     case 'hello':
       return { type: 'hello', session_id: str(value['session_id']), can_control: value['can_control'] === true, lingering: value['lingering'] === true };
-    case 'frame': {
-      const seq = num(value['seq']);
-      const width = num(value['width']);
-      const height = num(value['height']);
-      const bytes = num(value['bytes']);
-      if (seq === undefined || width === undefined || height === undefined || bytes === undefined) return undefined;
-      return { type: 'frame', seq, width, height, bytes, url: str(value['url']), title: str(value['title']), control: value['control'] === 'user' ? 'user' : 'agent' };
-    }
+    case 'frame':
+      return parseFrame(value);
     case 'notice':
     case 'refused':
     case 'end':

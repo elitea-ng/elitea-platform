@@ -81,3 +81,31 @@ export function resetTurnForReplay(history: readonly ChatMessage[], messageId: s
   next[index] = { ...history[index], content: '', messageItems: [], toolActions: [], isStreaming: true, isLoading: true } as ChatMessage;
   return next;
 }
+
+/** The execution id in an `/api/v2/executions/{project}/{execution}/events` path, when it has the expected shape. */
+export function executionIdOfEvents(eventsUrl: string | undefined): string | undefined {
+  const match = /\/executions\/[^/]+\/([^/]+)\/events$/.exec(eventsUrl ?? '');
+  const raw = match?.[1];
+  if (raw === undefined) return undefined;
+  let id: string;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+  return isExecutionId(id) ? id : undefined;
+}
+
+/**
+ * The live answer `responseId` names the run it streams from (`taskId`), as a
+ * reloaded transcript's row does: the chat finds the run's cloud browser
+ * from it (#1598). The same array when there is nothing to stamp.
+ */
+export function stampExecution(history: readonly ChatMessage[], responseId: string | undefined, executionId: string | undefined): readonly ChatMessage[] {
+  if (responseId === undefined || executionId === undefined) return history;
+  const index = history.findIndex((message) => message.id === responseId);
+  if (index === -1 || history[index]?.taskId === executionId) return history;
+  const next = [...history];
+  next[index] = { ...history[index], taskId: executionId } as ChatMessage;
+  return next;
+}

@@ -2,13 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setNativeTransport } from '@/shared/api/nativeTransport';
 
-import { browserViewAvailable, browserViewUrl, openBrowserView, type BrowserViewHandlers } from './client';
+import { browserViewAvailable, browserViewUrl, openBrowserView, type BrowserViewFailure, type BrowserViewHandlers } from './client';
 import { clipUtf8, parseDown } from './protocol';
 import { fakeSocketFactory } from './testing';
 
 const SESSION = 'elitea-br-0123456789abcdef01234567';
 
-function open(handlers: BrowserViewHandlers = {}, diagnose = vi.fn(() => Promise.resolve({ failure: 'not_found' as const, retryable: false }))) {
+type Diagnosis = { failure: BrowserViewFailure; retryable: boolean };
+
+function open(handlers: BrowserViewHandlers = {}, diagnose = vi.fn((_session: string): Promise<Diagnosis> => Promise.resolve({ failure: 'not_found', retryable: false }))) {
   const fake = fakeSocketFactory();
   const connection = openBrowserView(SESSION, handlers, { socketFactory: fake.factory, url: 'ws://host/api/v2/x', diagnose });
   return { ...fake, connection, diagnose };
@@ -125,7 +127,7 @@ describe('openBrowserView', () => {
 
   it('asks the route why a socket closed before hello', async () => {
     const onFailure = vi.fn();
-    const { last, diagnose } = open({ onFailure }, vi.fn(() => Promise.resolve({ failure: 'ended' as const, retryable: false })));
+    const { last, diagnose } = open({ onFailure }, vi.fn((_session: string): Promise<Diagnosis> => Promise.resolve({ failure: 'ended', retryable: false })));
     last().serverClose(1006);
     await vi.waitFor(() => expect(onFailure).toHaveBeenCalledWith('ended', false));
     expect(diagnose).toHaveBeenCalledWith(SESSION);
