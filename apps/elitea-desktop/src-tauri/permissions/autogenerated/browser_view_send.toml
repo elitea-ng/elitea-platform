@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-view-send"
+description = "Enables the browser_view_send command without any pre-configured scope."
+commands.allow = ["browser_view_send"]
+
+[[permission]]
+identifier = "deny-browser-view-send"
+description = "Denies the browser_view_send command without any pre-configured scope."
+commands.deny = ["browser_view_send"]
