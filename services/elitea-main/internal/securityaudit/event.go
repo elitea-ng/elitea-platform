@@ -128,6 +128,12 @@ const (
 	// subject is often guessable (a numeric id, an email address), so its
 	// unsalted digest would disclose it.
 	TypeIdentityLinkChanged EventType = "ai.elitea.security.v1.identity.link.changed"
+	// TypeAgentMemoryChanged is a change of an agent's own memory (ADR-0050
+	// decision 1b, #1607): action agent.memory.remembered, .approved,
+	// .rejected, .edited, .archived, .deleted, .cleared or .opted_out.
+	// ResourceID is "<application id>:<entry id>" ("<application id>" for a
+	// clear). The entry text is never in the event.
+	TypeAgentMemoryChanged EventType = "ai.elitea.security.v1.agent.memory.changed"
 )
 
 // OCSF class and category uids (https://schema.ocsf.io).
@@ -166,6 +172,7 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentCapOverride:        OCSFClassAPIActivity,
 	TypeConfigChanged:           OCSFClassEntityManagement,
 	TypeIdentityLinkChanged:     OCSFClassAccountChange,
+	TypeAgentMemoryChanged:      OCSFClassEntityManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.

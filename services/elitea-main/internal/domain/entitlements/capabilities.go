@@ -123,6 +123,12 @@ var Capabilities = map[string][]Capability{
 	"models.applications.version.delete":             {ConfigureAgents},
 	"models.applications.export_import.import":       {ConfigureAgents},
 	"models.applications.fork.post":                  {ConfigureAgents},
+	// Agent memory (ADR-0050 decision 1b, shared 0229): what an agent
+	// remembers shapes what it does, so editing, approving or deleting it is
+	// configuring the agent.
+	"models.applications.memory.update":  {ConfigureAgents},
+	"models.applications.memory.delete":  {ConfigureAgents},
+	"models.applications.memory.approve": {ConfigureAgents},
 	// Skills are instructions an agent runs with.
 	"models.applications.skills.create": {ConfigureAgents},
 	"models.applications.skills.update": {ConfigureAgents},
@@ -234,6 +240,7 @@ var OwnerCapabilities = []Capability{EditAgentRegistry}
 // permission that is in neither this set nor Capabilities fails the
 // coverage test, so it cannot silently escape the export.
 var NotGovernanceRelevant = map[string]bool{
+	"models.applications.memory.list":                   true,
 	"admin.moderation.create":                           true,
 	"admin.moderation.view":                             true,
 	"configuration.artifacts.artifacts.create":          true,

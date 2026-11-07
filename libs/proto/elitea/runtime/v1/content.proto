@@ -66,6 +66,12 @@ service RuntimeContentService {
   // The two chat-authored builder writes (#940 A8).
   rpc WriteSkill(WriteSkillRequestV1) returns (WriteSkillResponseV1);
   rpc WriteProjectContext(WriteProjectContextRequestV1) returns (WriteProjectContextResponseV1);
+  // The agent's own memory (ADR-0050 decision 1b, #1607): the remember,
+  // recall and forget tools. The agent, project, actor and conversation come
+  // from the claim; the request carries only the content.
+  rpc RememberAgentMemory(RememberAgentMemoryRequestV1) returns (RememberAgentMemoryResponseV1);
+  rpc RecallAgentMemory(RecallAgentMemoryRequestV1) returns (RecallAgentMemoryResponseV1);
+  rpc ForgetAgentMemory(ForgetAgentMemoryRequestV1) returns (ForgetAgentMemoryResponseV1);
   // The `artifact` toolkit family (#906).
   rpc ListArtifacts(ListArtifactsRequestV1) returns (ListArtifactsResponseV1);
   rpc ReadArtifact(ReadArtifactRequestV1) returns (ReadArtifactResponseV1);
@@ -248,6 +254,39 @@ message WriteProjectContextRequestV1 {
 }
 
 message WriteProjectContextResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message RememberAgentMemoryRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message RememberAgentMemoryResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message RecallAgentMemoryRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message RecallAgentMemoryResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message ForgetAgentMemoryRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message ForgetAgentMemoryResponseV1 {
   bytes response_json = 1;
   reserved 2 to 15;
 }

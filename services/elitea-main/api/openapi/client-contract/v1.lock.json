@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.40",
+  "client_contract": "1.41",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -3900,6 +3900,39 @@
                             "type": "string"
                           }
                         },
+                        "memory": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "recall": {
+                              "type": "object",
+                              "properties": {
+                                "max_entries": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 50
+                                },
+                                "max_tokens": {
+                                  "type": "integer",
+                                  "minimum": 100,
+                                  "maximum": 8000
+                                }
+                              }
+                            },
+                            "write": {
+                              "type": "string",
+                              "enum": [
+                                "auto",
+                                "auto_attended",
+                                "off",
+                                "review"
+                              ]
+                            }
+                          }
+                        },
                         "notes": {
                           "type": "string"
                         },
@@ -4239,6 +4272,39 @@
                             "type": "array",
                             "items": {
                               "type": "string"
+                            }
+                          },
+                          "memory": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "enabled": {
+                                "type": "boolean"
+                              },
+                              "recall": {
+                                "type": "object",
+                                "properties": {
+                                  "max_entries": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 50
+                                  },
+                                  "max_tokens": {
+                                    "type": "integer",
+                                    "minimum": 100,
+                                    "maximum": 8000
+                                  }
+                                }
+                              },
+                              "write": {
+                                "type": "string",
+                                "enum": [
+                                  "auto",
+                                  "auto_attended",
+                                  "off",
+                                  "review"
+                                ]
+                              }
                             }
                           },
                           "notes": {
@@ -8746,6 +8812,39 @@
                             "type": "array",
                             "items": {
                               "type": "string"
+                            }
+                          },
+                          "memory": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "enabled": {
+                                "type": "boolean"
+                              },
+                              "recall": {
+                                "type": "object",
+                                "properties": {
+                                  "max_entries": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 50
+                                  },
+                                  "max_tokens": {
+                                    "type": "integer",
+                                    "minimum": 100,
+                                    "maximum": 8000
+                                  }
+                                }
+                              },
+                              "write": {
+                                "type": "string",
+                                "enum": [
+                                  "auto",
+                                  "auto_attended",
+                                  "off",
+                                  "review"
+                                ]
+                              }
                             }
                           },
                           "notes": {

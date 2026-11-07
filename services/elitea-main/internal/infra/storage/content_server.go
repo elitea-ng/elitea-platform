@@ -118,6 +118,7 @@ type ContentServer struct {
 	runtimeObjects      *RuntimeAttachmentObjectService
 	toolkitArtifacts    ToolkitDiscoveryArtifactStore
 	runtimeBuilders     *RuntimeEntityBuilderService
+	runtimeAgentMemory  *RuntimeAgentMemoryService
 	runtimeArtifacts    *RuntimeArtifactObjectService
 	sandboxBundles      *SandboxBundleContentService
 	compiledSnapshots   *CompiledSnapshotContentService
@@ -333,6 +334,17 @@ func (s *ContentServer) WithRuntimeEntityBuilders(builders *RuntimeEntityBuilder
 		return nil
 	}
 	s.runtimeBuilders = builders
+	return s
+}
+
+// WithRuntimeAgentMemory enables the three agent memory routes (ADR-0050
+// decision 1b, #1607). Nil leaves them answering Unimplemented, which the
+// worker turns into "memory is not available here".
+func (s *ContentServer) WithRuntimeAgentMemory(memory *RuntimeAgentMemoryService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeAgentMemory = memory
 	return s
 }
 
@@ -723,6 +735,69 @@ func (s *ContentServer) WriteProjectContext(ctx context.Context, request *runtim
 		return nil, err
 	}
 	return &runtimev1.WriteProjectContextResponseV1{ResponseJson: encoded}, nil
+}
+
+// RememberAgentMemory, RecallAgentMemory and ForgetAgentMemory are the
+// agent memory tools (runtime_agent_memory.go). Twins of WriteSkill.
+func (s *ContentServer) RememberAgentMemory(ctx context.Context, request *runtimev1.RememberAgentMemoryRequestV1) (*runtimev1.RememberAgentMemoryResponseV1, error) {
+	var document RuntimeAgentMemoryRememberRequest
+	claim, release, err := s.agentMemoryRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeAgentMemory.Remember(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "agent memory write unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeAgentMemoryResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.RememberAgentMemoryResponseV1{ResponseJson: encoded}, nil
+}
+
+func (s *ContentServer) RecallAgentMemory(ctx context.Context, request *runtimev1.RecallAgentMemoryRequestV1) (*runtimev1.RecallAgentMemoryResponseV1, error) {
+	var document RuntimeAgentMemoryRecallRequest
+	claim, release, err := s.agentMemoryRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeAgentMemory.Recall(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "agent memory recall unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeAgentMemoryResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.RecallAgentMemoryResponseV1{ResponseJson: encoded}, nil
+}
+
+func (s *ContentServer) ForgetAgentMemory(ctx context.Context, request *runtimev1.ForgetAgentMemoryRequestV1) (*runtimev1.ForgetAgentMemoryResponseV1, error) {
+	var document RuntimeAgentMemoryForgetRequest
+	claim, release, err := s.agentMemoryRequest(ctx, request.GetScope(), request.GetRequestJson(), &document)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeAgentMemory.Forget(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "agent memory forget unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeAgentMemoryResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.ForgetAgentMemoryResponseV1{ResponseJson: encoded}, nil
+}
+
+func (s *ContentServer) agentMemoryRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {
+	if s.runtimeAgentMemory == nil {
+		return ContentClaim{}, nil, contentStatus(codes.Unimplemented)
+	}
+	return s.claimedDocument(ctx, scope, raw, target, maxRuntimeAgentMemoryRequestBytes)
 }
 
 func (s *ContentServer) builderRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {

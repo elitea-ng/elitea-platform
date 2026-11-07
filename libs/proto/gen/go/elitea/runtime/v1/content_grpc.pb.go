@@ -27,6 +27,9 @@ const (
 	RuntimeContentService_ExecuteHTTPAction_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ExecuteHTTPAction"
 	RuntimeContentService_WriteSkill_FullMethodName                    = "/elitea.runtime.v1.RuntimeContentService/WriteSkill"
 	RuntimeContentService_WriteProjectContext_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/WriteProjectContext"
+	RuntimeContentService_RememberAgentMemory_FullMethodName           = "/elitea.runtime.v1.RuntimeContentService/RememberAgentMemory"
+	RuntimeContentService_RecallAgentMemory_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/RecallAgentMemory"
+	RuntimeContentService_ForgetAgentMemory_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ForgetAgentMemory"
 	RuntimeContentService_ListArtifacts_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
 	RuntimeContentService_ReadArtifact_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
 	RuntimeContentService_WriteArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
@@ -119,6 +122,12 @@ type RuntimeContentServiceClient interface {
 	// The two chat-authored builder writes (#940 A8).
 	WriteSkill(ctx context.Context, in *WriteSkillRequestV1, opts ...grpc.CallOption) (*WriteSkillResponseV1, error)
 	WriteProjectContext(ctx context.Context, in *WriteProjectContextRequestV1, opts ...grpc.CallOption) (*WriteProjectContextResponseV1, error)
+	// The agent's own memory (ADR-0050 decision 1b, #1607): the remember,
+	// recall and forget tools. The agent, project, actor and conversation come
+	// from the claim; the request carries only the content.
+	RememberAgentMemory(ctx context.Context, in *RememberAgentMemoryRequestV1, opts ...grpc.CallOption) (*RememberAgentMemoryResponseV1, error)
+	RecallAgentMemory(ctx context.Context, in *RecallAgentMemoryRequestV1, opts ...grpc.CallOption) (*RecallAgentMemoryResponseV1, error)
+	ForgetAgentMemory(ctx context.Context, in *ForgetAgentMemoryRequestV1, opts ...grpc.CallOption) (*ForgetAgentMemoryResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(ctx context.Context, in *ListArtifactsRequestV1, opts ...grpc.CallOption) (*ListArtifactsResponseV1, error)
 	ReadArtifact(ctx context.Context, in *ReadArtifactRequestV1, opts ...grpc.CallOption) (*ReadArtifactResponseV1, error)
@@ -257,6 +266,36 @@ func (c *runtimeContentServiceClient) WriteProjectContext(ctx context.Context, i
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WriteProjectContextResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_WriteProjectContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) RememberAgentMemory(ctx context.Context, in *RememberAgentMemoryRequestV1, opts ...grpc.CallOption) (*RememberAgentMemoryResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RememberAgentMemoryResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_RememberAgentMemory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) RecallAgentMemory(ctx context.Context, in *RecallAgentMemoryRequestV1, opts ...grpc.CallOption) (*RecallAgentMemoryResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecallAgentMemoryResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_RecallAgentMemory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) ForgetAgentMemory(ctx context.Context, in *ForgetAgentMemoryRequestV1, opts ...grpc.CallOption) (*ForgetAgentMemoryResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForgetAgentMemoryResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_ForgetAgentMemory_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -629,6 +668,12 @@ type RuntimeContentServiceServer interface {
 	// The two chat-authored builder writes (#940 A8).
 	WriteSkill(context.Context, *WriteSkillRequestV1) (*WriteSkillResponseV1, error)
 	WriteProjectContext(context.Context, *WriteProjectContextRequestV1) (*WriteProjectContextResponseV1, error)
+	// The agent's own memory (ADR-0050 decision 1b, #1607): the remember,
+	// recall and forget tools. The agent, project, actor and conversation come
+	// from the claim; the request carries only the content.
+	RememberAgentMemory(context.Context, *RememberAgentMemoryRequestV1) (*RememberAgentMemoryResponseV1, error)
+	RecallAgentMemory(context.Context, *RecallAgentMemoryRequestV1) (*RecallAgentMemoryResponseV1, error)
+	ForgetAgentMemory(context.Context, *ForgetAgentMemoryRequestV1) (*ForgetAgentMemoryResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error)
 	ReadArtifact(context.Context, *ReadArtifactRequestV1) (*ReadArtifactResponseV1, error)
@@ -707,6 +752,15 @@ func (UnimplementedRuntimeContentServiceServer) WriteSkill(context.Context, *Wri
 }
 func (UnimplementedRuntimeContentServiceServer) WriteProjectContext(context.Context, *WriteProjectContextRequestV1) (*WriteProjectContextResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method WriteProjectContext not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) RememberAgentMemory(context.Context, *RememberAgentMemoryRequestV1) (*RememberAgentMemoryResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RememberAgentMemory not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) RecallAgentMemory(context.Context, *RecallAgentMemoryRequestV1) (*RecallAgentMemoryResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecallAgentMemory not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) ForgetAgentMemory(context.Context, *ForgetAgentMemoryRequestV1) (*ForgetAgentMemoryResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ForgetAgentMemory not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListArtifacts not implemented")
@@ -946,6 +1000,60 @@ func _RuntimeContentService_WriteProjectContext_Handler(srv interface{}, ctx con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeContentServiceServer).WriteProjectContext(ctx, req.(*WriteProjectContextRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_RememberAgentMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RememberAgentMemoryRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).RememberAgentMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_RememberAgentMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).RememberAgentMemory(ctx, req.(*RememberAgentMemoryRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_RecallAgentMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecallAgentMemoryRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).RecallAgentMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_RecallAgentMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).RecallAgentMemory(ctx, req.(*RecallAgentMemoryRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_ForgetAgentMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForgetAgentMemoryRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).ForgetAgentMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_ForgetAgentMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).ForgetAgentMemory(ctx, req.(*ForgetAgentMemoryRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1452,6 +1560,18 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WriteProjectContext",
 			Handler:    _RuntimeContentService_WriteProjectContext_Handler,
+		},
+		{
+			MethodName: "RememberAgentMemory",
+			Handler:    _RuntimeContentService_RememberAgentMemory_Handler,
+		},
+		{
+			MethodName: "RecallAgentMemory",
+			Handler:    _RuntimeContentService_RecallAgentMemory_Handler,
+		},
+		{
+			MethodName: "ForgetAgentMemory",
+			Handler:    _RuntimeContentService_ForgetAgentMemory_Handler,
 		},
 		{
 			MethodName: "ListArtifacts",

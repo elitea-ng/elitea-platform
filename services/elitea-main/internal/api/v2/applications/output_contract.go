@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 )
 
@@ -28,6 +29,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 		return true
 	}
 	if !checkCitations(w, body) {
+		return false
+	}
+	if !checkMemoryBlock(w, body) {
 		return false
 	}
 	var err error
@@ -86,4 +90,20 @@ func (h *Handler) storedApplicationAgentType(ctx context.Context, projectID, app
 		return ""
 	}
 	return agentType
+}
+
+// checkMemoryBlock refuses an invalid meta.memory (ADR-0050 decision 1b,
+// #1607) with a typed 422. It answers false when it wrote the refusal.
+func checkMemoryBlock(w http.ResponseWriter, body map[string]any) bool {
+	meta, _ := body["meta"].(map[string]any)
+	if meta == nil {
+		return true
+	}
+	if _, err := agentmemory.Parse(meta[agentmemory.MetaKey]); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(), "code": "memory_block_invalid",
+		})
+		return false
+	}
+	return true
 }
