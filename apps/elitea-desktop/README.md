@@ -380,13 +380,16 @@ executable; a build without it reads text files only.
 Every run of `.github/workflows/publish.yml` (a release, a nightly, a dev
 pre-release) builds the app for **Apple silicon only** in its `desktop` job,
 signs it with the Developer ID certificate and the hardened runtime, notarises
-and staples it, checks the result with `codesign`, `spctl` and `stapler`, and
-attaches `Elitea_<version>_aarch64.dmg` and `Elitea_<version>_aarch64.app.zip`
-to that GitHub release. The version is stamped at build time (Cargo.toml: the
+and staples it, and checks the result with `codesign`, `spctl` and `stapler`.
+The job is a release check: **it publishes nothing**. No `.dmg` or `.app.zip`
+is attached to the GitHub release, and none is kept as a workflow artifact.
+ELITEA's desktop builds reach clients through their device management, signed
+by the brand owner's Developer ID (ADR-0052 decision 8); the certificate in
+these secrets is not that owner's. Older releases that still carry desktop
+files had them removed by hand. The version is stamped at build time (Cargo.toml: the
 full release version, which `X-Client-Version` sends; tauri.conf.json: the
 numeric `X.Y.Z`, CFBundleVersion = the run number), so neither file is bumped by
-hand. The job fails when any secret below is missing; it never publishes an
-unsigned app.
+hand. The job fails when any secret below is missing.
 
 **Keep the bundle id and the team stable.** macOS keys the privacy grants
 computer use needs (Accessibility, Screen Recording, Input Monitoring;

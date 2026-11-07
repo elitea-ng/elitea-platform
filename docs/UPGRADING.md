@@ -25,6 +25,20 @@ whose view digest does not match its history.
   messages the new mode would leave out. Start a new conversation where
   that matters.
 - Saves with an invalid `meta.context` answer `422 context_block_invalid`.
+## Desktop app no longer attached to GitHub releases (ADR-0052 decision 8)
+
+Affects anyone who downloaded the macOS desktop app from a GitHub release.
+
+- Releases no longer carry `Elitea_<version>_aarch64.dmg`,
+  `Elitea_<version>_aarch64.app.zip` or `sbom-desktop.cdx.json`. The
+  release job still builds, signs and notarises the app as a check, and
+  publishes nothing for it.
+- The desktop files were also removed from the existing releases
+  (v7.1.0 to v7.5.0 and the nightly pre-releases).
+- ELITEA's desktop and mobile apps reach devices through the
+  organization's device management, signed by the brand owner. Ask your
+  ELITEA contact for the managed installer. An app already installed keeps
+  working.
 
 ## Desktop: computer use session panel, stop shortcut and Settings page (#1584, ADR-0047 decisions 6 and 7)
 
