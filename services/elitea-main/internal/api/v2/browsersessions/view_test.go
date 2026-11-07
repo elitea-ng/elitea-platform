@@ -389,7 +389,9 @@ func TestRelayADrivingViewer(t *testing.T) {
 	}
 	waitFor(t, func() bool { return len(stream.received()) == 5 })
 	got := stream.received()
+	// The view's button numbering is the proto's (1 left): the relay passes it through unchanged.
 	if got[0].GetAck() != 4 || !got[1].GetInput().GetTakeOver() || got[2].GetInput().GetPointer().GetX() != 10 ||
+		got[2].GetInput().GetPointer().GetButton() != 1 ||
 		got[3].GetInput().GetKey().GetText() != "a" || got[4].GetInput().GetHandBack().GetNote() != "logged in" {
 		t.Fatalf("up=%v", got)
 	}
@@ -579,6 +581,68 @@ func (e endFirst) OpenView(ctx context.Context, session browsersession.Session, 
 
 // A row the worker never ended (it crashed, or lost its lease) stops being
 // watchable at its start plus its wall plus the linger.
+// A plain GET (the web client's diagnosis after a refused upgrade) learns
+// 426 for a viewable session, and never takes a view slot or dials the
+// supervisor; its refusals are the upgrade's.
+func TestAPlainGetIsAnsweredWithoutTheSupervisor(t *testing.T) {
+	store := &sessionStore{rows: map[string]browsersession.Session{testSessionID: testSession(browsersession.StateLive)}}
+	owner, stranger := user(ownerID), user(strangerID)
+	get := func(t *testing.T, principal *auth.User, header http.Header) (*fakeDialer, int) {
+		t.Helper()
+		dialer := &fakeDialer{}
+		// One view per principal: a GET that took the slot would leave none.
+		handler := newTestHandler(t, store, dialer).WithLimits(Limits{MaxStreams: 1, MaxPerPrincipal: 1})
+		server := serve(t, handler, principal)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/api/v2/browser_sessions/"+testSessionID+"/view", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, values := range header {
+			request.Header[name] = values
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		return dialer, response.StatusCode
+	}
+	for _, test := range []struct {
+		name      string
+		principal *auth.User
+		header    http.Header
+		status    int
+	}{
+		{"a plain GET", &owner, nil, http.StatusUpgradeRequired},
+		{"an Upgrade without Connection: upgrade", &owner, http.Header{"Upgrade": {"websocket"}}, http.StatusUpgradeRequired},
+		{"a Connection: upgrade to something else", &owner, http.Header{"Connection": {"Upgrade"}, "Upgrade": {"h2c"}}, http.StatusUpgradeRequired},
+		{"a stranger still reads not found", &stranger, nil, http.StatusNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dialer, status := get(t, test.principal, test.header)
+			if status != test.status {
+				t.Fatalf("status=%d, want %d", status, test.status)
+			}
+			if len(dialer.streams) != 0 {
+				t.Fatal("a plain GET dialled the supervisor")
+			}
+		})
+	}
+}
+
+func TestIsWebSocketUpgradeIsCaseInsensitive(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Connection", "keep-alive, UPGRADE")
+	request.Header.Set("Upgrade", "WebSocket")
+	if !isWebSocketUpgrade(request) {
+		t.Fatal("a mixed-case upgrade was not recognised")
+	}
+	request.Header.Set("Connection", "keep-alive")
+	if isWebSocketUpgrade(request) {
+		t.Fatal("a request without Connection: upgrade was taken as an upgrade")
+	}
+}
+
 func TestALiveRowPastItsBoundIsGone(t *testing.T) {
 	stale := testSession(browsersession.StateLive)
 	stale.StartedAt = time.Now().Add(-time.Hour)

@@ -384,29 +384,7 @@ impl CdpDriver {
                 self.control.hand_back(note);
                 return Ok(());
             }
-            Some("pointer") => {
-                let kind = match event["kind"].as_str() {
-                    Some("move") => "mouseMoved",
-                    Some("down") => "mousePressed",
-                    Some("up") => "mouseReleased",
-                    _ => return Err(BrowserError::invalid("pointer kind is move, down or up")),
-                };
-                let button = match event["button"].as_u64() {
-                    Some(1) => "middle",
-                    Some(2) => "right",
-                    Some(3) => "back",
-                    _ if kind == "mouseMoved" && event["button"].is_null() => "none",
-                    _ => "left",
-                };
-                (
-                    "Input.dispatchMouseEvent",
-                    json!({
-                        "type": kind, "x": number("x"), "y": number("y"), "button": button,
-                        "clickCount": event["click_count"].as_u64().unwrap_or(1).min(3),
-                        "modifiers": modifiers,
-                    }),
-                )
-            }
+            Some("pointer") => ("Input.dispatchMouseEvent", pointer_params(event)?),
             Some("wheel") => (
                 "Input.dispatchMouseEvent",
                 json!({
@@ -414,30 +392,7 @@ impl CdpDriver {
                     "deltaX": number("delta_x"), "deltaY": number("delta_y"), "modifiers": modifiers,
                 }),
             ),
-            Some("key") => {
-                let text = |name: &str| -> String {
-                    event[name]
-                        .as_str()
-                        .unwrap_or_default()
-                        .chars()
-                        .take(32)
-                        .collect()
-                };
-                let kind = match event["kind"].as_str() {
-                    Some("down") if text("text").is_empty() => "rawKeyDown",
-                    Some("down") => "keyDown",
-                    Some("up") => "keyUp",
-                    Some("char") => "char",
-                    _ => return Err(BrowserError::invalid("key kind is down, up or char")),
-                };
-                let mut params = json!({
-                    "type": kind, "key": text("key"), "code": text("code"), "modifiers": modifiers,
-                });
-                if kind != "keyUp" && !text("text").is_empty() {
-                    params["text"] = Value::String(text("text"));
-                }
-                ("Input.dispatchKeyEvent", params)
-            }
+            Some("key") => ("Input.dispatchKeyEvent", key_params(event)?),
             _ => return Err(BrowserError::invalid("unknown input event")),
         };
         // The person's input pauses the agent first, then reaches the page.
@@ -1080,6 +1035,90 @@ async fn first_page(cdp: &Connection) -> Result<String, BrowserError> {
         .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the browser has no page"))
 }
 
+/// A viewer's pointer event as `Input.dispatchMouseEvent` parameters.
+///
+/// `button` follows `BrowserPointerEventV1`: 0 none, 1 left, 2 middle,
+/// 3 right. A move with 0 is a hover; a move with a button is a drag, so
+/// CDP also gets the held button in `buttons`. A press or a release must
+/// name its button: one with 0 is refused, never guessed as left.
+fn pointer_params(event: &Value) -> Result<Value, BrowserError> {
+    let kind = match event["kind"].as_str() {
+        Some("move") => "mouseMoved",
+        Some("down") => "mousePressed",
+        Some("up") => "mouseReleased",
+        _ => return Err(BrowserError::invalid("pointer kind is move, down or up")),
+    };
+    // The CDP button, and its bit in CDP's `buttons`.
+    let (button, held) = match event["button"].as_u64().unwrap_or_default() {
+        0 if kind == "mouseMoved" => ("none", 0),
+        1 => ("left", 1),
+        2 => ("middle", 4),
+        3 => ("right", 2),
+        _ => {
+            return Err(BrowserError::invalid(
+                "pointer button is 1 (left), 2 (middle) or 3 (right), or 0 on a move",
+            ));
+        }
+    };
+    // After a release no button is held.
+    let buttons = if kind == "mouseReleased" { 0 } else { held };
+    let click_count = if kind == "mouseMoved" {
+        0
+    } else {
+        event["click_count"].as_u64().unwrap_or(1).clamp(1, 3)
+    };
+    Ok(json!({
+        "type": kind,
+        "x": event["x"].as_f64().unwrap_or_default(),
+        "y": event["y"].as_f64().unwrap_or_default(),
+        "button": button, "buttons": buttons, "clickCount": click_count,
+        "modifiers": event["modifiers"].as_u64().unwrap_or_default() & 0x0f,
+    }))
+}
+
+/// A viewer's key event as `Input.dispatchKeyEvent` parameters.
+///
+/// Chromium acts on a key down only with its `windowsVirtualKeyCode`
+/// (Backspace, Enter, the arrows, Tab), so every event carries the code
+/// [`keys::virtual_key_code`] gives. A named key that types text (Enter
+/// types `"\r"`) types it on its down unless Ctrl, Alt or Meta is held. The
+/// view sends a separate `char` only for a printable character, so nothing
+/// is typed twice.
+fn key_params(event: &Value) -> Result<Value, BrowserError> {
+    // Alt 1, Ctrl 2, Meta 4: a chord types nothing; Shift (8) alone does.
+    const CHORD: u64 = 0b0111;
+    let text = |name: &str| -> String {
+        event[name]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .take(32)
+            .collect()
+    };
+    let modifiers = event["modifiers"].as_u64().unwrap_or_default() & 0x0f;
+    let key = text("key");
+    let mut typed = text("text");
+    if typed.is_empty() && event["kind"].as_str() == Some("down") && modifiers & CHORD == 0 {
+        keys::named_text(&key).clone_into(&mut typed);
+    }
+    let kind = match event["kind"].as_str() {
+        Some("down") if typed.is_empty() => "rawKeyDown",
+        Some("down") => "keyDown",
+        Some("up") => "keyUp",
+        Some("char") => "char",
+        _ => return Err(BrowserError::invalid("key kind is down, up or char")),
+    };
+    let mut params = json!({
+        "type": kind, "key": key, "code": text("code"), "modifiers": modifiers,
+        "windowsVirtualKeyCode": keys::virtual_key_code(&key),
+    });
+    if kind != "keyUp" && !typed.is_empty() {
+        params["text"] = Value::String(typed.clone());
+        params["unmodifiedText"] = Value::String(typed);
+    }
+    Ok(params)
+}
+
 /// Width and height of a PNG from its IHDR chunk.
 fn png_size(data: &[u8]) -> Option<(u32, u32)> {
     if data.len() < 24 || &data[..8] != b"\x89PNG\r\n\x1a\n" || &data[12..16] != b"IHDR" {
@@ -1505,6 +1544,104 @@ mod tests {
         assert!(!secure_info(
             &json!({"type": "email", "autocomplete": "email"})
         ));
+    }
+
+    #[test]
+    fn pointer_buttons_follow_the_proto() {
+        let params = |kind: &str, button: u64| {
+            pointer_params(
+                &json!({"kind": kind, "x": 1, "y": 2, "button": button, "click_count": 1}),
+            )
+        };
+        let pressed = |value: &Value| (value["button"].clone(), value["buttons"].clone());
+        assert_eq!(
+            pressed(&params("down", 1).unwrap()),
+            (json!("left"), json!(1))
+        );
+        assert_eq!(
+            pressed(&params("down", 2).unwrap()),
+            (json!("middle"), json!(4))
+        );
+        assert_eq!(
+            pressed(&params("up", 3).unwrap()),
+            (json!("right"), json!(0))
+        );
+        // A hover holds nothing; a drag holds its button.
+        assert_eq!(
+            pressed(&params("move", 0).unwrap()),
+            (json!("none"), json!(0))
+        );
+        assert_eq!(
+            pressed(&params("move", 1).unwrap()),
+            (json!("left"), json!(1))
+        );
+        assert_eq!(
+            pressed(&params("move", 3).unwrap()),
+            (json!("right"), json!(2))
+        );
+        assert_eq!(params("move", 0).unwrap()["clickCount"], 0);
+        // A press or release without a button is refused, not taken as left.
+        assert_eq!(
+            params("down", 0).unwrap_err().code(),
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            params("up", 4).unwrap_err().code(),
+            ErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn view_keys_carry_a_virtual_key_code_and_enter_types_a_return() {
+        let key = |kind: &str, key: &str, code: &str, text: &str, modifiers: u64| {
+            key_params(&json!({
+                "kind": kind, "key": key, "code": code, "text": text, "modifiers": modifiers,
+            }))
+            .unwrap()
+        };
+        let shape = |value: &Value| {
+            (
+                value["type"].clone(),
+                value["windowsVirtualKeyCode"].clone(),
+            )
+        };
+        let enter = key("down", "Enter", "Enter", "", 0);
+        assert_eq!(shape(&enter), (json!("keyDown"), json!(13)));
+        assert_eq!(enter["text"], "\r");
+        // Ctrl+Enter types nothing.
+        let chord = key("down", "Enter", "Enter", "", 2);
+        assert_eq!(shape(&chord), (json!("rawKeyDown"), json!(13)));
+        assert!(chord.get("text").is_none());
+        for (name, vk) in [
+            ("Backspace", 8),
+            ("Tab", 9),
+            ("ArrowLeft", 37),
+            ("Delete", 46),
+        ] {
+            let down = key("down", name, name, "", 0);
+            assert_eq!(shape(&down), (json!("rawKeyDown"), json!(vk)), "{name}");
+            assert!(down.get("text").is_none(), "{name}");
+        }
+        // A printable: a raw down with its code, then its char types it once.
+        let a = key("down", "a", "KeyA", "", 0);
+        assert_eq!(shape(&a), (json!("rawKeyDown"), json!(65)));
+        assert!(a.get("text").is_none());
+        let typed = key("char", "a", "KeyA", "a", 0);
+        assert_eq!(
+            (typed["type"].clone(), typed["text"].clone()),
+            (json!("char"), json!("a"))
+        );
+        let up = key("up", "Enter", "Enter", "", 0);
+        assert_eq!(shape(&up), (json!("keyUp"), json!(13)));
+        assert!(up.get("text").is_none());
+        assert_eq!(
+            key("down", "Shift", "ShiftLeft", "", 8)["windowsVirtualKeyCode"],
+            16
+        );
+        assert_eq!(
+            key("down", "7", "Digit7", "", 0)["windowsVirtualKeyCode"],
+            55
+        );
     }
 
     #[test]

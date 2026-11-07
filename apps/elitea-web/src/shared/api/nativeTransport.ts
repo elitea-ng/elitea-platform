@@ -62,6 +62,12 @@ export interface NativeTransport {
    * the browser constructor cannot send. See `shared/desktop/fetchEventSource.ts`.
    */
   readonly createEventSource?: (url: string) => EventSourceLike;
+  /**
+   * Opens a WebSocket with the bearer header, which the browser constructor
+   * cannot send: the cloud browser view (`shared/api/browserView`). Without
+   * it the desktop app does not offer the view.
+   */
+  readonly createWebSocket?: (url: string) => import('./browserView/socket').BrowserViewSocket;
   /** A request answered 426: this build is older than the deployment's minimum. */
   onUpgradeRequired?(): void;
 }

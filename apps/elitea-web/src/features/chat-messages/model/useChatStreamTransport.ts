@@ -35,7 +35,7 @@ import { isObserverTerminalFrame } from "../lib/chatStreamTurnEnd";
 import { resultReference, settleFinalResultObserver } from '../lib/chatStreamFinalResult';
 import { completeReferencedChatResult } from './completeReferencedChatResult';
 import { applyAgentAvatarFrame, settleAgentAvatars } from './agentAvatar.store';
-import { resetTurnForReplay } from "../lib/chatStreamReattach";
+import { executionIdOfEvents, resetTurnForReplay, stampExecution } from "../lib/chatStreamReattach";
 
 import { useChatStreamConnection } from "./useChatStreamConnection";
 import { usePendingReplay, useReattach } from "./usePendingReplay";
@@ -100,6 +100,7 @@ export function useChatStreamTransport(
   const questionIdRef = useRef<string | undefined>(undefined);
   const generationRef = useRef<string | undefined>(undefined);
   const runEpochRef = useRef(0);
+  const executionRef = useRef<string | undefined>(undefined); // the run's id, stamped as `taskId` (its cloud browser's session, #1598)
   const hydrationEpochRef = useRef<number | undefined>(undefined);
 
   /** The seeded message a reattach replays into, until its first frame (#6654). */
@@ -164,7 +165,7 @@ export function useChatStreamTransport(
         // Bind assembly results that arrive without agent_start to the admitted generation.
         const owned = generation && replayed.some((message) => message.id === responseId && message.executionGeneration !== generation)
           ? replayed.map((message) => message.id === responseId ? { ...message, executionGeneration: generation } : message) : replayed;
-        return applyChatStreamFrame(owned, identifiedFrame, contextRef.current ?? {});
+        return stampExecution(applyChatStreamFrame(owned, identifiedFrame, contextRef.current ?? {}), responseId, executionRef.current);
       });
       // Success progress precedes full_message; the result releases the durable observer.
       const terminal = isObserverTerminalFrame(identifiedFrame, generationRef.current);
@@ -302,6 +303,7 @@ export function useChatStreamTransport(
       refreshContext();
       questionIdRef.current = questionId;
       generationRef.current = nonEmptyString(accepted['execution_generation']);
+      executionRef.current = nonEmptyString(accepted.execution_id) ?? executionIdOfEvents(accepted.events_url);
       // `response_message_id` is what the cancel route addresses
       // (`DELETE .../task/prompt_lib/{projectID}/{responseMessageID}`). Without
       // one there is nothing to cancel and Stop can only detach.
