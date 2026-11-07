@@ -12,11 +12,13 @@ import { createRoot } from 'react-dom/client';
 
 import { BrandThemeProvider } from '@/app/providers/BrandThemeProvider';
 import { tauriAppIpc } from '@/shared/desktop/appEvents';
+import { tauriComputerIpc, type ComputerIpc } from '@/shared/desktop/computerIpc';
 import { installContextMenuGuard } from '@/shared/desktop/contextMenu';
 import { createDoctorIpc } from '@/shared/desktop/doctorIpc';
 import { createHostBridge, type HostInvoke } from '@/shared/desktop/hostBridge';
 import { DesktopThemeLayer } from '@/widgets/desktop-shell';
 
+import { COMPUTER_PANEL_HASH, ComputerSessionPanel } from './ComputerSessionPanel';
 import { DesktopShell, type DesktopShellProps } from './DesktopShell';
 
 function renderShell(root: HTMLElement, host: Pick<DesktopShellProps, 'bridge' | 'doctor' | 'appIpc'>): void {
@@ -31,11 +33,31 @@ function renderShell(root: HTMLElement, host: Pick<DesktopShellProps, 'bridge' |
   );
 }
 
+function renderPanel(root: HTMLElement, ipc: ComputerIpc): void {
+  createRoot(root).render(
+    <StrictMode>
+      <BrandThemeProvider>
+        <DesktopThemeLayer>
+          <ComputerSessionPanel ipc={ipc} />
+        </DesktopThemeLayer>
+      </BrandThemeProvider>
+    </StrictMode>,
+  );
+}
+
 /** `invoke`: the host's, or `undefined` in a browser tab; `./main.tsx` already installed the diagnostics on it. */
 export function start(invoke: HostInvoke | undefined): void {
   const container = document.getElementById('root');
   if (!container) {
     throw new Error('elitea-web desktop: #root container missing from index.html');
+  }
+
+  // The computer use session panel's own window (ADR-0047 decision 6): the panel alone, no shell.
+  const computer = window.location.hash === COMPUTER_PANEL_HASH ? tauriComputerIpc() : undefined;
+  if (computer !== undefined) {
+    installContextMenuGuard();
+    renderPanel(container, computer);
+    return;
   }
 
   const bridge = invoke === undefined ? undefined : createHostBridge(invoke);

@@ -23,6 +23,7 @@ const TroubleshootPage = /* @__PURE__ */ lazy(() => import('./TroubleshootPage')
 const RulesPage = /* @__PURE__ */ lazy(() => import('./RulesPage'));
 const McpPage = /* @__PURE__ */ lazy(() => import('./McpPage'));
 const HooksPage = /* @__PURE__ */ lazy(() => import('./HooksPage'));
+const ComputerUsePage = /* @__PURE__ */ lazy(() => import('./ComputerUsePage'));
 
 function NotAvailable(): React.JSX.Element {
   return <Navigate to="/chat" replace />;
@@ -82,6 +83,16 @@ export function HooksEntry(): React.JSX.Element | null {
   return (
     <Suspense fallback={null}>
       <HooksPage />
+    </Suspense>
+  );
+}
+
+/** Settings › Computer use (ADR-0047 decision 7, #1584); nothing outside `desktop`. */
+export function ComputerUseEntry(): React.JSX.Element | null {
+  if (import.meta.env.MODE !== 'desktop') return null;
+  return (
+    <Suspense fallback={null}>
+      <ComputerUsePage />
     </Suspense>
   );
 }
