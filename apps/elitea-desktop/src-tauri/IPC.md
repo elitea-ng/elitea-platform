@@ -2719,6 +2719,49 @@ a UUID or 16+ characters with a digit or of mixed case, become `{token}`),
 `text_chars` and `text_digest` in `args_summary` and `tool_inputs`. The
 platform stores the record as an ADR-0042 run step of toolkit `browser`.
 
+## Browser view socket (`src/view_socket.rs`, ADR-0048 decision 7, #1592)
+
+The cloud browser's streamed view (ADR-0049 decision 6) in a cloud
+thread's Browser tab and the chat's: a WebSocket to elitea-main's
+`GET /api/v2/browser_sessions/{session_id}/view`. The route authenticates
+with the bearer, which the page's `WebSocket` cannot send, so the **host**
+opens it on its own HTTP/1.1 client (`SharedHttp::upgrade_client`: same
+TLS roots as the pooled client, no h2, which has no upgrade), with
+`Authorization: Bearer <access token>` and `X-Client-Version`, and no
+`Origin`. The token never crosses the IPC. The page's side is
+`apps/elitea-web/src/shared/desktop/hostViewSocket.ts`, a
+`BrowserViewSocket` registered as `NativeTransport.createWebSocket`.
+
+| Command | Arguments | Result |
+| --- | --- | --- |
+| `browser_view_open` | `{id, url, events}`: the page's id, the `wss://` (or `ws://`) view URL, and a channel (`__CHANNEL__:<callback>`) | `null` once the socket is under way. Refused: `url_not_allowed` (not the view route `…/browser_sessions/{id}/view` of the connected deployment, or with userinfo, a query or a fragment), `invalid_request` (the id is open), `too_many_views` (8 open; the page reads it as the route's 429). |
+| `browser_view_send` | `{id, messages: string[], close: [code, reason] \| null}` | `null` once queued in order. Text only (the view's JSON), at most 256 messages of 8 KiB each; `close` last (1000 or 3000–4999, else 1000; the reason cut to 123 characters). `unknown_view` once the socket is gone. |
+
+Events on the channel, numbered by Tauri and put back in order by the page:
+
+- `{"t":"open"}` once the upgrade succeeded;
+- `{"t":"text","d":"…"}` per text message;
+- each **binary** message (a frame's JPEG) as the channel message's **raw
+  bytes**: Tauri hands a raw body of 1 KiB or more to the page as an
+  `ArrayBuffer` over its IPC protocol, one copy, never base64 (a body
+  under 1 KiB is inlined as a number array; a JPEG frame is never that
+  small);
+- `{"t":"close","code":…,"reason":"…","status":…}` last. `status` is the
+  HTTP status of a refused upgrade (404, 410, 429, 502, 503; 401 after one
+  refresh and retry, or when signed out; 426 for a build under the
+  deployment's minimum), `null` when it opened or the deployment was not
+  reached (the page reads that as transient). A page's `WebSocket` cannot
+  read that status, so the browser asks the route over plain HTTP; the
+  desktop does not.
+
+A 401 on the upgrade refreshes once (`AuthService::refresh_from`, which
+skips the exchange when a refresh already replaced that token) and
+retries once. Pings are answered by the host. A message from the
+deployment is at most 16 MiB. The upgrade must answer in 30 s (the route
+waits up to 10 s for the browser service's first message); a close waits
+5 s for the deployment's answer. A page load closes every socket of the
+old page, as it drops its fetches.
+
 ## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
 
 A Local turn gets the `computer` toolset
