@@ -59,6 +59,11 @@ pub enum DesktopError {
     PlatformNotSupported,
     #[error("internal error: {0}")]
     Internal(String),
+    /// The caller's [`Halt`](crate::Halt) was raised (the person paused or
+    /// stopped the session): the call stopped before its next step and
+    /// posted nothing more (`interrupted`).
+    #[error("interrupted: the person paused or stopped the session")]
+    Interrupted,
 }
 
 impl DesktopError {
@@ -82,6 +87,7 @@ impl DesktopError {
             Self::InvalidArgs(_) => "invalid_args",
             Self::PlatformNotSupported => "platform_not_supported",
             Self::Internal(_) => "internal",
+            Self::Interrupted => "interrupted",
         }
     }
 
@@ -137,6 +143,7 @@ mod tests {
             (DesktopError::InvalidArgs(String::new()), "invalid_args"),
             (DesktopError::PlatformNotSupported, "platform_not_supported"),
             (DesktopError::Internal(String::new()), "internal"),
+            (DesktopError::Interrupted, "interrupted"),
         ];
         for (err, code) in all {
             assert_eq!(err.code(), code);

@@ -59,6 +59,8 @@ pub struct MacDriver {
     refs: Mutex<RefRegistry<RefEntry, Payload>>,
     marker: SyntheticMarker,
     own: OwnApps,
+    /// The caller's halt of the call in flight ([`DesktopDriver::set_halt`]).
+    halt: Mutex<Option<crate::Halt>>,
 }
 
 impl Default for MacDriver {
@@ -77,6 +79,7 @@ impl MacDriver {
             refs: Mutex::new(RefRegistry::new(HELD_SNAPSHOTS)),
             marker: SyntheticMarker::new(tag).unwrap_or_else(|| unreachable!("tag is never 0")),
             own: OwnApps::default(),
+            halt: Mutex::new(None),
         }
     }
 
@@ -334,10 +337,25 @@ impl MacDriver {
         Ok(())
     }
 
-    fn lease(deadline: ad::Deadline) -> Result<ad::InteractionLease, DesktopError> {
+    /// The lease every input post takes, right before it posts: refused
+    /// once the caller's halt is raised, so an interrupted call posts
+    /// nothing more.
+    fn lease(&self, deadline: ad::Deadline) -> Result<ad::InteractionLease, DesktopError> {
+        self.check_halt()?;
         // An in-process lease: the driver is the only caller in this
         // process, and the vendor's file lock under /tmp is for its CLI.
         ad::InteractionLease::guarded(deadline, ()).map_err(map_err)
+    }
+
+    fn check_halt(&self) -> Result<(), DesktopError> {
+        match &*self
+            .halt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            Some(halt) => halt.check(),
+            None => Ok(()),
+        }
     }
 
     fn run_action(
@@ -364,7 +382,7 @@ impl MacDriver {
             self.refuse_if_secure(&handle, deadline)?;
         }
         let name = action.name();
-        let lease = Self::lease(deadline)?;
+        let lease = self.lease(deadline)?;
         let result = ad::execute_verified_action(
             &self.adapter,
             &handle,
@@ -641,7 +659,7 @@ impl DesktopDriver for MacDriver {
             .ok_or_else(|| {
                 DesktopError::ActionFailed("the frontmost app has no focused element".into())
             })?;
-        let lease = Self::lease(deadline)?;
+        let lease = self.lease(deadline)?;
         let result = ad::execute_verified_action(
             &self.adapter,
             &focused,
@@ -684,7 +702,7 @@ impl DesktopDriver for MacDriver {
         // the named one.
         self.require_frontmost(bundle_id, deadline)?;
         self.refuse_if_focus_secure(window.pid.get(), deadline)?;
-        let lease = Self::lease(deadline)?;
+        let lease = self.lease(deadline)?;
         let result = self
             .adapter
             .press_key_for_window(&window, &combo, ad::InteractionPolicy::headless(), &lease)
@@ -745,7 +763,7 @@ impl DesktopDriver for MacDriver {
                 ));
             }
         }
-        let lease = Self::lease(deadline)?;
+        let lease = self.lease(deadline)?;
         self.adapter
             .mouse_event(
                 ad::MouseEvent {
@@ -790,7 +808,7 @@ impl DesktopDriver for MacDriver {
         }
         guard::before_act(self)?;
         let deadline = deadline(LAUNCH_TIMEOUT_MS)?;
-        let lease = Self::lease(deadline)?;
+        let lease = self.lease(deadline)?;
         let options = ad::system::launch_options::LaunchOptions {
             timeout_ms: LAUNCH_TIMEOUT_MS,
             activate: true,
@@ -877,7 +895,8 @@ impl DesktopDriver for MacDriver {
             return Err(DesktopError::OwnWindowRefused(bundle_id.clone()));
         }
         loop {
-            // The screen can lock while the wait polls.
+            // The screen can lock, and the person pause, while it polls.
+            self.check_halt()?;
             guard::before_call(self)?;
             let done = if let WaitCondition::Stable { target } = condition {
                 // A poll stores nothing: the held refs stay held.
@@ -904,6 +923,21 @@ impl DesktopDriver for MacDriver {
 
     fn forget_snapshots(&self) {
         self.registry().clear();
+    }
+
+    fn watch_input(
+        &self,
+        filter: crate::InputFilter,
+        sink: crate::SignalSink,
+    ) -> Result<Box<dyn crate::InputWatch>, DesktopError> {
+        crate::macos_input::watch(self.marker, filter, sink)
+    }
+
+    fn set_halt(&self, halt: Option<crate::Halt>) {
+        *self
+            .halt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = halt;
     }
 }
 

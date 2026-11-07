@@ -15,8 +15,12 @@ mod browser_pane;
 mod browser_tools;
 mod commands;
 mod compaction_settings;
+mod computer_commands;
+mod computer_control;
+mod computer_session;
 mod computer_tools;
 mod context_menu;
+mod control_state;
 mod credentials_file;
 mod d0;
 mod discovery;
@@ -467,6 +471,10 @@ pub fn run() {
                 Arc::from(elitea_desktop_control::default_driver()),
                 config_dir.clone(),
             ));
+            app.manage(computer_commands::ComputerConfig(config_dir.clone()));
+            if let Some(setup) = agents.computer() {
+                computer_commands::wire(app.handle(), &setup.host().control());
+            }
             worktrees.register_all();
             app.manage(worktrees);
             app.manage(LocalState {
@@ -623,6 +631,11 @@ pub fn run() {
             browser_pane::browser_forget,
             browser_pane::browser_reveal_download,
             browser_pane::browser_control,
+            computer_commands::computer_settings_get,
+            computer_commands::computer_settings_set,
+            computer_commands::computer_app_forget,
+            computer_commands::computer_open_privacy,
+            computer_commands::computer_session,
         ])
         .build(tauri::generate_context!());
     let app = match built {

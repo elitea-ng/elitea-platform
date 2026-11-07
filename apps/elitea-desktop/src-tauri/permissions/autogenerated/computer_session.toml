@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-computer-session"
+description = "Enables the computer_session command without any pre-configured scope."
+commands.allow = ["computer_session"]
+
+[[permission]]
+identifier = "deny-computer-session"
+description = "Denies the computer_session command without any pre-configured scope."
+commands.deny = ["computer_session"]

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "computer-panel",
+  "description": "IPC for the computer use session panel only (ADR-0047 decision 6, #1584), named by its WEBVIEW label `computer-panel`: the bundled UI at `#computer-panel`, always on top while a session runs. It reads the session's state and presses Pause, Resume and Stop (`computer_session`), and listens to `computer://event`. Nothing else: no workspace, fetch, opener or window permission.",
+  "webviews": ["computer-panel"],
+  "permissions": [
+    "allow-computer-session",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

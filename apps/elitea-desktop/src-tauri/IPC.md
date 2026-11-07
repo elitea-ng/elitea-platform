@@ -2721,7 +2721,7 @@ platform stores the record as an ADR-0042 run step of toolkit `browser`.
 
 ## Computer use (`src/computer_tools.rs`, `libs/rust/desktop-control`, ADR-0047, #1583)
 
-No new command or event. A Local turn gets the `computer` toolset
+A Local turn gets the `computer` toolset
 (`computer_apps`, `computer_snapshot`, `computer_screenshot`,
 `computer_act`, `computer_type`, `computer_key`, `computer_click_at`,
 `computer_open_app`, `computer_wait`, `computer_request_user`) only while the
@@ -2769,6 +2769,60 @@ the call never waits for it. When the run ends the turn waits up to 30
 seconds in all for the uploads still running, then the record adds
 `uploaded` and `artifact` (the stored path), or `uploaded: false` for one
 that failed, was refused or did not finish.
+
+### Session panel, stop shortcut and user-active guard (`src/computer_control.rs`, `src/computer_session.rs`, `src/computer_commands.rs`, ADR-0047 decisions 6 and 7, #1584)
+
+The first computer call of a turn starts a **session**: the host starts a
+listen-only input watch (a `kCGEventTap` on the session, `libs/rust/desktop-control/src/macos_input.rs`)
+and shows the session panel. The watch tells the person's input from the
+driver's own by the marker the driver stamps in `kCGEventSourceUserData`.
+
+- **User-active guard.** A physical key, click, drag or scroll aimed at
+  another app pauses the session at once (`paused_by: "user_active"`): the
+  pending call ends with `user_active` (within 100 ms) and every later call
+  answers `user_active` until **Resume**. Pointer moves alone do not pause.
+  Input aimed at Elitea's own windows (the panel, the approval card) does not
+  pause either.
+- **Stop shortcut.** Control-Option-Escape (`stop_shortcut`,
+  `ctrl+option+escape`), seen by the same watch, wherever the focus is: the
+  pending call ends with `stopped_by_user` and the `computer` tools are gone
+  for the rest of the turn. The next turn starts a fresh session.
+- **No watch, no acts.** When macOS refuses the watch (no Accessibility or
+  Input Monitoring), acts fail with `user_active_guard_unavailable`; reads
+  (`computer_apps`, `computer_snapshot`, `computer_screenshot`,
+  `computer_wait`) still run.
+
+The pause and the stop are the same mechanism as the browser pane's
+take-over (`src/control_state.rs`, shared with `src/browser_control.rs`):
+one observed state per session, gated per turn, read again by every call.
+
+**Panel window.** Label `computer-panel`, the bundled UI at
+`index.html#computer-panel`: always on top, on every space, not closable,
+minimizable or resizable, no Dock entry, shown while the session is active
+or paused and hidden when the turn ends. Its own capability
+(`capabilities/computer-panel.json`) grants `computer_session` and event
+listening only.
+
+| Command | Args | Returns |
+| --- | --- | --- |
+| `computer_settings_get` | none | `ComputerSettings` |
+| `computer_settings_set` | `enabled: bool` | `ComputerSettings`; on is refused with `computer_policy_off` (policy) or `computer_accessibility_missing` |
+| `computer_app_forget` | `bundle_id: string` | `ComputerSettings`, after "always for this app" (seeing and acting) is revoked in every workspace, live sessions included |
+| `computer_open_privacy` | `grant: "accessibility" \| "screen_recording" \| "input_monitoring"` | nothing; opens that System Settings pane (fixed `x-apple.systempreferences:` URL per grant) |
+| `computer_session` | `action: "get" \| "pause" \| "resume" \| "stop"` | `SessionView` after the action |
+
+`ComputerSettings`: `{policy_allows, enabled, supported, accessibility,
+screen_recording, screenshot_tools, stop_shortcut, remembered: [{bundle_id,
+sees, acts}]}`; the grants are `granted | denied | unknown | not_required`,
+read live at every call. `enabled` is `settings.json` `"computer_use"`.
+
+`SessionView`: `{phase: "idle" | "active" | "paused" | "stopped", paused_by:
+"button" | "user_active" | null, app, action}` (`app`: the app's name, else
+its bundle id; `action`: the last action, at most 120 characters).
+
+Event `computer://event`, kind `computer_session`, payload a `SessionView`:
+every change, to the `main` and `computer-panel` webviews. The menu-bar item
+mirrors it (the app and Pause or Resume, and Stop, at the top of its menu).
 
 ## Events
 

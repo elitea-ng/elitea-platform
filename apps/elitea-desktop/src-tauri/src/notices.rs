@@ -44,10 +44,21 @@ pub enum NoticeError {
     EmptyTitle,
 }
 
-/// Bidi embeddings, overrides and isolates (U+202A–U+202E, U+2066–U+2069):
-/// they can make a notification read differently from what it says.
+/// Bidi embeddings, overrides, isolates and marks (U+202A–U+202E,
+/// U+2066–U+2069, U+200E, U+200F, U+061C) and the invisible format
+/// characters (zero-width spaces and joiners, the word joiner and the
+/// invisible operators, the byte-order mark): they can make a text read
+/// differently from what it says.
 fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{061C}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{FEFF}'
+    )
 }
 
 /// Control and bidi characters dropped, whitespace runs (a dropped newline or
@@ -214,6 +225,10 @@ mod tests {
         assert_eq!(sanitize("a\u{1b}[31mb"), "a[31mb");
         assert_eq!(sanitize(" \n\t "), "");
         assert_eq!(sanitize("Ünïcode — ok"), "Ünïcode — ok");
+        assert_eq!(
+            sanitize("Text\u{200F}Ed\u{200B}it\u{061C}\u{2060}\u{FEFF}\u{200E}"),
+            "TextEdit"
+        );
     }
 
     #[test]
