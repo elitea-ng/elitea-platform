@@ -842,10 +842,42 @@ impl OrdinaryNativeAgentAssembler {
             elitea_agent_runtime::lazy_tools::TOOLSET_NAME.to_owned(),
             "elitea_nested_applications".to_owned(),
             elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
+            super::hand_floor_tool::TOOLSET_NAME.to_owned(),
         ]);
-        let frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
+        let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
             .map_err(tool_binding_error)?;
+        // ADR-0050 decision 11 (#1611): a turn no human waits on binds only
+        // its unattended tools. Until the per-agent envelope (#1613) names
+        // them, an agent's unattended tools are its read-only tools.
+        if profile
+            .floor()
+            .is_some_and(|floor| floor.unattended_tools_only)
+        {
+            let (kept, dropped);
+            (frozen, kept, dropped) = super::hand_floor_tool::retain_read_only(frozen);
+            tracing::info!(
+                event = "agent_floor_unattended_tools",
+                kept,
+                dropped,
+                "an unattended floor turn binds only its read-only tools"
+            );
+        }
+        // The hand-off tool is bound after the filter, so an unattended turn
+        // can still hand the floor on.
+        if let Some(turn_taking) = profile.floor().and_then(|floor| {
+            super::hand_floor_tool::toolset(
+                floor,
+                Arc::clone(&self.platform),
+                Arc::clone(runtime_context),
+            )
+        }) {
+            frozen.extend(
+                freeze_toolsets(vec![turn_taking], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
         // Smart Tools Selection: a tool that needs a confirmation or a
         // delegated authorization stays bound directly, because both are
         // properties of the call the model makes (see `lazy_tools`).

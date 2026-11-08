@@ -49,6 +49,9 @@ type SettleView struct {
 	StepLimitReached    bool
 	Paused              bool
 	IsError             bool
+	// ParticipantID is the agent the settled run answered as; 0 when not
+	// recorded.
+	ParticipantID int64
 }
 
 // Chains reads and ends chains.
@@ -80,12 +83,31 @@ type Goals interface {
 	CheckCloud(ctx context.Context, root, executionID string) (runbrief.Result, bool, error)
 }
 
+// Floor reports whether a conversation still owes a floor turn other than
+// the settling run's (ADR-0050 decision 7c, repos.AgentFloorRepository): a
+// chain whose message still owes an agent turn, queued or already started
+// by the floor hook, does not end as completed; that turn is a link of the
+// chain and its own settle ends it.
+type Floor interface {
+	PendingFloorTurns(ctx context.Context, projectID int64, conversationUUID, settlingExecutionID string) (bool, error)
+}
+
 // Hook is the after-settle hook.
 type Hook struct {
 	chains  Chains
 	starter Starter
 	goals   Goals
+	floor   Floor
 	logger  *slog.Logger
+}
+
+// WithFloor adds the turn-taking gate. Without it, a chain ends as
+// completed when its run would end it.
+func (h *Hook) WithFloor(floor Floor) *Hook {
+	if h != nil {
+		h.floor = floor
+	}
+	return h
 }
 
 // WithGoals adds the run brief and the goal check. Without it, every
@@ -156,17 +178,27 @@ func (h *Hook) Settle(ctx context.Context, executionID string, outcome execution
 			// (the run did not finish its work).
 			return h.end(ctx, chain, unattended.EndWaiting)
 		}
-		return h.continued(ctx, chain, h.startNext(ctx, chain, unattended.LinkStepLimit,
+		return h.continued(ctx, chain, h.startNext(ctx, chain, view.ParticipantID, unattended.LinkStepLimit,
 			agentexecution.ContinuationQuestionID(chain.ExecutionID), h.continueText(ctx, chain)))
 	}
-	return h.finish(ctx, chain)
+	return h.finish(ctx, chain, view.ParticipantID)
 }
 
 // finish ends a chain whose run would end it as completed, after the goal
 // check when the chain has one. A check that an infrastructure error stopped
 // ends the chain completed ("not checked"); only a continuation's start
 // error stays for a replay.
-func (h *Hook) finish(ctx context.Context, chain unattended.Chain) error {
+func (h *Hook) finish(ctx context.Context, chain unattended.Chain, participant int64) error {
+	if h.floor != nil {
+		pending, err := h.floor.PendingFloorTurns(ctx, chain.ProjectID, chain.ConversationUUID, chain.ExecutionID)
+		if err != nil {
+			return err
+		}
+		if pending {
+			// The message's next agent turn continues the chain.
+			return nil
+		}
+	}
 	if h.goals == nil {
 		return h.end(ctx, chain, unattended.EndCompleted)
 	}
@@ -183,7 +215,7 @@ func (h *Hook) finish(ctx context.Context, chain unattended.Chain) error {
 	case runbrief.OutcomeBlocked:
 		return h.end(ctx, chain, unattended.EndFailed)
 	case runbrief.OutcomeNotMet:
-		return h.continued(ctx, chain, h.startNext(ctx, chain, unattended.LinkGoalNotMet,
+		return h.continued(ctx, chain, h.startNext(ctx, chain, participant, unattended.LinkGoalNotMet,
 			agentexecution.GoalContinuationQuestionID(chain.ExecutionID), result.ContinueText))
 	}
 	return h.end(ctx, chain, unattended.EndCompleted)
@@ -248,10 +280,17 @@ func (h *Hook) continueOutputLimit(ctx context.Context, chain unattended.Chain) 
 
 // startNext starts a continuation that asks a new question: a step-limit
 // or a goal_not_met continuation, with text as the question.
-func (h *Hook) startNext(ctx context.Context, chain unattended.Chain, kind, questionID, text string) error {
-	start := chain.Grant.Start
-	if start == nil || text == "" {
+//
+// participant is the agent of the settled run: in a multi-agent message's
+// chain (ADR-0050 decision 7c) a later link answers as another agent than
+// the root, and its continuation goes to it. 0 keeps the chain's start.
+func (h *Hook) startNext(ctx context.Context, chain unattended.Chain, participant int64, kind, questionID, text string) error {
+	if chain.Grant.Start == nil || text == "" {
 		return unattended.Refused("unattended", "", unattended.RefusedInvalid)
+	}
+	start := *chain.Grant.Start
+	if participant > 0 && start.Contract == agentexecution.CloudStartContractApplication {
+		start.ParticipantID = participant
 	}
 	continuation := &agentexecution.UnattendedContinuation{Chain: chain, Kind: kind}
 	var err error

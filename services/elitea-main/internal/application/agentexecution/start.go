@@ -84,6 +84,22 @@ type CurrentApplicationTurn struct {
 	// Attachments are the `attachment_message` items written onto the QUESTION
 	// group in the same transaction (#606). Empty for a turn with no files.
 	Attachments []CurrentTurnAttachment
+	// The turn-taking question fields (ADR-0050 decisions 7c and 7d,
+	// floor.go). Zero values write the question as before.
+	//
+	// QuestionAuthorParticipantID: an agent-to-agent turn's question is
+	// authored by the handing agent.
+	QuestionAuthorParticipantID int64
+	// ReplyToQuestionID: a later addressed agent answers the person's
+	// existing question; no question is written.
+	ReplyToQuestionID string
+	// QuestionAddressedTo are the question's addressees; empty derives them
+	// from the target.
+	QuestionAddressedTo []int64
+	// QuestionVisibility is all (empty) or side.
+	QuestionVisibility string
+	// QuestionCause is empty (derived from the author) or a turntaking cause.
+	QuestionCause string
 }
 
 func (turn CurrentApplicationTurn) Validate() error {
@@ -93,7 +109,11 @@ func (turn CurrentApplicationTurn) Validate() error {
 		!validUUID(turn.QuestionItemID) || !validUUID(turn.ResponseMessageID) ||
 		!validCurrentAgentInput(turn.UserInput, turn.AllowEmptyUserInput) ||
 		!validJSONObject(turn.QuestionMeta) ||
-		!validCurrentTurnAttachments(turn.Attachments) {
+		!validCurrentTurnAttachments(turn.Attachments) ||
+		turn.QuestionAuthorParticipantID < 0 ||
+		(turn.ReplyToQuestionID != "" && !validUUID(turn.ReplyToQuestionID)) ||
+		!validAddressedTo(turn.QuestionAddressedTo) ||
+		(turn.QuestionVisibility != "" && turn.QuestionVisibility != "all" && turn.QuestionVisibility != "side") {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -106,6 +126,7 @@ func (turn *CurrentApplicationTurn) Clone() *CurrentApplicationTurn {
 	clone := *turn
 	clone.QuestionMeta = bytes.Clone(turn.QuestionMeta)
 	clone.Attachments = cloneCurrentTurnAttachments(turn.Attachments)
+	clone.QuestionAddressedTo = append([]int64(nil), turn.QuestionAddressedTo...)
 	return &clone
 }
 
@@ -218,6 +239,13 @@ type CurrentApplicationStartRequest struct {
 	// ThreadRun is set only for a schedule's or a trigger's turn on a
 	// handed-off thread (thread_run.go); never from a request body.
 	ThreadRun *ThreadRun
+	// AddressedTo are the agents this message is for (ADR-0050 decision
+	// 7c): at most 16 positive unique participant ids. Empty: the floor
+	// decides.
+	AddressedTo []int64
+	// FloorTurn is set only when Main's floor hook starts a later agent
+	// turn of a human message (floor_hook.go); never from a request body.
+	FloorTurn *FloorTurn
 	// projectSkills is ProjectSkillIDs, read and frozen by the service for
 	// this one turn. Unexported so no caller can hand the service skill
 	// content of its own.
@@ -232,7 +260,9 @@ func (request CurrentApplicationStartRequest) Validate() error {
 		(request.InteractionUUID != "" && !validUUID(request.InteractionUUID)) ||
 		!validCurrentMCPTokens(request.MCPTokens) ||
 		!validProjectSkillIDs(request.ProjectSkillIDs) || request.ReleaseID < 0 ||
-		!request.ThreadRun.valid(request.TriggerOrigin) {
+		!request.ThreadRun.valid(request.TriggerOrigin) ||
+		!validAddressedTo(request.AddressedTo) || !request.FloorTurn.valid() ||
+		(request.FloorTurn != nil && (len(request.AddressedTo) > 0 || request.Unattended != nil)) {
 		return ErrInvalidCurrentAgentStart
 	}
 	return nil
@@ -296,6 +326,9 @@ type CurrentApplicationStartService struct {
 	// runBriefs writes the run brief of a new chain (WithRunBriefs,
 	// ADR-0045 decision 11).
 	runBriefs RunBriefStarter
+	// floor reads a conversation's floor (WithFloor, floor.go); nil turns
+	// the turn-taking engine off.
+	floor FloorStore
 }
 
 // WithAttachmentImages attaches the reader that lets an attached IMAGE reach
@@ -338,6 +371,12 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	request CurrentApplicationStartRequest,
 ) (CurrentApplicationStartOutcome, error) {
 	if err := request.Validate(); err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	}
+	// ADR-0050 decision 7c: the floor routes a human message before the
+	// target is resolved; the first agent it names answers now.
+	floor, err := service.planFloor(ctx, &request)
+	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
 	target, err := service.resolver.ResolveCurrentApplication(ctx, request)
@@ -417,14 +456,17 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		ctx, request.ProjectID, target.ApplicationID, request.ConversationUUID,
 		currentMemoryRecallUserInputText(request.UserInput), target.VersionDetails,
 	)
+	modelRequest := request
+	modelRequest.UserInput = floorModelInput(request)
 	input, err := currentApplicationInput(
-		request, target, toolkitGuardrails, attachments,
+		modelRequest, target, toolkitGuardrails, attachments,
 		joinRecallText(memoryRecall.Text, agentMemoryText), projectContextText,
 	)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
 	input.ContextSettings = contextSettings
+	input.Floor = floor.input(request.TargetParticipantID)
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,
@@ -443,9 +485,22 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	if request.UnattendedContinuation != nil {
 		questionMeta = markContinuedAutomatically(questionMeta)
 	}
+	currentTurn := &CurrentApplicationTurn{
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ConversationUUID:     request.ConversationUUID,
+		TargetParticipantID:  request.TargetParticipantID,
+		ApplicationID:        target.ApplicationID,
+		ApplicationVersionID: target.ApplicationVersionID,
+		QuestionID:           request.QuestionID, QuestionItemID: questionItemID,
+		ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
+		UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
+		Attachments: attachments,
+	}
+	applyFloorTurn(currentTurn, floor, request)
 	projectID := strconv.FormatInt(request.ProjectID, 10)
 	actorID := strconv.FormatInt(request.ActorUserID, 10)
 	outcome, err := service.admissions.Submit(ctx, SubmitRequest{
+		Floor:      floor.admission(request),
 		Unattended: chain,
 		Identity: executionapp.AdmissionIdentity{
 			TenantID: projectID, ResourceProjectID: projectID,
@@ -463,17 +518,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		HandoffCompletion: request.HandoffCompletion.Clone(),
 		CloudThread:       target.CloudWorkspace,
 		RunPolicy:         request.ThreadRun.snapshot(int64(request.ProjectID), request.ConversationUUID, request.TriggerOrigin),
-		CurrentTurn: &CurrentApplicationTurn{
-			ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
-			ConversationUUID:     request.ConversationUUID,
-			TargetParticipantID:  request.TargetParticipantID,
-			ApplicationID:        target.ApplicationID,
-			ApplicationVersionID: target.ApplicationVersionID,
-			QuestionID:           request.QuestionID, QuestionItemID: questionItemID,
-			ResponseMessageID: responseMessageID, QuestionMeta: questionMeta,
-			UserInput: request.UserInput, AllowEmptyUserInput: request.AllowEmptyUserInput,
-			Attachments: attachments,
-		},
+		CurrentTurn:       currentTurn,
 	})
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err

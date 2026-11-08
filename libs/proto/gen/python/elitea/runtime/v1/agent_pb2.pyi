@@ -38,7 +38,7 @@ class AgentExecutionCommandV1(_message.Message):
     def __init__(self, request_entry_id: _Optional[str] = ..., client_stream_id: _Optional[str] = ..., client_message_id: _Optional[str] = ..., sio_event: _Optional[str] = ...) -> None: ...
 
 class AgentExecutionInputV1(_message.Message):
-    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model", "platform_preamble", "unattended_grant", "mcp_token_references", "model_reasoning", "chat_history_refs", "context_view")
+    __slots__ = ("schema_revision", "llm", "chat_history", "user_input", "thread_id", "checkpoint_id", "debug", "tools", "application", "internal_tools", "steps_limit", "mcp_tokens", "ignored_mcp_servers", "user_declined_mcp_servers", "should_continue", "hitl_resume", "hitl_action", "hitl_value", "hitl_decisions", "execution_generation", "is_regenerate", "meta", "conversation_id", "persona", "context_settings", "supports_vision", "return_chat_history", "invoked_skills", "applied_skills", "auto_approve_sensitive_actions", "attached_skills", "input_attachments", "parallel_reconcile", "parallel_terminal_errors", "exception_handling_enabled", "debug_mode", "next_input_suggestion", "toolkit_guardrails", "truncated_content", "project_context", "model_context_limits", "summary_model", "platform_preamble", "unattended_grant", "mcp_token_references", "model_reasoning", "chat_history_refs", "context_view", "floor")
     SCHEMA_REVISION_FIELD_NUMBER: _ClassVar[int]
     LLM_FIELD_NUMBER: _ClassVar[int]
     CHAT_HISTORY_FIELD_NUMBER: _ClassVar[int]
@@ -87,6 +87,7 @@ class AgentExecutionInputV1(_message.Message):
     MODEL_REASONING_FIELD_NUMBER: _ClassVar[int]
     CHAT_HISTORY_REFS_FIELD_NUMBER: _ClassVar[int]
     CONTEXT_VIEW_FIELD_NUMBER: _ClassVar[int]
+    FLOOR_FIELD_NUMBER: _ClassVar[int]
     schema_revision: str
     llm: bytes
     chat_history: bytes
@@ -135,7 +136,28 @@ class AgentExecutionInputV1(_message.Message):
     model_reasoning: ModelReasoningV1
     chat_history_refs: _containers.RepeatedCompositeFieldContainer[ChatHistoryRefV1]
     context_view: ContextViewV1
-    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ..., unattended_grant: _Optional[_Union[UnattendedGrantV1, _Mapping]] = ..., mcp_token_references: _Optional[_Iterable[_Union[McpTokenReferenceV1, _Mapping]]] = ..., model_reasoning: _Optional[_Union[ModelReasoningV1, _Mapping]] = ..., chat_history_refs: _Optional[_Iterable[_Union[ChatHistoryRefV1, _Mapping]]] = ..., context_view: _Optional[_Union[ContextViewV1, _Mapping]] = ...) -> None: ...
+    floor: AgentFloorV1
+    def __init__(self, schema_revision: _Optional[str] = ..., llm: _Optional[bytes] = ..., chat_history: _Optional[bytes] = ..., user_input: _Optional[bytes] = ..., thread_id: _Optional[str] = ..., checkpoint_id: _Optional[str] = ..., debug: _Optional[bool] = ..., tools: _Optional[bytes] = ..., application: _Optional[bytes] = ..., internal_tools: _Optional[bytes] = ..., steps_limit: _Optional[int] = ..., mcp_tokens: _Optional[bytes] = ..., ignored_mcp_servers: _Optional[bytes] = ..., user_declined_mcp_servers: _Optional[bytes] = ..., should_continue: _Optional[bool] = ..., hitl_resume: _Optional[bool] = ..., hitl_action: _Optional[str] = ..., hitl_value: _Optional[str] = ..., hitl_decisions: _Optional[bytes] = ..., execution_generation: _Optional[str] = ..., is_regenerate: _Optional[bool] = ..., meta: _Optional[bytes] = ..., conversation_id: _Optional[str] = ..., persona: _Optional[str] = ..., context_settings: _Optional[bytes] = ..., supports_vision: _Optional[bool] = ..., return_chat_history: _Optional[bool] = ..., invoked_skills: _Optional[bytes] = ..., applied_skills: _Optional[bytes] = ..., auto_approve_sensitive_actions: _Optional[bool] = ..., attached_skills: _Optional[bytes] = ..., input_attachments: _Optional[bytes] = ..., parallel_reconcile: _Optional[bytes] = ..., parallel_terminal_errors: _Optional[bytes] = ..., exception_handling_enabled: _Optional[bool] = ..., debug_mode: _Optional[bool] = ..., next_input_suggestion: _Optional[bytes] = ..., toolkit_guardrails: _Optional[bytes] = ..., truncated_content: _Optional[bytes] = ..., project_context: _Optional[_Union[ProjectContextSnapshotV1, _Mapping]] = ..., model_context_limits: _Optional[_Union[ModelContextLimitsV1, _Mapping]] = ..., summary_model: _Optional[_Union[SummaryModelSnapshotV1, _Mapping]] = ..., platform_preamble: _Optional[_Union[PlatformPreambleSnapshotV1, _Mapping]] = ..., unattended_grant: _Optional[_Union[UnattendedGrantV1, _Mapping]] = ..., mcp_token_references: _Optional[_Iterable[_Union[McpTokenReferenceV1, _Mapping]]] = ..., model_reasoning: _Optional[_Union[ModelReasoningV1, _Mapping]] = ..., chat_history_refs: _Optional[_Iterable[_Union[ChatHistoryRefV1, _Mapping]]] = ..., context_view: _Optional[_Union[ContextViewV1, _Mapping]] = ..., floor: _Optional[_Union[AgentFloorV1, _Mapping]] = ...) -> None: ...
+
+class AgentFloorV1(_message.Message):
+    __slots__ = ("cause", "peers", "unattended_tools_only")
+    CAUSE_FIELD_NUMBER: _ClassVar[int]
+    PEERS_FIELD_NUMBER: _ClassVar[int]
+    UNATTENDED_TOOLS_ONLY_FIELD_NUMBER: _ClassVar[int]
+    cause: str
+    peers: _containers.RepeatedCompositeFieldContainer[AgentFloorPeerV1]
+    unattended_tools_only: bool
+    def __init__(self, cause: _Optional[str] = ..., peers: _Optional[_Iterable[_Union[AgentFloorPeerV1, _Mapping]]] = ..., unattended_tools_only: _Optional[bool] = ...) -> None: ...
+
+class AgentFloorPeerV1(_message.Message):
+    __slots__ = ("participant_id", "name", "role")
+    PARTICIPANT_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    ROLE_FIELD_NUMBER: _ClassVar[int]
+    participant_id: int
+    name: str
+    role: str
+    def __init__(self, participant_id: _Optional[int] = ..., name: _Optional[str] = ..., role: _Optional[str] = ...) -> None: ...
 
 class ContextViewV1(_message.Message):
     __slots__ = ("history", "window_tokens", "digest")

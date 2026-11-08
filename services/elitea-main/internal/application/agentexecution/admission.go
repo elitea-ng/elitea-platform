@@ -77,6 +77,11 @@ type SubmitRequest struct {
 	// transaction writes it after the CLOUD_IDLE fence. Only with
 	// CloudThread; not part of the request digest.
 	RunPolicy *UnattendedRunPolicy
+	// Floor is the turn-taking write of the turn (floor.go): a new human
+	// message's exchange and queued turns, or the start of a queued turn.
+	// Only with CurrentTurn; not part of the request digest (it is derived
+	// from the request).
+	Floor *FloorAdmission
 }
 
 // AssertedScope is the toolkit scope of a verified delegation assertion.
@@ -164,6 +169,9 @@ type Admission struct {
 	// RunPolicy: the transaction writes the thread's snapshot after the
 	// fence (SubmitRequest.RunPolicy).
 	RunPolicy *UnattendedRunPolicy
+	// Floor: the transaction writes the turn-taking rows after the turn
+	// (SubmitRequest.Floor).
+	Floor *FloorAdmission
 }
 
 // ApplicationID is the agent of the admission: the application of a current
@@ -361,6 +369,7 @@ func (s *AdmissionService) Submit(
 		HandoffCompletion:         request.HandoffCompletion.Clone(),
 		CloudThread:               request.CloudThread && request.HandoffCompletion == nil,
 		RunPolicy:                 request.RunPolicy.Clone(),
+		Floor:                     request.Floor.Clone(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -385,6 +394,12 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 	// comes only with a new question of a handed-off thread.
 	if request.RunPolicy != nil && (!request.CloudThread || request.HandoffCompletion != nil ||
 		(request.CurrentTurn == nil && request.CurrentAdhocTurn == nil)) {
+		return ErrInvalidAgentAdmission
+	}
+	if request.Floor != nil && (request.CurrentTurn == nil ||
+		(request.Floor.Exchange == nil) == (request.Floor.StartTurnQuestionID == "") ||
+		(request.Floor.StartTurnQuestionID != "" && request.Floor.StartTurnQuestionID != request.IdempotencyKey) ||
+		(request.Floor.Exchange != nil && request.Floor.Exchange.QuestionID != request.IdempotencyKey)) {
 		return ErrInvalidAgentAdmission
 	}
 	if request.CurrentTurn != nil {

@@ -14,9 +14,9 @@ use super::runtime_context::{
     AgentMemoryRememberRequest, AgentMemoryRemembered, ArtifactDeleteOutcome,
     ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
     ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
-    ProjectContextWriteOutcome, ProjectContextWriteRequest, RuntimeApplicationVersion,
-    RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError, SkillWriteOutcome,
-    SkillWriteRequest,
+    HandFloorRequest, ProjectContextWriteOutcome, ProjectContextWriteRequest,
+    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
+    SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -160,6 +160,16 @@ impl PlatformClient {
         self.runtime_context
             .forget_agent_memory(authority, request)
             .await
+    }
+
+    /// The `hand_floor` tool (ADR-0050 decision 11, #1611), under the same
+    /// non-fatal error contract as the agent memory tools.
+    pub(crate) async fn hand_floor(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &HandFloorRequest,
+    ) -> Result<serde_json::Value, RuntimeContextError> {
+        self.runtime_context.hand_floor(authority, request).await
     }
 
     /// The `artifact` toolkit family's four operations (#906) — the artifact

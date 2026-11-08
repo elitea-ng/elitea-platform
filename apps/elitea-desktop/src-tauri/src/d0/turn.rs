@@ -6385,6 +6385,7 @@ fn execution_request(
             platform_preamble: None,
             model_reasoning: None,
             chat_history_refs: Vec::new(),
+            floor: None,
         },
     }
 }

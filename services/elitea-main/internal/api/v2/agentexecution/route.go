@@ -197,6 +197,10 @@ type currentApplicationStartBody struct {
 	// Unattended is the person's unattended grant (ADR-0045, client
 	// contract 1.30); absent for an attended run.
 	Unattended *startUnattendedBody `json:"unattended"`
+	// AddressedTo are the agents this message is for (ADR-0050 decision
+	// 7c): at most 16 positive unique participant ids. Empty or absent: the
+	// conversation's floor decides.
+	AddressedTo []int64 `json:"addressed_to"`
 }
 
 type currentRegenerationBody struct {
@@ -326,6 +330,10 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 		}
 	}
 
+	if !validStartAddressedTo(body.AddressedTo) {
+		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
+		return
+	}
 	origin := startTriggerOrigin(user)
 	var outcome agentexecutionapp.CurrentApplicationStartOutcome
 	switch contract {
@@ -349,10 +357,14 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				ProjectSkillIDs:  projectSkillIDs,
 				ReleaseID:        body.ReleaseID,
 				Unattended:       body.Unattended.request(),
+				AddressedTo:      body.AddressedTo,
 			},
 		)
 	case CurrentAdhocStartContract:
-		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) || body.ReleaseID != 0 {
+		// A model chat has no floor (ADR-0050 decision 7c): addressing
+		// agents through it is refused, not dropped.
+		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) || body.ReleaseID != 0 ||
+			len(body.AddressedTo) > 0 {
 			writeUnsupported(writer)
 			return
 		}
@@ -687,6 +699,11 @@ func writeStartError(writer http.ResponseWriter, err error) {
 		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
 			"error":   "project_skill_name_conflict",
 			"message": "A project skill you picked has the same name as another skill of this agent.",
+		})
+	case errors.Is(err, agentexecutionapp.ErrFloorAddressee):
+		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
+			"error":   "addressee_not_in_conversation",
+			"message": "An agent this message is addressed to is not in the conversation.",
 		})
 	case errors.Is(err, agentexecutionapp.ErrAgentTargetRequired):
 		writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{
@@ -1139,4 +1156,20 @@ func callerMayReadProjectSkills(request *http.Request, projectID string) bool {
 		}
 	}
 	return false
+}
+
+// validStartAddressedTo is the addressed_to rule (ADR-0050 decision 7c): at
+// most 16 positive, unique participant ids.
+func validStartAddressedTo(ids []int64) bool {
+	if len(ids) > 16 {
+		return false
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
 }

@@ -5,7 +5,10 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/unattended"
 )
@@ -22,6 +25,10 @@ type ChainSettleView struct {
 	StepLimitReached    bool
 	Paused              bool
 	IsError             bool
+	// ParticipantID is the agent the run answered as (shared 0227); 0 when
+	// not recorded. A chain of a multi-agent message has links of several
+	// agents (ADR-0050 decision 7c): a continuation goes to this one.
+	ParticipantID int64
 }
 
 // ChainSettleView reads a settled run's chain and response. It answers
@@ -39,6 +46,16 @@ SELECT last_execution_id FROM elitea_runtime.run_chains WHERE root_execution_id 
 		return ChainSettleView{}, false, fmt.Errorf("unattended chain: read the latest run: %w", err)
 	}
 	view.Latest = last == nil || *last == executionID
+	var participant *int32
+	if err := r.pool.QueryRow(ctx, `
+SELECT participant_id FROM elitea_runtime.agent_execution_jobs
+WHERE execution_id = $1 ORDER BY generation DESC LIMIT 1`, executionID).Scan(&participant); err != nil &&
+		!errors.Is(err, pgx.ErrNoRows) {
+		return ChainSettleView{}, false, fmt.Errorf("unattended chain: read the run's participant: %w", err)
+	}
+	if participant != nil {
+		view.ParticipantID = int64(*participant)
+	}
 	facts, err := readResponseFacts(ctx, r.pool, chain.ProjectID, chain.ResponseMessageID, executionID)
 	if err != nil {
 		return ChainSettleView{}, false, fmt.Errorf("unattended chain: %w", err)

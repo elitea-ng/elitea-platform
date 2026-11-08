@@ -2632,6 +2632,8 @@ export interface components {
         };
         /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
         ChatSendRequest: {
+            /** @description ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides. An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`. */
+            addressed_to?: number[];
             /**
              * Format: uuid
              * @description Must equal the path's conversation id.

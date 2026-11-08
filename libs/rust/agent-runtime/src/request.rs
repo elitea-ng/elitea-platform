@@ -119,6 +119,35 @@ pub struct AgentExecutionPayload {
     /// One reference per `chat_history` entry, in order (ADR-0050 decision
     /// 9c). Empty: the session keeps its stored history.
     pub chat_history_refs: Vec<ChatHistoryRef>,
+    /// Why this agent holds the floor and who else can take it (ADR-0050
+    /// decision 11, #1611). `None`: an input from before the floor, or a
+    /// conversation with one agent.
+    pub floor: Option<AgentFloor>,
+}
+
+/// The turn-taking floor this invocation holds (ADR-0050 decision 11).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentFloor {
+    pub cause: FloorCause,
+    /// The other agents in the conversation the floor can be handed to.
+    pub peers: Vec<AgentFloorPeer>,
+    /// No human is waiting on this turn: bind only unattended tools.
+    pub unattended_tools_only: bool,
+}
+
+/// What gave this agent the floor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloorCause {
+    HumanMessage,
+    AgentMention,
+}
+
+/// One agent the floor can be handed to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentFloorPeer {
+    pub participant_id: i64,
+    pub name: String,
+    pub role: String,
 }
 
 /// Where one `chat_history` entry came from (ADR-0050 decision 9c).

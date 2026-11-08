@@ -1057,7 +1057,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// checks per (conversation, agent) (ADR-0050 decision 9b2, issue 1610):
 	// one active QUEUED or ADMITTED row per agent, the idle run's measurement
 	// for each agent's meter. No backfill, no permission.
-	require.EqualValues(t, 230, Head(shared))
+	//
+	// 231: shared/0231_agent_floor_turns.sql, the turn-taking engine
+	// (ADR-0050 decisions 7c and 7d, issue 1611): agent_floor_exchanges and
+	// agent_floor_turns, the chain link kind agent_turn and the three loop
+	// guard end limits. No backfill, no permission.
+	require.EqualValues(t, 231, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

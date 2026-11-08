@@ -119,6 +119,7 @@ type ContentServer struct {
 	toolkitArtifacts    ToolkitDiscoveryArtifactStore
 	runtimeBuilders     *RuntimeEntityBuilderService
 	runtimeAgentMemory  *RuntimeAgentMemoryService
+	runtimeHandFloor    *RuntimeHandFloorService
 	runtimeArtifacts    *RuntimeArtifactObjectService
 	sandboxBundles      *SandboxBundleContentService
 	compiledSnapshots   *CompiledSnapshotContentService
@@ -345,6 +346,17 @@ func (s *ContentServer) WithRuntimeAgentMemory(memory *RuntimeAgentMemoryService
 		return nil
 	}
 	s.runtimeAgentMemory = memory
+	return s
+}
+
+// WithRuntimeHandFloor enables the turn-taking hand_floor route (ADR-0050
+// decision 7d, #1611). Nil leaves it answering Unimplemented, which the
+// worker turns into "handing the floor is not available here".
+func (s *ContentServer) WithRuntimeHandFloor(floor *RuntimeHandFloorService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeHandFloor = floor
 	return s
 }
 
@@ -791,6 +803,30 @@ func (s *ContentServer) ForgetAgentMemory(ctx context.Context, request *runtimev
 		return nil, err
 	}
 	return &runtimev1.ForgetAgentMemoryResponseV1{ResponseJson: encoded}, nil
+}
+
+// HandFloor is the turn-taking hand_floor tool (runtime_hand_floor.go). A
+// twin of RememberAgentMemory.
+func (s *ContentServer) HandFloor(ctx context.Context, request *runtimev1.HandFloorRequestV1) (*runtimev1.HandFloorResponseV1, error) {
+	if s.runtimeHandFloor == nil {
+		return nil, contentStatus(codes.Unimplemented)
+	}
+	var document RuntimeHandFloorRequest
+	claim, release, err := s.claimedDocument(ctx, request.GetScope(), request.GetRequestJson(), &document,
+		maxRuntimeHandFloorRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeHandFloor.Hand(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "hand floor unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeHandFloorResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.HandFloorResponseV1{ResponseJson: encoded}, nil
 }
 
 func (s *ContentServer) agentMemoryRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {
