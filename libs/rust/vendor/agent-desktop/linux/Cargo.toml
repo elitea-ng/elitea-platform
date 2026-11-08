@@ -1,0 +1,40 @@
+# Vendored agent-desktop-linux 1.2.0 (vercel-labs/agent-desktop at
+# b43ac4f6e892ef608f8851428613c4009f0e84c7, Apache-2.0). Cargo.toml.orig is
+# the upstream manifest. This one spells out the `workspace = true` keys with
+# the values of the upstream workspace root, takes core by path, and drops
+# the clipboard-owner helper binary, the dev-dependencies and the upstream
+# lint table. Every change is listed in libs/rust/vendor/README.md
+# ("agent-desktop"). elitea-desktop-control depends on this crate only under
+# `cfg(target_os = "linux")`, so no other OS resolves its dependencies into
+# a build.
+[package]
+name = "agent-desktop-linux"
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.89"
+license = "Apache-2.0"
+publish = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+
+[lib]
+# The upstream unit tests are not vendored (vendor/README.md).
+test = false
+doctest = false
+
+[dependencies]
+agent-desktop-core = { path = "../core" }
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+thiserror = "2.0"
+libc = "0.2"
+async-io = "=2.6.0"
+futures-lite = "=2.6.1"
+zbus = "=5.19.0"
+# Upstream pins `=0.3.33` and `=1.1.5`. The host locks already resolve 0.3.34
+# and 1.1.6, so these are caret requirements (vendor/README.md).
+futures-util = { version = "0.3.33", default-features = false, features = ["alloc"] }
+png = { version = "=0.18.1", default-features = false }
+rustix = { version = "1.1.5", default-features = false, features = ["std", "process", "fs"] }
+x11rb = { version = "=0.14.0", default-features = false, features = ["composite", "damage", "randr", "res", "shape", "xkb", "xtest"] }

@@ -61,6 +61,8 @@ pub struct MacDriver {
     own: OwnApps,
     /// The caller's halt of the call in flight ([`DesktopDriver::set_halt`]).
     halt: Mutex<Option<crate::Halt>>,
+    /// The liveness of the last input watch started.
+    guard: crate::input::GuardState,
 }
 
 impl Default for MacDriver {
@@ -80,6 +82,7 @@ impl MacDriver {
             marker: SyntheticMarker::new(tag).unwrap_or_else(|| unreachable!("tag is never 0")),
             own: OwnApps::default(),
             halt: Mutex::new(None),
+            guard: crate::input::GuardState::default(),
         }
     }
 
@@ -510,11 +513,16 @@ impl HostState for MacDriver {
             locked: state.locked,
             screensaver,
             display_asleep: state.display_asleep,
+            lock_state_unknown: false,
         }
     }
 
     fn secure_input(&self) -> bool {
         agent_desktop_macos::elitea_ext::secure_event_input_enabled()
+    }
+
+    fn guard_dead(&self) -> bool {
+        self.guard.dead()
     }
 }
 
@@ -869,7 +877,7 @@ impl DesktopDriver for MacDriver {
             Some(region) => {
                 let (x, y, w, h) =
                     region_pixels(frame.width, frame.height, region, image.width, image.height)?;
-                let png = crop(&image.data, x, y, w, h)?;
+                let png = crate::crop::crop(&image.data, x, y, w, h)?;
                 Ok(Capture {
                     png,
                     width: w,
@@ -930,7 +938,7 @@ impl DesktopDriver for MacDriver {
         filter: crate::InputFilter,
         sink: crate::SignalSink,
     ) -> Result<Box<dyn crate::InputWatch>, DesktopError> {
-        crate::macos_input::watch(self.marker, filter, sink)
+        crate::macos_input::watch(self.marker, filter, sink, self.guard.start())
     }
 
     fn set_halt(&self, halt: Option<crate::Halt>) {
@@ -985,19 +993,6 @@ fn rect(r: ad::Rect) -> Rect {
         width: r.width,
         height: r.height,
     }
-}
-
-/// Crops a window capture to the pixel box (`x`, `y`, `w`, `h`) and
-/// re-encodes it as PNG.
-fn crop(png: &[u8], x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, DesktopError> {
-    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-        .map_err(|e| DesktopError::Internal(format!("decode capture: {e}")))?;
-    let cropped = img.crop_imm(x, y, w, h);
-    let mut out = std::io::Cursor::new(Vec::new());
-    cropped
-        .write_to(&mut out, image::ImageFormat::Png)
-        .map_err(|e| DesktopError::Internal(format!("encode capture: {e}")))?;
-    Ok(out.into_inner())
 }
 
 fn contains_text(node: &Node, text: &str) -> bool {

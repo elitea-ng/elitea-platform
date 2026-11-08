@@ -37,6 +37,14 @@ pub enum DesktopError {
     /// the menu path to a denied chord (`menu_item_refused`).
     #[error("menu item refused: {0}")]
     MenuItemRefused(String),
+    /// The application is on this OS's platform deny list
+    /// ([`crate::platform::is_denied_app`]; Windows and Linux): password
+    /// managers, terminals, sign-in and privilege prompts (`app_denied`).
+    /// Also a text write into an application this OS never types into
+    /// ([`crate::platform::text_entry_refusal`]: File Explorer on Windows).
+    /// On macOS the policy applies the list before the driver is called.
+    #[error("application denied: {0}")]
+    AppDenied(String),
     #[error("application not found: {0}")]
     AppNotFound(String),
     #[error("window not found: {0}")]
@@ -64,6 +72,12 @@ pub enum DesktopError {
     /// posted nothing more (`interrupted`).
     #[error("interrupted: the person paused or stopped the session")]
     Interrupted,
+    /// The user-active guard's input watch stopped on its own (the display
+    /// went away, a Windows hook could not be re-armed), so the person's input could no
+    /// longer pause the agent: every act is refused until a new watch runs
+    /// (`user_active_guard_unavailable`).
+    #[error("user-active guard unavailable: {0}")]
+    UserActiveGuardUnavailable(String),
 }
 
 impl DesktopError {
@@ -78,6 +92,7 @@ impl DesktopError {
             Self::ScreenUnavailable(_) => "screen_unavailable",
             Self::NotFrontmost(_) => "not_frontmost",
             Self::MenuItemRefused(_) => "menu_item_refused",
+            Self::AppDenied(_) => "app_denied",
             Self::AppNotFound(_) => "app_not_found",
             Self::WindowNotFound(_) => "window_not_found",
             Self::PermissionDenied(_) => "permission_denied",
@@ -88,6 +103,7 @@ impl DesktopError {
             Self::PlatformNotSupported => "platform_not_supported",
             Self::Internal(_) => "internal",
             Self::Interrupted => "interrupted",
+            Self::UserActiveGuardUnavailable(_) => "user_active_guard_unavailable",
         }
     }
 
@@ -125,6 +141,7 @@ mod tests {
                 DesktopError::MenuItemRefused(String::new()),
                 "menu_item_refused",
             ),
+            (DesktopError::AppDenied(String::new()), "app_denied"),
             (DesktopError::AppNotFound(String::new()), "app_not_found"),
             (
                 DesktopError::WindowNotFound(String::new()),
@@ -144,6 +161,10 @@ mod tests {
             (DesktopError::PlatformNotSupported, "platform_not_supported"),
             (DesktopError::Internal(String::new()), "internal"),
             (DesktopError::Interrupted, "interrupted"),
+            (
+                DesktopError::UserActiveGuardUnavailable(String::new()),
+                "user_active_guard_unavailable",
+            ),
         ];
         for (err, code) in all {
             assert_eq!(err.code(), code);

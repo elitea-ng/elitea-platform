@@ -28,8 +28,10 @@ export interface ComputerSettings {
   policy_allows: boolean;
   /** The person's device switch (off unless turned on). */
   enabled: boolean;
-  /** The OS can run it (macOS). */
+  /** The OS can run it (macOS, Windows, Linux). */
   supported: boolean;
+  /** Why the agent can see apps here but not use them (a Linux Wayland session), or null. */
+  read_only_reason: string | null;
   accessibility: GrantState;
   screen_recording: GrantState;
   /** The tools that are not offered without Screen Recording. */

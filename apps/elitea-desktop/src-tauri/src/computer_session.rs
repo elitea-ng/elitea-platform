@@ -10,9 +10,11 @@
 //! needed, and nothing listens while no session runs.
 //!
 //! An act needs the guard: when the OS refuses the watch (no grant, no
-//! platform support), `ComputerAct` calls are refused
-//! (`user_active_guard_unavailable`) — a pause nobody could notice is no
-//! pause. Reads still run.
+//! platform support), or the running watch dies on its own (its thread
+//! ended: the display went away, the OS dropped its hook), `ComputerAct`
+//! calls are refused (`user_active_guard_unavailable`) — a pause nobody
+//! could notice is no pause. Reads still run. A dead watch is tried again
+//! next session, as a refused one is.
 
 use std::sync::{Arc, Mutex};
 
@@ -62,7 +64,17 @@ impl ComputerSession {
         let mut watch = lock(&self.watch);
         self.control.begin(turn);
         match &*watch {
-            Watch::Running(_) => return Ok(()),
+            Watch::Running(running) if running.alive() => return Ok(()),
+            Watch::Running(_) => {
+                let why = "the user-active guard's input watch stopped".to_owned();
+                log::warn!(target: "computer", "{why}");
+                if let Watch::Running(dead) =
+                    std::mem::replace(&mut *watch, Watch::Refused(why.clone()))
+                {
+                    std::thread::spawn(move || drop(dead));
+                }
+                return Err(why);
+            }
             Watch::Refused(why) => return Err(why.clone()),
             Watch::Off => {}
         }
@@ -118,14 +130,20 @@ mod tests {
 
     use super::*;
 
-    /// A driver whose watch counts its live handles.
+    /// A driver whose watch counts its live handles; `dead` ends the
+    /// thread of every watch it started (a fake watch dying on its own).
     struct Watched {
         live: Arc<AtomicUsize>,
         starts: AtomicUsize,
+        dead: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    struct Handle(Arc<AtomicUsize>);
-    impl InputWatch for Handle {}
+    struct Handle(Arc<AtomicUsize>, Arc<std::sync::atomic::AtomicBool>);
+    impl InputWatch for Handle {
+        fn alive(&self) -> bool {
+            !self.1.load(Ordering::SeqCst)
+        }
+    }
     impl Drop for Handle {
         fn drop(&mut self) {
             self.0.fetch_sub(1, Ordering::SeqCst);
@@ -137,6 +155,7 @@ mod tests {
             Arc::new(Self {
                 live: Arc::new(AtomicUsize::new(0)),
                 starts: AtomicUsize::new(0),
+                dead: Arc::default(),
             })
         }
     }
@@ -224,7 +243,7 @@ mod tests {
         ) -> Result<Box<dyn InputWatch>, DesktopError> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             self.live.fetch_add(1, Ordering::SeqCst);
-            Ok(Box::new(Handle(self.live.clone())))
+            Ok(Box::new(Handle(self.live.clone(), self.dead.clone())))
         }
     }
 
@@ -279,6 +298,30 @@ mod tests {
                 driver.live.load(Ordering::SeqCst) == 0
             });
         }
+    }
+
+    #[test]
+    fn a_watch_that_died_refuses_the_session_until_the_next_one() {
+        let driver = Watched::new();
+        let session = ComputerSession::new(driver.clone(), Arc::default());
+        session.begin(1).unwrap();
+        // The watch's thread ends on its own mid-session.
+        driver.dead.store(true, Ordering::SeqCst);
+        let why = session.begin(1).unwrap_err();
+        assert!(why.contains("stopped"), "{why}");
+        // It stays refused for the session, and is not restarted.
+        assert!(session.begin(2).is_err());
+        assert_eq!(driver.starts.load(Ordering::SeqCst), 1);
+        until("the dead watch dropped", || {
+            driver.live.load(Ordering::SeqCst) == 0
+        });
+        session.end(1);
+        session.end(2);
+        // The next session tries again.
+        driver.dead.store(false, Ordering::SeqCst);
+        session.begin(3).unwrap();
+        assert_eq!(driver.starts.load(Ordering::SeqCst), 2);
+        session.end(3);
     }
 
     #[test]

@@ -62,7 +62,7 @@ use elitea_desktop_control::{
     Action, AppInfo, CaptureTarget, ClickAt, DesktopDriver, DesktopError, ElementRef, KeyChord,
     MAX_TYPED_CHARS, Node, OwnApps, Point, PointerButton, Rect, ScrollDirection, Snapshot,
     SnapshotBudget, WaitCondition, WindowInfo, WindowTarget, bundle_matches, is_denied_chord,
-    is_denied_menu_item,
+    is_denied_menu_item, platform::unnameable_app,
 };
 use elitea_local_tools::approvals::{
     ComputerControl, ComputerTarget, PAYLOAD_KEY, RulesEngine, ToolCall, ToolKind,
@@ -1561,7 +1561,8 @@ impl ComputerTool {
 }
 
 /// The hard limits of ADR-0047 decision 5 the host checks itself, in every
-/// permission mode: Elitea is never a target (`own_window_refused`), a
+/// permission mode: Elitea is never a target (`own_window_refused`), on
+/// Linux an interpreter's name is never an app (`invalid_args`), a
 /// denied chord is never sent (`chord_refused`), no menu item that quits,
 /// logs out, shuts down, restarts, sleeps, locks, force quits or switches
 /// user is acted on (`menu_item_refused`, the menu path to those chords, in
@@ -1574,6 +1575,14 @@ fn refuse_hard_limits(call: &Call, seen: &SeenSnapshots) -> Result<(), DesktopEr
         return Err(DesktopError::OwnWindowRefused(
             "Elitea's own windows are never read or acted on".to_owned(),
         ));
+    }
+    // On Linux an interpreter (`python3`, `node`) is never an application's
+    // id: refused before the person is asked, so "always for this app" can
+    // never be granted to every script it runs.
+    if cfg!(target_os = "linux")
+        && let Some(why) = call.bundle_id().and_then(unnameable_app)
+    {
+        return Err(DesktopError::InvalidArgs(why));
     }
     if let Call::Key { chord, .. } = call
         && is_denied_chord(chord)
