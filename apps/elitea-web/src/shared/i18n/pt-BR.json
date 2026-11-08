@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Não vinculado",
   "entities.token.table.tokenValue": "Valor do token",
   "entries.maintenance.page.headline": "O {{product}} está em manutenção!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Navegue pelos nossos guias na",
   "entries.maintenance.tips.docsLinkLabel": "Documentação.",
   "entries.maintenance.tips.intro": "Enquanto preparamos tudo nos bastidores, que tal explorar alguns recursos úteis?",

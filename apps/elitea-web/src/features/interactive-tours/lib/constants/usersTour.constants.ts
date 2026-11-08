@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { AI_CONFIG_TOUR_ID, USERS_TOUR_ID } from './tourIds.constants';
 import { USERS_TOUR_TARGETS } from './usersTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export { USERS_TOUR_ID };
 
@@ -34,7 +35,7 @@ Only users with the **Admin** role can invite or manage other users.`,
     target: USERS_TOUR_TARGETS.inviteButton,
     placement: 'left',
     title: 'Inviting Users',
-    content: `Click **+ Invite users** to open the invitation dialog. Enter one or more email addresses (comma-separated), select the role(s) to assign, and send. All addresses in the batch receive the same role assignment. Invited users are added to the project immediately and can log in with their existing ELITEA account.`,
+    content: `Click **+ Invite users** to open the invitation dialog. Enter one or more email addresses (comma-separated), select the role(s) to assign, and send. All addresses in the batch receive the same role assignment. Invited users are added to the project immediately and can log in with their existing ${productName()} account.`,
   },
   {
     id: 'user-table',

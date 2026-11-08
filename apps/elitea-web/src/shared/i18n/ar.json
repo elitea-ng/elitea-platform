@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "غير مرتبط",
   "entities.token.table.tokenValue": "قيمة الرمز",
   "entries.maintenance.page.headline": "{{product}} تحت الصيانة!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "تصفّح أدلتنا في",
   "entries.maintenance.tips.docsLinkLabel": "الوثائق.",
   "entries.maintenance.tips.intro": "بينما نجهّز الأمور في الخلفية، لماذا لا تستكشف بعض الموارد المفيدة؟",

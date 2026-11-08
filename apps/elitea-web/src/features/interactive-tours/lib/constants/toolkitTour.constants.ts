@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { SHARED_TOUR_TARGETS } from './interactiveTour.constants';
 import { TOOLKIT_TOUR_TARGETS } from './toolkitTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export const TOOLKIT_TOUR_ID = 'toolkit';
 
@@ -18,8 +19,8 @@ export const toolkitTourSteps: TourStep[] = [
     id: 'what-is-toolkit',
     target: SHARED_TOUR_TARGETS.workspace,
     placement: 'center',
-    title: 'What are ELITEA Toolkits?',
-    content: `ELITEA Toolkits are modular integrations that connect AI agents, pipelines, and conversations to external platforms and services. Each toolkit packages the connection configuration and a set of tools — specific actions the AI can perform on that service, such as creating issues, querying databases, or searching documents.
+    title: `What are ${productName()} Toolkits?`,
+    content: `${productName()} Toolkits are modular integrations that connect AI agents, pipelines, and conversations to external platforms and services. Each toolkit packages the connection configuration and a set of tools — specific actions the AI can perform on that service, such as creating issues, querying databases, or searching documents.
 
 Once configured, a toolkit can be attached to any agent or pipeline and used directly in Chat, enabling the AI to automate tasks across different systems without manual intervention.`,
   },

@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Niepowiązany",
   "entities.token.table.tokenValue": "Wartość tokenu",
   "entries.maintenance.page.headline": "{{product}} jest w trakcie konserwacji!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Przeglądaj nasze przewodniki w",
   "entries.maintenance.tips.docsLinkLabel": "dokumentacji.",
   "entries.maintenance.tips.intro": "Gdy przygotowujemy wszystko w tle, może zajrzysz do pomocnych zasobów?",

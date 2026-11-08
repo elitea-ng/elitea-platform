@@ -12,6 +12,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '../../../test/setup';
 
 import { exchangeMcpOAuthToken, refreshMcpOAuthToken, registerMcpDynamicClient } from './mcpOAuthClient';
+import { productName } from '@/shared/brand';
 
 afterEach(() => {
   resetGeneratedClient();
@@ -143,7 +144,7 @@ describe('registerMcpDynamicClient (API-166)', () => {
       projectId: 5,
       registration_endpoint: 'https://as.example.com/register',
       redirect_uris: ['https://app.example.com/mcp-auth-callback'],
-      client_name: 'ELITEA MCP Client',
+      client_name: `${productName()} MCP Client`,
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
@@ -168,7 +169,7 @@ describe('registerMcpDynamicClient (API-166)', () => {
         projectId: 6,
         registration_endpoint: 'https://as.example.com/register',
         redirect_uris: ['https://app.example.com/cb'],
-        client_name: 'ELITEA MCP Client',
+        client_name: `${productName()} MCP Client`,
         grant_types: ['authorization_code'],
         response_types: ['code'],
         token_endpoint_auth_method: 'none',

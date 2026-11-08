@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "לא מקושר",
   "entities.token.table.tokenValue": "ערך האסימון",
   "entries.maintenance.page.headline": "{{product}} בתחזוקה!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "עיין במדריכים שלנו ב",
   "entries.maintenance.tips.docsLinkLabel": "תיעוד.",
   "entries.maintenance.tips.intro": "בזמן שאנחנו מכינים דברים מאחורי הקלעים, למה שלא תחקור כמה משאבים שימושיים?",

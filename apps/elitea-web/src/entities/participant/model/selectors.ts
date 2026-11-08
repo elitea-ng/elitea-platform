@@ -1,7 +1,9 @@
 import type { Participant, ParticipantType } from './types';
+import { productName } from '@/shared/brand';
 
 /** apps/elitea-ui/src/common/constants.js:88 `DEFAULT_PARTICIPANT_NAME`. */
-export const DEFAULT_PARTICIPANT_NAME = 'Elitea';
+/** The assistant's name when no sender name is configured: the product's (ADR-0052 W3.3). */
+export const DEFAULT_PARTICIPANT_NAME = productName();
 
 /**
  * participants.helpers.js:5-8 — an `application` participant whose

@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "منسلک نہیں",
   "entities.token.table.tokenValue": "ٹوکن کی قدر",
   "entries.maintenance.page.headline": "{{product}} کی دیکھ بھال جاری ہے!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "ہماری گائیڈز یہاں دیکھیں",
   "entries.maintenance.tips.docsLinkLabel": "دستاویزات۔",
   "entries.maintenance.tips.intro": "جب تک ہم پس پردہ تیاری کرتے ہیں، کیوں نہ کچھ مفید وسائل دیکھ لیں؟",

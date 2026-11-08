@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "未繫結",
   "entities.token.table.tokenValue": "權杖值",
   "entries.maintenance.page.headline": "{{product}} 正在維護中！",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "瀏覽我們的指南，位於",
   "entries.maintenance.tips.docsLinkLabel": "文件。",
   "entries.maintenance.tips.intro": "在我們完成後臺準備的同時，不妨看看這些實用資源？",

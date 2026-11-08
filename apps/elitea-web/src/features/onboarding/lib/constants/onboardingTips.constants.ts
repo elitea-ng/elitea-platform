@@ -103,6 +103,7 @@ import tip46 from '@/assets/onboarding/tips/search-conversations.png';
 import tip47 from '@/assets/onboarding/tips/chat-folders.png';
 // Tip 48 — View Message Execution Details
 import tip48 from '@/assets/onboarding/tips/message-details.png';
+import { productName } from '@/shared/brand';
 
 export interface OnboardingTip {
   tip: string;
@@ -112,7 +113,7 @@ export interface OnboardingTip {
 export const onboardingTips: OnboardingTip[] = [
   {
     tip:
-      '### Tip 1: Welcome to ELITEA\n\nELITEA is your AI-powered workspace where you create intelligent agents, automate workflows with pipelines, and chat with powerful AI models. Everything you need is organized in the left sidebar for easy access.\n\n**Quick Action:** Click the ELITEA logo (top-left) to explore all available menus.',
+      `### Tip 1: Welcome to ${productName()}\n\n${productName()} is your AI-powered workspace where you create intelligent agents, automate workflows with pipelines, and chat with powerful AI models. Everything you need is organized in the left sidebar for easy access.\n\n**Quick Action:** Click the ${productName()} logo (top-left) to explore all available menus.`,
     image: tip01,
   },
   {

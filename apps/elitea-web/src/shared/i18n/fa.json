@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "متصل نشده",
   "entities.token.table.tokenValue": "مقدار توکن",
   "entries.maintenance.page.headline": "{{product}} در حال تعمیر و نگهداری است!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "راهنماهای ما را مرور کنید در",
   "entries.maintenance.tips.docsLinkLabel": "مستندات.",
   "entries.maintenance.tips.intro": "تا زمانی که پشت صحنه آماده می‌شویم، چرا منابع مفید را مرور نکنید؟",

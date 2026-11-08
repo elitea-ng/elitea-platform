@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "바인딩되지 않음",
   "entities.token.table.tokenValue": "토큰 값",
   "entries.maintenance.page.headline": "{{product}} 점검 중입니다!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "다음에서 가이드를 둘러보세요: ",
   "entries.maintenance.tips.docsLinkLabel": "문서.",
   "entries.maintenance.tips.intro": "준비하는 동안 유용한 리소스를 둘러보는 건 어떨까요?",

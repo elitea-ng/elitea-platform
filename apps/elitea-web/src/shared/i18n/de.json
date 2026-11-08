@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Nicht gebunden",
   "entities.token.table.tokenValue": "Token-Wert",
   "entries.maintenance.page.headline": "{{product}} befindet sich in Wartung!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Stöbern Sie in unseren Leitfäden in der",
   "entries.maintenance.tips.docsLinkLabel": "Dokumentation.",
   "entries.maintenance.tips.intro": "Während wir hinter den Kulissen alles vorbereiten, warum nicht ein paar hilfreiche Ressourcen erkunden?",

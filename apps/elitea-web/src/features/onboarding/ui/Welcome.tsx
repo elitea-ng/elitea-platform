@@ -15,6 +15,7 @@ import { Box, Typography } from '@mui/material';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 import ChatWelcomeImage from '@/assets/onboarding/welcome/chat-welcome.png';
+import { productName } from '@/shared/brand';
 
 /** Props for {@link Welcome}. */
 interface WelcomeProps {
@@ -50,7 +51,7 @@ const Welcome = memo<WelcomeProps>(({ name = 'there', onShowTour }) => {
       <Box
         component="img"
         src={ChatWelcomeImage}
-        alt="Elitea"
+        alt={productName()}
         sx={styles.image}
       />
       <Typography
@@ -58,7 +59,7 @@ const Welcome = memo<WelcomeProps>(({ name = 'there', onShowTour }) => {
         variant="headingMedium"
         sx={styles.title}
       >
-        Welcome to Elitea!
+        Welcome to {productName()}!
       </Typography>
       <Box
         sx={theme => ({
@@ -102,7 +103,7 @@ const Welcome = memo<WelcomeProps>(({ name = 'there', onShowTour }) => {
               component="div"
               sx={styles.message}
             >
-              Ready to explore Elitea&apos;s smart tools and tips?
+              Ready to explore {productName()}&apos;s smart tools and tips?
             </Typography>
             <BaseBtn
               variant="elitea"

@@ -19,6 +19,7 @@ import { createApplication, getListApplicationsQueryKey } from '@/shared/api/gen
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { ApplicationCreateRequest, Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
+import { productName } from '@/shared/brand';
 
 const LOCAL_CODING_AGENT_NAME = 'Local coding agent';
 /** The agent's own step limit: a workspace turn's default, set explicitly so the platform's stamp does not lower it. */
@@ -44,7 +45,7 @@ function localCodingAgentBody(model: Pick<ConfigModel, 'name' | 'project_id'>): 
   const modelProject = Number(model.project_id);
   return {
     name: LOCAL_CODING_AGENT_NAME,
-    description: 'Explores, edits and tests code in a folder on your computer, through the Elitea desktop app.',
+    description: `Explores, edits and tests code in a folder on your computer, through the ${productName()} desktop app.`,
     type: 'interface',
     versions: [
       {

@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Не привязан",
   "entities.token.table.tokenValue": "Значение токена",
   "entries.maintenance.page.headline": "{{product}} на техническом обслуживании!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Просмотрите наши руководства в разделе",
   "entries.maintenance.tips.docsLinkLabel": "«Документация».",
   "entries.maintenance.tips.intro": "Пока мы готовим всё за кулисами, почему бы не изучить полезные материалы?",

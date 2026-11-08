@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { AGENT_TOUR_TARGETS } from './agentTourTargets.constants';
 import { SHARED_TOUR_TARGETS } from './interactiveTour.constants';
+import { productName } from '@/shared/brand';
 
 export const AGENT_TOUR_ID = 'agent';
 
@@ -22,8 +23,8 @@ export const agentTourSteps: TourStep[] = [
     id: 'what-is-agent',
     target: AGENT_TOUR_TARGETS.workspace,
     placement: 'center',
-    title: 'What are ELITEA Agents?',
-    content: `ELITEA Agents are customizable AI-powered virtual assistants that automate tasks and streamline workflows. Each agent is built around three core components:
+    title: `What are ${productName()} Agents?`,
+    content: `${productName()} Agents are customizable AI-powered virtual assistants that automate tasks and streamline workflows. Each agent is built around three core components:
 
 - **Instructions** — define what the agent does and how it behaves
 - **Toolkits** — connect external services (GitHub, Jira, Confluence, SQL, and more) and internal tools
@@ -46,7 +47,7 @@ Once configured, an agent can autonomously execute complex, multi-step tasks suc
     target: AGENT_TOUR_TARGETS.tools,
     placement: 'right',
     title: 'Toolkits',
-    content: `Toolkits extend the agent's capabilities by connecting it to external services and other ELITEA resources. Attach them using the buttons in the TOOLKITS section — existing items can be selected from a dropdown, or new ones can be created inline without leaving the agent page.
+    content: `Toolkits extend the agent's capabilities by connecting it to external services and other ${productName()} resources. Attach them using the buttons in the TOOLKITS section — existing items can be selected from a dropdown, or new ones can be created inline without leaving the agent page.
 
 - **+ Toolkit** — attach an external integration (GitHub, Jira, SQL, etc.); select from existing or create a new one inline
 - **+ MCP** — attach a Model Context Protocol server for additional tool capabilities

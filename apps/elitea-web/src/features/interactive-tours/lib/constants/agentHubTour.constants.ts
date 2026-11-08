@@ -5,6 +5,7 @@
 import type { TourStep } from '../types';
 
 import { AGENT_HUB_TOUR_TARGETS } from './agentHubTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export const AGENT_HUB_TOUR_ID = 'agent-hub';
 
@@ -17,7 +18,7 @@ export const agentHubTourSteps: TourStep[] = [
     id: 'what-is-agents-studio',
     target: AGENT_HUB_TOUR_TARGETS.workspace,
     placement: 'center',
-    title: 'What is ELITEA Agents HUB?',
+    title: `What is ${productName()} Agents HUB?`,
     content: `Agents HUB is a shared library of community-published agents. Unlike the Agents menu — where you create and manage your own agents — HUB gives you read-only access to agents published by other users across all projects.
 
 Each agent in HUB is a fully configured AI assistant built for a specific purpose. You can browse, preview, and start conversations with any published agent without building one from scratch.`,
@@ -30,7 +31,7 @@ Each agent in HUB is a fully configured AI assistant built for a specific purpos
     content: `Use search and category filters together to narrow the agent library to what you need:
 
 - **Search** — find agents by name or description; results update as you type
-- **Category filters** — filter by Trending, My Liked, or domain categories such as Development, Documentation, Business Analysis, Test Management, Learning, Elitea, and Other
+- **Category filters** — filter by Trending, My Liked, or domain categories such as Development, Documentation, Business Analysis, Test Management, Learning, ${productName()}, and Other
 - Multiple category filters can be active simultaneously`,
   },
   {
@@ -52,7 +53,7 @@ Each agent in HUB is a fully configured AI assistant built for a specific purpos
     target: AGENT_HUB_TOUR_TARGETS.startConversationButton,
     placement: 'left',
     title: 'Starting a Chat',
-    content: `From the agent detail view, click **Start Chat** or click any chat starter. ELITEA opens a new chat with the agent already added as a participant and its chat starters ready to use.
+    content: `From the agent detail view, click **Start Chat** or click any chat starter. ${productName()} opens a new chat with the agent already added as a participant and its chat starters ready to use.
 
 Published agents can also be added directly from Chats without visiting Agents HUB. Use the \`#\` mention or the **+** button in the Participants panel to search for and add any published agent to an ongoing chat.`,
   },

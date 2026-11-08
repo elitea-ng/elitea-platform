@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "未関連付け",
   "entities.token.table.tokenValue": "トークンの値",
   "entries.maintenance.page.headline": "{{product}} はメンテナンス中です!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "ガイドはこちらからご覧いただけます: ",
   "entries.maintenance.tips.docsLinkLabel": "ドキュメント。",
   "entries.maintenance.tips.intro": "準備が整うまでの間、役立つリソースをご覧になってはいかがでしょうか。",

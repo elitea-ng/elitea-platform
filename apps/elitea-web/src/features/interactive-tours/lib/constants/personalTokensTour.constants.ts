@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { PERSONAL_TOKENS_TOUR_TARGETS } from './personalTokensTourTargets.constants';
 import { PERSONAL_TOKENS_TOUR_ID, SECRETS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { PERSONAL_TOKENS_TOUR_ID };
 
@@ -25,7 +26,7 @@ export const personalTokensTourSteps: TourStep[] = [
     target: PERSONAL_TOKENS_TOUR_TARGETS.page,
     placement: 'center',
     title: 'What are Personal Tokens?',
-    content: `Personal Tokens are authentication credentials that give external tools and IDE integrations secure access to ELITEA on your behalf. Each token is tied to your user account and can be scoped with an expiration period.
+    content: `Personal Tokens are authentication credentials that give external tools and IDE integrations secure access to ${productName()} on your behalf. Each token is tied to your user account and can be scoped with an expiration period.
 
 Tokens are used primarily to connect ELITEA-compatible IDE extensions (VS Code, JetBrains) and to authenticate API calls made outside the platform.`,
   },
@@ -56,7 +57,7 @@ Use the search field to find tokens by name, sort by name or expiration date, an
     target: PERSONAL_TOKENS_TOUR_TARGETS.ideSettings,
     placement: 'left',
     title: 'IDE Settings',
-    content: `Each token can generate pre-configured settings files for supported IDEs, so you can connect your editor to ELITEA without manually entering credentials:
+    content: `Each token can generate pre-configured settings files for supported IDEs, so you can connect your editor to ${productName()} without manually entering credentials:
 
 - **VS Code** — downloads \`settings.json\` pre-filled with your server URL, project ID, model, and token
 - **JetBrains** — downloads \`alita.xml\` with equivalent settings for JetBrains IDEs

@@ -6,6 +6,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '../../../test/setup';
 
 import { registerDynamicClient } from './registerDynamicClient';
+import { productName } from '@/shared/brand';
 
 afterEach(() => {
   resetGeneratedClient();
@@ -28,7 +29,7 @@ describe('registerDynamicClient', () => {
     expect(capturedBody).toMatchObject({
       registration_endpoint: 'https://as.example.com/register',
       redirect_uris: ['https://app.example.com/mcp-auth-callback'],
-      client_name: 'ELITEA MCP Client',
+      client_name: `${productName()} MCP Client`,
       token_endpoint_auth_method: 'none',
     });
   });

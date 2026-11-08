@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Non lié",
   "entities.token.table.tokenValue": "Valeur du jeton",
   "entries.maintenance.page.headline": "{{product}} est en maintenance!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Parcourez nos guides dans la",
   "entries.maintenance.tips.docsLinkLabel": "Documentation.",
   "entries.maintenance.tips.intro": "Pendant que nous préparons les choses en coulisses, pourquoi ne pas explorer quelques ressources utiles?",

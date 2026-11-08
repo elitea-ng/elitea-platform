@@ -738,7 +738,7 @@
   "entities.token.table.projectNone": "Niet gekoppeld",
   "entities.token.table.tokenValue": "Tokenwaarde",
   "entries.maintenance.page.headline": "{{product}} is in onderhoud!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Blader door onze gidsen in de",
   "entries.maintenance.tips.docsLinkLabel": "Documentatie.",
   "entries.maintenance.tips.intro": "Terwijl we achter de schermen alles klaarmaken, waarom verken je niet alvast wat nuttige bronnen?",

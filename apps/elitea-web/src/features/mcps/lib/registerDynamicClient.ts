@@ -30,12 +30,13 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { registerMcpDynamicClient } from '../api/mcpOAuthClient';
 
 import { MCP_OAUTH_ERRORS } from './constants';
+import { productName } from '@/shared/brand';
 
 const DCR_REQUEST_DEFAULTS = {
   token_endpoint_auth_method: 'none',
   grant_types: ['authorization_code', 'refresh_token'],
   response_types: ['code'],
-  client_name: 'ELITEA MCP Client',
+  client_name: `${productName()} MCP Client`,
   application_type: 'web',
 } as const;
 

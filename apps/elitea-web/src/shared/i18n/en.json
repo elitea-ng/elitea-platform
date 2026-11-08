@@ -740,7 +740,7 @@
   "entities.token.table.projectNone": "Not bound",
   "entities.token.table.tokenValue": "Token value",
   "entries.maintenance.page.headline": "{{product}} is under maintenance!",
-  "entries.maintenance.page.logoAlt": "EliteA",
+  "entries.maintenance.page.logoAlt": "{{product}}",
   "entries.maintenance.tips.docsLinePrefix": "Browse our guides in",
   "entries.maintenance.tips.docsLinkLabel": "Documentation.",
   "entries.maintenance.tips.intro": "While we get things ready behind the scenes, why not explore some helpful resources?",

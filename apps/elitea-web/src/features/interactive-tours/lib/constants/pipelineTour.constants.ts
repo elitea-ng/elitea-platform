@@ -9,6 +9,7 @@ import { PIPELINE_TOUR_TARGETS } from './pipelineTourTargets.constants';
 import { AGENT_TOUR_TARGETS } from './agentTourTargets.constants';
 import { CHAT_TOUR_TARGETS } from './chatTourTargets.constants';
 import { SHARED_TOUR_TARGETS } from './interactiveTour.constants';
+import { productName } from '@/shared/brand';
 
 export const PIPELINE_TOUR_ID = 'pipeline';
 
@@ -21,8 +22,8 @@ export const pipelineTourSteps: TourStep[] = [
     id: 'what-is-pipeline',
     target: PIPELINE_TOUR_TARGETS.workspace,
     placement: 'center',
-    title: 'What are ELITEA Pipelines?',
-    content: `ELITEA Pipelines are visual workflow automation tools that let you design and execute complex, multi-step processes by connecting a series of nodes. Each pipeline can combine LLM calls, toolkit actions, agent interactions, conditional logic, and custom code into a single automated flow.
+    title: `What are ${productName()} Pipelines?`,
+    content: `${productName()} Pipelines are visual workflow automation tools that let you design and execute complex, multi-step processes by connecting a series of nodes. Each pipeline can combine LLM calls, toolkit actions, agent interactions, conditional logic, and custom code into a single automated flow.
 
 Unlike a simple agent that responds turn-by-turn, a pipeline follows a defined execution graph — branching, looping, and passing data between steps — so it can handle sophisticated orchestration scenarios end-to-end.`,
   },
