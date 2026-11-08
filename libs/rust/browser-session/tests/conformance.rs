@@ -8,6 +8,8 @@
 //! reports a skip and passes, unless `ELITEA_REQUIRE_BROWSER_CONFORMANCE=1`
 //! (the CI job sets it): a skipped proof must not read as a passing one.
 //! `ELITEA_BROWSER_ENGINE_LOG=1` passes the engine's stderr through.
+// The engines run on unix only (their debugging pipe).
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -11,7 +11,7 @@ publish = false
 # crate forbids for itself) share one lock. `cargo test` here tests the host
 # only; CI tests the driver with `-p elitea-browser-driver-macos`.
 [workspace]
-members = [".", "browser-driver-macos"]
+members = [".", "browser-driver-dom", "browser-driver-macos", "browser-driver-windows"]
 
 [lib]
 name = "elitea_desktop_lib"

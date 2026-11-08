@@ -1645,12 +1645,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-browser-driver-dom"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "elitea-browser-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "elitea-browser-driver-macos"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "block2",
  "dispatch2",
+ "elitea-browser-driver-dom",
  "elitea-browser-tools",
  "libc",
  "objc2",
@@ -1663,6 +1675,18 @@ dependencies = [
  "serde_json",
  "tauri",
  "tokio",
+]
+
+[[package]]
+name = "elitea-browser-driver-windows"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tokio",
+ "webview2-com",
+ "windows",
+ "windows-core",
 ]
 
 [[package]]

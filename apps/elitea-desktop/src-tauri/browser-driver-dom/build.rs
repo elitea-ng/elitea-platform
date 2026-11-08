@@ -69,7 +69,7 @@ fn main() {
 }
 
 /// `ELITEA_TSC`, or the web app's tsc at the repository root (four levels
-/// above this crate: browser-driver-macos, src-tauri, elitea-desktop, apps).
+/// above this crate: browser-driver-dom, src-tauri, elitea-desktop, apps).
 fn tsc_path(manifest_dir: &Path) -> PathBuf {
     if let Some(tsc) = env::var_os("ELITEA_TSC").filter(|value| !value.is_empty()) {
         return PathBuf::from(tsc);

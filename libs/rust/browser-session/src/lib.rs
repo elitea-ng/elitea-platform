@@ -43,4 +43,8 @@ pub mod keys;
 pub mod page;
 pub mod protocol;
 pub mod screencast;
+// The pod's backend starts the engine on its debugging pipe (unix). The
+// desktop's Windows driver uses `driver::CdpDriver::attach` over `WebView2`'s
+// own CDP and needs neither.
+#[cfg(unix)]
 pub mod session;

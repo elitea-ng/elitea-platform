@@ -48,7 +48,9 @@ use serde_json::{Value, json};
 use crate::ax::{self, FrameTree, Handle};
 use crate::cdp::{CdpError, Connection};
 use crate::control::{Answer, Control, Driver};
-use crate::engine::{Engine, EngineConfig, EngineKind};
+#[cfg(unix)]
+use crate::engine::Engine;
+use crate::engine::{EngineConfig, EngineKind};
 use crate::keys;
 use crate::page::{self, Marks, TUNNEL_FAILED, Tracker, Watch};
 use crate::screencast::Screencast;
@@ -242,6 +244,7 @@ struct Refs {
 pub struct CdpDriver {
     cdp: Connection,
     /// Keeps the engine alive; `None` for a driver over a foreign connection.
+    #[cfg(unix)]
     engine: Mutex<Option<Engine>>,
     session: String,
     target: String,
@@ -276,11 +279,12 @@ fn engine_error(error: &CdpError) -> BrowserError {
 }
 
 impl CdpDriver {
-    /// Start the engine and set up its one page.
+    /// Start the engine and set up its one page (unix: the engine's pipe).
     ///
     /// # Errors
     ///
     /// The engine did not start or did not answer.
+    #[cfg(unix)]
     pub async fn start(config: &EngineConfig, control: Arc<Control>) -> Result<Self, BrowserError> {
         let (engine, cdp) = Engine::start(config).await.map_err(|error| {
             BrowserError::new(
@@ -378,6 +382,7 @@ impl CdpDriver {
         );
         Ok(Self {
             cdp,
+            #[cfg(unix)]
             engine: Mutex::new(None),
             session,
             target,
@@ -408,7 +413,11 @@ impl CdpDriver {
     /// The engine's process id, while it runs.
     #[must_use]
     pub fn engine_pid(&self) -> Option<u32> {
-        lock(&self.engine).as_ref().and_then(Engine::pid)
+        #[cfg(unix)]
+        let pid = lock(&self.engine).as_ref().and_then(Engine::pid);
+        #[cfg(not(unix))]
+        let pid = None;
+        pid
     }
 
     /// The view stream (#1597 relays it).
@@ -435,6 +444,7 @@ impl CdpDriver {
     /// page on the new engine. It runs while a person drives too, since
     /// their take-over carries over to the new engine. Best effort: a page
     /// that does not load is reported by the call that follows.
+    #[cfg(unix)]
     pub(crate) async fn reopen(&self, url: &str) {
         let before = self.tracker.marks();
         if let Ok(navigated) = self.page("Page.navigate", json!({ "url": url })).await
@@ -534,12 +544,16 @@ impl CdpDriver {
 
     /// Stop the engine (and remove its profile).
     pub fn shutdown(&self) {
+        #[cfg(unix)]
         lock(&self.engine).take();
     }
 
     /// Whether the engine is still running.
     pub fn is_alive(&self) -> bool {
+        #[cfg(unix)]
         let engine_alive = lock(&self.engine).as_mut().is_none_or(Engine::is_running);
+        #[cfg(not(unix))]
+        let engine_alive = true;
         engine_alive && self.cdp.is_open()
     }
 

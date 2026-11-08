@@ -4,11 +4,16 @@
 // the only script file in the repository: no JavaScript is committed, and a
 // type error here fails the cargo build.
 //
-// The macOS browser driver's page script (ADR-0048 decision 6).
+// The webview browser driver's page script (ADR-0048 decision 6), for macOS
+// (WKWebView) and Linux (WebKitGTK).
 //
-// It runs ONLY in the driver's private WKContentWorld: installed as a user
-// script in that world (every frame, at document start) and called with
-// `callAsyncJavaScript(_:arguments:in:in:)` in that world. The page's own
+// It runs ONLY in the driver's isolated world (a private WKContentWorld on
+// macOS, a WebKitScriptWorld on Linux): installed as a user script in that
+// world (every frame, at document start) and called with
+// `callAsyncJavaScript(_:arguments:in:in:)` (macOS) or
+// `webkit_web_view_call_async_javascript_function` (Linux) in that world.
+// Both engines expose `window.webkit.messageHandlers` to a world whose
+// handlers they registered, so the script is the same on both. The page's own
 // scripts live in the page world: they cannot see these globals, call these
 // functions, or replace the prototypes used here (each world has its own
 // JavaScript globals over the same DOM). The model never supplies any of

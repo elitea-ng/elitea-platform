@@ -1,6 +1,6 @@
 //! The WebKit half of the driver (macOS): [`WebKitEngine`].
 //!
-//! **The driver world.** [`install`] adds the page script ([`crate::SCRIPT`])
+//! **The driver world.** [`install`] adds the page script ([`SCRIPT`])
 //! to the webview's user content controller as a user script in a PRIVATE
 //! `WKContentWorld` ([`WORLD_NAME`]), at document start, in every frame,
 //! and a script message handler ([`FRAME_HANDLER`]) in that same world only.
@@ -17,7 +17,7 @@
 //! to [`INPUT_HANDLER`] (same world only), and the engine calls the host's
 //! [`WebKitEngine::on_person_input`] callback: the control pill's take-over
 //! (ADR-0048 decision 4). The downs of a click the driver itself posts as
-//! trusted input are not the person's ([`crate::input::OwnInput`]).
+//! trusted input are not the person's ([`elitea_browser_driver_dom::input::OwnInput`]).
 //!
 //! **Frames.** The script announces each subframe to [`FRAME_HANDLER`];
 //! the host keeps the `WKFrameInfo` it came with, and calls into a cross-
@@ -55,30 +55,10 @@ use objc2_web_kit::{
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use crate::driver::{Engine, EnginePage, FrameId, TOP};
-use crate::reply::{self, RawRect};
-
-/// The driver's content world. Named, so the Web Inspector shows it; the
-/// name is not a secret (a world is reached through the API, not by name).
-pub const WORLD_NAME: &str = "elitea-browser-driver";
-
-/// The message handler a subframe announces itself on, in the driver world.
-pub const FRAME_HANDLER: &str = "eliteaBrowserFrame";
-
-/// The one function body ever passed to `callAsyncJavaScript`. `op` and
-/// `args` are its arguments (a string and a JSON string), never source.
-pub const CALL_BODY: &str = "const driver = globalThis.__eliteaBrowserDriver; \
-if (driver === undefined) return MISSING; \
-return await driver.run(op, args);";
-
-/// [`CALL_BODY`]'s answer in a document loaded before the user script was
-/// installed (the pane's first page): the engine then evaluates the
-/// script itself in that frame, in the driver world, and calls again.
-const MISSING: &str = "elitea-driver-missing";
-
-/// The message handler the person's input is reported on, in the driver
-/// world.
-pub const INPUT_HANDLER: &str = "eliteaBrowserInput";
+use elitea_browser_driver_dom::driver::{Engine, EnginePage, FrameId, TOP};
+use elitea_browser_driver_dom::reply::{self, RawRect};
+pub use elitea_browser_driver_dom::{CALL_BODY, FRAME_HANDLER, INPUT_HANDLER, WORLD_NAME};
+use elitea_browser_driver_dom::{MISSING, SCRIPT};
 
 /// Frames remembered per page (a page that makes frames without end).
 const MAX_FRAMES: usize = 64;
@@ -108,7 +88,7 @@ struct Shared {
     frames: Arc<Mutex<Frames>>,
     input: Arc<Mutex<Option<InputCallback>>>,
     /// The downs of the driver's own trusted clicks, not yet reported.
-    posting: Arc<Mutex<crate::input::OwnInput>>,
+    posting: Arc<Mutex<elitea_browser_driver_dom::input::OwnInput>>,
 }
 
 impl Shared {
@@ -121,7 +101,7 @@ impl Shared {
     /// The person used the page (an input of type `kind`), unless it is
     /// the report of the driver's own click.
     fn person_input(&self, kind: &str) {
-        if !crate::input::REPORTED.contains(&kind) {
+        if !elitea_browser_driver_dom::input::REPORTED.contains(&kind) {
             return;
         }
         let own = self
@@ -250,7 +230,7 @@ unsafe fn install(webview: &WKWebView, mtm: MainThreadMarker) -> Shared {
         let controller = webview.configuration().userContentController();
         let script = WKUserScript::initWithSource_injectionTime_forMainFrameOnly_inContentWorld(
             WKUserScript::alloc(mtm),
-            &NSString::from_str(crate::SCRIPT),
+            &NSString::from_str(SCRIPT),
             WKUserScriptInjectionTime::AtDocumentStart,
             false,
             &world,
@@ -397,7 +377,7 @@ impl WebKitEngine {
         .await?
     }
 
-    /// Evaluate the driver script (the constant [`crate::SCRIPT`], never
+    /// Evaluate the driver script (the constant [`SCRIPT`], never
     /// anything else) in `frame`, in the driver world.
     #[allow(unsafe_code)]
     async fn inject(&self, frame: FrameId) -> Result<(), BrowserError> {
@@ -427,7 +407,7 @@ impl WebKitEngine {
             unsafe {
                 let world = WKContentWorld::worldWithName(&NSString::from_str(WORLD_NAME), mtm);
                 webview.evaluateJavaScript_inFrame_inContentWorld_completionHandler(
-                    &NSString::from_str(crate::SCRIPT),
+                    &NSString::from_str(SCRIPT),
                     info.as_deref(),
                     &world,
                     Some(&*done),
