@@ -409,11 +409,15 @@ fn zero_ref_tree(name: &str, output: &ToolOutput) -> bool {
 }
 
 /// Whether a zero-ref tree snapshot misses what the page's DOM shows: a
-/// control (a link, a button, a field) the tree gave no ref, or
-/// any text where the tree has no node at all. A page of text alone has no
-/// ref on any engine, so zero refs over text is not by itself Moli's fault.
+/// control (a link, a button, a field) the tree gave no ref, any text
+/// where the tree has no node at all, or custom elements the page never
+/// defined (a web-component app whose scripts did not run on Moli, so
+/// there is nothing to give a ref to: developer.salesforce.com/docs,
+/// #1599). A page of text alone has no ref on any engine, so zero refs
+/// over text is not by itself Moli's fault.
 fn empty_snapshot(output: &ToolOutput, content: PageContent) -> bool {
     content.controls
+        || content.undefined_elements
         || (content.text && empty_tree(output.result()["content"].as_str().unwrap_or_default()))
 }
 
@@ -932,11 +936,17 @@ mod tests {
         assert!(!zero_ref_tree(spec::BROWSER_SCREENSHOT, &empty));
         let text = PageContent {
             text: true,
-            controls: false,
+            ..PageContent::default()
         };
         let controls = PageContent {
             text: true,
             controls: true,
+            ..PageContent::default()
+        };
+        let undefined = PageContent {
+            text: true,
+            undefined_elements: true,
+            ..PageContent::default()
         };
         // No node at all over text: Moli lost the tree.
         assert!(empty_snapshot(&empty, text));
@@ -948,6 +958,26 @@ mod tests {
         assert!(empty_snapshot(&text_only, controls));
         // An empty page is empty on any engine.
         assert!(!empty_snapshot(&empty, PageContent::default()));
+        // Nodes but no ref over custom elements the page never defined:
+        // its components did not run on Moli (#1599,
+        // salesforce-developer-docs).
+        assert!(empty_snapshot(&text_only, undefined));
+        assert!(
+            crate::driver::page_content_of(
+                Some(&json!({"text": true, "controls": 0, "undefined": 3})),
+                false
+            )
+            .undefined_elements
+        );
+        assert!(
+            !crate::driver::page_content_of(
+                Some(&json!({"text": true, "controls": 0, "undefined": 0})),
+                false
+            )
+            .undefined_elements
+        );
+        // A script that did not run says nothing about custom elements.
+        assert!(!crate::driver::page_content_of(None, true).undefined_elements);
     }
 
     #[test]

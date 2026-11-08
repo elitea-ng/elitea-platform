@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use base64::Engine as _;
 use elitea_browser_tools::call::{
-    Direction, ElementRef, Key, ScrollTarget, WaitCondition, url_matches,
+    Direction, ElementRef, Key, ScrollTarget, SnapshotId, WaitCondition, url_matches,
 };
 use elitea_browser_tools::driver::{
     BrowserDriver, ControlInfo, Handback, HistoryStep, PageInfo, PageText, Screenshot,
@@ -59,6 +59,14 @@ use crate::screencast::Screencast;
 pub const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long after an act a navigation it caused may take to start.
 const NAVIGATION_GRACE: Duration = Duration::from_millis(150);
+/// How often a `browser_wait` for text refreshes Moli's layout
+/// ([`CdpDriver::refresh_layout`]).
+const LAYOUT_REFRESH_EVERY: Duration = Duration::from_millis(500);
+/// The most a layout refresh waits for its paint.
+const LAYOUT_REFRESH_LIMIT: Duration = Duration::from_secs(2);
+/// How long a whole tree snapshot that gave out no ref waits for a page
+/// still fetching (an app still booting) before it reads once more.
+const NO_REF_SETTLE: Duration = Duration::from_secs(3);
 /// At most this many frames are read into one snapshot.
 const MAX_FRAMES: usize = 32;
 const WORLD: &str = "elitea_browser_driver";
@@ -203,7 +211,19 @@ const CONTENT: &str = r#"function (limit) {
       if (el.shadowRoot) roots.push(el.shadowRoot);
     }
   }
-  return { text, controls: found };
+  // Custom elements the page never defined: a web-component app whose
+  // scripts did not run (Moli on developer.salesforce.com/docs). Only
+  // counted while the walk saw no control.
+  let undefinedTags = 0;
+  if (found === 0 && typeof customElements === 'object' && customElements) {
+    const named = new Set();
+    for (const el of document.querySelectorAll('*')) {
+      if (el.localName.includes('-')) named.add(el.localName);
+      if (named.size > 64) break;
+    }
+    for (const name of named) if (!customElements.get(name)) undefinedTags += 1;
+  }
+  return { text, controls: found, undefined: undefinedTags };
 }"#;
 
 /// The most elements [`CONTENT`] walks.
@@ -222,10 +242,12 @@ pub(crate) fn page_content_of(script: Option<&Value>, in_dom: bool) -> PageConte
         Some(script) if script["text"].is_boolean() => PageContent {
             text: script["text"] == true,
             controls: script["controls"].as_u64().is_some_and(|found| found > 0),
+            undefined_elements: script["undefined"].as_u64().is_some_and(|found| found > 0),
         },
         _ => PageContent {
             text: false,
             controls: in_dom,
+            undefined_elements: false,
         },
     }
 }
@@ -237,6 +259,9 @@ pub struct PageContent {
     pub text: bool,
     /// The page has a control.
     pub controls: bool,
+    /// The page has custom elements (a hyphenated tag) it never defined:
+    /// its component scripts did not run.
+    pub undefined_elements: bool,
 }
 
 /// What a call's start recorded, for its end.
@@ -586,6 +611,7 @@ impl CdpDriver {
     #[cfg(unix)]
     pub(crate) async fn page_content(&self) -> PageContent {
         let in_dom = lock(&self.refs).dom_controls > 0;
+        self.refresh_layout().await;
         let script = self
             .main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
             .await
@@ -973,6 +999,7 @@ impl CdpDriver {
                 json!({ "backendNodeId": handle.backend_id }),
             )
             .await;
+        self.refresh_layout().await;
         let Ok(quads) = self
             .call(
                 &handle.session,
@@ -1017,6 +1044,47 @@ impl CdpDriver {
         self.page("Input.dispatchMouseEvent", params)
             .await
             .map(|_| ())
+    }
+
+    /// Bring the engine's layout up to date before a read that depends on
+    /// it (geometry, `innerText`). Chrome lays out on demand, so this is a
+    /// no-op there. Moli keeps the layout it last published and publishes a
+    /// new one only for a paint (a screenshot or a screencast frame): after
+    /// the page's scripts changed the DOM, its `innerText` leaves out the new
+    /// text, and after a scroll its `DOM.getContentQuads` answers the old
+    /// scroll position (#1599: spa-todomvc-add, office-learn-search,
+    /// github-open-issues, gov-uk-holiday-start). A one-pixel screenshot is
+    /// the cheapest paint that publishes. Best effort: a page that cannot
+    /// paint yet keeps the layout it has.
+    ///
+    /// It runs on a task of its own, so its answer is not the call's: a
+    /// refused or slow paint never counts as a fault for `auto`.
+    async fn refresh_layout(&self) {
+        if self.kind != EngineKind::Moli {
+            return;
+        }
+        let cdp = self.cdp.clone();
+        let session = self.session.clone();
+        let paint = tokio::spawn(async move {
+            cdp.call(
+                Some(&session),
+                "Page.captureScreenshot",
+                json!({
+                    "format": "png",
+                    "clip": { "x": 0, "y": 0, "width": 1, "height": 1, "scale": 1 },
+                }),
+            )
+            .await
+        });
+        // A paint past the limit is cancelled, so slow pages never pile up
+        // screenshot calls (a text wait refreshes every 500 ms).
+        let abort = paint.abort_handle();
+        if tokio::time::timeout(LAYOUT_REFRESH_LIMIT, paint)
+            .await
+            .is_err()
+        {
+            abort.abort();
+        }
     }
 
     // ── page info and settling ──────────────────────────────────────────
@@ -1158,6 +1226,7 @@ impl CdpDriver {
 
     async fn take_snapshot(&self, max_nodes: usize) -> Result<Snapshot, BrowserError> {
         self.sync();
+        let mut settled = false;
         for _ in 0..3 {
             let before = self.tracker.marks();
             let input = self.control.state().input_epoch;
@@ -1176,9 +1245,29 @@ impl CdpDriver {
                 .sum();
             let url = self.tracker.lock().url.clone();
             let title = self.title().await;
+            let mut snapshot = Snapshot::build(
+                SnapshotId::sequence(0),
+                &url,
+                &title,
+                converted.roots,
+                max_nodes,
+            );
+            // A whole tree with no ref while the page is still fetching is
+            // most often an app still booting (spa-excalidraw, #1599, on
+            // either engine): let the network go idle and read once more.
+            if !settled
+                && snapshot.ref_count() == 0
+                && snapshot.omitted == 0
+                && !self.tracker.lock().in_flight.is_empty()
+            {
+                settled = true;
+                self.tracker
+                    .wait_until(NO_REF_SETTLE, |state| state.network_idle(Instant::now()))
+                    .await;
+                continue;
+            }
             let mut refs = lock(&self.refs);
-            let id = refs.slot.next_id();
-            let snapshot = Snapshot::build(id, &url, &title, converted.roots, max_nodes);
+            snapshot.id = refs.slot.next_id();
             refs.slot.install(snapshot.clone());
             refs.handles = converted.handles;
             refs.hosts = converted.hosts;
@@ -1234,14 +1323,20 @@ impl CdpDriver {
     ) -> Result<(), BrowserError> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut changes = self.tracker.changed();
+        let mut refreshed: Option<tokio::time::Instant> = None;
         loop {
             let done = match condition {
                 WaitCondition::Url(pattern) => url_matches(pattern, &self.tracker.lock().url),
                 WaitCondition::NetworkIdle => self.tracker.lock().network_idle(Instant::now()),
-                WaitCondition::Text(text) => self
-                    .main_frame(HAS_TEXT, vec![Value::String(text.clone())])
-                    .await
-                    .is_ok_and(|found| found == true),
+                WaitCondition::Text(text) => {
+                    if refreshed.is_none_or(|at| at.elapsed() >= LAYOUT_REFRESH_EVERY) {
+                        self.refresh_layout().await;
+                        refreshed = Some(tokio::time::Instant::now());
+                    }
+                    self.main_frame(HAS_TEXT, vec![Value::String(text.clone())])
+                        .await
+                        .is_ok_and(|found| found == true)
+                }
                 WaitCondition::Element(target) => {
                     let handle = self.handle(target, false)?;
                     self.element_box(&handle).await?.is_some()
@@ -1263,6 +1358,11 @@ impl CdpDriver {
             }
         }
     }
+}
+
+/// Whether a point lies inside a `width` x `height` viewport.
+fn in_viewport(x: f64, y: f64, width: u32, height: u32) -> bool {
+    (0.0..f64::from(width)).contains(&x) && (0.0..f64::from(height)).contains(&y)
 }
 
 fn min(values: &[f64; 4]) -> f64 {
@@ -1478,6 +1578,7 @@ impl BrowserDriver for CdpDriver {
         let epoch = self.begin()?;
         let result = async {
             let limit = max_chars.saturating_add(1).saturating_mul(2);
+            self.refresh_layout().await;
             let text = self.main_frame(TEXT, vec![json!(limit)]).await?;
             let url = self.tracker.lock().url.clone();
             Ok(PageText {
@@ -1531,8 +1632,12 @@ impl BrowserDriver for CdpDriver {
         let result = async {
             let handle = self.handle(target, false)?;
             let before = self.tracker.marks();
-            if let Some((left, top, width, height)) = self.element_box(&handle).await? {
-                let (x, y) = (left + width / 2.0, top + height / 2.0);
+            let centre = self
+                .element_box(&handle)
+                .await?
+                .map(|(left, top, width, height)| (left + width / 2.0, top + height / 2.0))
+                .filter(|&(x, y)| in_viewport(x, y, self.width, self.height));
+            if let Some((x, y)) = centre {
                 self.mouse("mouseMoved", x, y, 0).await?;
                 for clicks in if double { 1..=2 } else { 1..=1 } {
                     self.mouse("mousePressed", x, y, clicks).await?;
@@ -1540,7 +1645,9 @@ impl BrowserDriver for CdpDriver {
                 }
             } else {
                 // No box (an option of a closed select, a visually hidden
-                // control): the element's own activation.
+                // control), or a box the scroll left outside the view (a
+                // mouse event there would land off the page): the
+                // element's own activation.
                 let connected = self.on_element(&handle, INSPECT, Vec::new()).await?;
                 if connected["connected"] != true {
                     return Err(BrowserError::stale_ref(
