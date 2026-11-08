@@ -21,6 +21,22 @@ use webkit2gtk::{
     SnapshotOptions, SnapshotRegion, UserContentInjectedFrames, UserContentManagerExt as _,
     UserScript, UserScriptInjectionTime, WebView, WebViewExt as _,
 };
+use x11rb::connection::{Connection as _, RequestConnection as _};
+use x11rb::errors::ReplyError;
+use x11rb::protocol::xproto::{
+    BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt as _, MOTION_NOTIFY_EVENT,
+};
+use x11rb::protocol::xtest::{self, ConnectionExt as _};
+use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
+
+use crate::x11_click::{MAX_DEPTH, NO_WINDOW, ViewPlace, over_the_pane, root_point};
+
+/// Trusted input cannot be posted here: the person does the step.
+const NO_TRUSTED_INPUT: &str = "trusted input is not available on this display: ask the person to click it with browser_request_user";
+
+/// The pointer is over another window than the pane's: never click it.
+const NOT_THE_PANE: &str = "another window covers the page at that point: ask the person to click it with browser_request_user";
 
 /// The host's callback for the person's input.
 type InputCallback = Arc<dyn Fn() + Send + Sync>;
@@ -56,8 +72,79 @@ pub struct GtkEngine {
     /// Upgraded on the GTK main thread only (where it was made).
     webview: SendWeakRef<WebView>,
     shared: Shared,
-    /// Whether trusted input may be posted (X11, not Wayland).
+    /// Whether trusted input may be posted (X11 with XTEST, not Wayland).
     trusted: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// The one X connection trusted clicks go through (made at attach,
+    /// made again at the next click after it failed).
+    x11: Arc<Mutex<Option<Xtest>>>,
+}
+
+/// An X connection to the pane's display with the XTEST extension.
+struct Xtest {
+    connection: RustConnection,
+    /// The root window of the connection's screen.
+    root: u32,
+}
+
+impl Xtest {
+    /// Connect to `display` (a GDK display name, `:99`); `None` when there
+    /// is no X server there or it has no XTEST.
+    fn connect(display: &str) -> Option<Self> {
+        let name = (!display.is_empty()).then_some(display);
+        let (connection, screen) = RustConnection::connect(name).ok()?;
+        let _xtest = connection
+            .extension_information(xtest::X11_EXTENSION_NAME)
+            .ok()??;
+        let root = connection.setup().roots.get(screen)?.root;
+        Some(Self { connection, root })
+    }
+
+    /// Move the pointer to `at` (root pixels) with XTEST, then whether it is
+    /// there and over `toplevel` or one of its children: the windows under
+    /// the pointer, from the root's child down (QueryPointer's `child`,
+    /// followed), must hold `toplevel`.
+    fn warp_over(&self, at: (i16, i16), toplevel: u32) -> Result<bool, ReplyError> {
+        let connection = &self.connection;
+        connection.xtest_fake_input(
+            MOTION_NOTIFY_EVENT,
+            0, // absolute
+            x11rb::CURRENT_TIME,
+            self.root,
+            at.0,
+            at.1,
+            0,
+        )?;
+        connection.sync()?;
+        let pointer = connection.query_pointer(self.root)?.reply()?;
+        if !pointer.same_screen || (pointer.root_x, pointer.root_y) != at {
+            return Ok(false);
+        }
+        let mut chain = Vec::new();
+        let mut child = pointer.child;
+        while child != NO_WINDOW && chain.len() < MAX_DEPTH {
+            chain.push(child);
+            child = connection.query_pointer(child)?.reply()?.child;
+        }
+        Ok(over_the_pane(&chain, toplevel))
+    }
+
+    /// Press and release button 1 `clicks` times where the pointer is.
+    fn click(&self, clicks: usize) -> Result<(), ReplyError> {
+        for _ in 0..clicks {
+            for kind in [BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT] {
+                self.connection.xtest_fake_input(
+                    kind,
+                    1,
+                    x11rb::CURRENT_TIME,
+                    self.root,
+                    0,
+                    0,
+                    0,
+                )?;
+            }
+        }
+        self.connection.sync()
+    }
 }
 
 /// Take over `webview`: install the driver world. On the GTK main thread
@@ -66,12 +153,17 @@ pub struct GtkEngine {
 pub fn attach_to(webview: &WebView) -> GtkEngine {
     let shared = Shared::default();
     install(webview, &shared);
-    let x11 = gtk::gdk::Display::default()
-        .is_some_and(|display| crate::trusted_input_on(display.type_().name()));
+    // Trusted input needs X11 (not Wayland) and the server's XTEST: one
+    // local connection, kept for the clicks.
+    let xtest = gtk::gdk::Display::default()
+        .filter(|display| crate::trusted_input_on(display.type_().name()))
+        .and_then(|display| Xtest::connect(&display.name()));
+    let trusted = xtest.is_some();
     GtkEngine {
         webview: SendWeakRef::from(webview.downgrade()),
         shared,
-        trusted: Arc::new(move || x11),
+        trusted: Arc::new(move || trusted),
+        x11: Arc::new(Mutex::new(xtest)),
     }
 }
 
@@ -302,16 +394,14 @@ impl Engine for GtkEngine {
 
     async fn trusted_click(&self, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
         if !self.trusted_input() {
-            return Err(BrowserError::new(
-                ErrorCode::Unsupported,
-                "trusted input is not available on this display (Wayland)",
-            ));
+            return Err(BrowserError::new(ErrorCode::Unsupported, NO_TRUSTED_INPUT));
         }
         // The page reports this click's downs as trusted input: they are
         // the driver's.
         lock(&self.shared.posting).posting(if double { 2 } else { 1 }, Instant::now());
+        let x11 = self.x11.clone();
         self.on_main(move |webview, tx| {
-            let _ = tx.send(post_click(webview, at, double));
+            let _ = tx.send(post_click(webview, at, double, &x11));
         })
         .await?
     }
@@ -372,9 +462,24 @@ fn to_pixels(value: f64) -> i32 {
 }
 
 /// A real left click at `at` (CSS pixels of the page view, top-left
-/// origin), through GDK's test input on the page view's own window.
-fn post_click(webview: &WebView, at: (f64, f64), double: bool) -> Result<(), BrowserError> {
+/// origin), with XTEST fake input on the pane's X display.
+///
+/// Not GDK's `gdk_test_simulate_button`: on X11 it sends core button events
+/// to the window (`XSendEvent`), and GTK3 reads the pointer through
+/// XInput2, so WebKit never sees them. XTEST's events are the server's own
+/// device events, as a real mouse's. They go to whatever is on screen at
+/// that point, so the pointer is moved there first and the click is made
+/// only when the window under it is the pane's toplevel or one of its
+/// children (never another application's window on top). The pointer is
+/// left where it is.
+fn post_click(
+    webview: &WebView,
+    at: (f64, f64),
+    double: bool,
+    x11: &Mutex<Option<Xtest>>,
+) -> Result<(), BrowserError> {
     let unavailable = || BrowserError::new(ErrorCode::Internal, "the page view is not on screen");
+    let no_trusted_input = || BrowserError::new(ErrorCode::Unsupported, NO_TRUSTED_INPUT);
     if !webview.is_mapped() || !webview.is_visible() {
         // The pane is hidden (another tab, a modal sheet): never click
         // whatever is under that point instead.
@@ -383,46 +488,46 @@ fn post_click(webview: &WebView, at: (f64, f64), double: bool) -> Result<(), Bro
     let window = webview.window().ok_or_else(unavailable)?;
     let zoom = webview.zoom_level();
     let allocation = webview.allocation();
-    let (local_x, local_y) = (at.0 * zoom, at.1 * zoom);
-    if local_x < 0.0
-        || local_y < 0.0
-        || local_x > f64::from(allocation.width())
-        || local_y > f64::from(allocation.height())
-    {
-        return Err(BrowserError::invalid(
-            "that element is outside the visible page",
-        ));
-    }
-    // A widget without a window of its own draws on its parent's, at its
-    // allocation.
-    let (origin_x, origin_y) = if webview.has_window() {
-        (0, 0)
-    } else {
-        (allocation.x(), allocation.y())
+    let (_, origin_x, origin_y) = window.origin();
+    let place = ViewPlace {
+        origin: (origin_x, origin_y),
+        // A widget without a window of its own draws on its parent's, at
+        // its allocation.
+        offset: if webview.has_window() {
+            (0, 0)
+        } else {
+            (allocation.x(), allocation.y())
+        },
+        size: (allocation.width(), allocation.height()),
+        scale: window.scale_factor(),
     };
-    let x = origin_x + to_pixels(local_x.max(0.0)).min(allocation.width());
-    let y = origin_y + to_pixels(local_y.max(0.0)).min(allocation.height());
-    let clicks = if double { 2 } else { 1 };
-    for _ in 0..clicks {
-        for kind in [
-            gtk::gdk::EventType::ButtonPress,
-            gtk::gdk::EventType::ButtonRelease,
-        ] {
-            let posted = gtk::gdk::test_simulate_button(
-                &window,
-                x,
-                y,
-                1,
-                gtk::gdk::ModifierType::empty(),
-                kind,
-            );
-            if !posted {
-                return Err(BrowserError::new(
-                    ErrorCode::Unsupported,
-                    "trusted input is not available on this display",
-                ));
-            }
+    let point = root_point((at.0 * zoom, at.1 * zoom), place)
+        .ok_or_else(|| BrowserError::invalid("that element is outside the visible page"))?;
+    let toplevel = window
+        .toplevel()
+        .downcast::<gdkx11::X11Window>()
+        .ok()
+        .and_then(|toplevel| u32::try_from(toplevel.xid()).ok())
+        .ok_or_else(no_trusted_input)?;
+    let mut x11 = lock(x11);
+    if x11.is_none() {
+        *x11 = Xtest::connect(&webview.display().name());
+    }
+    let xtest = x11.as_ref().ok_or_else(no_trusted_input)?;
+    let over = match xtest.warp_over(point, toplevel) {
+        Ok(over) => over,
+        Err(_) => {
+            // Made again at the next click.
+            *x11 = None;
+            return Err(no_trusted_input());
         }
+    };
+    if !over {
+        return Err(BrowserError::new(ErrorCode::Unsupported, NOT_THE_PANE));
+    }
+    if xtest.click(if double { 2 } else { 1 }).is_err() {
+        *x11 = None;
+        return Err(no_trusted_input());
     }
     Ok(())
 }

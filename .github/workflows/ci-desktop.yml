@@ -212,7 +212,7 @@ jobs:
   # other two systems (clippy on the workspace on Linux; on Windows the pane
   # driver crates only, see the matrix), runs the pane's unit tests there, and runs each system's real-engine conformance run: the WebView2
   # bridge with the cloud CdpDriver on Windows, WebKitGTK under xvfb (X11, so
-  # the GDK trusted-input fallback is on) on Linux. Not the full host suite:
+  # the XTEST trusted-input fallback is on) on Linux. Not the full host suite:
   # that is the macOS job's, and the host's other modules are unchanged here.
   # The web bundle is a stub (the tests render nothing); `npm ci` is for the
   # pinned tsc the page scripts are compiled with (browser-driver-dom).

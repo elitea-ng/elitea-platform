@@ -17,12 +17,19 @@
 //!   type to [`INPUT_HANDLER`]; the host's callback pauses the agent.
 //! * **Screenshots** are `webkit_web_view_get_snapshot` of the visible
 //!   area, PNG-encoded with cairo (cut to an element's rectangle).
-//! * **Trusted input** (the fallback for a click a page ignores) is GDK's
-//!   test input (`gdk_test_simulate_button`), on **X11 only**: on Wayland
-//!   GDK cannot make it (no client may post input to another surface there,
-//!   and GDK's Wayland backend has no such call), so it is off and the
-//!   model is told to hand the page to the person (`browser_request_user`),
-//!   as on macOS without the Accessibility grant.
+//! * **Trusted input** (the fallback for a click a page ignores) is XTEST
+//!   fake input over a pure-Rust X connection (`x11rb`), on **X11 only**,
+//!   and only when the server has the XTEST extension. Not GDK's
+//!   `gdk_test_simulate_button`: it sends core button events to the window
+//!   (`XSendEvent`), which GTK3, reading the pointer through XInput2,
+//!   ignores. XTEST's events are device events, as a real mouse's, so they
+//!   hit whatever is on screen: the driver moves the pointer to the point,
+//!   and clicks only when the X window under it is the pane's toplevel or
+//!   one of its children; otherwise it answers `unsupported` and the model
+//!   is told to hand the page to the person. On Wayland no client may post
+//!   input to another surface, so trusted input is off and the model is told
+//!   to hand the page to the person (`browser_request_user`), as on macOS
+//!   without the Accessibility grant.
 //!
 //! GTK is main-thread only: every call goes to the GLib main context with
 //! `invoke` and answers on a oneshot channel. Off Linux the crate is empty.
@@ -34,6 +41,10 @@
 
 #[cfg(target_os = "linux")]
 mod gtk_engine;
+// Pure (no display): tested on every system.
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod x11_click;
 
 #[cfg(target_os = "linux")]
 pub use gtk_engine::{GtkEngine, attach_to};
@@ -44,7 +55,8 @@ pub use elitea_browser_driver_dom::{
 };
 
 /// Whether trusted input can be posted on a display of this GDK backend
-/// (the `GdkDisplay` type name): X11 only.
+/// (the `GdkDisplay` type name): X11 only (and then only with the server's
+/// XTEST extension, checked at attach).
 #[must_use]
 pub fn trusted_input_on(display_type: &str) -> bool {
     display_type == "GdkX11Display"

@@ -329,7 +329,7 @@ mod gtk_run {
         )
     }
 
-    /// A page that takes real input only: on X11 (xvfb) GDK's test input
+    /// A page that takes real input only: on X11 (xvfb) XTEST fake input
     /// clicks it; elsewhere the model is told to hand the page over.
     async fn trusted_input(driver: &WebDriver<GtkEngine>, port: u16) -> bool {
         use elitea_browser_driver_linux::Engine as _;
@@ -350,7 +350,7 @@ mod gtk_run {
                 if clicked["status"] != "ok" {
                     return Err(format!("the trusted click failed: {clicked}"));
                 }
-                // GDK's test input goes through the X server and then to
+                // XTEST's input goes through the X server and then to
                 // the web process: the page sees it after the call returns,
                 // so wait for it rather than snapshot at once.
                 let seen = call(

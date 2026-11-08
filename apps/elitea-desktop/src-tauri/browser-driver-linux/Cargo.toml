@@ -35,6 +35,14 @@ javascriptcore-rs = "1.1"
 gtk = "0.18"
 cairo-rs = { version = "0.18", features = ["png"] }
 tauri = { version = "2.12", default-features = false, features = ["wry"], optional = true }
+# The toplevel's X window id (`gdk_x11_window_get_xid`, safe), to check the
+# pointer is over the pane before a trusted click. In the tree through tao.
+gdkx11 = "0.18"
+# The trusted click: XTEST fake input over a pure-Rust X connection (no
+# libxcb, no unsafe; `allow-unsafe-code` stays off). GTK3 reads pointer
+# events through XInput2, which ignores the core events GDK's
+# `gdk_test_simulate_button` sends; XTEST's are real device events.
+x11rb = { version = "0.14", default-features = false, features = ["xtest"] }
 
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync"] }

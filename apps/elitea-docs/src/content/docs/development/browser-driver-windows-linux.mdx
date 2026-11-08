@@ -32,7 +32,7 @@ The Linux driver is the macOS driver's `WebDriver` and page script over a differ
 
 - **The driver world.** The page script runs only in a `WebKitScriptWorld` named `elitea-browser-driver`. It is installed as a user script of that world (every frame, at document start), and the host calls it with `webkit_web_view_call_async_javascript_function` in that world, with a fixed body and the operation and its JSON arguments as arguments. The message handlers for frames and for the person's input are registered in the driver world only, so the page's scripts cannot post to them.
 - **Screenshots** are `webkit_web_view_get_snapshot` of the visible area, encoded as PNG with cairo and cut to an element's rectangle when one is asked for.
-- **Trusted input.** A click that a page ignores (it acts on trusted events only) falls back to GDK's test input, `gdk_test_simulate_button`, at the element's centre. This works on **X11 only**. See [Limits](#limits).
+- **Trusted input.** A click that a page ignores (it acts on trusted events only) falls back to a real click at the element's centre, made with the X server's XTEST extension over a pure-Rust X connection (`x11rb`). It is not GDK's `gdk_test_simulate_button`: that sends core button events to the window with `XSendEvent`, and GTK 3 reads the pointer through XInput2, so WebKit never sees them. XTEST input is the server's own device input, like a real mouse, so it goes to whatever is on screen at that point. The driver therefore moves the pointer there first and clicks only when the X window under the pointer is the pane's own toplevel window or one of its children. If another window covers the point, the click answers `unsupported` and the model is told to use `browser_request_user`. The pointer stays where the click left it. This works on **X11 only**, with the XTEST extension (checked when the pane attaches). See [Limits](#limits).
 - GTK is main-thread only. Every engine call goes to the GLib main context and answers on a channel.
 
 ## Data folders per thread
@@ -70,7 +70,7 @@ The rules are the same as for the macOS crate: `unsafe_code = "deny"` in the lin
 
 ## Limits
 
-- **Wayland: no trusted input.** On Wayland no client can post input to another surface, and GDK's Wayland backend has no test-input call. The driver reads the display's GDK type and turns trusted input on only for `GdkX11Display`. On Wayland (and any other backend), a click that a page ignores answers `unsupported`, and the message tells the model to use `browser_request_user`, so the person does the step. This is the same path as macOS without the Accessibility grant. There is no virtual-keyboard protocol fallback.
+- **Wayland: no trusted input.** On Wayland no client can post input to another surface, and there is no XTEST. The driver reads the display's GDK type and turns trusted input on only for `GdkX11Display` whose X server has the XTEST extension. On Wayland (and any other backend), a click that a page ignores answers `unsupported`, and the message tells the model to use `browser_request_user`, so the person does the step. This is the same path as macOS without the Accessibility grant. There is no virtual-keyboard protocol fallback.
 - **Linux: cross-origin frames are out of reach.** WebKitGTK 2.40's call API has no frame argument, so the driver cannot run in a cross-origin frame. Same-origin frames are read inline. A cross-origin frame shows as an `iframe` node with no content, and actions in it answer `stale_ref`. Windows reads and acts in cross-origin frames through child CDP sessions; macOS through `WKFrameInfo`.
 - **Windows and Linux: navigations only.** The pane's navigation guard (`browser_pane::check`) applies to every navigation. The macOS content rules that also block subresource loads (`fetch`, images, frames, WebSockets) to private addresses are not yet on Windows or Linux. This is a follow-up.
 - **Windows: no Mark of the Web.** macOS quarantines every download. Windows downloads do not yet get the Mark of the Web (`Zone.Identifier`). This is a follow-up.
@@ -99,7 +99,7 @@ They run:
 
 - the conformance kit (`conformance::run`) on its fixture pages, served over loopback `http`;
 - the rules' reads: the live address, the focused control, and an element's details (a `download` link and a file input);
-- a page that takes trusted input only. On Windows the agent's CDP click is trusted. On Linux under X11 the GDK fallback clicks it; on Wayland the test expects the hand-over hint;
+- a page that takes trusted input only. On Windows the agent's CDP click is trusted. On Linux under X11 the XTEST fallback clicks it; on Wayland the test expects the hand-over hint;
 - on Linux, a hostile page that tampers with `JSON`, the value accessor and other built-ins and probes for the driver world: it must not reach it.
 
 The fixtures are shared with the macOS run (`browser-driver-macos/tests/fixtures`). No differences from the Chromium goldens are pinned. If an engine's tree has to differ, pin the difference in `differences()` in the test file (`Config.differences`), with the reason. CI runs the unit tests, Clippy on the whole workspace and the engine tests on `windows-latest` and `ubuntu-latest` (the `pane-drivers` job in `ci-desktop.yml`).
