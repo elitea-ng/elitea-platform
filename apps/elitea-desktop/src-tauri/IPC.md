@@ -2620,8 +2620,8 @@ literals. The pane is made at `about:blank`, the rules are installed
 is it navigated: no page loads before the rules apply. Rules WebKit
 refuses close the pane, and `browser_open` rejects `browser_unprotected`
 (fail closed). The rules are fixed when the pane is made: a policy change
-applies to panes made after it. Windows and Linux block navigations only
-until #1593.
+applies to panes made after it. Windows and Linux block navigations only:
+their subresource loads are not filtered yet (a follow-up).
 
 **Residual gap.** Content rules match URLs, not resolved addresses: a
 public name that resolves to a private address (DNS rebinding, or a record
@@ -2630,7 +2630,11 @@ a filtering proxy, a separate decision.
 
 **Site data.** Each thread has its own store. macOS 14+: a persistent
 `WKWebsiteDataStore(forIdentifier:)`, its UUID kept in
-`<data>/browser/stores.json`. macOS 12–13 (and other systems for now): a
+`<data>/browser/stores.json`. Windows and Linux: a data folder per thread,
+`<data>/browser/stores/<store id>` (the `WebView2` user data folder, or the
+WebKitGTK website data manager's base folder; a `WebView2` folder still
+locked at delete is retried at the next launch, which also deletes folders
+the registry no longer names). macOS 12–13: a
 non-persistent store (`incognito`), gone when the page closes. Deleted on
 Forget site data (`browser_forget`), thread delete or archive (the UI calls
 `browser_forget`), and sign-out (`host_sign_out`, `host_wipe`, the Doctor's
@@ -2656,7 +2660,7 @@ scales it by the app's zoom).
 | --- | --- | --- |
 | `browser_open` | `{thread_id, address, rect}` | `{url}` — opens the thread's page (or re-points it) at `address` (`example.com` means `https://example.com/`). Rejects `browser_invalid` (bad thread id or address), `browser_refused` (the guard; `message` says why), `browser_unprotected` (macOS: the content rules could not be installed, so the page was not opened), `browser_unavailable` (no main window) |
 | `browser_set_rect` | `{thread_id, rect, visible}` | `null` — moves the page; `visible: false` hides it (another tab, a modal sheet, the tab in its own window). No page: no-op |
-| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed`. Native on macOS (`goBack`, `goForward`, `reload`, `stopLoading` on the WKWebView), so the page cannot override them. Windows and Linux until #1593: reload is native; back, forward and stop run `history.back()`, `history.forward()`, `window.stop()` in the page, which the page can override |
+| `browser_go` | `{thread_id, action: "back" \| "forward" \| "reload" \| "stop"}` | `null`. Rejects `browser_closed`. Native on every system, so the page cannot override them: macOS `goBack`, `goForward`, `reload`, `stopLoading` on the WKWebView; Windows `WebView2` `GoBack`, `GoForward`, `Stop`; Linux WebKitGTK `go_back`, `go_forward`, `stop_loading`. Reload is `webview.reload()` everywhere |
 | `browser_close` | `{thread_id}` | `null` — closes the page; its site data stays |
 | `browser_forget` | `{thread_id}` | `{forgotten: boolean}` — closes the page and deletes the thread's store (`false`: it had none) |
 | `browser_reveal_download` | `{thread_id, name}` | `null` — shows the downloaded file in Finder. Rejects `not_found`, `os_refused` |

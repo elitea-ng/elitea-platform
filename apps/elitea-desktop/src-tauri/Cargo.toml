@@ -7,11 +7,13 @@ rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
-# The host and its macOS browser driver (browser-driver-macos: the FFI this
-# crate forbids for itself) share one lock. `cargo test` here tests the host
-# only; CI tests the driver with `-p elitea-browser-driver-macos`.
+# The host and its browser drivers share one lock: browser-driver-dom (the
+# safe webview driver core, macOS and Linux), and the two crates allowed
+# the FFI this crate forbids for itself, browser-driver-macos (WebKit) and
+# browser-driver-windows (WebView2 COM). `cargo test` here tests the host
+# only; CI tests the drivers with `-p`.
 [workspace]
-members = [".", "browser-driver-macos"]
+members = [".", "browser-driver-dom", "browser-driver-linux", "browser-driver-macos", "browser-driver-windows"]
 
 [lib]
 name = "elitea_desktop_lib"
@@ -142,6 +144,22 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 # a binary plist). Already in the tree through tauri-codegen (MIT); `Value`
 # only, no serde.
 plist = { version = "1.10", default-features = false }
+
+# The pane's Windows driver (ADR-0048 decision 6, #1593): the cloud
+# browser's CDP driver (elitea-browser-session, the #1594 mapping) over
+# WebView2's own CDP, which browser-driver-windows (COM FFI, its own crate
+# because this one forbids `unsafe`) turns into a CDP stream. The dom crate
+# gives the input reporter and its matcher.
+[target.'cfg(windows)'.dependencies]
+elitea-browser-driver-windows = { path = "browser-driver-windows" }
+elitea-browser-driver-dom = { path = "browser-driver-dom" }
+elitea-browser-session = { path = "../../../libs/rust/browser-session" }
+
+# The pane's Linux driver (ADR-0048 decision 6, #1593): the shared page
+# script and WebDriver over WebKitGTK, in browser-driver-linux (safe Rust,
+# its own crate so its WebKitGTK run can own `main`).
+[target.'cfg(target_os = "linux")'.dependencies]
+elitea-browser-driver-linux = { path = "browser-driver-linux", features = ["tauri"] }
 
 # The credentials file's owner check (geteuid) and O_NOFOLLOW, without
 # `unsafe` (src/credentials_file.rs). Already in the tree through tauri.

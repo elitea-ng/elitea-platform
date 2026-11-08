@@ -38,7 +38,7 @@ use elitea_browser_tools::call::{
     Direction, ElementRef, Key, ScrollTarget, WaitCondition, url_matches,
 };
 use elitea_browser_tools::driver::{
-    BrowserDriver, Handback, HistoryStep, PageInfo, PageText, Screenshot,
+    BrowserDriver, ControlInfo, Handback, HistoryStep, PageInfo, PageText, Screenshot,
 };
 use elitea_browser_tools::rate::ActRate;
 use elitea_browser_tools::snapshot::{Snapshot, SnapshotSlot, is_secure_field};
@@ -48,7 +48,9 @@ use serde_json::{Value, json};
 use crate::ax::{self, FrameTree, Handle};
 use crate::cdp::{CdpError, Connection};
 use crate::control::{Answer, Control, Driver};
-use crate::engine::{Engine, EngineConfig, EngineKind};
+#[cfg(unix)]
+use crate::engine::Engine;
+use crate::engine::{EngineConfig, EngineKind};
 use crate::keys;
 use crate::page::{self, Marks, TUNNEL_FAILED, Tracker, Watch};
 use crate::screencast::Screencast;
@@ -64,6 +66,7 @@ const WORLD: &str = "elitea_browser_driver";
 const INSPECT: &str = r"function () {
   const el = this;
   const tag = el.tagName;
+  const download = tag === 'A' && el.hasAttribute('download');
   const nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
   const editable = el.isContentEditable || tag === 'TEXTAREA' ||
     (tag === 'INPUT' && !nonText.includes(String(el.type || '').toLowerCase()));
@@ -73,6 +76,7 @@ const INSPECT: &str = r"function () {
     editable: !!editable,
     disabled: !!(el.disabled || el.readOnly),
     connected: el.isConnected,
+    download,
   };
 }";
 
@@ -115,8 +119,25 @@ const FOCUSED: &str = r"function () {
     autocomplete: el.getAttribute('autocomplete'),
     crossFrame: false,
     focused: document.hasFocus(),
+    element: true,
   };
 }";
+
+/// The element `FOCUSED` describes, as a remote object (same-origin frames
+/// and shadow roots followed; the body when nothing has the focus).
+const FOCUSED_ELEMENT: &str = r"(() => {
+  let el = document.activeElement;
+  for (let hops = 0; el && hops < 64; hops += 1) {
+    if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+    if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+      let inner = null;
+      try { inner = el.contentDocument; } catch (error) {}
+      if (inner) { el = inner.activeElement; continue; }
+    }
+    break;
+  }
+  return el;
+})()";
 
 const SELECT: &str = r"function (values) {
   if (this.tagName !== 'SELECT') return { error: 'not_select' };
@@ -160,6 +181,8 @@ const HAS_TEXT: &str = r"function (needle) {
 /// counts only when it is rendered (`getClientRects`) and not inside
 /// `aria-hidden="true"`: Chrome's tree leaves both out too, so neither
 /// is a ref Moli missed.
+// Read by `session` (the unix-only `auto` switch).
+#[cfg(unix)]
 const CONTENT: &str = r#"function (limit) {
   const body = document.body;
   const text = !!body && /[\p{L}\p{N}]/u.test(body.innerText.slice(0, 4000));
@@ -184,6 +207,7 @@ const CONTENT: &str = r#"function (limit) {
 }"#;
 
 /// The most elements [`CONTENT`] walks.
+#[cfg(unix)]
 const CONTENT_WALK_LIMIT: u64 = 20_000;
 
 /// [`PageContent`] from the page script's answer (`None`: it did not
@@ -191,6 +215,7 @@ const CONTENT_WALK_LIMIT: u64 = 20_000;
 /// layout and `aria-hidden`, so its answer stands; the DOM count, which
 /// sees neither, is a "yes" only when the script did not run (on Moli it
 /// may not).
+#[cfg(unix)]
 #[must_use]
 pub(crate) fn page_content_of(script: Option<&Value>, in_dom: bool) -> PageContent {
     match script {
@@ -242,6 +267,7 @@ struct Refs {
 pub struct CdpDriver {
     cdp: Connection,
     /// Keeps the engine alive; `None` for a driver over a foreign connection.
+    #[cfg(unix)]
     engine: Mutex<Option<Engine>>,
     session: String,
     target: String,
@@ -275,12 +301,28 @@ fn engine_error(error: &CdpError) -> BrowserError {
     }
 }
 
+/// What kind of page [`CdpDriver::set_up`] sets up.
+struct PageKind {
+    /// The cloud's own page: its size is set, its dialogs answered.
+    emulate: bool,
+    /// More set-up for each out-of-process frame (the desktop page).
+    child_setup: Option<page::ChildSetup>,
+}
+
+impl PageKind {
+    const CLOUD: Self = Self {
+        emulate: true,
+        child_setup: None,
+    };
+}
+
 impl CdpDriver {
-    /// Start the engine and set up its one page.
+    /// Start the engine and set up its one page (unix: the engine's pipe).
     ///
     /// # Errors
     ///
     /// The engine did not start or did not answer.
+    #[cfg(unix)]
     pub async fn start(config: &EngineConfig, control: Arc<Control>) -> Result<Self, BrowserError> {
         let (engine, cdp) = Engine::start(config).await.map_err(|error| {
             BrowserError::new(
@@ -336,6 +378,83 @@ impl CdpDriver {
             .as_str()
             .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page did not attach"))?
             .to_owned();
+        Self::set_up(
+            cdp,
+            events,
+            config,
+            control,
+            session,
+            target,
+            PageKind::CLOUD,
+        )
+        .await
+    }
+
+    /// Set up a connection that IS one page already (the desktop's
+    /// `WebView2`, whose CDP is the page's own: no browser target, no
+    /// `Target.attachToTarget`). Commands to `session` go to the page; the
+    /// page's child frames and workers still attach under it. The page
+    /// keeps its own size: no device metrics are overridden, and
+    /// `config.width` and `config.height` are only the page size a
+    /// scroll pages by. The page's dialogs are left to the person at it.
+    /// `child_setup` runs on each out-of-process frame before it runs.
+    ///
+    /// # Errors
+    ///
+    /// The page did not answer.
+    pub async fn attach_page(
+        cdp: Connection,
+        config: &EngineConfig,
+        control: Arc<Control>,
+        session: &str,
+        child_setup: Option<page::ChildSetup>,
+    ) -> Result<Self, BrowserError> {
+        let events = cdp.events();
+        let tree = cdp
+            .call(Some(session), "Page.getFrameTree", json!({}))
+            .await
+            .map_err(|error| engine_error(&error))?;
+        // A page target's id is its main frame's.
+        let target = tree["frameTree"]["frame"]["id"]
+            .as_str()
+            .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page has no frame"))?
+            .to_owned();
+        Self::set_up(
+            cdp,
+            events,
+            config,
+            control,
+            session.to_owned(),
+            target,
+            PageKind {
+                emulate: false,
+                child_setup,
+            },
+        )
+        .await
+    }
+
+    async fn set_up(
+        cdp: Connection,
+        events: tokio::sync::broadcast::Receiver<Arc<crate::cdp::Event>>,
+        config: &EngineConfig,
+        control: Arc<Control>,
+        session: String,
+        target: String,
+        kind: PageKind,
+    ) -> Result<Self, BrowserError> {
+        let PageKind {
+            emulate,
+            child_setup,
+        } = kind;
+        let call = |session: Option<String>, method: &'static str, params: Value| {
+            let cdp = cdp.clone();
+            async move {
+                cdp.call(session.as_deref(), method, params)
+                    .await
+                    .map_err(|error| engine_error(&error))
+            }
+        };
         let tracker = Tracker::new();
         page::spawn(
             Watch {
@@ -343,6 +462,8 @@ impl CdpDriver {
                 page_session: session.clone(),
                 page_target: target.clone(),
                 proxy_token: config.proxy_token.clone(),
+                answer_dialogs: emulate,
+                child_setup,
             },
             tracker.clone(),
             events,
@@ -354,15 +475,17 @@ impl CdpDriver {
         for method in ["Page.enable", "Network.enable"] {
             call(on_page.clone(), method, json!({})).await?;
         }
-        call(
-            on_page.clone(),
-            "Emulation.setDeviceMetricsOverride",
-            json!({
-                "width": config.width, "height": config.height,
-                "deviceScaleFactor": 1, "mobile": false,
-            }),
-        )
-        .await?;
+        if emulate {
+            call(
+                on_page.clone(),
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": config.width, "height": config.height,
+                    "deviceScaleFactor": 1, "mobile": false,
+                }),
+            )
+            .await?;
+        }
         call(
             on_page.clone(),
             "Target.setAutoAttach",
@@ -378,6 +501,7 @@ impl CdpDriver {
         );
         Ok(Self {
             cdp,
+            #[cfg(unix)]
             engine: Mutex::new(None),
             session,
             target,
@@ -408,7 +532,11 @@ impl CdpDriver {
     /// The engine's process id, while it runs.
     #[must_use]
     pub fn engine_pid(&self) -> Option<u32> {
-        lock(&self.engine).as_ref().and_then(Engine::pid)
+        #[cfg(unix)]
+        let pid = lock(&self.engine).as_ref().and_then(Engine::pid);
+        #[cfg(not(unix))]
+        let pid = None;
+        pid
     }
 
     /// The view stream (#1597 relays it).
@@ -435,6 +563,7 @@ impl CdpDriver {
     /// page on the new engine. It runs while a person drives too, since
     /// their take-over carries over to the new engine. Best effort: a page
     /// that does not load is reported by the call that follows.
+    #[cfg(unix)]
     pub(crate) async fn reopen(&self, url: &str) {
         let before = self.tracker.marks();
         if let Ok(navigated) = self.page("Page.navigate", json!({ "url": url })).await
@@ -454,6 +583,7 @@ impl CdpDriver {
     /// page script involved) and a page script, which also tells text.
     /// Outside the agent's gate, like [`Self::reopen`]; a script that does
     /// not run finds no text.
+    #[cfg(unix)]
     pub(crate) async fn page_content(&self) -> PageContent {
         let in_dom = lock(&self.refs).dom_controls > 0;
         let script = self
@@ -465,6 +595,7 @@ impl CdpDriver {
 
     /// How many main-frame documents the page has had: an `auto` open
     /// that timed out reached one when this rose during the call.
+    #[cfg(unix)]
     pub(crate) fn documents(&self) -> u64 {
         self.tracker.marks().documents
     }
@@ -534,12 +665,16 @@ impl CdpDriver {
 
     /// Stop the engine (and remove its profile).
     pub fn shutdown(&self) {
+        #[cfg(unix)]
         lock(&self.engine).take();
     }
 
     /// Whether the engine is still running.
     pub fn is_alive(&self) -> bool {
+        #[cfg(unix)]
         let engine_alive = lock(&self.engine).as_mut().is_none_or(Engine::is_running);
+        #[cfg(not(unix))]
+        let engine_alive = true;
         engine_alive && self.cdp.is_open()
     }
 
@@ -559,6 +694,9 @@ impl CdpDriver {
     /// document into another process (an error page after a failed load is
     /// one), the engine briefly answers "Not attached to an active page";
     /// the session itself survives, so the command is retried for a moment.
+    /// A screenshot taken while the swapped-in document has not painted yet
+    /// is refused with "Unable to capture screenshot"; it is retried the same
+    /// way.
     async fn page(&self, method: &str, params: Value) -> Result<Value, BrowserError> {
         let deadline = tokio::time::Instant::now() + PAGE_SWAP_GRACE;
         loop {
@@ -568,7 +706,7 @@ impl CdpDriver {
                 .await
             {
                 Err(CdpError::Protocol { message, .. })
-                    if message.contains(NOT_ATTACHED) && tokio::time::Instant::now() < deadline =>
+                    if is_page_swap(method, &message) && tokio::time::Instant::now() < deadline =>
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
@@ -884,16 +1022,25 @@ impl CdpDriver {
     // ── page info and settling ──────────────────────────────────────────
 
     async fn title(&self) -> String {
-        self.cdp
+        let title = |info: Value| info["targetInfo"]["title"].as_str().map(str::to_owned);
+        let browser = self
+            .cdp
             .call(
                 None,
                 "Target.getTargetInfo",
                 json!({ "targetId": self.target }),
             )
-            .await
-            .ok()
-            .and_then(|info| info["targetInfo"]["title"].as_str().map(str::to_owned))
-            .unwrap_or_default()
+            .await;
+        match browser {
+            Ok(info) => title(info).unwrap_or_default(),
+            // A page-only connection (`attach_page`): the page's own info.
+            Err(_) => self
+                .call(&self.session, "Target.getTargetInfo", json!({}))
+                .await
+                .ok()
+                .and_then(title)
+                .unwrap_or_default(),
+        }
     }
 
     async fn info(&self, before: Marks) -> Result<PageInfo, BrowserError> {
@@ -1271,6 +1418,15 @@ fn png_size(data: &[u8]) -> Option<(u32, u32)> {
 
 /// The engine's answer while a page's document is between processes.
 const NOT_ATTACHED: &str = "Not attached to an active page";
+
+/// The engine's answer to a screenshot of a document that has not painted.
+const NOT_PAINTED: &str = "Unable to capture screenshot";
+
+/// An engine refusal that only means the page's document is mid-swap.
+fn is_page_swap(method: &str, message: &str) -> bool {
+    message.contains(NOT_ATTACHED)
+        || (method == "Page.captureScreenshot" && message.contains(NOT_PAINTED))
+}
 
 /// How long a page command waits out such a swap.
 const PAGE_SWAP_GRACE: Duration = Duration::from_secs(5);
@@ -1660,11 +1816,112 @@ impl BrowserDriver for CdpDriver {
             )),
         }
     }
+
+    // The desktop host's rules read these before a call (the Windows pane,
+    // `attach_page`); the cloud session does not call them.
+
+    async fn focused(&self) -> Result<Option<ControlInfo>, BrowserError> {
+        let focused = self.main_frame(FOCUSED, Vec::new()).await?;
+        if focused["crossFrame"] == true {
+            // In an out-of-process frame: not known, so the host fails closed.
+            return Err(BrowserError::stale_ref("the focused frame is out of reach"));
+        }
+        if focused["element"] != true {
+            return Ok(None);
+        }
+        // The focused node's role and name, as the accessibility tree has them.
+        let context = self.world(&self.session, &self.target, false).await?;
+        let object = self
+            .call(
+                &self.session,
+                "Runtime.evaluate",
+                json!({ "expression": FOCUSED_ELEMENT, "contextId": context }),
+            )
+            .await?;
+        let object_id = object["result"]["objectId"]
+            .as_str()
+            .ok_or_else(|| BrowserError::stale_ref("the focus moved: try again"))?
+            .to_owned();
+        let tree = self
+            .call(
+                &self.session,
+                "Accessibility.getPartialAXTree",
+                json!({ "objectId": object_id, "fetchRelatives": false }),
+            )
+            .await;
+        let _ = self
+            .call(
+                &self.session,
+                "Runtime.releaseObject",
+                json!({ "objectId": object_id }),
+            )
+            .await;
+        let tree = tree?;
+        let node = tree["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .ok_or_else(|| BrowserError::stale_ref("the focus moved: try again"))?;
+        Ok(Some(ControlInfo {
+            role: ax::role_of(node["role"]["value"].as_str().unwrap_or_default()).to_owned(),
+            name: node["name"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            input_type: focused["type"].as_str().map(str::to_ascii_lowercase),
+            download: false,
+        }))
+    }
+
+    async fn inspect(&self, target: &ElementRef) -> Result<ControlInfo, BrowserError> {
+        let (role, name) = {
+            self.sync();
+            let refs = lock(&self.refs);
+            let node = refs.slot.resolve(target)?;
+            (node.role.clone(), node.name.clone())
+        };
+        let handle = self.handle(target, false)?;
+        let inspected = self.on_element(&handle, INSPECT, Vec::new()).await?;
+        Ok(ControlInfo {
+            role,
+            name,
+            input_type: inspected["type"].as_str().map(str::to_ascii_lowercase),
+            download: inspected["download"] == true,
+        })
+    }
+
+    async fn current_url(&self) -> Result<String, BrowserError> {
+        let history = self.page("Page.getNavigationHistory", json!({})).await?;
+        let index = history["currentIndex"]
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok());
+        index
+            .and_then(|index| history["entries"].get(index))
+            .and_then(|entry| entry["url"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page has no address"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_swap_is_waited_out_and_an_unpainted_screenshot_only_for_screenshots() {
+        assert!(is_page_swap("Runtime.evaluate", NOT_ATTACHED));
+        assert!(is_page_swap(
+            "Page.captureScreenshot",
+            "Unable to capture screenshot"
+        ));
+        assert!(!is_page_swap(
+            "Runtime.evaluate",
+            "Unable to capture screenshot"
+        ));
+        assert!(!is_page_swap(
+            "Page.captureScreenshot",
+            "Invalid parameters"
+        ));
+    }
 
     #[test]
     fn png_size_reads_the_header() {
@@ -1792,5 +2049,192 @@ mod tests {
             script_value(&json!({"result": {"value": 3}})).unwrap(),
             json!(3)
         );
+    }
+
+    /// A connection that is one page (`WebView2`'s CDP): the commands it
+    /// got, by method and session.
+    type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+    fn one_page() -> (Connection, Seen) {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (client_write, page_read) = tokio::io::duplex(1 << 16);
+        let (mut page_write, client_read) = tokio::io::duplex(1 << 16);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(page_read);
+            let mut record = Vec::new();
+            while reader.read_until(0, &mut record).await.unwrap_or(0) > 0 {
+                record.pop();
+                let command: Value = serde_json::from_slice(&record).unwrap();
+                record.clear();
+                let method = command["method"].as_str().unwrap_or_default().to_owned();
+                let session = command["sessionId"].as_str().map(str::to_owned);
+                lock(&log).push((method.clone(), session));
+                let reply = if method.starts_with("Target.") && method != "Target.setAutoAttach" {
+                    json!({"id": command["id"], "error": {"code": -32601, "message": "not found"}})
+                } else if method == "Page.getFrameTree" {
+                    json!({"id": command["id"], "result": {"frameTree": {"frame": {"id": "MAIN"}}}})
+                } else {
+                    json!({"id": command["id"], "result": {}})
+                };
+                let mut bytes = serde_json::to_vec(&reply).unwrap();
+                bytes.push(0);
+                page_write.write_all(&bytes).await.unwrap();
+            }
+        });
+        (Connection::new(client_read, client_write), seen)
+    }
+
+    #[tokio::test]
+    async fn a_page_connection_is_set_up_without_browser_targets_or_emulation() {
+        let (cdp, seen) = one_page();
+        let control = Arc::new(Control::new(false, Duration::from_secs(1)));
+        let driver = CdpDriver::attach_page(cdp, &EngineConfig::default(), control, "PAGE", None)
+            .await
+            .unwrap();
+        assert_eq!(driver.target, "MAIN", "the main frame is the page target");
+        let seen = lock(&seen).clone();
+        let methods: Vec<&str> = seen.iter().map(|(method, _)| method.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "Page.getFrameTree",
+                "Page.enable",
+                "Network.enable",
+                "Target.setAutoAttach"
+            ]
+        );
+        assert!(
+            seen.iter()
+                .all(|(_, session)| session.as_deref() == Some("PAGE")),
+            "every command goes to the page session: {seen:?}"
+        );
+        assert!(driver.engine_pid().is_none());
+        // The title falls back to the page's own target info.
+        assert_eq!(driver.title().await, "");
+    }
+
+    /// A page that announces one out-of-process frame (`CHILD`) once the
+    /// driver set up auto-attach, and refuses `refuse` there.
+    fn page_with_a_frame(refuse: &'static str) -> (Connection, Seen) {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (client_write, page_read) = tokio::io::duplex(1 << 16);
+        let (mut page_write, client_read) = tokio::io::duplex(1 << 16);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(page_read);
+            let mut record = Vec::new();
+            while reader.read_until(0, &mut record).await.unwrap_or(0) > 0 {
+                record.pop();
+                let command: Value = serde_json::from_slice(&record).unwrap();
+                record.clear();
+                let method = command["method"].as_str().unwrap_or_default().to_owned();
+                let session = command["sessionId"].as_str().map(str::to_owned);
+                lock(&log).push((method.clone(), session.clone()));
+                let child = session.as_deref() == Some("CHILD");
+                let reply = if child && method == refuse {
+                    json!({"id": command["id"], "error": {"code": -32000, "message": "no"}})
+                } else if method == "Page.getFrameTree" {
+                    json!({"id": command["id"], "result": {"frameTree": {"frame": {"id": "MAIN"}}}})
+                } else {
+                    json!({"id": command["id"], "result": {}})
+                };
+                let mut bytes = serde_json::to_vec(&reply).unwrap();
+                bytes.push(0);
+                if method == "Target.setAutoAttach" && !child {
+                    let event = json!({
+                        "method": "Target.attachedToTarget",
+                        "sessionId": "PAGE",
+                        "params": {
+                            "sessionId": "CHILD",
+                            "targetInfo": {"targetId": "F1", "type": "iframe"},
+                            "waitingForDebugger": true,
+                        },
+                    });
+                    bytes.extend(serde_json::to_vec(&event).unwrap());
+                    bytes.push(0);
+                }
+                page_write.write_all(&bytes).await.unwrap();
+            }
+        });
+        (Connection::new(client_read, client_write), seen)
+    }
+
+    /// Wait until the frame was released (`runIfWaitingForDebugger`).
+    async fn released(seen: &Seen) -> Vec<String> {
+        for _ in 0..200 {
+            let child: Vec<String> = lock(seen)
+                .iter()
+                .filter(|(_, session)| session.as_deref() == Some("CHILD"))
+                .map(|(method, _)| method.clone())
+                .collect();
+            if child
+                .iter()
+                .any(|method| method == "Runtime.runIfWaitingForDebugger")
+            {
+                return child;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the frame was never released: {:?}", lock(seen));
+    }
+
+    #[tokio::test]
+    async fn each_out_of_process_frame_gets_the_hosts_setup_before_it_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let setup = |failures: &Arc<AtomicUsize>| {
+            let failures = Arc::clone(failures);
+            page::ChildSetup {
+                commands: vec![
+                    ("Runtime.addBinding", json!({ "name": "report" })),
+                    (
+                        "Page.addScriptToEvaluateOnNewDocument",
+                        json!({ "source": "1" }),
+                    ),
+                ],
+                failed: Arc::new(move || {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                }),
+            }
+        };
+        let control = || Arc::new(Control::new(false, Duration::from_secs(1)));
+
+        let failures = Arc::new(AtomicUsize::new(0));
+        let (cdp, seen) = page_with_a_frame("none");
+        let _driver = CdpDriver::attach_page(
+            cdp,
+            &EngineConfig::default(),
+            control(),
+            "PAGE",
+            Some(setup(&failures)),
+        )
+        .await
+        .unwrap();
+        let child = released(&seen).await;
+        let at = |method: &str| child.iter().position(|seen| seen == method).unwrap();
+        assert!(at("Runtime.addBinding") < at("Runtime.runIfWaitingForDebugger"));
+        assert!(
+            at("Page.addScriptToEvaluateOnNewDocument") < at("Runtime.runIfWaitingForDebugger"),
+            "set up before the frame runs: {child:?}"
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 0);
+
+        // A frame that cannot be set up is reported (the host pauses the
+        // agent), and still released.
+        let failures = Arc::new(AtomicUsize::new(0));
+        let (cdp, seen) = page_with_a_frame("Runtime.addBinding");
+        let _driver = CdpDriver::attach_page(
+            cdp,
+            &EngineConfig::default(),
+            control(),
+            "PAGE",
+            Some(setup(&failures)),
+        )
+        .await
+        .unwrap();
+        released(&seen).await;
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
     }
 }

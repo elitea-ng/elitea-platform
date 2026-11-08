@@ -1,0 +1,34 @@
+[package]
+name = "elitea-browser-driver-dom"
+version = "0.1.0"
+description = "The desktop browser pane's webview driver core (ADR-0048 decisions 5 and 6): the browser tool contract over a page script in an isolated world. The macOS (WKWebView) and Linux (WebKitGTK) drivers are engines under it."
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+# Plain Rust, no FFI: the page script (js/driver.ts, compiled by build.rs),
+# the reply parser, the input matcher and `WebDriver` over an `Engine`
+# trait. The macOS engine (browser-driver-macos, FFI) and the Linux engine
+# (src-tauri/src/browser_linux.rs, the safe webkit2gtk API) implement the
+# trait. Builds and tests on every OS.
+
+[dependencies]
+elitea-browser-tools = { path = "../../../../libs/rust/browser-tools" }
+async-trait = "0.1.92"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `time`: waits poll.
+tokio = { version = "1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+# The input filter is tested on the exact key events the CDP driver sends
+# (Windows).
+elitea-browser-session = { path = "../../../../libs/rust/browser-session" }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

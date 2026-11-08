@@ -294,6 +294,9 @@ jobs:
 
       - name: Provision the secured NATS permission test
         working-directory: .
+        env:
+          # The chart dependency fallback and the nats CLI fetch use the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/nats/ci-secure-test-env.sh
 
       - name: Start the secured NATS test server

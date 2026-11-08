@@ -256,14 +256,24 @@ jobs:
       # target, so a new release could red an untouched branch, and the local
       # run that proves a change can never match what CI will do. Raise this
       # value deliberately, and read the release notes when you do.
+      # Through the API, not the github.com release download link (504s),
+      # and checked against the release's checksums file.
       - name: Install golangci-lint
         env:
-          GOLANGCI_LINT_VERSION: v2.9.0
+          GOLANGCI_LINT_VERSION: "2.9.0"
+          GOLANGCI_LINT_SHA256: 493aaaca2eba6c8bcef847d92716bbd91bbac4b22cdbb0ab5b6a581b32946091
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/${GOLANGCI_LINT_VERSION}/install.sh" \
-            | sh -s -- -b "$(go env GOPATH)/bin" "${GOLANGCI_LINT_VERSION}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
+          gh release download "v${GOLANGCI_LINT_VERSION}" --repo golangci/golangci-lint \
+            --pattern "${archive}" --output "/tmp/${archive}" --clobber
+          echo "${GOLANGCI_LINT_SHA256}  /tmp/${archive}" | sha256sum -c -
+          bin="$(go env GOPATH)/bin"
+          mkdir -p "$bin"
+          tar -xzf "/tmp/${archive}" -C "$bin" --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/golangci-lint" version
 
       # The script fails when the binary is absent, so a broken install above
       # cannot turn into a green "nothing to report" below.
@@ -524,6 +534,8 @@ jobs:
 
       - name: Provision the secured NATS permission tests
         env:
+          # The chart dependency fallback and the nats CLI fetch use the API.
+          GH_TOKEN: ${{ github.token }}
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
         run: bash scripts/nats/ci-secure-test-env.sh
 

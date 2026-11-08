@@ -13,17 +13,31 @@
 //! ours; off by default, because it can name URLs). Exit status 0 on a clean
 //! end, 2 on bad arguments, 1 when the streams failed.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::process::ExitCode;
+#[cfg(unix)]
 use std::sync::Arc;
 
+#[cfg(unix)]
 use elitea_browser_session::engine::{DEFAULT_ENGINE, DEFAULT_MOLI};
+#[cfg(unix)]
 use elitea_browser_session::protocol::{self, log};
+#[cfg(unix)]
 use elitea_browser_session::session::{Engines, Session};
 
+#[cfg(unix)]
 const USAGE: &str =
     "usage: elitea-browser-session idle | serve [--engine <path>] [--moli <path>] [--engine-log]";
 
+/// The agent runs in a Linux pod; off unix there is no engine pipe.
+#[cfg(not(unix))]
+fn main() -> ExitCode {
+    eprintln!("elitea-browser-session runs on unix only");
+    ExitCode::from(2)
+}
+
+#[cfg(unix)]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let mut words = std::env::args().skip(1);

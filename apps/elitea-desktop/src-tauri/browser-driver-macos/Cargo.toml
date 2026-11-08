@@ -9,13 +9,13 @@ publish = false
 
 # A crate of its own because the WebKit, AppKit and CoreGraphics calls are
 # FFI (`unsafe`), which the desktop host forbids for itself
-# (`unsafe_code = "forbid"`). This is the ONE first-party crate allowed
-# `unsafe` (owner decision on #1634, recorded in the repo-root AGENTS.md):
-# `unsafe_code = "deny"`, each unsafe fn or block opted in with
+# (`unsafe_code = "forbid"`). One of the TWO first-party crates allowed
+# `unsafe` (owner decisions on #1634 and #1593, recorded in the repo-root
+# AGENTS.md): `unsafe_code = "deny"`, each unsafe fn or block opted in with
 # `#[allow(unsafe_code)]` and explained by a `// SAFETY:` comment, and only
-# safe functions exported. Everything that is not FFI (the snapshot
-# reader, the reply parser, the script body) is plain Rust and tested on
-# every OS; the WebKit part builds on macOS only.
+# safe functions exported. Everything that is not FFI (the page script, the
+# snapshot reader, the reply parser, `WebDriver`) is the safe crate
+# elitea-browser-driver-dom, shared with the Linux driver.
 
 [features]
 default = []
@@ -23,6 +23,7 @@ default = []
 tauri = ["dep:tauri"]
 
 [dependencies]
+elitea-browser-driver-dom = { path = "../browser-driver-dom" }
 elitea-browser-tools = { path = "../../../../libs/rust/browser-tools" }
 async-trait = "0.1.92"
 serde = { version = "1", features = ["derive"] }

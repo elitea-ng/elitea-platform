@@ -1168,6 +1168,9 @@ jobs:
       # scripts/ci/check-chart-deps.mjs). `helm package` puts them in the
       # published chart, so an OCI install needs nothing built.
       - name: Build the chart dependencies
+        env:
+          # build-deps.sh's fallback fetches release assets through the API.
+          GH_TOKEN: ${{ github.token }}
         run: |
           CHART_DIR="deploy/helm/${{ matrix.chart }}"
           if [ -f "${CHART_DIR}/build-deps.sh" ]; then bash "${CHART_DIR}/build-deps.sh"; fi

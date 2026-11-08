@@ -447,6 +447,7 @@ async fn stream(
 /// # Errors
 ///
 /// The signal handlers could not be installed.
+#[cfg(unix)]
 pub async fn idle() -> std::io::Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
     let mut terminate = signal(SignalKind::terminate())?;

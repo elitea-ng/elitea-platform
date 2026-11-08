@@ -30,6 +30,11 @@ export const developmentTab: NavTab = {
         { kind: 'page', slug: 'development/backend', title: 'Backend services and workers' },
         { kind: 'page', slug: 'development/browser-tools', title: 'The browser tool contract' },
         { kind: 'page', slug: 'development/browser-driver-macos', title: 'The macOS browser driver' },
+        {
+          kind: 'page',
+          slug: 'development/browser-driver-windows-linux',
+          title: 'The Windows and Linux browser drivers',
+        },
         { kind: 'page', slug: 'development/desktop-control', title: 'Desktop control driver' },
         { kind: 'page', slug: 'development/browser-session', title: 'The cloud browser session agent' },
         { kind: 'page', slug: 'development/docs-site', title: 'Work on the documentation' },
