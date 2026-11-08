@@ -48,8 +48,11 @@ pub const REQUEST_USER_TIMEOUT: Duration = Duration::from_secs(80);
 /// The notice the agent sends when `auto` moves from Moli to Chrome.
 pub const NOTICE_ENGINE_SWITCHED: &str = "engine_switched";
 
-/// gVisor's sentry reports a fixed kernel in `/proc/version`: release
-/// 4.4.0 and this build line.
+/// gVisor's sentry reports a fixed kernel in `/proc/version`:
+/// `Linux version <release> #1 SMP Sun Jan 10 15:06:54 PST 2016`, where the
+/// release is `4.19.0-gvisor` (or `5.15.0-gvisor` with RDMA) on current
+/// releases and plain `4.4.0` on old ones
+/// (`pkg/sentry/kernel/version/version.go`).
 const GVISOR_BUILD: &str = "#1 SMP Sun Jan 10 15:06:54 PST 2016";
 
 /// Whether this process runs under gVisor, by the kernel version string its
@@ -61,7 +64,13 @@ pub fn under_gvisor() -> bool {
 }
 
 fn is_gvisor_version(version: &str) -> bool {
-    version.contains(" 4.4.0 ") && version.contains(GVISOR_BUILD)
+    let Some(rest) = version.trim_end().strip_prefix("Linux version ") else {
+        return false;
+    };
+    let Some((release, build)) = rest.split_once(' ') else {
+        return false;
+    };
+    build == GVISOR_BUILD && (release == "4.4.0" || release.ends_with("-gvisor"))
 }
 
 /// The engine binaries an image ships.
@@ -960,8 +969,20 @@ mod tests {
         assert!(is_gvisor_version(
             "Linux version 4.4.0 #1 SMP Sun Jan 10 15:06:54 PST 2016\n"
         ));
+        // Current gVisor releases (the bake-off's runsc 20261102 among them).
+        assert!(is_gvisor_version(
+            "Linux version 4.19.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2016\n"
+        ));
+        assert!(is_gvisor_version(
+            "Linux version 5.15.0-gvisor #1 SMP Sun Jan 10 15:06:54 PST 2016\n"
+        ));
         assert!(!is_gvisor_version(
             "Linux version 6.8.0-1017-azure (buildd@lcy02) #20-Ubuntu SMP Mon Oct 20 2026\n"
         ));
+        // The build line alone, or the release alone, is not enough.
+        assert!(!is_gvisor_version(
+            "Linux version 6.8.0 #1 SMP Sun Jan 10 15:06:54 PST 2016\n"
+        ));
+        assert!(!is_gvisor_version("Linux version 4.19.0-gvisor #2 SMP\n"));
     }
 }

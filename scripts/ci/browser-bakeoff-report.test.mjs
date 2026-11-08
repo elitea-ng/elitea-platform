@@ -22,25 +22,25 @@ test("lite below 80% on read and extract is refused", () => {
   // Two of five read/extract fail: 60%.
   const result = r.verdict([...run("full", [0, 1]), ...run("lite", [0, 1])]);
   assert.equal(result.admitted, false);
-  assert.equal(result.checks[0].pass, false);
-  assert.equal(result.checks[1].pass, true);
+  assert.equal(result.checks[1].pass, false);
+  assert.equal(result.checks[2].pass, true);
 });
 
 test("lite more than 10 points behind full overall is refused", () => {
   // Full 10/10, lite 8/10 with every read/extract passing: 20 points behind.
   const result = r.verdict([...run("full"), ...run("lite", [5, 6])]);
-  assert.equal(result.checks[0].pass, true);
-  assert.equal(result.checks[1].pass, false);
+  assert.equal(result.checks[1].pass, true);
+  assert.equal(result.checks[2].pass, false);
   assert.equal(result.admitted, false);
   // Exactly 10 points behind passes.
-  assert.equal(r.verdict([...run("full"), ...run("lite", [5])]).checks[1].pass, true);
+  assert.equal(r.verdict([...run("full"), ...run("lite", [5])]).checks[2].pass, true);
 });
 
 test("one crash or hang of lite is refused, even at full success", () => {
   for (const flag of ["crashed", "hung"]) {
     const result = r.verdict([...run("full"), ...run("lite", [], { 7: { [flag]: true } })]);
     assert.equal(result.admitted, false, flag);
-    assert.equal(result.checks[2].pass, false, flag);
+    assert.equal(result.checks[3].pass, false, flag);
   }
 });
 
@@ -67,4 +67,18 @@ test("the report says the verdict and lists every task", () => {
 
 test("a line that is not JSON names its number", () => {
   assert.throws(() => r.parse('{"engine":"full"}\nnot json\n'), /line 2/);
+});
+
+test("a run where full itself fails is no comparison, even when lite matches it", () => {
+  // Every task fails on both (a start refused for all): lite is "0 points
+  // behind" and never crashed, which must not read as a fair result.
+  const all = kinds.map((_, i) => i);
+  const result = r.verdict([...run("full", all), ...run("lite", all)]);
+  assert.equal(result.comparable, false);
+  assert.equal(result.admitted, false);
+  assert.equal(result.checks[0].pass, false);
+  assert.match(r.markdown(result, []), /no comparison: the full baseline failed/);
+  // Half the corpus on full is enough to compare.
+  const half = r.verdict([...run("full", [5, 6, 7, 8, 9]), ...run("lite", [5, 6, 7, 8, 9])]);
+  assert.equal(half.comparable, true);
 });

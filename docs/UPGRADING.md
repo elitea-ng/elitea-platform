@@ -25,6 +25,13 @@ No operator action. No migration, no contract change.
 - Upgrade the supervisor and the worker together, as for every
   `BrowserEngineV1` change. The proto gains `BROWSER_ENGINE_V1_AUTO`. An
   older supervisor refuses an `auto` spec as an unknown engine.
+- The session agent now recognises current gVisor releases, which report
+  `Linux version 4.19.0-gvisor` (or `5.15.0-gvisor`) in `/proc/version`;
+  it accepted only the old `4.4.0`. On a current runsc, a session with
+  `engine_sandbox: false` was refused as `isolation_refused` (the
+  bake-off's first full run hit this on every task). Deployments that run
+  sessions under gVisor with the engine sandbox off should move to this
+  release.
 
 ## Desktop: the streamed cloud browser in the pane (#1592, ADR-0048 decision 7)
 
