@@ -93,12 +93,10 @@ const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while
 /**
  * The EAS project this app is linked to (docs/release.md, "Link the EAS project").
  *
- * Not a secret. Until the owner runs `eas init`, both values are empty and the
- * app is simply not linked: no `owner`, no `extra.eas.projectId`, and EAS Update
- * is OFF (`updates.enabled: false`, no `updates.url`). After `eas init`, write the
- * project id and owner here (recommended: every machine and CI then computes the
- * same runtime fingerprint), or set EAS_PROJECT_ID / EXPO_OWNER in the
- * environment, which win over the committed values.
+ * Not a secret. The brand manifest's `eas.projectId` / `eas.owner` (null until the
+ * brand owner runs `eas init`); EAS_PROJECT_ID / EXPO_OWNER in the environment win
+ * over them. Unlinked: no `owner`, no `extra.eas.projectId`. Linked or not, EAS
+ * Update stays OFF unless the manifest turns it on (`updatesConfig` below).
  */
 const easLink = {
   projectId: manifest.eas.projectId ?? '',
@@ -133,17 +131,27 @@ export function resolveEasLink(env: Record<string, string | undefined> = process
  * runtimeVersion `fingerprint`: an update reaches only binaries whose native layer
  * (native modules, config plugins, this config) hashes the same, so JS that needs a
  * native change can never be sent to an old binary. The build's channel (eas.json)
- * picks the branch. On by link only: an unlinked build has no update URL at all.
+ * picks the branch. On only for a brand that turns it on (below): every other build has
+ * no update URL at all.
  * Downloads never block launch (fallbackToCacheTimeout 0): a new update applies on
  * the next cold start.
  */
 function updatesConfig(link: EasProjectLink): ExpoConfig['updates'] {
-  if (!link.projectId) return { enabled: false };
+  // Off unless the BRAND turns updates on (ADR-0052 decision 3): its manifest says
+  // `updates.mode: "on"` and names the brand's own EAS project and code signing
+  // certificate (brand-check holds those to the manifest). An update is then signed with
+  // the brand's key and checked against this certificate, so it never crosses brands.
+  // A link from the environment alone (EAS_PROJECT_ID) never turns updates on.
+  if (manifest.updates.mode !== 'on' || !link.projectId || link.projectId !== manifest.eas.projectId?.toLowerCase()) {
+    return { enabled: false };
+  }
   return {
     enabled: true,
     url: `https://u.expo.dev/${link.projectId}`,
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
+    codeSigningCertificate: brandFile(manifest.updates.codeSigningCertificate as string),
+    codeSigningMetadata: { keyid: 'main', alg: 'rsa-v1_5-sha256' },
   };
 }
 

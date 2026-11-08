@@ -11,7 +11,7 @@ Store copy, privacy answers and the export-compliance reasoning live in
 | Piece | Where | State |
 |-------|-------|-------|
 | Build, submit and update profiles | [`eas.json`](../eas.json) | ready |
-| EAS project link, OTA config, privacy manifest, export-compliance key | [`app.config.ts`](../app.config.ts) | ready; project id empty until `eas init` |
+| EAS project link, OTA config, privacy manifest, export-compliance key | [`app.config.ts`](../app.config.ts), `brand/<id>/brand.json` | ready; project id null until `eas init`, updates off |
 | Widget extension privacy manifest | [`plugins/withExtensionPrivacyManifest.js`](../plugins/withExtensionPrivacyManifest.js) | ready |
 | Manual build and submit workflows | [`.github/workflows/mobile-eas-build.yml`](../../../.github/workflows/mobile-eas-build.yml), [`mobile-eas-submit.yml`](../../../.github/workflows/mobile-eas-submit.yml) (repository root) | ready; need `EXPO_TOKEN` |
 | Structural checks of all of the above | [`scripts/eas-config.test.mjs`](../scripts/eas-config.test.mjs) (runs in CI) | ready |
@@ -133,14 +133,12 @@ eas init                   # creates the project under the organization
 ```
 
 `app.config.ts` is dynamic, so `eas init` cannot write the link itself: it
-prints the project id. Put the id and the organization name into `easLink` in
-[`app.config.ts`](../app.config.ts) and merge the change:
+prints the project id. Put the id and the organization name into the brand
+manifest, `eas` in [`brand/<id>/brand.json`](../../../brand/elitea/brand.json)
+(ADR-0052; the app config reads it from there), and merge the change:
 
-```ts
-const easLink = {
-  projectId: '<uuid from eas init>',
-  owner: 'elitea-ng',
-};
+```json
+"eas": { "projectId": "<uuid from eas init>", "owner": "elitea-ng" }
 ```
 
 Committing the link (it is not a secret) is the recommended way: every
@@ -149,10 +147,15 @@ runtime fingerprint of a build and of an update agree. `EAS_PROJECT_ID` and
 `EXPO_OWNER` in the environment override it (handy for a fork or a dry run);
 if you rely on them instead, set them as EAS environment variables in all
 three environments too (`eas env:set`), or the build server sees an unlinked
-app.
+app. `eas submit` finds the bundle id and package in the built app; `eas.json`
+names no identifier.
 
-Once linked, the app has `updates.url` and EAS Update is on (section 10).
-Unlinked builds (any local build today) have updates disabled.
+Linking does NOT turn EAS Update on. It is on only for a brand whose manifest
+says `"updates": { "mode": "on", "codeSigningCertificate": "certs/<file>.pem" }`
+AND names its own `eas.projectId` (section 10); a link from the environment
+alone, or one naming another project, leaves updates disabled. brand/elitea
+ships with updates off. `node scripts/assert-release-config.mjs` checks every
+brand in `brand/` (or only `ELITEA_BRAND`) and fails on any other combination.
 
 Then protect the production update channel so only organization admins can
 publish to it:
@@ -235,7 +238,7 @@ belongs in a mobile binary.
 
 ### First internal build, step by step
 
-1. Sections 1 to 6 done; `easLink` and `ascAppId` merged.
+1. Sections 1 to 6 done; the brand manifest's `eas` link and `ascAppId` merged.
 2. Local, interactive, once per platform (credentials, section 5):
    `eas build -p ios --profile production` and `eas build -p android --profile production`.
 3. iOS: `eas submit -p ios --profile production --latest` (or the EAS submit
@@ -314,12 +317,23 @@ an update published from it reaches no existing build.
 5. The production channel is protected (section 4): only organization admins
    publish to it. The CI robot token can still publish (keep it secret).
 
-**Hardening to decide before the first public release** (owner):
-end-to-end code signing of updates (`updates.codeSigningCertificate` in the
-app config, a private key kept outside EAS, `eas update --private-key-path`),
-so a leaked Expo token alone cannot push code to devices. Check that the Expo
-plan includes it. Some enterprise customers also forbid OTA for managed apps;
-a future workspace policy or MDM key could turn update checks off.
+**Turning updates on for a brand** (owner, ADR-0052 decision 3): updates are
+code-signed end to end, so a leaked Expo token alone cannot push code to
+devices and an update never crosses brands.
+
+1. `npx expo-updates codesigning:generate --key-output-directory <outside the repo>
+   --certificate-output-directory brand/<id>/certs --certificate-validity-duration-years 10
+   --certificate-common-name "<brand> updates"`. The certificate is public and
+   committed; the private key never enters the repository or EAS.
+2. Set `"updates": { "mode": "on", "codeSigningCertificate": "certs/certificate.pem" }`
+   and the brand's own `eas.projectId` in its `brand.json`. The app config then
+   sets `updates.codeSigningCertificate` with `codeSigningMetadata`
+   `{ keyid: "main", alg: "rsa-v1_5-sha256" }`.
+3. Publish with `eas update ... --private-key-path <the key>`. Check that the
+   Expo plan includes code signing.
+
+Some enterprise customers forbid OTA for managed apps; a future workspace
+policy or MDM key could turn update checks off.
 
 Every update check sends Expo the platform, the runtime version, the channel
 and a random per-installation id (expo-eas-client). The privacy answers in
@@ -372,5 +386,5 @@ after.
 | Who "collects" data for the privacy labels | docs/store/privacy.md, "Who collects" | the conservative answer (declared) |
 | Age rating / target audience | docs/store/listing.md | 13+ (Apple) / Teen, 18+ audience (Play) |
 | Demo workspace and reviewer test account | docs/store/listing.md, "Review notes" | none: must exist before the first external TestFlight round |
-| OTA code signing; OTA for MDM-managed installs | section 10 | not enabled |
+| OTA code signing (per brand, `updates.mode`); OTA for MDM-managed installs | section 10 | off for every brand in the repository |
 | Trademark clearance for the name | open-questions §2 | closed (Elitea's own app) |

@@ -4,7 +4,7 @@
 // Run with `npm run test:scripts` (node:test).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,20 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const eas = JSON.parse(readFileSync(resolve(root, 'eas.json'), 'utf8'));
+/**
+ * A copy of brand/sample as brand "ota" with updates on, in a temp folder beside this
+ * app (so its relative paths stay short): its own EAS project and a certificate.
+ */
+function otaBrand(projectId) {
+  const parent = mkdtempSync(resolve(root, '.brand-ota-'));
+  const dir = resolve(parent, 'ota');
+  cpSync(resolve(root, '../../brand/sample'), dir, { recursive: true });
+  const m = { ...brandManifest('sample'), id: 'ota', eas: { projectId, owner: 'ota-owner' }, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } };
+  writeFileSync(resolve(dir, 'brand.json'), JSON.stringify(m));
+  mkdirSync(resolve(dir, 'certs'));
+  writeFileSync(resolve(dir, 'certs/update.pem'), '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+  return dir;
+}
 const brandManifest = (id) => JSON.parse(readFileSync(resolve(root, '../../brand', id, 'brand.json'), 'utf8'));
 
 /** A build profile with its `extends` chain applied (shallow per platform, like EAS). */
@@ -29,8 +43,8 @@ function profile(name, seen = []) {
   };
 }
 
-function expoConfig(env) {
-  const output = execFileSync(npx, ['expo', 'config', '--type', 'public', '--json'], {
+function expoConfig(env, type = 'public') {
+  const output = execFileSync(npx, ['expo', 'config', '--type', type, '--json'], {
     cwd: root,
     env: { ...process.env, EAS_PROJECT_ID: '', EXPO_OWNER: '', ELITEA_BRAND: '', ...env },
     encoding: 'utf8',
@@ -103,19 +117,35 @@ describe('Expo config for EAS', () => {
     assert.deepEqual(config.runtimeVersion, { policy: 'fingerprint' });
   });
 
-  it('linked: project id and owner from the environment, update URL for that project', () => {
+  it('linked from the environment: project id and owner set, EAS Update still OFF (the brand did not turn it on)', () => {
     const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
     const config = expoConfig({ EAS_PROJECT_ID: projectId, EXPO_OWNER: 'elitea-ng' });
     assert.equal(config.owner, 'elitea-ng');
     assert.equal(config.extra.eas.projectId, projectId);
-    assert.equal(config.updates.enabled, true);
-    assert.equal(config.updates.url, `https://u.expo.dev/${projectId}`);
-    assert.equal(config.updates.fallbackToCacheTimeout, 0);
+    assert.deepEqual(config.updates, { enabled: false });
     // expo-widgets' extension entry survives the merge (EAS signs the extension from it).
     const elitea = brandManifest('elitea');
     assert.equal(config.extra.eas.build.experimental.ios.appExtensions[0].bundleIdentifier, elitea.mobile.widgetBundleId);
     assert.equal(config.ios.bundleIdentifier, elitea.mobile.bundleId);
     assert.equal(config.android.package, elitea.mobile.bundleId);
+  });
+
+  it('a brand that turns updates on with its own project and certificate gets signed updates', () => {
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
+    const dir = otaBrand(projectId);
+    try {
+      const config = expoConfig({ ELITEA_BRAND: dir }, 'prebuild');
+      assert.equal(config.updates.enabled, true);
+      assert.equal(config.updates.url, `https://u.expo.dev/${projectId}`);
+      assert.equal(config.updates.fallbackToCacheTimeout, 0);
+      assert.ok(config.updates.codeSigningCertificate.endsWith('/ota/certs/update.pem'), config.updates.codeSigningCertificate);
+      assert.ok(!config.updates.codeSigningCertificate.startsWith('/'), 'certificate path is absolute');
+      assert.deepEqual(config.updates.codeSigningMetadata, { keyid: 'main', alg: 'rsa-v1_5-sha256' });
+      // The environment cannot point a brand's updates at another project.
+      assert.deepEqual(expoConfig({ ELITEA_BRAND: dir, EAS_PROJECT_ID: '1f5e1c1e-1111-4222-8333-444455556666' }).updates, { enabled: false });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
   });
 
   it('refuses a malformed project id instead of building an unreachable update URL', () => {
