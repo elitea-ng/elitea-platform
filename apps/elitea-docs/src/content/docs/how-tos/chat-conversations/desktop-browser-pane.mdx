@@ -37,6 +37,16 @@ An agent can ask you to do something only you should do in the page, such as sig
 
 Each thing the agent does in the browser is a step of its turn: the site, the page path without the query or fragment, the control it used and how it went. A part of the path that looks like a token is recorded as `{token}`: a UUID, or a run of 16 or more letters and digits, as in reset and sign-in links. `/reset/3f2a9c4e-…/confirm` is recorded as `/reset/{token}/confirm`. Text the agent types is recorded as its length and a fingerprint only, never the text itself.
 
+## When the thread runs in the cloud
+
+When you send a thread to the cloud (**Run in cloud**), its agent uses a cloud browser instead of the page on your computer. The thread's **Browser** tab then shows that cloud browser, streamed live, once the agent has opened a page in it:
+
+- the toolbar shows the page's address (read-only: the agent navigates) and the pill: **Agent**, **You** or **Ended**;
+- **Take over**, or a click, key or scroll in the page, gives you the page; **Hand back** returns it, with an optional note the agent reads;
+- if you may only watch, the tab says **Watching only**.
+
+The cloud browser keeps nothing from the page on your computer: no cookies, no sign-ins. Sign in again in the cloud browser where needed. It ends with its run; when the thread comes back to your computer, the tab is the local page again, with its own site data as you left it. See [Watch and take over](/integrations/toolkits/cloud_browser_toolkit#watch-and-take-over).
+
 ## What the browser opens
 
 - **`https` pages.** Always.

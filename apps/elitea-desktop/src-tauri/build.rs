@@ -101,6 +101,8 @@ fn main() {
             "http_fetch",
             "http_read_body",
             "http_cancel",
+            "browser_view_open",
+            "browser_view_send",
             "app_ready",
             "doctor_run",
             "doctor_fix",

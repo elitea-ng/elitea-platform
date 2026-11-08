@@ -127,7 +127,12 @@ impl Default for FetchLimits {
 #[derive(Clone)]
 pub struct SharedHttp {
     client: Arc<OnceCell<reqwest::Client>>,
+    /// HTTP/1.1 only, for a WebSocket upgrade (`view_socket.rs`): on the
+    /// pooled client TLS negotiates h2, where an upgrade does not exist.
+    /// `None` once no such client could be built.
+    upgrade: Arc<OnceCell<Option<reqwest::Client>>>,
     user_agent: Arc<str>,
+    client_version: Arc<str>,
 }
 
 impl SharedHttp {
@@ -135,8 +140,38 @@ impl SharedHttp {
     pub fn new(client_version: &str) -> Self {
         Self {
             client: Arc::new(OnceCell::new()),
+            upgrade: Arc::new(OnceCell::new()),
             user_agent: format!("elitea-desktop/{client_version}").into(),
+            client_version: client_version.into(),
         }
+    }
+
+    /// The app's version, for `X-Client-Version`.
+    #[must_use]
+    pub fn client_version(&self) -> &str {
+        &self.client_version
+    }
+
+    /// The HTTP/1.1 client a WebSocket upgrade goes through, built on first
+    /// use as the pooled one is (the root-store load blocks). `None` when
+    /// no HTTP/1.1-only client could be built: a default client would
+    /// negotiate h2, so the open fails instead.
+    pub async fn upgrade_client(&self) -> Option<&reqwest::Client> {
+        self.upgrade
+            .get_or_init(|| async {
+                let user_agent = self.user_agent.clone();
+                match tokio::task::spawn_blocking(move || build_upgrade_client(&user_agent)).await {
+                    Ok(client) => client,
+                    Err(error) => {
+                        log::warn!(
+                            "the http/1.1 client build failed ({error}); using the built-in roots"
+                        );
+                        upgrade_built_in_roots(&self.user_agent)
+                    }
+                }
+            })
+            .await
+            .as_ref()
     }
 
     /// Start building the client now, so the first request (or the setup
@@ -198,6 +233,29 @@ fn build_client(user_agent: &str) -> reqwest::Client {
             built_in_roots(user_agent)
         }
     }
+}
+
+/// The HTTP/1.1-only client with the system roots, else the built-in ones;
+/// never a default client (that one negotiates h2).
+fn build_upgrade_client(user_agent: &str) -> Option<reqwest::Client> {
+    match builder(user_agent).http1_only().build() {
+        Ok(client) => Some(client),
+        Err(error) => {
+            log::warn!(
+                "http/1.1 client with the system roots failed ({error}); using the built-in roots"
+            );
+            upgrade_built_in_roots(user_agent)
+        }
+    }
+}
+
+fn upgrade_built_in_roots(user_agent: &str) -> Option<reqwest::Client> {
+    builder(user_agent)
+        .http1_only()
+        .tls_built_in_native_certs(false)
+        .build()
+        .inspect_err(|error| log::warn!("no http/1.1 client could be built ({error})"))
+        .ok()
 }
 
 // ---- scope -------------------------------------------------------------
@@ -929,6 +987,19 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+
+    #[tokio::test]
+    async fn no_upgrade_client_rather_than_one_that_negotiates_h2() {
+        // An agent no header takes fails both builds, the system roots and
+        // the built-in ones: no client, never a default (h2-capable) one.
+        assert!(build_upgrade_client("elitea\ndesktop").is_none());
+        let broken = SharedHttp {
+            user_agent: "elitea\ndesktop".into(),
+            ..SharedHttp::new("0.1.0")
+        };
+        assert!(broken.upgrade_client().await.is_none());
+        assert!(SharedHttp::new("0.1.0").upgrade_client().await.is_some());
+    }
 
     fn meta(value: &serde_json::Value) -> FetchMeta {
         serde_json::from_value(value.clone()).unwrap()

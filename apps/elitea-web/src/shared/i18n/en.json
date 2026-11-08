@@ -5860,5 +5860,6 @@
   "features.agentMemory.writer.agent": "The agent",
   "features.agentMemory.writer.person": "A person",
   "pages.agents.editApplication.tabs.memory": "Memory",
-  "features.agentMemory.chip.archived": "archived"
+  "features.agentMemory.chip.archived": "archived",
+  "cloudBrowser.failure.upgradeRequired": "Update the app to see the browser: this version is older than the workspace allows."
 }
