@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 
 import { useRouterState } from '@tanstack/react-router';
 
-import { resolveBrandPack } from '@/shared/brand';
+import { productFullName } from '@/shared/brand';
 
 import { derivePageTitle } from '../lib/pageTitle';
 
@@ -26,8 +26,8 @@ export interface PageTitleSetterProps {
  * suffix is the only visible change for a deployment on the default pack
  * (`… - Elitea`).
  *
- * `resolveBrandPack()` is memoised rather than called per render: it runs a
- * zod parse over the served pack, and the global it reads is fixed for the
+ * `productFullName()` (the resolved pack's `product.name`) is memoised
+ * rather than called per render: it runs a zod parse over the served pack, and the global it reads is fixed for the
  * document's lifetime (`index.html` sets it with a blocking script before the
  * bundle evaluates).
  */
@@ -40,7 +40,7 @@ export function PageTitleSetter({ projectName }: PageTitleSetterProps): null {
       return typeof value === 'string' ? value : '';
     },
   });
-  const productName = useMemo(() => resolveBrandPack().product.name, []);
+  const productName = useMemo(() => productFullName(), []);
 
   useEffect(() => {
     const derived = derivePageTitle(pathname, searchName, projectName);

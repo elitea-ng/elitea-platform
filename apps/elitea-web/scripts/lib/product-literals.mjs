@@ -16,7 +16,7 @@ import { parse } from '@babel/parser';
 import { walk } from './budgets-core.mjs';
 
 /** The product name as a word on its own, not part of a wire name. */
-export const PRODUCT_LITERAL_RE = /(?<![-\w/.@])(?:Elitea|ELITEA|EliteA)(?![-\w/.@])/;
+const PRODUCT_LITERAL_RE = /(?<![-\w/.@])(?:Elitea|ELITEA|EliteA)(?![-\w/.@])/;
 
 /**
  * Files allowed to name the product, each with why. Paths are relative to

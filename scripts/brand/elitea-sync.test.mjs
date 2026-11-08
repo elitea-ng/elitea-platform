@@ -33,7 +33,7 @@ for (const [mine, theirs] of Object.entries(COPIES)) {
   });
 }
 
-test('brand/elitea names, hue and support address match the web default pack and client-core', () => {
+test('brand/elitea names and hue match the web default pack and client-core', () => {
   const pack = JSON.parse(repo('apps/elitea-web/src/shared/brand/tokens/default.pack.json'));
   assert.equal(brand.manifest.productName, pack.product.name);
   assert.equal(brand.manifest.shortName, pack.product.shortName);
@@ -42,6 +42,8 @@ test('brand/elitea names, hue and support address match the web default pack and
   const identity = repo('libs/ts/client-core/src/brand/identity.ts').toString();
   assert.match(identity, new RegExp(`name: '${lit(brand.manifest.productName)}', shortName: '${lit(brand.manifest.shortName)}'`));
   assert.match(identity, new RegExp(`DEFAULT_BRAND_HUE = '${lit(brand.manifest.brand.hue)}'`, 'i'));
+  // The web client ships no support address (ADR-0052 W3.5): ELITEA's comes
+  // from the served pack, a brand's from its generated default pack.
   const links = repo('apps/elitea-web/src/shared/brand/brandLinks.ts').toString();
-  assert.match(links, new RegExp(`FALLBACK_SUPPORT_EMAIL = '${lit(brand.manifest.supportEmail)}'`));
+  assert.doesNotMatch(links, new RegExp(lit(brand.manifest.supportEmail)));
 });

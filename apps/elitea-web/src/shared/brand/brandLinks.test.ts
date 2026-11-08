@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  FALLBACK_SUPPORT_EMAIL,
   docsBaseUrl,
   docsLink,
   supportEmail,
@@ -147,10 +146,19 @@ describe('supportEmail / supportUrl', () => {
     expect(supportUrl(tenantPack)).toBe('https://help.contoso.example/tickets');
   });
 
-  it('fall back to the shipped address, and to a mailto: of it for the URL', () => {
-    expect(supportEmail(DEFAULT_BRAND_PACK)).toBe(FALLBACK_SUPPORT_EMAIL);
-    expect(supportUrl(DEFAULT_BRAND_PACK)).toBe(`mailto:${FALLBACK_SUPPORT_EMAIL}`);
+  it('fall back to the build default pack’s, and to no link at all: never a shipped address (ADR-0052 W3.5)', () => {
+    const bare = BrandPack.parse({ ...DEFAULT_BRAND_PACK, product: { name: 'Machina AI', shortName: 'Machina' } });
+    expect(supportEmail(bare)).toBe(DEFAULT_BRAND_PACK.product.supportEmail);
+    expect(supportUrl(bare)).toBe(
+      DEFAULT_BRAND_PACK.product.supportUrl ??
+        (DEFAULT_BRAND_PACK.product.supportEmail === undefined ? undefined : `mailto:${DEFAULT_BRAND_PACK.product.supportEmail}`),
+    );
+    if (DEFAULT_BRAND_PACK.product.supportEmail === undefined && DEFAULT_BRAND_PACK.product.supportUrl === undefined) {
+      expect(supportEmail(bare)).toBeUndefined();
+      expect(supportUrl(bare)).toBeUndefined();
+    }
   });
+
 
   it('build the mailto: from the pack’s e-mail when it states an e-mail but no URL', () => {
     const emailOnly = BrandPack.parse({
