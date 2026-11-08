@@ -27,8 +27,6 @@ export const PRODUCT_LITERAL_ALLOWED = new Map([
   ['src/features/agent-lifecycle/lib/publishValidation.ts', 'a stored category value'],
   // The bug report goes to ELITEA's own public repository, which builds every brand.
   ['src/widgets/account-menu/lib/accountLinks.ts', 'names the upstream product in an upstream bug report'],
-  // The push worker's offline notice title; W3.4 moves it to the default pack.
-  ['src/entries/push-sw/pushWorker.ts', 'until W3.4'],
   // Development-only fake hosts.
   ['src/entries/desktop/devHarness.tsx', 'development harness'],
   ['src/shared/desktop/doctorIpc.fake.ts', 'fake host for tests and the harness'],

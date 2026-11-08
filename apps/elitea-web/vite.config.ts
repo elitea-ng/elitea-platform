@@ -147,8 +147,10 @@ function pushWorker(): Plugin {
       logLevel: 'silent',
       root: resolvePath('.'),
       publicDir: false,
-      // The worker names notices with the build's brand (`tokens/default.pack.json`).
-      plugins: [brandPlugin()],
+      // The worker names a notice that names no run with the build's product
+      // (the default pack's shortName), inlined as one string: importing the
+      // pack would bundle all of it into the worker.
+      define: { 'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(brandProductName()) },
       build: {
         write: false,
         minify,
@@ -256,6 +258,12 @@ function brandResolveId(built: BrandBuild): NonNullable<Plugin['resolveId']> {
     if (target === undefined) return null;
     return query === undefined ? target : `${target}?${query}`;
   };
+}
+
+/** The build's product short name: the generated default pack's for a non-default brand. */
+function brandProductName(): string {
+  const reference = JSON.parse(readFileSync(BRAND_DEFAULT_PACK_FILE, 'utf8'));
+  return isDefaultBrand(BRAND) ? reference.product.shortName : brandDefaultPack(BRAND, reference).product.shortName;
 }
 
 export function brandPlugin(): Plugin {

@@ -6,7 +6,7 @@ export declare function isDefaultBrand(brand: Brand): boolean;
 export declare function brandDefaultPack(
   brand: Brand,
   reference: Record<string, unknown> & { product: Record<string, unknown> },
-): Record<string, unknown>;
+): Record<string, unknown> & { product: { name: string; shortName: string } };
 export declare function fillSized(svg: string): string;
 export declare function brandLogoFiles(brand: Brand): {
   public: Record<string, string>;
