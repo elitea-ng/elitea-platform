@@ -350,10 +350,19 @@ mod gtk_run {
                 if clicked["status"] != "ok" {
                     return Err(format!("the trusted click failed: {clicked}"));
                 }
-                let snapshot = tree(driver).await?;
-                if snapshot.find("paragraph", "Clicked").is_none() {
+                // GDK's test input goes through the X server and then to
+                // the web process: the page sees it after the call returns,
+                // so wait for it rather than snapshot at once.
+                let seen = call(
+                    driver,
+                    "browser_wait",
+                    json!({ "text": "Clicked", "timeout_ms": 5000 }),
+                )
+                .await;
+                if seen["status"] != "ok" {
+                    let snapshot = tree(driver).await?;
                     return Err(format!(
-                        "the page did not see a real click:\n{}",
+                        "the page did not see a real click ({seen}):\n{}",
                         snapshot.render_tree()
                     ));
                 }
