@@ -9,6 +9,7 @@ import { test } from 'node:test';
 
 import { BRANDS_DIR } from './load.mjs';
 import { PLACEHOLDER_COLOURS, placeholderAssets } from './placeholder-assets.mjs';
+import { decodedPngs } from './raster.mjs';
 
 const SAMPLE = join(BRANDS_DIR, 'sample');
 const OS_FILES = new Set(['.DS_Store', 'Thumbs.db']);
@@ -19,7 +20,10 @@ test('brand/sample assets are exactly the generated placeholders', () => {
   const actual = files(join(SAMPLE, 'assets')).map((f) => relative(join(SAMPLE, 'assets'), f).split('\\').join('/'));
   assert.deepEqual(actual.sort(), [...expected.keys()].sort());
   for (const [path, bytes] of expected) {
-    assert.ok(readFileSync(join(SAMPLE, 'assets', path)).equals(bytes), `assets/${path} differs: run node scripts/brand/placeholder-assets.mjs brand/sample`);
+    // Rasters compare by decoded pixels: deflate output varies with node's zlib build.
+    const committed = readFileSync(join(SAMPLE, 'assets', path));
+    const same = /\.(png|ico|icns)$/.test(path) ? decodedPngs(committed).equals(decodedPngs(bytes)) && decodedPngs(bytes).length > 0 : committed.equals(bytes);
+    assert.ok(same, `assets/${path} differs: run node scripts/brand/placeholder-assets.mjs brand/sample`);
   }
 });
 

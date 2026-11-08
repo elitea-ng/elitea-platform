@@ -3,7 +3,7 @@
 // tests for fixtures and by gen-sample.mjs for brand/sample's placeholder
 // icons. Node's standard library only (zlib for the PNG stream).
 
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -139,4 +139,35 @@ export const solidPng = (size, hex, { alpha = false } = {}) => {
 export function placeholderSvg({ fg, bg = null, viewBox = 512 }) {
   const tile = bg ? `<rect width="${viewBox}" height="${viewBox}" rx="${Math.round(viewBox * 0.22)}" fill="${bg}"/>` : '';
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${viewBox} ${viewBox}">${tile}<circle cx="${viewBox / 2}" cy="${viewBox / 2}" r="${Math.round(viewBox * 0.3)}" fill="${fg}"/></svg>\n`;
+}
+
+/**
+ * The decoded content of every PNG inside `buf` (a PNG, or an .ico/.icns
+ * that embeds PNGs), as one buffer: each image's IHDR and its inflated
+ * pixel stream. Compressed bytes depend on the zlib build of the node that
+ * wrote them; this does not, so two runs of the generator compare equal on
+ * any node. Bytes outside the PNGs (container headers that hold offsets and
+ * lengths) are left out; the image list itself carries the sizes.
+ */
+export function decodedPngs(buf) {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const out = [];
+  let at = buf.indexOf(sig);
+  while (at !== -1) {
+    let p = at + 8;
+    let ihdr = null;
+    const idat = [];
+    while (p + 8 <= buf.length) {
+      const len = buf.readUInt32BE(p);
+      const type = buf.toString('latin1', p + 4, p + 8);
+      const data = buf.subarray(p + 8, p + 8 + len);
+      if (type === 'IHDR') ihdr = data;
+      if (type === 'IDAT') idat.push(data);
+      p += 12 + len;
+      if (type === 'IEND') break;
+    }
+    if (ihdr) out.push(Buffer.from(ihdr), inflateSync(Buffer.concat(idat)));
+    at = buf.indexOf(sig, p);
+  }
+  return Buffer.concat(out);
 }
