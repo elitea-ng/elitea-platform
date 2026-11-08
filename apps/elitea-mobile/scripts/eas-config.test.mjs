@@ -13,15 +13,20 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const eas = JSON.parse(readFileSync(resolve(root, 'eas.json'), 'utf8'));
 /**
- * A copy of brand/sample as brand "ota" with updates on, in a temp folder beside this
- * app (so its relative paths stay short): its own EAS project and a certificate.
+ * A copy of brand/sample as brand `id` with `patch` over its manifest, in a temp folder
+ * beside this app (so its relative paths stay short). The caller removes `dirname(dir)`.
  */
-function otaBrand(projectId) {
-  const parent = mkdtempSync(resolve(root, '.brand-ota-'));
-  const dir = resolve(parent, 'ota');
+function tempBrand(id, patch) {
+  const parent = mkdtempSync(resolve(root, `.brand-${id}-`));
+  const dir = resolve(parent, id);
   cpSync(resolve(root, '../../brand/sample'), dir, { recursive: true });
-  const m = { ...brandManifest('sample'), id: 'ota', eas: { projectId, owner: 'ota-owner' }, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } };
-  writeFileSync(resolve(dir, 'brand.json'), JSON.stringify(m));
+  writeFileSync(resolve(dir, 'brand.json'), JSON.stringify({ ...brandManifest('sample'), id, ...patch }));
+  return dir;
+}
+
+/** brand/sample as brand "ota" with updates on: its own EAS project and a certificate. */
+function otaBrand(projectId) {
+  const dir = tempBrand('ota', { eas: { projectId, owner: 'ota-owner' }, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } });
   mkdirSync(resolve(dir, 'certs'));
   writeFileSync(resolve(dir, 'certs/update.pem'), '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
   return dir;
@@ -166,8 +171,16 @@ describe('Expo config for EAS', () => {
 
   it("declares Expo's update installation id only when EAS Update is on", () => {
     const collected = (env) => expoConfig(env).ios.privacyManifests.NSPrivacyCollectedDataTypes.map((t) => t.NSPrivacyCollectedDataType);
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
     assert.ok(!collected({}).includes('NSPrivacyCollectedDataTypeDeviceID'));
-    assert.ok(collected({ EAS_PROJECT_ID: '0f5e1c1e-1111-4222-8333-444455556666' }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    // Linked but updates off (the brand did not turn them on): no update checks, no id.
+    assert.ok(!collected({ EAS_PROJECT_ID: projectId }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    const dir = otaBrand(projectId);
+    try {
+      assert.ok(collected({ ELITEA_BRAND: dir }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
   });
 
   // Apple does not read static pods' manifests, so the app's manifest must carry every
@@ -289,6 +302,31 @@ describe('Expo config per brand (ADR-0052 decisions 2 and 3)', () => {
     assert.equal(config.extra.brand, 'sample');
     assert.throws(() => expoConfig({ ELITEA_BRAND: 'assets' }));
     assert.throws(() => expoConfig({ ELITEA_BRAND: resolve(root, 'no-such-brand') }));
+  });
+});
+
+describe('Universal links and App Links on the brand linkDomain (ADR-0052 decision 11)', () => {
+  const links = (config) => ({ associatedDomains: config.ios.associatedDomains, intentFilters: config.android.intentFilters });
+  const declared = (domain) => ({
+    associatedDomains: [`applinks:${domain}`],
+    intentFilters: [
+      { action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: domain, pathPrefix: '/connect' }], category: ['BROWSABLE', 'DEFAULT'] },
+    ],
+  });
+
+  it('each brand declares its own linkDomain, for connect links only', () => {
+    for (const id of ['elitea', 'sample']) {
+      assert.deepEqual(links(expoConfig({ ELITEA_BRAND: id })), declared(brandManifest(id).linkDomain), id);
+    }
+  });
+
+  it('a brand with no linkDomain declares no associated domain and no App Link filter', () => {
+    const dir = tempBrand('nolinks', { linkDomain: null });
+    try {
+      assert.deepEqual(links(expoConfig({ ELITEA_BRAND: dir })), { associatedDomains: undefined, intentFilters: undefined });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
   });
 });
 

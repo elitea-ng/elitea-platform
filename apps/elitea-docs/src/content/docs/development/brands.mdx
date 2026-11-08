@@ -116,6 +116,27 @@ With no argument it checks the brand `ELITEA_BRAND` selects. `--json` prints a m
 
 CI runs it on both brands, with the unit tests (`scripts/brand-check.test.mjs`, `scripts/brand/*.test.mjs`), in the **No Binaries** workflow's brand job on every pull request.
 
+## Mobile app
+
+`apps/elitea-mobile/app.config.ts` reads the selected brand through the loader, so every `expo` and EAS command builds the brand `ELITEA_BRAND` names:
+
+```bash
+cd apps/elitea-mobile
+ELITEA_BRAND=sample npx expo config --type public   # the sample brand's config
+ELITEA_BRAND=sample eas build -p ios --profile preview
+```
+
+From the manifest the app takes:
+
+- **Identity:** `productName` (app name, `CFBundleName`, permission texts), `shortName`, `mobile.bundleId` (iOS bundle id and Android package), `mobile.appGroup`, `mobile.widgetBundleId`, `mobile.connectSchemes` and `mobile.oauthRedirectScheme` (URL schemes), and the web, privacy and support URLs. Runtime code reads them from `src/config/identity.ts`; none is written in the app's source.
+- **Assets:** the app icon (`ios/icon-1024.png`, or the Icon Composer document `ios/app.icon/` when present), Android adaptive icon layers, splash, favicon and the mark (`logo/logo-mark.svg`, drawn by `BrandMark`). Paths in the config are relative to the app folder.
+- **Firebase:** `firebase/GoogleService-Info.plist` and `firebase/google-services.json` when the brand carries them; otherwise push is not wired.
+- **EAS:** `eas.projectId` and `eas.owner`; `EAS_PROJECT_ID` and `EXPO_OWNER` override them. `eas.json` names no identifier.
+- **Updates:** EAS Update is off unless `updates.mode` is `"on"` and the manifest names its own `eas.projectId` and `updates.codeSigningCertificate` (a public certificate under `certs/`). Updates are then signed with the brand's key, which never enters the repository. `npm run check:release-config` checks every brand.
+- **Links:** with a `linkDomain`, the app declares `applinks:<linkDomain>` and a verified Android App Link for `https://<linkDomain>/connect`. The domain must serve `apple-app-site-association` and `assetlinks.json` naming the brand's app; `npm run check:link-files` (with `APPLE_TEAM_ID` and `ANDROID_CERT_SHA256`) verifies them before a release. `linkDomain: null` declares neither.
+
+Siri and Shortcuts phrases name the app by its installed name, so the App Intents source holds no product name. Building with `brand/sample` yields a config with no ELITEA identifier, name or domain (`scripts/eas-config.test.mjs`, `src/config/sampleBrand.test.tsx`).
+
 ## Add a field
 
 1. Add the field and its rule to `validateManifest` in `scripts/brand/schema.mjs`, and a test in `scripts/brand/schema.test.mjs`. The `allowed` list rejects any field the validator does not know.

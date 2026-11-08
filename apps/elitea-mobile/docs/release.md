@@ -165,6 +165,27 @@ eas channel:create production   # the first build creates channels too
 eas channel:protect production
 ```
 
+## 4a. Universal links and App Links (brand owner)
+
+A brand with a `linkDomain` declares `applinks:<linkDomain>` (iOS associated
+domains) and a verified `https://<linkDomain>/connect` App Link (Android
+intent filter, `autoVerify`). Connect links on that domain then open the app
+instead of the browser. A brand with `linkDomain: null` declares neither and
+uses its custom scheme alone.
+
+The domain must serve, over HTTPS with no redirect:
+
+- `/.well-known/apple-app-site-association` with an `applinks.details` entry
+  whose `appIDs` holds `<Apple team id>.<bundle id>` and whose `components` (or
+  `paths`) cover `/connect`;
+- `/.well-known/assetlinks.json` with a `delegate_permission/common.handle_all_urls`
+  statement for the package and the SHA-256 fingerprint of the Play app
+  signing key (Play Console, Test and release, App integrity).
+
+`npm run check:link-files` fetches both and fails when they do not name this
+brand's app and certificate. The team id and fingerprint come from the
+environment, not the manifest: they belong to the brand owner's accounts.
+
 ## 5. Credentials (let EAS manage them)
 
 EAS generates, stores and renews signing credentials. Nothing secret is ever
@@ -375,6 +396,7 @@ after.
 - [ ] No new cryptography outside the operating system on iOS (docs/store/export-compliance.md); otherwise the key must be revisited.
 - [ ] Review sign-in still works (demo workspace and test account, docs/store/listing.md).
 - [ ] Screenshots still match the app (docs/store/screenshots.md).
+- [ ] The brand's link files name this app: `ELITEA_BRAND=<id> APPLE_TEAM_ID=<team> ANDROID_CERT_SHA256=<Play app signing key fingerprint> npm run check:link-files` (section 4a).
 - [ ] Submit for review; phased release (iOS) and staged rollout (Android) on.
 
 ## 13. Owner decisions still open

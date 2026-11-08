@@ -162,7 +162,7 @@ function updatesConfig(link: EasProjectLink): ExpoConfig['updates'] {
  * native sources of modules that ship none (docs/store/privacy.md, "Privacy manifest").
  * Collected data types match the App Store privacy label draft (same doc).
  */
-const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>['privacyManifests'] => ({
+const privacyManifests = (updatesOn: boolean): NonNullable<ExpoConfig['ios']>['privacyManifests'] => ({
   NSPrivacyTracking: false,
   NSPrivacyTrackingDomains: [],
   NSPrivacyAccessedAPITypes: [
@@ -203,9 +203,10 @@ const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>[
         NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
       }),
     ),
-    // EAS Update, only when it is on (a linked build): a random per-installation id
-    // (expo-eas-client) sent to Expo with each update check, not linked to the user.
-    ...(link.projectId
+    // EAS Update, only when it is on (the brand turns it on, updatesConfig): a random
+    // per-installation id (expo-eas-client) sent to Expo with each update check, not linked
+    // to the user.
+    ...(updatesOn
       ? [
           {
             NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
@@ -217,6 +218,26 @@ const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>[
       : []),
   ],
 });
+
+/**
+ * Universal links (iOS) and verified App Links (Android) on the brand's `linkDomain`, for
+ * connect links only (`https://<linkDomain>/connect?server=...`, the same screen as
+ * `<scheme>://connect`). The domain serves apple-app-site-association and assetlinks.json
+ * naming this brand's app (`npm run check:link-files` before a release). No `linkDomain`:
+ * nothing is declared, and the custom scheme works alone.
+ */
+export const LINK_PATH_PREFIX = '/connect';
+const associatedDomains = identity.linkDomain ? [`applinks:${identity.linkDomain}`] : [];
+const appLinkFilters: NonNullable<ExpoConfig['android']>['intentFilters'] = identity.linkDomain
+  ? [
+      {
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'https', host: identity.linkDomain, pathPrefix: LINK_PATH_PREFIX }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      },
+    ]
+  : [];
 
 /** Read once per evaluation of this file (each `expo config` run, each EAS build). */
 const eas = resolveEasLink();
@@ -240,8 +261,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: 'automatic',
   ios: {
     bundleIdentifier: identity.bundleId,
-    privacyManifests: privacyManifests(eas),
+    privacyManifests: privacyManifests(updatesConfig(eas)?.enabled === true),
     supportsTablet: true,
+    ...(associatedDomains.length ? { associatedDomains } : {}),
     // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
     requireFullScreen: false,
     // The brand's Icon Composer document when it has one (the system derives Dark, Tinted,
@@ -268,6 +290,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   android: {
     package: identity.bundleId,
     allowBackup: false,
+    ...(appLinkFilters.length ? { intentFilters: appLinkFilters } : {}),
     adaptiveIcon: {
       backgroundColor: background.dark,
       foregroundImage: brandAsset('android/adaptive-foreground.png'),

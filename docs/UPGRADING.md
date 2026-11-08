@@ -18,6 +18,15 @@ been uploaded under the earlier placeholder identity, so no installed app moves.
 - **Building another brand:** set `ELITEA_BRAND` to a brand folder for every
   `expo` and EAS command (docs: Development → Brands). `eas.json` names no
   app identifier; EAS reads them from the brand's Expo config.
+- **EAS link and updates:** the EAS project id and owner move into the brand
+  manifest's `eas` (environment variables still override). EAS Update is now
+  off unless the brand sets `updates.mode: "on"` with its own project and a
+  code signing certificate; a project id from the environment alone no longer
+  turns it on. brand/elitea ships with updates off.
+- **Universal links and App Links:** builds declare `applinks:elitea.ai` and a
+  verified App Link for `https://elitea.ai/connect`. Until the domain serves
+  matching well-known files (`npm run check:link-files`), connect links on it
+  open in the browser; the `elitea://` scheme is unchanged.
 
 ## Brand manifests: brand/elitea and brand/sample (#1675, ADR-0052 W0)
 
