@@ -92,6 +92,7 @@ fn screen() -> ScreenStatus {
         locked: state.locked,
         screensaver: state.screensaver,
         display_asleep: false,
+        lock_state_unknown: false,
     }
 }
 

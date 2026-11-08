@@ -510,6 +510,7 @@ impl HostState for MacDriver {
             locked: state.locked,
             screensaver,
             display_asleep: state.display_asleep,
+            lock_state_unknown: false,
         }
     }
 

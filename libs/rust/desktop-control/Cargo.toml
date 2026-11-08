@@ -42,9 +42,11 @@ willhook = "0.6.3"
 agent-desktop-core = { path = "../vendor/agent-desktop/core", version = "=1.2.0" }
 agent-desktop-linux = { path = "../vendor/agent-desktop/linux", version = "=1.2.0" }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-# The X11 user-active guard's XInput2 raw-event watch (src/linux_input.rs):
-# the x11rb the adapter pins, plus `xinput` (MIT OR Apache-2.0).
-x11rb = { version = "=0.14.0", default-features = false, features = ["xinput"] }
+# The X11 user-active guard's XInput2 raw-event watch (src/linux_input.rs)
+# and the X server's own screensaver state (MIT-SCREEN-SAVER, src/linux.rs):
+# the x11rb the adapter pins, plus `xinput` and `screensaver` (MIT OR
+# Apache-2.0; features only, no new crate).
+x11rb = { version = "=0.14.0", default-features = false, features = ["xinput", "screensaver"] }
 # The screen reads (logind, the screensaver services; src/linux.rs): the
 # zbus the adapter pins (MIT).
 zbus = "=5.19.0"

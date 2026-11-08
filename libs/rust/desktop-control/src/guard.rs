@@ -49,6 +49,9 @@ pub struct ScreenStatus {
     pub screensaver: bool,
     /// The main display sleeps.
     pub display_asleep: bool,
+    /// Whether the lock screen is up cannot be told (Linux with no
+    /// screensaver service that answers): the screen counts as locked.
+    pub lock_state_unknown: bool,
 }
 
 impl ScreenStatus {
@@ -75,6 +78,10 @@ impl ScreenStatus {
             Some("the screensaver is up")
         } else if self.display_asleep {
             Some("the display is asleep")
+        } else if self.lock_state_unknown {
+            Some(
+                "whether the screen is locked cannot be read (no screensaver service answers), so it counts as locked",
+            )
         } else {
             None
         }
@@ -273,6 +280,10 @@ mod tests {
             },
             ScreenStatus {
                 on_console: false,
+                ..ScreenStatus::available()
+            },
+            ScreenStatus {
+                lock_state_unknown: true,
                 ..ScreenStatus::available()
             },
             ScreenStatus::default(),

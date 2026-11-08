@@ -391,6 +391,49 @@ fn is_file_location(location: &str) -> bool {
         && location.len() > 7
 }
 
+/// What a Linux session says about its screen, for [`linux_screen_status`].
+/// Each read is `None` when nothing answered it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LinuxScreenReads {
+    /// `DISPLAY` or `WAYLAND_DISPLAY` is set.
+    pub display: bool,
+    /// logind's session of this process: `Active`, then `LockedHint`
+    /// (`None` when the hint cannot be read).
+    pub logind: Option<(bool, Option<bool>)>,
+    /// The screensaver services (`org.freedesktop.ScreenSaver`,
+    /// `org.gnome.ScreenSaver`): `Some(true)` when one says it is active,
+    /// `Some(false)` when at least one answered and none is active.
+    pub screensaver_service: Option<bool>,
+    /// The X server's own screensaver (MIT-SCREEN-SAVER `QueryInfo`):
+    /// `Some(true)` while it is on or cycling.
+    pub x11_saver_on: Option<bool>,
+}
+
+/// The Linux screen rule (ADR-0047 decision 5, #1586), pure so every case is
+/// tested on every OS. It fails closed: only a desktop's own screensaver
+/// service that answers can say the screen is not locked. logind's
+/// `LockedHint` is set by the desktops that integrate their locker (GNOME,
+/// KDE), but i3lock, slock and xsecurelock set nothing and run no D-Bus
+/// service, so a `LockedHint` of false, or no logind at all, says nothing:
+/// without a screensaver service that answers the lock state is unknown and
+/// the screen counts as locked. logind saying the session is inactive or
+/// locked, and the X server's screensaver being on, refuse on their own.
+#[must_use]
+pub fn linux_screen_status(reads: &LinuxScreenReads) -> crate::ScreenStatus {
+    let (active, logind_locked) = match reads.logind {
+        Some((active, locked)) => (active, locked == Some(true)),
+        None => (true, false),
+    };
+    crate::ScreenStatus {
+        session_present: reads.display,
+        on_console: active,
+        locked: logind_locked,
+        screensaver: reads.screensaver_service == Some(true) || reads.x11_saver_on == Some(true),
+        display_asleep: false,
+        lock_state_unknown: reads.screensaver_service.is_none(),
+    }
+}
+
 /// The applications of ADR-0047 decision 3 by their Linux ids (the
 /// desktop entry id, else the executable, [`linux_app_id`]).
 pub const PLATFORM_APP_DENY_LINUX: &[&str] = &[
@@ -890,6 +933,110 @@ mod tests {
             windows_window_verdict(&WindowsWindowFacts::default()),
             WindowVerdict::Unresolved(_)
         ));
+    }
+
+    #[test]
+    fn a_linux_screen_is_usable_only_when_a_screensaver_service_says_so() {
+        let gnome = LinuxScreenReads {
+            display: true,
+            logind: Some((true, Some(false))),
+            screensaver_service: Some(false),
+            x11_saver_on: Some(false),
+        };
+        assert_eq!(linux_screen_status(&gnome).unavailable_reason(), None);
+        // KDE without logind (a container, a non-systemd distribution).
+        let no_logind = LinuxScreenReads {
+            logind: None,
+            ..gnome
+        };
+        assert_eq!(linux_screen_status(&no_logind).unavailable_reason(), None);
+        // The X server's own saver is not read on Wayland: still fine.
+        let wayland = LinuxScreenReads {
+            x11_saver_on: None,
+            ..gnome
+        };
+        assert_eq!(linux_screen_status(&wayland).unavailable_reason(), None);
+    }
+
+    #[test]
+    fn an_unknown_linux_lock_state_counts_as_locked() {
+        // i3 + i3lock: logind says unlocked because nobody tells it, and no
+        // screensaver service runs.
+        let i3 = LinuxScreenReads {
+            display: true,
+            logind: Some((true, Some(false))),
+            screensaver_service: None,
+            x11_saver_on: Some(false),
+        };
+        // No logind and no screensaver service at all.
+        let bare = LinuxScreenReads {
+            display: true,
+            ..LinuxScreenReads::default()
+        };
+        for reads in [i3, bare] {
+            let status = linux_screen_status(&reads);
+            assert!(status.lock_state_unknown, "{reads:?}");
+            assert!(
+                status
+                    .unavailable_reason()
+                    .is_some_and(|r| r.contains("counts as locked")),
+                "{reads:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn logind_and_the_x_saver_refuse_on_their_own() {
+        let ok = LinuxScreenReads {
+            display: true,
+            logind: Some((true, Some(false))),
+            screensaver_service: Some(false),
+            x11_saver_on: Some(false),
+        };
+        let cases = [
+            (
+                LinuxScreenReads {
+                    logind: Some((true, Some(true))),
+                    ..ok
+                },
+                "locked",
+            ),
+            (
+                LinuxScreenReads {
+                    logind: Some((false, Some(false))),
+                    ..ok
+                },
+                "console",
+            ),
+            (
+                LinuxScreenReads {
+                    screensaver_service: Some(true),
+                    ..ok
+                },
+                "screensaver",
+            ),
+            (
+                LinuxScreenReads {
+                    x11_saver_on: Some(true),
+                    ..ok
+                },
+                "screensaver",
+            ),
+            (
+                LinuxScreenReads {
+                    display: false,
+                    ..ok
+                },
+                "session",
+            ),
+        ];
+        for (reads, word) in cases {
+            let reason = linux_screen_status(&reads).unavailable_reason();
+            assert!(
+                reason.is_some_and(|r| r.contains(word)),
+                "{reads:?}: {reason:?}"
+            );
+        }
     }
 
     #[test]
