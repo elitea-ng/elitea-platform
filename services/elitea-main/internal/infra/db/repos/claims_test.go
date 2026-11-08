@@ -1437,3 +1437,44 @@ func TestAWakeWithAnAuthorizeIsGrantedOnlyToAnOptedInWorker(t *testing.T) {
 		}
 	}
 }
+
+// Issue 1610: an idle compaction run (empty input, no user turn) is granted
+// only to a worker that opts in to the mode. An older worker is answered
+// retry-later with no authority allocated, after one binding read.
+func TestAnIdleCompactionRunIsGrantedOnlyToAnOptedInWorker(t *testing.T) {
+	digest := runtimedomain.SHA256([]byte("published-signed-envelope"))
+	for _, optedIn := range []bool{false, true} {
+		row := claimExecutionRow("RUNNING", "DISPATCHED", true, digest[:], digest[:], true)
+		store := &scriptedStore{scriptedExecutor: &scriptedExecutor{rowResults: []scriptedRow{row, {err: pgx.ErrNoRows}, {values: []any{true}}, {err: pgx.ErrNoRows}}}}
+		generated := false
+		repository, err := newClaimsRepository(
+			store,
+			func() (string, error) { generated = true; return "claim", nil },
+			func() (runtimedomain.FenceToken, error) { generated = true; return runtimedomain.FenceToken{}, nil },
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := testClaimRequest(digest)
+		request.CapabilityID = executiondomain.AgentApplicationCapability
+		// Past the fan-out wake gate, so the idle gate is the one read.
+		request.FanoutInterruptDecisions = true
+		request.IdleCompaction = optedIn
+		decision, claimErr := repository.ClaimValidation(context.Background(), request, executionapp.MaxClaimLeaseTTLMillis)
+		if !optedIn {
+			if decision.Disposition != executionapp.ClaimRetryLaterNoACK || generated || len(store.rowCalls) != 3 ||
+				!strings.Contains(store.rowCalls[2].sql, "agent_idle_compactions") {
+				t.Fatalf("an older worker reached the idle run: %v %+v generated=%t rows=%d", claimErr, decision, generated, len(store.rowCalls))
+			}
+			continue
+		}
+		for _, call := range store.rowCalls {
+			if strings.Contains(call.sql, "agent_idle_compactions") {
+				t.Fatal("an opted-in worker was asked for the idle binding")
+			}
+		}
+		if len(store.rowCalls) < 3 {
+			t.Fatalf("an opted-in worker was stopped at the gate: %+v rows=%d", decision, len(store.rowCalls))
+		}
+	}
+}

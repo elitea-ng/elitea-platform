@@ -315,6 +315,24 @@ WHERE claim_id = $1 AND released_at IS NULL`, existing.ClaimID); err != nil {
 				return nil
 			}
 		}
+		// Issue 1610: an idle compaction continuation (empty input, no user
+		// turn) run by a worker without the mode would answer an empty question
+		// into the transcript. It is answered retry-later until an opted-in
+		// worker claims it; the sweep's lease bounds how long it waits.
+		if !request.IdleCompaction &&
+			(request.CapabilityID == executiondomain.AgentApplicationCapability || request.CapabilityID == executiondomain.AgentAdhocCapability) {
+			idle, err := isIdleCompactionRun(ctx, tx, request.ExecutionID)
+			if err != nil {
+				return err
+			}
+			if idle {
+				decision = executionapp.ClaimDecision{
+					Disposition:  executionapp.ClaimRetryLaterNoACK,
+					DesiredState: desired,
+				}
+				return nil
+			}
+		}
 
 		if !authorityGranted {
 			tag, err := tx.Exec(ctx, `

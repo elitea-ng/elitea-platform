@@ -77,6 +77,14 @@ message ClaimCommandRequestV1 {
   // retry-later, so an older worker can never resume an authorization without
   // its credential.
   bool fanout_delegated_credentials = 20;
+  // Opt in only when the worker implements the idle compaction continuation
+  // (ADR-0050 decision 9b2, issue 1610): an input whose
+  // meta.idle_compaction_v1 asks for one cached summary of the agent's last
+  // request, with no user turn, no tools and no transcript frame. Main never
+  // grants an idle compaction job to a claim without it; the claim is answered
+  // retry-later, so an older worker cannot run it as a fresh turn with an
+  // empty question. Recovery claims keep it.
+  bool idle_compaction = 21;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must

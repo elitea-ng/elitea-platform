@@ -22,6 +22,8 @@ import (
 type AgentExecutionResultsRepository struct {
 	projects projectStore
 	signals  *ExecutionInterruptSignals
+	// idleRuns: an idle compaction's terminal ends its row, not a response.
+	idleRuns idleRunDetector
 }
 
 // SetInterruptSignals installs the after-commit wake-admission kick for a
@@ -35,14 +37,19 @@ func NewAgentExecutionResultsRepository(pool *pgxpool.Pool) (*AgentExecutionResu
 	if err != nil {
 		return nil, err
 	}
-	return newAgentExecutionResultsRepository(projects)
+	repository, err := newAgentExecutionResultsRepository(projects)
+	if err != nil {
+		return nil, err
+	}
+	repository.idleRuns = postgresIdleRunDetector{}
+	return repository, nil
 }
 
 func newAgentExecutionResultsRepository(projects projectStore) (*AgentExecutionResultsRepository, error) {
 	if projects == nil {
 		return nil, errors.New("agent result project database is required")
 	}
-	return &AgentExecutionResultsRepository{projects: projects}, nil
+	return &AgentExecutionResultsRepository{projects: projects, idleRuns: noopIdleRunDetector{}}, nil
 }
 
 type currentAgentFullMessage struct {
@@ -212,6 +219,27 @@ func (r *AgentExecutionResultsRepository) ProjectAgentExecution(ctx context.Cont
 				return outputapp.ErrOutputDeadlineExceeded
 			}
 			return runtimedomain.ErrStaleFence
+		}
+		// An idle compaction (ADR-0050 decision 9b2) has no transcript: its
+		// terminal only ends its row. A completed run is DONE; a run that
+		// paused (it has no tools, so it never should) is a failed check.
+		idle, err := r.idleRuns.isIdleRun(ctx, tx, projection.Frame.Fence.ExecutionID)
+		if err != nil {
+			return err
+		}
+		if idle {
+			end := agentexecutionapp.IdleCompactionSkipRunFailed
+			if terminal.FullMessage != nil {
+				end = ""
+			}
+			if err := settleIdleCompactionRun(ctx, tx, projection.Frame.Fence.ExecutionID, end); err != nil {
+				return err
+			}
+			if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
+				return err
+			}
+			outcome = outputapp.ProjectionOutcome{Inserted: true, Cursor: uint64(terminal.Cursor), CommittedSequence: record.Sequence}
+			return nil
 		}
 		if err := persistCurrentAgentTerminal(ctx, tx, projection.Expected, terminal); err != nil {
 			return err

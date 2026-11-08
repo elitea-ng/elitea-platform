@@ -100,7 +100,7 @@ BROWSER_SESSION_REPORT_STATE_V1_LINGERING: BrowserSessionReportStateV1
 BROWSER_SESSION_REPORT_STATE_V1_ENDED: BrowserSessionReportStateV1
 
 class ClaimCommandRequestV1(_message.Message):
-    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials")
+    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials", "idle_compaction")
     WORKLOAD_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PRODUCER_ID_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
@@ -109,6 +109,7 @@ class ClaimCommandRequestV1(_message.Message):
     GOVERNED_SECURITY_CONTEXT_V1_FIELD_NUMBER: _ClassVar[int]
     FANOUT_INTERRUPT_DECISIONS_FIELD_NUMBER: _ClassVar[int]
     FANOUT_DELEGATED_CREDENTIALS_FIELD_NUMBER: _ClassVar[int]
+    IDLE_COMPACTION_FIELD_NUMBER: _ClassVar[int]
     workload_session_id: str
     producer_id: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
@@ -117,7 +118,8 @@ class ClaimCommandRequestV1(_message.Message):
     governed_security_context_v1: bool
     fanout_interrupt_decisions: bool
     fanout_delegated_credentials: bool
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ..., fanout_delegated_credentials: _Optional[bool] = ...) -> None: ...
+    idle_compaction: bool
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ..., fanout_delegated_credentials: _Optional[bool] = ..., idle_compaction: _Optional[bool] = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")

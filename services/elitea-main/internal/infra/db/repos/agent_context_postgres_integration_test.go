@@ -64,6 +64,23 @@ func TestPostgresCurrentAgentContextSurvivesRefreshAndSettlesWithResponse(t *tes
 	if status.RuntimeContext == nil || !status.RuntimeContext.Active || status.CurrentTokens != 190000 {
 		t.Fatalf("status=%+v", status)
 	}
+	// A measurement before a model request stamps that request's start
+	// (ADR-0050 decision 9b2); a provider reading keeps it.
+	requestStarted := func() string {
+		var started *string
+		if err := pool.QueryRow(t.Context(), `SELECT meta ->> 'runtime_request_started_at'
+FROM p_1.chat_message_group WHERE uuid::text = $1`, responseID).Scan(&started); err != nil {
+			t.Fatal(err)
+		}
+		if started == nil {
+			return ""
+		}
+		return *started
+	}
+	stamped := requestStarted()
+	if stamped == "" {
+		t.Fatal("the request start was not stamped")
+	}
 	// Child, pipeline-node and cross-admission data cannot change the root meter.
 	measurement["estimated_input_tokens"] = 120000
 	measurement["phase"] = "measured"
@@ -88,6 +105,9 @@ func TestPostgresCurrentAgentContextSurvivesRefreshAndSettlesWithResponse(t *tes
 	}
 	if err := project(encode()); err != nil {
 		t.Fatal(err)
+	}
+	if requestStarted() != stamped {
+		t.Fatal("a provider reading moved the request start")
 	}
 	provider := read()
 	if provider.CurrentTokens != 125000 || provider.MaxTokens != 269280 || provider.RuntimeContext.Measurement.ProviderUsage == nil {

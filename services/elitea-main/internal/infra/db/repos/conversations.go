@@ -2303,15 +2303,32 @@ func (r *ConversationsRepo) GetContextState(ctx context.Context, projectID, conv
 				ELSE NULL END
 			 FROM %s.chat_message_group mg
 			 WHERE mg.conversation_id = c.id AND NULLIF(mg.task_id, '') IS NOT NULL
-			 ORDER BY mg.is_streaming DESC, COALESCE(mg.updated_at, mg.created_at) DESC, mg.id DESC LIMIT 1)
+			 ORDER BY mg.is_streaming DESC, COALESCE(mg.updated_at, mg.created_at) DESC, mg.id DESC LIMIT 1),
+			c.uuid::text
 		FROM %s.chat_conversations c WHERE c.id = $1`, s, s, s)
 
 	var state contextsettings.ConversationState
-	if err := r.pool.QueryRow(ctx, q, id).Scan(&state.Strategy, &state.Analytics, &state.MessageGroupsTotal, &state.RuntimeContext); err != nil {
+	var conversationUUID string
+	if err := r.pool.QueryRow(ctx, q, id).Scan(&state.Strategy, &state.Analytics, &state.MessageGroupsTotal, &state.RuntimeContext, &conversationUUID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return contextsettings.ConversationState{}, apierr.NotFound("conversation not found")
 		}
 		return contextsettings.ConversationState{}, fmt.Errorf("conversations: get context state: %w", err)
+	}
+	// Each agent's own meter (issue 1610): its latest answer's measurement,
+	// or its latest idle compaction's when that is newer.
+	project, err := strconv.ParseInt(projectID, 10, 64)
+	if err != nil {
+		return state, nil
+	}
+	agents, err := (&AgentIdleCompactionsRepository{pool: r.pool}).LatestAgentContexts(ctx, project, conversationUUID)
+	if err != nil {
+		return contextsettings.ConversationState{}, fmt.Errorf("conversations: get agent contexts: %w", err)
+	}
+	for _, agent := range agents {
+		state.AgentContexts = append(state.AgentContexts, contextsettings.AgentContextRecord{
+			ParticipantID: agent.ParticipantID, RuntimeContext: agent.RuntimeContext, Idle: agent.Idle,
+		})
 	}
 	return state, nil
 }

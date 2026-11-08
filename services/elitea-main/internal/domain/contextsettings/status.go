@@ -59,9 +59,6 @@ type ConversationState struct {
 // reading as a real zero.
 type Status struct {
 	RuntimeContext         *RuntimeContext `json:"runtime_context,omitempty"`
-	// AgentContexts is each agent participant's own meter (issue 1610);
-	// empty until an agent has answered.
-	AgentContexts []AgentContext `json:"agent_contexts"`
 	BudgetMode             BudgetMode      `json:"budget_mode,omitempty"`
 	CurrentTokens          int             `json:"current_tokens"`
 	MaxTokens              int             `json:"max_tokens"`
@@ -70,6 +67,10 @@ type Status struct {
 	SummaryCount           int             `json:"summary_count"`
 	StrategyName           string          `json:"strategy_name"`
 	ContextAnalytics       map[string]any  `json:"context_analytics"`
+
+	// AgentContexts is each agent participant's own meter (issue 1610);
+	// empty until an agent has answered.
+	AgentContexts []AgentContext `json:"agent_contexts"`
 
 	// MessageGroupsTotal is a real COUNT(*) of the conversation's message
 	// groups. It is NOT `message_groups_in_context`: a group can be present in

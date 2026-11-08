@@ -38,6 +38,10 @@ type SubmitRequest struct {
 	// CurrentFanoutWakeTurn is a Main-admitted wake of a parked fan-out
 	// response (continue_fanout_wake.go); it excludes every other turn.
 	CurrentFanoutWakeTurn *CurrentFanoutWakeTurn
+	// CurrentIdleCompactionTurn is a Main-admitted quiet compaction of an
+	// agent's settled turn (idle_compaction.go, ADR-0050 decision 9b2); it
+	// excludes every other turn.
+	CurrentIdleCompactionTurn *CurrentIdleCompactionTurn
 	// TriggerOrigin is how the run started (shared 0140). Empty means a
 	// person at the UI. It is NOT part of the request digest: it describes
 	// the caller, not the work, and adding it would make every replay that
@@ -132,6 +136,9 @@ type Admission struct {
 	CurrentRegenerateTurn *CurrentRegenerateTurn
 	CurrentContinueTurn   *CurrentContinueTurn
 	CurrentFanoutWakeTurn *CurrentFanoutWakeTurn
+	// CurrentIdleCompactionTurn: the transaction rechecks the idle row and
+	// moves it to ADMITTED with the job (no transcript write).
+	CurrentIdleCompactionTurn *CurrentIdleCompactionTurn
 	// GovernedCredentials is the governed-credential-references freeze of a
 	// bound agent's run (#1119); nil otherwise. The admission transaction
 	// writes it into the run's security context.
@@ -171,15 +178,20 @@ func (a Admission) ApplicationID() int64 {
 		return a.CurrentRegenerateTurn.ApplicationID
 	case a.CurrentContinueTurn != nil:
 		return a.CurrentContinueTurn.ApplicationID
+	case a.CurrentIdleCompactionTurn != nil:
+		// An idle compaction runs as the source's agent: the kill switch,
+		// the gateway throttle and spend see it.
+		return a.CurrentIdleCompactionTurn.ApplicationID
 	}
 	return 0
 }
 
 // ParticipantID is the chat participant the run answers as (shared 0227,
 // ADR-0050 decision 7b): the target participant of a current turn, an ad hoc
-// chat, a regeneration or a continuation; 0 for a fan-out wake, which
-// inherits the participant of the run it wakes in the admission
-// transaction.
+// chat, a regeneration or a continuation; 0 for a fan-out wake and an idle
+// compaction, which inherit the participant of the run they continue in the
+// admission transaction. A turn with a participant here is that agent's new
+// turn: it cancels the agent's armed idle check.
 func (a Admission) ParticipantID() int64 {
 	switch {
 	case a.CurrentTurn != nil:
@@ -332,22 +344,23 @@ func (s *AdmissionService) Submit(
 		return executionapp.AdmissionOutcome{}, err
 	}
 	outcome, err := s.store.AdmitAgentExecution(ctx, Admission{
-		MemoryToolkitIDs:      memoryToolkits,
-		ToolkitTypes:          toolkitTypes,
-		Record:                record,
-		Binding:               binding,
-		CurrentTurn:           request.CurrentTurn.Clone(),
-		CurrentAdhocTurn:      request.CurrentAdhocTurn.Clone(),
-		CurrentRegenerateTurn: request.CurrentRegenerateTurn.Clone(),
-		CurrentContinueTurn:   request.CurrentContinueTurn.Clone(),
-		CurrentFanoutWakeTurn: request.CurrentFanoutWakeTurn.Clone(),
-		GovernedCredentials:   governed,
-		ReleaseID:             releaseID(request.Release),
-		BindingVersionID:      bindingVersionID(request.Release, 0),
-		Unattended:            request.Unattended.Clone(),
-		HandoffCompletion:     request.HandoffCompletion.Clone(),
-		CloudThread:           request.CloudThread && request.HandoffCompletion == nil,
-		RunPolicy:             request.RunPolicy.Clone(),
+		MemoryToolkitIDs:          memoryToolkits,
+		ToolkitTypes:              toolkitTypes,
+		Record:                    record,
+		Binding:                   binding,
+		CurrentTurn:               request.CurrentTurn.Clone(),
+		CurrentAdhocTurn:          request.CurrentAdhocTurn.Clone(),
+		CurrentRegenerateTurn:     request.CurrentRegenerateTurn.Clone(),
+		CurrentContinueTurn:       request.CurrentContinueTurn.Clone(),
+		CurrentFanoutWakeTurn:     request.CurrentFanoutWakeTurn.Clone(),
+		CurrentIdleCompactionTurn: request.CurrentIdleCompactionTurn.Clone(),
+		GovernedCredentials:       governed,
+		ReleaseID:                 releaseID(request.Release),
+		BindingVersionID:          bindingVersionID(request.Release, 0),
+		Unattended:                request.Unattended.Clone(),
+		HandoffCompletion:         request.HandoffCompletion.Clone(),
+		CloudThread:               request.CloudThread && request.HandoffCompletion == nil,
+		RunPolicy:                 request.RunPolicy.Clone(),
 	})
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("admit agent execution: %w", err)
@@ -427,6 +440,21 @@ func validateAgentTurns(request SubmitRequest, generation string) error {
 			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||
 			strconv.FormatInt(turn.ProjectID, 10) != request.Identity.ResourceProjectID ||
 			strconv.FormatInt(turn.ActorUserID, 10) != request.Identity.ActorID {
+			return ErrInvalidAgentAdmission
+		}
+	}
+	if request.CurrentIdleCompactionTurn != nil {
+		turn := request.CurrentIdleCompactionTurn
+		if request.CurrentTurn != nil || request.CurrentAdhocTurn != nil || request.CurrentRegenerateTurn != nil ||
+			request.CurrentContinueTurn != nil || request.CurrentFanoutWakeTurn != nil ||
+			request.HandoffCompletion != nil || request.CloudThread || request.RunPolicy != nil ||
+			request.Unattended != nil || request.Release != nil || turn.Validate() != nil ||
+			request.IdempotencyKey != IdleCompactionIdempotencyKey(turn.SourceExecutionID) ||
+			turn.ResponseMessageID != request.ClientMessageID || turn.ConversationUUID != request.ClientStreamID ||
+			turn.ExecutionGeneration != generation || request.SIOEvent != "chat_continue_predict" ||
+			strconv.FormatInt(turn.ProjectID, 10) != request.Identity.ResourceProjectID ||
+			strconv.FormatInt(turn.ActorUserID, 10) != request.Identity.ActorID ||
+			(turn.ApplicationID > 0) != (request.CapabilityID == executiondomain.AgentApplicationCapability) {
 			return ErrInvalidAgentAdmission
 		}
 	}
