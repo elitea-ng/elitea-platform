@@ -25,26 +25,43 @@ pub struct Command {
 /// The largest record the bridge accepts from the driver.
 pub const MAX_COMMAND_BYTES: usize = 16 << 20;
 
-/// Read one record. `None`: not a command (it is dropped; the driver then
-/// times out on it, as it would on a dead engine).
-#[must_use]
-pub fn command(record: &[u8]) -> Option<Command> {
+/// A record that is not a command. `id`: its id, when one could be read
+/// (the bridge answers it with [`refused`] and [`MALFORMED`], so the driver
+/// does not wait for it until its timeout); `None`: nothing can be answered
+/// (the bridge logs it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Malformed {
+    pub id: Option<u64>,
+}
+
+/// The answer to a malformed command.
+pub const MALFORMED: &str = "malformed command";
+
+/// Read one record.
+///
+/// # Errors
+///
+/// [`Malformed`]: not a command (too large, not JSON, no id or method, or
+/// parameters that are not an object).
+pub fn command(record: &[u8]) -> Result<Command, Malformed> {
+    let nothing = Malformed { id: None };
     if record.len() > MAX_COMMAND_BYTES {
-        return None;
+        return Err(nothing);
     }
-    let message: Value = serde_json::from_slice(record).ok()?;
-    let id = message["id"].as_u64()?;
-    let method = message["method"].as_str()?.to_owned();
+    let message: Value = serde_json::from_slice(record).map_err(|_| nothing)?;
+    let id = message["id"].as_u64().ok_or(nothing)?;
+    let malformed = Malformed { id: Some(id) };
+    let method = message["method"].as_str().ok_or(malformed)?.to_owned();
     let params = match message.get("params") {
         None | Some(Value::Null) => "{}".to_owned(),
         Some(params @ Value::Object(_)) => params.to_string(),
-        Some(_) => return None,
+        Some(_) => return Err(malformed),
     };
     let session = message["sessionId"]
         .as_str()
         .filter(|session| *session != PAGE_SESSION && !session.is_empty())
         .map(str::to_owned);
-    Some(Command {
+    Ok(Command {
         id,
         method,
         params,
@@ -132,17 +149,25 @@ mod tests {
     }
 
     #[test]
-    fn records_that_are_not_commands_are_dropped() {
-        assert_eq!(command(b"not json"), None);
-        assert_eq!(command(br#"{"method":"Page.enable"}"#), None, "no id");
-        assert_eq!(command(br#"{"id":1}"#), None, "no method");
+    fn records_that_are_not_commands_are_answered_when_their_id_reads() {
+        let nothing = Err(Malformed { id: None });
+        assert_eq!(command(b"not json"), nothing);
+        assert_eq!(command(br#"{"method":"Page.enable"}"#), nothing, "no id");
         assert_eq!(
-            command(br#"{"id":1,"method":"Page.enable","params":[1]}"#),
-            None,
-            "params must be an object"
+            command(br#"{"id":1}"#),
+            Err(Malformed { id: Some(1) }),
+            "no method: answered"
+        );
+        assert_eq!(
+            command(br#"{"id":2,"method":"Page.enable","params":[1]}"#),
+            Err(Malformed { id: Some(2) }),
+            "params must be an object: answered"
         );
         let huge = vec![b' '; MAX_COMMAND_BYTES + 1];
-        assert_eq!(command(&huge), None);
+        assert_eq!(command(&huge), nothing);
+        let answer = parse(&refused(2, MALFORMED));
+        assert_eq!(answer["id"], 2);
+        assert_eq!(answer["error"]["message"], MALFORMED);
     }
 
     #[test]

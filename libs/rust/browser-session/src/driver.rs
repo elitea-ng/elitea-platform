@@ -301,6 +301,21 @@ fn engine_error(error: &CdpError) -> BrowserError {
     }
 }
 
+/// What kind of page [`CdpDriver::set_up`] sets up.
+struct PageKind {
+    /// The cloud's own page: its size is set, its dialogs answered.
+    emulate: bool,
+    /// More set-up for each out-of-process frame (the desktop page).
+    child_setup: Option<page::ChildSetup>,
+}
+
+impl PageKind {
+    const CLOUD: Self = Self {
+        emulate: true,
+        child_setup: None,
+    };
+}
+
 impl CdpDriver {
     /// Start the engine and set up its one page (unix: the engine's pipe).
     ///
@@ -363,7 +378,16 @@ impl CdpDriver {
             .as_str()
             .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page did not attach"))?
             .to_owned();
-        Self::set_up(cdp, events, config, control, session, target, true).await
+        Self::set_up(
+            cdp,
+            events,
+            config,
+            control,
+            session,
+            target,
+            PageKind::CLOUD,
+        )
+        .await
     }
 
     /// Set up a connection that IS one page already (the desktop's
@@ -373,6 +397,7 @@ impl CdpDriver {
     /// keeps its own size: no device metrics are overridden, and
     /// `config.width` and `config.height` are only the page size a
     /// scroll pages by. The page's dialogs are left to the person at it.
+    /// `child_setup` runs on each out-of-process frame before it runs.
     ///
     /// # Errors
     ///
@@ -382,6 +407,7 @@ impl CdpDriver {
         config: &EngineConfig,
         control: Arc<Control>,
         session: &str,
+        child_setup: Option<page::ChildSetup>,
     ) -> Result<Self, BrowserError> {
         let events = cdp.events();
         let tree = cdp
@@ -400,7 +426,10 @@ impl CdpDriver {
             control,
             session.to_owned(),
             target,
-            false,
+            PageKind {
+                emulate: false,
+                child_setup,
+            },
         )
         .await
     }
@@ -412,9 +441,12 @@ impl CdpDriver {
         control: Arc<Control>,
         session: String,
         target: String,
-        // The cloud's own page: its size is set, its dialogs answered.
-        emulate: bool,
+        kind: PageKind,
     ) -> Result<Self, BrowserError> {
+        let PageKind {
+            emulate,
+            child_setup,
+        } = kind;
         let call = |session: Option<String>, method: &'static str, params: Value| {
             let cdp = cdp.clone();
             async move {
@@ -431,6 +463,7 @@ impl CdpDriver {
                 page_target: target.clone(),
                 proxy_token: config.proxy_token.clone(),
                 answer_dialogs: emulate,
+                child_setup,
             },
             tracker.clone(),
             events,
@@ -2028,7 +2061,7 @@ mod tests {
     async fn a_page_connection_is_set_up_without_browser_targets_or_emulation() {
         let (cdp, seen) = one_page();
         let control = Arc::new(Control::new(false, Duration::from_secs(1)));
-        let driver = CdpDriver::attach_page(cdp, &EngineConfig::default(), control, "PAGE")
+        let driver = CdpDriver::attach_page(cdp, &EngineConfig::default(), control, "PAGE", None)
             .await
             .unwrap();
         assert_eq!(driver.target, "MAIN", "the main frame is the page target");
@@ -2051,5 +2084,128 @@ mod tests {
         assert!(driver.engine_pid().is_none());
         // The title falls back to the page's own target info.
         assert_eq!(driver.title().await, "");
+    }
+
+    /// A page that announces one out-of-process frame (`CHILD`) once the
+    /// driver set up auto-attach, and refuses `refuse` there.
+    fn page_with_a_frame(refuse: &'static str) -> (Connection, Seen) {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (client_write, page_read) = tokio::io::duplex(1 << 16);
+        let (mut page_write, client_read) = tokio::io::duplex(1 << 16);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(page_read);
+            let mut record = Vec::new();
+            while reader.read_until(0, &mut record).await.unwrap_or(0) > 0 {
+                record.pop();
+                let command: Value = serde_json::from_slice(&record).unwrap();
+                record.clear();
+                let method = command["method"].as_str().unwrap_or_default().to_owned();
+                let session = command["sessionId"].as_str().map(str::to_owned);
+                lock(&log).push((method.clone(), session.clone()));
+                let child = session.as_deref() == Some("CHILD");
+                let reply = if child && method == refuse {
+                    json!({"id": command["id"], "error": {"code": -32000, "message": "no"}})
+                } else if method == "Page.getFrameTree" {
+                    json!({"id": command["id"], "result": {"frameTree": {"frame": {"id": "MAIN"}}}})
+                } else {
+                    json!({"id": command["id"], "result": {}})
+                };
+                let mut bytes = serde_json::to_vec(&reply).unwrap();
+                bytes.push(0);
+                if method == "Target.setAutoAttach" && !child {
+                    let event = json!({
+                        "method": "Target.attachedToTarget",
+                        "sessionId": "PAGE",
+                        "params": {
+                            "sessionId": "CHILD",
+                            "targetInfo": {"targetId": "F1", "type": "iframe"},
+                            "waitingForDebugger": true,
+                        },
+                    });
+                    bytes.extend(serde_json::to_vec(&event).unwrap());
+                    bytes.push(0);
+                }
+                page_write.write_all(&bytes).await.unwrap();
+            }
+        });
+        (Connection::new(client_read, client_write), seen)
+    }
+
+    /// Wait until the frame was released (`runIfWaitingForDebugger`).
+    async fn released(seen: &Seen) -> Vec<String> {
+        for _ in 0..200 {
+            let child: Vec<String> = lock(seen)
+                .iter()
+                .filter(|(_, session)| session.as_deref() == Some("CHILD"))
+                .map(|(method, _)| method.clone())
+                .collect();
+            if child
+                .iter()
+                .any(|method| method == "Runtime.runIfWaitingForDebugger")
+            {
+                return child;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the frame was never released: {:?}", lock(seen));
+    }
+
+    #[tokio::test]
+    async fn each_out_of_process_frame_gets_the_hosts_setup_before_it_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let setup = |failures: &Arc<AtomicUsize>| {
+            let failures = Arc::clone(failures);
+            page::ChildSetup {
+                commands: vec![
+                    ("Runtime.addBinding", json!({ "name": "report" })),
+                    (
+                        "Page.addScriptToEvaluateOnNewDocument",
+                        json!({ "source": "1" }),
+                    ),
+                ],
+                failed: Arc::new(move || {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                }),
+            }
+        };
+        let control = || Arc::new(Control::new(false, Duration::from_secs(1)));
+
+        let failures = Arc::new(AtomicUsize::new(0));
+        let (cdp, seen) = page_with_a_frame("none");
+        let _driver = CdpDriver::attach_page(
+            cdp,
+            &EngineConfig::default(),
+            control(),
+            "PAGE",
+            Some(setup(&failures)),
+        )
+        .await
+        .unwrap();
+        let child = released(&seen).await;
+        let at = |method: &str| child.iter().position(|seen| seen == method).unwrap();
+        assert!(at("Runtime.addBinding") < at("Runtime.runIfWaitingForDebugger"));
+        assert!(
+            at("Page.addScriptToEvaluateOnNewDocument") < at("Runtime.runIfWaitingForDebugger"),
+            "set up before the frame runs: {child:?}"
+        );
+        assert_eq!(failures.load(Ordering::SeqCst), 0);
+
+        // A frame that cannot be set up is reported (the host pauses the
+        // agent), and still released.
+        let failures = Arc::new(AtomicUsize::new(0));
+        let (cdp, seen) = page_with_a_frame("Runtime.addBinding");
+        let _driver = CdpDriver::attach_page(
+            cdp,
+            &EngineConfig::default(),
+            control(),
+            "PAGE",
+            Some(setup(&failures)),
+        )
+        .await
+        .unwrap();
+        released(&seen).await;
+        assert_eq!(failures.load(Ordering::SeqCst), 1);
     }
 }

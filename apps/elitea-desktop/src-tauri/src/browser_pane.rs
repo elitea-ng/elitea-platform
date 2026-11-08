@@ -402,11 +402,34 @@ impl StoreRegistry {
         self.threads.values().any(|known| *known == id) || self.pending_removal.contains(&id)
     }
 
+    #[cfg(test)]
     fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+        Self::read(path).0
+    }
+
+    /// The list at `path`, and whether it can be trusted to name every
+    /// store: `false` when a file is there but could not be read or parsed
+    /// (it is then read as empty, and nothing on disk may be taken for a
+    /// stray). A missing file is an empty list that can be trusted (a first
+    /// launch: no store was made yet).
+    fn read(path: &Path) -> (Self, bool) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return (Self::default(), true);
+            }
+            Err(error) => {
+                log::warn!(target: "browser", "the browser store list could not be read: {error}");
+                return (Self::default(), false);
+            }
+        };
+        match serde_json::from_str(&text) {
+            Ok(registry) => (registry, true),
+            Err(error) => {
+                log::warn!(target: "browser", "the browser store list is corrupt: {error}");
+                (Self::default(), false)
+            }
+        }
     }
 
     fn save(&self, path: &Path) {
@@ -713,6 +736,10 @@ pub struct BrowserPanes {
     /// Held across `browser_open`: a pane being made is not navigated by a
     /// second open before its content rules are installed.
     opening: tokio::sync::Mutex<()>,
+    /// The store list was read, or there was none: the launch sweep may
+    /// take a folder it does not name for a stray. `false` when a list was
+    /// there but unreadable: then nothing is swept ([`sweep_strays`]).
+    registry_trusted: bool,
     inner: Mutex<Inner>,
 }
 
@@ -732,10 +759,11 @@ impl BrowserPanes {
         drivers: Arc<BrowserDrivers>,
     ) -> Self {
         let registry_path = data_dir.join("browser").join("stores.json");
-        let registry = StoreRegistry::load(&registry_path);
+        let (registry, registry_trusted) = StoreRegistry::read(&registry_path);
         Self {
             settings: SettingsFiles::new(config_dir),
             registry_path,
+            registry_trusted,
             stores_root: data_dir.join("browser").join("stores"),
             downloads_root,
             drivers,
@@ -1113,6 +1141,29 @@ fn unknown_folders(stores_root: &Path, registry: &StoreRegistry) -> Vec<[u8; 16]
         .collect()
 }
 
+/// The stray data folders to delete at launch ([`unknown_folders`]), only
+/// when the store list can be trusted (`trusted`): a list that was there
+/// but could not be read names no store, and taking every folder for a
+/// stray would delete every thread's sign-ins. Logs how many and why.
+fn sweep_strays(stores_root: &Path, registry: &StoreRegistry, trusted: bool) -> Vec<[u8; 16]> {
+    if !trusted {
+        log::warn!(
+            target: "browser",
+            "the browser store list was unreadable: no data folder is swept at this launch"
+        );
+        return Vec::new();
+    }
+    let strays = unknown_folders(stores_root, registry);
+    if !strays.is_empty() {
+        log::info!(
+            target: "browser",
+            "{} browser data folder(s) are not in the store list and will be deleted",
+            strays.len()
+        );
+    }
+    strays
+}
+
 /// At launch: the deletions the OS refused last time, and any identified
 /// store the list does not know (the list was lost): only the browser pane
 /// makes identified stores; the main webview uses the default one.
@@ -1131,7 +1182,7 @@ pub fn clean_up_at_launch(app: AppHandle) {
         }
         if mode == StoreMode::Folder {
             let mut inner = panes.lock();
-            let unknown = unknown_folders(&panes.stores_root, &inner.registry);
+            let unknown = sweep_strays(&panes.stores_root, &inner.registry, panes.registry_trusted);
             if !unknown.is_empty() {
                 for id in unknown {
                     inner
@@ -1143,7 +1194,9 @@ pub fn clean_up_at_launch(app: AppHandle) {
             }
         }
         #[cfg(target_vendor = "apple")]
-        if let Ok(ids) = app.fetch_data_store_identifiers().await {
+        if !panes.registry_trusted {
+            log::warn!(target: "browser", "the browser store list was unreadable: no store is swept at this launch");
+        } else if let Ok(ids) = app.fetch_data_store_identifiers().await {
             let mut inner = panes.lock();
             let mut changed = false;
             for id in ids {
@@ -2004,6 +2057,41 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("notes")).unwrap();
         assert_eq!(unknown_folders(dir.path(), &registry), vec![stray]);
         assert!(unknown_folders(&dir.path().join("missing"), &registry).is_empty());
+        assert_eq!(sweep_strays(dir.path(), &registry, true), vec![stray]);
+    }
+
+    #[test]
+    fn an_unreadable_store_list_sweeps_no_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stores.json");
+        let stores = dir.path().join("stores");
+        let mut registry = StoreRegistry::default();
+        let kept = registry.identifier("t1");
+        std::fs::create_dir_all(store_folder(&stores, kept)).unwrap();
+        registry.save(&path);
+
+        // The list is read: only strays are swept.
+        let (read, trusted) = StoreRegistry::read(&path);
+        assert!(trusted);
+        assert!(sweep_strays(&stores, &read, trusted).is_empty());
+
+        // The list is corrupt: it reads as empty, but is not trusted, so
+        // the thread's folder is NOT taken for a stray.
+        std::fs::write(&path, "{not json").unwrap();
+        let (read, trusted) = StoreRegistry::read(&path);
+        assert_eq!(read, StoreRegistry::default());
+        assert!(!trusted);
+        assert_eq!(
+            unknown_folders(&stores, &read),
+            vec![kept],
+            "it looks stray"
+        );
+        assert!(sweep_strays(&stores, &read, trusted).is_empty());
+
+        // No list at all (a first launch) can be trusted.
+        let (read, trusted) = StoreRegistry::read(&dir.path().join("none.json"));
+        assert_eq!(read, StoreRegistry::default());
+        assert!(trusted);
     }
 
     #[test]

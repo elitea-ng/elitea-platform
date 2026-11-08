@@ -62,10 +62,12 @@ pub const EVENTS: &[&str] = &[
     "Runtime.bindingCalled",
 ];
 
+pub mod bridge;
 pub mod wire;
 
 #[cfg(windows)]
 mod com;
 
+pub use bridge::{NoWatcher, Observe, Watcher};
 #[cfg(windows)]
-pub use com::{Go, Observe, OnUiThread, attach, go, open_stream};
+pub use com::{Go, OnUiThread, attach, go, open_stream};

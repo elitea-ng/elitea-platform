@@ -37,7 +37,7 @@ mod windows_run {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use elitea_browser_driver_windows::{OnUiThread, PAGE_SESSION, open_stream};
+    use elitea_browser_driver_windows::{NoWatcher, OnUiThread, PAGE_SESSION, open_stream};
     use elitea_browser_session::cdp::Connection;
     use elitea_browser_session::control::Control;
     use elitea_browser_session::driver::CdpDriver;
@@ -159,7 +159,7 @@ mod windows_run {
                 "conformance",
                 &webview.controller(),
                 on_ui,
-                Arc::new(|_| {}),
+                Arc::new(NoWatcher),
             )
             .expect("the bridge")
         };
@@ -202,7 +202,7 @@ mod windows_run {
             ..EngineConfig::default()
         };
         let control = Arc::new(Control::new(false, Duration::from_secs(1)));
-        let driver = match CdpDriver::attach_page(cdp, &config, control, PAGE_SESSION).await {
+        let driver = match CdpDriver::attach_page(cdp, &config, control, PAGE_SESSION, None).await {
             Ok(driver) => driver,
             Err(error) => {
                 println!("FAIL attach: {error}");

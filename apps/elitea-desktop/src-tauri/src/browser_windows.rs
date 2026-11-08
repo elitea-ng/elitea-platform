@@ -19,6 +19,9 @@
 //!   person's input unless the driver's own CDP input caused it
 //!   ([`elitea_browser_driver_dom::input::cdp_reports`]: `WebView2` makes
 //!   `Input.*` trusted, so the page sees the agent's clicks as real).
+//!   Each out-of-process frame (a cross-origin iframe) gets the same
+//!   world, binding and script before it runs (`ChildSetup`); a frame that
+//!   cannot be set up pauses the agent, as the person may be in it.
 //! - **`browser_request_user`** is the pane's hand-over, not the cloud
 //!   driver's own control (which stays at "agent": the host gates every
 //!   call before it reaches the driver).
@@ -33,6 +36,7 @@ use elitea_browser_session::cdp::Connection;
 use elitea_browser_session::control::Control;
 use elitea_browser_session::driver::CdpDriver;
 use elitea_browser_session::engine::EngineConfig;
+use elitea_browser_session::page::ChildSetup;
 use elitea_browser_tools::call::{ElementRef, Key, ScrollTarget, WaitCondition};
 use elitea_browser_tools::driver::{
     BrowserDriver, ControlInfo, Handback, HistoryStep, PageInfo, PageText, Screenshot,
@@ -79,21 +83,9 @@ pub async fn attach(
         )
     };
     let own = Arc::new(Mutex::new(OwnInput::default()));
-    let observe: elitea_browser_driver_windows::Observe = {
-        let own = Arc::clone(&own);
-        Arc::new(move |command| {
-            let params = serde_json::from_str(&command.params).unwrap_or_default();
-            let reports = cdp_reports(&command.method, &params);
-            if reports.is_empty() {
-                return;
-            }
-            let now = Instant::now();
-            let mut own = own.lock().unwrap_or_else(PoisonError::into_inner);
-            for (kind, count) in reports {
-                own.expect(kind, count, now);
-            }
-        })
-    };
+    let observe: elitea_browser_driver_windows::Observe = Arc::new(OwnCommands {
+        own: Arc::clone(&own),
+    });
     let stream = elitea_browser_driver_windows::attach(app, webview, observe)
         .await
         .map_err(unavailable)?;
@@ -108,19 +100,19 @@ pub async fn attach(
                 .map_err(|error| unavailable(error.to_string()))
         }
     };
-    // The input reporter's world and binding, before any page loads.
-    call("Runtime.enable", json!({})).await?;
-    call(
-        "Runtime.addBinding",
-        json!({ "name": INPUT_BINDING, "executionContextName": INPUT_WORLD }),
-    )
-    .await?;
-    call(
-        "Page.addScriptToEvaluateOnNewDocument",
-        json!({ "source": INPUT_SCRIPT, "worldName": INPUT_WORLD }),
-    )
-    .await?;
-    spawn_input_watch(&cdp, own, person_input);
+    // The input reporter's world and binding, before any page loads: on the
+    // page here, and on each out-of-process frame (a cross-origin iframe)
+    // before it runs, through the driver's `child_setup`.
+    for (method, params) in reporter_setup() {
+        call(method, params).await?;
+    }
+    spawn_input_watch(&cdp, own, Arc::clone(&person_input));
+    let child_setup = ChildSetup {
+        commands: reporter_setup(),
+        // A frame whose input cannot be reported may be where the person
+        // is: the agent pauses (fail closed).
+        failed: person_input,
+    };
     let config = EngineConfig {
         width: PAGE.0,
         height: PAGE.1,
@@ -134,6 +126,7 @@ pub async fn attach(
         &config,
         control,
         elitea_browser_driver_windows::PAGE_SESSION,
+        Some(child_setup),
     )
     .await?;
     Ok(WindowsDriver {
@@ -141,6 +134,50 @@ pub async fn attach(
         check,
         hand_over,
     })
+}
+
+/// The input reporter's set-up on one target (the page, or a frame):
+/// `Runtime.enable` (the binding's events), the binding in the reporter's
+/// world only, and the reporter in that world on every new document.
+fn reporter_setup() -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        ("Runtime.enable", json!({})),
+        (
+            "Runtime.addBinding",
+            json!({ "name": INPUT_BINDING, "executionContextName": INPUT_WORLD }),
+        ),
+        (
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": INPUT_SCRIPT, "worldName": INPUT_WORLD }),
+        ),
+    ]
+}
+
+/// The driver's own input commands: what each will report, and from when
+/// (its answer: the page sees the input only once it was dispatched).
+struct OwnCommands {
+    own: Arc<Mutex<OwnInput>>,
+}
+
+impl elitea_browser_driver_windows::Watcher for OwnCommands {
+    fn sending(&self, command: &elitea_browser_driver_windows::wire::Command) {
+        let params = serde_json::from_str(&command.params).unwrap_or_default();
+        let reports = cdp_reports(&command.method, &params);
+        if reports.is_empty() {
+            return;
+        }
+        self.own
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .sending(command.id, &reports, Instant::now());
+    }
+
+    fn answered(&self, id: u64) {
+        self.own
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .answered(id, Instant::now());
+    }
 }
 
 /// Each `Runtime.bindingCalled` of the reporter is an input of the person

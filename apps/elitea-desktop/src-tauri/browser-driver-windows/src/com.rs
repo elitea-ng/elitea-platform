@@ -21,12 +21,10 @@
 //! 6. `ICoreWebView2::GoBack`, `GoForward` and `Stop` — the pane's buttons.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 use tauri::webview::PlatformWebview;
 use tauri::{AppHandle, Runtime, Webview};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, DuplexStream};
-use tokio::sync::mpsc;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2_11, ICoreWebView2Controller,
     ICoreWebView2DevToolsProtocolEventReceivedEventArgs,
@@ -39,24 +37,26 @@ use webview2_com::{
 };
 use windows_core::{HSTRING, Interface as _, PWSTR};
 
+use crate::bridge::{Observe, Outbox, Panes, next_out, outbox, subscribe_all};
 use crate::{EVENTS, wire};
 
 /// The buffer of each direction of the byte stream.
 const STREAM_BYTES: usize = 4 << 20;
 
-/// Bytes on their way to the driver (answers and events).
-type Out = mpsc::UnboundedSender<Vec<u8>>;
+/// One event subscription: the receiver and its handler's token.
+type Subscription = (ICoreWebView2DevToolsProtocolEventReceiver, i64);
 
 /// The page and its event subscriptions, removed when its stream closes.
 struct Pane {
     webview: ICoreWebView2,
-    receivers: Vec<(ICoreWebView2DevToolsProtocolEventReceiver, i64)>,
+    receivers: Vec<Subscription>,
 }
 
 thread_local! {
-    /// The panes whose CDP stream is open, by Tauri webview label. UI
+    /// The panes whose CDP stream is open, by Tauri webview label and
+    /// generation (a pane opened again under its label is a new one). UI
     /// thread only: the COM objects are not `Send`.
-    static PANES: RefCell<HashMap<String, Pane>> = RefCell::new(HashMap::new());
+    static PANES: RefCell<Panes<Pane>> = RefCell::new(Panes::default());
 }
 
 /// The browser buttons `WebView2` runs itself (the page cannot override
@@ -70,10 +70,6 @@ pub enum Go {
 
 /// Hands work to the UI thread; `false` when it is gone (the app quits).
 pub type OnUiThread = std::sync::Arc<dyn Fn(Box<dyn FnOnce() + Send>) -> bool + Send + Sync>;
-
-/// Sees each command on its way to the page (the host matches its own
-/// trusted input to the reports of the person's).
-pub type Observe = std::sync::Arc<dyn Fn(&wire::Command) + Send + Sync>;
 
 /// Open the CDP stream of a Tauri webview's page, for
 /// `elitea-browser-session`'s `Connection::new` (the halves of the one
@@ -122,8 +118,8 @@ pub fn open_stream(
 ) -> Result<DuplexStream, String> {
     let (driver_side, bridge_side) = tokio::io::duplex(STREAM_BYTES);
     let (bridge_read, mut bridge_write) = tokio::io::split(bridge_side);
-    let (out, mut outgoing) = mpsc::unbounded_channel::<Vec<u8>>();
-    open(key, controller, &out)?;
+    let (out, mut inbox) = outbox(observe.clone());
+    let generation = open(key, controller, &out)?;
     let key = key.to_owned();
     // Driver to the UI thread: one command per record.
     tokio::spawn(async move {
@@ -138,21 +134,33 @@ pub fn open_stream(
             if record.last() == Some(&0) {
                 record.pop();
             }
-            let Some(command) = wire::command(&record) else {
-                continue;
+            let command = match wire::command(&record) {
+                Ok(command) => command,
+                Err(wire::Malformed { id: Some(id) }) => {
+                    out.answer(id, wire::refused(id, wire::MALFORMED));
+                    continue;
+                }
+                Err(wire::Malformed { id: None }) => {
+                    eprintln!(
+                        "elitea-browser-driver-windows: dropped a record of {} bytes that is not a command",
+                        record.len()
+                    );
+                    continue;
+                }
             };
-            observe(&command);
+            observe.sending(&command);
             let id = command.id;
             let (on_main, key) = (out.clone(), key.clone());
-            if !on_ui(Box::new(move || call(&key, command, &on_main))) {
-                let _ = out.send(wire::refused(id, "the app is closing"));
+            if !on_ui(Box::new(move || call(&key, generation, command, &on_main))) {
+                out.answer(id, wire::refused(id, "the app is closing"));
             }
         }
-        let _ = on_ui(Box::new(move || close(&key)));
+        // Only this stream's own pane: the label may be open again.
+        let _ = on_ui(Box::new(move || close(&key, generation)));
     });
     // The UI thread to the driver.
     tokio::spawn(async move {
-        while let Some(bytes) = outgoing.recv().await {
+        while let Some(bytes) = next_out(&mut inbox).await {
             if bridge_write.write_all(&bytes).await.is_err() {
                 break;
             }
@@ -202,42 +210,62 @@ fn go_now(controller: &ICoreWebView2Controller, action: Go) -> Result<(), String
     done.map_err(|error| error.message())
 }
 
-/// Subscribe to [`EVENTS`] of the page, on the UI thread.
-#[allow(unsafe_code)]
-fn open(label: &str, controller: &ICoreWebView2Controller, out: &Out) -> Result<(), String> {
+/// Subscribe to [`EVENTS`] of the page, on the UI thread: all of them or
+/// none (a subscription that fails removes the ones made). Its generation,
+/// which [`call`] and [`close`] name.
+fn open(label: &str, controller: &ICoreWebView2Controller, out: &Outbox) -> Result<u64, String> {
     let webview = core_of(controller)?;
-    close(label);
-    let mut receivers = Vec::with_capacity(EVENTS.len());
-    for &name in EVENTS {
-        // SAFETY: (2) on the UI thread, on the live `ICoreWebView2`; the
-        // name is a valid, NUL-terminated wide string (`HSTRING`) that
-        // outlives the call. The result is an owned receiver or an error.
-        let receiver = unsafe { webview.GetDevToolsProtocolEventReceiver(&HSTRING::from(name)) }
-            .map_err(|error| error.message())?;
-        let out = out.clone();
-        let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(
-            move |_sender, args: Option<ICoreWebView2DevToolsProtocolEventReceivedEventArgs>| {
-                if let Some(args) = args {
-                    let (params, session) = event_of(&args);
-                    let _ = out.send(wire::event(name, &params, &session));
-                }
-                Ok(())
-            },
-        ));
-        let mut token = 0_i64;
-        // SAFETY: (2) on the UI thread, on the live receiver; `handler` is a
-        // COM object that `WebView2` AddRefs and keeps, and `token` is a
-        // valid `i64` out-parameter for the call's duration.
-        unsafe { receiver.add_DevToolsProtocolEventReceived(&handler, &raw mut token) }
-            .map_err(|error| error.message())?;
-        receivers.push((receiver, token));
-    }
-    PANES.with(|panes| {
+    let receivers = subscribe_all(EVENTS, |name| subscribe(&webview, name, out), unsubscribe)?;
+    let (generation, replaced) = PANES.with(|panes| {
         panes
             .borrow_mut()
-            .insert(label.to_owned(), Pane { webview, receivers });
+            .insert(label, Pane { webview, receivers })
     });
-    Ok(())
+    // A stream still open on this label loses its page: its commands now
+    // answer "the page is closed", and its close removes nothing.
+    if let Some(old) = replaced {
+        old.receivers.into_iter().for_each(unsubscribe);
+    }
+    Ok(generation)
+}
+
+/// One event's subscription.
+#[allow(unsafe_code)]
+fn subscribe(
+    webview: &ICoreWebView2,
+    name: &'static str,
+    out: &Outbox,
+) -> Result<Subscription, String> {
+    // SAFETY: (2) on the UI thread, on the live `ICoreWebView2`; the name
+    // is a valid, NUL-terminated wide string (`HSTRING`) that outlives the
+    // call. The result is an owned receiver or an error.
+    let receiver = unsafe { webview.GetDevToolsProtocolEventReceiver(&HSTRING::from(name)) }
+        .map_err(|error| error.message())?;
+    let out = out.clone();
+    let frames = name == "Page.screencastFrame";
+    let handler = DevToolsProtocolEventReceivedEventHandler::create(Box::new(
+        move |_sender, args: Option<ICoreWebView2DevToolsProtocolEventReceivedEventArgs>| {
+            if let Some(args) = args {
+                let (params, session) = event_of(&args);
+                let record = wire::event(name, &params, &session);
+                if frames {
+                    // Dropped when the driver is behind; it acks the ones
+                    // it reads, so the screencast goes on.
+                    let _ = out.frame(record);
+                } else {
+                    out.send(record);
+                }
+            }
+            Ok(())
+        },
+    ));
+    let mut token = 0_i64;
+    // SAFETY: (2) on the UI thread, on the live receiver; `handler` is a COM
+    // object that `WebView2` AddRefs and keeps, and `token` is a valid `i64`
+    // out-parameter for the call's duration.
+    unsafe { receiver.add_DevToolsProtocolEventReceived(&handler, &raw mut token) }
+        .map_err(|error| error.message())?;
+    Ok((receiver, token))
 }
 
 /// An event's parameters and its session (empty: the page's own).
@@ -269,10 +297,15 @@ fn event_of(args: &ICoreWebView2DevToolsProtocolEventReceivedEventArgs) -> (Stri
 
 /// Send one command, on the UI thread; its answer goes to `out`.
 #[allow(unsafe_code)]
-fn call(label: &str, command: wire::Command, out: &Out) {
-    let webview = PANES.with(|panes| panes.borrow().get(label).map(|pane| pane.webview.clone()));
+fn call(label: &str, generation: u64, command: wire::Command, out: &Outbox) {
+    let webview = PANES.with(|panes| {
+        panes
+            .borrow()
+            .get(label, generation)
+            .map(|pane| pane.webview.clone())
+    });
     let Some(webview) = webview else {
-        let _ = out.send(wire::refused(command.id, "the page is closed"));
+        out.answer(command.id, wire::refused(command.id, "the page is closed"));
         return;
     };
     let id = command.id;
@@ -280,7 +313,7 @@ fn call(label: &str, command: wire::Command, out: &Out) {
         let out = out.clone();
         CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
             move |result: windows_core::Result<()>, answer: String| {
-                let _ = out.send(wire::reply(id, result.is_err(), &answer));
+                out.answer(id, wire::reply(id, result.is_err(), &answer));
                 Ok(())
             },
         ))
@@ -306,19 +339,22 @@ fn call(label: &str, command: wire::Command, out: &Out) {
         },
     };
     if let Err(error) = sent {
-        let _ = out.send(wire::refused(id, &error.message()));
+        out.answer(id, wire::refused(id, &error.message()));
     }
 }
 
-/// Drop the page's subscriptions, on the UI thread.
-#[allow(unsafe_code)]
-fn close(label: &str) {
-    let Some(pane) = PANES.with(|panes| panes.borrow_mut().remove(label)) else {
-        return;
-    };
-    for (receiver, token) in pane.receivers {
-        // SAFETY: (5) on the UI thread, on the live receiver, with the token
-        // its own `add_DevToolsProtocolEventReceived` gave.
-        let _ = unsafe { receiver.remove_DevToolsProtocolEventReceived(token) };
+/// Drop the page's subscriptions, on the UI thread, if the label is still
+/// that generation's.
+fn close(label: &str, generation: u64) {
+    if let Some(pane) = PANES.with(|panes| panes.borrow_mut().remove(label, generation)) {
+        pane.receivers.into_iter().for_each(unsubscribe);
     }
+}
+
+/// End one subscription.
+#[allow(unsafe_code)]
+fn unsubscribe((receiver, token): Subscription) {
+    // SAFETY: (5) on the UI thread, on the live receiver, with the token its
+    // own `add_DevToolsProtocolEventReceived` gave.
+    let _ = unsafe { receiver.remove_DevToolsProtocolEventReceived(token) };
 }
