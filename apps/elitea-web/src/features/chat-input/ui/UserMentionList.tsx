@@ -140,9 +140,12 @@ export interface UserMentionListProps {
   readonly query?: string | undefined;
   readonly onSelectUser: (user: UserMentionCandidate) => void;
   readonly onClose: () => void;
+  /** The list's heading; "Participants" when absent. */
+  readonly title?: string | undefined;
+  readonly testId?: string | undefined;
 }
 
-export function UserMentionList({ users = [], query, onSelectUser, onClose }: UserMentionListProps): ReactNode {
+export function UserMentionList({ users = [], query, onSelectUser, onClose, title, testId }: UserMentionListProps): ReactNode {
   const [activeIndex, setActiveIndex] = useState(0);
 
   const filteredUsers = useMemo(() => {
@@ -183,6 +186,7 @@ export function UserMentionList({ users = [], query, onSelectUser, onClose }: Us
   return (
     <ClickAwayListener onClickAway={onClose}>
       <Box
+        data-testid={testId}
         sx={(theme: Theme) => ({
           border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
           width: '100%',
@@ -203,7 +207,7 @@ export function UserMentionList({ users = [], query, onSelectUser, onClose }: Us
             variant="subtitle"
             color="text.primary"
           >
-            {t('chatInput.userMentionList.participants', 'Participants')}
+            {title ?? t('chatInput.userMentionList.participants', 'Participants')}
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%' }}>

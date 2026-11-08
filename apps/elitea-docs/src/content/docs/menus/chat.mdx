@@ -69,6 +69,22 @@ A loop guard bounds every exchange. For one message from you, agents hand the fl
 
 A new message from you ends the exchange of your earlier message: agents that were still waiting their turn do not answer it.
 
+#### Addressing agents in the composer
+
+In a conversation with two or more agents, the web app and the mobile app let you address agents and set the lead:
+
+- **@Agent or #Agent.** Type `@` or `#` and pick an agent of the conversation. The name is highlighted in your message, and the message is addressed to it. Remove the name from your text and the agent is no longer addressed. `@` still lists people too, and `#` still opens the project picker when no agent of the conversation matches what you typed.
+- **To: chip.** Next to the composer, **To:** names the agent that answers a message with no address: the lead, marked **(lead)**, or else the agent you picked or last addressed. On mobile, a new conversation with several agents and no pick shows **Choose an agent**, and sending opens the agent picker instead of sending to the first agent.
+- **Lead.** In the participants panel, an agent's menu has **Make lead** and **Clear lead**. The lead has a **Lead** badge. Making an agent the lead switches the conversation's floor to **Lead**; clearing it switches it back to **Addressed**.
+- **Side conversations.** Agent-to-agent messages fold into a **Side conversation (n)** chip under the message that started them. Open it to see each message as a compact "Agent → Agent" row.
+- **System lines.** A loop guard's line is shown centred and muted, with no avatar.
+
+If an agent you addressed has left the conversation, the send fails with a message saying so; address the agents that are still in it.
+
+The first agent's answer streams as you watch. Each next agent starts only after the one before it finished, and its answer appears in the open chat a few seconds later, without a reload.
+
+The desktop app shows the same in a cloud conversation. A local desktop thread still holds one agent.
+
 ### Who is speaking
 
 Every participant has a kind: a **person**, an **agent**, a short-lived **ephemeral agent** that an agent starts for one task, or the **system**. A toolkit, a prompt or an MCP has no kind: it is in the conversation but never writes. An agent with a [persona](/menus/agents#persona) shows its persona's display name, pronouns and role in this conversation. They come from the agent version the conversation runs, and change with the next answer after a new release.

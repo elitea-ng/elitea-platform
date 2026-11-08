@@ -51,7 +51,7 @@ import { ChatBoxSteeringNotice, ChatBoxSteeringOffer, chatBoxQueueKey, useChatBo
 import { ChatBoxComposerQueue } from './ChatBoxComposerQueue';
 import { ChatBoxVoicePlayer } from './ChatBoxVoicePlayer';
 import { buildChatBoxPopupsProps, ChatBoxPopups } from './ChatBoxPopups';
-import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice';
+import { ChatBoxWithdrawnNotice } from './ChatBoxWithdrawnNotice'; import { ChatBoxFloorTarget } from './ChatBoxFloorTarget';
 import { useChatBoxUnattended } from './hooks/useChatBoxUnattended';
 import { useChatBoxChainFollow } from './hooks/useChatBoxChainFollow';
 import { ChatBoxDeleteModal } from './ChatBoxDeleteModal';
@@ -233,7 +233,7 @@ const ChatBoxInner = memo(function ChatBox({
   // A14 (ELITEA-0386): per-participant LLM-settings edit dialog
   const llmSettingsDialog = useChatBoxLlmSettingsDialog({ projectId: projectIdString, conversationId, participant: participantForEditor });
   // "@" mention -> send-to-user/everyone routing, "~" skill selection
-  const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = useChatBoxMentions({ state, onChangeParticipant });
+  const mentions = useChatBoxMentions({ state, onChangeParticipant, participants: conversationParticipants, chatInput: chatInputRef, sendQuestion: handlers.sendQuestion }); const { handleMentionChange, handleSelectUserMention, handleSelectSkillTool } = mentions; // + "@"/"#" agents (ADR-0050 7c)
 
   // Input disable/loading derivation
   const { isInputLoading, isComposerBusy, isDraftInputBusy, disabledSend } = deriveChatBoxInputState({
@@ -267,7 +267,7 @@ const ChatBoxInner = memo(function ChatBox({
     handleContinueMcpExecution,
     handleContinueTokenLimit,
     handleClear,
-  } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated, onSkillsUnavailable: voiceFeedback.onError });
+  } = useChatBoxActions({ chatInputRef, data, state, handlers, deleteAlert, messages, isAgentsPage, readAloudStop, onConversationCreated, onSkillsUnavailable: voiceFeedback.onError, takeAddressedTo: mentions.takeAddressedTo });
 
   const staticPause = useStaticPauseCards({ messages, setChatHistory: data.setChatHistory, projectId, conversationUuid, continueExecution: continueStreamedExecution, editorTest, isStreaming });
   // A message typed while an authored pipeline pause is current continues that
@@ -282,7 +282,7 @@ const ChatBoxInner = memo(function ChatBox({
   // a reload, and stamps its deliveries so the transcript can label them.
   const queued = useChatBoxQueuedMessages({
     conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming,
-    onSendNow: sendNow, send: handlers.sendQuestion, onConversationCreated,
+    onSendNow: sendNow, send: mentions.queuedSend, onConversationCreated, // a queued message keeps its own addressing (ADR-0050 7c)
   });
 
   // Imperative handle (stable via refs, so identity never churns)
@@ -299,7 +299,7 @@ const ChatBoxInner = memo(function ChatBox({
   const steering = useChatSteering({ conversationKey: chatBoxQueueKey(conversationUuid, conversationId), isStreaming, streamTarget, send: queued.onSend, queueAfterTurn: queued.enqueue, answerFailed: (id) => messages.some((m) => m.id === id && (Boolean(m.exception) || m.failureCode !== undefined)) });
   useReattachSeededTurn({ messages, conversationUuid, reattach: reattachStreamedExecution, onReattached: steering.onReattached }); // #6654: a reload mid-turn observes the run again
   // ADR-0045: what Main writes after an unattended answer settles (brief, goal check, continuations) shows without a reload.
-  const chainFollow = useChatBoxChainFollow({ enabled: !editorTest, projectId, conversationUuid, messages, isStreaming, setChatHistory: data.setChatHistory, granted: () => unattended.wire() !== undefined });
+  const chainFollow = useChatBoxChainFollow({ enabled: !editorTest, projectId, conversationUuid, messages, isStreaming, setChatHistory: data.setChatHistory, granted: () => unattended.wire() !== undefined || mentions.addressableAgents.length >= 2 }); // ADR-0050 7c: Main starts later floor turns itself
   // The composer's Stop, and Esc Esc anywhere on the page: the leftovers of the turn are offered, not sent.
   const stopTurn = (): void => { chainFollow.cancel(); steering.onStop(); stopGeneration(); };
   useDoubleEscape(isStreaming && !hidden, stopTurn);
@@ -353,16 +353,17 @@ const ChatBoxInner = memo(function ChatBox({
             projectId: projectIdString,
             onSelectUser: handleSelectUserMention,
             onSelectTool: handleSelectSkillTool,
-            onAddParticipant: entityParticipantActions.onSelectParticipant,
+            onAddParticipant: entityParticipantActions.onSelectParticipant, mentions,
           })}
         />
         {contextIndicator}
+        <ChatBoxFloorTarget agents={mentions.addressableAgents} meta={conversationMeta} activeParticipant={activeParticipant} participants={conversationParticipants} stickyParticipantId={stickyParticipantId} onSelect={onChangeParticipant} onAddress={mentions.handleAddressAgent} />
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}
           state={{ isLoading: isComposerBusy, disabledInput: isDraftInputBusy, isStreaming, disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
-          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: state.combinedHighlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, editorTest] }) }}
-          callbacks={{ onSend: steering.onSend, onStopGeneration: stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: state.onInputChange }}
+          content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, scratch: [isAgentsPage, editorTest] }) }}
+          callbacks={{ onSend: steering.onSend, onStopGeneration: stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: mentions.onInputChange }}
           agentEditor={buildAgentEditorProps({
             participantForEditor,
             activeParticipantDetails: agentEditorParticipantDetails,

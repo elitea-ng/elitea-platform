@@ -11,7 +11,10 @@ import {
   useParticipantCandidates,
   type Participant,
 } from '@/api/queries/participants';
+import { setConversationLead } from '@/api/queries/conversationActions';
 import { useDesign } from '@/design/DesignProvider';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
+import { floorOf } from '@elitea/client-core/conversation';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantName, participantUserId } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
@@ -50,6 +53,16 @@ export interface ParticipantsSheetProps {
   onChanged: () => void;
   /** An agent was added: address it. */
   onAgentAdded?: (participantId: number) => void;
+  /**
+   * The conversation's meta (its `floor`, ADR-0050 7d). When given, the lead agent wears a
+   * "Lead" badge and each agent row offers "Make lead" / "Clear lead" (an updateConversation).
+   */
+  conversationMeta?: unknown;
+}
+
+/** Agents and pipelines: the participants a lead can be. */
+export function canLead(participant: Participant): boolean {
+  return participant.entity_name === 'application' || participant.entity_name === 'pipeline';
 }
 
 /**
@@ -78,6 +91,7 @@ function SheetBody({
   canAddAgent = true,
   onChanged,
   onAgentAdded,
+  conversationMeta,
 }: ParticipantsSheetProps) {
   const { colors, radius } = useDesign();
   const insets = useSafeAreaInsets();
@@ -109,6 +123,19 @@ function SheetBody({
       { text: 'Cancel', style: 'cancel' },
       { text: 'Remove', style: 'destructive', onPress: () => run(() => removeParticipant(projectId, conversationId, participant.id)) },
     ]);
+  };
+
+  const leadId = floorOf(conversationMeta).leadParticipantId;
+  const leadsShown = conversationMeta !== undefined && Number.isSafeInteger(Number(conversationId));
+  const agentCount = participants.filter(canLead).length;
+  const toggleLead = (participant: Participant) => {
+    if (busy || offline) return;
+    setBusy(true);
+    setError(null);
+    setConversationLead(projectId, Number(conversationId), conversationMeta, participant.id === leadId ? 0 : participant.id)
+      .then(onChanged)
+      .catch(() => setError(TURN_TAKING_COPY.leadFailed))
+      .finally(() => setBusy(false));
   };
 
   const attachedAgentIds = new Set(
@@ -154,14 +181,29 @@ function SheetBody({
             {participants.map((p) => {
               const name = participantName(p) ?? KIND_LABEL[p.entity_name] ?? p.entity_name;
               const me = p.entity_name === 'user' && participantUserId(p) === selfUserId;
+              const isLead = leadsShown && p.id === leadId;
+              const leadable = leadsShown && canLead(p) && (agentCount > 1 || isLead);
+              const kind = KIND_LABEL[p.entity_name] ?? p.entity_name;
               return (
                 <ListRow
                   key={p.id}
                   title={me ? `${name} (you)` : name}
-                  subtitle={KIND_LABEL[p.entity_name] ?? p.entity_name}
+                  subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    isRemovable(p, selfUserId) ? (
+                    leadable || isRemovable(p, selfUserId) ? (
+                      <View style={styles.trailing}>
+                        {leadable ? (
+                          <Button
+                            title={isLead ? TURN_TAKING_COPY.clearLead : TURN_TAKING_COPY.makeLead}
+                            variant="plain"
+                            size="small"
+                            accessibilityLabel={isLead ? TURN_TAKING_COPY.clearLeadLabel(name) : TURN_TAKING_COPY.makeLeadLabel(name)}
+                            disabled={offline || busy}
+                            onPress={() => toggleLead(p)}
+                          />
+                        ) : null}
+                        {isRemovable(p, selfUserId) ? (
                       <Button
                         title="Remove"
                         variant="destructivePlain"
@@ -170,6 +212,8 @@ function SheetBody({
                         disabled={offline || busy}
                         onPress={() => confirmRemove(p)}
                       />
+                        ) : null}
+                      </View>
                     ) : undefined
                   }
                 />
@@ -254,6 +298,7 @@ const styles = StyleSheet.create({
   sheet: { flex: 1, paddingHorizontal: 16, gap: 12 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   flex: { flex: 1 },
+  trailing: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   note: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderCurve: 'continuous' },
   list: { gap: 20 },
   search: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, borderWidth: 1, borderCurve: 'continuous' },

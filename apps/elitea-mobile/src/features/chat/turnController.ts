@@ -24,6 +24,7 @@ import type { StreamTransport } from '@/api/sse/transport';
 import { projectScope } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { parseFrame } from '@/features/chat/frames';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { INITIAL_TURN, isTurnTerminal, reduceTurn, withSteering, type TurnState } from '@/features/chat/turnReducer';
 import { FRAME_TYPE, STEERING_ERROR, STEERING_STATE, isSteeringCarryOver, joinSteeringTexts, leftoverSteering, type SteeringItem } from '@elitea/client-core/stream';
 import { applyAgentStateFrame, type AvatarStates } from '@elitea/client-core/conversation';
@@ -202,6 +203,7 @@ export const FAILURE_TEXT = {
   stream: 'Lost the connection to the reply.',
   signedOut: 'You were signed out.',
   answeredElsewhere: 'Answered elsewhere.',
+  addresseeGone: TURN_TAKING_COPY.addresseeGone,
 } as const;
 
 function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -762,6 +764,9 @@ export class TurnController {
               return null;
             case 'unsupported_agent':
               this.fail('send', FAILURE_TEXT.unsupported, false);
+              return null;
+            case 'addressee_not_in_conversation':
+              this.fail('send', FAILURE_TEXT.addresseeGone, false);
               return null;
             case 'already_resolved':
               this.fail('send', FAILURE_TEXT.answeredElsewhere, false);

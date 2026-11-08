@@ -63,6 +63,34 @@ export function hasStreamingGroup(detail: ConversationDetail | undefined): boole
 /** While a turn is still being written server-side, poll every 3 s until it settles. */
 export const STREAMING_POLL_MS = 3000;
 
+/**
+ * How long a conversation with several agents is still read after its last answer settled
+ * (ADR-0050 7c/7d): Main starts the next addressed or handed agent's turn itself and sends no
+ * frame for it, so the thread reads it from the conversation.
+ */
+export const FLOOR_FOLLOW_MS = 20_000;
+
+function agentCount(detail: ConversationDetail | undefined): number {
+  return (detail?.participants ?? []).filter((p) => p?.entity_name === 'application').length;
+}
+
+function newestGroupAt(detail: ConversationDetail | undefined): number {
+  let newest = 0;
+  for (const group of detail?.message_groups ?? []) {
+    const at = Date.parse(String((group as { created_at?: unknown } | null)?.created_at ?? ''));
+    if (Number.isFinite(at) && at > newest) newest = at;
+  }
+  return newest;
+}
+
+/** The poll interval of a conversation read: while a turn streams, and briefly after one settles with several agents. */
+export function conversationPollInterval(detail: ConversationDetail | undefined, now: number = Date.now()): number | false {
+  if (hasStreamingGroup(detail)) return STREAMING_POLL_MS;
+  if (agentCount(detail) < 2) return false;
+  const newest = newestGroupAt(detail);
+  return newest > 0 && now - newest < FLOOR_FOLLOW_MS ? STREAMING_POLL_MS : false;
+}
+
 export function useConversation(projectId: number | null, conversationRef: string, options: { pollWhileStreaming?: boolean } = {}) {
   const poll = options.pollWhileStreaming ?? true;
   const enabled = projectId !== null && isConversationRef(conversationRef);
@@ -76,6 +104,6 @@ export function useConversation(projectId: number | null, conversationRef: strin
     enabled,
     placeholderData: saved === null ? undefined : { ...saved },
     queryFn: ({ signal }) => fetchConversation(projectId as number, conversationRef, sessionApiClient(), signal),
-    refetchInterval: (query) => (poll && hasStreamingGroup(query.state.data) ? STREAMING_POLL_MS : false),
+    refetchInterval: (query) => (poll ? conversationPollInterval(query.state.data) : false),
   });
 }

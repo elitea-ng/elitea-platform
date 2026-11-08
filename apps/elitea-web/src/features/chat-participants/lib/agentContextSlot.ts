@@ -28,6 +28,15 @@ export function agentContextOf(
   return render && participantId !== undefined ? { contextSlot: render({ participantId }) } : {};
 }
 
+/** The lead badge and menu for one agent row (ADR-0050 7d), or nothing. */
+export function agentLeadOf(
+  render: ((props: { participantId: number }) => ReactNode) | undefined,
+  participant: TransformedParticipant,
+): { leadSlot?: ReactNode } {
+  const participantId = render ? agentParticipantId(participant) : undefined;
+  return render && participantId !== undefined ? { leadSlot: render({ participantId }) } : {};
+}
+
 /** Binds the meter to the conversation the budget may query (none for a new or replayed one). */
 export function useAgentContextSlot(
   render: AgentContextRenderer | undefined,

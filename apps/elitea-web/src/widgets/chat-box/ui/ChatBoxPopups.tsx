@@ -15,7 +15,10 @@ import { t } from '@/shared/i18n';
 import { MentionToolList } from '@/shared/ui/MentionToolList';
 import type { MentionTool } from '@/shared/ui/MentionToolList';
 
+import type { AddressableAgent } from '@elitea/client-core/conversation';
+
 import { optField } from './ChatBox.helpers';
+import { agentCandidates, agentOfCandidate } from './hooks/useChatBoxAgentMentions';
 import { HashParticipantPopup } from './HashParticipantPopup';
 import type { HashParticipantSelection } from './HashParticipantPopup';
 import { useNoopValidateToolkitQuery, useSlashToolkitDetailsQuery } from './hooks/useChatBoxSlashQueries';
@@ -34,7 +37,7 @@ interface ChatBoxPopupsRecommendations {
 interface ChatBoxPopupsUserMentions {
   readonly isProcessingAtSymbol: boolean;
   readonly hasOtherUsers: boolean;
-  readonly users: ChatBoxState['users'];
+  readonly users: readonly { readonly id: string; readonly name: string }[];
   readonly atQuery: string;
   readonly onSelectUser: (user: unknown) => void;
   readonly onClose: () => void;
@@ -45,6 +48,15 @@ interface ChatBoxPopupsSkill {
   readonly filteredItems: ChatBoxState['skill']['filteredItems'];
   readonly highlightedIndex: ChatBoxState['skill']['highlightedIndex'];
   readonly onSelectTool: (toolName: string | null) => void;
+}
+
+interface ChatBoxPopupsAgents {
+  /** The conversation's addressable agents (two or more), or none. */
+  readonly agents: readonly AddressableAgent[];
+  readonly hashOpen: boolean;
+  readonly hashQuery: string;
+  readonly onSelectHash: (agent: AddressableAgent) => void;
+  readonly onCloseHash: () => void;
 }
 
 interface ChatBoxPopupsHashPicker {
@@ -58,9 +70,16 @@ interface ChatBoxPopupsHashPicker {
 export interface ChatBoxPopupsProps {
   readonly recommendations: ChatBoxPopupsRecommendations;
   readonly hashPicker?: ChatBoxPopupsHashPicker | undefined;
+  readonly agents?: ChatBoxPopupsAgents | undefined;
   readonly userMentions: ChatBoxPopupsUserMentions;
   readonly slash: ChatBoxState['slash'];
   readonly skill: ChatBoxPopupsSkill;
+}
+
+/** The agents whose name holds the "#" query (its leading "#" dropped). */
+export function matchingAgents(agents: readonly AddressableAgent[], query: string): AddressableAgent[] {
+  const search = (query.startsWith('#') ? query.slice(1) : query).toLowerCase();
+  return agents.filter((agent) => agent.name.toLowerCase().includes(search));
 }
 
 /**
@@ -81,11 +100,23 @@ export function buildChatBoxPopupsProps(input: {
   readonly onSelectTool: ChatBoxPopupsSkill['onSelectTool'];
   /** Attaches a "#"-picked agent or pipeline (the "+" menu's `onSelectParticipant`). */
   readonly onAddParticipant?: ((selection: unknown) => void) | undefined;
+  /** ADR-0050 7c: the conversation's agents "@" and "#" can address (`addressableAgents`), and the "#" pick. */
+  readonly mentions?: { readonly addressableAgents: readonly AddressableAgent[]; readonly handleSelectHashAgent: (agent: AddressableAgent) => void } | undefined;
 }): ChatBoxPopupsProps {
   const { state, onChangeParticipant, existingParticipants, projectId, onSelectUser, onSelectTool, onAddParticipant } = input;
+  const agents = input.mentions?.addressableAgents ?? [];
+  // "#" lists the conversation's agents while one matches; otherwise the project picker attaches a new one.
+  const hashAgents = state.keyDown.isProcessingSymbols ? matchingAgents(agents, state.keyDown.query) : [];
   return {
+    agents: {
+      agents: hashAgents,
+      hashOpen: hashAgents.length > 0,
+      hashQuery: state.keyDown.query,
+      onSelectHash: (agent) => { input.mentions?.handleSelectHashAgent?.(agent); },
+      onCloseHash: state.keyDown.stopProcessingSymbols,
+    },
     hashPicker: {
-      isOpen: state.keyDown.isProcessingSymbols && onAddParticipant !== undefined,
+      isOpen: state.keyDown.isProcessingSymbols && onAddParticipant !== undefined && hashAgents.length === 0,
       query: state.keyDown.query,
       projectId,
       onSelect: (selection) => { state.clearHashQuery(); onAddParticipant?.(selection); },
@@ -100,8 +131,9 @@ export function buildChatBoxPopupsProps(input: {
     },
     userMentions: {
       isProcessingAtSymbol: state.keyDown.isProcessingAtSymbol,
-      hasOtherUsers: state.hasOtherUsers,
-      users: state.users,
+      hasOtherUsers: state.hasOtherUsers || agents.length > 0,
+      // Agents first, then people ("Everyone" only when there are other people).
+      users: [...agentCandidates(agents), ...(state.hasOtherUsers ? state.users : [])],
       atQuery: state.keyDown.atQuery,
       onSelectUser,
       onClose: state.keyDown.stopProcessingAtSymbol,
@@ -116,9 +148,21 @@ export function buildChatBoxPopupsProps(input: {
   };
 }
 
-export function ChatBoxPopups({ recommendations, hashPicker, userMentions, slash, skill }: ChatBoxPopupsProps): ReactNode {
+export function ChatBoxPopups({ recommendations, hashPicker, agents, userMentions, slash, skill }: ChatBoxPopupsProps): ReactNode {
   return (
     <>
+      {agents?.hashOpen === true && (
+        <Box sx={{ mb: 1 }}>
+          <UserMentionList
+            users={agentCandidates(agents.agents)}
+            query={agents.hashQuery}
+            onSelectUser={(candidate) => { const agent = agentOfCandidate(candidate); if (agent) agents.onSelectHash(agent); }}
+            onClose={agents.onCloseHash}
+            title={t('widgets.chatBox.agentMentions.title', 'Agents in this conversation')}
+            testId="chat-agent-mention-list"
+          />
+        </Box>
+      )}
       {hashPicker?.isOpen === true && (
         <HashParticipantPopup
           query={hashPicker.query}
@@ -144,6 +188,7 @@ export function ChatBoxPopups({ recommendations, hashPicker, userMentions, slash
             query={userMentions.atQuery}
             onSelectUser={userMentions.onSelectUser}
             onClose={userMentions.onClose}
+            testId="chat-user-mention-list"
           />
         </Box>
       )}

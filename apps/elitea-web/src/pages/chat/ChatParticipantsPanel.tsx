@@ -24,6 +24,8 @@ import { t } from '@/shared/i18n';
 import type { ChatBoxProps } from '@/widgets/chat-box';
 import { AgentContextMeter, ContextBudget } from '@/widgets/context-budget';
 
+import { useAgentLeadSlot } from './ChatAgentLead';
+
 /**
  * Baseline `rightPanelWidth` (`NewChat.jsx:187`). `ParticipantsWrapper`'s own
  * default is 320, which is not the production width.
@@ -56,6 +58,8 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
     ),
     [projectId],
   );
+  // ADR-0050 7d (issue 1612): the lead badge and menu on each agent row, with two or more agents.
+  const leadSlot = useAgentLeadSlot(projectId, activeConversation);
 
   const panel = (
     <ParticipantsWrapper
@@ -80,6 +84,7 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
        * import `widgets/`, which is why the slot is filled by the page.
        */
       renderAgentContext={renderAgentContext}
+      {...leadSlot}
       renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
         <ContextBudget
           conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}
