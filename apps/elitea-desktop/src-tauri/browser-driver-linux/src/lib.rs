@@ -78,6 +78,38 @@ pub async fn attach(
     Ok(WebDriver::new(engine, check, hand_over))
 }
 
+/// The browser buttons WebKitGTK runs itself (the page cannot override
+/// them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Go {
+    Back,
+    Forward,
+    Stop,
+}
+
+/// Back, Forward or Stop on the pane's WebKitGTK view itself.
+///
+/// # Errors
+///
+/// Tauri could not reach the webview.
+#[cfg(all(target_os = "linux", feature = "tauri"))]
+pub async fn go(webview: &tauri::Webview, action: Go) -> Result<(), String> {
+    use webkit2gtk::WebViewExt as _;
+    let (done, result) = tokio::sync::oneshot::channel();
+    webview
+        .with_webview(move |platform| {
+            let view = platform.inner();
+            match action {
+                Go::Back => view.go_back(),
+                Go::Forward => view.go_forward(),
+                Go::Stop => view.stop_loading(),
+            }
+            let _ = done.send(());
+        })
+        .map_err(|error| error.to_string())?;
+    result.await.map_err(|_| "the page view is gone".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::trusted_input_on;

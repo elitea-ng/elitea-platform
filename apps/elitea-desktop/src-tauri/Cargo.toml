@@ -155,17 +155,11 @@ elitea-browser-driver-windows = { path = "browser-driver-windows" }
 elitea-browser-driver-dom = { path = "browser-driver-dom" }
 elitea-browser-session = { path = "../../../libs/rust/browser-session" }
 
-# The pane's Linux driver (ADR-0048 decision 6, #1593, src/browser_linux.rs):
-# the shared page script and WebDriver (browser-driver-dom) over WebKitGTK's
-# safe bindings, a WebKitScriptWorld, its snapshot as PNG (cairo), and GDK's
-# test input for the trusted-input fallback (X11 only). Every one is
-# already in the tree through tauri and wry (same versions); `png` is the
-# only feature turned on here.
+# The pane's Linux driver (ADR-0048 decision 6, #1593): the shared page
+# script and WebDriver over WebKitGTK, in browser-driver-linux (safe Rust,
+# its own crate so its WebKitGTK run can own `main`).
 [target.'cfg(target_os = "linux")'.dependencies]
-elitea-browser-driver-dom = { path = "browser-driver-dom" }
-webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
-gtk = "0.18"
-cairo-rs = { version = "0.18", features = ["png"] }
+elitea-browser-driver-linux = { path = "browser-driver-linux", features = ["tauri"] }
 
 # The credentials file's owner check (geteuid) and O_NOFOLLOW, without
 # `unsafe` (src/credentials_file.rs). Already in the tree through tauri.

@@ -36,8 +36,10 @@
 //!   a second open cannot navigate a pane still being armed. The policy
 //!   (rules and guard) is fixed when the pane is made: a change applies to
 //!   panes made after it. The FFI is in
-//!   `browser-driver-macos` (`native`), the one crate allowed `unsafe`.
-//!   Windows and Linux block navigations only until their delivery (#1593).
+//!   `browser-driver-macos` (`native`), one of the two crates allowed
+//!   `unsafe`. Windows and Linux block navigations only (the guard): their
+//!   subresource loads are not filtered yet (a follow-up, docs page
+//!   `development/browser-driver-windows-linux`).
 //!
 //!   **Residual gap.** Content rules match URLs, not resolved addresses: a
 //!   public name that resolves to a private address (DNS rebinding, or a
@@ -49,8 +51,10 @@
 //!   an allowed URL replaces the page (the opener stays in its history).
 //! - **An isolated store per thread.** macOS 14+: a
 //!   `WKWebsiteDataStore(forIdentifier:)` whose identifier is kept in
-//!   `<data>/browser/stores.json` ([`StoreRegistry`]); macOS 12 and 13 (and
-//!   Windows and Linux until their delivery): a non-persistent store. It is
+//!   `<data>/browser/stores.json` ([`StoreRegistry`]); Windows and Linux: a
+//!   data folder per thread, `<data>/browser/stores/<id>` (the `WebView2`
+//!   user data folder, or the WebKitGTK website data manager); macOS 12
+//!   and 13: a non-persistent store. It is
 //!   deleted by Forget site data, the thread's delete or archive, and
 //!   sign-out; a deletion the OS refused is retried at the next launch.
 //! - **No permissions.** Every permission request (camera, microphone,
@@ -67,9 +71,10 @@
 //! - **History buttons** are native on macOS: Back, Forward and Stop call
 //!   the WKWebView's `goBack`, `goForward` and `stopLoading`
 //!   (`browser-driver-macos`, #1634), Reload `webview.reload()`, so a page
-//!   that overrides `history.back` cannot stop them. On Windows and Linux
-//!   Back, Forward and Stop still run `history.back()` and friends in the
-//!   page until #1593 (the page can override those there). The address
+//!   that overrides `history.back` cannot stop them. Windows and Linux are
+//!   native too: `WebView2`'s `GoBack`, `GoForward` and `Stop`
+//!   (`browser-driver-windows`), WebKitGTK's `go_back`, `go_forward` and
+//!   `stop_loading` (`browser-driver-linux`). The address
 //!   field and Close are host-side and always work.
 //!
 //! Tauri's child webviews are behind its `unstable` feature: this module is
@@ -92,12 +97,16 @@ use elitea_browser_tools::{BrowserError, ErrorCode};
 use elitea_egress_guard::{Class, classify};
 
 use crate::browser_control::ControlView;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use crate::browser_control::{Answer, PaneControl};
 use crate::browser_tools::{BrowserDrivers, DownloadVerdict};
 use crate::local_commands::IpcError;
 use crate::settings::SettingsFiles;
+#[cfg(target_os = "linux")]
+use elitea_browser_driver_linux as pane_driver;
 #[cfg(target_os = "macos")]
+use elitea_browser_driver_macos as pane_driver;
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use elitea_browser_tools::driver::Handback;
 use elitea_local_tools::policy::{LocalWorkPolicy, browser_domains_refusal};
 
@@ -290,16 +299,24 @@ pub fn pane_label(thread_id: &str) -> Option<String> {
 pub enum StoreMode {
     /// `WKWebsiteDataStore(forIdentifier:)`: persistent, one per thread.
     Identified,
+    /// A data folder of its own per thread (Windows: the `WebView2` user
+    /// data folder; Linux: a `WebKitWebsiteDataManager` rooted there), under
+    /// `<data>/browser/stores/<id>`. Persistent; deleted as a folder.
+    Folder,
     /// A non-persistent store that ends with the webview.
     Ephemeral,
 }
 
-/// macOS 14 introduced identified stores. Older systems, and the other
-/// OSes for now, get a non-persistent store: wry silently falls back to
-/// the DEFAULT store (the main webview's) when given an identifier the OS
-/// cannot honour, so the identifier is only ever passed on 14+.
+/// macOS 14 introduced identified stores. Older macOS gets a
+/// non-persistent store: wry silently falls back to the DEFAULT store (the
+/// main webview's) when given an identifier the OS cannot honour, so the
+/// identifier is only ever passed on 14+. Windows and Linux get a data
+/// folder per thread.
 #[must_use]
 pub const fn store_mode(macos_major: Option<i64>) -> StoreMode {
+    if cfg!(any(windows, target_os = "linux")) {
+        return StoreMode::Folder;
+    }
     match macos_major {
         Some(major) if major >= 14 => StoreMode::Identified,
         _ => StoreMode::Ephemeral,
@@ -315,6 +332,12 @@ fn macos_major() -> Option<i64> {
 #[cfg(not(target_os = "macos"))]
 const fn macos_major() -> Option<i64> {
     None
+}
+
+/// The data folder of the store `id` ([`StoreMode::Folder`]).
+#[must_use]
+pub fn store_folder(stores_root: &Path, id: [u8; 16]) -> PathBuf {
+    stores_root.join(uuid::Uuid::from_bytes(id).hyphenated().to_string())
 }
 
 /// Which store identifier belongs to which thread, and the ones still to
@@ -549,8 +572,9 @@ fn quarantine(path: &Path, url: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Other systems have no quarantine attribute; their delivery (#1593)
-/// decides the equivalent (Windows: the Mark of the Web).
+/// Other systems have no quarantine attribute. Windows' equivalent, the
+/// Mark of the Web, is not written yet (a follow-up, docs page
+/// `development/browser-driver-windows-linux`).
 #[cfg(not(target_os = "macos"))]
 const fn quarantine(_path: &Path, _url: &str) -> std::io::Result<()> {
     Ok(())
@@ -603,7 +627,10 @@ const RULE_ADDRESSES: &[&str] = &[
 /// ([`arm_pane`]).
 #[cfg_attr(
     not(any(test, target_os = "macos")),
-    expect(dead_code, reason = "Windows and Linux content blocking is #1593's")
+    expect(
+        dead_code,
+        reason = "WebKit content rules: Windows and Linux block navigations only (a follow-up)"
+    )
 )]
 #[must_use]
 pub fn content_rules(policy: &GuardPolicy) -> Option<String> {
@@ -678,6 +705,8 @@ pub fn logical_bounds(rect: PaneRect, zoom: f64) -> Option<PaneRect> {
 pub struct BrowserPanes {
     settings: SettingsFiles,
     registry_path: PathBuf,
+    /// `<data>/browser/stores`: the data folders ([`StoreMode::Folder`]).
+    stores_root: PathBuf,
     downloads_root: PathBuf,
     /// The agent's driver of each open pane (`crate::browser_tools`).
     drivers: Arc<BrowserDrivers>,
@@ -707,6 +736,7 @@ impl BrowserPanes {
         Self {
             settings: SettingsFiles::new(config_dir),
             registry_path,
+            stores_root: data_dir.join("browser").join("stores"),
             downloads_root,
             drivers,
             opening: tokio::sync::Mutex::new(()),
@@ -987,17 +1017,22 @@ fn build_pane(
     {
         builder = builder.allow_link_preview(false);
     }
-    builder = match store_mode(macos_major()) {
-        StoreMode::Identified => {
-            let id = {
-                let mut inner = panes.lock();
-                let id = inner.registry.identifier(thread_id);
-                inner.registry.save(&panes.registry_path);
-                id
-            };
-            builder.data_store_identifier(id)
+    let mode = store_mode(macos_major());
+    let id = (mode != StoreMode::Ephemeral).then(|| {
+        let mut inner = panes.lock();
+        let id = inner.registry.identifier(thread_id);
+        inner.registry.save(&panes.registry_path);
+        id
+    });
+    builder = match (mode, id) {
+        (StoreMode::Identified, Some(id)) => builder.data_store_identifier(id),
+        (StoreMode::Folder, Some(id)) => {
+            let folder = store_folder(&panes.stores_root, id);
+            std::fs::create_dir_all(&folder)
+                .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))?;
+            builder.data_directory(folder)
         }
-        StoreMode::Ephemeral => builder.incognito(true),
+        _ => builder.incognito(true),
     };
 
     let zoom = app
@@ -1023,26 +1058,59 @@ fn close_pane(app: &AppHandle, panes: &BrowserPanes, thread_id: &str) {
     }
 }
 
-/// Delete the stores still pending (macOS 14+ only: older systems have
-/// none, and the call does not exist there).
+/// Delete the stores still pending: macOS 14+ through WebKit, Windows and
+/// Linux as folders (older macOS has none).
 async fn remove_pending(app: &AppHandle, panes: &BrowserPanes) {
-    if store_mode(macos_major()) != StoreMode::Identified {
-        return;
-    }
-    #[cfg(target_vendor = "apple")]
-    {
-        let pending = panes.lock().registry.pending();
-        for id in pending {
-            match app.remove_data_store(id).await {
-                Ok(()) => panes.mark_removed(id),
-                Err(error) => {
-                    log::warn!(target: "browser", "a browser store was not deleted yet: {error}");
+    match store_mode(macos_major()) {
+        StoreMode::Ephemeral => {}
+        StoreMode::Folder => {
+            let pending = panes.lock().registry.pending();
+            for id in pending {
+                let folder = store_folder(&panes.stores_root, id);
+                match std::fs::remove_dir_all(&folder) {
+                    Ok(()) => panes.mark_removed(id),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        panes.mark_removed(id);
+                    }
+                    // A webview still holds files in it (Windows): the next
+                    // launch tries again.
+                    Err(error) => {
+                        log::warn!(target: "browser", "a browser store was not deleted yet: {error}");
+                    }
+                }
+            }
+        }
+        StoreMode::Identified => {
+            #[cfg(target_vendor = "apple")]
+            {
+                let pending = panes.lock().registry.pending();
+                for id in pending {
+                    match app.remove_data_store(id).await {
+                        Ok(()) => panes.mark_removed(id),
+                        Err(error) => {
+                            log::warn!(target: "browser", "a browser store was not deleted yet: {error}");
+                        }
+                    }
                 }
             }
         }
     }
     #[cfg(not(target_vendor = "apple"))]
-    let _ = (app, panes);
+    let _ = app;
+}
+
+/// The data folders on disk that the registry does not know (the list was
+/// lost): every folder under `stores_root` is a pane's.
+fn unknown_folders(stores_root: &Path, registry: &StoreRegistry) -> Vec<[u8; 16]> {
+    let Ok(entries) = std::fs::read_dir(stores_root) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| uuid::Uuid::parse_str(&entry.file_name().to_string_lossy()).ok())
+        .map(|id| *id.as_bytes())
+        .filter(|id| !registry.knows(*id))
+        .collect()
 }
 
 /// At launch: the deletions the OS refused last time, and any identified
@@ -1057,8 +1125,22 @@ pub fn clean_up_at_launch(app: AppHandle) {
         else {
             return;
         };
-        if store_mode(macos_major()) != StoreMode::Identified {
+        let mode = store_mode(macos_major());
+        if mode == StoreMode::Ephemeral {
             return;
+        }
+        if mode == StoreMode::Folder {
+            let mut inner = panes.lock();
+            let unknown = unknown_folders(&panes.stores_root, &inner.registry);
+            if !unknown.is_empty() {
+                for id in unknown {
+                    inner
+                        .registry
+                        .pending_removal
+                        .push(uuid::Uuid::from_bytes(id));
+                }
+                inner.registry.save(&panes.registry_path);
+            }
         }
         #[cfg(target_vendor = "apple")]
         if let Ok(ids) = app.fetch_data_store_identifiers().await {
@@ -1147,16 +1229,55 @@ fn agent_check(
     }
 }
 
-/// Install the agent's driver in a pane just made (macOS: the WKWebView
-/// driver's private content world). Without one the pane is the person's
-/// only, and the browser tools say so.
-#[cfg(target_os = "macos")]
-async fn attach_driver(panes: &Arc<BrowserPanes>, thread_id: &str, webview: &Webview) {
+/// Install the agent's driver in a pane just made: macOS, the WKWebView
+/// driver's private content world; Linux, the WebKitGTK driver's script
+/// world; Windows, the CDP driver over `WebView2`'s own CDP. Without one the
+/// pane is the person's only, and the browser tools say so.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+async fn attach_driver(
+    _app: &AppHandle,
+    panes: &Arc<BrowserPanes>,
+    thread_id: &str,
+    webview: &Webview,
+) {
     let control = panes.drivers.control(thread_id);
     let hand_over = Arc::new(PaneHandOver(control.clone()));
     let person_input = Arc::new(move || control.person_input());
     let check = Arc::new(agent_check(Arc::downgrade(panes)));
-    match elitea_browser_driver_macos::attach(webview, check, hand_over, person_input).await {
+    #[cfg(target_os = "macos")]
+    let attached = elitea_browser_driver_macos::attach(webview, check, hand_over, person_input)
+        .await
+        .map(|driver| Arc::new(driver) as Arc<dyn elitea_browser_tools::BrowserDriver>);
+    #[cfg(target_os = "linux")]
+    let attached = elitea_browser_driver_linux::attach(webview, check, hand_over, person_input)
+        .await
+        .map(|driver| Arc::new(driver) as Arc<dyn elitea_browser_tools::BrowserDriver>);
+    match attached {
+        Ok(driver) => panes.drivers.attach(thread_id, driver),
+        Err(error) => {
+            log::warn!(target: "browser", "the agent cannot drive this page: {error}");
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn attach_driver(
+    app: &AppHandle,
+    panes: &Arc<BrowserPanes>,
+    thread_id: &str,
+    webview: &Webview,
+) {
+    let control = panes.drivers.control(thread_id);
+    let hand_over: crate::browser_windows::HandOver = {
+        let control = control.clone();
+        Arc::new(move |reason: String| {
+            let control = control.clone();
+            Box::pin(async move { hand_over(&control, &reason).await })
+        })
+    };
+    let person_input = Arc::new(move || control.person_input());
+    let check = Arc::new(agent_check(Arc::downgrade(panes)));
+    match crate::browser_windows::attach(app, webview, check, hand_over, person_input).await {
         Ok(driver) => panes.drivers.attach(thread_id, Arc::new(driver)),
         Err(error) => {
             log::warn!(target: "browser", "the agent cannot drive this page: {error}");
@@ -1164,30 +1285,42 @@ async fn attach_driver(panes: &Arc<BrowserPanes>, thread_id: &str, webview: &Web
     }
 }
 
+/// Other systems have no pane driver.
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+async fn attach_driver(
+    _app: &AppHandle,
+    _panes: &Arc<BrowserPanes>,
+    _thread_id: &str,
+    _webview: &Webview,
+) {
+}
+
 /// `browser_request_user` on a desktop pane (ADR-0048 decision 4): the
 /// person drives with the reason shown above the page, until they hand back
 /// (the note is the call's answer) or decline, or the question's wait
 /// passes (declined, and the agent is told the person did not take it).
-#[cfg(target_os = "macos")]
-struct PaneHandOver(Arc<PaneControl>);
-
-#[cfg(target_os = "macos")]
-#[async_trait::async_trait]
-impl elitea_browser_driver_macos::HandOver for PaneHandOver {
-    async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError> {
-        match self.0.ask(reason).await {
-            Answer::HandedBack(note) => Ok(Handback { note }),
-            Answer::Declined => Err(BrowserError::new(
-                ErrorCode::Declined,
-                "the person did not take the page: they declined, or did not answer in time",
-            )),
-        }
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+async fn hand_over(control: &PaneControl, reason: &str) -> Result<Handback, BrowserError> {
+    match control.ask(reason).await {
+        Answer::HandedBack(note) => Ok(Handback { note }),
+        Answer::Declined => Err(BrowserError::new(
+            ErrorCode::Declined,
+            "the person did not take the page: they declined, or did not answer in time",
+        )),
     }
 }
 
-/// Windows and Linux drivers are #1593's.
-#[cfg(not(target_os = "macos"))]
-async fn attach_driver(_panes: &Arc<BrowserPanes>, _thread_id: &str, _webview: &Webview) {}
+/// [`hand_over`] as the webview driver's `HandOver` (macOS and Linux).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+struct PaneHandOver(Arc<PaneControl>);
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[async_trait::async_trait]
+impl pane_driver::HandOver for PaneHandOver {
+    async fn request_user(&self, reason: &str) -> Result<Handback, BrowserError> {
+        hand_over(&self.0, reason).await
+    }
+}
 
 /// The page a new pane is made at: wry loads nothing for it, so no request
 /// leaves the pane before [`arm_pane`] installed its content rules.
@@ -1214,7 +1347,8 @@ async fn arm_pane(webview: &Webview, policy: &GuardPolicy) -> Result<(), IpcErro
         })
 }
 
-/// Windows and Linux: navigations only (the guard) until #1593.
+/// Windows and Linux: navigations only (the guard); blocking their
+/// subresource loads is a follow-up (module docs).
 #[cfg(not(target_os = "macos"))]
 async fn arm_pane(_webview: &Webview, _policy: &GuardPolicy) -> Result<(), IpcError> {
     Ok(())
@@ -1327,7 +1461,7 @@ pub async fn browser_open(
             close_pane(&app, &panes, &thread_id);
             return Err(error);
         }
-        attach_driver(&panes, &thread_id, &webview).await;
+        attach_driver(&app, &panes, &thread_id, &webview).await;
         webview
     };
     webview
@@ -1380,7 +1514,7 @@ pub enum GoAction {
 }
 
 impl GoAction {
-    /// The native call (macOS); `None`: Reload, which wry has.
+    /// The native call; `None`: Reload, which wry has.
     #[cfg(target_os = "macos")]
     const fn native(self) -> Option<elitea_browser_driver_macos::native::Go> {
         use elitea_browser_driver_macos::native::Go;
@@ -1392,9 +1526,33 @@ impl GoAction {
         }
     }
 
-    /// Windows and Linux (until #1593): the script run in the page. History
-    /// only: nothing is read back. The page can override these.
-    #[cfg(any(test, not(target_os = "macos")))]
+    /// The native call; `None`: Reload, which wry has.
+    #[cfg(target_os = "linux")]
+    const fn native(self) -> Option<elitea_browser_driver_linux::Go> {
+        use elitea_browser_driver_linux::Go;
+        match self {
+            Self::Back => Some(Go::Back),
+            Self::Forward => Some(Go::Forward),
+            Self::Stop => Some(Go::Stop),
+            Self::Reload => None,
+        }
+    }
+
+    /// The native call; `None`: Reload, which wry has.
+    #[cfg(windows)]
+    const fn native(self) -> Option<elitea_browser_driver_windows::Go> {
+        use elitea_browser_driver_windows::Go;
+        match self {
+            Self::Back => Some(Go::Back),
+            Self::Forward => Some(Go::Forward),
+            Self::Stop => Some(Go::Stop),
+            Self::Reload => None,
+        }
+    }
+
+    /// Other systems: the script run in the page. History only: nothing is
+    /// read back. The page can override these.
+    #[cfg(any(test, not(any(target_os = "macos", target_os = "linux", windows))))]
     const fn script(self) -> &'static str {
         match self {
             Self::Back => "history.back()",
@@ -1422,19 +1580,25 @@ pub async fn browser_go(
     go_in_page(&webview, action).await
 }
 
-/// Back, Forward or Stop on the WKWebView itself: the page cannot override
-/// them.
-#[cfg(target_os = "macos")]
+/// Back, Forward or Stop on the webview itself (WKWebView, WebKitGTK,
+/// `WebView2`): the page cannot override them.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 async fn go_in_page(webview: &Webview, action: GoAction) -> Result<(), IpcError> {
     let Some(native) = action.native() else {
         return Ok(());
     };
-    elitea_browser_driver_macos::native::go(webview, native)
+    #[cfg(target_os = "macos")]
+    let done = elitea_browser_driver_macos::native::go(webview, native)
         .await
-        .map_err(|error| IpcError::new("browser_unavailable", error.to_string()))
+        .map_err(|error| error.to_string());
+    #[cfg(target_os = "linux")]
+    let done = elitea_browser_driver_linux::go(webview, native).await;
+    #[cfg(windows)]
+    let done = elitea_browser_driver_windows::go(webview, native).await;
+    done.map_err(|error| IpcError::new("browser_unavailable", error))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 async fn go_in_page(webview: &Webview, action: GoAction) -> Result<(), IpcError> {
     webview
         .eval(action.script())
@@ -1809,11 +1973,37 @@ mod tests {
 
     #[test]
     fn only_macos_14_and_later_get_an_identified_store() {
+        if cfg!(any(windows, target_os = "linux")) {
+            for major in [None, Some(12), Some(15)] {
+                assert_eq!(store_mode(major), StoreMode::Folder);
+            }
+            return;
+        }
         assert_eq!(store_mode(Some(15)), StoreMode::Identified);
         assert_eq!(store_mode(Some(14)), StoreMode::Identified);
         assert_eq!(store_mode(Some(13)), StoreMode::Ephemeral);
         assert_eq!(store_mode(Some(12)), StoreMode::Ephemeral);
         assert_eq!(store_mode(None), StoreMode::Ephemeral);
+    }
+
+    #[test]
+    fn a_threads_data_folder_is_its_store_id_and_a_lost_list_finds_strays() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut registry = StoreRegistry::default();
+        let kept = registry.identifier("t1");
+        let folder = store_folder(dir.path(), kept);
+        assert_eq!(folder.parent(), Some(dir.path()));
+        assert_eq!(
+            folder.file_name().unwrap().to_string_lossy(),
+            uuid::Uuid::from_bytes(kept).hyphenated().to_string()
+        );
+        std::fs::create_dir_all(&folder).unwrap();
+        let stray = *uuid::Uuid::new_v4().as_bytes();
+        std::fs::create_dir_all(store_folder(dir.path(), stray)).unwrap();
+        // Not a store folder: left alone.
+        std::fs::create_dir_all(dir.path().join("notes")).unwrap();
+        assert_eq!(unknown_folders(dir.path(), &registry), vec![stray]);
+        assert!(unknown_folders(&dir.path().join("missing"), &registry).is_empty());
     }
 
     #[test]
@@ -2168,10 +2358,15 @@ mod tests {
         assert_eq!(logical_bounds(rect, 0.0), None);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
-    fn the_history_buttons_are_native_on_macos() {
+    fn the_history_buttons_are_native() {
+        #[cfg(target_os = "linux")]
+        use elitea_browser_driver_linux::Go;
+        #[cfg(target_os = "macos")]
         use elitea_browser_driver_macos::native::Go;
+        #[cfg(windows)]
+        use elitea_browser_driver_windows::Go;
         assert_eq!(GoAction::Back.native(), Some(Go::Back));
         assert_eq!(GoAction::Forward.native(), Some(Go::Forward));
         assert_eq!(GoAction::Stop.native(), Some(Go::Stop));
@@ -2186,7 +2381,7 @@ mod tests {
     }
 
     #[test]
-    fn the_history_buttons_run_history_only_off_macos() {
+    fn the_fallback_history_buttons_run_history_only() {
         assert_eq!(GoAction::Back.script(), "history.back()");
         assert_eq!(GoAction::Forward.script(), "history.forward()");
         assert_eq!(GoAction::Stop.script(), "window.stop()");

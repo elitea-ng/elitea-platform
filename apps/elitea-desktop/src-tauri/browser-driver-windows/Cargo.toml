@@ -27,6 +27,20 @@ webview2-com = "0.39"
 windows-core = "0.62"
 tauri = { version = "2.12", default-features = false, features = ["wry"] }
 
+# The WebView2 conformance run (tests/webview2.rs): a plain tao window with
+# a wry webview, driven by the cloud CdpDriver over this crate's bridge. It
+# owns `main` (UI thread) and is ignored unless asked for with `-- --ignored`.
+[target.'cfg(windows)'.dev-dependencies]
+elitea-browser-session = { path = "../../../../libs/rust/browser-session" }
+elitea-browser-tools = { path = "../../../../libs/rust/browser-tools" }
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
+wry = "0.57"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "io-util"] }
+
+[[test]]
+name = "webview2"
+harness = false
+
 [lints.rust]
 # Not `forbid` (every other first-party crate): FFI here is opted in per
 # block with `#[allow(unsafe_code)]` and a `// SAFETY:` comment (AGENTS.md).

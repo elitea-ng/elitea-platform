@@ -1708,11 +1708,15 @@ dependencies = [
 name = "elitea-browser-driver-windows"
 version = "0.1.0"
 dependencies = [
+ "elitea-browser-session",
+ "elitea-browser-tools",
  "serde_json",
+ "tao",
  "tauri",
  "tokio",
  "webview2-com",
  "windows-core",
+ "wry",
 ]
 
 [[package]]
@@ -1804,11 +1808,11 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bytes",
- "cairo-rs",
  "chrono",
  "dirs",
  "elitea-agent-runtime",
  "elitea-browser-driver-dom",
+ "elitea-browser-driver-linux",
  "elitea-browser-driver-macos",
  "elitea-browser-driver-windows",
  "elitea-browser-session",
@@ -1822,7 +1826,6 @@ dependencies = [
  "elitea-workspace-store",
  "futures",
  "glob",
- "gtk",
  "hmac",
  "keepawake",
  "log",
@@ -1854,7 +1857,6 @@ dependencies = [
  "unicode-general-category",
  "url",
  "uuid",
- "webkit2gtk",
 ]
 
 [[package]]
