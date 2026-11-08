@@ -26,3 +26,6 @@ pub use system::runtime::com_runtime::{
 /// silence, and the way it would announce itself is a reaper that matches
 /// nothing and leaves a topmost overlay on screen.
 pub use system::cursor_overlay::pipe_name::CHILD_ARGV_FLAG as CURSOR_OVERLAY_CHILD_FLAG;
+
+// Elitea patch (libs/rust/vendor/README.md, "agent-desktop", windows change 1).
+pub mod elitea_ext;

@@ -94,7 +94,7 @@ describe('Settings › Computer use', () => {
   it('says so when no app is always allowed, and when not on macOS', async () => {
     renderWithTheme(<ComputerUsePage ipc={createFakeComputerIpc({ supported: false })} />);
     expect(await screen.findByTestId('computer-remembered-empty')).toBeInTheDocument();
-    expect(screen.getByText('Computer use runs on macOS only.')).toBeInTheDocument();
+    expect(screen.getByText('Computer use runs on macOS, Windows and Linux only.')).toBeInTheDocument();
     expect(screen.queryByTestId('computer-grant-accessibility')).toBeNull();
   });
 

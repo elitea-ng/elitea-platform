@@ -1,6 +1,6 @@
 [package]
 name = "elitea-desktop-control"
-description = "Desktop computer use (ADR-0047 decision 1): the DesktopDriver trait over the person's other applications — apps and windows, budgeted accessibility snapshots with snapshot-scoped refs, actions on refs, typing, key chords, capture and waits. macOS through the vendored agent-desktop adapters; every other OS compiles to the Unsupported driver."
+description = "Desktop computer use (ADR-0047 decision 1): the DesktopDriver trait over the person's other applications — apps and windows, budgeted accessibility snapshots with snapshot-scoped refs, actions on refs, typing, key chords, capture and waits. macOS (AX), Windows (UI Automation) and Linux (AT-SPI) through the vendored agent-desktop adapters; every other OS compiles to the Unsupported driver."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -25,6 +25,29 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 # Apache-2.0).
 core-foundation = "0.10.1"
 core-graphics = { version = "0.25.0", features = ["elcapitan", "highsierra"] }
+
+# Windows only. The vendored agent-desktop 1.2.0 `windows` adapter (UI
+# Automation, SendInput; ../vendor/README.md, "agent-desktop").
+[target.'cfg(target_os = "windows")'.dependencies]
+agent-desktop-core = { path = "../vendor/agent-desktop/core", version = "=1.2.0" }
+agent-desktop-windows = { path = "../vendor/agent-desktop/windows", version = "=1.2.0" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# The user-active guard's low-level keyboard and mouse hooks
+# (src/windows_input.rs), through its safe API (MIT; winapi underneath).
+willhook = "0.6.3"
+
+# Linux only. The vendored agent-desktop 1.2.0 `linux` adapter (AT-SPI,
+# XTEST on X11; ../vendor/README.md, "agent-desktop").
+[target.'cfg(target_os = "linux")'.dependencies]
+agent-desktop-core = { path = "../vendor/agent-desktop/core", version = "=1.2.0" }
+agent-desktop-linux = { path = "../vendor/agent-desktop/linux", version = "=1.2.0" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# The X11 user-active guard's XInput2 raw-event watch (src/linux_input.rs):
+# the x11rb the adapter pins, plus `xinput` (MIT OR Apache-2.0).
+x11rb = { version = "=0.14.0", default-features = false, features = ["xinput"] }
+# The screen reads (logind, the screensaver services; src/linux.rs): the
+# zbus the adapter pins (MIT).
+zbus = "=5.19.0"
 
 [lints]
 workspace = true

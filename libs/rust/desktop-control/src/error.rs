@@ -37,6 +37,12 @@ pub enum DesktopError {
     /// the menu path to a denied chord (`menu_item_refused`).
     #[error("menu item refused: {0}")]
     MenuItemRefused(String),
+    /// The application is on this OS's platform deny list
+    /// ([`crate::platform::is_denied_app`]; Windows and Linux): password
+    /// managers, terminals, sign-in and privilege prompts (`app_denied`).
+    /// On macOS the policy applies the list before the driver is called.
+    #[error("application denied: {0}")]
+    AppDenied(String),
     #[error("application not found: {0}")]
     AppNotFound(String),
     #[error("window not found: {0}")]
@@ -78,6 +84,7 @@ impl DesktopError {
             Self::ScreenUnavailable(_) => "screen_unavailable",
             Self::NotFrontmost(_) => "not_frontmost",
             Self::MenuItemRefused(_) => "menu_item_refused",
+            Self::AppDenied(_) => "app_denied",
             Self::AppNotFound(_) => "app_not_found",
             Self::WindowNotFound(_) => "window_not_found",
             Self::PermissionDenied(_) => "permission_denied",
@@ -125,6 +132,7 @@ mod tests {
                 DesktopError::MenuItemRefused(String::new()),
                 "menu_item_refused",
             ),
+            (DesktopError::AppDenied(String::new()), "app_denied"),
             (DesktopError::AppNotFound(String::new()), "app_not_found"),
             (
                 DesktopError::WindowNotFound(String::new()),

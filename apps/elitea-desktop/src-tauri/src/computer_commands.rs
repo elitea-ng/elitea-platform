@@ -94,7 +94,11 @@ fn settings_of(state: &LocalState, files: &SettingsFiles) -> Result<ComputerSett
     Ok(ComputerSettings {
         policy_allows: policy.allowed && policy.computer_use,
         enabled,
-        supported: cfg!(target_os = "macos"),
+        supported: cfg!(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux"
+        )),
         accessibility: grants.accessibility,
         screen_recording: grants.screen_recording,
         screenshot_tools: crate::computer_tools::TOOLS
@@ -207,7 +211,7 @@ pub async fn computer_open_privacy(app: AppHandle, grant: Grant) -> Result<(), I
     if !cfg!(target_os = "macos") {
         return Err(IpcError::new(
             "computer_unsupported",
-            "Computer use runs on macOS only.",
+            "Only macOS asks for these permissions in System Settings.",
         ));
     }
     app.opener()

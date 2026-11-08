@@ -209,10 +209,10 @@ function ComputerUseSettings({ ipc }: { readonly ipc: ComputerIpc }): React.JSX.
       <Typography color="text.secondary">
         {t(
           'desktop.computerUse.help',
-          'The agent can see and use the apps on this Mac, asking you first for each app. While it works a panel stays on top with Pause and Stop; using the keyboard or the pointer pauses it until you press Resume.',
+          'The agent can see and use the apps on this computer, asking you first for each app. While it works a panel stays on top with Pause and Stop; using the keyboard or the pointer pauses it until you press Resume.',
         )}
       </Typography>
-      {settings.supported ? null : <Alert severity="info">{t('desktop.computerUse.unsupported', 'Computer use runs on macOS only.')}</Alert>}
+      {settings.supported ? null : <Alert severity="info">{t('desktop.computerUse.unsupported', 'Computer use runs on macOS, Windows and Linux only.')}</Alert>}
       <DeviceSwitch settings={settings} busy={busy} onChange={(enabled) => run(() => ipc.setEnabled(enabled))} />
       {error === null ? null : (
         <Alert severity="error" data-testid="computer-error">

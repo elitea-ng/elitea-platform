@@ -869,7 +869,7 @@ impl DesktopDriver for MacDriver {
             Some(region) => {
                 let (x, y, w, h) =
                     region_pixels(frame.width, frame.height, region, image.width, image.height)?;
-                let png = crop(&image.data, x, y, w, h)?;
+                let png = crate::crop::crop(&image.data, x, y, w, h)?;
                 Ok(Capture {
                     png,
                     width: w,
@@ -985,19 +985,6 @@ fn rect(r: ad::Rect) -> Rect {
         width: r.width,
         height: r.height,
     }
-}
-
-/// Crops a window capture to the pixel box (`x`, `y`, `w`, `h`) and
-/// re-encodes it as PNG.
-fn crop(png: &[u8], x: u32, y: u32, w: u32, h: u32) -> Result<Vec<u8>, DesktopError> {
-    let img = image::load_from_memory_with_format(png, image::ImageFormat::Png)
-        .map_err(|e| DesktopError::Internal(format!("decode capture: {e}")))?;
-    let cropped = img.crop_imm(x, y, w, h);
-    let mut out = std::io::Cursor::new(Vec::new());
-    cropped
-        .write_to(&mut out, image::ImageFormat::Png)
-        .map_err(|e| DesktopError::Internal(format!("encode capture: {e}")))?;
-    Ok(out.into_inner())
 }
 
 fn contains_text(node: &Node, text: &str) -> bool {
