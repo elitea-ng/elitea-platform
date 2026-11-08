@@ -30,7 +30,7 @@ flowchart LR
 | Rule | Value |
 |---|---|
 | Ceiling, `full` engine | 2 CPUs, 2 GiB |
-| Ceiling, `lite` engine | 1 CPU, 512 MiB. Off until the engine bake-off admits it |
+| Ceiling, `lite` engine | 1 CPU, 512 MiB. Off unless `profile.lite` and `profile.liteImage` are set; projects can choose it only once the engine bake-off admits Moli |
 | Wall limit per session | 60 minutes (`maxWallSeconds`) |
 | Pages per session | 3 (`maxPages`) |
 | Sessions per run | 3 (`sessionsPerRun`) |
@@ -116,6 +116,31 @@ worker:
       max_pages: 3
 ```
 
+### Optional: the lite engine (Moli)
+
+`lite` and `auto` sessions run Moli from a second image, `elitea-browser-session-lite`. It is the session image with Moli added at a pinned, checksum-verified release. Projects can choose these engines only after the ADR-0049 engine bake-off admits Moli. The [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit#the-engine) page lists the rules. Until then Main serves every session as `full`, whatever the chart sets, so these values only matter once Moli is admitted:
+
+```yaml
+sandboxKubernetes:
+  browserSessions:
+    profile:
+      lite:
+        maxCpuMillis: 1000
+        maxMemoryBytes: 536870912
+      # Required with `lite`, refused without it, and must differ from `image`.
+      liteImage: ghcr.io/elitea-ng/elitea-browser-session-lite@sha256:<digest>
+
+worker:
+  runtime:
+    browserSessions:
+      # Both or neither; at most the profile's `lite` ceiling. Unset: a lite
+      # session asks for the full size.
+      lite_cpu_millis: 1000
+      lite_memory_bytes: 536870912
+```
+
+An `auto` session runs in the lite image with the `full` ceilings, because it may end on Chrome. Moli has no process sandbox of its own, so `lite` and `auto` run only under gVisor. On any other RuntimeClass they fail with `browser_isolation_refused`, whatever `engineSandbox` says.
+
 Without `worker.runtime.browserSessions` the worker has no browser, and every browser tool answers `browser_unavailable`. A project uses the browser only when its **Cloud browser** setting is enabled. Egress, the time limits and the unattended rules are in [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit).
 
 From these values the chart renders the supervisor's `browser` profile into the `elitea-sandbox-browser-profile` ConfigMap, projects it beside the material Secret, adds `--config /run/elitea-sandbox/browser.json` and port 9471 to the supervisor, and creates the `elitea-sandbox-browser` Service. The supervisor's NetworkPolicy admits the port from the worker and Main only. The chart also grants the supervisor `get` on the one RuntimeClass, as it does for workspace runs.
@@ -173,7 +198,8 @@ To prove the `--no-sandbox` refusal, point `sandboxKubernetes.runtimeClass.name`
 |---|---|
 | A browser call fails `browser_capacity` | `concurrency` sessions were alive for 30 s. Raise it (and `maxPods`) or add browser nodes |
 | `browser_session_limit` | The run already started `sessionsPerRun` sessions |
-| `browser_isolation_refused` | `engineSandbox: false` on a RuntimeClass that is not gVisor |
+| `browser_isolation_refused` | `engineSandbox: false` on a RuntimeClass that is not gVisor, or a `lite` or `auto` session off gVisor |
+| `browser_engine_unavailable` | A `lite` or `auto` session on a profile without `lite` and `liteImage` |
 | `browser_session_runtime_class_refused` in the log | The RuntimeClass is missing or not isolating, or the chart's ClusterRole was removed |
 | `browser_session_ended` | The session ended (idle, wall or run end); the next call in a new run starts a fresh one |
 | Session Pods stay Pending | No node matches `nodeSelector`, or the taint is not tolerated |

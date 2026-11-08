@@ -39,6 +39,16 @@ Every half-enabled shape fails the render here.
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /* ADR-0049 decision 2 (#1599): `lite` and the Moli image come together.
+A null liteImage (--set k=null keeps the key) is the same as unset. */}}
+{{- $liteImage := "" }}
+{{- if and (hasKey $p "liteImage") (not (kindIs "invalid" $p.liteImage)) }}{{ $liteImage = toString $p.liteImage }}{{ end }}
+{{- if and ($p.lite | default dict) (not $liteImage) }}{{ fail "sandboxKubernetes.browserSessions.profile.lite requires profile.liteImage (elitea-browser-session-lite by digest)" }}{{ end }}
+{{- if and $liteImage (not ($p.lite | default dict)) }}{{ fail "sandboxKubernetes.browserSessions.profile.liteImage requires profile.lite (its ceilings)" }}{{ end }}
+{{- if $liteImage }}
+{{- if not (regexMatch "^[^[:space:]@]+@sha256:[a-f0-9]{64}$" $liteImage) }}{{ fail "sandboxKubernetes.browserSessions.profile.liteImage must be the lite session image by registry SHA-256 digest" }}{{ end }}
+{{- if eq $liteImage (toString $p.image) }}{{ fail "sandboxKubernetes.browserSessions.profile.liteImage must differ from profile.image" }}{{ end }}
+{{- end }}
 {{- range $key := list "ca" "certificate" "privateKey" "keyring" }}
 {{- if not (regexMatch "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$" (default "" (get $p.material $key))) }}{{ fail (printf "sandboxKubernetes.browserSessions.profile.material.%s must be a flat key name of the material Secret" $key) }}{{ end }}
 {{- end }}

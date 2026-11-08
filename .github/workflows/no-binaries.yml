@@ -75,7 +75,9 @@ jobs:
           # and publish.yml run; its parser is tested here, where no Helm is.
           # check-vendor-manifest-notes.mjs is the vendored-crate manifest gate
           # of dependency-scanning.yml; its scenarios need only node.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes; do
+          # browser-bakeoff-report.mjs applies the ADR-0049 admission rule
+          # in browser-bakeoff.yml; its rule is tested here on every PR.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?

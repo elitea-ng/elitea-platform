@@ -23,11 +23,26 @@
 # present in the base; the container runs as uid 10001 on a read-only root
 # with memory-backed /tmp and /dev/shm (the supervisor's pod spec).
 #
+# Two images come out of this file (ADR-0049 decision 2, #1599):
+#
+#   full (the last stage, the default build): chrome-headless-shell only.
+#   lite (--target lite): the same plus Moli (lexmount/moli, Apache-2.0 or
+#     MIT) at /opt/moli/moli, pinned to MOLI_VERSION and verified by
+#     SHA-256 per architecture. The session agent finds it there and runs
+#     `lite` and `auto` sessions on it; Chrome stays in the image so `auto`
+#     can move a session to it. The Moli pin moves only when the bake-off
+#     corpus passes on the new version (deploy/browser-bakeoff,
+#     browser-bakeoff.yml): bump MOLI_VERSION and both checksums together
+#     (the release's asset digests, `gh api
+#     repos/lexmount/moli/releases/tags/<tag>`).
+#
 # Build from the repository root:
 #
 #   podman build -f libs/rust/browser-session/Containerfile -t elitea-browser-session:dev .
+#   podman build -f libs/rust/browser-session/Containerfile --target lite -t elitea-browser-session-lite:dev .
 
 ARG CFT_VERSION=157.0.8103.38
+ARG MOLI_VERSION=1.1.22
 
 FROM rust:1.99.1-trixie@sha256:767c71592f7d1f3f242292000f8efd4e67b6732363da176772f4d220332e264f AS builder
 ENV CARGO_NET_RETRY=10 \
@@ -71,6 +86,32 @@ RUN set -eu; \
     echo "${CFT_VERSION}" > /opt/chrome-headless-shell/CFT_VERSION; \
     rm -rf /tmp/engine /tmp/engine.zip
 
+# Moli, fetched and verified in its own stage like the engine above. The
+# release tarball is data: it is unpacked, never run here.
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS moli
+ARG MOLI_VERSION
+ARG TARGETARCH
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) triple=x86_64-unknown-linux-gnu; sum=7e10f9a5b62371da56203b21ac0172bbe3c3626de189fc3742b91b2e2b8cdd39 ;; \
+      arm64) triple=aarch64-unknown-linux-gnu; sum=a199802d237fff981cb5a72ac075813af2510f5a4b51ce182d8fc18b5520210b ;; \
+      *) echo "no moli for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl --fail --silent --show-error --location --retry 5 --retry-all-errors \
+      -o /tmp/moli.tar.gz \
+      "https://github.com/lexmount/moli/releases/download/v${MOLI_VERSION}/moli-${triple}.tar.gz"; \
+    echo "${sum}  /tmp/moli.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/moli; \
+    tar -xzf /tmp/moli.tar.gz -C /tmp/moli --no-same-owner; \
+    mv "/tmp/moli/moli-v${MOLI_VERSION}-${triple}" /opt/moli; \
+    test -f /opt/moli/moli; \
+    chmod 0755 /opt/moli/moli; \
+    echo "${MOLI_VERSION}" > /opt/moli/MOLI_VERSION; \
+    rm -rf /tmp/moli /tmp/moli.tar.gz
+
 FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS runtime
 # The engine's NEEDED libraries (readelf -d of chrome-headless-shell 157)
 # and Chrome for Testing's deb.deps: fonts so text renders, CA roots for the
@@ -97,3 +138,17 @@ WORKDIR /tmp
 ENV HOME=/tmp
 ENTRYPOINT ["/usr/local/bin/elitea-browser-session"]
 CMD ["idle"]
+
+# The lite image: the full one plus Moli and its licences. A library Moli
+# needs and the image lacks fails the build here.
+FROM runtime AS lite
+USER 0:0
+COPY --from=moli /opt/moli/ /opt/moli/
+RUN set -eu; \
+    missing="$(ldd /opt/moli/moli | grep 'not found' || true)"; \
+    if [ -n "${missing}" ]; then echo "${missing}" >&2; exit 1; fi
+USER 10001:10001
+
+# The full image stays the last stage, so a build without --target (publish,
+# the conformance job) ships what it always has.
+FROM runtime AS full

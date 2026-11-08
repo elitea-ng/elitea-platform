@@ -109,7 +109,22 @@ data:
     {{- if not (has .audience ($.Values.main.runtime.sandboxAudiences | default list)) }}
     {{- fail "worker.runtime.browserSessions.audience must be in main.runtime.sandboxAudiences" }}
     {{- end }}
-    {{- $_ := set $config "browser_sessions" (dict "target" .target "audience" .audience "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "wall_seconds" (int64 .wall_seconds) "max_pages" (int64 .max_pages)) }}
+    {{- $sessions := dict "target" .target "audience" .audience "cpu_millis" (int64 .cpu_millis) "memory_bytes" (int64 .memory_bytes) "wall_seconds" (int64 .wall_seconds) "max_pages" (int64 .max_pages) }}
+    {{- /* The lite session size (#1599): both or neither; null is unset. */}}
+    {{- $liteSet := list }}
+    {{- range $key := list "lite_cpu_millis" "lite_memory_bytes" }}
+    {{- if and (hasKey $.Values.worker.runtime.browserSessions $key) (not (kindIs "invalid" (index $.Values.worker.runtime.browserSessions $key))) }}
+    {{- $liteSet = append $liteSet $key }}
+    {{- end }}
+    {{- end }}
+    {{- if eq (len $liteSet) 1 }}
+    {{- fail "worker.runtime.browserSessions.lite_cpu_millis and lite_memory_bytes are both or neither" }}
+    {{- end }}
+    {{- if eq (len $liteSet) 2 }}
+    {{- $_ := set $sessions "lite_cpu_millis" (int64 .lite_cpu_millis) }}
+    {{- $_ := set $sessions "lite_memory_bytes" (int64 .lite_memory_bytes) }}
+    {{- end }}
+    {{- $_ := set $config "browser_sessions" $sessions }}
     {{- end }}
     {{- /* The model completions one claim's toolkits may make in total (the
     step-back index tools, the Office prompts, image generation). Written

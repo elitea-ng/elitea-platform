@@ -45,6 +45,8 @@ export function describeNotice(code: string | null): string | null {
       return t('cloudBrowser.notice.controlRevoked', 'You can no longer take over this browser. The agent has it back.');
     case 'input_refused':
       return t('cloudBrowser.notice.inputRefused', 'The browser did not take that input.');
+    case 'engine_switched':
+      return t('cloudBrowser.notice.engineSwitched', 'The page needed the full browser, so it was reopened there.');
     case 'malformed':
       return null;
     default:

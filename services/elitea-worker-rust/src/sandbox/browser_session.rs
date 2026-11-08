@@ -63,8 +63,11 @@ pub const MIN_MEMORY_BYTES: u64 = TMP_BYTES + SHM_BYTES;
 pub enum Engine {
     /// chrome-headless-shell.
     Full,
-    /// Moli, after the bake-off admits it.
+    /// Moli, after the bake-off admits it (decision 9).
     Lite,
+    /// Moli first, chrome-headless-shell after a switch (decision 2): the
+    /// `lite` image, under the `full` ceilings.
+    Auto,
 }
 
 impl Engine {
@@ -74,13 +77,21 @@ impl Engine {
         match self {
             Self::Full => "full",
             Self::Lite => "lite",
+            Self::Auto => "auto",
         }
     }
 
-    fn from_wire(value: i32) -> Option<Self> {
+    /// Whether the session runs in the `lite` image (which ships Moli).
+    #[must_use]
+    pub const fn needs_moli(self) -> bool {
+        matches!(self, Self::Lite | Self::Auto)
+    }
+
+    pub(crate) fn from_wire(value: i32) -> Option<Self> {
         match BrowserEngineV1::try_from(value).ok()? {
             BrowserEngineV1::Full => Some(Self::Full),
             BrowserEngineV1::Lite => Some(Self::Lite),
+            BrowserEngineV1::Auto => Some(Self::Auto),
             BrowserEngineV1::Unspecified => None,
         }
     }
@@ -89,6 +100,7 @@ impl Engine {
         match self {
             Self::Full => BrowserEngineV1::Full,
             Self::Lite => BrowserEngineV1::Lite,
+            Self::Auto => BrowserEngineV1::Auto,
         }
     }
 }
@@ -574,6 +586,14 @@ pub(crate) mod tests {
 
     #[test]
     fn the_wire_spec_round_trips_and_the_digest_binds_every_field() {
+        for engine in [Engine::Full, Engine::Lite, Engine::Auto] {
+            let image = session(engine).image;
+            let back = BrowserSessionContainer::from_wire(&session(engine).to_wire(), &image, true)
+                .expect("round trip");
+            assert_eq!(back, session(engine));
+        }
+        assert!(Engine::Auto.needs_moli() && Engine::Lite.needs_moli());
+        assert!(!Engine::Full.needs_moli());
         let image = session(Engine::Lite).image;
         let wire = session(Engine::Lite).to_wire();
         let back = BrowserSessionContainer::from_wire(&wire, &image, true).expect("round trip");

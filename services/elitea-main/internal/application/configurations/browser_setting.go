@@ -2,6 +2,7 @@ package configurations
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -9,15 +10,16 @@ import (
 // BrowserConfigurationType is a project's cloud browser setting (ADR-0049
 // decisions 3 and 5, #1596): one tenant configuration row with type
 // `browser` in section `project_settings`. `enabled` (default false) lets the
-// project's runs use the cloud browser. `engine` is the browser engine; only
-// `full` is admitted. `allow_domains` is a list in the egresslib grammar that
+// project's runs use the cloud browser. `engine` is the browser engine:
+// `full` until the ADR-0049 bake-off admits Moli
+// (platformconfig.BrowserLiteAdmitted), then `full`, `lite` or `auto`. `allow_domains` is a list in the egresslib grammar that
 // the browser may reach when its egress token has an allowlist. It takes the
 // `models.project_settings.edit` gate of the other project settings.
 const (
 	BrowserConfigurationType = "browser"
 	BrowserSection           = "project_settings"
-	// BrowserEngineFull is the one admitted engine.
-	BrowserEngineFull = "full"
+	// BrowserEngineFull is the default engine (platformconfig.BrowserEngineFull).
+	BrowserEngineFull = platformconfig.BrowserEngineFull
 	// MaxBrowserAllowDomains is the most entries of `allow_domains`.
 	MaxBrowserAllowDomains = 128
 )
@@ -33,6 +35,7 @@ func (catalog *CurrentAvailableCatalog) addBrowserProjectSetting() error {
 	if !ok {
 		return ErrInvalidCurrentAvailableSnapshot
 	}
+	admitted := platformconfig.BrowserLiteAdmitted
 	var schema map[string]any
 	if err := json.Unmarshal(catalog.entries[template].ConfigSchema, &schema); err != nil {
 		return ErrInvalidCurrentAvailableSnapshot
@@ -56,9 +59,9 @@ func (catalog *CurrentAvailableCatalog) addBrowserProjectSetting() error {
 			},
 			"engine": map[string]any{
 				"title":       "Engine",
-				"description": "The browser engine. Only full is available.",
+				"description": browserEngineDescription(admitted),
 				"type":        "string",
-				"enum":        []string{BrowserEngineFull},
+				"enum":        platformconfig.BrowserEngines(admitted),
 				"default":     BrowserEngineFull,
 			},
 			"allow_domains": map[string]any{
@@ -87,11 +90,25 @@ func (catalog *CurrentAvailableCatalog) addBrowserProjectSetting() error {
 	return nil
 }
 
-// normalizeBrowserSetting keeps `enabled` (default false), `engine` (only
-// `full`, the default) and `allow_domains` (every entry valid in the
-// egresslib grammar, at most MaxBrowserAllowDomains, duplicates removed).
-// Other keys are dropped.
+func browserEngineDescription(admitted bool) string {
+	if admitted {
+		return "The browser engine: full (Chrome), lite (Moli, smaller and faster on read pages) " +
+			"or auto (Moli first, Chrome when a page needs it)."
+	}
+	return "The browser engine. Only full is available."
+}
+
+// normalizeBrowserSetting keeps `enabled` (default false), `engine` (one of
+// the admitted engines, default `full`) and `allow_domains` (every entry
+// valid in the egresslib grammar, at most MaxBrowserAllowDomains, duplicates
+// removed). Other keys are dropped.
 func normalizeBrowserSetting(data map[string]any) (map[string]any, error) {
+	return normalizeBrowserSettingFor(data, platformconfig.BrowserEngines(platformconfig.BrowserLiteAdmitted))
+}
+
+// normalizeBrowserSettingFor is normalizeBrowserSetting over a given set of
+// admitted engines.
+func normalizeBrowserSettingFor(data map[string]any, engines []string) (map[string]any, error) {
 	if data == nil {
 		return nil, currentLocalConfigurationFieldError("data")
 	}
@@ -105,9 +122,10 @@ func normalizeBrowserSetting(data map[string]any) (map[string]any, error) {
 	}
 	if raw, present := data["engine"]; present && raw != nil {
 		engine, ok := raw.(string)
-		if !ok || engine != BrowserEngineFull {
+		if !ok || !slices.Contains(engines, engine) {
 			return nil, currentLocalConfigurationFieldError("data.engine")
 		}
+		normalized["engine"] = engine
 	}
 	raw, present := data["allow_domains"]
 	if !present || raw == nil {

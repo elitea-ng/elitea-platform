@@ -125,6 +125,10 @@ fn full() -> BrowserSessionSpecV1 {
 fn ceilings(concurrency: usize, engine_sandbox: bool) -> BrowserCeilings {
     BrowserCeilings {
         image: format!("registry.example/browser@sha256:{}", "e".repeat(64)),
+        lite_image: Some(format!(
+            "registry.example/browser-lite@sha256:{}",
+            "d".repeat(64)
+        )),
         full: EngineCeiling {
             max_cpu_millis: 2_000,
             max_memory_bytes: 2 << 30,
@@ -149,6 +153,10 @@ struct Harness {
 }
 
 fn harness_with(concurrency: usize, engine_sandbox: bool, capacity_wait: Duration) -> Harness {
+    harness_over(ceilings(concurrency, engine_sandbox), capacity_wait)
+}
+
+fn harness_over(ceilings: BrowserCeilings, capacity_wait: Duration) -> Harness {
     let mut public = [0; 32];
     public.copy_from_slice(key().public_key().as_ref());
     let verifier = GrantVerifier::new(Keys(public), AUDIENCE.into()).expect("verifier");
@@ -158,7 +166,7 @@ fn harness_with(concurrency: usize, engine_sandbox: bool, capacity_wait: Duratio
         BrowserSessionSupervisor::new(
             verifier,
             Arc::clone(&backend) as Arc<dyn super::browser_session_service::BrowserSessionBackend>,
-            ceilings(concurrency, engine_sandbox),
+            ceilings,
             Arc::new(Arc::clone(&clock)),
         )
         .with_fixed_peer(PEER)
@@ -402,6 +410,9 @@ async fn ceilings_hold_per_engine_wall_and_pages() {
         (spec(BrowserEngineV1::Lite, 512 << 20, 1_000), true),
         (spec(BrowserEngineV1::Lite, 1 << 30, 1_000), false),
         (spec(BrowserEngineV1::Lite, 512 << 20, 2_000), false),
+        // Auto may end on Chrome: the full ceiling.
+        (spec(BrowserEngineV1::Auto, 2 << 30, 2_000), true),
+        (spec(BrowserEngineV1::Auto, (2 << 30) + 1, 2_000), false),
     ] {
         let outcome = h
             .service
@@ -423,6 +434,54 @@ async fn ceilings_hold_per_engine_wall_and_pages() {
             .await
             .expect_err("ceiling");
         assert_eq!(code(&status), "browser_ceiling_exceeded");
+    }
+}
+
+/// Moli sessions run in the `lite` image; a profile without it refuses
+/// `lite` and `auto` as `browser_engine_unavailable`, and `full` still runs
+/// in the full image.
+#[tokio::test]
+async fn the_image_follows_the_engine_and_lite_needs_its_image() {
+    let h = harness(8);
+    for (engine, image) in [
+        (BrowserEngineV1::Full, "registry.example/browser@"),
+        (BrowserEngineV1::Lite, "registry.example/browser-lite@"),
+        (BrowserEngineV1::Auto, "registry.example/browser-lite@"),
+    ] {
+        let (memory, cpu) = if engine == BrowserEngineV1::Lite {
+            (512 << 20, 1_000)
+        } else {
+            (2 << 30, 2_000)
+        };
+        let spec = spec(engine, memory, cpu);
+        h.service
+            .start_browser_session(start_request(&format!("run-{}", spec.name), &spec))
+            .await
+            .expect("started");
+        let containers = h.backend.containers.lock().unwrap();
+        let launch = containers.get(&spec.name).expect("created");
+        assert!(launch.container.image.starts_with(image), "{engine:?}");
+        assert_eq!(
+            launch.container.engine.as_str(),
+            match engine {
+                BrowserEngineV1::Lite => "lite",
+                BrowserEngineV1::Auto => "auto",
+                _ => "full",
+            }
+        );
+    }
+    let mut without = ceilings(8, false);
+    without.lite_image = None;
+    without.lite = None;
+    let h = harness_over(without, Duration::from_millis(200));
+    for engine in [BrowserEngineV1::Lite, BrowserEngineV1::Auto] {
+        let spec = spec(engine, 512 << 20, 1_000);
+        let status = h
+            .service
+            .start_browser_session(start_request(&format!("run-{}", spec.name), &spec))
+            .await
+            .expect_err("no lite");
+        assert_eq!(code(&status), "browser_engine_unavailable", "{engine:?}");
     }
 }
 
@@ -738,6 +797,25 @@ async fn the_view_streams_frames_ack_paced_and_refuses_watch_only_input() {
         Some(browser_view_output_v1::Frame::Notice(ref notice)) if notice.code == "input_refused"
     ));
     up.send(ack(frame.seq)).await.unwrap();
+    // An `auto` session's engine switch reaches the viewer as a notice
+    // (#1599); the agent's logged-only notices do not.
+    let mut switch = call_request("run-1", &s, 1);
+    switch.get_mut().call_id = "toolu_switch".into();
+    switch.get_mut().name = "browser_snapshot".into();
+    switch.get_mut().arguments_json = r#"{"switch":true}"#.into();
+    let answered = h.service.browser_call(switch).await.expect("answered");
+    assert!(answered.get_ref().result_json.contains("engine_switched"));
+    let switched = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let message = down.message().await.expect("ok").expect("a message");
+            if let Some(browser_view_output_v1::Frame::Notice(notice)) = message.frame {
+                return notice.code;
+            }
+        }
+    })
+    .await
+    .expect("the notice");
+    assert_eq!(switched, "engine_switched");
     drop(up);
 
     // A watch-only grant cannot open a driving stream.

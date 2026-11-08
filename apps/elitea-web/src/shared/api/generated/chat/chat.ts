@@ -20250,7 +20250,7 @@ export const getViewBrowserSessionUrl = (sessionId: string) => {
  * (`control` is `agent` or `user`), followed by exactly ONE binary
  * message holding that frame's JPEG of `bytes` bytes;
  * `{"type":"notice","code"}` (`input_refused`, `session_lingering`,
- * `control_revoked`);
+ * `control_revoked`, `engine_switched`);
  * `{"type":"refused","code"}` for one up message that was not
  * relayed (`input_refused` from a watch-only viewer, `malformed`);
  * and `{"type":"end","code"}` (`session_destroyed`, `idle`, `wall`,

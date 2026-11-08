@@ -178,6 +178,6 @@ carries; sandbox/browser-profile.yaml validates the values first.
   "engine_sandbox" (eq (toString $p.engineSandbox) "true")
   "full" (dict "max_cpu_millis" (int64 $p.full.maxCpuMillis) "max_memory_bytes" (int64 $p.full.maxMemoryBytes))
   "backend" $backend -}}
-{{- with $p.lite }}{{ $_ := set $profile "lite" (dict "max_cpu_millis" (int64 .maxCpuMillis) "max_memory_bytes" (int64 .maxMemoryBytes)) }}{{ end -}}
+{{- with $p.lite }}{{ $_ := set $profile "lite" (dict "max_cpu_millis" (int64 .maxCpuMillis) "max_memory_bytes" (int64 .maxMemoryBytes)) }}{{ $_ := set $profile "lite_image" (toString $p.liteImage) }}{{ end -}}
 {{- $profile | toJson -}}
 {{- end -}}

@@ -7,36 +7,43 @@
 //!   and stdout until `destroy` or the end of stdin.
 //!
 //! Flags (`serve`): `--engine <path>` (default
-//! `/opt/chrome-headless-shell/chrome-headless-shell`), `--engine-log` (the
-//! engine's stderr to ours; off by default, because it can name URLs).
-//! Exit status 0 on a clean end, 2 on bad arguments, 1 when the streams
-//! failed.
+//! `/opt/chrome-headless-shell/chrome-headless-shell`), `--moli <path>`
+//! (default `/opt/moli/moli` when that file exists: the `lite` image ships
+//! it, the `full` image does not), `--engine-log` (the engine's stderr to
+//! ours; off by default, because it can name URLs). Exit status 0 on a clean
+//! end, 2 on bad arguments, 1 when the streams failed.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use elitea_browser_session::engine::DEFAULT_ENGINE;
+use elitea_browser_session::engine::{DEFAULT_ENGINE, DEFAULT_MOLI};
 use elitea_browser_session::protocol::{self, log};
-use elitea_browser_session::session::Session;
+use elitea_browser_session::session::{Engines, Session};
 
-const USAGE: &str = "usage: elitea-browser-session idle | serve [--engine <path>] [--engine-log]";
+const USAGE: &str =
+    "usage: elitea-browser-session idle | serve [--engine <path>] [--moli <path>] [--engine-log]";
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let mut words = std::env::args().skip(1);
     let command = words.next();
     let mut engine = PathBuf::from(DEFAULT_ENGINE);
+    let mut moli = Some(PathBuf::from(DEFAULT_MOLI)).filter(|path| path.is_file());
     let mut engine_log = false;
     while let Some(flag) = words.next() {
         match flag.as_str() {
             "--engine-log" => engine_log = true,
-            "--engine" => {
+            "--engine" | "--moli" => {
                 let Some(path) = words.next() else {
                     eprintln!("{USAGE}");
                     return ExitCode::from(2);
                 };
-                engine = PathBuf::from(path);
+                if flag == "--engine" {
+                    engine = PathBuf::from(path);
+                } else {
+                    moli = Some(PathBuf::from(path));
+                }
             }
             _ => {
                 eprintln!("{USAGE}");
@@ -50,7 +57,11 @@ async fn main() -> ExitCode {
             Err(_) => ExitCode::from(1),
         },
         Some("serve") => {
-            let session = Arc::new(Session::new(engine, engine_log));
+            let engines = Engines {
+                chrome: engine,
+                moli,
+            };
+            let session = Arc::new(Session::with_engines(engines, engine_log));
             let input = tokio::io::BufReader::new(tokio::io::stdin());
             if protocol::serve(session, input, tokio::io::stdout())
                 .await

@@ -41,7 +41,7 @@ The supervisor side is `services/elitea-worker-rust/src/sandbox/browser_session_
 
 | `op` | Fields | Meaning |
 | --- | --- | --- |
-| `start` | `revision` (1), `engine` (`full` or `lite`), `engine_sandbox` (bool), `max_pages`, `viewport` `{width, height}` (default 1280 by 800), `proxy` (`{url, token}` or `null`), `attended` (bool, optional, default `true`; `false` answers `browser_request_user` with `no_person`) | Always the first line. Start the engine, then answer `ready` or `error`. |
+| `start` | `revision` (1), `engine` (`full`, `lite` or `auto`), `engine_sandbox` (bool), `max_pages`, `viewport` `{width, height}` (default 1280 by 800), `proxy` (`{url, token}` or `null`), `attended` (bool, optional, default `true`; `false` answers `browser_request_user` with `no_person`) | Always the first line. Start the engine, then answer `ready` or `error`. |
 | `call` | `id`, `name`, `args` | One browser tool call from the `libs/rust/browser-tools` contract: a `browser_*` name with an arguments object. Answer exactly one `result` (or `error` with the same `id`). |
 | `view` | `on` (bool), `max_fps` (1 to 10) | Start or stop the screencast. `on: true` is sent when the first viewer attaches, and `on: false` when the last one leaves. With no viewer, the screencast does not run. |
 | `ack` | `seq` | A viewer showed frame `seq`. |
@@ -72,6 +72,46 @@ The supervisor side is `services/elitea-worker-rust/src/sandbox/browser_session_
 - WebRTC, QUIC and DNS-over-HTTPS are off in the engine (ADR-0049
   decision 5).
 
+### Engines
+
+| `engine` | Engine | Image |
+| --- | --- | --- |
+| `full` | chrome-headless-shell over `--remote-debugging-pipe` | the session image |
+| `lite` | Moli (`/opt/moli/moli`, `moli serve`) over CDP on a loopback WebSocket | the lite session image |
+| `auto` | Moli first, then chrome-headless-shell (below) | the lite session image |
+
+- Moli has no process sandbox of its own, so `lite` and `auto` answer
+  `isolation_refused` outside gVisor, whatever `engine_sandbox` says. An
+  image without Moli answers `engine_start_failed` for both.
+- Moli listens on `127.0.0.1` only, on a port the agent picks. The agent
+  accepts only a `webSocketDebuggerUrl` on that address and port.
+- Moli sends every request to `proxy.url` with no bypass list, and
+  `proxy: null` points it at a closed loopback port. The token is answered
+  through CDP `Fetch.authRequired`, never on argv or in the environment.
+- `ready`'s `engine_version` names the engine that answered `start`:
+  `moli/<version>` or `chrome-headless-shell/<version>`.
+
+### `auto` switching
+
+An `auto` session moves to chrome-headless-shell once, and never back, when:
+
+| Reason | When |
+| --- | --- |
+| `start_failed` | Moli does not start. The session starts on Chrome. |
+| `unsupported_protocol` | A call made Moli answer a CDP method as unknown or unsupported (`-32601`, or a message that says so). |
+| `empty_snapshot` | A `browser_snapshot` found no actionable ref and an empty tree on a page that has text. |
+
+On a switch the agent:
+
+1. starts chrome-headless-shell with the same `start` fields,
+2. opens the page's `http`/`https` URL again (form state and history are
+   lost),
+3. writes `notice` with `code` `engine_switched` (the viewer shows it, and
+   the supervisor logs it), and
+4. answers the call on Chrome, with `engine_switched`
+   `{from: "lite", to: "full", reason}` added to its result so the agent
+   model knows the page was reloaded.
+
 ### `input` events
 
 | `type` | Fields |
@@ -98,7 +138,7 @@ rules of ADR-0048 decision 4 are the agent's:
 | `ready` | `engine_version` (for example `chrome-headless-shell/142.0.7444.59`) | The answer to `start`. |
 | `result` | `id`, `result` (the contract's result object, failures included as `{"status":"error","code":...}`), optional `image` `{media_type, data}` | The answer to one `call`. `image` is present for `browser_screenshot` only. |
 | `frame` | `seq` (increasing), `jpeg`, `width`, `height`, `url`, `title`, `control` (`agent` or `user`) | One screencast frame. Send the latest frame first. Send the next frame only after the supervisor acks this one, and drop the frames in between. At most `max_fps` frames per second. |
-| `notice` | `code` (`[a-z_]`, at most 64 bytes) | A non-fatal event, logged by its code only. |
+| `notice` | `code` (`[a-z_]`, at most 64 bytes) | A non-fatal event, logged by its code only. `engine_switched`: an `auto` session moved to Chrome. A notice from `start` follows `ready`. |
 | `error` | `code`, optional `id` | Without `id`: `start` failed, or the session is broken (the supervisor destroys it). With `id`: that call failed outside the contract (the agent could not run it at all). |
 | `bye` | none | The agent is exiting. The last line it writes. |
 

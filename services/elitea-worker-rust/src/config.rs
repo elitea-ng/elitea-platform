@@ -182,11 +182,20 @@ pub struct BrowserSessionsConfig {
     pub target: String,
     /// That profile's grant audience.
     pub audience: String,
-    /// Each at most the profile's ceiling for the `full` engine.
+    /// Each at most the profile's ceiling for the `full` engine (`auto`
+    /// sessions use it too: they may end on Chrome).
     pub cpu_millis: u64,
     pub memory_bytes: u64,
     pub wall_seconds: u64,
     pub max_pages: u32,
+    /// A `lite` (Moli) session's size, each at most the profile's `lite`
+    /// ceiling (ADR-0049 decision 1: 1 CPU and 512 MiB). Both or neither;
+    /// absent, a `lite` session asks for the `full` size above, which a
+    /// profile with the ADR's ceilings refuses.
+    #[serde(default)]
+    pub lite_cpu_millis: Option<u64>,
+    #[serde(default)]
+    pub lite_memory_bytes: Option<u64>,
 }
 
 impl BrowserSessionsConfig {
@@ -204,6 +213,13 @@ impl BrowserSessionsConfig {
             || !(60..=crate::sandbox::browser_session::MAX_WALL_SECONDS)
                 .contains(&self.wall_seconds)
             || !(1..=crate::sandbox::browser_session::MAX_PAGES).contains(&self.max_pages)
+            || self.lite_cpu_millis.is_some() != self.lite_memory_bytes.is_some()
+            || self
+                .lite_cpu_millis
+                .is_some_and(|cpu| !(1..=64_000).contains(&cpu))
+            || self.lite_memory_bytes.is_some_and(|memory| {
+                !(crate::sandbox::browser_session::MIN_MEMORY_BYTES..=64 << 30).contains(&memory)
+            })
         {
             return Err(invalid_config());
         }
@@ -959,6 +975,31 @@ mod tests {
         validate_private_directory,
     };
     use crate::protocol::command::LIMITS_REVISION;
+
+    #[test]
+    fn a_lite_session_size_is_both_or_neither_and_bounded() {
+        let base = json!({
+            "target": "elitea-sandbox-browser:9471", "audience": "dns:elitea-sandbox-browser",
+            "cpu_millis": 2000, "memory_bytes": 2_147_483_648_u64,
+            "wall_seconds": 3600, "max_pages": 3,
+        });
+        let parse = |value: &Value| {
+            serde_json::from_value::<super::BrowserSessionsConfig>(value.clone())
+                .unwrap()
+                .validate()
+        };
+        assert!(parse(&base).is_ok());
+        let mut lite = base.clone();
+        lite["lite_cpu_millis"] = json!(1000);
+        lite["lite_memory_bytes"] = json!(536_870_912);
+        assert!(parse(&lite).is_ok());
+        let mut half = base.clone();
+        half["lite_cpu_millis"] = json!(1000);
+        assert!(parse(&half).is_err());
+        let mut tiny = lite.clone();
+        tiny["lite_memory_bytes"] = json!(1024);
+        assert!(parse(&tiny).is_err());
+    }
 
     #[test]
     fn model_timeouts_default_independently_and_reject_unbounded_values() {

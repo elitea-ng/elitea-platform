@@ -322,6 +322,17 @@ func TestFailuresDegradeTheField(t *testing.T) {
 			}
 		})
 	}
+	// Once the platform admits Moli the stored engine is served as is.
+	for _, engine := range []string{"lite", "auto"} {
+		sources := enabledSources()
+		sources.setting.Engine = engine
+		field, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
+			WithEngines(platformconfig.BrowserEngines(true)).
+			ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
+		if err != nil || field == nil || field.Engine != engine || field.Egress.Mode != EgressModeProxy {
+			t.Fatalf("%s: field=%+v err=%v", engine, field, err)
+		}
+	}
 	// The project setting itself is the one source whose failure is an
 	// error: without it Main cannot tell whether the browser is on.
 	failing := &failingProject{fakeSources: enabledSources()}
