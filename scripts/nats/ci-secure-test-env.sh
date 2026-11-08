@@ -34,8 +34,10 @@ ha_conf="${RUNNER_TEMP}/nats-secure-ha.conf"
 bash "${root}/scripts/nats/render-secure-conf.sh" "$ha_conf" "${root}/deploy/helm/elitea/values-nats-ha.yaml"
 
 zip="${RUNNER_TEMP}/natscli.zip"
-curl -fsSL -o "$zip" \
-  "https://github.com/nats-io/natscli/releases/download/v${NATSCLI_VERSION}/nats-${NATSCLI_VERSION}-linux-amd64.zip"
+# Through the API (gh, the job's GH_TOKEN), not the github.com release
+# download link, which answers 504 for long stretches.
+gh release download "v${NATSCLI_VERSION}" --repo nats-io/natscli \
+  --pattern "nats-${NATSCLI_VERSION}-linux-amd64.zip" --output "$zip" --clobber
 echo "${NATSCLI_SHA256}  ${zip}" | sha256sum -c -
 unzip -o -q "$zip" -d "${RUNNER_TEMP}/natscli"
 cli="${RUNNER_TEMP}/natscli/nats-${NATSCLI_VERSION}-linux-amd64/nats"

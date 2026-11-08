@@ -534,6 +534,8 @@ jobs:
 
       - name: Provision the secured NATS permission tests
         env:
+          # The chart dependency fallback and the nats CLI fetch use the API.
+          GH_TOKEN: ${{ github.token }}
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
         run: bash scripts/nats/ci-secure-test-env.sh
 
