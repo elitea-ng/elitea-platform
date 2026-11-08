@@ -55,6 +55,8 @@ permissions:
 
 env:
   KUBECONFORM_VERSION: v0.6.7
+  # From the release's CHECKSUMS file (kubeconform-linux-amd64.tar.gz).
+  KUBECONFORM_SHA256: 95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
   # Read by the LLM-path gate below. Pinned, not "latest".
   YQ_VERSION: v4.44.6
   # CRD schemas (argoproj.io Application, cert-manager Certificate) come from
@@ -428,8 +430,9 @@ jobs:
       # NATS_REQUIRE_KUBECONFORM makes a missing binary a failure, not a skip.
       - name: Install kubeconform (for the NATS renders)
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
@@ -685,8 +688,9 @@ jobs:
 
       - name: Install kubeconform
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
@@ -894,8 +898,9 @@ jobs:
 
       - name: Install kubeconform
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
+          curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
