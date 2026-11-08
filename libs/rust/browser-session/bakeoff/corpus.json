@@ -1,5 +1,5 @@
 {
-  "revision": 3,
+  "revision": 4,
   "about": "The ADR-0049 decision 9 bake-off corpus (#1599): public pages of the classes ADR-0049 names, driven through the browser tools by the scripted bake-off agent (libs/rust/browser-session/tests/bakeoff.rs) on each engine. kind read: the page renders its key text; extract: a named fact is in the page's text; act: a sequence of tool calls changes the page. No task signs in, submits a form that sends data anywhere, or buys anything. A task whose expectation goes stale fails on every engine alike: fix the task in a reviewed change, never per engine.",
   "tasks": [
     { "id": "atlassian-support-confluence", "class": "atlassian", "kind": "read",
@@ -14,13 +14,13 @@
     { "id": "atlassian-agile-scrum", "class": "atlassian", "kind": "read",
       "url": "https://www.atlassian.com/agile/scrum",
       "expect": { "text": ["Scrum"], "min_refs": 10 } },
-    { "id": "atlassian-status-history", "class": "atlassian", "kind": "act",
-      "url": "https://status.atlassian.com/",
+    { "id": "atlassian-agile-kanban", "class": "atlassian", "kind": "act",
+      "url": "https://www.atlassian.com/agile",
       "steps": [
-        { "click": { "role": "link", "name": "Incident History" } },
-        { "wait": { "url": "*/history*", "timeout_ms": 20000 } }
+        { "click": { "role": "link", "name": "Kanban" } },
+        { "wait": { "url": "*kanban*", "timeout_ms": 20000 } }
       ],
-      "expect": { "text": ["Incident History"], "url": "*/history*" } },
+      "expect": { "text": ["Kanban"], "url": "*kanban*" } },
 
     { "id": "office-landing", "class": "office", "kind": "read",
       "url": "https://www.office.com/",
