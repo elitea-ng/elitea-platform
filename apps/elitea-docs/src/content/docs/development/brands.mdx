@@ -26,7 +26,7 @@ Every build reads the brand that `ELITEA_BRAND` names:
 | a bare id, such as `sample` | `brand/sample` |
 | a path, such as `../acme-brand/brand/acme` | that folder, relative to the current directory or absolute |
 
-The generators (mobile `app.config.ts`, the desktop `tauri.brand.json` writer and the web default pack) read the brand only through `scripts/brand/load.mjs`. Nothing else opens a `brand.json`. The mobile and desktop clients read it today; the web client moves to it in the next step of ADR-0052.
+The generators (mobile `app.config.ts`, the desktop `tauri.brand.json` writer and the web default pack) read the brand only through `scripts/brand/load.mjs`. Nothing else opens a `brand.json`. The mobile, desktop and web clients all read it.
 
 ## The folder
 
@@ -157,6 +157,24 @@ From the manifest the app takes:
 - **Assets:** the bundle icons (`desktop/32x32.png`, `desktop/128x128.png`, `desktop/128x128@2x.png`, `macos/icon.icns`, `windows/icon.ico`) and the menu-bar template image (`desktop/tray-template.png`), by paths relative to `src-tauri`.
 
 The host reads the product name and identifier from the configuration compiled into it (`src/brand.rs`); none is written in its source. The menu labels the web page translates keep `{product}` in place, and the host fills in its own name. The computer-use guards treat the brand's identifier as the app's own windows, which an agent never reads or acts on. CI builds the host as ELITEA (`ci-desktop.yml`, host job) and as brand/sample (the pane-drivers job on Linux and Windows); `scripts/tauri-brand.test.mjs` checks the overlay of both.
+
+## Web app
+
+`apps/elitea-web/vite.config.ts` loads the brand (`brandPlugin`). For brand/elitea every build is the committed files, byte for byte. For any other brand the build writes `apps/elitea-web/.brand/<id>/` (gitignored) and uses it in place of the committed files:
+
+```bash
+cd apps/elitea-web
+ELITEA_BRAND=sample npm run build      # every entry, as the sample brand
+```
+
+- **Default pack** (channel A, `src/shared/brand/tokens/default.pack.json`): the brand's `pack.json` when the folder has one, else a pack derived from `brand.json` (`scripts/brand-web.mjs`): `productName` and `shortName` as the product's name and short name, `docsUrl`, `supportUrl` and `supportEmail`, and `brand.hue` with the colour tokens derived from it. A served pack (`/api/v2/branding/bootstrap.js`, channel C) still wins over it at runtime.
+- **Logos and favicon:** `logo/logo-mark.svg`, `logo/logo-full.svg` and `web/favicon.svg` replace the compiled logo components and `public/brand/*.svg`.
+- **Titles:** every entry's `<title>` names the brand's product. The running app's title follows the served pack.
+- **Messages:** the catalogues write the product as `{{product}}` (all 19 locales); i18next fills in the pack's `shortName`. Code reads `productName()` and `productFullName()` from `@/shared/brand`. `scripts/lib/product-literals.test.mjs` fails on a string in the source that names the product, outside a short allow-list.
+- **Push notices:** the push worker titles a notice that names no run with the build's `shortName`.
+- **Support address:** the app has none of its own. `supportEmail()` and `supportUrl()` return the served pack's, else the build default's, else nothing, and the screen shows no link.
+
+The web and elitea-main images take the brand as a build argument: `podman build --build-arg ELITEA_BRAND=sample -f apps/elitea-web/Containerfile .`.
 
 ## Add a field
 

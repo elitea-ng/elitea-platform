@@ -4,6 +4,24 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Web app brand from the brand manifest (#1701, ADR-0052 W3)
+
+ELITEA's web build is unchanged (the same files, byte for byte). The web
+client now reads the brand from `brand/<id>/` at build time.
+
+- **Another brand:** set `ELITEA_BRAND` before `npm run build`, or pass
+  `--build-arg ELITEA_BRAND=<id or path>` to the web and elitea-main image
+  builds. The default pack, logos, favicon, titles, product name and push
+  notice title follow it. A served pack still overrides the default pack.
+- **Support address:** the web client no longer falls back to a built-in
+  support mailbox. A deployment that wants a support link sets
+  `product.supportEmail` or `product.supportUrl` in its brand pack (Admin ›
+  Branding); without one, no support link shows.
+- **Translators:** messages name the product as `{{product}}`. Keep the
+  placeholder; the app fills in the brand's name.
+- **Contributors:** `apps/elitea-web/.prettierrc.json` sets the app's code
+  style (`npm run format -- <file>`).
+
 ## Desktop app brand from the brand manifest (#1692, ADR-0052 W2a)
 
 The desktop app's product name, identifier, icons, menu-bar image, publisher and
