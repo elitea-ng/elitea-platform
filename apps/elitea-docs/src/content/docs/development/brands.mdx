@@ -37,10 +37,11 @@ brand/<id>/
   pack.json      optional: a full web brand pack; otherwise one is derived
   firebase/      optional: GoogleService-Info.plist, google-services.json
   store/         optional: listing texts and screenshots
+  certs/         optional: the public EAS Update code signing certificate
   README.md      optional
 ```
 
-The folder name is the brand id. Any other file at the top fails the check. Signing keys and other secrets are never in the folder: CI reads them from the brand owner's secret store.
+The folder name is the brand id. Any other file at the top fails the check (OS files such as `.DS_Store` are ignored). Signing keys and other secrets are never in the folder: CI reads them from the brand owner's secret store.
 
 ## brand.json
 
@@ -64,7 +65,7 @@ The folder name is the brand id. Any other file at the top fails the check. Sign
 | `brand.onBrand` | Optional label colour on the hue; default white | |
 | `brand.schemes.light`, `.dark` | Optional token overrides, as in a web brand pack; `background.default` moves the contrast check's background | |
 | `eas.projectId`, `eas.owner` | The brand's own EAS project UUID and Expo owner, both or neither (`null`) | `null` until linked |
-| `updates.mode` | `off`, or `on` with the brand's own `eas.projectId` and `updates.codeSigningCertificate` (a path in the folder). An update never crosses brands | `off` |
+| `updates.mode` | `off`, or `on` with the brand's own `eas.projectId` and `updates.codeSigningCertificate` (a path under `certs/` that must exist; the public certificate only, never its key). An update never crosses brands | `off` |
 | `push.relay` | `none`, or the relay owner's name (ADR-0046) | `epam` |
 
 Bundle id, App Group, widget id and desktop identifier must all differ from each other.

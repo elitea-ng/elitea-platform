@@ -14,6 +14,8 @@ import { BRANDS_DIR, loadBrandFrom, REPO_ROOT } from './load.mjs';
 const brand = loadBrandFrom(join(BRANDS_DIR, 'elitea'));
 const repo = (p) => readFileSync(join(REPO_ROOT, p));
 const asset = (p) => readFileSync(join(brand.assetsDir, p));
+/** A literal string as a RegExp source. */
+const lit = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** brand/elitea asset → the copy an app reads today. */
 const COPIES = {
@@ -51,10 +53,10 @@ test('brand/elitea names, hue and support address match the web default pack and
   assert.equal(brand.manifest.docsUrl, pack.product.docsUrl);
   assert.equal(brand.manifest.brand.hue.toLowerCase(), pack.brand.hue.toLowerCase());
   const identity = repo('libs/ts/client-core/src/brand/identity.ts').toString();
-  assert.match(identity, new RegExp(`name: '${brand.manifest.productName}', shortName: '${brand.manifest.shortName}'`));
-  assert.match(identity, new RegExp(`DEFAULT_BRAND_HUE = '${brand.manifest.brand.hue}'`, 'i'));
+  assert.match(identity, new RegExp(`name: '${lit(brand.manifest.productName)}', shortName: '${lit(brand.manifest.shortName)}'`));
+  assert.match(identity, new RegExp(`DEFAULT_BRAND_HUE = '${lit(brand.manifest.brand.hue)}'`, 'i'));
   const links = repo('apps/elitea-web/src/shared/brand/brandLinks.ts').toString();
-  assert.match(links, new RegExp(`FALLBACK_SUPPORT_EMAIL = '${brand.manifest.supportEmail.replace('.', '\\.')}'`));
+  assert.match(links, new RegExp(`FALLBACK_SUPPORT_EMAIL = '${lit(brand.manifest.supportEmail)}'`));
 });
 
 test('brand/elitea desktop identifier and product match tauri.conf.json', () => {
@@ -64,8 +66,8 @@ test('brand/elitea desktop identifier and product match tauri.conf.json', () => 
 
 test('brand/elitea mobile links and connect scheme match app.config.ts', () => {
   const config = repo('apps/elitea-mobile/app.config.ts').toString();
-  for (const key of ['webUrl', 'privacyUrl', 'supportUrl']) assert.match(config, new RegExp(`${key}: '${brand.manifest[key]}'`));
-  assert.match(config, new RegExp(`connectSchemes: \\['${brand.manifest.mobile.connectSchemes.join("', '")}'\\]`));
-  assert.match(config, new RegExp(`displayName: '${brand.manifest.productName}'`));
+  for (const key of ['webUrl', 'privacyUrl', 'supportUrl']) assert.match(config, new RegExp(`${key}: '${lit(brand.manifest[key])}'`));
+  assert.match(config, new RegExp(`connectSchemes: \\['${brand.manifest.mobile.connectSchemes.map(lit).join("', '")}'\\]`));
+  assert.match(config, new RegExp(`displayName: '${lit(brand.manifest.productName)}'`));
   // The bundle id, redirect scheme, App Group and widget id move to brand/elitea in W1a (#1681).
 });

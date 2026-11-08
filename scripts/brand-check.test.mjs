@@ -202,3 +202,36 @@ test('the iOS Icon Composer document must name images that exist', () => {
   assert.deepEqual(errorsOf(dir), []);
 });
 
+
+test('a malformed Icon Composer document is a finding, not a crash', () => {
+  const dir = makeBrand();
+  mkdirSync(join(dir, 'assets/ios/app.icon'), { recursive: true });
+  writeFileSync(join(dir, 'assets/ios/app.icon/icon.json'), '{ "groups": [');
+  assert.deepEqual(errorsOf(dir), ['assets/ios/app.icon/icon.json: not valid JSON']);
+});
+
+test('updates on: the certificate lives under certs/ and must exist', () => {
+  const linked = { eas: { projectId: '2d2b8e3c-1a7c-4c4e-9f0a-1b2c3d4e5f60', owner: 'acme' }, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } };
+  const dir = makeBrand(validManifest(linked));
+  assert.deepEqual(errorsOf(dir), ['updates.codeSigningCertificate: certs/update.pem not found in the brand folder']);
+  mkdirSync(join(dir, 'certs'));
+  writeFileSync(join(dir, 'certs/update.pem'), '-----BEGIN CERTIFICATE-----\n');
+  assert.deepEqual(errorsOf(dir), []);
+});
+
+test('OS files (.DS_Store) are ignored, at the top and in firebase/', () => {
+  const dir = makeBrand();
+  writeFileSync(join(dir, '.DS_Store'), 'x');
+  mkdirSync(join(dir, 'firebase'));
+  writeFileSync(join(dir, 'firebase/.DS_Store'), 'x');
+  writeFileSync(join(dir, 'firebase/google-services.json'), '{}');
+  assert.deepEqual(errorsOf(dir), []);
+});
+
+test('run() checks the reference brand once when it is also a target', () => {
+  const elitea = eliteaLike();
+  const result = run([elitea], { referenceDir: elitea });
+  assert.ok(result.ok);
+  assert.equal(result.reports.length, 1);
+  assert.equal(result.reports[0].id, 'elitea');
+});

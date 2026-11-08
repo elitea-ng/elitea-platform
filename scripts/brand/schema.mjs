@@ -61,7 +61,7 @@ export const ASSETS = Object.freeze([
 ]);
 
 /** Optional folders and files beside `assets/` (ADR-0052 decision 2). */
-export const OPTIONAL_ENTRIES = Object.freeze(['pack.json', 'firebase', 'store', 'README.md']);
+export const OPTIONAL_ENTRIES = Object.freeze(['pack.json', 'firebase', 'store', 'certs', 'README.md']);
 
 /** The files `firebase/` may hold. */
 export const FIREBASE_FILES = Object.freeze(['GoogleService-Info.plist', 'google-services.json']);
@@ -305,9 +305,9 @@ export function validateManifest(m) {
     if (m.updates.mode !== 'on' && m.updates.mode !== 'off') fail('updates.mode', 'must be "on" or "off"');
     if (m.updates.mode === 'on') {
       if (!isObject(m.eas) || !m.eas.projectId) fail('updates.mode', '"on" needs the brand\'s own eas.projectId (an update never crosses brands)');
-      if (!isRelativeFile(m.updates.codeSigningCertificate)) fail('updates.codeSigningCertificate', '"on" needs the path of the code signing certificate, relative to the brand folder');
-    } else if (m.updates.codeSigningCertificate !== undefined && !isRelativeFile(m.updates.codeSigningCertificate)) {
-      fail('updates.codeSigningCertificate', 'must be a path relative to the brand folder');
+      if (!isRelativeFile(m.updates.codeSigningCertificate) || !m.updates.codeSigningCertificate.startsWith('certs/')) fail('updates.codeSigningCertificate', '"on" needs the path of the code signing certificate (a public certificate, never a key), under certs/ in the brand folder');
+    } else if (m.updates.codeSigningCertificate !== undefined && !(isRelativeFile(m.updates.codeSigningCertificate) && m.updates.codeSigningCertificate.startsWith('certs/'))) {
+      fail('updates.codeSigningCertificate', 'must be a path under certs/ in the brand folder');
     }
   }
 

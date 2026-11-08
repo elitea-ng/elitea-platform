@@ -315,19 +315,24 @@ jobs:
       # loader, the CLI, the sample's placeholders and brand/elitea's sync
       # with the copies the apps ship. Here, unfiltered, because the sync test
       # reads files outside brand/ (the mobile and desktop icons, the web
-      # default pack). Node's standard library only. A floor on the passed
-      # count, because a suite that collects nothing exits 0.
+      # default pack). Node's standard library only. The passed count must
+      # equal the tests the files declare (top-level `test(` calls plus one
+      # per row of elitea-sync's COPIES table, which builds its tests in a
+      # loop), because a suite that collects nothing exits 0.
       - name: Brand manifests pass brand-check and their tests
         run: |
           set -euo pipefail
           node scripts/brand-check.mjs brand/elitea brand/sample
+          declared="$(cat scripts/brand-check.test.mjs scripts/brand/*.test.mjs | grep -c '^test(')"
+          copies="$(sed -n '/^const COPIES = {/,/^};/p' scripts/brand/elitea-sync.test.mjs | grep -c "^  '")"
+          expected=$((declared + copies))
           status=0
           output="$(node --test --test-reporter=tap scripts/brand-check.test.mjs scripts/brand/*.test.mjs 2>&1)" || status=$?
           printf '%s\n' "${output}"
           ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
           failed="$(printf '%s\n' "${output}" | sed -n 's/^# fail \([0-9][0-9]*\)$/\1/p')"
-          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -lt 50 ] || [ "${failed:-1}" -ne 0 ]; then
-            echo "::error::brand manifest tests: ${ran:-none} passed, ${failed:-unknown} failed (exit ${status}); at least 50 must pass"
+          if [ "${status}" -ne 0 ] || [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ] || [ "${failed:-1}" -ne 0 ]; then
+            echo "::error::brand manifest tests: ${ran:-none} passed, ${failed:-unknown} failed (exit ${status}); the files declare ${expected}"
             exit 1
           fi
 

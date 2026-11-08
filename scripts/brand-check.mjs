@@ -85,8 +85,11 @@ export function checkAsset(spec, buf) {
 /** The files and folders at the top of a brand folder that the format does not name. */
 function strayEntries(dir) {
   const known = new Set(['brand.json', 'assets', ...OPTIONAL_ENTRIES]);
-  return readdirSync(dir).filter((name) => !known.has(name) && name !== '.DS_Store');
+  return readdirSync(dir).filter((name) => !known.has(name) && !IGNORED.has(name));
 }
+
+/** Files the OS writes on its own; never part of a brand. */
+const IGNORED = new Set(['.DS_Store', 'Thumbs.db']);
 
 /**
  * Check one brand folder. Returns
@@ -109,7 +112,7 @@ export function checkBrand(dir, { reference = null } = {}) {
 
   for (const name of strayEntries(dir)) errors.push(`${name}: not part of the brand folder format (brand.json, assets/, ${OPTIONAL_ENTRIES.join(', ')})`);
   const fb = join(dir, 'firebase');
-  if (existsSync(fb)) for (const f of listFiles(fb)) if (!FIREBASE_FILES.includes(f)) errors.push(`firebase/${f}: firebase/ holds only ${FIREBASE_FILES.join(' and ')}`);
+  if (existsSync(fb)) for (const f of listFiles(fb)) if (!FIREBASE_FILES.includes(f) && !IGNORED.has(f.split('/').pop())) errors.push(`firebase/${f}: firebase/ holds only ${FIREBASE_FILES.join(' and ')}`);
   if (existsSync(join(dir, 'pack.json'))) {
     try {
       const pack = JSON.parse(readFileSync(join(dir, 'pack.json'), 'utf8'));
@@ -118,6 +121,9 @@ export function checkBrand(dir, { reference = null } = {}) {
       errors.push('pack.json: not valid JSON');
     }
   }
+
+  const cert = manifest.updates.codeSigningCertificate;
+  if (cert !== undefined && !(existsSync(join(dir, cert)) && statSync(join(dir, cert)).isFile())) errors.push(`updates.codeSigningCertificate: ${cert} not found in the brand folder`);
 
   // Assets.
   const hashes = new Map();
@@ -133,7 +139,12 @@ export function checkBrand(dir, { reference = null } = {}) {
   }
   const iconDoc = join(brand.assetsDir, 'ios/app.icon');
   if (existsSync(join(iconDoc, 'icon.json'))) {
-    const doc = JSON.parse(readFileSync(join(iconDoc, 'icon.json'), 'utf8'));
+    let doc = {};
+    try {
+      doc = JSON.parse(readFileSync(join(iconDoc, 'icon.json'), 'utf8'));
+    } catch {
+      // checkAsset has already reported it.
+    }
     const images = (doc.groups ?? []).flatMap((g) => g.layers ?? []).map((l) => l['image-name']).filter(Boolean);
     for (const img of images) {
       const p = join(iconDoc, 'Assets', img);
@@ -172,8 +183,8 @@ export function checkBrand(dir, { reference = null } = {}) {
 
 /** brand/elitea's manifest and asset hashes, for the reuse check; null when it does not load. */
 export function loadReference(dir = join(BRANDS_DIR, DEFAULT_BRAND_ID)) {
-  const r = checkBrand(dir);
-  return r.manifest ? { manifest: r.manifest, hashes: r.hashes } : null;
+  const report = checkBrand(dir);
+  return report.manifest ? { dir: resolve(dir), report, manifest: report.manifest, hashes: report.hashes } : null;
 }
 
 /** Problems across brands checked together: a shared id or identifier. */
@@ -195,7 +206,8 @@ export function crossBrandErrors(reports) {
 /** Check `dirs` (absolute); returns `{ ok, reports, cross }`. */
 export function run(dirs, { referenceDir } = {}) {
   const reference = loadReference(referenceDir);
-  const reports = dirs.map((dir) => checkBrand(dir, { reference }));
+  // brand/elitea is checked once: its reference report is reused when it is also a target.
+  const reports = dirs.map((dir) => (reference && resolve(dir) === reference.dir ? reference.report : checkBrand(dir, { reference })));
   const cross = crossBrandErrors(reports);
   const needsReference = reports.some((r) => r.id && r.id !== DEFAULT_BRAND_ID);
   if (needsReference && !reference) cross.push(`brand/${DEFAULT_BRAND_ID} does not load, so the asset and name reuse check could not run`);

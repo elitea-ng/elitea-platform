@@ -11,7 +11,8 @@ import { BRANDS_DIR } from './load.mjs';
 import { PLACEHOLDER_COLOURS, placeholderAssets } from './placeholder-assets.mjs';
 
 const SAMPLE = join(BRANDS_DIR, 'sample');
-const files = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
+const OS_FILES = new Set(['.DS_Store', 'Thumbs.db']);
+const files = (dir) => readdirSync(dir, { withFileTypes: true }).filter((e) => !OS_FILES.has(e.name)).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
 
 test('brand/sample assets are exactly the generated placeholders', () => {
   const expected = placeholderAssets(PLACEHOLDER_COLOURS);

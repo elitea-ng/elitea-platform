@@ -124,6 +124,7 @@ test('eas, updates and push', () => {
   const linked = { eas: { projectId: '2d2b8e3c-1a7c-4c4e-9f0a-1b2c3d4e5f60', owner: 'acme' } };
   assert.ok(hasError(validManifest({ ...linked, updates: { mode: 'on' } }), 'updates.codeSigningCertificate'));
   assert.ok(hasError(validManifest({ ...linked, updates: { mode: 'on', codeSigningCertificate: '../x.pem' } }), 'updates.codeSigningCertificate'));
+  assert.ok(hasError(validManifest({ ...linked, updates: { mode: 'on', codeSigningCertificate: 'update.pem' } }), 'updates.codeSigningCertificate'));
   assert.deepEqual(errorsFor(validManifest({ ...linked, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } })), []);
   assert.ok(hasError(validManifest({ push: { relay: 'EPAM relay' } }), 'push.relay'));
   assert.ok(!hasError(validManifest({ push: { relay: 'epam' } }), 'push.relay'));
