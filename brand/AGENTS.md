@@ -21,6 +21,34 @@ sources. The docs never import it, and it never imports them.
 | Page shell, styles, behaviour | `brand/template.html`, `brand/styles.css`, `brand/brand.js` |
 | Build and tests | `brand/scripts/build.mjs`, `brand/test/build.test.mjs` |
 
+## Brand folders (ADR-0052)
+
+`brand/` holds two things side by side: the brand guide site above, and the
+**brand manifests**, one folder per client brand:
+
+| Folder | What it is |
+| --- | --- |
+| `brand/elitea/` | EPAM's ELITEA, the default build: `brand.json` and `assets/` |
+| `brand/sample/` | The neutral test brand for CI and docs; never published |
+
+The guide owns the names `assets`, `scripts`, `test` and `dist`; the
+manifest loader (`scripts/brand/load.mjs`) refuses them as brand ids, and a
+new guide folder name must be added to `RESERVED_IDS` in
+`scripts/brand/schema.mjs`. The guide build reads only `brand/assets/` and
+never the manifest folders; manifest tooling never reads the guide. The
+format, the asset table and how to add a field are in the docs:
+`apps/elitea-docs/src/content/docs/development/brands.mdx`.
+
+`brand/elitea/assets/` holds copies of the LE-03 colored-dark rasters the apps
+ship; `scripts/brand/elitea-sync.test.mjs` keeps them equal. After a change to
+the mark, copy the new rasters there too.
+
+```
+node scripts/brand-check.mjs brand/elitea brand/sample   # validate both brands
+node --test scripts/brand-check.test.mjs scripts/brand/*.test.mjs
+node scripts/brand/placeholder-assets.mjs brand/sample    # regenerate the sample's icons
+```
+
 ## Commands
 
 ```
@@ -33,7 +61,7 @@ node brand/scripts/render-icon-pack.mjs          # rasterise the icon pack → b
 `render-icon-pack.mjs` needs one rasteriser on `PATH`: resvg, rsvg-convert or Inkscape.
 After a deliberate change to the mark, run `gen-brand.mjs`, then
 `render-icon-pack.mjs --out brand/assets/icon-pack`, then copy the new picks into
-`brand/assets/icons/`, the desktop icons and the mobile assets.
+`brand/assets/icons/`, the desktop icons, the mobile assets and `brand/elitea/assets/`.
 
 Node's standard library only: nothing to install (the icon renderer also calls a rasteriser).
 
