@@ -1126,6 +1126,7 @@
   "desktop.computerUse.pageTitle": "Computer use",
   "desktop.computerUse.permissions": "Permissions",
   "desktop.computerUse.policyOff": "Your organisation does not allow computer use. An administrator turns it on in Admin › Configuration › Native client policy.",
+  "desktop.computerUse.readOnly": "On this session the agent can see your apps but not use them: Elitea cannot watch your keyboard and pointer here, so it could not pause when you use the computer. Sign in to an X11 session to let it act.",
   "desktop.computerUse.rememberedEmpty": "No app is always allowed. The agent asks each time.",
   "desktop.computerUse.rememberedTitle": "Always allowed apps",
   "desktop.computerUse.revoke": "Revoke",

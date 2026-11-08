@@ -79,6 +79,23 @@ pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord, is_denied_menu_i
 #[cfg(target_os = "windows")]
 pub use windows::WindowsDriver;
 
+/// Why computer use can read but not act on this computer, or `None` when
+/// it can act (as far as the session kind tells: grants are separate). On a
+/// Linux Wayland or `XWayland` session the user-active guard cannot run, so
+/// every act is refused (`user_active_guard_unavailable`); the host's
+/// settings show computer use as read-only with this reason.
+#[must_use]
+pub fn read_only_reason() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::guard_unavailable()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// The driver of this OS: `MacDriver` on macOS, `WindowsDriver` on
 /// Windows, `LinuxDriver` on Linux, [`Unsupported`] elsewhere.
 #[must_use]

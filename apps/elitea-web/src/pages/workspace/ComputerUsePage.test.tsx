@@ -51,6 +51,21 @@ describe('Settings › Computer use', () => {
     expect(screen.queryByTestId('computer-needs-accessibility')).toBeNull();
   });
 
+  it('shows computer use as read-only with the reason on a Linux Wayland session', async () => {
+    const reason = 'the session is a Wayland session (logind)';
+    renderWithTheme(<ComputerUsePage ipc={createFakeComputerIpc({ read_only_reason: reason })} />);
+    const notice = await screen.findByTestId('computer-read-only');
+    expect(notice).toHaveTextContent('can see your apps but not use them');
+    expect(notice).toHaveAttribute('data-reason', reason);
+  });
+
+  it('shows no read-only notice where the agent can act', async () => {
+    renderWithTheme(<ComputerUsePage ipc={createFakeComputerIpc()} />);
+    await screen.findByRole('heading', { name: 'Computer use' });
+    await waitFor(() => expect(toggle()).toBeInTheDocument());
+    expect(screen.queryByTestId('computer-read-only')).toBeNull();
+  });
+
   it('says when the organisation does not allow it', async () => {
     renderWithTheme(<ComputerUsePage ipc={createFakeComputerIpc({ policy_allows: false })} />);
     expect(await screen.findByTestId('computer-policy-off')).toHaveTextContent('Native client policy');

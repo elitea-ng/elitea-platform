@@ -64,8 +64,11 @@ pub struct ComputerSettings {
     policy_allows: bool,
     /// The person's device switch (off unless turned on).
     enabled: bool,
-    /// The OS can run it at all (macOS).
+    /// The OS can run it at all (macOS, Windows, Linux).
     supported: bool,
+    /// Why it can see apps here but not act in them (a Linux Wayland
+    /// session: the user-active guard cannot run), or `None`.
+    read_only_reason: Option<&'static str>,
     /// `granted`, `denied`, `unknown` or `not_required`.
     accessibility: elitea_desktop_control::Grant,
     screen_recording: elitea_desktop_control::Grant,
@@ -99,6 +102,7 @@ fn settings_of(state: &LocalState, files: &SettingsFiles) -> Result<ComputerSett
             target_os = "windows",
             target_os = "linux"
         )),
+        read_only_reason: elitea_desktop_control::read_only_reason(),
         accessibility: grants.accessibility,
         screen_recording: grants.screen_recording,
         screenshot_tools: crate::computer_tools::TOOLS

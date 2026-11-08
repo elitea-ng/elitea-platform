@@ -213,6 +213,14 @@ function ComputerUseSettings({ ipc }: { readonly ipc: ComputerIpc }): React.JSX.
         )}
       </Typography>
       {settings.supported ? null : <Alert severity="info">{t('desktop.computerUse.unsupported', 'Computer use runs on macOS, Windows and Linux only.')}</Alert>}
+      {settings.supported && settings.read_only_reason !== null ? (
+        <Alert severity="warning" data-testid="computer-read-only" data-reason={settings.read_only_reason}>
+          {t(
+            'desktop.computerUse.readOnly',
+            'On this session the agent can see your apps but not use them: Elitea cannot watch your keyboard and pointer here, so it could not pause when you use the computer. Sign in to an X11 session to let it act.',
+          )}
+        </Alert>
+      ) : null}
       <DeviceSwitch settings={settings} busy={busy} onChange={(enabled) => run(() => ipc.setEnabled(enabled))} />
       {error === null ? null : (
         <Alert severity="error" data-testid="computer-error">

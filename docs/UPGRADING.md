@@ -24,7 +24,35 @@ person's device switch both allow it, as before.
   fails with the new error code `app_denied`.
 - Linux on Wayland can see apps but not act in them: there is no global
   input watch for the pause-on-your-input guard, so every act is refused with
-  `user_active_guard_unavailable`. X11 sessions act normally.
+  `user_active_guard_unavailable`. X11 sessions act normally. Wayland is
+  told by the environment, logind's `Session.Type` or an XWayland X server,
+  so a stripped environment does not get past it. Settings shows computer
+  use as read-only there, with the reason (`read_only_reason` in the
+  settings reply).
+- Windows judges each window, not only its owner: a packaged app's frame
+  (`applicationframehost.exe`) by the app it hosts, so Windows Settings and
+  Windows Security are denied; of `explorer.exe`'s windows only File
+  Explorer folder windows pass (the Run box and the Control Panel are
+  refused). `rundll32.exe`, `control.exe` and `sechealthui.exe` join the
+  deny list. A policy allow entry for `explorer.exe` or
+  `applicationframehost.exe` no longer opens those.
+- Linux denies GNOME Settings and KDE System Settings whole
+  (`org.gnome.Settings`, `gnome-control-center`, `org.kde.systemsettings`,
+  `systemsettings`). An app with no desktop entry is named by its
+  executable (`xterm`), never by its display name: review policy app lists
+  that used a display name.
+- Linux fails closed on the lock screen: with no screensaver service that
+  answers (i3lock, slock, xsecurelock), every call is refused with
+  `screen_unavailable`. There is no override; a desktop without one cannot
+  use computer use.
+- The user-active guard's watch dying mid-session (display gone, hook
+  removed) now refuses every act with `user_active_guard_unavailable`
+  until the next session, a new `DesktopError` code from the driver.
+- On Windows and Linux, a key chord that types or pastes is refused
+  (`action_failed`) when the focused control cannot be found; navigation
+  keys still pass.
+- Other programs' injected input (remote-control tools, `xdotool`) does not
+  pause the agent on Windows or Linux; the how-to says so.
 
 ## Turn-taking for conversations with several agents (#1611, ADR-0050 decisions 7c and 7d)
 
