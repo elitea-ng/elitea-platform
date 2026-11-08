@@ -9,7 +9,7 @@ const C = '33333333-3333-4333-8333-333333333333';
 
 const row = (id: string, extra: Record<string, unknown> = {}) => ({
   id,
-  client_id: 'ca.mlops.elitea',
+  client_id: 'ai.elitea.app',
   client_name: 'Elitea AI',
   device_name: 'iPhone',
   platform: 'ios',

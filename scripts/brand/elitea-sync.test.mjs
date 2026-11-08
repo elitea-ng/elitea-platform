@@ -63,11 +63,3 @@ test('brand/elitea desktop identifier and product match tauri.conf.json', () => 
   const conf = JSON.parse(repo('apps/elitea-desktop/src-tauri/tauri.conf.json'));
   assert.equal(conf.identifier, brand.manifest.desktop.identifier);
 });
-
-test('brand/elitea mobile links and connect scheme match app.config.ts', () => {
-  const config = repo('apps/elitea-mobile/app.config.ts').toString();
-  for (const key of ['webUrl', 'privacyUrl', 'supportUrl']) assert.match(config, new RegExp(`${key}: '${lit(brand.manifest[key])}'`));
-  assert.match(config, new RegExp(`connectSchemes: \\['${brand.manifest.mobile.connectSchemes.map(lit).join("', '")}'\\]`));
-  assert.match(config, new RegExp(`displayName: '${lit(brand.manifest.productName)}'`));
-  // The bundle id, redirect scheme, App Group and widget id move to brand/elitea in W1a (#1681).
-});

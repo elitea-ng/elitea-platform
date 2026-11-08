@@ -72,7 +72,7 @@ function nativeSlot(id: string, origin: string) {
     JSON.stringify({
       v: 1,
       origin,
-      clientId: 'ca.mlops.elitea',
+      clientId: 'ai.elitea.app',
       tokenEndpoint: `${origin}/api/v2/auth/native/token`,
       revocationEndpoint: `${origin}/api/v2/auth/native/revoke`,
       refreshToken: opaqueToken('elnrt_', 2),
@@ -374,7 +374,7 @@ describe('removeWorkspace', () => {
       JSON.stringify({
         v: 1,
         origin: ORIGIN_B,
-        clientId: 'ca.mlops.elitea',
+        clientId: 'ai.elitea.app',
         tokenEndpoint: `${ORIGIN_B}/api/v2/auth/native/token`,
         revocationEndpoint: `${ORIGIN_B}/api/v2/auth/native/revoke`,
         refreshToken: opaqueToken('elnrt_', 1),
@@ -389,7 +389,7 @@ describe('removeWorkspace', () => {
     expect(revoke).toHaveBeenCalledWith(
       ORIGIN_B,
       `${ORIGIN_B}/api/v2/auth/native/revoke`,
-      { token: opaqueToken('elnrt_', 1), clientId: 'ca.mlops.elitea' },
+      { token: opaqueToken('elnrt_', 1), clientId: 'ai.elitea.app' },
       expect.objectContaining({ signal: expect.anything() }),
     );
     expect(itemsOf(B)).toEqual({});
@@ -530,7 +530,7 @@ describe('classifyIncomingLink', () => {
   it('ignores non-connect URLs and invalid links', () => {
     for (const url of [
       null,
-      'ca.mlops.elitea:/oauth/callback?code=x',
+      'ai.elitea.app:/oauth/callback?code=x',
       'exp+elitea-mobile://expo-development-client/?url=x',
       'https://b.example.com',
       link('http://b.example.com'),

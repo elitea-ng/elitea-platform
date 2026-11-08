@@ -26,7 +26,7 @@ administrator; questions about the app itself come to us.
 
 **"This workspace is not supported" or the sign-in button is missing.**
 The workspace must be an Elitea-compatible server that allows the Elitea AI
-app. Ask your administrator to enable native clients for `ca.mlops.elitea`.
+app. Ask your administrator to enable native clients for `ai.elitea.app`.
 
 **"Update required."** The workspace needs a newer version of the app. Update
 it from the App Store or Google Play.

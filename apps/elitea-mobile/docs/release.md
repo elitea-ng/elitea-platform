@@ -82,15 +82,15 @@ the first external TestFlight round.
 ## 2. App Store Connect app record (owner)
 
 1. **Certificates, Identifiers and Profiles** (developer.apple.com): EAS
-   registers `ca.mlops.elitea`, the widget extension `ca.mlops.elitea.widgets`
-   and the App Group `group.ca.mlops.elitea` on the first build (section 4), so
+   registers `ai.elitea.app`, the widget extension `ai.elitea.app.widgets`
+   and the App Group `group.ai.elitea.app` on the first build (section 4), so
    nothing is needed here first. If you prefer to create them by hand, enable
    the App Groups capability on both identifiers and attach the group.
 2. App Store Connect, **Apps, +, New App**:
    - Platform: iOS
    - Name: `Elitea AI` (docs/store/listing.md)
    - Primary language: English (U.S.) or English (Canada)
-   - Bundle ID: `ca.mlops.elitea` (permanent: it can never change)
+   - Bundle ID: `ai.elitea.app` (permanent: it can never change)
    - SKU: `elitea-mobile-ios`
    - User access: Full access
 3. Open the new app, **App Information**: copy the numeric **Apple ID** (for
@@ -177,7 +177,7 @@ eas build --platform ios --profile production
 
 Answer yes to logging in to Apple and to letting EAS generate everything. It
 creates the distribution certificate, the App Store provisioning profiles for
-`ca.mlops.elitea` and `ca.mlops.elitea.widgets`, and the App Group. Then create
+`ai.elitea.app` and `ai.elitea.app.widgets`, and the App Group. Then create
 the App Store Connect API key EAS uses to submit:
 
 ```bash

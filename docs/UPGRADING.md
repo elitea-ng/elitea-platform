@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Mobile app identity from the brand manifest: `ai.elitea.app` (#1681, ADR-0052 W1a)
+
+The mobile app's identifiers now come from `brand/elitea/brand.json`, and its
+default identity is `ai.elitea.app` (owner decision 9). No mobile build had
+been uploaded under the earlier placeholder identity, so no installed app moves.
+
+- **Operators who registered a native client for the mobile app** (admin →
+  native clients, or `NATIVE_CLIENTS_PATH`): register `ai.elitea.app` with
+  redirect URI `ai.elitea.app:/oauth/callback`. A client registered under the
+  earlier placeholder id no longer matches any build; remove it. The Helm
+  values comment shows the entry.
+- **Building another brand:** set `ELITEA_BRAND` to a brand folder for every
+  `expo` and EAS command (docs: Development → Brands). `eas.json` names no
+  app identifier; EAS reads them from the brand's Expo config.
+
 ## Brand manifests: brand/elitea and brand/sample (#1675, ADR-0052 W0)
 
 No server, migration, configuration or client change. The repository gains

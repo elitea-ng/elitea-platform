@@ -93,7 +93,8 @@
       "<rootDir>/node_modules"
     ],
     "moduleNameMapper": {
-      "^@elitea/client-core/(.*)$": "<rootDir>/../../libs/ts/client-core/src/$1/index.ts"
+      "^@elitea/client-core/(.*)$": "<rootDir>/../../libs/ts/client-core/src/$1/index.ts",
+      "^(\\.\\./)+scripts/brand/load\\.mjs$": "<rootDir>/src/test/brandLoader.ts"
     },
     "testPathIgnorePatterns": [
       "/node_modules/",

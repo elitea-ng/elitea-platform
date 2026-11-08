@@ -1,7 +1,7 @@
 import { isOAuthRedirect, rewriteSystemPath } from '@/linking/nativeIntent';
 
 describe('rewriteSystemPath', () => {
-  const callback = 'ca.mlops.elitea:/oauth/callback?code=abc&state=xyz&iss=https%3A%2F%2Fai.example.com';
+  const callback = 'ai.elitea.app:/oauth/callback?code=abc&state=xyz&iss=https%3A%2F%2Fai.example.com';
 
   it('swallows the OAuth redirect while the app is running', () => {
     expect(rewriteSystemPath(callback, false)).toBeNull();

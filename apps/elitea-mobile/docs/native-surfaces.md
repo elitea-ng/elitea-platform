@@ -16,8 +16,8 @@ Message content, tool names and credentials never reach any of them.
 ## Widgets
 
 `src/features/surfaces/`. One WidgetKit extension (`ExpoWidgetsTarget`, bundle id
-`ca.mlops.elitea.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
-a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ca.mlops.elitea`:
+`ai.elitea.app.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
+a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ai.elitea.app`:
 
 - after a sync changed stored data (`subscribeSyncChanges` in `src/sync/appSync.ts`),
   when the offline store opens, when the unread count changes and when a live turn

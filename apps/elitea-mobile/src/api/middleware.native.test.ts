@@ -28,7 +28,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 
 const BASE = {
   origin: FIXTURE_ORIGIN,
-  clientId: 'ca.mlops.elitea',
+  clientId: 'ai.elitea.app',
   tokenEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/token`,
   revocationEndpoint: `${FIXTURE_ORIGIN}/api/v2/auth/native/revoke`,
 };

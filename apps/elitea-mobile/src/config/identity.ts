@@ -29,5 +29,5 @@ function loadIdentity(): AppIdentity {
 
 export const identity: AppIdentity = loadIdentity();
 
-/** RFC 8252 redirect URI, e.g. `ca.mlops.elitea:/oauth/callback`. */
+/** RFC 8252 redirect URI, e.g. `ai.elitea.app:/oauth/callback`. */
 export const oauthRedirectUri = `${identity.oauthRedirectScheme}:${identity.oauthRedirectPath}`;

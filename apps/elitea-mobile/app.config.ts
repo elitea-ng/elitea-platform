@@ -1,36 +1,61 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
+// The brand manifest loader (ADR-0052 decision 2). It is plain ESM with node's
+// standard library only; Expo evaluates this file in node, which loads it with
+// require(esm), and so does the jest setup (src/test/setupExpoConfig.ts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { loadBrand } = require('../../scripts/brand/load.mjs') as typeof import('../../scripts/brand/load.mjs');
+
 /**
- * Single source of truth for Elitea AI's fixed identifiers.
+ * The selected brand: `ELITEA_BRAND` (a brand id under `brand/`, or a path to a
+ * brand folder), unset meaning `brand/elitea`, EPAM's ELITEA. Read once per
+ * evaluation of this file (each `expo config` run, each EAS build).
+ */
+const brand = loadBrand();
+const manifest = brand.manifest;
+
+/** A file of the brand folder, as a path Expo resolves from this directory. */
+const brandFile = (rel: string): string => brand.path(rel);
+
+/**
+ * The app's fixed identifiers, built from the brand manifest
+ * (`brand/<id>/brand.json`, the only place they are written down).
  *
- * Nothing else in the codebase may hardcode these values: runtime code reads
- * them through `src/config/identity.ts`, which reads `expoConfig.extra.identity`.
+ * Runtime code reads them through `src/config/identity.ts`, which reads
+ * `expoConfig.extra.identity`. Nothing else in the app may hardcode them.
  *
- * `bundleId` is PERMANENT once published to the App Store / Play Store.
+ * `bundleId` and `appGroup` are PERMANENT once a build of the brand is
+ * uploaded to a store (`node scripts/brand-check.mjs` marks them).
  */
 const identity = {
-  displayName: 'Elitea AI',
-  slug: 'elitea-mobile',
-  bundleId: 'ca.mlops.elitea',
-  /** Schemes accepted for connect links, e.g. `elitea://connect?server=https://...`. */
-  connectSchemes: ['elitea'],
+  displayName: manifest.productName,
+  shortName: manifest.shortName,
+  slug: `${manifest.id}-mobile`,
+  bundleId: manifest.mobile.bundleId,
+  /** Schemes accepted for connect links, e.g. `<scheme>://connect?server=https://...`. */
+  connectSchemes: [...manifest.mobile.connectSchemes],
   /** RFC 8252 private-use (reverse-DNS) scheme for the OAuth redirect. */
-  oauthRedirectScheme: 'ca.mlops.elitea',
+  oauthRedirectScheme: manifest.mobile.oauthRedirectScheme,
   oauthRedirectPath: '/oauth/callback',
-  webUrl: 'https://elitea.ai',
-  privacyUrl: 'https://elitea.ai/privacy',
-  supportUrl: 'https://elitea.ai/support',
+  /** Universal links and App Links host, or null: the custom scheme then works alone. */
+  linkDomain: manifest.linkDomain,
+  webUrl: manifest.webUrl,
+  privacyUrl: manifest.privacyUrl,
+  supportUrl: manifest.supportUrl,
   /**
    * App Group shared with the widget extension (widgets and Live Activities,
    * src/features/surfaces/). It carries COUNTS only unless the workspace
    * policy allows titles (`allow_system_surfaces`); never a credential.
    */
-  appGroup: 'group.ca.mlops.elitea',
+  appGroup: manifest.mobile.appGroup,
   /** The widget extension's bundle id (home-screen and lock-screen widgets, Live Activities). */
-  widgetBundleId: 'ca.mlops.elitea.widgets',
-} as const;
+  widgetBundleId: manifest.mobile.widgetBundleId,
+};
 
 export type AppIdentity = typeof identity;
+
+/** The brand id this config was built for (`extra.brand`); never used to branch behaviour. */
+export const BRAND_ID = brand.id;
 
 /** NSMicrophoneUsageDescription: the microphone is used only for on-device dictation. */
 const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while you dictate a message. Speech is recognised on this device.`;
@@ -46,8 +71,8 @@ const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while
  * environment, which win over the committed values.
  */
 const easLink = {
-  projectId: '',
-  owner: '',
+  projectId: manifest.eas.projectId ?? '',
+  owner: manifest.eas.owner ?? '',
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -329,6 +354,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     ...config.extra,
     identity,
+    brand: brand.id,
     // Merged, not replaced: config plugins (expo-widgets) add extra.eas.build for the extension.
     ...(eas.projectId ? { eas: { ...(config.extra?.eas as object | undefined), projectId: eas.projectId } } : {}),
   },

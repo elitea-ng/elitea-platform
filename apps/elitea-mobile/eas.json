@@ -50,11 +50,8 @@
   },
   "submit": {
     "production": {
-      "ios": {
-        "bundleIdentifier": "ca.mlops.elitea"
-      },
+      "ios": {},
       "android": {
-        "applicationId": "ca.mlops.elitea",
         "track": "internal",
         "releaseStatus": "draft"
       }
