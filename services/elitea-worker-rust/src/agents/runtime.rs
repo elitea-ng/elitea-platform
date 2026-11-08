@@ -455,6 +455,13 @@ pub(super) fn admit_pipeline_plan<'a>(
     NativeAgentAssemblyError,
 > {
     tracing::Span::current().record("stage", "start_admission");
+    // An idle compaction summarizes an ordinary agent's last request; a graph
+    // has no such request (ADR-0050 decision 9b2).
+    if super::idle_compaction::requested(&request.payload) {
+        return Err(idle_compaction_admission_error(
+            super::idle_compaction::IdleCompactionError::Pipeline,
+        ));
+    }
     let has_continuation = has_continuation(request);
     let start = if has_continuation {
         pipeline_continuation_start(&request.payload)?
@@ -670,6 +677,9 @@ impl<'a> AdmittedPipelineNativeAssembly<'a> {
 /// The direct-agent start modes admitted before PAT redemption.
 pub(crate) enum AdmittedNativeStart {
     Fresh,
+    /// ADR-0050 decision 9b2 (#1610): one cached summary of the session's
+    /// last request; the agent loop never runs.
+    IdleCompaction(super::idle_compaction::IdleCompaction),
     Regenerate,
     OutputContinuation,
     DirectHitl(DirectHitlDecisionSet),
@@ -797,6 +807,9 @@ pub(super) fn admit_ordinary_plan(
     let start = admit_native_start(request)?;
     let profile = match &start {
         AdmittedNativeStart::Fresh => OrdinaryNoToolProfile::validate(request)?,
+        AdmittedNativeStart::IdleCompaction(_) => {
+            OrdinaryNoToolProfile::validate_idle_compaction(request)?
+        }
         AdmittedNativeStart::Regenerate => OrdinaryNoToolProfile::validate_regeneration(request)?,
         AdmittedNativeStart::OutputContinuation => {
             OrdinaryNoToolProfile::validate_output_continuation(request)?
@@ -826,6 +839,13 @@ fn admit_native_start(
     request: &AgentExecutionRequest,
 ) -> Result<AdmittedNativeStart, NativeAgentAssemblyError> {
     let payload = &request.payload;
+    // The marker is checked before any other kind, so an idle compaction can
+    // never be read as a fresh turn with an empty question.
+    if let Some(idle) = super::idle_compaction::IdleCompaction::from_payload(payload)
+        .map_err(idle_compaction_admission_error)?
+    {
+        return Ok(AdmittedNativeStart::IdleCompaction(idle));
+    }
     if payload.is_regenerate {
         if has_continuation(request) {
             return Err(NativeAgentAssemblyError::new(
@@ -877,6 +897,16 @@ fn has_continuation(request: &AgentExecutionRequest) -> bool {
         || !payload.hitl_decisions.is_empty()
         || !payload.ignored_mcp_servers.is_empty()
         || !payload.user_declined_mcp_servers.is_empty()
+}
+
+pub(super) fn idle_compaction_admission_error(
+    error: super::idle_compaction::IdleCompactionError,
+) -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidInput,
+        "the idle compaction input is malformed",
+    )
+    .with_cause(error.code(), None)
 }
 
 fn direct_hitl_admission_error(error: &DirectHitlError) -> NativeAgentAssemblyError {

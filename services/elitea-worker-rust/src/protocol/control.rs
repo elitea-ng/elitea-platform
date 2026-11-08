@@ -3180,6 +3180,11 @@ pub fn build_agent_claim_request(
     // capability, not a recovery mode: recovery claims keep it, so a reclaim
     // of such a wake is never refused for lack of it.
     request.fanout_delegated_credentials = true;
+    // ADR-0050 decision 9b2 (#1610): this Worker runs an input carrying
+    // `meta.idle_compaction_v1` as one cached summary call, never as a fresh
+    // turn with an empty question, so Main may grant it an idle compaction
+    // job. A capability, not a recovery mode: recovery claims keep it.
+    request.idle_compaction = true;
     Ok(request)
 }
 
@@ -3200,6 +3205,8 @@ fn build_claim_request(
         fanout_interrupt_decisions: false,
         // Agent claims opt in (`build_agent_claim_request`).
         fanout_delegated_credentials: false,
+        // Agent claims opt in (`build_agent_claim_request`).
+        idle_compaction: false,
         // Legacy by default; AgentControlClient::fresh_claim_request sets it
         // for a worker that serves the governed security context (#1115).
         governed_security_context_v1: false,

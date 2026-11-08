@@ -20,6 +20,7 @@ pub(crate) mod events;
 mod governed_nested;
 pub mod graph;
 pub(crate) mod grounding_model;
+pub(crate) mod idle_compaction;
 pub(crate) use elitea_agent_runtime::instruction_authority;
 pub(crate) mod internal_tools;
 mod model_checkpoint;

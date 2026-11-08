@@ -284,6 +284,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One request, every wire field it must carry.
 async fn native_messages_request_preserves_cache_thinking_identity_and_completion() {
     let response =
         test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));

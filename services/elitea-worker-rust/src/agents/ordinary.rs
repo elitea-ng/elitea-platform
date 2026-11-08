@@ -251,6 +251,10 @@ impl OrdinaryNativeAgentAssembler {
             .prepare_runner_inputs(redeemed, tool_policy, false)
             .await?;
         let assembled = match start {
+            AdmittedNativeStart::IdleCompaction(_) => {
+                tracing::Span::current().record("tool_execution_mode", "idle_compaction");
+                super::session::assemble_idle_compaction(model, plan, runtime, sessions).await
+            }
             AdmittedNativeStart::Fresh
             | AdmittedNativeStart::Regenerate
             | AdmittedNativeStart::OutputContinuation => {
