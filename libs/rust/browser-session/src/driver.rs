@@ -694,6 +694,9 @@ impl CdpDriver {
     /// document into another process (an error page after a failed load is
     /// one), the engine briefly answers "Not attached to an active page";
     /// the session itself survives, so the command is retried for a moment.
+    /// A screenshot taken while the swapped-in document has not painted yet
+    /// is refused with "Unable to capture screenshot"; it is retried the same
+    /// way.
     async fn page(&self, method: &str, params: Value) -> Result<Value, BrowserError> {
         let deadline = tokio::time::Instant::now() + PAGE_SWAP_GRACE;
         loop {
@@ -703,7 +706,7 @@ impl CdpDriver {
                 .await
             {
                 Err(CdpError::Protocol { message, .. })
-                    if message.contains(NOT_ATTACHED) && tokio::time::Instant::now() < deadline =>
+                    if is_page_swap(method, &message) && tokio::time::Instant::now() < deadline =>
                 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
@@ -1416,6 +1419,15 @@ fn png_size(data: &[u8]) -> Option<(u32, u32)> {
 /// The engine's answer while a page's document is between processes.
 const NOT_ATTACHED: &str = "Not attached to an active page";
 
+/// The engine's answer to a screenshot of a document that has not painted.
+const NOT_PAINTED: &str = "Unable to capture screenshot";
+
+/// An engine refusal that only means the page's document is mid-swap.
+fn is_page_swap(method: &str, message: &str) -> bool {
+    message.contains(NOT_ATTACHED)
+        || (method == "Page.captureScreenshot" && message.contains(NOT_PAINTED))
+}
+
 /// How long a page command waits out such a swap.
 const PAGE_SWAP_GRACE: Duration = Duration::from_secs(5);
 
@@ -1893,6 +1905,23 @@ impl BrowserDriver for CdpDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_swap_is_waited_out_and_an_unpainted_screenshot_only_for_screenshots() {
+        assert!(is_page_swap("Runtime.evaluate", NOT_ATTACHED));
+        assert!(is_page_swap(
+            "Page.captureScreenshot",
+            "Unable to capture screenshot"
+        ));
+        assert!(!is_page_swap(
+            "Runtime.evaluate",
+            "Unable to capture screenshot"
+        ));
+        assert!(!is_page_swap(
+            "Page.captureScreenshot",
+            "Invalid parameters"
+        ));
+    }
 
     #[test]
     fn png_size_reads_the_header() {
