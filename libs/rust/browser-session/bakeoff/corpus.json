@@ -1,5 +1,5 @@
 {
-  "revision": 2,
+  "revision": 3,
   "about": "The ADR-0049 decision 9 bake-off corpus (#1599): public pages of the classes ADR-0049 names, driven through the browser tools by the scripted bake-off agent (libs/rust/browser-session/tests/bakeoff.rs) on each engine. kind read: the page renders its key text; extract: a named fact is in the page's text; act: a sequence of tool calls changes the page. No task signs in, submits a form that sends data anywhere, or buys anything. A task whose expectation goes stale fails on every engine alike: fix the task in a reviewed change, never per engine.",
   "tasks": [
     { "id": "atlassian-support-confluence", "class": "atlassian", "kind": "read",
@@ -14,13 +14,13 @@
     { "id": "atlassian-agile-scrum", "class": "atlassian", "kind": "read",
       "url": "https://www.atlassian.com/agile/scrum",
       "expect": { "text": ["Scrum"], "min_refs": 10 } },
-    { "id": "atlassian-jira-pricing", "class": "atlassian", "kind": "act",
-      "url": "https://www.atlassian.com/software/jira",
+    { "id": "atlassian-status-history", "class": "atlassian", "kind": "act",
+      "url": "https://status.atlassian.com/",
       "steps": [
-        { "click": { "role": "link", "name": "Pricing" } },
-        { "wait": { "url": "*/jira/pricing*", "timeout_ms": 20000 } }
+        { "click": { "role": "link", "name": "Incident History" } },
+        { "wait": { "url": "*/history*", "timeout_ms": 20000 } }
       ],
-      "expect": { "text": ["Premium"], "url": "*/jira/pricing*" } },
+      "expect": { "text": ["Incident History"], "url": "*/history*" } },
 
     { "id": "office-landing", "class": "office", "kind": "read",
       "url": "https://www.office.com/",
@@ -55,9 +55,9 @@
       "url": "https://help.salesforce.com/s/",
       "expect": { "text": ["Salesforce"] } },
 
-    { "id": "servicenow-docs-change", "class": "servicenow", "kind": "read",
-      "url": "https://www.servicenow.com/docs/r/it-service-management/change-management/c_ITILChangeManagement.html",
-      "expect": { "text": ["Change Management"], "min_refs": 5 } },
+    { "id": "servicenow-developer-blog", "class": "servicenow", "kind": "read",
+      "url": "https://www.servicenow.com/community/developer-blog/bg-p/developer-blog",
+      "expect": { "text": ["Developer blog"], "min_refs": 10 } },
     { "id": "servicenow-developer", "class": "servicenow", "kind": "read",
       "url": "https://developer.servicenow.com/dev.do",
       "expect": { "text": ["ServiceNow"], "min_refs": 5 } },
@@ -67,9 +67,9 @@
     { "id": "servicenow-store", "class": "servicenow", "kind": "extract",
       "url": "https://store.servicenow.com/",
       "expect": { "text": ["Store"] } },
-    { "id": "servicenow-docs-incident", "class": "servicenow", "kind": "extract",
-      "url": "https://www.servicenow.com/docs/r/it-service-management/incident-management/c_IncidentManagement.html",
-      "expect": { "text": ["Incident Management restores normal service operation"] } },
+    { "id": "servicenow-sdk-readme", "class": "servicenow", "kind": "extract",
+      "url": "https://github.com/ServiceNow/sdk",
+      "expect": { "text": ["ServiceNow SDK"] } },
 
     { "id": "github-repo", "class": "github", "kind": "read",
       "url": "https://github.com/rust-lang/rust",
