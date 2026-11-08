@@ -287,7 +287,9 @@ mod windows_run {
             if !info.download {
                 return Err(format!("the download attribute was not read: {info:?}"));
             }
-            let field = find_ref(&snapshot, "textbox", "Resume")?;
+            // Chromium's accessibility tree names a file input a button
+            // ("Resume", value "No file chosen"); WebKit names it a textbox.
+            let field = find_ref(&snapshot, "button", "Resume")?;
             let info = driver.inspect(&field).await.map_err(|e| e.to_string())?;
             if info.input_type.as_deref() != Some("file") {
                 return Err(format!("the file input was not read: {info:?}"));
