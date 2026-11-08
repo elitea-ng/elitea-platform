@@ -47,7 +47,7 @@ func agentToolsSection() map[string]any {
 				"key":   platformconfig.KeyAgentsMaxToolLimit,
 				"type":  "integer",
 				"title": "Maximum Calls of One Tool",
-				"description": fmt.Sprintf("The most calls of any one tool in a run, whatever the agent's own "+
+				"description": fmt.Sprintf("The most calls of any one toolkit tool in a turn, whatever the agent's own "+
 					"limits say. 0 (the default) sets no limit beyond the run caps. From 0 to %d.",
 					platformconfig.MaxAgentsMaxToolLimit),
 				"section": section,
@@ -61,7 +61,8 @@ func agentToolsSection() map[string]any {
 				"items": map[string]any{"type": "string"},
 				"title": "Tools That Write, Allowed Unattended",
 				"description": "Tools that change something and that an agent may still use with nobody present, " +
-					"as \"toolkit/tool\" (\"toolkit/*\" for every tool of a toolkit). Read-only tools need no " +
+					"as \"toolkit type/tool\", for example \"github/create_comment\" (\"github/*\" for every tool " +
+					"of the type). The toolkit is matched by its type, never by its name. Read-only tools need no " +
 					"entry. A tool that writes and is not listed is never used unattended, even when the " +
 					"agent's own unattended tools name it. Empty (the default) allows none.",
 				"section":  section,

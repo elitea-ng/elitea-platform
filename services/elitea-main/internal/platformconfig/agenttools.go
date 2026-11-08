@@ -4,10 +4,10 @@ import (
 	"context"
 	"math"
 	"slices"
-	"strings"
-	"unicode"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 )
 
 // SectionAgents is the platform's ceilings on the per-agent tool envelope
@@ -78,14 +78,10 @@ func AgentToolSettingsFromValues(values Values) AgentToolSettings {
 }
 
 // ValidAgentToolKey reports a "<toolkit>/<tool>" key, the tool part "*" for
-// every tool of the toolkit (the toolenvelope key rule).
+// every tool of the toolkit (the toolenvelope key rule). The worker matches
+// an allowlist key by the toolkit's type.
 func ValidAgentToolKey(key string) bool {
-	if key == "" || len(key) > 512 || strings.ContainsFunc(key, unicode.IsControl) {
-		return false
-	}
-	toolkit, tool, found := strings.Cut(key, "/")
-	return found && strings.TrimSpace(toolkit) != "" && strings.TrimSpace(tool) != "" &&
-		!strings.Contains(tool, "/") && (tool == "*" || !strings.Contains(tool, "*"))
+	return toolenvelope.ValidKey(key)
 }
 
 // ValidAgentsMaxToolLimit reports a whole number from 0 to

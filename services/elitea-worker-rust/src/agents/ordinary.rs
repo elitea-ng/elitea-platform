@@ -561,17 +561,14 @@ impl OrdinaryNativeAgentAssembler {
                 let facade = Arc::clone(&self.model_facade);
                 let context = Arc::clone(&context);
                 let model_project_id = profile.model_project_id();
-                // ADR-0050 decision 3: the agent's `subagent_tools`, over its
-                // toolkits; without them a child keeps the read-only rule.
-                let grant = profile
-                    .tool_envelope()
-                    .filter(|envelope| envelope.grants_subagent_tools())
-                    .map(|envelope| {
-                        elitea_agent_runtime::tool_envelope::SubAgentGrant::new(
-                            envelope.clone(),
-                            toolkit_kinds(&tool_snapshot),
-                        )
-                    });
+                // ADR-0050 decision 3: the agent's `subagent_tools` over its
+                // toolkits (without them a child keeps the read-only rule).
+                // The toolkit types are lent either way, so a `profile.tools`
+                // key can name a toolkit by its type.
+                let grant = elitea_agent_runtime::tool_envelope::SubAgentGrant::new(
+                    profile.tool_envelope().cloned().unwrap_or_default(),
+                    toolkit_kinds(&tool_snapshot),
+                );
                 runtime.with_subagents(move |toolsets, excluded| {
                     super::subagents::toolset(
                         super::subagents::WorkerSubAgents {

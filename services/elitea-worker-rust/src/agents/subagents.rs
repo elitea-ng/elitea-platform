@@ -113,20 +113,18 @@ impl SubAgentHost for WorkerSubAgents {
 /// whole of what it is told.
 /// Every child counts one level of the run's delegation depth from
 /// `delegation` (ADR-0044 decision 3).
-/// With `grant` (the agent's `subagent_tools`, ADR-0050 decision 3), a
-/// child is offered the tools it names, writes included; without it, the
+/// `grant` is the agent's `subagent_tools` (ADR-0050 decision 3): a child
+/// is offered the tools it names, writes included; without them, the
 /// read-only tools.
 pub(crate) fn toolset(
     host: WorkerSubAgents,
     excluded: Vec<String>,
     delegation: DelegationScope,
-    grant: Option<SubAgentGrant>,
+    grant: SubAgentGrant,
 ) -> Arc<dyn Toolset> {
-    let mut config = SubAgentConfig::new("")
+    let config = SubAgentConfig::new("")
         .with_excluded_tools(excluded)
-        .with_delegation(delegation);
-    if let Some(grant) = grant {
-        config = config.with_grant(grant);
-    }
+        .with_delegation(delegation)
+        .with_grant(grant);
     SubAgents::new(Arc::new(host), config).toolset()
 }

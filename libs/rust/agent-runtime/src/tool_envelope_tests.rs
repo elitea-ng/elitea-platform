@@ -157,6 +157,14 @@ fn tool_limits_take_the_lowest_of_every_match_and_the_ceiling() {
     // covers a tool the author did not name.
     assert_eq!(ceiling.limit_for(&reference("create_issue")), Some(5));
     assert_eq!(ceiling.limit_for(&reference("get_issue")), Some(5));
+    // The ceiling is for toolkit tools: a platform tool (no toolkit type)
+    // such as the planner or `wait_agent` is not capped by it.
+    let platform_tool = ToolRef {
+        toolkit_name: "elitea_subagents",
+        toolkit_type: None,
+        tool_name: "wait_agent",
+    };
+    assert_eq!(ceiling.limit_for(&platform_tool), None);
 }
 
 #[tokio::test]
@@ -234,6 +242,19 @@ fn unattended_tools_only_narrow_and_writes_need_the_platform_allowlist() {
     };
     let (kept, ..) = retain_unattended(github(), &envelope(&only_allowlist), &kinds());
     assert!(kept.is_empty(), "an empty list allows no tool");
+    // The allowlist names a toolkit by its type: an author cannot meet it
+    // by naming a toolkit of another type after the allowed one.
+    let by_name = ToolEnvelopeInput {
+        unattended_tools: vec!["gh/create_comment".to_owned()],
+        unattended_tools_set: true,
+        unattended_tools_allowlist: vec!["gh/create_comment".to_owned()],
+        ..ToolEnvelopeInput::default()
+    };
+    let (kept, ..) = retain_unattended(github(), &envelope(&by_name), &kinds());
+    assert!(
+        kept.is_empty(),
+        "an allowlist key never matches a toolkit name"
+    );
 }
 
 #[test]

@@ -247,7 +247,12 @@ impl SubAgentTool {
         let filter = if isolated {
             "isolated".to_owned()
         } else {
-            match (self.registry.grant.as_ref(), requested) {
+            let grant = self
+                .registry
+                .grant
+                .as_ref()
+                .filter(|grant| grant.grants_writes());
+            match (grant, requested) {
                 (None, None) => "read_only".to_owned(),
                 (grant, requested) => {
                     let granted = grant.map(|grant| grant.granted_keys().join(","));

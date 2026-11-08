@@ -25,7 +25,7 @@ A key is `toolkit/tool`. The toolkit part is the toolkit's name in the agent, or
 
 ## Per-tool limits
 
-`tool_limits` maps a key to the most calls of the tool in one turn, from 1 to 10000. When several keys match a tool, the lowest limit applies. The platform's **Maximum Calls of One Tool** applies too, even to a tool the agent does not name. The call past the limit does not run. The model gets the error `tool_limit_reached` and can go on without the tool.
+`tool_limits` maps a key to the most calls of the tool in one turn, from 1 to 10000. When several keys match a tool, the lowest limit applies. The platform's **Maximum Calls of One Tool** applies too, to every toolkit tool, even one the agent does not name; the platform's own tools (the planner, sub-agents, attachments) are not capped by it. The call past the limit does not run. The model gets the error `tool_limit_reached` and can go on without the tool.
 
 The limit counts the calls of one turn. A run cap ([Run caps](/admin/enterprise-controls/runtime-safety#run-caps)) still bounds the whole run.
 
@@ -34,13 +34,13 @@ The limit counts the calls of one turn. A run cap ([Run caps](/admin/enterprise-
 When another agent hands an agent the floor, nobody waits on its turn (see [Several agents in a chat](/menus/chat)). Such a turn binds:
 
 - without `unattended_tools`: the agent's read-only tools;
-- with it: the tools it names. A tool that writes stays out unless the platform's **Tools That Write, Allowed Unattended** names it too.
+- with it: the tools it names. A tool that writes stays out unless the platform's **Tools That Write, Allowed Unattended** names it too. That list names a toolkit by its type, never by the name you gave it.
 
 An empty list binds no tool.
 
 ## Sub-agent tools
 
-A sub-agent that the agent starts with `spawn_agent` gets:
+A sub-agent that the agent starts with `spawn_agent` calls a limited tool through the agent's own counter, so a limit holds across the agent and its sub-agents. It gets:
 
 - without `subagent_tools`: the agent's read-only tools;
 - with it: the tools it names, writes included.

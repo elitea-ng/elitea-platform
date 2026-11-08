@@ -10,7 +10,7 @@
 //! - [`ToolEnvelope::admits_unattended`]: whether a turn nobody waits on (an
 //!   agent-to-agent turn) may bind the tool. Without `unattended_tools`, the
 //!   read-only tools. With it, the tools it names, and a tool that writes
-//!   only when the platform's allowlist names it too.
+//!   only when the platform's allowlist names it too (by toolkit type).
 //! - [`ToolEnvelope::admits_subagent`]: whether a sub-agent may be given the
 //!   tool. Without `subagent_tools`, the read-only tools (the rule before
 //!   the envelope). With it, the tools it names, writes included.
@@ -21,8 +21,9 @@
 //! tool kept here still asks for every approval it asked for before.
 //!
 //! A tool key is `<toolkit>/<tool>`: the toolkit by its name in the agent or
-//! by its type, and `*` for every tool of the toolkit. Matching ignores case
-//! and surrounding space.
+//! by its type, and `*` for every tool of the toolkit. A key of the
+//! platform's allowlist names the toolkit by its type only. Matching ignores
+//! case and surrounding space.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -99,15 +100,26 @@ impl ToolKey {
     }
 
     fn matches(&self, tool: &ToolRef<'_>) -> bool {
-        let toolkit_matches = self.toolkit == tool.toolkit_name.trim().to_lowercase()
-            || tool
-                .toolkit_type
-                .is_some_and(|kind| self.toolkit == kind.trim().to_lowercase());
-        toolkit_matches
-            && self
-                .tool
-                .as_ref()
-                .is_none_or(|name| *name == tool.tool_name.trim().to_lowercase())
+        (self.toolkit == tool.toolkit_name.trim().to_lowercase() || self.matches_type(tool))
+            && self.matches_tool(tool)
+    }
+
+    /// A platform key: the toolkit by its type only, never by the name the
+    /// agent's author gave it, so an author cannot meet an administrator's
+    /// key by naming a toolkit after it.
+    fn matches_by_type(&self, tool: &ToolRef<'_>) -> bool {
+        self.matches_type(tool) && self.matches_tool(tool)
+    }
+
+    fn matches_type(&self, tool: &ToolRef<'_>) -> bool {
+        tool.toolkit_type
+            .is_some_and(|kind| self.toolkit == kind.trim().to_lowercase())
+    }
+
+    fn matches_tool(&self, tool: &ToolRef<'_>) -> bool {
+        self.tool
+            .as_ref()
+            .is_none_or(|name| *name == tool.tool_name.trim().to_lowercase())
     }
 }
 
@@ -208,7 +220,9 @@ impl ToolEnvelope {
     }
 
     /// The most calls of `tool` in one turn: the lowest matching limit and
-    /// the platform's ceiling. `None` is no per-tool limit.
+    /// the platform's ceiling. `None` is no per-tool limit. The ceiling
+    /// covers configured toolkits' tools (a tool with a toolkit type), not
+    /// the platform's own tools (the planner, sub-agents, attachments).
     #[must_use]
     pub fn limit_for(&self, tool: &ToolRef<'_>) -> Option<u32> {
         let own = self
@@ -217,7 +231,8 @@ impl ToolEnvelope {
             .filter(|(key, _)| key.matches(tool))
             .map(|(_, calls)| *calls)
             .min();
-        let ceiling = (self.max_tool_limit > 0).then_some(self.max_tool_limit);
+        let ceiling =
+            (self.max_tool_limit > 0 && tool.toolkit_type.is_some()).then_some(self.max_tool_limit);
         match (own, ceiling) {
             (Some(own), Some(ceiling)) => Some(own.min(ceiling)),
             (own, ceiling) => own.or(ceiling),
@@ -235,7 +250,7 @@ impl ToolEnvelope {
                         || self
                             .unattended_allowlist
                             .iter()
-                            .any(|key| key.matches(tool)))
+                            .any(|key| key.matches_by_type(tool)))
             }
         }
     }
