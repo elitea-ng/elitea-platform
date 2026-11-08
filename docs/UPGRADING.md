@@ -4,6 +4,27 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: Moli layout refresh and a wider auto trigger (#1599, ADR-0049)
+
+No migration or configuration change; `platformconfig.BrowserLiteAdmitted`
+stays false, so `lite` and `auto` are still not offered to projects.
+
+- On Moli (`lite`, and `auto` before a switch) the browser session agent now
+  takes a one-pixel screenshot before it reads an element's box, waits for
+  text, reads the text snapshot or probes the page for `auto`. Moli
+  publishes layout only for a paint, so clicks after a scroll landed off the
+  page and text the page added was missing. Chrome (`full`) is unchanged.
+- A click whose element centre is still outside the viewport uses the
+  element's own activation instead of a mouse press, on both engines.
+- A whole tree snapshot with no ref while requests are still in flight waits
+  up to 3 seconds for network idle and reads once more, on both engines. A
+  snapshot of a booting app can take up to 3 seconds longer.
+- `auto` also leaves Moli (`empty_snapshot`) when a zero-ref snapshot is over
+  custom elements the page never defined.
+- Bake-off corpus revision 4: `atlassian-status-history` is replaced by
+  `atlassian-agile-kanban`. Compare bake-off reports only within one
+  revision.
+
 ## Mobile app identity from the brand manifest: `ai.elitea.app` (#1681, ADR-0052 W1a)
 
 The mobile app's identifiers now come from `brand/elitea/brand.json`, and its

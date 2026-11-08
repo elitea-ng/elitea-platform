@@ -275,13 +275,6 @@ async fn run_task(session: &Session, task: &Value) -> Outcome {
             );
         };
         if result["status"] != "ok" {
-            if std::env::var_os("ELITEA_CDP_TRACE").is_some() {
-                let text_args = json!({ "mode": "text", "max_chars": 600 });
-                let text = content(
-                    &call(session, spec::BROWSER_SNAPSHOT, &text_args, &mut switched).await,
-                );
-                eprintln!("bakeoff-diag step failed {step}: {result} page: {text}");
-            }
             return fail(
                 format!("step {step}: {}", result["code"]),
                 refs,
@@ -465,10 +458,7 @@ async fn forward_proxy() -> String {
 }
 
 async fn measure(engines: &Engines, proxy: &str, engine: &str, task: &Value) -> Value {
-    let session = Arc::new(Session::with_engines(
-        engines.clone(),
-        std::env::var_os("ELITEA_CDP_TRACE").is_some(),
-    ));
+    let session = Arc::new(Session::with_engines(engines.clone(), false));
     let start = Start {
         engine: engine.to_owned(),
         // The runner is the session image under gVisor: the production
