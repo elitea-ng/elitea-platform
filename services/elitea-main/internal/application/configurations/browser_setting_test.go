@@ -1,7 +1,9 @@
 package configurations
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -49,19 +51,37 @@ func TestNormalizeBrowserSetting(t *testing.T) {
 	}
 }
 
-// Until the bake-off admits Moli only `full` is accepted; once admitted the
-// stored engine is kept.
+// The bake-off admitted `auto` and not `lite` (ADR-0049 appendix, run
+// 42513255705): a project may store `full` or `auto`, and `lite` is refused
+// with the message naming the appendix. Once lite is admitted the stored
+// engine is kept.
 func TestBrowserSettingEnginesFollowAdmission(t *testing.T) {
 	t.Parallel()
-	if platformconfig.BrowserLiteAdmitted {
-		t.Fatal("lite is admitted without a recorded bake-off appendix")
+	if !platformconfig.BrowserAutoAdmitted || platformconfig.BrowserLiteAdmitted {
+		t.Fatal("the admission no longer matches the recorded ADR-0049 appendix (auto admitted, lite not)")
 	}
-	for _, engine := range []string{"lite", "auto"} {
-		if _, err := normalizeBrowserSetting(map[string]any{"engine": engine}); err == nil {
-			t.Errorf("%s accepted before admission", engine)
+	for _, engine := range []string{"full", "auto"} {
+		normalized, err := normalizeBrowserSetting(map[string]any{"engine": engine})
+		if err != nil || normalized["engine"] != engine {
+			t.Errorf("%s: normalized=%v err=%v", engine, normalized, err)
 		}
 	}
-	admitted := platformconfig.BrowserEngines(true)
+	_, err := normalizeBrowserSetting(map[string]any{"engine": "lite"})
+	var refusal *CurrentConfigurationMutationError
+	if !errors.As(err, &refusal) || refusal.Code != CurrentConfigurationMutationEngineNotAdmitted ||
+		refusal.Field != "data.engine" {
+		t.Fatalf("lite: err = %v, want engine_not_admitted on data.engine", err)
+	}
+	if !strings.Contains(BrowserEngineNotAdmittedMessage, "ADR-0049") ||
+		!strings.Contains(BrowserEngineNotAdmittedMessage, "Appendix A") {
+		t.Fatalf("the refusal does not name the appendix: %q", BrowserEngineNotAdmittedMessage)
+	}
+	// A value that is no engine at all stays a plain invalid field.
+	_, err = normalizeBrowserSetting(map[string]any{"engine": "turbo"})
+	if !errors.As(err, &refusal) || refusal.Code != CurrentConfigurationMutationInvalid {
+		t.Fatalf("turbo: err = %v, want invalid", err)
+	}
+	admitted := platformconfig.BrowserEngines(platformconfig.BrowserAdmission{Auto: true, Lite: true})
 	for _, engine := range []string{"full", "lite", "auto"} {
 		normalized, err := normalizeBrowserSettingFor(map[string]any{"engine": engine}, admitted)
 		if err != nil || normalized["engine"] != engine {
@@ -70,6 +90,18 @@ func TestBrowserSettingEnginesFollowAdmission(t *testing.T) {
 	}
 	if _, err := normalizeBrowserSettingFor(map[string]any{"engine": "turbo"}, admitted); err == nil {
 		t.Error("an unknown engine was accepted")
+	}
+}
+
+// The served schema offers exactly the admitted engines.
+func TestBrowserSettingSchemaOffersTheAdmittedEngines(t *testing.T) {
+	t.Parallel()
+	if got, want := platformconfig.BrowserEngines(platformconfig.AdmittedBrowserEngines), []string{"full", "auto"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("engines = %v, want %v", got, want)
+	}
+	if got := browserEngineDescription(platformconfig.AdmittedBrowserEngines); strings.Contains(got, "lite") ||
+		!strings.Contains(got, "auto") {
+		t.Fatalf("description = %q", got)
 	}
 }
 

@@ -11,8 +11,10 @@ import (
 // decisions 3 and 5, #1596): one tenant configuration row with type
 // `browser` in section `project_settings`. `enabled` (default false) lets the
 // project's runs use the cloud browser. `engine` is the browser engine:
-// `full` until the ADR-0049 bake-off admits Moli
-// (platformconfig.BrowserLiteAdmitted), then `full`, `lite` or `auto`. `allow_domains` is a list in the egresslib grammar that
+// one of the engines the ADR-0049 bake-off admitted
+// (platformconfig.BrowserEngines): `full` or `auto` today; `lite` is refused
+// with CurrentConfigurationMutationEngineNotAdmitted until a re-run admits
+// Moli alone (platformconfig.BrowserLiteAdmitted). `allow_domains` is a list in the egresslib grammar that
 // the browser may reach when its egress token has an allowlist. It takes the
 // `models.project_settings.edit` gate of the other project settings.
 const (
@@ -20,6 +22,9 @@ const (
 	BrowserSection           = "project_settings"
 	// BrowserEngineFull is the default engine (platformconfig.BrowserEngineFull).
 	BrowserEngineFull = platformconfig.BrowserEngineFull
+	// BrowserEngineNotAdmittedMessage is the API message of
+	// CurrentConfigurationMutationEngineNotAdmitted.
+	BrowserEngineNotAdmittedMessage = platformconfig.BrowserEngineNotAdmittedMessage
 	// MaxBrowserAllowDomains is the most entries of `allow_domains`.
 	MaxBrowserAllowDomains = 128
 )
@@ -35,7 +40,7 @@ func (catalog *CurrentAvailableCatalog) addBrowserProjectSetting() error {
 	if !ok {
 		return ErrInvalidCurrentAvailableSnapshot
 	}
-	admitted := platformconfig.BrowserLiteAdmitted
+	admitted := platformconfig.AdmittedBrowserEngines
 	var schema map[string]any
 	if err := json.Unmarshal(catalog.entries[template].ConfigSchema, &schema); err != nil {
 		return ErrInvalidCurrentAvailableSnapshot
@@ -90,20 +95,30 @@ func (catalog *CurrentAvailableCatalog) addBrowserProjectSetting() error {
 	return nil
 }
 
-func browserEngineDescription(admitted bool) string {
-	if admitted {
+func browserEngineDescription(admitted platformconfig.BrowserAdmission) string {
+	switch {
+	case admitted.Lite && admitted.Auto:
 		return "The browser engine: full (Chrome), lite (Moli, smaller and faster on read pages) " +
 			"or auto (Moli first, Chrome when a page needs it)."
+	case admitted.Auto:
+		return "The browser engine: full (Chrome) or auto (Moli first, smaller and faster on read pages; " +
+			"Chrome when a page needs it)."
+	case admitted.Lite:
+		return "The browser engine: full (Chrome) or lite (Moli, smaller and faster on read pages)."
+	default:
+		return "The browser engine. Only full is available."
 	}
-	return "The browser engine. Only full is available."
 }
 
 // normalizeBrowserSetting keeps `enabled` (default false), `engine` (one of
 // the admitted engines, default `full`) and `allow_domains` (every entry
 // valid in the egresslib grammar, at most MaxBrowserAllowDomains, duplicates
-// removed). Other keys are dropped.
+// removed). Other keys are dropped. A known engine the bake-off did not
+// admit (`lite` today) is refused with
+// CurrentConfigurationMutationEngineNotAdmitted, which names the ADR-0049
+// appendix; any other value is invalid.
 func normalizeBrowserSetting(data map[string]any) (map[string]any, error) {
-	return normalizeBrowserSettingFor(data, platformconfig.BrowserEngines(platformconfig.BrowserLiteAdmitted))
+	return normalizeBrowserSettingFor(data, platformconfig.BrowserEngines(platformconfig.AdmittedBrowserEngines))
 }
 
 // normalizeBrowserSettingFor is normalizeBrowserSetting over a given set of
@@ -122,8 +137,11 @@ func normalizeBrowserSettingFor(data map[string]any, engines []string) (map[stri
 	}
 	if raw, present := data["engine"]; present && raw != nil {
 		engine, ok := raw.(string)
-		if !ok || !slices.Contains(engines, engine) {
+		if !ok || !platformconfig.IsBrowserEngine(engine) {
 			return nil, currentLocalConfigurationFieldError("data.engine")
+		}
+		if !slices.Contains(engines, engine) {
+			return nil, currentMutationFieldError(CurrentConfigurationMutationEngineNotAdmitted, "data.engine")
 		}
 		normalized["engine"] = engine
 	}

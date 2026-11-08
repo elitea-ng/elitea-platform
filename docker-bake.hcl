@@ -266,11 +266,13 @@ target "elitea-browser-session" {
 }
 
 # The cloud browser's `lite` session image (ADR-0049 decision 2, #1599): the
-# session image plus Moli at a pinned, checksum-verified version, for `lite`
-# and `auto` sessions. Built, not published: it ships only once the bake-off
-# admits Moli (platformconfig.BrowserLiteAdmitted), and the change that
-# admits it adds the publish entries and drops it from UNPUBLISHED in
-# scripts/ci/image-matrix.sh. The bake-off workflow builds it.
+# session image plus Moli at a pinned, checksum-verified version, for `auto`
+# sessions (Moli first, Chrome on engine loss) and, once admitted, `lite`
+# ones. Published since the bake-off admitted `auto` (ADR-0049 Appendix A,
+# platformconfig.BrowserAutoAdmitted); `lite` alone is still not admitted
+# (platformconfig.BrowserLiteAdmitted). The chart pins it by digest
+# (sandboxKubernetes.browserSessions.profile.liteImage). The bake-off
+# workflow builds it too.
 target "elitea-browser-session-lite" {
   context    = "."
   dockerfile = "libs/rust/browser-session/Containerfile"

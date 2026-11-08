@@ -139,6 +139,12 @@ test('RES03: Help Center content is identical across projects', async ({ page })
   const before = await helpCenterRoot().innerText();
 
   await ensureProjectSelected(page, PUBLISH_AUTHOR_PROJECT_NAME);
+  // The switch is a `window.location.replace()` still in flight when
+  // `ensureProjectSelected` returns; a `goto` over it is two main-frame
+  // navigations racing, which WebKit fails with "WebKit encountered an
+  // internal error" (PR 1812's webkit-3of3). Same wait as
+  // `settings.project-context.spec.ts`'s `gotoProjectParams`.
+  await page.waitForLoadState('load').catch(() => {});
   await gotoHelpCenter(page);
   const afterSwitch = await helpCenterRoot().innerText();
   expect(afterSwitch).toBe(before);

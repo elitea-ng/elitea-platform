@@ -366,7 +366,7 @@ describe('#830 — a logout must not sign out every other worker', () => {
 
   it('J4 signs in through the provider before it signs out', () => {
     const source = read(REDIRECT_SPEC);
-    expect(source).toContain("signInThroughOidc(page, 'e2e-member@autotest.local')");
+    expect(source).toContain("signInThroughOidc(page, 'e2e-member@autotest.local'");
     expect(source).toContain("browser.newContext({ storageState: undefined })");
   });
 
