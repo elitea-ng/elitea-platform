@@ -200,6 +200,34 @@ pub fn linux_app_id(desktop_id: Option<&str>, executable: &str) -> Option<String
     (!base.is_empty()).then(|| base.to_owned())
 }
 
+/// The longest name the kernel keeps in `/proc/<pid>/comm`
+/// (`TASK_COMM_LEN` - 1): a name this long may have been cut.
+const COMM_MAX: usize = 15;
+
+/// The executable name a Linux application's id falls back to when it has
+/// no desktop entry ([`linux_app_id`]), never its display name. `exe_link`
+/// is the target of `/proc/<pid>/exe`; `listed` is the name the adapter
+/// lists the process under (the same basename, else `comm`). A `comm` the
+/// kernel may have cut (15 bytes) is not trusted, since `gnome-terminal-`
+/// must not slip past `gnome-terminal-server`: with no readable link the
+/// id is then `None`, and an application with no id cannot be named by a
+/// call.
+#[must_use]
+pub fn linux_executable_name(exe_link: Option<&str>, listed: &str) -> Option<String> {
+    let base = |path: &str| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        name.strip_suffix(" (deleted)")
+            .unwrap_or(name)
+            .trim()
+            .to_owned()
+    };
+    if let Some(name) = exe_link.map(base).filter(|n| !n.is_empty()) {
+        return Some(name);
+    }
+    let listed = base(listed);
+    (!listed.is_empty() && listed.len() < COMM_MAX).then_some(listed)
+}
+
 /// Whether `id` names an application `open_app` may launch on `os`. Never
 /// a path, a command line or an argument: on macOS a bundle id; on Windows
 /// an image name ending in `.exe` (resolved by the vendor in the system
@@ -754,6 +782,43 @@ mod tests {
         );
         assert_eq!(linux_app_id(Some(""), "xterm").as_deref(), Some("xterm"));
         assert_eq!(linux_app_id(None, ""), None);
+    }
+
+    #[test]
+    fn a_linux_app_without_a_desktop_entry_is_named_by_its_executable() {
+        // xterm and foot have no desktop entry on many systems: their id is
+        // the executable, so the deny entries match.
+        for (link, listed, want) in [
+            (Some("/usr/bin/xterm"), "XTerm", Some("xterm")),
+            (Some("/usr/bin/foot"), "foot", Some("foot")),
+            (
+                Some("/usr/libexec/gnome-terminal-server"),
+                "gnome-terminal-",
+                Some("gnome-terminal-server"),
+            ),
+            // A binary replaced by a package upgrade while it runs.
+            (Some("/usr/bin/kitty (deleted)"), "kitty", Some("kitty")),
+            // No readable link: the listed name, unless the kernel may have
+            // cut it.
+            (None, "xterm", Some("xterm")),
+            (None, "gnome-terminal-", None),
+            (Some(""), "", None),
+        ] {
+            assert_eq!(
+                linux_executable_name(link, listed).as_deref(),
+                want,
+                "{link:?} {listed:?}"
+            );
+        }
+        let id = |link, listed| {
+            linux_app_id(
+                None,
+                &linux_executable_name(link, listed).unwrap_or_default(),
+            )
+        };
+        assert!(id(Some("/usr/bin/xterm"), "XTerm").is_some_and(|i| is_denied_app(Os::Linux, &i)));
+        assert!(id(Some("/usr/bin/foot"), "Foot").is_some_and(|i| is_denied_app(Os::Linux, &i)));
+        assert_eq!(id(None, "gnome-terminal-"), None);
     }
 
     #[test]

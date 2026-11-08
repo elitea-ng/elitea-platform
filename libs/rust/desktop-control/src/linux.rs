@@ -3,8 +3,9 @@
 //! the portals), behind the shared engine (`engine.rs`).
 //!
 //! - **Application ids** are desktop entry ids (`org.gnome.TextEditor`),
-//!   or the application's name when it has none
-//!   ([`crate::platform::linux_app_id`]). `open_app` takes either; the
+//!   or the executable's own name when it has none (`xterm`, read from
+//!   `/proc/<pid>/exe`; [`crate::platform::linux_app_id`],
+//!   [`crate::platform::linux_executable_name`]). `open_app` takes either; the
 //!   vendor never launches a path outside the XDG data directories.
 //! - **The screen** ([`screen`], decided by
 //!   [`crate::platform::linux_screen_status`]): no display, a logind session
@@ -65,8 +66,14 @@ impl Default for NativeDriver {
     }
 }
 
+/// The desktop entry id, else the executable's own name read from
+/// `/proc/<pid>/exe` ([`platform::linux_executable_name`]), never the
+/// display name.
 fn app_id(app: &ad::AppInfo) -> Option<String> {
-    platform::linux_app_id(app.bundle_id.as_deref(), &app.name)
+    let link = std::fs::read_link(format!("/proc/{}/exe", app.pid.get())).ok();
+    let link = link.as_deref().and_then(std::path::Path::to_str);
+    let executable = platform::linux_executable_name(link, &app.name).unwrap_or_default();
+    platform::linux_app_id(app.bundle_id.as_deref(), &executable)
 }
 
 /// Why the user-active guard cannot run in this session, or `None` on a
