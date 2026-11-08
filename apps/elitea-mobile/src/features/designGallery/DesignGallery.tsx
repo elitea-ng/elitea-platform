@@ -2,7 +2,7 @@ import { router, Stack } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { DesignProvider, useDesign } from '@/design/DesignProvider';
 import type { BrandInput } from '@/design/brand';
 import type { SchemePreference } from '@/design/resolve';
@@ -275,8 +275,8 @@ function GalleryBody({
           <View style={styles.row}>
             <Avatar kind="agent" name="Research" mark size={48} />
             <Avatar kind="agent" name="HR helper" size={48} />
-            <EliteaMark size={96} decorative />
-            <EliteaMark size={80} decorative />
+            <BrandMark size={96} decorative />
+            <BrandMark size={80} decorative />
           </View>
           <View style={styles.row}>
             <Badge count={3} />

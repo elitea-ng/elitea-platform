@@ -453,7 +453,7 @@ describe('empty state (§4.9)', () => {
     expect(onPress).toHaveBeenCalled();
     expect(screen.queryByRole('image')).toBeNull();
     const { toJSON } = await inScheme(<EmptyState mark="none" title="Something went wrong" />);
-    expect(JSON.stringify(toJSON())).not.toContain('elitea-mark');
+    expect(JSON.stringify(toJSON())).not.toContain('brand-mark');
   });
 });
 

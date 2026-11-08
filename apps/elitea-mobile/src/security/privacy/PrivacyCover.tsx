@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { identity } from '@/config/identity';
 import { coverVisible } from '@/security/privacy/privacyProtection';
 import { GradientBackground, Text } from '@/ui';
@@ -27,7 +27,7 @@ export function PrivacyCover() {
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.cover]}>
       <GradientBackground style={styles.center}>
-        <EliteaMark size={96} decorative />
+        <BrandMark size={96} decorative />
         <Text variant="title3" tone="secondary" emphasized>
           {identity.displayName}
         </Text>

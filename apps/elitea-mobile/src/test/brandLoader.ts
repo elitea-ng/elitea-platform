@@ -15,7 +15,7 @@ const { join, relative, resolve, sep } = require('node:path') as {
   resolve(...p: string[]): string;
   sep: string;
 };
-const { existsSync } = require('node:fs') as { existsSync(p: string): boolean };
+const { existsSync, readFileSync } = require('node:fs') as { existsSync(p: string): boolean; readFileSync(p: string, enc: 'utf8'): string };
 const { pathToFileURL } = require('node:url') as { pathToFileURL(p: string): { href: string } };
 declare const __dirname: string;
 declare const process: { env: Record<string, string | undefined>; execPath: string };
@@ -32,6 +32,7 @@ interface LoadedBrand {
   assetsDir: string;
   path(rel: string): string;
   has(rel: string): boolean;
+  readText(rel: string): string;
   relativeTo(from: string, rel: string): string;
 }
 
@@ -41,11 +42,12 @@ const b = loadBrand();
 process.stdout.write(JSON.stringify({ dir: b.dir, id: b.id, manifest: b.manifest, assetsDir: b.assetsDir }));`;
   const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' });
   const brand = JSON.parse(out) as Omit<LoadedBrand, 'path' | 'has' | 'relativeTo'>;
-  // The same three helpers as load.mjs, over the folder the real loader resolved.
+  // The same helpers as load.mjs, over the folder the real loader resolved.
   return {
     ...brand,
     path: (rel: string) => join(brand.dir, rel),
     has: (rel: string) => existsSync(join(brand.dir, rel)),
+    readText: (rel: string) => readFileSync(join(brand.dir, rel), 'utf8'),
     relativeTo: (from: string, rel: string) => {
       const p = relative(from, join(brand.dir, rel)).split(sep).join('/');
       return p.startsWith('.') ? p : `./${p}`;

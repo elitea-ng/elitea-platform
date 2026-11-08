@@ -8,6 +8,7 @@ import { deviceAuth } from '@/security/lock/deviceAuth';
 import { LockController, type LockState } from '@/security/lock/lockController';
 import { getPolicy, subscribePolicy } from '@/security/policy';
 import { isSwitchingWorkspace, onWorkspaceSwitch } from '@/state/workspace';
+import { identity } from '@/config/identity';
 
 /** The app's one lock controller. */
 export const lockController = new LockController({
@@ -18,7 +19,7 @@ export const lockController = new LockController({
   // A switch resets the policy to the strict defaults in passing: not a tightening.
   isSessionEnding: () => isEndingSession() || isSuspendingWorkspace() || isSwitchingWorkspace(),
   onLockedChange: (locked) => appActivity.setLocked(locked),
-  promptMessage: 'Unlock Elitea AI',
+  promptMessage: `Unlock ${identity.displayName}`,
 });
 
 // A server policy change (token response, discovery) applies immediately.

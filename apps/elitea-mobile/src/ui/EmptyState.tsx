@@ -1,6 +1,6 @@
 import { StyleSheet, View, type ViewProps } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { useDesign } from '@/design/DesignProvider';
 
 import { Button } from './Button';
@@ -29,7 +29,7 @@ export function EmptyState({ title, body, action, mark = 'large', style }: Empty
   const variant = mark === 'none' ? null : design.accessibilityLayout ? 'small' : mark;
   return (
     <View style={[styles.wrap, { padding: design.space.screenGutter }, style]}>
-      {variant ? <EliteaMark size={variant === 'large' ? 96 : 64} decorative testID="elitea-mark" /> : null}
+      {variant ? <BrandMark size={variant === 'large' ? 96 : 64} decorative testID="brand-mark" /> : null}
       <Text variant="title2" heading style={styles.center}>
         {title}
       </Text>

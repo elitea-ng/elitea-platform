@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { MaxContentWidth } from '@/constants/theme';
 import { useDesign } from '@/design/DesignProvider';
 import { ButtonAlignmentContext, GradientBackground, Text } from '@/ui';
@@ -28,7 +28,7 @@ export function StatusScreen({
   const content = (
     <View style={[styles.container, { padding: design.space.screenGutter }]}>
       <View style={styles.content}>
-        {mark ? <EliteaMark size={mark === 'large' && !design.accessibilityLayout ? 96 : 72} decorative /> : null}
+        {mark ? <BrandMark size={mark === 'large' && !design.accessibilityLayout ? 96 : 72} decorative /> : null}
         {busy ? <ActivityIndicator size="large" color={design.colors.accent} /> : null}
         {title ? (
           <Text variant="title2" heading style={styles.center}>

@@ -40,6 +40,8 @@ export interface Brand {
   path(rel: string): string;
   /** Whether a file in the brand folder exists. */
   has(rel: string): boolean;
+  /** A file of the brand folder as UTF-8 text. */
+  readText(rel: string): string;
   /** A brand folder file as a `/`-separated path relative to the directory `from`. */
   relativeTo(from: string, rel: string): string;
 }

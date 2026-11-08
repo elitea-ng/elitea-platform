@@ -14,6 +14,11 @@ const { loadBrand, REPO_ROOT } = require('../../scripts/brand/load.mjs') as type
 const brand = loadBrand();
 const manifest = brand.manifest;
 
+/** A text file of the brand folder, trimmed (the loader reads; nothing here opens files). */
+function readBrandText(rel: string): string {
+  return brand.readText(rel).trim();
+}
+
 /**
  * A brand folder file as a path relative to this app (`../../brand/elitea/...`): the
  * config, and the native fingerprint EAS Update matches on, then hold no machine path.
@@ -69,6 +74,12 @@ const identity = {
   appGroup: manifest.mobile.appGroup,
   /** The widget extension's bundle id (home-screen and lock-screen widgets, Live Activities). */
   widgetBundleId: manifest.mobile.widgetBundleId,
+  /**
+   * The brand's mark (`assets/logo/logo-mark.svg`) as markup, drawn by `<BrandMark>`: the
+   * app's own identity on the welcome, lock, About and empty screens. brand-check holds it to
+   * an SVG with a viewBox.
+   */
+  markSvg: readBrandText('assets/logo/logo-mark.svg'),
 };
 
 export type AppIdentity = typeof identity;

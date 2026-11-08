@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
 import { EntryScreen } from '@/features/entry/EntryScreen';
@@ -92,9 +92,9 @@ export function ConnectWelcome({
       }>
       <View style={styles.hero}>
         {adding ? null : compact ? (
-          <EliteaMark size={96} decorative />
+          <BrandMark size={96} decorative />
         ) : (
-          <EliteaMark size={heroWidth} decorative />
+          <BrandMark size={heroWidth} decorative />
         )}
         <Text variant="title1" heading style={styles.center}>
           {adding ? 'Add a workspace' : `Meet ${identity.displayName}`}

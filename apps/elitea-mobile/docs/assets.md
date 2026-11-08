@@ -10,8 +10,9 @@ is never recoloured with the workspace brand.
 
 ## In the app
 
-The mark is drawn as vector art by `<EliteaMark variant size />` (`src/components/EliteaMark.tsx`)
-from `ELITEA_MARK_SVG` in `@elitea/client-core/brand`. Its one canonical source is
+The mark is drawn as vector art by `<BrandMark variant size />` (`src/components/BrandMark.tsx`)
+from `identity.markSvg`, the built brand's `assets/logo/logo-mark.svg`. ELITEA's copy
+(`brand/elitea/assets/logo/logo-mark.svg`) equals `ELITEA_MARK_SVG` in `@elitea/client-core/brand`. Its one canonical source is
 `libs/ts/client-core/src/brand/logo-mark.svg`; `libs/ts/client-core/scripts/gen-brand.mjs`
 derives the string the app imports and the web app's copies from it, and
 `node libs/ts/client-core/scripts/gen-brand.mjs --check` fails in CI when any copy drifts.
