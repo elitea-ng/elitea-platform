@@ -127,7 +127,7 @@ pub fn classify(
 /// after the drop returns.
 pub trait InputWatch: Send {
     /// Whether the watch still hears input. A watch whose thread ended on
-    /// its own (the display went away, the OS dropped its hook) is dead: the
+    /// its own (the display went away, a hook could not be re-armed) is dead: the
     /// user-active guard no longer runs, so nothing may act
     /// (`user_active_guard_unavailable`).
     fn alive(&self) -> bool {

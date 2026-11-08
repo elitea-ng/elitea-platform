@@ -17,11 +17,23 @@
 //! - **One hook per process.** `willhook` keeps its hooks in a process
 //!   global and refuses a second while one runs; a second watch fails with
 //!   `internal`.
+//! - **A silently removed hook cannot be detected.** Windows removes a
+//!   low-level hook without telling anyone when its callback overruns
+//!   `LowLevelHooksTimeout`, and from then on the hook delivers nothing.
+//!   `willhook`'s event channel is a process-wide static that never
+//!   disconnects, and neither it nor the vendor exposes the hook handle, so
+//!   no safe call can tell a removed hook from a quiet person. The watch
+//!   therefore re-arms its hooks every [`REARM_PERIOD`] (drops them, which
+//!   unhooks, and installs new ones): a hook Windows removed is replaced
+//!   within that period, and a re-arm that fails ends the watch, which then
+//!   reads as dead and the driver refuses every act. During each re-arm
+//!   (a few milliseconds) and for up to one period after a silent removal,
+//!   the person's input is not seen.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use willhook::{
     InputEvent as HookEvent, IsEventInjected, KeyPress, KeyboardKey, MouseButtonPress,
@@ -33,6 +45,9 @@ use crate::{DesktopError, SyntheticMarker};
 
 /// How often the watch's thread looks for its stop flag.
 const PASS: Duration = Duration::from_millis(100);
+/// How often the watch drops and re-installs its hooks, bounding how long a
+/// hook Windows removed silently goes unnoticed.
+pub(crate) const REARM_PERIOD: Duration = Duration::from_secs(30);
 
 /// What one hook event means to the classifier, before the target pid and
 /// the modifiers are filled in. Pure, so it is tested on every OS.
@@ -229,6 +244,39 @@ pub(crate) fn watch(
     }
 }
 
+/// The hooks the watch reads from: `willhook`'s, or a test's.
+pub(crate) trait HookSource {
+    fn try_recv(&self) -> Result<HookEvent, std::sync::mpsc::TryRecvError>;
+}
+
+impl HookSource for willhook::Hook {
+    fn try_recv(&self) -> Result<HookEvent, std::sync::mpsc::TryRecvError> {
+        willhook::Hook::try_recv(self)
+    }
+}
+
+/// What the watch loop does next, given whether an event was waiting and
+/// how long the hooks have been armed. Pure, so it is tested on every run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Step {
+    /// Read the next event.
+    Read,
+    /// Nothing waiting and the period is up: drop the hooks, install new.
+    Rearm,
+    /// Nothing waiting: sleep a little.
+    Idle,
+}
+
+pub(crate) fn next_step(event_waiting: bool, armed_for: Duration, period: Duration) -> Step {
+    if event_waiting {
+        Step::Read
+    } else if armed_for >= period {
+        Step::Rearm
+    } else {
+        Step::Idle
+    }
+}
+
 fn run(
     marker: SyntheticMarker,
     filter: &InputFilter,
@@ -236,8 +284,36 @@ fn run(
     stop: &AtomicBool,
     ready: &std::sync::mpsc::Sender<Result<(), DesktopError>>,
 ) {
-    // The hook lives on this thread and is removed when it drops here.
-    let Some(hook) = willhook::willhook() else {
+    let target = crate::windows::foreground_pid;
+    pump(
+        willhook::willhook,
+        REARM_PERIOD,
+        marker,
+        filter,
+        sink,
+        stop,
+        ready,
+        target,
+    );
+}
+
+/// The watch loop over `arm` (which installs the hooks; `None` when it
+/// cannot). Returns when `stop` is set, when the first `arm` fails (sent on
+/// `ready`), or when a re-arm fails: the caller's thread then ends, so the
+/// watch reads as dead.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pump<H: HookSource>(
+    mut arm: impl FnMut() -> Option<H>,
+    period: Duration,
+    marker: SyntheticMarker,
+    filter: &InputFilter,
+    sink: &SignalSink,
+    stop: &AtomicBool,
+    ready: &std::sync::mpsc::Sender<Result<(), DesktopError>>,
+    target: impl Fn() -> u32,
+) {
+    // The hooks live on this thread and are removed when they drop here.
+    let Some(mut hook) = arm() else {
         let _ = ready.send(Err(DesktopError::Internal(
             "the keyboard and mouse hooks could not be installed (another watch runs?)".into(),
         )));
@@ -246,31 +322,49 @@ fn run(
     if ready.send(Ok(())).is_err() {
         return;
     }
+    let mut armed_at = Instant::now();
     let mut modifiers = Modifiers::default();
     while !stop.load(Ordering::SeqCst) {
-        match hook.try_recv() {
-            Ok(event) => {
+        let received = hook.try_recv();
+        let waiting = received.is_ok();
+        match next_step(waiting, armed_at.elapsed(), period) {
+            Step::Read => {
+                let Ok(event) = received else { continue };
                 let reading = read(&event);
                 if let Reading::Modifier { which, down } = reading {
                     modifiers.update(which, down);
                     continue;
                 }
-                let target = crate::windows::foreground_pid();
-                if let Some(input) =
-                    to_input(reading, injected(&event), marker, modifiers.held(), target)
-                    && let Some(signal) = classify(&input, marker, filter)
+                if let Some(input) = to_input(
+                    reading,
+                    injected(&event),
+                    marker,
+                    modifiers.held(),
+                    target(),
+                ) && let Some(signal) = classify(&input, marker, filter)
                 {
                     sink(signal);
                 }
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::sleep(PASS / 10),
-            // The hook's channel closed: the OS removed the hook (or its
-            // thread ended), so nothing more will be heard. End the thread:
-            // the watch reads as dead and the driver refuses every act.
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            Step::Rearm => {
+                // Unhook first: `willhook` allows one set of hooks per
+                // process. A hook Windows removed silently is replaced
+                // here; one that cannot be installed again ends the watch.
+                drop(hook);
+                match arm() {
+                    Some(fresh) => {
+                        hook = fresh;
+                        armed_at = Instant::now();
+                        // A key up may have fallen in the gap: forget what
+                        // was held rather than keep a stale modifier.
+                        modifiers = Modifiers::default();
+                    }
+                    None => return,
+                }
+            }
+            Step::Idle => std::thread::sleep(PASS / 10),
         }
     }
-    drop(hook);
 }
 
 #[cfg(test)]
@@ -400,6 +494,87 @@ mod tests {
             key(KeyboardKey::Escape, true, false),
         ];
         assert_eq!(signals(&released, &[], 9), vec![Signal::UserActive]);
+    }
+
+    #[test]
+    fn the_hooks_are_rearmed_once_the_period_is_up() {
+        let period = Duration::from_secs(30);
+        assert_eq!(next_step(true, Duration::ZERO, period), Step::Read);
+        // Waiting events are read first, even past the period.
+        assert_eq!(next_step(true, period * 2, period), Step::Read);
+        assert_eq!(
+            next_step(false, Duration::from_secs(29), period),
+            Step::Idle
+        );
+        assert_eq!(next_step(false, period, period), Step::Rearm);
+    }
+
+    /// A fake hook: its events, then empty.
+    struct Fake(std::sync::Mutex<Vec<HookEvent>>);
+
+    impl HookSource for Fake {
+        fn try_recv(&self) -> Result<HookEvent, std::sync::mpsc::TryRecvError> {
+            self.0
+                .lock()
+                .unwrap()
+                .pop()
+                .ok_or(std::sync::mpsc::TryRecvError::Empty)
+        }
+    }
+
+    #[test]
+    fn a_rearm_that_fails_ends_the_watch() {
+        let (ready, started) = std::sync::mpsc::channel();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = seen.clone();
+        let sink: SignalSink = Box::new(move |s| into.lock().unwrap().push(s));
+        let mut arms = 0;
+        let stop = AtomicBool::new(false);
+        // The first arm works and carries one key; the re-arm fails. With a
+        // zero period the loop re-arms as soon as the key is read, and must
+        // return on its own (the watch thread ends: the watch is dead).
+        pump(
+            || {
+                arms += 1;
+                (arms == 1).then(|| {
+                    Fake(std::sync::Mutex::new(vec![key(
+                        KeyboardKey::A,
+                        true,
+                        false,
+                    )]))
+                })
+            },
+            Duration::ZERO,
+            marker(),
+            &InputFilter::new(Vec::new()),
+            &sink,
+            &stop,
+            &ready,
+            || 9,
+        );
+        assert_eq!(arms, 2);
+        assert!(matches!(started.try_recv(), Ok(Ok(()))));
+        assert_eq!(*seen.lock().unwrap(), vec![Signal::UserActive]);
+    }
+
+    #[test]
+    fn a_first_arm_that_fails_is_reported() {
+        let (ready, started) = std::sync::mpsc::channel();
+        let sink: SignalSink = Box::new(|_| {});
+        pump(
+            || None::<Fake>,
+            REARM_PERIOD,
+            marker(),
+            &InputFilter::new(Vec::new()),
+            &sink,
+            &AtomicBool::new(false),
+            &ready,
+            || 9,
+        );
+        assert!(matches!(
+            started.try_recv(),
+            Ok(Err(DesktopError::Internal(_)))
+        ));
     }
 
     #[test]

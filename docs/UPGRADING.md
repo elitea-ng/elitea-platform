@@ -52,9 +52,14 @@ person's device switch both allow it, as before.
   answers (i3lock, slock, xsecurelock), every call is refused with
   `screen_unavailable`. There is no override; a desktop without one cannot
   use computer use.
-- The user-active guard's watch dying mid-session (display gone, hook
-  removed) now refuses every act with `user_active_guard_unavailable`
-  until the next session, a new `DesktopError` code from the driver.
+- The user-active guard's watch dying mid-session (display gone, a
+  Windows hook that cannot be re-armed) now refuses every act with
+  `user_active_guard_unavailable` until the next session, a new
+  `DesktopError` code from the driver.
+- Windows cannot detect a low-level hook it removed silently (after
+  `LowLevelHooksTimeout`): the watch re-arms its hooks every 30 seconds, so
+  the person's input can go unseen for at most that long. A re-arm that
+  fails ends the watch as above.
 - On Windows and Linux, a key chord that types or pastes is refused
   (`action_failed`) when the focused control cannot be found; navigation
   keys still pass.

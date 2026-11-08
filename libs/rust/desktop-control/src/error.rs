@@ -73,7 +73,7 @@ pub enum DesktopError {
     #[error("interrupted: the person paused or stopped the session")]
     Interrupted,
     /// The user-active guard's input watch stopped on its own (the display
-    /// went away, the OS dropped its hook), so the person's input could no
+    /// went away, a Windows hook could not be re-armed), so the person's input could no
     /// longer pause the agent: every act is refused until a new watch runs
     /// (`user_active_guard_unavailable`).
     #[error("user-active guard unavailable: {0}")]

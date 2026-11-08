@@ -72,7 +72,7 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 | `timeout` | A wait or an OS read ran out of time |
 | `invalid_args` | Bad arguments, such as text over 10,000 characters |
 | `platform_not_supported` | The `Unsupported` driver of an OS other than macOS, Windows and Linux |
-| `user_active_guard_unavailable` | The user-active guard's input watch stopped on its own (the display went away, the OS dropped its hook): every act is refused until a new watch runs. The host returns the same code when the watch cannot start |
+| `user_active_guard_unavailable` | The user-active guard's input watch stopped on its own (the display went away, a Windows hook could not be re-armed): every act is refused until a new watch runs. The host returns the same code when the watch cannot start |
 | `internal` | Anything else |
 
 ## The macOS driver
@@ -105,7 +105,8 @@ The user-active guard:
 - **Windows**: low-level keyboard and mouse hooks through `willhook` (listen only). Windows flags every injected event, and an injected event is read as the driver's own. So another program's injected input does not pause the agent either.
 - **Linux on X11**: XInput2 raw events on the root window (listen only). An event from the server's XTEST devices is read as the driver's own, so another program's XTEST input (`xdotool`, a remote-control tool) does not pause the agent either; the active window's `_NET_WM_PID` tells input aimed at Elitea.
 - **Linux on Wayland or XWayland: fails closed** (`linux_guard_unavailable`). Wayland gives no application a global view of the keyboard and pointer, and an X11 watch through XWayland sees only X clients. A session is taken as Wayland on any one sign: `WAYLAND_DISPLAY` or `XDG_SESSION_TYPE`, logind's `Session.Type`, or an X server with the `XWAYLAND` extension or an XWayland vendor string, so a stripped environment does not get past it. The watch cannot start, and every act is refused with `user_active_guard_unavailable` (`user_active_unavailable: a Wayland session ... (why)`). Reads still work, and the settings page shows computer use as read-only with the reason (`read_only_reason`). Sign in to an X11 session to let the agent act.
-- **A watch that dies** (its thread ended: an X error, the OS removing the hook) clears `InputWatch::alive()`. The driver then refuses every act with `user_active_guard_unavailable`, and the host treats the session's watch as refused, starting a new one next session. Windows ends the watch when the hook's channel disconnects.
+- **A watch that dies** (its thread ended: an X error, a Windows hook that cannot be re-armed) clears `InputWatch::alive()`. The driver then refuses every act with `user_active_guard_unavailable`, and the host treats the session's watch as refused, starting a new one next session.
+- **Windows cannot detect a silently removed hook.** Windows removes a low-level hook without notice when its callback overruns `LowLevelHooksTimeout`, and the hook then delivers nothing. `willhook`'s event channel is a process-wide static that never disconnects and exposes no hook handle, so without `unsafe` code no call tells a removed hook from a person who is not typing. The watch bounds the exposure instead: every 30 seconds (`REARM_PERIOD`) it drops its hooks and installs new ones, and a re-arm that fails ends the watch (dead, as above). So a silently removed hook leaves the person's input unseen for at most 30 seconds, plus the few milliseconds of each re-arm.
 
 The stop shortcut is Control+Alt+Escape on both (Option is Alt). The settings page's System Settings buttons are macOS's own; on Windows and Linux there is no grant to open.
 
