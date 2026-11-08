@@ -567,9 +567,8 @@ async fn the_bake_off() {
     let corpus: Value =
         serde_json::from_str(&std::fs::read_to_string(&corpus_path).expect("the corpus"))
             .expect("JSON");
-    let only: Option<HashSet<String>> = std::env::var("ELITEA_BAKEOFF_ONLY")
-        .ok()
-        .map(|ids| ids.split(',').map(str::to_owned).collect());
+    // The workflow always passes the variable; empty means the whole corpus.
+    let only = only_tasks(std::env::var("ELITEA_BAKEOFF_ONLY").ok().as_deref());
     let engines = Engines {
         chrome: env_path("ELITEA_BROWSER_ENGINE")
             .expect("ELITEA_BROWSER_ENGINE (chrome-headless-shell)"),
@@ -579,12 +578,14 @@ async fn the_bake_off() {
         std::env::var("ELITEA_BAKEOFF_ENGINES").unwrap_or_else(|_| "full,lite,auto".to_owned());
     let proxy = forward_proxy().await;
     let mut lines = String::new();
+    let mut ran = 0_usize;
     for engine in names.split(',') {
         for task in corpus["tasks"].as_array().expect("tasks") {
             let id = task["id"].as_str().unwrap_or_default();
             if only.as_ref().is_some_and(|only| !only.contains(id)) {
                 continue;
             }
+            ran += 1;
             let line = flat(measure(&engines, &proxy, engine, task).await);
             eprintln!("{line}");
             lines.push_str(&line.to_string());
@@ -593,6 +594,28 @@ async fn the_bake_off() {
             std::fs::write(&out, &lines).expect("the output");
         }
     }
+    assert!(ran > 0, "the selection matched no corpus task: {only:?}");
+}
+
+/// `ELITEA_BAKEOFF_ONLY` as a task filter: unset, empty or only commas
+/// means every task, never none.
+fn only_tasks(value: Option<&str>) -> Option<HashSet<String>> {
+    let ids: HashSet<String> = value?
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
+#[test]
+fn an_empty_selection_runs_the_whole_corpus() {
+    assert_eq!(only_tasks(None), None);
+    assert_eq!(only_tasks(Some("")), None);
+    assert_eq!(only_tasks(Some(" , ")), None);
+    let picked = only_tasks(Some("read-01, act-02")).expect("two ids");
+    assert!(picked.contains("read-01") && picked.contains("act-02") && picked.len() == 2);
 }
 
 #[test]
