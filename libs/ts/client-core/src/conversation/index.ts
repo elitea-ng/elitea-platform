@@ -31,3 +31,18 @@ export {
   type ParticipantAvatarState,
 } from './avatarState';
 export { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';
+export {
+  DEFAULT_FLOOR,
+  FLOOR_POLICY,
+  MAX_ADDRESSED,
+  addressedTo,
+  floorOf,
+  foldSideTalk,
+  metaWithLead,
+  sideTalkLabel,
+  type AddressableAgent,
+  type Floor,
+  type FloorPolicy,
+  type FoldableRow,
+  type FoldedEntry,
+} from './floor';
