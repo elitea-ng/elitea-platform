@@ -1,0 +1,37 @@
+{
+  "$comment": "A neutral test brand for CI and the docs (ADR-0052 decision 2). Never published. Assets: node scripts/brand/placeholder-assets.mjs brand/sample. Check: node scripts/brand-check.mjs brand/sample.",
+  "formatVersion": 1,
+  "id": "sample",
+  "productName": "Sample Assistant",
+  "shortName": "Sample",
+  "publisher": "Example Publisher",
+  "mobile": {
+    "bundleId": "com.example.sample",
+    "connectSchemes": ["sample"],
+    "oauthRedirectScheme": "com.example.sample",
+    "appGroup": "group.com.example.sample",
+    "widgetBundleId": "com.example.sample.widgets"
+  },
+  "desktop": {
+    "identifier": "com.example.sample.desktop"
+  },
+  "linkDomain": "sample.example.com",
+  "webUrl": "https://sample.example.com",
+  "privacyUrl": "https://sample.example.com/privacy",
+  "supportUrl": "https://sample.example.com/support",
+  "supportEmail": "support@sample.example.com",
+  "docsUrl": "/docs/",
+  "brand": {
+    "hue": "#0e7490"
+  },
+  "eas": {
+    "projectId": null,
+    "owner": null
+  },
+  "updates": {
+    "mode": "off"
+  },
+  "push": {
+    "relay": "none"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$comment": "EPAM's ELITEA brand: the default build (ADR-0052 owner decision 4). Format: apps/elitea-docs/src/content/docs/development/brands.mdx. Check: node scripts/brand-check.mjs brand/elitea. mobile.bundleId, mobile.appGroup and desktop.identifier are permanent once a build is uploaded.",
+  "formatVersion": 1,
+  "id": "elitea",
+  "productName": "Elitea AI",
+  "shortName": "Elitea",
+  "publisher": "EPAM Systems",
+  "mobile": {
+    "bundleId": "ai.elitea.app",
+    "connectSchemes": ["elitea"],
+    "oauthRedirectScheme": "ai.elitea.app",
+    "appGroup": "group.ai.elitea.app",
+    "widgetBundleId": "ai.elitea.app.widgets"
+  },
+  "desktop": {
+    "identifier": "ai.elitea.desktop"
+  },
+  "linkDomain": "elitea.ai",
+  "webUrl": "https://elitea.ai",
+  "privacyUrl": "https://elitea.ai/privacy",
+  "supportUrl": "https://elitea.ai/support",
+  "supportEmail": "SupportAlita@epam.com",
+  "docsUrl": "/docs/",
+  "brand": {
+    "hue": "#4a4de8"
+  },
+  "eas": {
+    "projectId": null,
+    "owner": null
+  },
+  "updates": {
+    "mode": "off"
+  },
+  "push": {
+    "relay": "epam"
+  }
+}

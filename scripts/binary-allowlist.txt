@@ -145,3 +145,15 @@ brand/assets/icons/*.ico
 brand/assets/icon-pack/*/*/*.png
 brand/assets/icon-pack/*/*/*.ico
 brand/assets/icon-pack/icon-pack-preview.png
+
+# Brand folders (ADR-0052 decision 2; apps/elitea-docs development/brands):
+# each brand's app icons, rasterised for the stores and the OS, checked by
+# scripts/brand-check.mjs. brand/elitea holds copies of the LE-03 rasters
+# above; brand/sample's placeholders are written by
+# scripts/brand/placeholder-assets.mjs. Only these asset kinds.
+brand/elitea/assets/*.png
+brand/elitea/assets/*.ico
+brand/elitea/assets/*.icns
+brand/sample/assets/*.png
+brand/sample/assets/*.ico
+brand/sample/assets/*.icns

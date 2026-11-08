@@ -1,0 +1,129 @@
+---
+title: "Brands"
+description: "The brand manifest of ADR-0052: one brand/<id>/ folder sets the name, icons, colours, identifiers, links and accounts of the mobile, desktop and web clients. The brand.json fields, the asset table, the permanent fields, ELITEA_BRAND, brand-check and how to add a field."
+---
+
+A **brand** is build-time configuration: one folder that gives the iOS, Android, macOS, Windows and web clients their name, icons, colours, identifiers, links, store accounts and push credentials (ADR-0052). No code branches on a brand. Every build has the same features; capabilities that need MDM, a relay or a customer network switch on at runtime.
+
+This repository holds two brands:
+
+| Folder | What it is |
+| --- | --- |
+| `brand/elitea/` | EPAM's ELITEA, the default build (`ai.elitea.app`) |
+| `brand/sample/` | A neutral test brand (`com.example.sample`) for CI and these docs. Never published |
+
+Any other brand lives in its own repository and builds from an ELITEA release tag with its own folder, without patches.
+
+`brand/` also holds the brand guide site (`brand/AGENTS.md`). The folder names `assets`, `scripts`, `test` and `dist` belong to the guide and cannot be brand ids.
+
+## Select a brand
+
+Every build reads the brand that `ELITEA_BRAND` names:
+
+| `ELITEA_BRAND` | Brand folder |
+| --- | --- |
+| unset or empty | `brand/elitea` |
+| a bare id, such as `sample` | `brand/sample` |
+| a path, such as `../acme-brand/brand/acme` | that folder, relative to the current directory or absolute |
+
+The generators (mobile `app.config.ts`, the desktop `tauri.brand.json` writer and the web default pack) read the brand only through `scripts/brand/load.mjs`. Nothing else opens a `brand.json`. Today `brand-check` is the only reader; the mobile, desktop and web clients move to it in the next steps of ADR-0052.
+
+## The folder
+
+```
+brand/<id>/
+  brand.json     identity, links, colours, accounts (no secrets)
+  assets/        icons, splash, logos, favicon (table below)
+  pack.json      optional: a full web brand pack; otherwise one is derived
+  firebase/      optional: GoogleService-Info.plist, google-services.json
+  store/         optional: listing texts and screenshots
+  certs/         optional: the public EAS Update code signing certificate
+  README.md      optional
+```
+
+The folder name is the brand id. Any other file at the top fails the check (OS files such as `.DS_Store` are ignored). Signing keys and other secrets are never in the folder: CI reads them from the brand owner's secret store.
+
+## brand.json
+
+| Field | Rule | ELITEA |
+| --- | --- | --- |
+| `formatVersion` | `1` | `1` |
+| `id` | 2 to 32 characters: a lowercase letter, then letters, digits or `-`; equals the folder name | `elitea` |
+| `productName`, `shortName` | Up to 40 and 20 characters | `Elitea AI`, `Elitea` |
+| `publisher` | The publisher's legal name (bundle copyright, installers) | `EPAM Systems` |
+| `mobile.bundleId` | iOS bundle id and Android package: reverse-DNS, three or more labels, each a lowercase letter then letters or digits, no Java keyword. **Permanent** | `ai.elitea.app` |
+| `mobile.connectSchemes` | Custom URI schemes for connect links; not `http`, `https` or another well-known scheme | `["elitea"]` |
+| `mobile.oauthRedirectScheme` | Reverse-DNS private-use scheme (RFC 8252): the bundle id, or under it; not a connect scheme | `ai.elitea.app` |
+| `mobile.appGroup` | `group.` and a reverse-DNS id. **Permanent** | `group.ai.elitea.app` |
+| `mobile.widgetBundleId` | Under the bundle id | `ai.elitea.app.widgets` |
+| `desktop.identifier` | Reverse-DNS; not ending in `.app`. **Permanent** | `ai.elitea.desktop` |
+| `linkDomain` | Host for universal links and App Links, or `null` (the custom scheme then works alone) | `elitea.ai` |
+| `webUrl`, `privacyUrl`, `supportUrl` | Absolute `https` URLs with a host name, no port, credentials or fragment | `https://elitea.ai`, `/privacy`, `/support` |
+| `supportEmail` | An email address, or `null` | the brand's own address |
+| `docsUrl` | An `https` URL, or a path on the workspace server | `/docs/` |
+| `brand.hue` | `#rgb` or `#rrggbb`; the one scheme-independent brand colour | `#4a4de8` |
+| `brand.onBrand` | Optional label colour on the hue; default white | |
+| `brand.schemes.light`, `.dark` | Optional token overrides, as in a web brand pack; `background.default` moves the contrast check's background | |
+| `eas.projectId`, `eas.owner` | The brand's own EAS project UUID and Expo owner, both or neither (`null`) | `null` until linked |
+| `updates.mode` | `off`, or `on` with the brand's own `eas.projectId` and `updates.codeSigningCertificate` (a path under `certs/` that must exist; the public certificate only, never its key). An update never crosses brands | `off` |
+| `push.relay` | `none`, or the relay owner's name (ADR-0046) | `epam` |
+
+Bundle id, App Group, widget id and desktop identifier must all differ from each other.
+
+### Permanent fields
+
+`mobile.bundleId`, `mobile.appGroup` and `desktop.identifier` are permanent once a brand uploads its first build. The stores key the app on the bundle id. The widget extension shares data with the app through the App Group. The desktop identifier names the folder that holds every user's config, data, logs and credentials. `brand-check` marks each one in its report. A brand that must change one ships a new app.
+
+## Assets
+
+Every file is required unless marked optional. PNGs are square.
+
+| Path under `assets/` | Pixels | Alpha | Used for |
+| --- | --- | --- | --- |
+| `ios/icon-1024.png` | 1024 | none | iOS app icon and App Store listing (Apple rejects alpha) |
+| `ios/app.icon/` | | | Optional: iOS 26 Icon Composer document (`icon.json` and the `Assets/` it names) |
+| `android/icon-512.png` | 512 | either | Google Play listing icon |
+| `android/adaptive-foreground.png` | 1024 | needed | Adaptive icon foreground (108 dp canvas) |
+| `android/adaptive-background.png` | 1024 | none | Adaptive icon background |
+| `android/adaptive-monochrome.png` | 1024 | needed | Android 13+ themed icon |
+| `macos/icon.icns` | 16 to 1024 | | macOS app icon: 16, 32, 64, 128, 256, 512 and 1024 |
+| `windows/icon.ico` | 16 to 256 | | Windows app and installer icon: 16, 24, 32, 48, 64, 128 and 256 |
+| `desktop/32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.png` | 32, 128, 256, 512 | either | Desktop bundle and window icons |
+| `desktop/tray-template.png` | 44 | needed | macOS menu bar template image (22 pt at 2x) |
+| `splash/splash-icon.png` | 1024 | either | Mobile splash screen |
+| `web/favicon.svg` | | | Web favicon |
+| `web/favicon-48.png` | 48 | either | Mobile web favicon |
+| `logo/logo-full.svg`, `logo/logo-mark.svg` | | | The lockup and the mark |
+
+`brand/elitea`'s assets are copies of the approved LE-03 icon pack's colored-dark rasters (`brand/assets/icon-pack/`) and the client-core logos. Until each client reads its icons from the brand folder, `scripts/brand/elitea-sync.test.mjs` keeps `brand/elitea` byte-equal to the copies the apps ship. To change ELITEA's artwork, change both.
+
+`brand/sample`'s assets are a plain disc on a tile, written by `node scripts/brand/placeholder-assets.mjs brand/sample` (deterministic). The script writes a full placeholder set into any brand folder, which is a quick way to start a new brand.
+
+## brand-check
+
+```bash
+node scripts/brand-check.mjs brand/elitea brand/sample
+```
+
+With no argument it checks the brand `ELITEA_BRAND` selects. `--json` prints a machine-readable report. Exit 1 means a brand failed. For each folder it checks:
+
+- the manifest rules above;
+- every asset: present, the right file type, every size, alpha where the platform needs or forbids it;
+- the hue's contrast (WCAG 2.2): at least 3:1 on the light and the dark background (non-text contrast), and at least 4.5:1 for `brand.onBrand` on the hue (a button label);
+- no files outside the folder format;
+- for every brand except `elitea`: no asset byte-identical to one of `brand/elitea`'s, and no product name, id, scheme, domain, URL or support address of `brand/elitea`'s. A product name that contains "Elitea" fails;
+- when several folders are checked together, no two share an id or identifier.
+
+CI runs it on both brands, with the unit tests (`scripts/brand-check.test.mjs`, `scripts/brand/*.test.mjs`), in the **No Binaries** workflow's brand job on every pull request.
+
+## Add a field
+
+1. Add the field and its rule to `validateManifest` in `scripts/brand/schema.mjs`, and a test in `scripts/brand/schema.test.mjs`. The `allowed` list rejects any field the validator does not know.
+2. Add it to the valid fixture in `scripts/brand/fixtures.mjs`.
+3. Set it in `brand/elitea/brand.json` and `brand/sample/brand.json`. If brand/elitea's value is also written somewhere an app reads today, add the pair to `elitea-sync.test.mjs`.
+4. If the field is an identifier a store or the OS fixes for good, add it to `PERMANENT_FIELDS`. If another brand must not reuse ELITEA's value, add it to `DISTINCT_FIELDS` in `scripts/brand-check.mjs`.
+5. Add a row to the table on this page.
+
+A field changes `formatVersion` only when an existing field changes meaning. Adding a required field is a breaking change for brand repositories: say so in `docs/UPGRADING.md`.
+
+An asset works the same way: add a row to `ASSETS` in `schema.mjs`, a case to `placeholder-assets.mjs`, the file to both brands, and a row to the asset table above.
