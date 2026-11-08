@@ -61,7 +61,8 @@ export interface ChatBoxChainFollow {
   readonly cancel: () => void;
 }
 
-const MARK_KEYS = ['continuedAutomatically', 'continuationIndex', 'stepLimitReached', 'runBrief', 'goalCheck'] as const;
+// `messageClass`/`addresseeNames` (ADR-0050 7e): a streamed answer learns it is side talk from the read.
+const MARK_KEYS = ['continuedAutomatically', 'continuationIndex', 'stepLimitReached', 'runBrief', 'goalCheck', 'messageClass', 'addresseeNames'] as const;
 
 const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
 

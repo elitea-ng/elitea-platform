@@ -32,6 +32,8 @@ export interface ChatMessage {
   readonly authorName?: string | undefined;
   /** The answering participant (`author_participant_id`), as a number; the key of its avatar state. */
   readonly authorParticipantId?: number | undefined;
+  /** Who the row is addressed to, by name (`addressed_to`), for a side-talk label (ADR-0050 decision 7e). */
+  readonly addresseeNames?: readonly string[] | undefined;
   /** The answer's rendering class (ADR-0050 decision 7e, `classifyMessage`). */
   readonly messageClass?: MessageClass | undefined;
   /** The author's persona `role` (client contract 1.38), shown beside the name. */

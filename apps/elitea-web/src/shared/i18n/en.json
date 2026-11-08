@@ -5865,5 +5865,16 @@
   "cloudBrowser.failure.upgradeRequired": "Update the app to see the browser: this version is older than the workspace allows.",
   "widgets.contextBudget.agent.idleCompacted": "Context {{tokens}} tokens. Summarised while idle: the next answer starts from the summary.",
   "widgets.contextBudget.agent.percentage": "{{percentage}}%",
-  "widgets.contextBudget.agent.tokens": "Context {{tokens}} tokens"
+  "widgets.contextBudget.agent.tokens": "Context {{tokens}} tokens",
+  "chat.lead.badge": "Lead",
+  "chat.lead.clear": "Clear lead",
+  "chat.lead.make": "Make lead",
+  "chat.lead.menu": "Floor options",
+  "chatMessages.floor.addresseeNotInConversation": "One of the agents you addressed is no longer in this conversation. Remove the mention or add the agent again, then send.",
+  "chatMessages.sideTalk.chip": "Side conversation ({{n}})",
+  "widgets.chatBox.agentMentions.title": "Agents in this conversation",
+  "widgets.chatBox.floorTarget.change": "Change who answers",
+  "widgets.chatBox.floorTarget.label": "To: {{name}}",
+  "widgets.chatBox.floorTarget.lead": "To: {{name}} (lead)",
+  "widgets.chatBox.floorTarget.pick": "pick an agent"
 }

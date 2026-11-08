@@ -26,7 +26,8 @@ import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
 import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
-import { LiveReply, PersistedMessage, QueuedMessage } from '@/features/chat/ThreadRows';
+import { LiveReply, PersistedMessage, QueuedMessage, SideTalkRow, SystemLine } from '@/features/chat/ThreadRows';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { SteeringMessage, steeringRows } from '@/features/chat/SteeringRows';
 import { SteeringOfferNote } from '@/features/chat/SteeringOfferNote';
 import type { SteeringItem } from '@elitea/client-core/stream';
@@ -90,7 +91,15 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
 import { AgentMotion, useAvatarClock } from '@/features/chat/AgentMotion';
-import { activeAnimatedParticipant, avatarMotion, type AvatarStates } from '@elitea/client-core/conversation';
+import {
+  MESSAGE_CLASS,
+  activeAnimatedParticipant,
+  avatarMotion,
+  floorOf,
+  foldSideTalk,
+  type AddressableAgent,
+  type AvatarStates,
+} from '@elitea/client-core/conversation';
 import { ATTACHMENT_ONLY_TEXT, STEERING_NOT_SUPPORTED_TEXT, useTurn } from '@/features/chat/useTurn';
 import { useSteeringWaitText } from '@/features/chat/useSteeringWaitText';
 import { CloudExecutorNotice } from '@/features/localWork/CloudExecutorNotice';
@@ -104,6 +113,8 @@ import type { OutboxItem } from '@/sync/outbox';
 
 type Row =
   | { kind: 'persisted'; key: string; message: ChatMessage }
+  /** A run of agent-to-agent messages, folded (ADR-0050 decision 7e). */
+  | { kind: 'side_talk'; key: string; messages: ChatMessage[] }
   | { kind: 'outbox'; key: string; item: OutboxItem }
   | { kind: 'live_user'; key: string; text: string; files: string[] }
   | { kind: 'live_reply'; key: string; live: LiveTurn }
@@ -187,7 +198,16 @@ export function ThreadView({
   // sheet), and every row stays drawn for a screen reader.
   const latestAnswerKey = latestAnswer?.key ?? null;
   const screenReader = useScreenReader();
-  const target = chatTarget(detail, { targetParticipantId: chosen, lastAnsweredBy });
+  // ADR-0050 7d: with a lead, a message that addresses no one goes to it.
+  const floor = floorOf(detail?.meta);
+  const target = chatTarget(detail, { targetParticipantId: chosen, lastAnsweredBy, leadParticipantId: floor.leadParticipantId });
+  // The conversation's agents a message can address by "@Name" / "#Name" (7c): with several only.
+  const addressable: AddressableAgent[] =
+    target.ok && target.kind === 'agent' && target.choices.length > 1
+      ? target.choices.filter((a) => a.name !== null && a.name.trim() !== '').map((a) => ({ participantId: a.participantId, name: a.name as string }))
+      : [];
+  // Issue #1624: the "To:" sheet, opened by the chip or by a Send before an agent is chosen.
+  const [chipOpen, setChipOpen] = useState(false);
   // A model conversation with no saved model runs on the project's default.
   const needsDefaultModel = target.ok && target.kind === 'model' && target.model === null;
   const models = useModels(projectId, needsDefaultModel);
@@ -202,12 +222,12 @@ export function ThreadView({
         ? { name: fallback.name, projectId: fallback.projectId }
         : null;
   const conversationUuid = typeof detail?.uuid === 'string' && detail.uuid !== '' ? detail.uuid : null;
-  const addressable = target.ok && (target.kind === 'agent' || model !== null);
+  const canAddress = target.ok && (target.kind === 'agent' || model !== null);
   const turn = useTurn({
     projectId,
     conversationRef: ref,
     conversationUuid,
-    participantId: target.ok && addressable ? target.participantId : null,
+    participantId: target.ok && canAddress ? target.participantId : null,
     model: target.ok && target.kind === 'model' ? model : null,
     steering: contract127,
   });
@@ -482,9 +502,23 @@ export function ThreadView({
     if (plan.kind === 'pick') queueMicrotask(() => void pickInto(plan.source));
     else Alert.alert(plan.title, plan.message);
   });
-  const sendWithFiles = async (text: string, mentions: SendExtras['mentions']): Promise<string | null> => {
+  const sendWithFiles = async (text: string, mentions: SendExtras['mentions'], addressedTo: number[] = []): Promise<string | null> => {
     if (scanBusy) return 'The scan is still being prepared. Send once it is in the tray.';
-    if (trayItems.length === 0) return turn.send(text, { mentions });
+    // Issue #1624: several agents and nothing chosen: a message that names none asks who it is
+    // for (the sheet opens, the text stays); one that names some goes to the first of them.
+    const needsChoice = target.ok && target.kind === 'agent' && target.needsChoice;
+    if (needsChoice && addressedTo.length === 0) {
+      setChipOpen(true);
+      return TURN_TAKING_COPY.chooseAgentFirst;
+    }
+    // Main lets the chip's agent answer first only when it is addressed; otherwise the first
+    // addressee answers, so the turn starts as that agent (its live reply carries its name).
+    const redirected = addressedTo.length > 0 && !(target.ok && addressedTo.includes(target.participantId) && !needsChoice);
+    const addressing: Pick<SendExtras, 'addressedTo' | 'participantId'> =
+      addressedTo.length > 0 ? { addressedTo, ...(redirected ? { participantId: addressedTo[0] } : {}) } : {};
+    // The first addressee becomes the chosen target, so the next message (a steer while it answers) has one.
+    if (needsChoice && addressedTo.length > 0 && chosenKey !== null) setTarget(chosenKey, addressedTo[0]);
+    if (trayItems.length === 0) return turn.send(text, { mentions, ...addressing });
     if (gateReason) return gateReason;
     // Every file first: a message with files is sent (or queued) only once all are stored.
     const uploaded = await tray.uploadAll();
@@ -493,6 +527,7 @@ export function ThreadView({
     const questionId = newQuestionId();
     const problem = await turn.send(text.trim() === '' ? ATTACHMENT_ONLY_TEXT : text, {
       mentions,
+      ...addressing,
       attachments: uploaded.attachments,
       questionId,
     });
@@ -635,7 +670,10 @@ export function ThreadView({
     const already = attached.find((c) => c.agentId === agent.id);
     if (already) {
       setTarget(chosenKey, already.participantId);
-      return { insert: '' };
+      // An agent already here is addressed by name (ADR-0050 7c) when there are several.
+      return already.name && attached.length > 1
+        ? { insert: `#${already.name} `, address: { participantId: already.participantId, name: already.name } }
+        : { insert: '' };
     }
     try {
       const row = await addAgentParticipant(projectId, conversationNumericId, agent);
@@ -726,9 +764,15 @@ export function ThreadView({
   }
   // A regenerated answer is rewritten in place: its old text hides while the new one streams.
   const replacing = answerHiddenByRegeneration(live);
-  for (const message of [...messages].reverse()) {
-    if (replacing !== null && message.uuid === replacing) continue;
-    rows.push({ kind: 'persisted', key: message.key, message });
+  // Consecutive agent-to-agent messages fold into one "Side conversation (n)" row (7e).
+  const shownMessages = messages.filter((message) => !(replacing !== null && message.uuid === replacing));
+  const folded = foldSideTalk(
+    shownMessages.map((message) => ({ messageClass: message.messageClass ?? MESSAGE_CLASS.Human, message })),
+    (row) => row.message.key,
+  );
+  for (const entry of folded.reverse()) {
+    if (entry.kind === 'side_talk') rows.push({ kind: 'side_talk', key: entry.key, messages: entry.rows.map((r) => r.message) });
+    else rows.push({ kind: 'persisted', key: entry.row.message.key, message: entry.row.message });
   }
 
   const pauseBlocks = pause !== null && pause.kind !== 'output_limit' && !(pause.kind === 'hitl' && pause.shape === 'fanout');
@@ -746,7 +790,7 @@ export function ThreadView({
         : target.reason === 'toolkit_agent'
           ? 'This conversation mixes toolkits and agents. Continue it in the web app.'
           : 'This conversation has no agent or model you can message from mobile.'
-      : addressable
+      : canAddress
         ? null
         : models.isLoading
           ? 'Loading the workspace model…'
@@ -801,6 +845,8 @@ export function ThreadView({
           canAddAgent={agentsCanJoin(detail)}
           onChanged={() => void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, ref) })}
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
+          // The update replaces the whole meta: no lead control without the meta that was read.
+          conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
         />
       ) : null}
       <ThreadLayout
@@ -811,7 +857,7 @@ export function ThreadView({
             <ForkedFromLink forkedFrom={forkedFrom} onOpen={openConversation} />
             {empty ? (
               <ChatEmptyState
-                agentName={targetName ?? 'your agent'}
+                agentName={(target.ok && target.kind === 'agent' && target.needsChoice ? null : targetName) ?? 'your agent'}
                 iconUri={agentIcon}
                 welcome={agentVersion.data?.welcomeMessage ?? null}
                 suggestions={disabledReason ? [] : suggestions}
@@ -834,8 +880,16 @@ export function ThreadView({
                 ListHeaderComponent={pauseCard ?? undefined}
                 renderItem={({ item }) => {
                   switch (item.kind) {
+                    case 'side_talk':
+                      return (
+                        <SideTalkRow
+                          messages={item.messages}
+                          nameOf={(id) => participantName((detail?.participants ?? []).find((p) => Number(p.id) === id))}
+                        />
+                      );
                     case 'persisted': {
                       const message = item.message;
+                      if (message.messageClass === MESSAGE_CLASS.System) return <SystemLine message={message} />;
                       const plan = planActions(message, {
                         shareOut: policy.allow_share_out,
                         contract13,
@@ -975,12 +1029,13 @@ export function ThreadView({
           <Composer
             // Siri "Ask <agent>": the question waits in the input for the user to send it.
             initialText={typeof prefill === 'string' ? prefill.slice(0, MAX_PREFILL) : null}
-            placeholder={targetName ? `Message ${targetName}…` : 'Message'}
+            placeholder={targetName && !(target.ok && target.kind === 'agent' && target.needsChoice) ? `Message ${targetName}…` : 'Message'}
             draft={draft}
             unsentKey={projectId !== null && ref !== '' ? draftKey(projectId, ref) : null}
             disabledReason={disabledReason}
             busy={turn.busy}
             people={people}
+            agents={addressable}
             hint={
               steeringWait ??
               (turn.canSteer
@@ -997,7 +1052,16 @@ export function ThreadView({
               (target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null) || trayItems.length > 0 || documentScan.phase === 'preparing' ? (
                 <>
                   {target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null ? (
-                    <TargetChip current={target.agent} choices={target.choices} onChoose={(id) => setTarget(chosenKey, id)} />
+                    <TargetChip
+                      current={target.agent}
+                      choices={target.choices}
+                      onChoose={(id) => setTarget(chosenKey, id)}
+                      unchosen={target.needsChoice}
+                      viaLead={target.viaLead}
+                      leadParticipantId={floor.leadParticipantId}
+                      open={chipOpen}
+                      onOpenChange={setChipOpen}
+                    />
                   ) : null}
                   <AttachmentTrayView
                     items={trayItems}
@@ -1010,7 +1074,7 @@ export function ThreadView({
             }
             allowEmptyText={trayItems.length > 0}
             leading={<AttachButton disabledReason={attachReason} scan={documentScan.source} onPick={(source) => void pickInto(source)} onBlocked={showToast} />}
-            onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
+            onSend={({ text, mentions, addressedTo }) => sendWithFiles(text, mentions, addressedTo)}
             onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
             steer={turn.canSteer}
             dictation={dictation}

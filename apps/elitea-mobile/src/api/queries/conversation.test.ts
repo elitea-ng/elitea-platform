@@ -1,6 +1,6 @@
 import { createApiClient } from '@/api/client';
 import type { BaseFetch } from '@/api/middleware';
-import { fetchConversation, hasStreamingGroup, isConversationRef } from '@/api/queries/conversation';
+import { FLOOR_FOLLOW_MS, STREAMING_POLL_MS, conversationPollInterval, fetchConversation, hasStreamingGroup, isConversationRef } from '@/api/queries/conversation';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
@@ -42,5 +42,22 @@ describe('conversation read', () => {
     expect(
       hasStreamingGroup({ message_groups: [{ is_streaming: true }] } as never),
     ).toBe(true);
+  });
+});
+
+describe('conversationPollInterval (ADR-0050 7c)', () => {
+  const at = Date.parse('2026-11-08T12:00:00Z');
+  const agents = [{ entity_name: 'application' }, { entity_name: 'application' }];
+  it('polls while a turn streams', () => {
+    expect(conversationPollInterval({ message_groups: [{ is_streaming: true }] } as never, at)).toBe(STREAMING_POLL_MS);
+  });
+  it('keeps reading a multi-agent conversation briefly after its last answer', () => {
+    const detail = { participants: agents, message_groups: [{ created_at: '2026-11-08T11:59:50Z' }] } as never;
+    expect(conversationPollInterval(detail, at)).toBe(STREAMING_POLL_MS);
+    expect(conversationPollInterval(detail, at + FLOOR_FOLLOW_MS)).toBe(false);
+  });
+  it('does not poll a one-agent conversation', () => {
+    const detail = { participants: agents.slice(1), message_groups: [{ created_at: '2026-11-08T11:59:59Z' }] } as never;
+    expect(conversationPollInterval(detail, at)).toBe(false);
   });
 });

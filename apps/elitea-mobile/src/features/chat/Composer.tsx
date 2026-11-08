@@ -20,6 +20,8 @@ import {
 import { SuggestionStrip, type Suggestion, type SuggestionState } from '@/features/chat/SuggestionStrip';
 import { holdsOnlySent } from '@/features/chat/keyboardCommit';
 import { composerDrafts, useDraftLoads } from '@/features/chat/composerDrafts';
+import { addressedTo, type AddressableAgent } from '@elitea/client-core/conversation';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { DictationPanel } from '@/features/speech/DictationPanel';
 import { dictationProblemText, joinDictation, useDictation } from '@/features/speech/dictation';
 
@@ -28,10 +30,15 @@ export interface ComposerSend {
   text: string;
   /** Derived from the final text; null when the conversation offers no one to mention. */
   mentions: DerivedMentions | null;
+  /**
+   * ADR-0050 7c: the conversation's agents the text mentions (`@Name` / `#Name`), picked ones
+   * first in the order picked; absent when it addresses no one (the floor decides).
+   */
+  addressedTo?: number[];
 }
 
 /** The answer to a pick from an outside source (`#` agent, `~` skill, `/` tool). */
-export type PickResult = { insert: string } | { error: string };
+export type PickResult = { insert: string; address?: AddressableAgent } | { error: string };
 
 export interface ComposerProps {
   /** Why sending is impossible; renders instead of the input. */
@@ -41,6 +48,8 @@ export interface ComposerProps {
   onSend: (input: ComposerSend) => string | null | Promise<string | null>;
   /** The other people in the conversation ("@"); "Everyone" is offered with them. */
   people?: readonly MentionCandidate[];
+  /** The conversation's agents a message can address ("@" lists them after the people). */
+  agents?: readonly AddressableAgent[];
   /** A one-line note under the input (e.g. where mentions notify). */
   hint?: string | null;
   /** Triggers served from outside (the screen fetches their suggestions). */
@@ -128,11 +137,25 @@ export function peopleSuggestions(people: readonly MentionCandidate[], query: st
   return rows;
 }
 
+/** The "@" rows of the conversation's agents for a query: names starting with it, then containing it. */
+export function agentMentionSuggestions(agents: readonly AddressableAgent[], query: string): Suggestion[] {
+  const q = query.toLocaleLowerCase();
+  const named = agents.filter((a) => a.name.trim() !== '');
+  const starts = named.filter((a) => a.name.toLocaleLowerCase().startsWith(q));
+  const contains = named.filter((a) => !starts.includes(a) && a.name.toLocaleLowerCase().includes(q));
+  return [...starts, ...contains].map((a) => ({
+    key: `agent-mention-${a.participantId}`,
+    title: a.name,
+    subtitle: TURN_TAKING_COPY.agentMentionSubtitle,
+  }));
+}
+
 export function Composer({
   disabledReason,
   busy,
   onSend,
   people = [],
+  agents = [],
   hint,
   externalTriggers = [],
   onTriggerChange,
@@ -238,12 +261,15 @@ export function Composer({
   useEffect(() => {
     if (unsentKey !== null) composerDrafts.set(unsentKey, text);
   }, [unsentKey, text]);
+  /** The agents picked from a strip, in the order picked (they address the message first). */
+  const [chosenAgents, setChosenAgents] = useState<AddressableAgent[]>([]);
+  const choose = (agent: AddressableAgent) => setChosenAgents((list) => (list.some((a) => a.participantId === agent.participantId) ? list : [...list, agent]));
   /** A token whose pick failed; its strip stays hidden until the token changes. */
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   const triggers = useMemo<TriggerChar[]>(
-    () => [...(people.length > 0 ? (['@'] as TriggerChar[]) : []), ...externalTriggers],
-    [people.length, externalTriggers],
+    () => [...(people.length > 0 || agents.length > 0 ? (['@'] as TriggerChar[]) : []), ...externalTriggers],
+    [people.length, agents.length, externalTriggers],
   );
   const detected = detectTrigger(text, selection, triggers);
   const tokenKey = detected ? `${detected.start}:${detected.trigger}${detected.query}` : null;
@@ -333,6 +359,7 @@ export function Composer({
     const at = sentAt.current;
     const last = changedAt.current;
     setText((current) => (holdsOnlySent(sent, current, at, last) ? '' : current));
+    setChosenAgents([]);
     // The draft too, even when the composer is gone (the thread was left mid-send).
     if (keptAs !== null) composerDrafts.clearIfSent(keptAs, (stored) => holdsOnlySent(sent, stored, at, last));
   };
@@ -349,7 +376,9 @@ export function Composer({
     sentAt.current = Date.now();
     changedAt.current = null;
     const mentions = people.length > 0 ? deriveMentions(sent, people, { everyone: true }) : null;
-    const result = onSend({ text: sent, mentions });
+    // Typed by hand counts too: the conversation's agents follow the picked ones.
+    const addressed = agents.length > 0 ? addressedTo(sent, [...chosenAgents, ...agents]) : [];
+    const result = onSend(addressed.length > 0 ? { text: sent, mentions, addressedTo: addressed } : { text: sent, mentions });
     if (!(result instanceof Promise)) {
       settle(sent, result, keptAs);
       return;
@@ -373,6 +402,12 @@ export function Composer({
   const pick = (item: Suggestion) => {
     if (!active) return;
     if (active.trigger === '@') {
+      const agent = agents.find((a) => `agent-mention-${a.participantId}` === item.key);
+      if (agent) {
+        choose(agent);
+        applyInsert(active, `@${agent.name} `);
+        return;
+      }
       const name = item.key === 'everyone' ? EVERYONE : item.title;
       applyInsert(active, `@${name} `);
       return;
@@ -385,6 +420,7 @@ export function Composer({
         setError(result.error);
         setDismissed(tokenKey);
       } else {
+        if (result.address) choose(result.address);
         applyInsert(trigger, result.insert);
       }
     };
@@ -402,7 +438,7 @@ export function Composer({
   const stripState: SuggestionState | null = !active
     ? null
     : active.trigger === '@'
-      ? { items: peopleSuggestions(people, active.query) }
+      ? { items: [...peopleSuggestions(people, active.query), ...agentMentionSuggestions(agents, active.query)] }
       : (externalSuggestions ?? { items: [], loading: true });
 
   return (
@@ -429,7 +465,7 @@ export function Composer({
         <SuggestionStrip
           state={picking ? { ...stripState, loading: true } : stripState}
           onPick={pick}
-          label={active?.trigger === '@' ? 'People' : 'Suggestions'}
+          label={active?.trigger === '@' ? (agents.length > 0 ? TURN_TAKING_COPY.mentionStripLabel : 'People') : 'Suggestions'}
         />
       ) : null}
       {error ? (

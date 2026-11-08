@@ -32,6 +32,7 @@ import {
   type SendDeps,
   type UploadAttachmentsOutcome,
 } from "./useChatBoxSend.helpers";
+import { addressedIdsOf, startParticipantId, targetForAddressed } from "./useChatBoxSend.floor";
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
@@ -154,6 +155,8 @@ export function useChatBoxSend(
     () => resolveTargetParticipant(params.activeParticipant, params.participants, params.stickyParticipantId),
     [params.activeParticipant, params.participants, params.stickyParticipantId],
   );
+  // The composer's target and the roster an address picks from (one dependency for the start callback's budget).
+  const routing = useMemo(() => ({ target, participants: params.participants }), [target, params.participants]);
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
     onContextChanged,
@@ -187,15 +190,16 @@ export function useChatBoxSend(
       // — including one addressed to an agent — as `agent.execute.adhoc.v1`.
       // That resolver joins on `entity_name='dummy'` and answers 422 for an
       // agent participant.
+      const sendTarget = targetForAddressed(routing.target, routing.participants, addressedIdsOf(payload["addressedTo"])); // ADR-0050 7c
       const isApplicationTurn =
-        resolveStartContract(target) === conversationApi.contracts.application;
+        resolveStartContract(sendTarget) === conversationApi.contracts.application;
       if (
-        (target as { readonly entity_name?: unknown } | null | undefined)
+        (sendTarget as { readonly entity_name?: unknown } | null | undefined)
           ?.entity_name === "user"
       )
         return requireTestTransport(NO_STREAM_TRANSPORT);
       const targetParticipantId = positiveParticipantId(
-        (target as { readonly id?: unknown } | null | undefined)?.id,
+        (sendTarget as { readonly id?: unknown } | null | undefined)?.id,
       );
       const grant = unattended?.();
       const bodyParams = {
@@ -205,10 +209,8 @@ export function useChatBoxSend(
         payload,
         ...modelRequest,
         isApplicationTurn,
-        participantId:
-          (isApplicationTurn
-            ? positiveParticipantId(payload["participant_id"])
-            : undefined) ?? targetParticipantId,
+        // An address the composer's target is not part of goes to the first addressee.
+        participantId: startParticipantId({ isApplicationTurn, redirected: sendTarget !== routing.target, payloadParticipantId: payload["participant_id"], targetParticipantId }),
       };
       const body = buildStartBody({ ...bodyParams, unattended: grant });
       // No body can satisfy this contract (an agent turn with no addressable
@@ -216,7 +218,7 @@ export function useChatBoxSend(
       // certain to be refused.
       if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       const start = (startBody: Record<string, unknown>) =>
-        startDetailed({ projectId, conversationUuid, contract: resolveStartContract(target), body: startBody });
+        startDetailed({ projectId, conversationUuid, contract: resolveStartContract(sendTarget), body: startBody });
       const outcome = await start(body);
       // ADR-0045: "Run to completion" is on by default, but an administrator
       // can turn grants off. Then the control hides for this page load. A
@@ -234,7 +236,7 @@ export function useChatBoxSend(
       projectIdString,
       modelRequest,
       getInternalToolsForSend,
-      target,
+      routing,
       unattended,
     ],
   );

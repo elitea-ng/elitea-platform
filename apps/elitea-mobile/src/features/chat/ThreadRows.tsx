@@ -1,12 +1,14 @@
 import { router } from 'expo-router';
-import type { ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
 import { AttachmentStrip } from '@/features/chat/attachments/AttachmentStrip';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import type { ChatAttachment, ChatMessage } from '@/features/chat/messageModel';
-import { MESSAGE_CLASS, type MessageClass } from '@elitea/client-core/conversation';
+import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-core/conversation';
+import { useDesign } from '@/design/DesignProvider';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
 import { ToolActivity } from '@/features/chat/ToolCalls';
 import type { ToolStep } from '@/features/chat/toolActivity';
@@ -15,7 +17,7 @@ import type { SendExtras } from '@/features/chat/useTurn';
 import { Markdown } from '@/features/markdown/Markdown';
 import { outboxDrainer } from '@/sync/appOutbox';
 import { outboxStatus, type OutboxItem } from '@/sync/outbox';
-import { Button } from '@/ui';
+import { Button, Icon, Text } from '@/ui';
 
 /**
  * The rows of a conversation (docs/design-system.md §4.6, screens.md §4), shared by the thread
@@ -114,12 +116,63 @@ export function PersistedMessage({
 /** What a refused outbox item carried besides its text (kept on "Send again"). */
 function extrasOf(item: OutboxItem): SendExtras {
   try {
-    const { mentions, attachments } = restorePreparedTurn(item.bodyJson).request;
-    return { mentions, attachments };
+    const { mentions, attachments, addressedTo } = restorePreparedTurn(item.bodyJson).request;
+    // Refused for an addressee that left: sent again, the floor decides instead.
+    return { mentions, attachments, addressedTo: item.lastError === 'addressee_not_in_conversation' ? null : addressedTo };
   } catch (error) {
     if (error instanceof TurnInputError) return {};
     throw error;
   }
+}
+
+/**
+ * A platform line (ADR-0050 decision 7e: a loop guard, a hand-off): centred, muted, no avatar and
+ * no bubble.
+ */
+export function SystemLine({ message }: { message: ChatMessage }) {
+  return (
+    <View style={styles.system} accessible accessibilityRole="text" testID="system-line">
+      <Text variant="footnote" tone="secondary" style={styles.systemText}>
+        {message.text}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * A run of agent-to-agent messages (decision 7e) folded into one "Side conversation (n)" row; a
+ * tap opens it into compact "A → B" rows, each with its text.
+ */
+export function SideTalkRow({ messages, nameOf }: { messages: readonly ChatMessage[]; nameOf: (participantId: number) => string | null }) {
+  const { colors, radius } = useDesign();
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={styles.side}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityHint={TURN_TAKING_COPY.sideConversationHint(open)}
+        onPress={() => setOpen((v) => !v)}
+        style={[styles.sideHeader, { backgroundColor: colors.surfaceSunken, borderRadius: radius.md }]}>
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} tone="secondary" weight="semibold" />
+        <Text variant="footnote" tone="secondary" emphasized>
+          {TURN_TAKING_COPY.sideConversation(messages.length)}
+        </Text>
+      </Pressable>
+      {open
+        ? messages.map((m) => (
+            <View key={m.key} style={[styles.sideRow, { borderStartColor: colors.separatorStrong }]} testID="side-talk-row">
+              <Text variant="caption" tone="secondary" emphasized numberOfLines={1}>
+                {sideTalkLabel(m.author ?? '', (m.addressedTo ?? []).map((id) => nameOf(id) ?? ''))}
+              </Text>
+              <Text variant="footnote" numberOfLines={6}>
+                {m.text}
+              </Text>
+            </View>
+          ))
+        : null}
+    </View>
+  );
 }
 
 /** A message waiting in the offline outbox (queued, sending, or refused). */
@@ -225,4 +278,9 @@ export function LiveReply({
 
 const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  system: { alignSelf: 'center', maxWidth: '85%', paddingVertical: 6, paddingHorizontal: 12 },
+  systemText: { textAlign: 'center' },
+  side: { alignSelf: 'stretch', gap: 6, paddingStart: 40, paddingVertical: 4 },
+  sideHeader: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 32, paddingHorizontal: 10 },
+  sideRow: { gap: 2, paddingStart: 10, borderStartWidth: 2 },
 });

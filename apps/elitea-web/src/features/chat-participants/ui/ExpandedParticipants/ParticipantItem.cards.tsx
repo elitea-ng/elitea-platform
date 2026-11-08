@@ -39,6 +39,8 @@ export interface NormalCardProps extends CardBaseProps {
   nameRef: React.RefObject<HTMLSpanElement>;
   /** The agent's own context meter (issue 1610); hidden while hovered, where the actions take its place. */
   contextSlot?: React.ReactNode;
+  /** The agent's "Lead" badge and lead menu (issue 1612); stays while hovered. */
+  leadSlot?: React.ReactNode;
 }
 
 export interface AttentionCardProps extends CardBaseProps {
@@ -50,6 +52,7 @@ export interface AttentionCardProps extends CardBaseProps {
   spOAuthLoggedOut: boolean | undefined; spConfig: unknown;
   handleEditClick: (e: React.MouseEvent) => void; isToolkitParticipant: boolean;
   sharepointLoginSlot?: React.ReactNode;
+  leadSlot?: React.ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +63,7 @@ export function renderNormalCard({
   isActive, collapsed, displayName, iconNode, entitySettings, versionName, isBeingEdited,
   s, onClickHandler, onMouseEnter, onMouseLeave, containerInfoRow,
   participant, onEdit, onDelete, disabledEdit, showEditButton, hasRemoteMcpLoggedIn,
-  isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot,
+  isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot, leadSlot,
 }: NormalCardProps): React.ReactElement | null {
   return (
     <Box sx={s.normalItemWrapper}>
@@ -94,6 +97,7 @@ export function renderNormalCard({
           </Box>
         )}
 
+        {!collapsed && leadSlot}
         {!collapsed && !isHovering && contextSlot}
 
         {!collapsed && !isBeingEdited && (
@@ -128,7 +132,7 @@ export function renderAttentionCard({
   isPublishedAgentGone, remoteMcpLoggedOut, spOAuthLoggedOut, spConfig,
   handleEditClick, isToolkitParticipant, participant, onEdit, onDelete,
   disabledEdit, showEditButton, hasRemoteMcpLoggedIn, isHovering,
-  mcpLoginSlot, mcpLogoutSlot, sharepointLoginSlot,
+  mcpLoginSlot, mcpLogoutSlot, sharepointLoginSlot, leadSlot,
 }: AttentionCardProps): React.ReactElement {
   return (
     <Box
@@ -151,6 +155,7 @@ export function renderAttentionCard({
             )}
           </Box>
         )}
+        {!collapsed && leadSlot}
         {!collapsed && !isBeingEdited && (
           <ParticipantActions
             participant={participant}

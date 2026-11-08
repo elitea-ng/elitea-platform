@@ -18,6 +18,7 @@ import { log } from '@/lib/log';
 import { network } from '@/lib/network';
 import { handOffToOutbox, mustQueueBehindOutbox, queueSend, shouldQueue } from '@/sync/appOutbox';
 import { isOfflineCopy } from '@/sync/offlineReads';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import {
   TurnController,
   newQuestionId,
@@ -78,6 +79,13 @@ export const STEERING_NOT_SUPPORTED_TEXT = "This agent can't read new messages w
 export interface SendExtras {
   mentions?: TurnMentions | null;
   attachments?: TurnAttachment[] | null;
+  /** The agents the message is addressed to (ADR-0050 7c); empty or absent: the floor decides. */
+  addressedTo?: number[] | null;
+  /**
+   * The participant this send goes to instead of the hook's (a message addressed by mention in
+   * a conversation where nothing was chosen yet, issue #1624: its first addressee).
+   */
+  participantId?: number;
   /** The question_id to use (minted earlier, e.g. before uploading its files). */
   questionId?: string;
 }
@@ -91,6 +99,8 @@ export function inputErrorText(error: TurnInputError): string {
       return 'This message mentions too many people.';
     case 'attachments':
       return 'The attached files could not be added to this message.';
+    case 'addressed_to':
+      return TURN_TAKING_COPY.tooManyAddressees;
     default:
       return 'This message cannot be sent.';
   }
@@ -229,7 +239,7 @@ export function freshConversation<T>(queryClient: QueryClient, projectId: number
  * body, stream replayed from the start); unmounting stops its network work
  * but keeps the turn for the next mount.
  */
-export function useTurn({ projectId, conversationRef, conversationUuid, participantId, model = null, steering = false }: UseTurnArgs): UseTurn {
+export function useTurn({ projectId, conversationRef, conversationUuid, participantId: boundParticipant, model = null, steering = false }: UseTurnArgs): UseTurn {
   const queryClient = useQueryClient();
   // The end-of-turn rule of steering (contract 1.27) sends the leftover texts as ONE normal message, through `send`,
   // with the question id that the hand-off named (when there was a hand-off).
@@ -289,7 +299,9 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       const fields = {
         mentions: extras.mentions && (extras.mentions.userIds.length > 0 || extras.mentions.everyone) ? extras.mentions : null,
         attachments: extras.attachments && extras.attachments.length > 0 ? extras.attachments : null,
+        addressedTo: extras.addressedTo && extras.addressedTo.length > 0 ? extras.addressedTo : null,
       };
+      const participantId = extras.participantId ?? boundParticipant;
       if (projectId === null || !conversationUuid || participantId === null || key === null) {
         return 'This conversation cannot be messaged from mobile.';
       }
@@ -356,7 +368,7 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
       setLiveTurn(key, next);
       return null;
     },
-    [projectId, conversationUuid, participantId, model, key, queryClient, conversationRef, steering, onLeftover, onSteeringOffer],
+    [projectId, conversationUuid, boundParticipant, model, key, queryClient, conversationRef, steering, onLeftover, onSteeringOffer],
   );
   useEffect(() => {
     sendRef.current = send;

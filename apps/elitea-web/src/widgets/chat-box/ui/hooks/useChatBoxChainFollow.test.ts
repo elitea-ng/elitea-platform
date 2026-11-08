@@ -176,4 +176,10 @@ describe('mergeChainSnapshot', () => {
     const live = [question, answer];
     expect(mergeChainSnapshot(live, [{ ...question, id: 'x' }])).toBe(live);
   });
+
+  it('takes the class a settled answer has in the read, so streamed side talk folds (ADR-0050 7e)', () => {
+    const live = [question, answer];
+    const read = [question, { ...answer, messageClass: 'agent_to_agent' as const, addresseeNames: ['Analyst'] }];
+    expect(mergeChainSnapshot(live, read)[1]).toMatchObject({ messageClass: 'agent_to_agent', addresseeNames: ['Analyst'] });
+  });
 });

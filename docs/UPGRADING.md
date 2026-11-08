@@ -23,6 +23,14 @@ logs and credentials stay where they are.
 - **Translators:** the desktop menu labels name the product as `{product}`;
   the host puts in the build's product name. Keep the placeholder.
 
+## Composing for several agents on web and mobile (#1612, ADR-0050 decisions 7e and 7f)
+
+No operator action. No migration, no contract change: the web and mobile
+clients now send `addressed_to` (added in #1611), write the conversation meta
+`floor` for the lead, fold agent-to-agent messages into a side-conversation
+chip, and show loop-guard lines. Roll out Main with #1611 before these
+clients. A local desktop thread still holds one agent (#1806).
+
 ## Cloud browser: Moli layout refresh and a wider auto trigger (#1599, ADR-0049)
 
 No migration or configuration change; `platformconfig.BrowserLiteAdmitted`

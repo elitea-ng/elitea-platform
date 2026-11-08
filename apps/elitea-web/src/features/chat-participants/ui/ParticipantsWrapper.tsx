@@ -162,6 +162,7 @@ export interface ParticipantsWrapperProps {
    */
   readonly renderContextBudget?: ParticipantsProps['renderContextBudget'];
   readonly renderAgentContext?: AgentContextRenderer; // issue 1610
+  readonly renderAgentLead?: AgentContextRenderer; // issue 1612: an agent row's lead badge and menu
   /**
    * Optional slot to resolve toolkit/MCP icons.
    * @see ParticipantsProps.resolveToolkitIcon
@@ -234,7 +235,7 @@ export const ParticipantsWrapper = memo(
     onUpdateParticipant,
     onEditParticipant,
     onAddParticipants,
-    renderContextBudget, renderAgentContext,
+    renderContextBudget, renderAgentContext, renderAgentLead,
     resolveToolkitIcon,
     isMcpVisible,
     editingToolkit,
@@ -257,6 +258,7 @@ export const ParticipantsWrapper = memo(
     );
 
     const agentSlot = useAgentContextSlot(renderAgentContext, derived._conversationId);
+    const leadSlot = useAgentContextSlot(renderAgentLead, derived._conversationId).renderAgentContext;
 
     // Fixes adversarial review C5-wrapper #5: old-app `disabledAdd` gates on
     // BOTH playback state and `users.view` permission, not playback alone.
@@ -295,7 +297,7 @@ export const ParticipantsWrapper = memo(
             resolveToolkitIcon={resolveToolkitIcon}
             isMcpVisible={isMcpVisible}
             renderContextBudget={contextSlot}
-            {...agentSlot}
+            {...agentSlot} {...(leadSlot ? { renderAgentLead: leadSlot } : {})}
             {...(derived._conversationId !== undefined ? { conversationId: derived._conversationId } : {})}
             maxVisibleUsers={maxVisibleUsers}
             isSmallWindow={isSmallWindow}
