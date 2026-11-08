@@ -167,6 +167,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-desktop-linux"
+version = "1.2.0"
+dependencies = [
+ "agent-desktop-core",
+ "async-io",
+ "futures-lite",
+ "futures-util",
+ "libc",
+ "png 0.18.1",
+ "rustix",
+ "serde_json",
+ "thiserror 2.0.21",
+ "x11rb",
+ "zbus",
+]
+
+[[package]]
 name = "agent-desktop-macos"
 version = "1.2.0"
 dependencies = [
@@ -183,6 +200,20 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "agent-desktop-windows"
+version = "1.2.0"
+dependencies = [
+ "agent-desktop-core",
+ "png 0.18.1",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+ "uiautomation",
+ "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1867,12 +1898,17 @@ name = "elitea-desktop-control"
 version = "0.1.0"
 dependencies = [
  "agent-desktop-core",
+ "agent-desktop-linux",
  "agent-desktop-macos",
+ "agent-desktop-windows",
  "core-foundation",
  "core-graphics",
  "image",
  "serde",
  "thiserror 2.0.21",
+ "willhook",
+ "x11rb",
+ "zbus",
 ]
 
 [[package]]
@@ -8438,6 +8474,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "uiautomation"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa2eacf9390a8491bc949b04230f40c12520c6423a2962a6087eea1ef14373af"
+dependencies = [
+ "chrono",
+ "uiautomation_derive",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
+name = "uiautomation_derive"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c893ec96e05c3c81ba46f838f3190549ec185ef377d582ab3d44202b2dfacbd"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
 name = "unicase"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8888,6 +8947,16 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "willhook"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "984cc87572ddeee205caab3372ca4d84596c363e6c809294dc4514ef43f5e83e"
+dependencies = [
+ "once_cell",
+ "winapi",
+]
 
 [[package]]
 name = "winapi"

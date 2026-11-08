@@ -2865,10 +2865,13 @@ listening only.
 | `computer_open_privacy` | `grant: "accessibility" \| "screen_recording" \| "input_monitoring"` | nothing; opens that System Settings pane (fixed `x-apple.systempreferences:` URL per grant) |
 | `computer_session` | `action: "get" \| "pause" \| "resume" \| "stop"` | `SessionView` after the action |
 
-`ComputerSettings`: `{policy_allows, enabled, supported, accessibility,
-screen_recording, screenshot_tools, stop_shortcut, remembered: [{bundle_id,
-sees, acts}]}`; the grants are `granted | denied | unknown | not_required`,
-read live at every call. `enabled` is `settings.json` `"computer_use"`.
+`ComputerSettings`: `{policy_allows, enabled, supported, read_only_reason,
+accessibility, screen_recording, screenshot_tools, stop_shortcut,
+remembered: [{bundle_id, sees, acts}]}`; the grants are `granted | denied |
+unknown | not_required`, read live at every call. `enabled` is
+`settings.json` `"computer_use"`. `read_only_reason` is `null`, or why the
+agent can see apps but not act in them on this session (a Linux Wayland or
+XWayland session, where the user-active guard cannot run).
 
 `SessionView`: `{phase: "idle" | "active" | "paused" | "stopped", paused_by:
 "button" | "user_active" | null, app, action}` (`app`: the app's name, else

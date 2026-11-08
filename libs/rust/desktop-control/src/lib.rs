@@ -9,6 +9,11 @@
 //! - `MacDriver` (macOS only) is built on the vendored agent-desktop
 //!   `core` and `macos` crates (`libs/rust/vendor/agent-desktop`). No vendor
 //!   type crosses the trait.
+//! - `WindowsDriver` (Windows only, UI Automation) and `LinuxDriver`
+//!   (Linux only, AT-SPI with X11 input) are built on the vendored
+//!   agent-desktop `windows` and `linux` crates through one shared engine
+//!   (`engine.rs`), with each OS's deny list and secure-field rule in
+//!   [`platform`] (ADR-0047 decision 10).
 //! - [`Unsupported`] is the driver of every other OS; every call fails with
 //!   [`DesktopError::PlatformNotSupported`].
 //! - [`default_driver`] returns the one this OS has.
@@ -28,11 +33,14 @@
 //! calls [`DesktopDriver::screen`] before every tool call, so a locked
 //! screen refuses the whole call.
 
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+mod crop;
 mod driver;
 mod error;
 mod guard;
 pub mod input;
 mod model;
+pub mod platform;
 mod policy;
 pub mod snapshot;
 
@@ -41,10 +49,23 @@ mod macos;
 #[cfg(target_os = "macos")]
 mod macos_input;
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod engine;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+mod linux_input;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+mod windows_input;
+
 pub use driver::{DesktopDriver, Unsupported};
 pub use error::DesktopError;
 pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlaps};
 pub use input::{Halt, InputFilter, InputWatch, STOP_SHORTCUT, Signal, SignalSink};
+#[cfg(target_os = "linux")]
+pub use linux::LinuxDriver;
 #[cfg(target_os = "macos")]
 pub use macos::MacDriver;
 pub use model::{
@@ -55,15 +76,43 @@ pub use model::{
     validate_text_write,
 };
 pub use policy::{InputOrigin, SyntheticMarker, is_denied_chord, is_denied_menu_item};
+#[cfg(target_os = "windows")]
+pub use windows::WindowsDriver;
 
-/// The driver of this OS: `MacDriver` on macOS, [`Unsupported`] elsewhere.
+/// Why computer use can read but not act on this computer, or `None` when
+/// it can act (as far as the session kind tells: grants are separate). On a
+/// Linux Wayland or `XWayland` session the user-active guard cannot run, so
+/// every act is refused (`user_active_guard_unavailable`); the host's
+/// settings show computer use as read-only with this reason.
+#[must_use]
+pub fn read_only_reason() -> Option<&'static str> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::guard_unavailable()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// The driver of this OS: `MacDriver` on macOS, `WindowsDriver` on
+/// Windows, `LinuxDriver` on Linux, [`Unsupported`] elsewhere.
 #[must_use]
 pub fn default_driver() -> Box<dyn DesktopDriver> {
     #[cfg(target_os = "macos")]
     {
         Box::new(MacDriver::new())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(WindowsDriver::new())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(LinuxDriver::new())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Box::new(Unsupported)
     }

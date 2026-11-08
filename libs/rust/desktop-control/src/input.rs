@@ -125,7 +125,75 @@ pub fn classify(
 
 /// A running input watch. Dropping it stops the watch; no signal is heard
 /// after the drop returns.
-pub trait InputWatch: Send {}
+pub trait InputWatch: Send {
+    /// Whether the watch still hears input. A watch whose thread ended on
+    /// its own (the display went away, a hook could not be re-armed) is dead: the
+    /// user-active guard no longer runs, so nothing may act
+    /// (`user_active_guard_unavailable`).
+    fn alive(&self) -> bool {
+        true
+    }
+}
+
+/// The liveness of one watch, shared by its handle, its thread and the
+/// driver that started it. The thread holds an [`AliveGuard`], which clears
+/// it however the thread ends.
+#[derive(Debug, Clone)]
+pub(crate) struct Alive(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Alive {
+    pub(crate) fn new() -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            true,
+        )))
+    }
+
+    pub(crate) fn get(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The guard the watch's thread holds for its whole life.
+    pub(crate) fn guard(&self) -> AliveGuard {
+        AliveGuard(self.clone())
+    }
+}
+
+/// Clears its [`Alive`] when dropped: on the watch thread's every exit,
+/// a panic included.
+pub(crate) struct AliveGuard(Alive);
+
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        (self.0).0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The liveness of the last watch a driver started, for its act gate: dead
+/// once that watch's thread ended. `None` before any watch was started (a
+/// driver used without the host's session, as the live tests do).
+#[derive(Debug, Default)]
+pub(crate) struct GuardState(std::sync::Mutex<Option<Alive>>);
+
+impl GuardState {
+    /// A new watch is starting: its liveness from now on.
+    pub(crate) fn start(&self) -> Alive {
+        let alive = Alive::new();
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(alive.clone());
+        alive
+    }
+
+    /// Whether the last watch started has died.
+    pub(crate) fn dead(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|alive| !alive.get())
+    }
+}
 
 /// Hears each [`Signal`], on the watch's own thread.
 pub type SignalSink = Box<dyn Fn(Signal) + Send + Sync>;
@@ -293,6 +361,27 @@ mod tests {
             classify(&aimed_at_elitea, marker(), &own),
             Some(Signal::Stop)
         );
+    }
+
+    #[test]
+    fn a_watch_thread_that_ends_clears_its_liveness() {
+        let state = GuardState::default();
+        assert!(!state.dead(), "no watch yet is not a dead watch");
+        let alive = state.start();
+        assert!(alive.get() && !state.dead());
+        let guard = alive.guard();
+        // The thread ends on its own (an error return, a panic).
+        std::thread::spawn(move || {
+            let _guard = guard;
+            panic!("the display went away");
+        })
+        .join()
+        .unwrap_err();
+        assert!(!alive.get());
+        assert!(state.dead());
+        // A new watch replaces the dead one.
+        let next = state.start();
+        assert!(next.get() && !state.dead());
     }
 
     #[test]

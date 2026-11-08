@@ -46,9 +46,30 @@ const DENIED: &[(&[Modifier], &str)] = &[
 /// carry (ADR-0047 decision 5): the menu path to a denied chord. A title
 /// matches whole (`Sleep`), or as its first words followed by more
 /// (`Quit TextEdit`, `Log Out Alex…`, `Force Quit…`), ASCII case ignored and
-/// a trailing ellipsis (`…` or `...`) dropped.
-const DENIED_MENU_EXACT: &[&str] = &["shut down", "restart", "sleep", "lock screen"];
-const DENIED_MENU_PREFIX: &[&str] = &["quit", "log out", "force quit", "switch user"];
+/// a trailing ellipsis (`…` or `...`) dropped. The Windows and Linux titles
+/// (ADR-0047 decision 10) are here too: one rule on every OS. A Windows
+/// mnemonic marker (`E&xit`) is dropped before the match; `Exit` matches
+/// whole only, so `Exit full screen` passes.
+const DENIED_MENU_EXACT: &[&str] = &[
+    "shut down",
+    "restart",
+    "sleep",
+    "lock screen",
+    "exit",
+    "power off",
+    "suspend",
+    "hibernate",
+    "reboot",
+];
+const DENIED_MENU_PREFIX: &[&str] = &[
+    "quit",
+    "log out",
+    "force quit",
+    "switch user",
+    "sign out",
+    "log off",
+    "shut down",
+];
 
 /// Whether an element with this (normalised) role and title is a denied
 /// menu item (`menu_item_refused`): pressing it is refused in every mode.
@@ -65,8 +86,8 @@ pub fn is_denied_menu_item(role: &str, title: Option<&str>) -> bool {
     for ellipsis in ["\u{2026}", "..."] {
         title = title.strip_suffix(ellipsis).unwrap_or(title);
     }
-    // Non-breaking spaces read as spaces.
-    let title = title.replace('\u{a0}', " ");
+    // Non-breaking spaces read as spaces; a Windows mnemonic marker goes.
+    let title = title.replace('\u{a0}', " ").replace('&', "");
     let title = title.trim();
     DENIED_MENU_EXACT.contains(&title)
         || DENIED_MENU_PREFIX.iter().any(|prefix| {

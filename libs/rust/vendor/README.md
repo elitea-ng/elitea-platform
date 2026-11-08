@@ -648,24 +648,25 @@ the isolation test). Drop this copy when an upstream release requires `zip` 9.
 **Upstream.** The `zip` 9 move, the name handling above and the test-directory
 fixes, on the current `zavora-ai/zavora-xlsx` default branch: https://github.com/zavora-ai/zavora-xlsx/pull/2.
 
-## `agent-desktop/` — agent-desktop 1.2.0 (`core` and `macos`) with three patches
+## `agent-desktop/` — agent-desktop 1.2.0 (`core`, `macos`, `windows`, `linux`) with four patches
 
-The macOS driver behind `elitea-desktop-control` (ADR-0047, #1581). That
-crate is its only caller and keeps every vendor type behind its own
-`DesktopDriver` trait.
+The macOS, Windows and Linux drivers behind `elitea-desktop-control`
+(ADR-0047, #1581; Windows and Linux: decision 10, #1586). That crate is its
+only caller and keeps every vendor type behind its own `DesktopDriver` trait.
+Each OS crate is compiled only on its own OS.
 
 **Why vendored.** The upstream crates are not published, and they are a
 new, fast-moving project. A copy keeps the code that drives a person's other
 applications as a reviewed diff in this tree. The patches add a tag on
-synthetic events and three small readers that upstream does not have.
+synthetic events and a few small read-only accessors that upstream does not have.
 
 | | |
 | --- | --- |
-| Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core` and `crates/macos` |
-| Tree digest | `88c4e6697e77ce55281f692813dcdeedfe66858e046b2a36c8ddcc01daaa927e` (624 files, 3.9 MB, after the patches; command below) |
+| Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core`, `crates/macos`, `crates/windows` and `crates/linux` |
+| Tree digest | `fea3dadbe960c77f037208a72ec5f146468ed8e54e418759f3bfb6ad1aac826b` (1429 files, 9.1 MB, after the patches; command below) |
 | Licence | `Apache-2.0`; the repository's `LICENSE` is at `agent-desktop/LICENSE`. Upstream has no `NOTICE` file. The root `NOTICE` names the copy. |
-| Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`; the upstream manifests as `core/Cargo.toml.orig` and `macos/Cargo.toml.orig` |
-| Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, the CLI crate (`src/` at the root), the Windows and Linux crates, `skills/`, `npm/`, `apps/`, benchmarks, probes |
+| Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`, `windows/src/**`, `linux/src/**`; the upstream manifests as `<crate>/Cargo.toml.orig` |
+| Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, `testdata/` and the `.py` helper scripts of the Windows and Linux crates, the CLI crate (`src/` at the root), `skills/`, `npm/`, `apps/`, benchmarks, probes |
 
 **Changes.**
 
@@ -694,8 +695,31 @@ synthetic events and three small readers that upstream does not have.
    (`CGSSessionScreenIsLocked`, `kCGSSessionOnConsoleKey`) and
    `CGDisplayIsAsleep(CGMainDisplayID())`, for the `screen_unavailable`
    gate of ADR-0047 decision 5. `lib.rs` declares the module.
+4. The new file `windows/src/elitea_ext.rs` adds two read-only functions
+   (#1586). `screen_state()` returns a `ScreenState` for the same gate:
+   `ProcessIdToSessionId` and `WTSGetActiveConsoleSessionId` with
+   `WTSQuerySessionInformationW(WTSConnectState) == WTSActive` (on the
+   console and connected), `OpenInputDesktop` + `GetUserObjectInformationW
+   (UOI_NAME)` (the input desktop is not `Default`, or cannot be opened:
+   the lock or sign-in screen or a UAC/credential secure desktop), and
+   `SystemParametersInfoW(SPI_GETSCREENSAVERRUNNING)`. `foreground_pid()`
+   is `GetForegroundWindow` + `GetWindowThreadProcessId`; the input watch
+   uses it to leave out input aimed at Elitea. A non-Windows build gets
+   stubs. `lib.rs` declares the module, and the manifest adds the
+   `windows-sys` features `Win32_System_RemoteDesktop` and
+   `Win32_System_StationsAndDesktops` for it.
+5. `windows/src/elitea_ext.rs` adds `window_facts(window_id)` and its
+   `WindowFacts` (#1586): the owner's image name, the window class, the
+   image of the app an `ApplicationFrameWindow` hosts (the adapter's own
+   `frame_identity::hosted_application_pid`), and, for a `CabinetWClass`
+   window, its `IShellWindows` / `IWebBrowserApp::LocationURL`. Reads only.
+   The driver's deny rule needs them because Settings and Windows Security
+   are framed by `applicationframehost.exe`, and the Run box and the Control
+   Panel are `explorer.exe` windows. The manifest adds the `windows`
+   features `Win32_System_Ole`, `Win32_System_Variant` and `Win32_UI_Shell`
+   for it (the VARIANT comes from `uiautomation`, already a dependency).
 
-The two `Cargo.toml` files are rewritten as standalone manifests:
+The four `Cargo.toml` files are rewritten as standalone manifests:
 
 - the `workspace = true` keys are written out with the upstream root's values;
 - `rust-version` is 1.89, the upstream value, which is at or below the
@@ -705,7 +729,13 @@ The two `Cargo.toml` files are rewritten as standalone manifests:
 - `autobins`, `autoexamples`, `autotests` and `autobenches` are false;
 - the upstream lint table is dropped;
 - the no-op features `dev-tools` and `interactive-tests` stay in macos, so
-  its `cfg(feature = ...)` lines are known.
+  its `cfg(feature = ...)` lines are known;
+- windows and linux drop their `[[bin]]` targets (the clipboard-owner and
+  overlay helpers, not copied) and their dev-dependencies;
+- linux relaxes two exact pins to carets, `futures-util = "0.3.33"` and
+  `rustix = "1.1.5"`, so the lock keeps the 0.3.34 and 1.1.6 every other
+  crate here already uses; its other pins (`zbus`, `x11rb`, `async-io`,
+  `futures-lite`, `png`) stay exact.
 
 Every other file matches upstream byte for byte.
 
@@ -713,18 +743,22 @@ Every other file matches upstream byte for byte.
 
 ```bash
 git clone https://github.com/vercel-labs/agent-desktop /tmp/ad && git -C /tmp/ad checkout b43ac4f6e892ef608f8851428613c4009f0e84c7
-for c in core macos; do
-  diff -r -x '*_tests.rs' -x tests.rs -x bin /tmp/ad/crates/$c/src vendor/agent-desktop/$c/src
+for c in core macos windows linux; do
+  diff -r -x '*_tests.rs' -x tests.rs -x bin -x testdata -x '*.py' /tmp/ad/crates/$c/src vendor/agent-desktop/$c/src
   diff /tmp/ad/crates/$c/Cargo.toml vendor/agent-desktop/$c/Cargo.toml.orig
 done                       # only the patched files above differ
 diff /tmp/ad/crates/macos/build.rs vendor/agent-desktop/macos/build.rs
 (cd vendor/agent-desktop && find . -type f | LC_ALL=C sort | xargs shasum -a 256) | shasum -a 256
 ```
 
-**How it is built.** `elitea-desktop-control` uses both crates as path
-dependencies, and only under `cfg(target_os = "macos")`. A Linux build of
-the workspace never compiles them, and Cargo still resolves them into
-`Cargo.lock`. On macOS, `macos/build.rs` compiles the `.m` bridges with
+**How it is built.** `elitea-desktop-control` uses the crates as path
+dependencies: `core` and `macos` only under `cfg(target_os = "macos")`,
+`core` and `windows` only under `cfg(target_os = "windows")`, `core` and
+`linux` only under `cfg(target_os = "linux")`. A build compiles its own OS's
+adapter and nothing else (`uiautomation`, `windows`, `willhook` on Windows;
+`x11rb`, `zbus` on Linux), and Cargo still resolves all of them into
+`Cargo.lock`. `.github/workflows/ci-desktop-control.yml` builds the crate on
+windows-latest and ubuntu-latest. On macOS, `macos/build.rs` compiles the `.m` bridges with
 `xcrun clang` and links AppKit, ApplicationServices and the other system
 frameworks. That build script runs in this tree, never in the upstream
 clone. The crates are not workspace members (`libs/rust/Cargo.toml`
@@ -752,10 +786,33 @@ cleanly.
   are built in memory (`snapshot::build`), so the `RefStore` disk cache is
   never written.
 
-Updating: re-copy the listed paths at the new commit, re-apply the three
+**Review of `windows` and `linux` (2026-11-08, #1586).**
+
+- `unsafe`: `windows` uses it in 87 files (522 lines, the UI Automation,
+  COM, Win32 and Graphics Capture FFI, and patch 4); `linux` in 6 files
+  (15 lines: `libc` calls for signals, memfd and process identity). It
+  stays in these vendored crates, reviewed as vendored code on the macOS
+  precedent; `elitea-desktop-control` keeps `unsafe_code = "forbid"` and
+  has none.
+- Subprocesses at run time: Windows launches the application `open_app`
+  names (UI Automation's own launch path, `windows/src/system/launch.rs`)
+  and refuses to start its cursor-overlay renderer from any image but its
+  own CLI, so under Elitea it never forks itself. Linux launches the
+  desktop entry `open_app` names (`linux/src/system/launch/launch_spawn.rs`),
+  and its Wayland clipboard runs `wl-copy`/`wl-paste` and a helper binary
+  that is not vendored (so a Wayland clipboard write fails). Every other
+  `Command::new` (`xwininfo`, `xprop`, `xdotool`, `python3`, `kill`, `cmd`,
+  fixtures) is in a `#[cfg(test)]` module and is not compiled.
+- Network: only `linux/src/system/x11/bounded.rs`, which connects to the X
+  server named by `DISPLAY` (a TCP display when `DISPLAY` names a host).
+- Files: the vendors' interaction leases are bypassed as on macOS
+  (`InteractionLease::guarded`); the other file writes are test fixtures.
+
+Updating: re-copy the listed paths at the new commit, re-apply the four
 patches, refresh the tree digest and this table, then run
 `cargo clippy -p elitea-desktop-control -- -D warnings` and the ignored
-live test (`desktop-control/tests/macos_live.rs`) on a Mac.
+live test (`desktop-control/tests/macos_live.rs`) on a Mac; let
+`ci-desktop-control.yml` build Windows and Linux.
 
 ## Moving zip
 

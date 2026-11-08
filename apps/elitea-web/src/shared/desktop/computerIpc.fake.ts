@@ -19,6 +19,7 @@ const FAKE_COMPUTER_SETTINGS: ComputerSettings = {
   policy_allows: true,
   enabled: false,
   supported: true,
+  read_only_reason: null,
   accessibility: 'granted',
   screen_recording: 'denied',
   screenshot_tools: ['computer_screenshot', 'computer_click_at'],
