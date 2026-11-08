@@ -22,8 +22,8 @@
 //! * [`input`] — telling the person's input from the driver's own.
 //!
 //! The engines are elsewhere: `elitea-browser-driver-macos` (WebKit FFI,
-//! the one crate allowed `unsafe` for WebKit) and the desktop host's
-//! `browser_linux` (the safe `webkit2gtk` API). Windows uses only
+//! one of the two crates allowed `unsafe`) and `elitea-browser-driver-linux`
+//! (the safe `webkit2gtk` API). Windows uses only
 //! [`INPUT_SCRIPT`] and [`input`] from this crate: `WebView2` has CDP, so
 //! its driver is the cloud's CDP driver (`elitea-browser-session`) over
 //! `CallDevToolsProtocolMethod`.

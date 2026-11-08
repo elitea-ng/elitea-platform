@@ -1,0 +1,105 @@
+---
+title: "The Windows and Linux browser drivers"
+description: "How the desktop app drives the browser pane on Windows (WebView2 and its own CDP) and on Linux (WebKitGTK and an isolated script world): the per-thread data folders, the person's input, trusted input and its Wayland limit, native history, the unsafe rules for the Windows crate, the known limits, and how to run the engine tests."
+---
+
+The desktop browser pane shows a web page in a Tauri child webview. On macOS that is a WKWebView ([The macOS browser driver](/development/browser-driver-macos)). On Windows it is a `WebView2`, and on Linux it is a WebKitGTK `WebView`. The two drivers on this page let the agent of a Local work thread read and use the page on those systems, with the same tools, results and errors as on macOS and in the cloud ([The browser tool contract](/development/browser-tools)). They follow ADR-0048 decision 6 (#1593).
+
+## Crates
+
+| Crate | Path | Holds | `unsafe` |
+| --- | --- | --- | --- |
+| `elitea-browser-driver-dom` | `apps/elitea-desktop/src-tauri/browser-driver-dom` | The page script (`js/driver.ts`), the Windows input reporter (`js/input.ts`), the reply reader, `WebDriver` over an `Engine` trait, and the input filter (`OwnInput`, `cdp_reports`). Shared by macOS and Linux. | `forbid` |
+| `elitea-browser-driver-linux` | `browser-driver-linux` | `GtkEngine`, the WebKitGTK engine under `WebDriver`, on the safe `webkit2gtk` bindings. Empty off Linux. | `forbid` |
+| `elitea-browser-driver-windows` | `browser-driver-windows` | The bridge from `WebView2`'s own CDP to a CDP byte stream (the COM calls), and the record format (`wire`). Empty off Windows, except `wire`. | `deny`, with per-block exceptions |
+| `elitea-desktop` | `src-tauri/src/browser_windows.rs` | The Windows pane driver: the cloud `CdpDriver` over the bridge, plus the person's input and the hand-over. | `forbid` |
+
+All four are members of the `src-tauri` workspace and share one `Cargo.lock`. The page scripts are TypeScript, compiled at build time by `browser-driver-dom/build.rs` with the web app's pinned `tsc` (run `npm ci` in `apps/elitea-web` first, or set `ELITEA_TSC`). No JavaScript is committed.
+
+## Windows: WebView2 and its own CDP
+
+`WebView2` is Chromium, and it gives the page's own Chrome DevTools Protocol through `CallDevToolsProtocolMethod` and one event receiver per event name. So the Windows pane does not get a new driver. It gets the cloud browser's `CdpDriver` (`elitea-browser-session`, #1594), which already maps the contract to `Accessibility.getFullAXTree`, `DOM`, `Input.dispatch*Event` and `Page.captureScreenshot`. The agent gets the same trees and results as from a cloud thread.
+
+- **The bridge.** `browser-driver-windows` turns the driver's NUL-delimited CDP records into COM calls on the UI thread and turns the answers and events back into records. A command with no session, or with the fixed page session `elitea-webview2-page`, goes to `CallDevToolsProtocolMethod`. A command to a child target (a cross-origin frame or a worker) goes to `CallDevToolsProtocolMethodForSession`. Events carry their session id (the page's own when it is empty).
+- **One page, no browser target.** `CdpDriver::attach_page` sets up a connection that is one page already: no `Target.attachToTarget`, no device-metrics override (the page keeps the pane's size), and the page's own dialogs stay with the person at it. Cross-origin frames attach as child sessions, as in the cloud.
+- **The person's input.** `WebView2` has no WebKit message handlers. The host installs the input reporter (`INPUT_SCRIPT`) in an isolated world of its own, `elitea_browser_input` (`Page.addScriptToEvaluateOnNewDocument` with `worldName`), and adds a binding, `eliteaBrowserInput`, to that world only (`Runtime.addBinding` with `executionContextName`). The page's scripts live in the page world and cannot see the binding or call it. Each trusted event of the same list as macOS (`pointerdown`, `keydown`, `wheel`, `touchstart`, `beforeinput`, `paste`, `drop`), at most one every 50 ms per type, is a `Runtime.bindingCalled` event on the host.
+- **The agent's own input.** `WebView2` makes `Input.*` trusted input, so the page sees the agent's clicks as real. That is good for pages that accept trusted input only, but it means that each of the agent's commands causes reports too. The bridge passes every command to `cdp_reports`, which says which reports it will cause (for example `Input.dispatchMouseEvent` `mousePressed` causes one `pointerdown`). Those reports are the driver's; every other report is the person's and pauses the agent (`user_active`). If reports are lost (a lagged event channel), the agent pauses too: fail closed.
+- **The hand-over.** `browser_request_user` is the pane's own (the control pill), as on macOS. The cloud driver's own control stays at "agent", because the host gates every call before it reaches the driver.
+
+## Linux: WebKitGTK and an isolated script world
+
+The Linux driver is the macOS driver's `WebDriver` and page script over a different engine, `GtkEngine`:
+
+- **The driver world.** The page script runs only in a `WebKitScriptWorld` named `elitea-browser-driver`. It is installed as a user script of that world (every frame, at document start), and the host calls it with `webkit_web_view_call_async_javascript_function` in that world, with a fixed body and the operation and its JSON arguments as arguments. The message handlers for frames and for the person's input are registered in the driver world only, so the page's scripts cannot post to them.
+- **Screenshots** are `webkit_web_view_get_snapshot` of the visible area, encoded as PNG with cairo and cut to an element's rectangle when one is asked for.
+- **Trusted input.** A click that a page ignores (it acts on trusted events only) falls back to GDK's test input, `gdk_test_simulate_button`, at the element's centre. This works on **X11 only**. See [Limits](#limits).
+- GTK is main-thread only. Every engine call goes to the GLib main context and answers on a channel.
+
+## Data folders per thread
+
+Each thread has its own store, as on macOS:
+
+- **Windows:** a `WebView2` user data folder per thread.
+- **Linux:** a WebKitGTK website data manager per thread (wry keys its `WebContext` on the data folder).
+
+The folder is `<data>/browser/stores/<store id>`, where the store id is the one `<data>/browser/stores.json` keeps for the thread. Forget site data, the thread's delete or archive, and sign-out delete the folder. A `WebView2` folder can still be locked by the browser process when it is deleted. The delete is then retried at the next launch, which also deletes any folder that the registry no longer names.
+
+## Native history
+
+The toolbar's Back, Forward and Stop are the engine's own calls, so a page that replaces `history.back` or `window.stop` cannot stop them:
+
+- **Windows:** `GoBack`, `GoForward` and `Stop` on the `ICoreWebView2` (`elitea_browser_driver_windows::go`).
+- **Linux:** `go_back`, `go_forward` and `stop_loading` on the `WebView` (`elitea_browser_driver_linux::go`).
+
+Reload is `webview.reload()` on every system.
+
+## Unsafe code (Windows only)
+
+webview2-com declares every `ICoreWebView2` method as an `unsafe fn`. So `browser-driver-windows` is the second first-party exception to `unsafe_code = "forbid"` (owner decision on #1593, recorded in the repository's `AGENTS.md`). The Linux driver needs no `unsafe`: the `webkit2gtk`, `gtk`, `gdk` and `cairo` bindings are safe.
+
+The rules are the same as for the macOS crate: `unsafe_code = "deny"` in the lints, `#[allow(unsafe_code)]` on each function that holds an `unsafe` block, a `// SAFETY:` comment on each block (clippy `undocumented_unsafe_blocks = "deny"`), and safe functions only in the public API. All `unsafe` is in `src/com.rs`. Each block calls a `WebView2` COM method on the UI thread, on a live interface the webview holds:
+
+| Function | COM calls | Why |
+| --- | --- | --- |
+| `core_of` | `ICoreWebView2Controller::CoreWebView2` | Get the page's `ICoreWebView2` from the controller Tauri gives. |
+| `open` | `GetDevToolsProtocolEventReceiver`, `add_DevToolsProtocolEventReceived` | Subscribe to each CDP event the driver reads. |
+| `event_of` | `ParameterObjectAsJson`, `ICoreWebView2DevToolsProtocolEventReceivedEventArgs2::SessionId` | Read an event's parameters and its target session (out-parameter strings, freed once). |
+| `call` | `CallDevToolsProtocolMethod`, `ICoreWebView2_11::CallDevToolsProtocolMethodForSession` | Send one CDP command to the page or to a child session. |
+| `close` | `remove_DevToolsProtocolEventReceived` | Remove the subscriptions when the stream closes. |
+| `go_now` | `GoBack`, `GoForward`, `Stop` | The pane's native history buttons. |
+
+## Limits
+
+- **Wayland: no trusted input.** On Wayland no client can post input to another surface, and GDK's Wayland backend has no test-input call. The driver reads the display's GDK type and turns trusted input on only for `GdkX11Display`. On Wayland (and any other backend), a click that a page ignores answers `unsupported`, and the message tells the model to use `browser_request_user`, so the person does the step. This is the same path as macOS without the Accessibility grant. There is no virtual-keyboard protocol fallback.
+- **Linux: cross-origin frames are out of reach.** WebKitGTK 2.40's call API has no frame argument, so the driver cannot run in a cross-origin frame. Same-origin frames are read inline. A cross-origin frame shows as an `iframe` node with no content, and actions in it answer `stale_ref`. Windows reads and acts in cross-origin frames through child CDP sessions; macOS through `WKFrameInfo`.
+- **Windows and Linux: navigations only.** The pane's navigation guard (`browser_pane::check`) applies to every navigation. The macOS content rules that also block subresource loads (`fetch`, images, frames, WebSockets) to private addresses are not yet on Windows or Linux. This is a follow-up.
+- **Windows: no Mark of the Web.** macOS quarantines every download. Windows downloads do not yet get the Mark of the Web (`Zone.Identifier`). This is a follow-up.
+
+## Run the tests
+
+The unit tests run on every system:
+
+```sh
+cd apps/elitea-desktop/src-tauri
+cargo test -p elitea-browser-driver-dom -p elitea-browser-driver-windows -p elitea-browser-driver-linux
+cargo test -p elitea-desktop --lib browser_
+```
+
+The engine tests open a window and drive the real engine. They are ignored unless you ask for them:
+
+```sh
+# Windows (needs the WebView2 runtime, which Windows 11 has)
+cargo test -p elitea-browser-driver-windows --test webview2 -- --ignored
+
+# Linux (X11 under xvfb, so the trusted-input fallback is on)
+xvfb-run -a cargo test -p elitea-browser-driver-linux --test webkitgtk -- --ignored
+```
+
+They run:
+
+- the conformance kit (`conformance::run`) on its fixture pages, served over loopback `http`;
+- the rules' reads: the live address, the focused control, and an element's details (a `download` link and a file input);
+- a page that takes trusted input only. On Windows the agent's CDP click is trusted. On Linux under X11 the GDK fallback clicks it; on Wayland the test expects the hand-over hint;
+- on Linux, a hostile page that tampers with `JSON`, the value accessor and other built-ins and probes for the driver world: it must not reach it.
+
+The fixtures are shared with the macOS run (`browser-driver-macos/tests/fixtures`). No differences from the Chromium goldens are pinned. If an engine's tree has to differ, pin the difference in `differences()` in the test file (`Config.differences`), with the reason. CI runs the unit tests, Clippy on the whole workspace and the engine tests on `windows-latest` and `ubuntu-latest` (the `pane-drivers` job in `ci-desktop.yml`).
