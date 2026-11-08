@@ -14,9 +14,11 @@
 //!   cannot be read is `screen_unavailable`. It fails closed: a desktop
 //!   whose locker runs no screensaver service (i3lock, slock, xsecurelock)
 //!   cannot show the screen is unlocked, so it counts as locked.
-//! - **The user-active guard** runs on X11 only (`linux_input.rs`). Wayland
-//!   gives no application a global view of the keyboard and pointer, so on
-//!   a Wayland session the watch fails closed and every act is refused
+//! - **The user-active guard** runs on plain X11 only (`linux_input.rs`).
+//!   Wayland gives no application a global view of the keyboard and
+//!   pointer, so on a Wayland session ([`guard_unavailable`]: the
+//!   environment, logind's `Session.Type`, or an X server that is
+//!   `XWayland`) the watch fails closed and every act is refused
 //!   (`user_active_guard_unavailable`); reads still work.
 
 use std::time::Duration;
@@ -67,11 +69,42 @@ fn app_id(app: &ad::AppInfo) -> Option<String> {
     platform::linux_app_id(app.bundle_id.as_deref(), &app.name)
 }
 
-/// Whether this process runs in a Wayland session (the guard's fail-closed
-/// case).
-pub(crate) fn is_wayland() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
-        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t.eq_ignore_ascii_case("wayland"))
+/// Why the user-active guard cannot run in this session, or `None` on a
+/// plain X11 session ([`platform::linux_guard_unavailable`]): Wayland by
+/// the environment or by logind's `Session.Type`, or an X server that is
+/// `XWayland`.
+pub(crate) fn guard_unavailable() -> Option<&'static str> {
+    let env_type = std::env::var("XDG_SESSION_TYPE").ok();
+    let logind_type = logind_session_type();
+    let (xwayland_extension, x_vendor) = x_server_kind();
+    platform::linux_guard_unavailable(&platform::LinuxSessionReads {
+        wayland_display: std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
+        env_session_type: env_type.as_deref(),
+        logind_session_type: logind_type.as_deref(),
+        xwayland_extension,
+        x_vendor: x_vendor.as_deref(),
+    })
+}
+
+/// Whether the X server of `DISPLAY` is `XWayland` (its `XWAYLAND`
+/// extension), and its vendor string; `(None, None)` without one.
+fn x_server_kind() -> (Option<bool>, Option<String>) {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    if std::env::var_os("DISPLAY").is_none_or(|v| v.is_empty()) {
+        return (None, None);
+    }
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return (None, None);
+    };
+    let vendor = String::from_utf8_lossy(&conn.setup().vendor).into_owned();
+    let xwayland = conn
+        .query_extension(b"XWAYLAND")
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.present);
+    (xwayland, Some(vendor))
 }
 
 fn bus(system: bool) -> Option<Connection> {
@@ -97,9 +130,8 @@ fn property(bus: &Connection, dest: &str, path: &str, iface: &str, name: &str) -
     bool::try_from(value).ok()
 }
 
-/// What logind says about this process's session: (`Active`,
-/// `LockedHint`), or `None` without logind or a session.
-fn logind() -> Option<(bool, Option<bool>)> {
+/// The logind session of this process, on the system bus.
+fn logind_session() -> Option<(Connection, OwnedObjectPath)> {
     let bus = bus(true)?;
     let reply = bus
         .call_method(
@@ -111,22 +143,35 @@ fn logind() -> Option<(bool, Option<bool>)> {
         )
         .ok()?;
     let path: OwnedObjectPath = reply.body().deserialize().ok()?;
-    let session = "org.freedesktop.login1.Session";
-    let active = property(
-        &bus,
-        "org.freedesktop.login1",
-        path.as_str(),
-        session,
-        "Active",
-    )?;
-    let locked = property(
-        &bus,
-        "org.freedesktop.login1",
-        path.as_str(),
-        session,
-        "LockedHint",
-    );
+    Some((bus, path))
+}
+
+const LOGIND: &str = "org.freedesktop.login1";
+const LOGIND_SESSION: &str = "org.freedesktop.login1.Session";
+
+/// What logind says about this process's session: (`Active`,
+/// `LockedHint`), or `None` without logind or a session.
+fn logind() -> Option<(bool, Option<bool>)> {
+    let (bus, path) = logind_session()?;
+    let active = property(&bus, LOGIND, path.as_str(), LOGIND_SESSION, "Active")?;
+    let locked = property(&bus, LOGIND, path.as_str(), LOGIND_SESSION, "LockedHint");
     Some((active, locked))
+}
+
+/// logind's `Session.Type` of this process's session (`x11`, `wayland`).
+fn logind_session_type() -> Option<String> {
+    let (bus, path) = logind_session()?;
+    let reply = bus
+        .call_method(
+            Some(LOGIND),
+            path.as_str(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(LOGIND_SESSION, "Type"),
+        )
+        .ok()?;
+    let value: OwnedValue = reply.body().deserialize().ok()?;
+    String::try_from(value).ok()
 }
 
 /// The screensaver services of the desktops (freedesktop, which KDE and

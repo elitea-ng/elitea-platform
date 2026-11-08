@@ -17,8 +17,9 @@
 //! - **The stop shortcut** is Control+Alt+Escape (Option is Alt).
 //! - **Wayland fails closed.** No Wayland compositor gives an application a
 //!   global view of the keyboard and pointer, and an X11 watch through
-//!   `XWayland` sees only `XWayland` clients. On a Wayland session [`watch`]
-//!   fails, so the host refuses every act (`user_active_guard_unavailable`);
+//!   `XWayland` sees only `XWayland` clients. On a Wayland session, told by
+//!   the environment, by logind's `Session.Type` or by the X server being
+//!   `XWayland` (`crate::linux::guard_unavailable`), [`watch`] fails, so the host refuses every act (`user_active_guard_unavailable`);
 //!   reads still work.
 
 use std::sync::Arc;
@@ -50,10 +51,16 @@ const XK_SHIFT_R: u32 = 62;
 const XK_SUPER_L: u32 = 133;
 const XK_SUPER_R: u32 = 134;
 
-/// What the watch refuses with on a Wayland session.
+/// What the watch refuses with on a Wayland or `XWayland` session.
 pub(crate) const WAYLAND_REASON: &str = "user_active_unavailable: a Wayland session gives no \
      application a global input watch, so the user-active guard cannot run and computer use \
      cannot act here (reads still work); sign in to an X11 session to act";
+
+/// The refusal for a session where the guard cannot run: why, then
+/// [`WAYLAND_REASON`].
+pub(crate) fn wayland_refusal(why: &str) -> String {
+    format!("{WAYLAND_REASON} ({why})")
+}
 
 /// What one raw event means to the classifier, before the target pid and
 /// the modifiers are filled in. Pure, so it is tested on every OS.
@@ -196,8 +203,8 @@ pub(crate) fn watch(
     filter: InputFilter,
     sink: SignalSink,
 ) -> Result<Box<dyn InputWatch>, DesktopError> {
-    if crate::linux::is_wayland() {
-        return Err(DesktopError::PermissionDenied(WAYLAND_REASON.into()));
+    if let Some(why) = crate::linux::guard_unavailable() {
+        return Err(DesktopError::PermissionDenied(wayland_refusal(why)));
     }
     let watcher = Watcher::open()?;
     let stop = Arc::new(AtomicBool::new(false));
@@ -478,5 +485,8 @@ mod tests {
     fn the_wayland_reason_names_the_guard() {
         assert!(WAYLAND_REASON.starts_with("user_active_unavailable"));
         assert!(WAYLAND_REASON.contains("Wayland"));
+        let refusal = wayland_refusal("the X server is XWayland");
+        assert!(refusal.starts_with("user_active_unavailable"));
+        assert!(refusal.ends_with("(the X server is XWayland)"));
     }
 }
