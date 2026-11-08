@@ -351,10 +351,15 @@ pub const PLATFORM_APP_DENY_LINUX: &[&str] = &[
     "gdm",
     "lightdm",
     "sddm",
-    // The security panels of the settings apps.
-    "gnome-privacy-panel",
-    "gnome-user-accounts-panel",
-    "kcm_users",
+    // The settings apps, whole: their privacy, user-account, password and
+    // sharing pages run in the one process and the one window, under the
+    // app's own id, so no single page can be told apart (GNOME Settings
+    // by its desktop id and its executable; KDE System Settings likewise).
+    "org.gnome.Settings",
+    "gnome-control-center",
+    "org.kde.systemsettings",
+    "systemsettings",
+    "systemsettings5",
 ];
 
 /// Whether `pattern` matches the application id `id`: equal ignoring ASCII
@@ -620,6 +625,40 @@ mod tests {
             (Os::MacOs, "com.apple.Terminal"),
         ] {
             assert!(!is_denied_app(os, app), "{os:?} {app} must pass");
+        }
+    }
+
+    #[test]
+    fn the_linux_settings_apps_are_denied_whole() {
+        // The ids AT-SPI and the desktop entries actually report: GNOME
+        // Settings (desktop id, then its executable when it has no entry)
+        // and KDE System Settings. Their privacy and account pages are
+        // pages of these apps, never apps of their own.
+        for app in [
+            "org.gnome.Settings",
+            "gnome-control-center",
+            "org.kde.systemsettings",
+            "systemsettings",
+            "systemsettings5",
+            "ORG.GNOME.SETTINGS",
+        ] {
+            assert!(is_denied_app(Os::Linux, app), "{app} must be denied");
+        }
+        // The panel ids that never appear as an application id are gone
+        // from the list: an entry that cannot match only reads as coverage.
+        for never in [
+            "gnome-privacy-panel",
+            "gnome-user-accounts-panel",
+            "kcm_users",
+        ] {
+            assert!(
+                !PLATFORM_APP_DENY_LINUX.contains(&never),
+                "{never} never matches an app id"
+            );
+        }
+        // Lookalikes stay allowed.
+        for app in ["org.gnome.SettingsDaemon", "org.gnome.Settings2"] {
+            assert!(!is_denied_app(Os::Linux, app), "{app} must pass");
         }
     }
 

@@ -22,6 +22,12 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "libs/rust/desktop-control/**"
+      # The host's computer toolset and session (the caller of the driver,
+      # and of its error codes and watch) and the policy that applies the
+      # macOS deny list: a change there can change what the drivers are
+      # asked to do.
+      - "apps/elitea-desktop/src-tauri/**"
+      - "libs/rust/local-tools/**"
       - "libs/rust/vendor/agent-desktop/**"
       - "libs/rust/Cargo.lock"
       - "libs/rust/Cargo.toml"
