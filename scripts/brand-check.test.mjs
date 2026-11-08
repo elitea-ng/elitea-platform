@@ -63,11 +63,11 @@ test('image headers: PNG, ICO and ICNS', () => {
   assert.equal(icnsSizes(broken), null);
 });
 
-test('the real Tauri icons parse as the asset table expects', () => {
-  const icons = fileURLToPath(new URL('../apps/elitea-desktop/src-tauri/icons/', import.meta.url));
+test("brand/elitea's desktop icons parse as the asset table expects", () => {
+  const icons = fileURLToPath(new URL('../brand/elitea/assets/', import.meta.url));
   const spec = (p) => ASSETS.find((a) => a.path === p);
-  assert.deepEqual(checkAsset(spec('macos/icon.icns'), readFileSync(join(icons, 'icon.icns'))), []);
-  assert.deepEqual(checkAsset(spec('windows/icon.ico'), readFileSync(join(icons, 'icon.ico'))), []);
+  assert.deepEqual(checkAsset(spec('macos/icon.icns'), readFileSync(join(icons, 'macos/icon.icns'))), []);
+  assert.deepEqual(checkAsset(spec('windows/icon.ico'), readFileSync(join(icons, 'windows/icon.ico'))), []);
 });
 
 test('a complete placeholder brand passes', () => {

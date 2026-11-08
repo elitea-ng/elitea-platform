@@ -347,19 +347,30 @@ cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo
 ```
 
 `tauri build` runs `npm run build:desktop` in `apps/elitea-web` first.
-Icons are the Elitea AI LE-03 mark (brand guide v3) from the approved LE-03 icon pack,
-**colored-dark** variant (the mark on Ink `#0B0B18`), never re-drawn here. Keep the files
-`tauri.conf.json` lists, plus `tray-template.png`:
+
+### Brand
+
+The product name, identifier, icons, tray image, publisher and copyright come from the
+brand manifest (ADR-0052; docs: Development → Brands). `npm run brand` writes
+`src-tauri/tauri.brand.json` for the brand `ELITEA_BRAND` selects (unset: brand/elitea),
+and `dev`, `build` and `build:debug` pass it with `--config`. `tauri.conf.json` holds
+brand/sample's neutral values. For cargo alone, export the overlay first:
+
+```sh
+npm run brand && export TAURI_CONFIG="$(cat src-tauri/tauri.brand.json)"
+```
+
+The icons are the brand folder's (`brand/<id>/assets/desktop/`, `macos/icon.icns`,
+`windows/icon.ico`), and `brand-check` validates their sizes. ELITEA's are the Elitea AI
+LE-03 mark (brand guide v3) from the approved LE-03 icon pack, **colored-dark** variant
+(the mark on Ink `#0B0B18`), never re-drawn here. In `brand/elitea/assets/`:
 
 | File | Source in the pack (`colored-dark/`) |
 |---|---|
-| `32x32.png`, `128x128.png`, `128x128@2x.png` (256), `icon.png` (512) | `macos/…-macos-{32,128,256,512}.png` (squircle masters, alpha) |
-| `icon.icns` | `iconutil -c icns` over an `.iconset` of `macos/` 16…1024 (`icon_16x16` 16, `@2x` 32, `icon_32x32` 32, `@2x` 64, `icon_128x128` 128, `@2x` 256, `icon_256x256` 256, `@2x` 512, `icon_512x512` 512, `@2x` 1024) |
-| `icon.ico` | `windows/elitea-colored-dark.ico` (256…16) as is |
-| `tray-template.png` | not from the pack: `libs/ts/client-core/src/brand/logo-mark.svg` with every fill set to `#000000`, rendered by Inkscape at 38 px and centred on a transparent 44 px canvas (a macOS template image: black + alpha, no tile) |
-
-Check with `sips -g pixelWidth -g pixelHeight -g hasAlpha src-tauri/icons/*` and
-`file src-tauri/icons/icon.icns src-tauri/icons/icon.ico`.
+| `desktop/32x32.png`, `desktop/128x128.png`, `desktop/128x128@2x.png` (256), `desktop/icon.png` (512) | `macos/…-macos-{32,128,256,512}.png` (squircle masters, alpha) |
+| `macos/icon.icns` | `iconutil -c icns` over an `.iconset` of `macos/` 16…1024 (`icon_16x16` 16, `@2x` 32, `icon_32x32` 32, `@2x` 64, `icon_128x128` 128, `@2x` 256, `icon_256x256` 256, `@2x` 512, `icon_512x512` 512, `@2x` 1024) |
+| `windows/icon.ico` | `windows/elitea-colored-dark.ico` (256…16) as is |
+| `desktop/tray-template.png` | not from the pack: `libs/ts/client-core/src/brand/logo-mark.svg` with every fill set to `#000000`, rendered by Inkscape at 38 px and centred on a transparent 44 px canvas (a macOS template image: black + alpha, no tile) |
 
 ## Document sidecar
 
