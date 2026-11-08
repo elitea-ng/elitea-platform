@@ -61,8 +61,9 @@ async function seed(page: Page): Promise<Fixture> {
   const names = [uniqueName('mira'), uniqueName('doctor'), uniqueName('scribe')];
   const created = await Promise.all(names.map((name) => createAgent(page.request, name)));
   const conversationId = await createConversation(page.request, uniqueName('conv'));
-  for (const agent of created) {
-    await addConversationParticipant(page.request, conversationId, { entity_name: 'application', entity_meta: { id: Number(agent.id) } });
+  for (const [index, agent] of created.entries()) {
+    // The name, as the participants panel attaches an agent (`chat-participants/lib/helpers.ts`): Main keeps it as the participant's display name.
+    await addConversationParticipant(page.request, conversationId, { entity_name: 'application', entity_meta: { id: Number(agent.id), name: names[index] ?? '' } });
   }
   const { participants } = await readConversationDetails(page.request, conversationId);
   const agents = created.map((agent, index) => {
@@ -75,6 +76,8 @@ async function seed(page: Page): Promise<Fixture> {
 
 async function cleanup(page: Page, fixture: Fixture | undefined): Promise<void> {
   if (fixture === undefined) return;
+  // The served routes would otherwise still answer (or hold) the cleanup's own requests.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
   await deleteConversation(page.request, fixture.conversationId);
   for (const id of fixture.appIds) await deleteAgent(page.request, id);
 }
@@ -131,6 +134,7 @@ async function openChat(page: Page, conversationId: string): Promise<void> {
 
 /* ADR-0050 7c-7f: address two agents, fold side talk, show a system line, set the lead */
 test('three-agent chat: address two agents, side talk folds, system line, lead', async ({ page }) => {
+  test.setTimeout(90_000); // three agents and a conversation are created and deleted over the API
   let fixture: Fixture | undefined;
   try {
     fixture = await seed(page);
@@ -201,6 +205,7 @@ test('three-agent chat: address two agents, side talk folds, system line, lead',
 
 /* ADR-0050 7c: a refused address (422 addressee_not_in_conversation) reads as a sentence */
 test('a message addressed to an agent that left reads as a readable error', async ({ page }) => {
+  test.setTimeout(90_000); // three agents and a conversation are created and deleted over the API
   let fixture: Fixture | undefined;
   try {
     fixture = await seed(page);
