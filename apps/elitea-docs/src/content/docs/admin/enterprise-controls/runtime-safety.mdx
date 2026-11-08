@@ -367,6 +367,31 @@ Until an administrator saves a per-tier value, the worker applies its defaults (
 - Keep the price catalogue current, so that `max_spend` uses correct prices.
 - Use [project budgets](/admin/budgets-and-governance) for spend across runs. A run cap limits one run only.
 
+## Agent tools
+
+### The risk
+
+An agent's author knows which of its tools are dangerous to call many times, to use with nobody present, or to lend to a sub-agent. An administrator needs ceilings that hold whatever an author sets.
+
+### What is enforced
+
+Each agent version can carry a tool envelope (see [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope/)): per-tool limits, the tools it may use in a turn nobody waits on, and the tools its sub-agents may get. Main freezes the root agent's envelope and these ceilings into each run when it starts, and the worker enforces them after the toolkit policy, the guardrails and the approvals. Each control only narrows the tools the agent already has.
+
+### Configure
+
+Under **Configuration › Agent tools**, a platform administrator (permission `configuration.governance`) sets:
+
+- **Maximum Calls of One Tool**: the most calls of any one tool in a turn, whatever the agent's own limits say. 0 (the default) sets none; at most 10000.
+- **Tools That Write, Allowed Unattended**: `toolkit/tool` keys (`toolkit/*` for every tool of a toolkit) of tools that write and that an agent may still use with nobody present, when its own `unattended_tools` names them too. Empty (the default) allows none. Read-only tools need no entry.
+
+A save drops the cache on this replica at once; other replicas see it within a minute. **Save it only after every worker runs this release**: an earlier worker refuses a run input that carries an envelope.
+
+### Evidence
+
+- The run's input bundle holds the frozen envelope, and its digest covers it.
+- The worker logs `agent_tool_envelope_limits` with the number of limited tools, and a call past its limit answers `tool_limit_reached`.
+- A sub-agent request outside the grant answers `SUBAGENT_TOOL_NOT_GRANTED`; the delegation evidence's grant digest covers the grant and the requested tools.
+
 ## Approval evidence and unattended runs
 
 ### The risk

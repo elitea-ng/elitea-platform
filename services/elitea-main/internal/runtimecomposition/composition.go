@@ -146,6 +146,11 @@ type Dependencies struct {
 	// decision 3) for every agent execution command: the cache the admin
 	// save drops. Nil: a cache of its own, refreshed by its TTL only.
 	RunCapsSettings workerruncapsapp.SettingsReader
+	// AgentToolSettings reads the platform's agents section (ADR-0050
+	// decision 3), the ceilings admission freezes into each turn's tool
+	// envelope: the cache the admin save drops. Nil: a cache of its own,
+	// refreshed by its TTL only.
+	AgentToolSettings agentexecutionapp.AgentToolSettingsSource
 	// IndexScheduleMandates and IndexScheduleMandateGate make every index
 	// schedule occurrence mandate-bound (#1122): built at the composition
 	// root only with credential governance on. Nil: the executor keeps the
@@ -900,6 +905,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct platform preamble revisions: %w", preambleErr)
 		}
 		agentAdmissions.WithPlatformPreamble(preambleRevisions)
+		// Each turn's input freezes the root agent's tool envelope under the
+		// platform's agents ceilings (ADR-0050 decision 3).
+		agentToolSettings := dependencies.AgentToolSettings
+		if agentToolSettings == nil {
+			agentToolSettings = platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.AgentToolSettings, error) {
+				return platformconfig.LoadAgentToolSettings(ctx, dependencies.AdmissionPool)
+			}, 0)
+		}
+		agentAdmissions.WithToolEnvelope(agentToolSettings)
 		agentTargets, targetErr := newCurrentAgentStartRepository(
 			dependencies.AdmissionPool,
 			catalogueProjectID,

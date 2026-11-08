@@ -96,6 +96,7 @@ pub mod subagents;
 pub mod text;
 pub mod thinking;
 pub mod tool_category;
+pub mod tool_envelope;
 pub mod tool_namespacing;
 pub mod toolkits;
 pub mod untrusted;

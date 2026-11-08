@@ -123,6 +123,11 @@ pub struct AgentExecutionPayload {
     /// decision 11, #1611). `None`: an input from before the floor, or a
     /// conversation with one agent.
     pub floor: Option<AgentFloor>,
+    /// The root agent's tool envelope (ADR-0050 decision 3, #1613), frozen
+    /// at admission and validated by the host's protocol. `None`: an input
+    /// from before the envelope; no per-tool limit, and unattended turns and
+    /// sub-agents get read-only tools.
+    pub tool_envelope: Option<crate::tool_envelope::ToolEnvelope>,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).
@@ -131,7 +136,8 @@ pub struct AgentFloor {
     pub cause: FloorCause,
     /// The other agents in the conversation the floor can be handed to.
     pub peers: Vec<AgentFloorPeer>,
-    /// No human is waiting on this turn: bind only unattended tools.
+    /// No human is waiting on this turn: bind only unattended tools (the
+    /// envelope's `unattended_tools`, else the read-only tools).
     pub unattended_tools_only: bool,
 }
 

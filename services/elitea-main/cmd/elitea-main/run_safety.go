@@ -33,6 +33,9 @@ type runSafety struct {
 	// contentControls are the content controls (ADR-0043 decisions 3 and
 	// 4) every agent execution command carries.
 	contentControls *platformconfig.CachedSection[platformconfig.ContentControlsSettings]
+	// agentTools are the agents ceilings (ADR-0050 decision 3) admission
+	// freezes into each turn's tool envelope.
+	agentTools *platformconfig.CachedSection[platformconfig.AgentToolSettings]
 }
 
 func newRunSafety(pool *pgxpool.Pool) runSafety {
@@ -51,6 +54,9 @@ func newRunSafety(pool *pgxpool.Pool) runSafety {
 		}, 0),
 		contentControls: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.ContentControlsSettings, error) {
 			return platformconfig.LoadContentControlsSettings(ctx, pool)
+		}, 0),
+		agentTools: platformconfig.NewCachedSection(func(ctx context.Context) (platformconfig.AgentToolSettings, error) {
+			return platformconfig.LoadAgentToolSettings(ctx, pool)
 		}, 0),
 	}
 }

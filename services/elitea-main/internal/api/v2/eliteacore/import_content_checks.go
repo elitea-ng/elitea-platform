@@ -2,6 +2,7 @@ package eliteacore
 
 import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/citations"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 )
 
 // importedVersionsRefusal checks every version of one imported or forked
@@ -28,6 +29,10 @@ func importedVersionsRefusal(versions []any) error {
 		meta, _ := version["meta"].(map[string]any)
 		instructions, _ := version["instructions"].(string)
 		if err := citations.CheckVersion(agentType, meta, instructions); err != nil {
+			return err
+		}
+		// ADR-0050 decision 3 (#1613): the tool envelope a worker would refuse.
+		if err := toolenvelope.Check(meta); err != nil {
 			return err
 		}
 	}

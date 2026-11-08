@@ -858,6 +858,7 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         model_reasoning: None,
         chat_history_refs: Vec::new(),
         floor: None,
+        tool_envelope: None,
     }
 }
 

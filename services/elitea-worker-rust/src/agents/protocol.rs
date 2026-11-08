@@ -195,6 +195,66 @@ mod chat_history_ref_tests {
 }
 
 #[cfg(test)]
+mod tool_envelope_tests {
+    use super::tool_envelope;
+    use crate::agents::AgentProtocolError;
+    use crate::protocol::elitea::runtime::v1::{AgentToolEnvelopeV1, AgentToolLimitV1};
+    use elitea_agent_runtime::tool_envelope::ToolRef;
+
+    #[test]
+    fn the_envelope_decodes_and_narrows() {
+        let decoded = tool_envelope(&AgentToolEnvelopeV1 {
+            tool_limits: vec![AgentToolLimitV1 {
+                tool: "github/create_issue".to_owned(),
+                max_calls: 3,
+            }],
+            max_tool_limit: 2,
+            subagent_tools: vec!["github/*".to_owned()],
+            subagent_tools_set: true,
+            ..AgentToolEnvelopeV1::default()
+        })
+        .expect("a valid envelope");
+        let create = ToolRef {
+            toolkit_name: "gh",
+            toolkit_type: Some("github"),
+            tool_name: "create_issue",
+        };
+        assert_eq!(decoded.limit_for(&create), Some(2));
+        assert!(decoded.admits_subagent(&create, false));
+        assert!(!decoded.admits_unattended(&create, false));
+    }
+
+    #[test]
+    fn a_malformed_envelope_is_refused() {
+        for envelope in [
+            AgentToolEnvelopeV1 {
+                tool_limits: vec![AgentToolLimitV1 {
+                    tool: "github".to_owned(),
+                    max_calls: 3,
+                }],
+                ..AgentToolEnvelopeV1::default()
+            },
+            AgentToolEnvelopeV1 {
+                tool_limits: vec![AgentToolLimitV1 {
+                    tool: "github/x".to_owned(),
+                    max_calls: 0,
+                }],
+                ..AgentToolEnvelopeV1::default()
+            },
+            AgentToolEnvelopeV1 {
+                unattended_tools: vec!["github/x".to_owned()],
+                ..AgentToolEnvelopeV1::default()
+            },
+        ] {
+            assert!(matches!(
+                tool_envelope(&envelope),
+                Err(AgentProtocolError::InvalidInput(_))
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
 mod agent_floor_tests {
     use super::agent_floor;
     use crate::agents::request::{AgentFloorPeer, FloorCause};
@@ -475,6 +535,11 @@ pub fn request_from(
                 .transpose()?,
             chat_history_refs: chat_history_refs(&message.chat_history_refs, chat_len)?,
             floor: message.floor.as_ref().map(agent_floor).transpose()?,
+            tool_envelope: message
+                .tool_envelope
+                .as_ref()
+                .map(tool_envelope)
+                .transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -608,6 +673,35 @@ fn agent_floor(
         cause,
         peers,
         unattended_tools_only: floor.unattended_tools_only,
+    })
+}
+
+/// ADR-0050 decision 3 (#1613): the root agent's tool envelope Main froze.
+/// A malformed key, a limit out of range or an oversized list is refused.
+fn tool_envelope(
+    envelope: &crate::protocol::elitea::runtime::v1::AgentToolEnvelopeV1,
+) -> Result<elitea_agent_runtime::tool_envelope::ToolEnvelope, AgentProtocolError> {
+    use elitea_agent_runtime::tool_envelope::{ToolEnvelope, ToolEnvelopeError, ToolEnvelopeInput};
+    ToolEnvelope::from_input(&ToolEnvelopeInput {
+        tool_limits: envelope
+            .tool_limits
+            .iter()
+            .map(|limit| (limit.tool.clone(), limit.max_calls))
+            .collect(),
+        max_tool_limit: envelope.max_tool_limit,
+        unattended_tools: envelope.unattended_tools.clone(),
+        unattended_tools_set: envelope.unattended_tools_set,
+        unattended_tools_allowlist: envelope.unattended_tools_allowlist.clone(),
+        subagent_tools: envelope.subagent_tools.clone(),
+        subagent_tools_set: envelope.subagent_tools_set,
+    })
+    .map_err(|error| match error {
+        ToolEnvelopeError::TooLarge => {
+            AgentProtocolError::ResourceExhausted("the agent tool envelope exceeds its limit")
+        }
+        ToolEnvelopeError::Invalid(_) => {
+            AgentProtocolError::InvalidInput("the agent tool envelope is malformed")
+        }
     })
 }
 

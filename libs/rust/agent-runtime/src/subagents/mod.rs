@@ -25,6 +25,13 @@
 //!
 //! # What a child may call
 //!
+//! A host may lend the run's sub-agent grant (ADR-0050 decision 3,
+//! `subagent_tools`, [`SubAgentConfig::with_grant`]): a child is then
+//! offered the tools it names, writes included, and `spawn_agent` may narrow
+//! them further with `profile.tools`. A key outside the grant or the
+//! parent's tools refuses the spawn with
+//! [`crate::tool_envelope::SUBAGENT_TOOL_NOT_GRANTED`]. Without a grant:
+//!
 //! Only read-only tools: every tool the host offers a child passes the
 //! runtime's filter ([`ChildToolset`]), which drops any tool whose
 //! `is_read_only()` is false, the four sub-agent tools themselves (one level
@@ -353,6 +360,11 @@ pub struct SubAgentConfig {
     /// with [`crate::delegation::DEPTH_EXCEEDED`]. `None` (the desktop)
     /// counts no depth.
     pub delegation: Option<crate::delegation::DelegationScope>,
+    /// The run's sub-agent grant (ADR-0050 decision 3, `subagent_tools`):
+    /// with one, a child is offered the tools it names, writes included,
+    /// and `spawn_agent` may ask for some of them (`profile.tools`). `None`
+    /// keeps the read-only rule.
+    pub grant: Option<Arc<crate::tool_envelope::SubAgentGrant>>,
 }
 
 impl SubAgentConfig {
@@ -363,7 +375,15 @@ impl SubAgentConfig {
             limits: SubAgentLimits::default(),
             excluded_tools: BTreeSet::new(),
             delegation: None,
+            grant: None,
         }
+    }
+
+    /// The run's sub-agent grant (ADR-0050 decision 3).
+    #[must_use]
+    pub fn with_grant(mut self, grant: crate::tool_envelope::SubAgentGrant) -> Self {
+        self.grant = Some(Arc::new(grant));
+        self
     }
 
     /// Count each child as one delegation below `scope` (ADR-0044 decision
@@ -413,6 +433,7 @@ pub(crate) struct Registry {
     limits: SubAgentLimits,
     excluded: BTreeSet<String>,
     delegation: Option<crate::delegation::DelegationScope>,
+    grant: Option<Arc<crate::tool_envelope::SubAgentGrant>>,
     children: Mutex<Vec<child::Child>>,
 }
 
@@ -429,6 +450,7 @@ impl SubAgents {
                 limits: config.limits.capped(),
                 excluded: config.excluded_tools,
                 delegation: config.delegation,
+                grant: config.grant,
                 children: Mutex::new(Vec::new()),
             }),
         }

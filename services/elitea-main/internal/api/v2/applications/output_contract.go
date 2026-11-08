@@ -9,6 +9,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 )
 
 // outputContractRefusal is the typed 422 body of a refused output contract
@@ -36,6 +37,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 		return false
 	}
 	if !checkContextBlock(w, body) {
+		return false
+	}
+	if !checkToolEnvelope(w, body) {
 		return false
 	}
 	var err error
@@ -122,6 +126,20 @@ func checkContextBlock(w http.ResponseWriter, body map[string]any) bool {
 	if _, err := contextview.Parse(meta[contextview.MetaKey]); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 			"error": err.Error(), "code": "context_block_invalid",
+		})
+		return false
+	}
+	return true
+}
+
+// checkToolEnvelope refuses an invalid meta.tool_envelope (ADR-0050 decision
+// 3, issue 1613) with a typed 422. It answers false when it wrote the
+// refusal.
+func checkToolEnvelope(w http.ResponseWriter, body map[string]any) bool {
+	meta, _ := body["meta"].(map[string]any)
+	if err := toolenvelope.Check(meta); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(), "code": toolenvelope.Code,
 		})
 		return false
 	}

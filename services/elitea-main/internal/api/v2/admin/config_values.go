@@ -308,6 +308,11 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
 		return
 	}
+	// The agents ceilings' range and tool keys (ADR-0050 decision 3).
+	if reason := validateAgentToolsValues(section.id, body.Values); reason != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
+		return
+	}
 	// The circuit breaker's ranges and resume rules (ADR-0041 decision 2).
 	if reason := validateCircuitBreakerValues(section.id, body.Values); reason != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": reason})
@@ -338,6 +343,7 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 	h.invalidateDelegation(section.id)
 	h.invalidateApprovalPolicy(section.id)
 	h.invalidateContentControls(section.id)
+	h.invalidateAgentTools(section.id)
 	if section.id == platformconfig.SectionBranding {
 		h.invalidateBranding()
 		if stored, err := h.loadSectionValues(r, section.id); err == nil {

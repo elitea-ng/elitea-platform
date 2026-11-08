@@ -561,6 +561,17 @@ impl OrdinaryNativeAgentAssembler {
                 let facade = Arc::clone(&self.model_facade);
                 let context = Arc::clone(&context);
                 let model_project_id = profile.model_project_id();
+                // ADR-0050 decision 3: the agent's `subagent_tools`, over its
+                // toolkits; without them a child keeps the read-only rule.
+                let grant = profile
+                    .tool_envelope()
+                    .filter(|envelope| envelope.grants_subagent_tools())
+                    .map(|envelope| {
+                        elitea_agent_runtime::tool_envelope::SubAgentGrant::new(
+                            envelope.clone(),
+                            toolkit_kinds(&tool_snapshot),
+                        )
+                    });
                 runtime.with_subagents(move |toolsets, excluded| {
                     super::subagents::toolset(
                         super::subagents::WorkerSubAgents {
@@ -574,6 +585,7 @@ impl OrdinaryNativeAgentAssembler {
                         },
                         excluded,
                         delegation_root.clone(),
+                        grant,
                     )
                 })
             } else {
@@ -847,20 +859,39 @@ impl OrdinaryNativeAgentAssembler {
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
             .map_err(tool_binding_error)?;
-        // ADR-0050 decision 11 (#1611): a turn no human waits on binds only
-        // its unattended tools. Until the per-agent envelope (#1613) names
-        // them, an agent's unattended tools are its read-only tools.
+        // ADR-0050 decision 3 (#1613): the root agent's tool envelope. Each
+        // control starts from the tools bound above, after the toolkit
+        // policy and the guardrails, and only keeps or counts some of them.
+        let no_envelope = elitea_agent_runtime::tool_envelope::ToolEnvelope::none();
+        let envelope = profile.tool_envelope().unwrap_or(&no_envelope);
+        let toolkit_kinds = toolkit_kinds(tool_snapshot);
+        // A turn no human waits on (decision 11) binds only its unattended
+        // tools: the envelope's `unattended_tools`, else the read-only ones.
         if profile
             .floor()
             .is_some_and(|floor| floor.unattended_tools_only)
         {
             let (kept, dropped);
-            (frozen, kept, dropped) = super::hand_floor_tool::retain_read_only(frozen);
+            (frozen, kept, dropped) = elitea_agent_runtime::tool_envelope::retain_unattended(
+                frozen,
+                envelope,
+                &toolkit_kinds,
+            );
             tracing::info!(
                 event = "agent_floor_unattended_tools",
                 kept,
                 dropped,
-                "an unattended floor turn binds only its read-only tools"
+                "an unattended floor turn binds only its unattended tools"
+            );
+        }
+        let limited;
+        (frozen, limited) =
+            elitea_agent_runtime::tool_envelope::limit_toolsets(frozen, envelope, &toolkit_kinds);
+        if limited > 0 {
+            tracing::info!(
+                event = "agent_tool_envelope_limits",
+                limited,
+                "tools of this turn are counted against their envelope limits"
             );
         }
         // The hand-off tool is bound after the filter, so an unattended turn
@@ -882,16 +913,7 @@ impl OrdinaryNativeAgentAssembler {
         // delegated authorization stays bound directly, because both are
         // properties of the call the model makes (see `lazy_tools`).
         let (frozen, lazy_tools_index, lazy_directory) = if internal_tools.lazy_tools_enabled() {
-            let kinds: BTreeMap<String, String> = tool_snapshot
-                .iter()
-                .filter(|reference| reference.kind() != FrozenToolKind::Application)
-                .map(|reference| {
-                    (
-                        reference.toolkit_name().to_owned(),
-                        reference.tool_type().to_owned(),
-                    )
-                })
-                .collect();
+            let kinds = toolkit_kinds.clone();
             let unpartitioned = frozen.clone();
             let partition = elitea_agent_runtime::lazy_tools::partition(
                 frozen,
@@ -1253,6 +1275,21 @@ fn model_adapter(
         }
         OrdinaryModelProvider::NativeAnthropic => (ModelAdapterKind::Anthropic, "anthropic"),
     }
+}
+
+/// The toolkit type of each configured toolkit, by its name in the agent:
+/// what a tool envelope key and Smart Tools Selection match a toolkit by.
+fn toolkit_kinds(tool_snapshot: &AdmittedToolSnapshot<'_>) -> BTreeMap<String, String> {
+    tool_snapshot
+        .iter()
+        .filter(|reference| reference.kind() != FrozenToolKind::Application)
+        .map(|reference| {
+            (
+                reference.toolkit_name().to_owned(),
+                reference.tool_type().to_owned(),
+            )
+        })
+        .collect()
 }
 
 fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {

@@ -2170,6 +2170,17 @@ export interface components {
             values?: string[];
             voice?: string[];
         };
+        /** @description NOTE(W2): internal/domain/toolenvelope/toolenvelope.go, Parse. Every control only narrows the tools the agent already has. */
+        AgentToolEnvelope: {
+            /** @description The tools a sub-agent of this agent may be given, writes included. Absent is the read-only tools. A spawn_agent call whose profile.tools names another is refused with SUBAGENT_TOOL_NOT_GRANTED. */
+            subagent_tools?: string[];
+            /** @description The most calls of one tool in a turn, keyed "<toolkit>/<tool>" (the toolkit by its name in the agent or by its type; "*" for every tool of the toolkit). The lowest matching limit and the platform's agents.max_tool_limit apply; the call past it does not run and answers tool_limit_reached. */
+            tool_limits?: {
+                [key: string]: number;
+            };
+            /** @description The tools the agent may use in a turn nobody waits on (a turn another agent handed it). Absent is the read-only tools; a tool that writes needs the platform's agents.unattended_tools_allowlist too. Empty is no tool. */
+            unattended_tools?: string[];
+        };
         /** @description NOTE(W2): internal/domain/applications/types.go:15-50 — required set = json tags WITHOUT omitempty (id, name, tags, created_at, owner_id, is_forked, meta, has_interrupt) PLUS updated_at, whose omitempty is ineffective on a time.Time (always marshaled; zero sentinel when unscanned). Every other omitempty field is optional (absent when zero-valued). */
         Application: {
             agent_type?: string;
@@ -4477,6 +4488,8 @@ export interface components {
             run_caps?: components["schemas"]["VersionRunCaps"] | null;
             source_version_id?: string;
             step_limit?: number | null;
+            /** @description The agent's tool envelope (ADR-0050 decision 3): per-tool call limits, the tools it may use unattended, and the tools its sub-agents may get. Main freezes it, with the platform's agents ceilings, into each run; nested agents follow the root agent's. A save with an invalid block is refused with 422 tool_envelope_invalid. */
+            tool_envelope?: components["schemas"]["AgentToolEnvelope"] | null;
             /** @description Written into meta on create when the request carries variables (applications/handler.go:430, 747-752). */
             variables?: components["schemas"]["VersionVariable"][];
         } & {

@@ -19,7 +19,6 @@ use adk_rust::tool::BasicToolset;
 use adk_rust::{Tool, ToolContext, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::host::HostErrorCode;
-use elitea_agent_runtime::toolkits::FrozenToolset;
 use serde_json::{Value, json};
 
 use super::request::{AgentFloor, AgentFloorPeer};
@@ -52,29 +51,6 @@ pub(crate) fn toolset(
         authority,
     });
     Some(Arc::new(BasicToolset::new(TOOLSET_NAME, vec![tool])))
-}
-
-/// Keep only the read-only tools of `toolsets` (an unattended floor turn,
-/// ADR-0050 decision 11), with how many tools were kept and dropped. A
-/// toolset left with no tools is dropped whole.
-#[must_use]
-pub(crate) fn retain_read_only(toolsets: Vec<FrozenToolset>) -> (Vec<FrozenToolset>, usize, usize) {
-    let (mut kept, mut dropped) = (0, 0);
-    let mut retained = Vec::with_capacity(toolsets.len());
-    for toolset in toolsets {
-        let tools: Vec<Arc<dyn Tool>> = toolset
-            .tools()
-            .iter()
-            .filter(|tool| tool.is_read_only())
-            .cloned()
-            .collect();
-        kept += tools.len();
-        dropped += toolset.tools().len() - tools.len();
-        if !tools.is_empty() {
-            retained.push(FrozenToolset::new(toolset.name(), tools));
-        }
-    }
-    (retained, kept, dropped)
 }
 
 fn describe(peers: &[AgentFloorPeer]) -> String {
