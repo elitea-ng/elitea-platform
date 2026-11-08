@@ -21,8 +21,10 @@
 //! - **The user-active guard** runs on plain X11 only (`linux_input.rs`).
 //!   Wayland gives no application a global view of the keyboard and
 //!   pointer, so on a Wayland session ([`guard_unavailable`]: the
-//!   environment, logind's `Session.Type`, or an X server that is
-//!   `XWayland`) the watch fails closed and every act is refused
+//!   environment, logind's `Session.Type` of the `XDG_SESSION_ID` session,
+//!   the user's display session or this pid's, or an X server that is
+//!   `XWayland` by its `XWAYLAND` extension or its `XWAYLAND*` `RandR`
+//!   outputs) the watch fails closed and every act is refused
 //!   (`user_active_guard_unavailable`); reads still work.
 
 use std::time::Duration;
@@ -93,40 +95,66 @@ fn app_id(app: &ad::AppInfo) -> Option<String> {
 
 /// Why the user-active guard cannot run in this session, or `None` on a
 /// plain X11 session ([`platform::linux_guard_unavailable`]): Wayland by
-/// the environment or by logind's `Session.Type`, or an X server that is
-/// `XWayland`.
+/// the environment or by logind's `Session.Type` of any session this
+/// process could be in, or an X server that is `XWayland`.
 pub(crate) fn guard_unavailable() -> Option<&'static str> {
     let env_type = std::env::var("XDG_SESSION_TYPE").ok();
-    let logind_type = logind_session_type();
-    let (xwayland_extension, x_vendor) = x_server_kind();
+    let logind_types = logind_session_types();
+    let (xwayland_extension, randr_outputs) = x_server_kind();
     platform::linux_guard_unavailable(&platform::LinuxSessionReads {
         wayland_display: std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty()),
         env_session_type: env_type.as_deref(),
-        logind_session_type: logind_type.as_deref(),
+        logind_session_types: &logind_types,
         xwayland_extension,
-        x_vendor: x_vendor.as_deref(),
+        randr_outputs: randr_outputs.as_deref(),
     })
 }
 
-/// Whether the X server of `DISPLAY` is `XWayland` (its `XWAYLAND`
-/// extension), and its vendor string; `(None, None)` without one.
-fn x_server_kind() -> (Option<bool>, Option<String>) {
+/// The most `RandR` outputs read: a desktop has a handful.
+const MAX_OUTPUTS: usize = 16;
+
+/// What the X server of `DISPLAY` says about being `XWayland`: whether it
+/// has the `XWAYLAND` extension (`Xwayland` 23.1 and later), and its `RandR`
+/// output names (`XWAYLAND0`... on Xwayland). `(None, None)` without one.
+fn x_server_kind() -> (Option<bool>, Option<Vec<String>>) {
     use x11rb::connection::Connection as _;
+    use x11rb::protocol::randr::ConnectionExt as _;
     use x11rb::protocol::xproto::ConnectionExt as _;
 
     if std::env::var_os("DISPLAY").is_none_or(|v| v.is_empty()) {
         return (None, None);
     }
-    let Ok((conn, _)) = x11rb::connect(None) else {
+    let Ok((conn, screen)) = x11rb::connect(None) else {
         return (None, None);
     };
-    let vendor = String::from_utf8_lossy(&conn.setup().vendor).into_owned();
     let xwayland = conn
         .query_extension(b"XWAYLAND")
         .ok()
         .and_then(|cookie| cookie.reply().ok())
         .map(|reply| reply.present);
-    (xwayland, Some(vendor))
+    let outputs = conn.setup().roots.get(screen).and_then(|root| {
+        let resources = conn
+            .randr_get_screen_resources_current(root.root)
+            .ok()?
+            .reply()
+            .ok()?;
+        Some(
+            resources
+                .outputs
+                .iter()
+                .take(MAX_OUTPUTS)
+                .filter_map(|&output| {
+                    let info = conn
+                        .randr_get_output_info(output, resources.config_timestamp)
+                        .ok()?
+                        .reply()
+                        .ok()?;
+                    Some(String::from_utf8_lossy(&info.name).into_owned())
+                })
+                .collect::<Vec<_>>(),
+        )
+    });
+    (xwayland, outputs)
 }
 
 fn bus(system: bool) -> Option<Connection> {
@@ -138,7 +166,7 @@ fn bus(system: bool) -> Option<Connection> {
     builder.ok()?.method_timeout(BUS_TIMEOUT).build().ok()
 }
 
-fn property(bus: &Connection, dest: &str, path: &str, iface: &str, name: &str) -> Option<bool> {
+fn get(bus: &Connection, dest: &str, path: &str, iface: &str, name: &str) -> Option<OwnedValue> {
     let reply = bus
         .call_method(
             Some(dest),
@@ -148,52 +176,90 @@ fn property(bus: &Connection, dest: &str, path: &str, iface: &str, name: &str) -
             &(iface, name),
         )
         .ok()?;
-    let value: OwnedValue = reply.body().deserialize().ok()?;
-    bool::try_from(value).ok()
+    reply.body().deserialize().ok()
 }
 
-/// The logind session of this process, on the system bus.
-fn logind_session() -> Option<(Connection, OwnedObjectPath)> {
-    let bus = bus(true)?;
-    let reply = bus
-        .call_method(
-            Some("org.freedesktop.login1"),
-            "/org/freedesktop/login1",
-            Some("org.freedesktop.login1.Manager"),
-            "GetSessionByPID",
-            &(std::process::id(),),
-        )
-        .ok()?;
-    let path: OwnedObjectPath = reply.body().deserialize().ok()?;
-    Some((bus, path))
+fn property(bus: &Connection, dest: &str, path: &str, iface: &str, name: &str) -> Option<bool> {
+    bool::try_from(get(bus, dest, path, iface, name)?).ok()
 }
 
 const LOGIND: &str = "org.freedesktop.login1";
+const LOGIND_PATH: &str = "/org/freedesktop/login1";
+const LOGIND_MANAGER: &str = "org.freedesktop.login1.Manager";
 const LOGIND_SESSION: &str = "org.freedesktop.login1.Session";
+const LOGIND_USER: &str = "org.freedesktop.login1.User";
 
-/// What logind says about this process's session: (`Active`,
-/// `LockedHint`), or `None` without logind or a session.
+fn manager_call<B>(bus: &Connection, method: &str, body: &B) -> Option<OwnedObjectPath>
+where
+    B: serde::Serialize + zbus::zvariant::DynamicType,
+{
+    let reply = bus
+        .call_method(
+            Some(LOGIND),
+            LOGIND_PATH,
+            Some(LOGIND_MANAGER),
+            method,
+            body,
+        )
+        .ok()?;
+    reply.body().deserialize().ok()
+}
+
+/// The logind sessions this process could be in, most specific first:
+/// the session `XDG_SESSION_ID` names, the user's display session
+/// (`/org/freedesktop/login1/user/self`, `Display`), and the session of
+/// this pid. The last alone fails for an app started in a systemd
+/// `app-*.scope` (most desktop launchers), which belongs to no session.
+fn logind_sessions() -> Option<(Connection, Vec<OwnedObjectPath>)> {
+    let bus = bus(true)?;
+    let mut sessions: Vec<OwnedObjectPath> = Vec::new();
+    if let Some(id) = std::env::var("XDG_SESSION_ID")
+        .ok()
+        .filter(|id| !id.trim().is_empty())
+        && let Some(path) = manager_call(&bus, "GetSession", &(id.trim(),))
+    {
+        sessions.push(path);
+    }
+    if let Some(value) = get(
+        &bus,
+        LOGIND,
+        "/org/freedesktop/login1/user/self",
+        LOGIND_USER,
+        "Display",
+    ) && let Ok((_, path)) = <(String, OwnedObjectPath)>::try_from(value)
+        && path.as_str() != "/"
+    {
+        sessions.push(path);
+    }
+    if let Some(path) = manager_call(&bus, "GetSessionByPID", &(std::process::id(),)) {
+        sessions.push(path);
+    }
+    sessions.dedup_by(|a, b| a.as_str() == b.as_str());
+    Some((bus, sessions))
+}
+
+/// What logind says about this process's session (the first
+/// [`logind_sessions`] finds): (`Active`, `LockedHint`), or `None` without
+/// logind or a session.
 fn logind() -> Option<(bool, Option<bool>)> {
-    let (bus, path) = logind_session()?;
+    let (bus, sessions) = logind_sessions()?;
+    let path = sessions.first()?;
     let active = property(&bus, LOGIND, path.as_str(), LOGIND_SESSION, "Active")?;
     let locked = property(&bus, LOGIND, path.as_str(), LOGIND_SESSION, "LockedHint");
     Some((active, locked))
 }
 
-/// logind's `Session.Type` of this process's session (`x11`, `wayland`).
-fn logind_session_type() -> Option<String> {
-    let (bus, path) = logind_session()?;
-    let reply = bus
-        .call_method(
-            Some(LOGIND),
-            path.as_str(),
-            Some("org.freedesktop.DBus.Properties"),
-            "Get",
-            &(LOGIND_SESSION, "Type"),
-        )
-        .ok()?;
-    let value: OwnedValue = reply.body().deserialize().ok()?;
-    String::try_from(value).ok()
+/// logind's `Session.Type` of every session this process could be in.
+fn logind_session_types() -> Vec<String> {
+    let Some((bus, sessions)) = logind_sessions() else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter_map(|path| {
+            String::try_from(get(&bus, LOGIND, path.as_str(), LOGIND_SESSION, "Type")?).ok()
+        })
+        .collect()
 }
 
 /// The screensaver services of the desktops (freedesktop, which KDE and

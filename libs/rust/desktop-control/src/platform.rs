@@ -854,36 +854,47 @@ pub struct LinuxSessionReads<'a> {
     pub wayland_display: bool,
     /// `XDG_SESSION_TYPE`.
     pub env_session_type: Option<&'a str>,
-    /// logind's `Session.Type` of this process's session (`x11`,
-    /// `wayland`, `tty`, `mir`, `unspecified`).
-    pub logind_session_type: Option<&'a str>,
-    /// Whether the X server has the `XWAYLAND` extension (`None`: no X
-    /// server could be reached).
+    /// logind's `Session.Type` (`x11`, `wayland`, `tty`, `mir`,
+    /// `unspecified`) of every session this process could be in: the one
+    /// `XDG_SESSION_ID` names, the user's display session (`User.Display`),
+    /// and the session of this process's pid. Empty without logind.
+    pub logind_session_types: &'a [String],
+    /// Whether the X server has the `XWAYLAND` extension, which only
+    /// Xwayland 23.1 and later have (`None`: no X server could be reached).
     pub xwayland_extension: Option<bool>,
-    /// The X server's vendor string.
-    pub x_vendor: Option<&'a str>,
+    /// The names of the X server's `RandR` outputs (`None`: no X server, or
+    /// no `RandR`). `Xwayland` names them `XWAYLAND0`, `XWAYLAND1`, ...; Xorg
+    /// after the connectors (`eDP-1`, `HDMI-1`, `DP-0`), Xvfb `screen`.
+    pub randr_outputs: Option<&'a [String]>,
 }
 
 /// Why the Linux user-active guard cannot run here, or `None` on a plain
 /// X11 session (#1586). The `XInput2` watch sees only X clients: under
 /// Wayland, and under `XWayland` even with the environment stripped, the
 /// person's typing in Wayland apps never reaches it, so a pause could be
-/// missed. Any one sign of Wayland is enough: the environment, logind's
-/// session type, the X server being `XWayland` (its `XWAYLAND` extension or
-/// its vendor string). It fails closed.
+/// missed. Any one sign of Wayland is enough: the environment, any logind
+/// session this process could be in having type `wayland`, or the X server
+/// being `Xwayland` (its `XWAYLAND` extension, or `RandR` outputs named
+/// `XWAYLAND*`). It fails closed on every sign; with none of them the
+/// session is taken as X11 (a plain Xorg started without logind or
+/// `XDG_SESSION_TYPE` must still act).
 #[must_use]
 pub fn linux_guard_unavailable(reads: &LinuxSessionReads<'_>) -> Option<&'static str> {
-    let is = |v: Option<&str>, want: &str| v.is_some_and(|v| v.trim().eq_ignore_ascii_case(want));
-    if reads.wayland_display || is(reads.env_session_type, "wayland") {
+    let is = |v: &str, want: &str| v.trim().eq_ignore_ascii_case(want);
+    if reads.wayland_display || reads.env_session_type.is_some_and(|v| is(v, "wayland")) {
         return Some("the session is a Wayland session (environment)");
     }
-    if is(reads.logind_session_type, "wayland") {
+    if reads.logind_session_types.iter().any(|t| is(t, "wayland")) {
         return Some("the session is a Wayland session (logind)");
     }
+    let xwayland_output = |name: &String| {
+        name.get(..8)
+            .is_some_and(|head| head.eq_ignore_ascii_case("XWAYLAND"))
+    };
     if reads.xwayland_extension == Some(true)
         || reads
-            .x_vendor
-            .is_some_and(|v| v.to_ascii_lowercase().contains("xwayland"))
+            .randr_outputs
+            .is_some_and(|outputs| outputs.iter().any(xwayland_output))
     {
         return Some("the X server is XWayland: input to Wayland apps cannot be watched");
     }
@@ -1807,24 +1818,72 @@ mod tests {
         }
     }
 
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|&n| n.to_owned()).collect()
+    }
+
+    /// Values real sessions report: Ubuntu 24.04 "GNOME on Xorg"
+    /// (modesetting outputs), an NVIDIA Xorg, Xvfb, and Xwayland 22.1
+    /// (Ubuntu 22.04: no `XWAYLAND` extension yet) and 23.2 (Ubuntu 24.04).
+    /// Every X server's vendor string is "The X.Org Foundation", Xwayland's
+    /// included, so it tells nothing and is not read.
     #[test]
     fn the_guard_runs_on_plain_x11_only() {
+        let x11 = names(&["x11"]);
+        let xorg_outputs = names(&["eDP-1", "HDMI-1", "DP-1"]);
         let xorg = LinuxSessionReads {
             wayland_display: false,
             env_session_type: Some("x11"),
-            logind_session_type: Some("x11"),
+            logind_session_types: &x11,
             xwayland_extension: Some(false),
-            x_vendor: Some("The X.Org Foundation"),
+            randr_outputs: Some(&xorg_outputs),
         };
         assert_eq!(linux_guard_unavailable(&xorg), None);
-        // No logind, no XDG_SESSION_TYPE: an X server that is not XWayland.
-        let bare = LinuxSessionReads {
-            env_session_type: None,
-            logind_session_type: None,
+        // startx on a distribution without logind: nothing names the
+        // session, and the X server is not Xwayland.
+        let nvidia = names(&["DP-0", "HDMI-0"]);
+        let xvfb = names(&["screen"]);
+        for outputs in [Some(nvidia.as_slice()), Some(xvfb.as_slice()), None] {
+            let bare = LinuxSessionReads {
+                env_session_type: None,
+                logind_session_types: &[],
+                randr_outputs: outputs,
+                ..xorg
+            };
+            assert_eq!(linux_guard_unavailable(&bare), None, "{outputs:?}");
+        }
+        // startx from a text console: logind says tty.
+        let tty = names(&["tty"]);
+        let startx = LinuxSessionReads {
+            env_session_type: Some("tty"),
+            logind_session_types: &tty,
             ..xorg
         };
-        assert_eq!(linux_guard_unavailable(&bare), None);
-        let wayland = [
+        assert_eq!(linux_guard_unavailable(&startx), None);
+    }
+
+    #[test]
+    fn any_sign_of_wayland_stops_the_guard() {
+        let x11 = names(&["x11"]);
+        let wayland = names(&["wayland"]);
+        // An app scope's pid has no session, the env one is an ssh tty,
+        // the user's display session is Wayland.
+        let mixed = names(&["tty", "wayland"]);
+        let xorg_outputs = names(&["eDP-1"]);
+        let xwayland_outputs = names(&["XWAYLAND0", "XWAYLAND1"]);
+        let xorg = LinuxSessionReads {
+            wayland_display: false,
+            env_session_type: Some("x11"),
+            logind_session_types: &x11,
+            xwayland_extension: Some(false),
+            randr_outputs: Some(&xorg_outputs),
+        };
+        let stripped = LinuxSessionReads {
+            env_session_type: None,
+            logind_session_types: &[],
+            ..xorg
+        };
+        for reads in [
             LinuxSessionReads {
                 wayland_display: true,
                 ..xorg
@@ -1836,26 +1895,27 @@ mod tests {
             // The environment stripped (a launcher that unsets
             // WAYLAND_DISPLAY and XDG_SESSION_TYPE): logind still knows.
             LinuxSessionReads {
-                env_session_type: None,
-                logind_session_type: Some("wayland"),
-                ..xorg
+                logind_session_types: &wayland,
+                ..stripped
             },
-            // Everything stripped, logind absent: the X server is XWayland.
             LinuxSessionReads {
-                env_session_type: None,
-                logind_session_type: None,
+                logind_session_types: &mixed,
+                ..stripped
+            },
+            // Environment stripped and no logind: Xwayland 23.1 or later
+            // has the XWAYLAND extension.
+            LinuxSessionReads {
                 xwayland_extension: Some(true),
-                ..xorg
+                ..stripped
             },
+            // An older Xwayland (22.1) has no extension, but names its
+            // `RandR` outputs XWAYLAND0...
             LinuxSessionReads {
-                env_session_type: None,
-                logind_session_type: None,
-                xwayland_extension: None,
-                x_vendor: Some("XWayland (GNOME)"),
-                ..xorg
+                xwayland_extension: Some(false),
+                randr_outputs: Some(&xwayland_outputs),
+                ..stripped
             },
-        ];
-        for reads in wayland {
+        ] {
             assert!(linux_guard_unavailable(&reads).is_some(), "{reads:?}");
         }
     }

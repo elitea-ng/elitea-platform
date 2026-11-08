@@ -25,8 +25,10 @@ person's device switch both allow it, as before.
 - Linux on Wayland can see apps but not act in them: there is no global
   input watch for the pause-on-your-input guard, so every act is refused with
   `user_active_guard_unavailable`. X11 sessions act normally. Wayland is
-  told by the environment, logind's `Session.Type` or an XWayland X server,
-  so a stripped environment does not get past it. Settings shows computer
+  told by the environment, logind's `Session.Type` (of the
+  `XDG_SESSION_ID` session, the user's display session, or the process's
+  own), or an Xwayland X server (its `XWAYLAND` extension, or RandR outputs
+  named `XWAYLAND*`), so a stripped environment does not get past it. Settings shows computer
   use as read-only there, with the reason (`read_only_reason` in the
   settings reply).
 - Windows judges each window, not only its owner: a packaged app's frame
