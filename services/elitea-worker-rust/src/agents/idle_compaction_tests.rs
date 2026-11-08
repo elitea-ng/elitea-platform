@@ -389,13 +389,23 @@ async fn an_answer_that_calls_a_tool_is_refused() {
         id: Some("call-two".into()),
         thought_signature: None,
     });
-    let model = Arc::new(Model::answering(vec![call]));
-    let error = run(Arc::clone(&sessions), model)
+    // Called twice: the retry answers the call with a refusal, and a
+    // second call refuses the run without running anything.
+    let model = Arc::new(Model::answering(vec![call.clone(), call]));
+    let error = run(Arc::clone(&sessions), Arc::clone(&model))
         .run("inv-idle", |_| panic!("no status"))
         .await
         .unwrap_err();
     assert_eq!(error.code, "agent.idle_compaction.tool_call");
     assert_eq!(session(sessions.as_ref()).await.events().len(), 3);
+    let sent = model.requests.lock().unwrap();
+    assert_eq!(sent.len(), 2);
+    let retry = sent[1].contents.last().unwrap();
+    assert!(matches!(
+        &retry.parts[0],
+        Part::FunctionResponse { id: Some(id), .. } if id == "call-two"
+    ));
+    assert!(matches!(retry.parts.last(), Some(Part::Text { .. })));
 }
 
 #[tokio::test]
@@ -422,4 +432,24 @@ async fn a_session_without_an_answered_request_does_nothing() {
         .unwrap();
     assert_eq!(outcome, IdleOutcome::Skipped("no_session"));
     assert!(model.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_tool_call_then_a_summary_compacts() {
+    let request = last_request(70_000);
+    let sessions = session_with_turn(&request, "Found call-one.").await;
+    let mut call = Content::new("model");
+    call.parts.push(Part::FunctionCall {
+        name: "lookup".into(),
+        args: json!({}),
+        id: Some("call-two".into()),
+        thought_signature: None,
+    });
+    let model = Arc::new(Model::answering(vec![call, summary()]));
+    let outcome = run(sessions, Arc::clone(&model))
+        .run("inv-idle", |_| {})
+        .await
+        .unwrap();
+    assert!(matches!(outcome, IdleOutcome::Compacted { .. }));
+    assert_eq!(model.requests.lock().unwrap().len(), 2);
 }

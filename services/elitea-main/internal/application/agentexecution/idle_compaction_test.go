@@ -89,7 +89,7 @@ func TestIdleCompactionInputKeepsFrozenFieldsAndClearsTheTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"idle_compaction_v1":{"cache_ttl_seconds":300,"request_started_unix_ms":1770000000123,"schema":"elitea.agent.idle-compaction.v1","source_execution_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source_generation":1},"keep":1}`
+	want := `{"idle_compaction_v1":{"cache_ttl_seconds":300,"request_started_unix_ms":1770000000123,"schema":"elitea.agent.idle-compaction.v1","source_execution_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","source_generation":1}}`
 	if string(input.GetMeta()) != want || input.GetHitlResume() || input.GetShouldContinue() || input.GetIsRegenerate() ||
 		input.HitlAction != nil || input.HitlValue != nil || input.CheckpointId != nil || input.TruncatedContent != nil ||
 		input.McpTokenReferences != nil || string(input.GetHitlDecisions()) != `[]` || string(input.GetUserInput()) != `""` ||
@@ -187,7 +187,7 @@ func (s *fakeIdleStore) DeferIdleCompaction(context.Context, CurrentIdleCompacti
 func TestIdleCompactionAdmitterClassifiesRefusals(t *testing.T) {
 	cases := map[error]string{
 		ErrIdleCompactionSuperseded:                string(idlecompaction.SkipSuperseded),
-		ErrIdleCompactionAgentBusy:                 string(idlecompaction.SkipAgentBusy),
+		ErrIdleCompactionAgentBusy:                 "",
 		ErrIdleCompactionActorNotAllowed:           IdleCompactionSkipActorNotAllowed,
 		ErrUnsupportedCurrentAgentStart:            IdleCompactionSkipAdmission,
 		executionapp.ErrIdempotencyConflict:        IdleCompactionSkipAdmission,
@@ -210,7 +210,8 @@ func TestIdleCompactionAdmitterClassifiesRefusals(t *testing.T) {
 		if (wantCode == "" && len(store.skipped) != 0) || (wantCode != "" && (len(store.skipped) != 1 || store.skipped[0] != wantCode)) {
 			t.Errorf("%v: skipped=%v want %q", submitErr, store.skipped, wantCode)
 		}
-		if capacity := errors.Is(submitErr, executionapp.ErrAdmissionCapacityExhausted); (store.deferred == 1) != capacity {
+		waits := errors.Is(submitErr, executionapp.ErrAdmissionCapacityExhausted) || errors.Is(submitErr, ErrIdleCompactionAgentBusy)
+		if (store.deferred == 1) != waits {
 			t.Errorf("%v: deferred=%d", submitErr, store.deferred)
 		}
 		if strings.Contains(logs.String(), "10000000-0000-4000-8000-000000000002") || strings.Contains(logs.String(), "thread-1") {
@@ -219,10 +220,21 @@ func TestIdleCompactionAdmitterClassifiesRefusals(t *testing.T) {
 	}
 
 	// The decision runs before admission: nothing is submitted for a check
-	// that is superseded, busy or past its cache.
+	// that is superseded or past its cache. A live run of the conversation
+	// (the agent's own or a peer's, which shares its session) defers it.
+	{
+		target := idleTestTarget(t, nil)
+		target.AgentBusy = true
+		store := &fakeIdleStore{targets: []IdleCompactionTarget{target}}
+		submitter := &fakeWakeSubmitter{}
+		admitter, _ := NewIdleCompactionAdmitter(store, submitter, slog.New(slog.DiscardHandler))
+		if _, err := admitter.Sweep(t.Context()); err != nil || len(submitter.requests) != 0 ||
+			len(store.skipped) != 0 || store.deferred != 1 {
+			t.Errorf("busy: %v %d %v %d", err, len(submitter.requests), store.skipped, store.deferred)
+		}
+	}
 	decided := map[string]func(*IdleCompactionTarget){
 		string(idlecompaction.SkipSuperseded): func(target *IdleCompactionTarget) { target.LatestExecution = strings.Repeat("c", 32) },
-		string(idlecompaction.SkipAgentBusy):  func(target *IdleCompactionTarget) { target.AgentBusy = true },
 		string(idlecompaction.SkipCacheExpired): func(target *IdleCompactionTarget) {
 			target.Now = target.RequestStarted.Add(10 * time.Minute)
 		},

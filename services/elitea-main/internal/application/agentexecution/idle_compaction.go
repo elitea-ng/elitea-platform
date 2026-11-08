@@ -51,7 +51,8 @@ var (
 	// ErrIdleCompactionSuperseded: the admission transaction found a newer
 	// execution of the participant than the source. The row ends SKIPPED.
 	ErrIdleCompactionSuperseded = errors.New("idle compaction source is no longer the agent's latest turn")
-	// ErrIdleCompactionAgentBusy: a turn of the participant runs or waits.
+	// ErrIdleCompactionAgentBusy: an agent run of the conversation runs or
+	// waits; the check is deferred, not ended.
 	ErrIdleCompactionAgentBusy = errors.New("idle compaction agent has a running turn")
 	// ErrIdleCompactionActorNotAllowed: the source's actor may no longer
 	// write to the conversation.
@@ -159,17 +160,11 @@ func (target IdleCompactionTarget) Check() idlecompaction.Check {
 	}
 }
 
-// idleCompactionResumeMarkers are the continuation discriminators a source's
-// frozen meta may carry; the idle input drops them all.
-var idleCompactionResumeMarkers = []string{
-	"pipeline_static_resume_v1", "pipeline_static_tool_resume_v1", "fanout_wake_v1", "idle_compaction_v1",
-}
-
 // IdleCompactionInput derives the idle input from the source's frozen
 // request: every frozen field is the source's (so the provider prompt cache
 // of its last request is read), user_input is the empty string, no resume,
 // continue or regenerate, no HITL decision, no checkpoint and no delegated
-// sign-in, and meta.idle_compaction_v1 names the source. The frozen bytes
+// sign-in, and meta holds only idle_compaction_v1, which names the source. The frozen bytes
 // must match their stored digest, so the input is deterministic and a
 // retried admission collapses on its idempotency key.
 func IdleCompactionInput(target IdleCompactionTarget) (*runtimev1.AgentExecutionInputV1, error) {
@@ -189,13 +184,14 @@ func IdleCompactionInput(target IdleCompactionTarget) (*runtimev1.AgentExecution
 		(input.ThreadId != nil && input.GetThreadId() != turn.ThreadID) {
 		return nil, errInvalidIdleCompaction
 	}
-	var meta map[string]json.RawMessage
-	if json.Unmarshal(input.GetMeta(), &meta) != nil || meta == nil {
+	var sourceMeta map[string]json.RawMessage
+	if json.Unmarshal(input.GetMeta(), &sourceMeta) != nil || sourceMeta == nil {
 		return nil, errInvalidIdleCompaction
 	}
-	for _, marker := range idleCompactionResumeMarkers {
-		delete(meta, marker)
-	}
+	// The marker is the idle input's only meta key: the worker refuses any
+	// other (agent.idle_compaction.not_empty), so a source's own meta (a
+	// resume marker, or a key a later input path adds) never reaches it.
+	meta := map[string]json.RawMessage{}
 	ttl := target.CacheTTL
 	if ttl == 0 {
 		ttl = idlecompaction.CacheTTL

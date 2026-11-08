@@ -353,3 +353,36 @@ WHERE task_id = $1`, small)
 		t.Fatalf("sweep: %d %v %q", created, err, h.checkState(second))
 	}
 }
+
+// A peer agent's live run shares the conversation's worker session, so a due
+// check waits for it (stays QUEUED, attempt given back) and is admitted on
+// the pass after the peer settles. The peer's turn never ends the check.
+func TestIdleCompactionWaitsForAPeersLiveRun(t *testing.T) {
+	h := newIdleHarness(t)
+	// The peer is mid-turn when the agent's turn settles: the agent still
+	// arms its check.
+	peerResponse := h.newResponse()
+	peerRun := h.executions[peerResponse]
+	h.exec(`UPDATE elitea_runtime.agent_execution_jobs SET client_stream_id = $2, participant_id = $3
+WHERE execution_id = $1`, peerRun, h.conversation, h.peer)
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'RUNNING' WHERE execution_id = $1`, peerRun)
+	source := h.settledAnswer(h.newResponse(), h.agent)
+	if !h.arm(source) {
+		t.Fatal("a peer's live run stopped the agent's check from arming")
+	}
+	h.makeDue(source)
+	if created, err := h.admitter.Sweep(t.Context()); err != nil || created != 0 || h.checkState(source) != "QUEUED" {
+		t.Fatalf("sweep during the peer's run: %d %v %q", created, err, h.checkState(source))
+	}
+	var attempts int
+	if err := h.pool.QueryRow(t.Context(), `SELECT admission_attempts FROM elitea_runtime.agent_idle_compactions
+WHERE idempotency_key = $1`, agentexecutionapp.IdleCompactionIdempotencyKey(source)).Scan(&attempts); err != nil || attempts != 1 {
+		t.Fatalf("attempts = %d %v", attempts, err)
+	}
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET state = 'SUCCEEDED', settled_at = clock_timestamp() WHERE execution_id = $1`, peerRun)
+	h.exec(`UPDATE elitea_runtime.agent_idle_compactions SET lease_until = NULL WHERE idempotency_key = $1`,
+		agentexecutionapp.IdleCompactionIdempotencyKey(source))
+	if created, err := h.admitter.Sweep(t.Context()); err != nil || created != 1 || h.checkState(source) != "ADMITTED" {
+		t.Fatalf("sweep after the peer settled: %d %v %q", created, err, h.checkState(source))
+	}
+}

@@ -109,7 +109,14 @@ func (a *IdleCompactionAdmitter) Sweep(ctx context.Context) (int, error) {
 		if ctx.Err() != nil {
 			return created, ctx.Err()
 		}
-		if code := idlecompaction.Decide(target.Check(), target.Now); code != idlecompaction.SkipNone {
+		code := idlecompaction.Decide(target.Check(), target.Now)
+		if code == idlecompaction.SkipAgentBusy {
+			// A run of the conversation is live: wait for the next pass.
+			// A peer's turn never ends the check; the cache lifetime does.
+			a.deferCheck(ctx, target.Turn)
+			continue
+		}
+		if code != idlecompaction.SkipNone {
 			a.skip(ctx, target.Turn, string(code))
 			continue
 		}
@@ -124,7 +131,7 @@ func (a *IdleCompactionAdmitter) Sweep(ctx context.Context) (int, error) {
 		case errors.Is(err, ErrIdleCompactionSuperseded):
 			a.skip(ctx, target.Turn, string(idlecompaction.SkipSuperseded))
 		case errors.Is(err, ErrIdleCompactionAgentBusy):
-			a.skip(ctx, target.Turn, string(idlecompaction.SkipAgentBusy))
+			a.deferCheck(ctx, target.Turn)
 		case errors.Is(err, ErrIdleCompactionActorNotAllowed):
 			a.skip(ctx, target.Turn, IdleCompactionSkipActorNotAllowed)
 		case errors.Is(err, errInvalidIdleCompaction):
@@ -134,11 +141,7 @@ func (a *IdleCompactionAdmitter) Sweep(ctx context.Context) (int, error) {
 			governedRefusal(err), admissionRefusal(err), errors.Is(err, ErrUnsupportedCurrentAgentStart):
 			a.skip(ctx, target.Turn, IdleCompactionSkipAdmission)
 		case errors.Is(err, executionapp.ErrAdmissionCapacityExhausted):
-			// Stays QUEUED and gives its attempt back; a check whose cache
-			// expires meanwhile is skipped by the next pass's Decide.
-			if deferErr := a.store.DeferIdleCompaction(ctx, target.Turn); deferErr != nil && ctx.Err() == nil {
-				a.logger.Warn("idle compaction deferral was not recorded", "reason", "unavailable")
-			}
+			a.deferCheck(ctx, target.Turn)
 		default:
 			if ctx.Err() != nil {
 				return created, ctx.Err()
@@ -171,6 +174,15 @@ func (a *IdleCompactionAdmitter) admit(ctx context.Context, target IdleCompactio
 		CurrentIdleCompactionTurn: turn.Clone(),
 		TriggerOrigin:             target.TriggerOrigin,
 	})
+}
+
+// deferCheck keeps a transiently refused row QUEUED and gives its attempt
+// back; a check whose cache expires meanwhile is skipped by a later pass's
+// Decide.
+func (a *IdleCompactionAdmitter) deferCheck(ctx context.Context, turn CurrentIdleCompactionTurn) {
+	if err := a.store.DeferIdleCompaction(ctx, turn); err != nil && ctx.Err() == nil {
+		a.logger.Warn("idle compaction deferral was not recorded", "reason", "unavailable")
+	}
 }
 
 func (a *IdleCompactionAdmitter) skip(ctx context.Context, turn CurrentIdleCompactionTurn, code string) {

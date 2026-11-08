@@ -386,29 +386,55 @@ impl IdleCompactionRun {
             Content::new("user")
                 .with_text(super::context_summary::continuation_prompt(&self.guidance)),
         );
-        let first = self.ask(request.clone()).await?;
-        match super::context_summary::validate(&first, source) {
-            Ok(accepted) => Ok(accepted),
-            Err(error) => {
-                tracing::info!(
-                    validation_code = error.code,
-                    "the idle summary ignored the template: asking once more"
-                );
-                request
-                    .contents
-                    .push(Content::new("model").with_text(first));
-                request.contents.push(
-                    Content::new("user").with_text(super::context_management::TEMPLATE_RETRY),
-                );
-                let second = self.ask(request).await?;
-                super::context_summary::validate(&second, source)
+        // The request declares the source's tools (the cached prefix must
+        // match), so the model may answer with a call. A call is never run:
+        // like a missed template it gets the one retry, and a second call
+        // refuses the run.
+        let first = match self.ask(request.clone()).await? {
+            Answer::Text(text) => match super::context_summary::validate(&text, source) {
+                Ok(accepted) => return Ok(accepted),
+                Err(error) => {
+                    tracing::info!(
+                        validation_code = error.code,
+                        "the idle summary ignored the template: asking once more"
+                    );
+                    Content::new("model").with_text(text)
+                }
+            },
+            Answer::ToolCall(call) => {
+                tracing::info!("the idle summary called a tool: asking once more");
+                call
             }
+        };
+        // Every call is answered (the provider requires a result for each
+        // call), with a refusal, then the template retry in the same turn.
+        let mut retry = Content::new("user");
+        for part in &first.parts {
+            if let Part::FunctionCall { name, id, .. } = part {
+                retry.parts.push(Part::FunctionResponse {
+                    function_response: adk_rust::FunctionResponseData::new(
+                        name.as_str(),
+                        json!({"error": "Tools are unavailable now. Write the summary as text."}),
+                    ),
+                    id: id.clone(),
+                    annotations: None,
+                });
+            }
+        }
+        request.contents.push(first);
+        retry.parts.push(Part::Text {
+            text: super::context_management::TEMPLATE_RETRY.to_owned(),
+        });
+        request.contents.push(retry);
+        match self.ask(request).await? {
+            Answer::Text(second) => super::context_summary::validate(&second, source),
+            Answer::ToolCall(_) => Err(tool_call_refused()),
         }
     }
 
-    /// One provider call through the bound facade; an answer that calls a
-    /// tool is refused, never executed.
-    async fn ask(&self, request: LlmRequest) -> adk_rust::Result<String> {
+    /// One provider call through the bound facade. An answer that calls a
+    /// tool comes back as [`Answer::ToolCall`], never executed.
+    async fn ask(&self, request: LlmRequest) -> adk_rust::Result<Answer> {
         if let Some(completion) = &self.completion {
             completion.discard_unaccepted()?;
         }
@@ -420,7 +446,17 @@ impl IdleCompactionRun {
             if let Some(content) = &response.content {
                 for part in &content.parts {
                     match part {
-                        Part::FunctionCall { .. } => return Err(tool_call_refused()),
+                        Part::FunctionCall { .. } => {
+                            let mut call = Content::new("model");
+                            call.parts.extend(
+                                content
+                                    .parts
+                                    .iter()
+                                    .filter(|part| matches!(part, Part::FunctionCall { .. }))
+                                    .cloned(),
+                            );
+                            return Ok(Answer::ToolCall(call));
+                        }
                         // Deltas, then the terminal's own last delta (never a
                         // restatement at the facade boundary).
                         Part::Text { text: delta } => text.push_str(delta),
@@ -435,8 +471,15 @@ impl IdleCompactionRun {
         if !terminal || text.trim().is_empty() {
             return Err(invalid_idle());
         }
-        Ok(text)
+        Ok(Answer::Text(text))
     }
+}
+
+/// One summary call's answer.
+enum Answer {
+    Text(String),
+    /// The model called a tool; the content holds the call as returned.
+    ToolCall(Content),
 }
 
 /// The root agent of an idle compaction invocation: it runs the compaction
