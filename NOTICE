@@ -28,6 +28,6 @@ apps/elitea-desktop/src-tauri/src/acp/fixtures/.
 
 This product includes software from agent-desktop (Apache-2.0),
 by the agent-desktop authors (https://github.com/vercel-labs/agent-desktop, commit
-b43ac4f6e892ef608f8851428613c4009f0e84c7): the crates core and macos,
-vendored with three patches in libs/rust/vendor/agent-desktop/ (see
+b43ac4f6e892ef608f8851428613c4009f0e84c7): the crates core, macos, windows and linux,
+vendored with four patches in libs/rust/vendor/agent-desktop/ (see
 libs/rust/vendor/README.md) and used by libs/rust/desktop-control/.

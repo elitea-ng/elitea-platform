@@ -1,17 +1,17 @@
 ---
 title: "Let the agent use your other apps (desktop)"
-description: "How a Local work thread in the Elitea desktop app sees and operates your other macOS applications, what you are asked, and the limits that hold in every mode."
+description: "How a Local work thread in the Elitea desktop app sees and operates your other applications on macOS, Windows and Linux, what you are asked, and the limits that hold in every mode."
 ---
 
-In the Elitea desktop app on macOS, the agent of a **Local work** thread can see and operate your other applications: read a window, press a button, type into a field, send a key chord, open an app. These are the `computer` tools. They are off until your organization and you both turn them on.
+In the Elitea desktop app on macOS, Windows and Linux, the agent of a **Local work** thread can see and operate your other applications: read a window, press a button, type into a field, send a key chord, open an app. These are the `computer` tools. They are off until your organization and you both turn them on.
 
 ## Turn it on
 
 <Steps>
 1. Your organization's client policy must allow computer use (`local_work_computer_use`). If it does not, the agent has no `computer` tools, and any call is denied.
 2. Open **Settings ▸ Computer use** in the app. The page shows the policy, the permissions macOS has granted Elitea right now, and the device switch.
-3. Grant **Accessibility**: select **Open System Settings** next to it and turn Elitea on in **Privacy & Security ▸ Accessibility**. Without it the agent cannot read or operate any app, and the switch stays off.
-4. To let the agent take screenshots, also grant **Screen Recording** the same way, then restart Elitea. Without it, `computer_screenshot` and `computer_click_at` are not offered; the page names them.
+3. On macOS, grant **Accessibility**: select **Open System Settings** next to it and turn Elitea on in **Privacy & Security ▸ Accessibility**. Without it the agent cannot read or operate any app, and the switch stays off.
+4. On macOS, to let the agent take screenshots, also grant **Screen Recording** the same way, then restart Elitea. Without it, `computer_screenshot` and `computer_click_at` are not offered; the page names them.
 5. Turn on **Let the agent use this computer**. It is off until you turn it on.
 </Steps>
 
@@ -21,15 +21,25 @@ The next turn of a thread has the tools. Sub-agents never get them, and a cloud 
 macOS keeps these grants for the app's bundle id (`ai.elitea.desktop`) and its signing team. An Elitea build with another bundle id or team, a self-built one for example, starts with no grants: grant them again.
 </Note>
 
+<Note>
+Windows and Linux ask for no grant: the page shows what the system reports. On Linux the accessibility bus (AT-SPI) must be running, as it is on GNOME and KDE. Apps are named by their executable on Windows (`notepad.exe`) and by their desktop entry on Linux (`org.gnome.TextEditor`), in questions and in **Always allowed apps**.
+</Note>
+
 ## While the agent uses your computer
 
 The agent's first `computer` call of a turn starts a session. A small panel stays on top of every window, on every desktop, until the turn ends. It shows the app the agent is in and its last action, with **Pause** and **Stop**. You cannot hide it while the session runs. The menu-bar item shows the same state and the same buttons.
 
 - **Pause.** Select **Pause** in the panel or the menu-bar item. Nothing the agent asks of the computer runs until you select **Resume**; its calls are refused with `user_active` meanwhile.
 - **When you use the computer, it pauses.** If you type, click, drag or scroll in another app while the agent works, the session pauses at once and the panel says **Paused, you are using the computer**. The action the agent was doing stops, and nothing runs until you select **Resume**, so the agent never fights you for the keyboard or the pointer. Moving the pointer alone, and using Elitea's own windows, do not pause it.
-- **Stop.** Select **Stop**, or press **Control-Option-Escape** (⌃⌥⎋) anywhere. The agent's current action fails with `stopped_by_user`, and it has no `computer` tools for the rest of the turn. The next turn can use them again.
+- **Stop.** Select **Stop**, or press **Control-Option-Escape** (⌃⌥⎋) anywhere; on Windows and Linux, **Ctrl+Alt+Esc**. The agent's current action fails with `stopped_by_user`, and it has no `computer` tools for the rest of the turn. The next turn can use them again.
 
 If macOS does not let Elitea watch the keyboard and the pointer, the agent can still see apps but cannot act in them (`user_active_guard_unavailable`). Grant Accessibility, and Input Monitoring if macOS asks for it (**Settings ▸ Computer use ▸ Open Input Monitoring**).
+
+<Warning>
+**Linux on Wayland: the agent can see apps but not act in them.** Wayland lets no application watch the keyboard and the pointer, so the pause on your own input cannot run, and every act is refused with `user_active_guard_unavailable`. To let the agent act, sign in to an X11 session (often "GNOME on Xorg" on the login screen).
+</Warning>
+
+On Windows, input another program injects (a remote-control tool or an automation script) does not pause the agent: Windows marks it the same way as the agent's own.
 
 ## What the agent can do
 
@@ -60,12 +70,12 @@ The agent asks before it sees an app, and asks again, separately, before it acts
 These hold in every mode, bypass included, and no answer lifts them:
 
 - **Locked or sleeping screen.** No call runs while the screen is locked, the screensaver is up, the display sleeps, or another user is switched in (`screen_unavailable`).
-- **Passwords.** A password field shows as `[secure]` with no value, and the agent never types into it. While macOS secure input is on (a password prompt anywhere), every act is refused (`secure_field_refused`). The agent asks you to type it instead.
-- **Denied chords and menu items.** Quit, force quit, log out, lock, shut down, empty Trash, Spotlight and Siri are refused (`chord_refused`). So are the menu items Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit and Switch User, in any app's menus and the Apple menu (`menu_item_refused`).
+- **Passwords.** A password field shows as `[secure]` with no value, and the agent never types into it. While macOS secure input is on (a password prompt anywhere), every act is refused (`secure_field_refused`). On Windows a UAC or credential prompt switches to a secure desktop, and every call is refused (`screen_unavailable`). The agent asks you to type it instead.
+- **Denied chords and menu items.** Quit, force quit, log out, lock, shut down, empty Trash, Spotlight and Siri are refused (`chord_refused`). On Windows also Alt+F4, Ctrl+Alt+Del, Ctrl+Shift+Esc, Win+L, Win+R, Win+X and Alt+Tab; on Linux also Alt+F4, Ctrl+Alt+Del, Ctrl+Alt+F1 to F12, Super+L, Alt+F2 and Alt+Tab. So are the menu items Quit, Exit, Log Out, Sign out, Shut Down, Restart, Sleep, Suspend, Hibernate, Lock Screen, Force Quit and Switch User, in any app's menus and the Apple menu (`menu_item_refused`).
 - **Only the app it names.** Typing with no target control, a key chord and a coordinate click go only into the app the agent named, and only while that app is in front (`not_frontmost`). A window or a control of one app is never used for another.
 - **Screenshots show one window.** A screenshot, zoomed or not, shows that window only; another window on top of it does not appear.
 - **Elitea itself.** The agent never reads or acts on Elitea's own windows, so it cannot approve its own questions (`own_window_refused`). A coordinate click that another window covers is refused too.
-- **Denied apps.** Apps the platform or your policy denies, such as Keychain Access and the password managers, are never read or acted on.
+- **Denied apps.** Apps the platform or your policy denies, such as Keychain Access and the password managers, are never read or acted on. On Windows and Linux terminals and shells, Task Manager, the registry editor, Settings' security pages, and the sign-in, UAC and polkit prompts are denied too (`app_denied`).
 - **Rate.** At most 10 acts and 2 screenshots in any second (`rate_limited`).
 
 ## What the agent sees

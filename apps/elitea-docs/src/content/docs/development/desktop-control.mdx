@@ -1,6 +1,6 @@
 ---
 title: "Desktop control driver"
-description: "The elitea-desktop-control crate (ADR-0047): the DesktopDriver trait, the macOS driver on vendored agent-desktop, snapshots and refs, the hard limits, and how to run the live test."
+description: "The elitea-desktop-control crate (ADR-0047): the DesktopDriver trait, the macOS, Windows and Linux drivers on vendored agent-desktop, snapshots and refs, the hard limits per OS, and how to run the live test."
 ---
 
 `libs/rust/desktop-control` (package `elitea-desktop-control`) is the layer that drives the person's other applications on their own computer (ADR-0047, #1581). Its caller is the desktop host's `computer` toolset (#1583, `apps/elitea-desktop/src-tauri/src/computer_tools.rs`; see [Let the agent use your other apps](/how-tos/chat-conversations/desktop-computer-use/)). The user-active guard (#1584) will build on it too.
@@ -25,7 +25,9 @@ description: "The elitea-desktop-control crate (ADR-0047): the DesktopDriver tra
 | `synthetic_marker()`, `is_synthetic_event(field)` | Tell the driver's own input events from the person's |
 | `forget_snapshots()` | Make every ref handed out so far stale |
 
-`default_driver()` returns the macOS driver on macOS. On every other OS it returns `Unsupported`, which fails every call with `platform_not_supported`, so Linux CI compiles and tests the crate.
+`default_driver()` returns the macOS driver on macOS, the Windows driver on Windows and the Linux driver on Linux (ADR-0047 decision 10, #1586). On any other OS it returns `Unsupported`, which fails every call with `platform_not_supported`.
+
+On Windows and Linux the `bundle_id` of every call is that OS's application id: the executable image on Windows (`notepad.exe`), the desktop entry id on Linux (`org.gnome.TextEditor`, or the application's name when it has none). Approvals, remembered answers and policy use it exactly as they use a macOS bundle id.
 
 ## Snapshots and refs
 
@@ -47,7 +49,7 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 - **Window-only capture.** A capture is always of one window alone, without its shadow (`screencapture -o -l`, the vendor's frame capture): no other window that overlaps it shows, and its pixels map 1:1 onto the window's frame times the display scale. A zoom (`CaptureTarget::WindowRegion`) is a crop of that capture; there is no screen-region capture.
 - **Text length.** `type_text` and `act set_value` write at most 10,000 characters (`MAX_TYPED_CHARS`). Longer text fails with `invalid_args` before anything is sent.
 - **Denied menu items.** `act` on a menu item titled Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit or Switch User (case ignored, with or without the ellipsis and any trailing app or user name) fails with `menu_item_refused`, in any app's menus, the Apple menu's included: the menu path to the denied chords.
-- **Denied chords.** They fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through. Switch user has no entry: macOS has no default fast-user-switching chord, only the menu-bar and Control Centre item. A switched-out session fails every call with `screen_unavailable`.
+- **Denied chords.** They fail with `chord_refused` before any event is sent: quit, force quit, log out, lock screen, the power and eject chords, empty Trash, Spotlight and Siri. Adding a modifier to a denied chord does not get it through. Switch user has no entry: macOS has no default fast-user-switching chord, only the menu-bar and Control Centre item. A switched-out session fails every call with `screen_unavailable`. Windows and Linux have lists of their own (below).
 - Every event the driver posts carries its marker in `kCGEventSourceUserData`. A physical event carries 0 there, so an event tap can classify each event with `is_synthetic_event`.
 
 ## Error codes
@@ -58,6 +60,7 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 | --- | --- |
 | `stale_ref` | The ref's snapshot is gone, or the element changed. Take a new snapshot |
 | `secure_field_refused` | A write into a secure field, or any act while macOS secure input is on |
+| `app_denied` | An application on the Windows or Linux platform deny list (terminals, password managers, system and security tools) |
 | `chord_refused` | A denied key chord |
 | `menu_item_refused` | A Quit, Log Out, Shut Down, Restart, Sleep, Lock Screen, Force Quit or Switch User menu item |
 | `not_frontmost` | Input with no element target, and the named app is not the frontmost one |
@@ -68,7 +71,7 @@ The driver enforces the hard limits of ADR-0047 decision 5 that only it can see,
 | `action_not_supported`, `action_failed` | The element cannot do the action, or it did not take effect |
 | `timeout` | A wait or an OS read ran out of time |
 | `invalid_args` | Bad arguments, such as text over 10,000 characters |
-| `platform_not_supported` | The `Unsupported` driver of a non-macOS OS |
+| `platform_not_supported` | The `Unsupported` driver of an OS other than macOS, Windows and Linux |
 | `internal` | Anything else |
 
 ## The macOS driver
@@ -77,9 +80,33 @@ The macOS driver wraps vendored copies of the `core` and `macos` crates of [agen
 
 Actions are semantic first, through the accessibility API, with no pointer move and no change of focus. `ActionOutcome.delivery` says whether an action was delivered semantically or needed physical input.
 
+## The Windows and Linux drivers
+
+Both wrap vendored copies of agent-desktop's `windows` (UI Automation) and `linux` (AT-SPI) crates, at the same commit as macOS, behind one engine (`src/engine.rs`). Each crate, and the crates it needs (`uiautomation`, `windows` and `willhook` on Windows; `x11rb` and `zbus` on Linux), is compiled only on its own OS. Their `unsafe` stays in the vendored crates; `elitea-desktop-control` has none. `.github/workflows/ci-desktop-control.yml` runs check, clippy and the tests on windows-latest and ubuntu-latest.
+
+The pure rules live in `src/platform.rs`, and their tests run on every OS:
+
+- **Denied chords.** Windows: Alt+F4, Ctrl+Alt+Delete and Ctrl+Alt+End, Ctrl+Shift+Esc, Win+L, Win+X, Win+R, Win+S, Win+I, Win+E, Win+D, the Windows key alone, Alt+Tab and Win+Tab, and the power and sleep keys. Linux: Alt+F4, Ctrl+Alt+Delete, End, Backspace, Escape, L and T, Ctrl+Alt+F1 to F12 (virtual terminals), Super+L, Alt+F2, Alt+Space, the Super key alone, Super+A, Super+D, Super+Space, Alt+Tab and Super+Tab, and the power, sleep and suspend keys. The vendor's own blocked combos are refused too. As on macOS, an added modifier does not get a denied chord through.
+- **Denied menu items.** The macOS list also covers Exit, Sign out, Log off, Shut down, Power off, Suspend, Hibernate and Reboot, with Windows mnemonics (`E&xit`) ignored.
+- **Denied apps.** Opening, snapshotting or acting on a denied application fails with `app_denied`: Elitea itself, password managers, terminals and shells (`cmd.exe`, `powershell.exe`, `wt.exe`, GNOME Terminal, Konsole and others), the registry and management consoles, Task Manager, the sign-in, UAC and lock-screen processes, Settings' security pages, polkit and pinentry prompts, screensavers and greeters. `open_app` takes only a plain application id (no path, no `..`; on Windows a `.exe` image).
+- **Secure fields.** An element is secure when the vendor marks it `secure` (UI Automation `IsPassword`, AT-SPI `PASSWORD_TEXT`). There is no OS-wide secure-input state as on macOS, so `secure_input()` is always false there; the focused element is read before `type_text` with no ref and before `key`.
+
+The screen gate (`screen_unavailable`):
+
+- **Windows** (vendor patch `windows/src/elitea_ext.rs`): this process's session is not the connected console session, the input desktop is not `Default` (the lock or sign-in screen, or a UAC or credential prompt's secure desktop), or the screensaver runs.
+- **Linux**: no display, the logind session is not active or has `LockedHint` set, or `org.freedesktop.ScreenSaver` (or GNOME's) says the screensaver is active. A desktop without logind or a screensaver service reports those reads as clear.
+
+The user-active guard:
+
+- **Windows**: low-level keyboard and mouse hooks through `willhook` (listen only). Windows flags every injected event, and an injected event is read as the driver's own. So another program's injected input does not pause the agent either.
+- **Linux on X11**: XInput2 raw events on the root window (listen only). An event from the server's XTEST devices is read as the driver's own; the active window's `_NET_WM_PID` tells input aimed at Elitea.
+- **Linux on Wayland: fails closed.** Wayland gives no application a global view of the keyboard and pointer, so the watch cannot start, and every act is refused with `user_active_guard_unavailable` (`user_active_unavailable: a Wayland session ...`). Reads still work. Sign in to an X11 session to let the agent act.
+
+The stop shortcut is Control+Alt+Escape on both (Option is Alt). The settings page's System Settings buttons are macOS's own; on Windows and Linux there is no grant to open.
+
 ## Run the live test
 
-The unit tests run everywhere. The live test drives TextEdit and needs a logged-in macOS session.
+The unit tests run everywhere. The live test drives TextEdit and needs a logged-in macOS session. Windows and Linux have no live test yet: CI proves they build and that their pure rules and input readings hold.
 
 <Steps>
 <Step title="Grant access">

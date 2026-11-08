@@ -1,0 +1,97 @@
+name: CI — desktop control on Windows and Linux
+
+# ADR-0047 decision 10 (#1586): elitea-desktop-control drives the person's
+# apps on macOS (AX), Windows (UI Automation) and Linux (AT-SPI) through the
+# vendored agent-desktop adapters, each compiled only on its own OS. The
+# shared Rust job runs the crate on Linux; ci-desktop.yml builds it inside the
+# host on macOS. This workflow is the one place the Windows driver compiles at
+# all, and the place each OS's own input-watch tests run (they are cfg-gated
+# to their target): check, clippy -D warnings and the tests, on
+# windows-latest and ubuntu-latest.
+#
+# Cheap on purpose: two jobs, path-filtered to the crate, the vendored
+# adapters and the lock, and the cargo cache read everywhere but written on
+# main only. The last step of each job checks that its OS's input tests
+# actually ran: a test binary whose cfg-gated module compiled to nothing
+# would otherwise pass.
+
+on:
+  pull_request:
+    paths:
+      # The pin every cargo step asserts (scripts/ci/assert-rust-toolchain.sh).
+      - "rust-toolchain.toml"
+      - "scripts/ci/assert-rust-toolchain.sh"
+      - "libs/rust/desktop-control/**"
+      - "libs/rust/vendor/agent-desktop/**"
+      - "libs/rust/Cargo.lock"
+      - "libs/rust/Cargo.toml"
+      - "libs/rust/rust-toolchain.toml"
+      - ".github/workflows/ci-desktop-control.yml"
+  # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
+  # The nightly run on main is the one that WRITES the caches pull requests
+  # read (scripts/ci/check-workflow-cache-writes.mjs); staggered with the
+  # other cache writers, ahead of publish.yml's 02:07 nightly pre-release.
+  schedule:
+    - cron: "53 0 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  desktop-control:
+    name: Desktop control — ${{ matrix.os }} check, clippy and tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            # tests in src/windows_input.rs
+            input_tests: "windows_input::tests::"
+          - os: ubuntu-latest
+            # tests in src/linux_input.rs
+            input_tests: "linux_input::tests::"
+    defaults:
+      run:
+        working-directory: libs/rust
+        # Explicit bash runs with -o pipefail on every runner, so
+        # `cargo test | tee` fails when cargo does.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assert the pinned toolchain
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: libs/rust
+
+      - name: Check
+        run: cargo check --locked -p elitea-desktop-control --all-targets
+
+      - name: Clippy
+        run: cargo clippy --locked -p elitea-desktop-control --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked -p elitea-desktop-control 2>&1 | tee "$RUNNER_TEMP/desktop-control-test.log"
+
+      - name: This OS's input tests ran
+        env:
+          INPUT_TESTS: ${{ matrix.input_tests }}
+        run: |
+          ran=$(grep -cE "^test ${INPUT_TESTS}[a-z_]+ \.\.\. ok\$" "$RUNNER_TEMP/desktop-control-test.log" || true)
+          echo "input tests passed: $ran"
+          test "$ran" -ge 5

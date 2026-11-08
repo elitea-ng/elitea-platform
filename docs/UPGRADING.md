@@ -4,6 +4,28 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Desktop computer use on Windows and Linux (#1586, ADR-0047 decision 10)
+
+Desktop app only; no server, migration or configuration change. The desktop
+app's computer use (`computer` tools of a Local work thread) now runs on
+Windows (UI Automation) and Linux (AT-SPI), not only on macOS. It stays off
+until the organisation's client policy (`local_work_computer_use`) and the
+person's device switch both allow it, as before.
+
+- An organisation that allows computer use now allows it on Windows and Linux
+  desktops too, once the person turns it on there. The policy has no per-OS
+  switch; review `local_work_computer_use_apps_allow` / `_apps_deny` with
+  the Windows and Linux application ids below in mind.
+- Application ids on Windows are executable images (`notepad.exe`), on Linux
+  desktop entry ids (`org.gnome.TextEditor`). Policy app lists and remembered
+  "always for this app" answers name them that way.
+- Each OS has its own deny list of chords, menu items and applications
+  (terminals, password managers, system and security tools). A denied app
+  fails with the new error code `app_denied`.
+- Linux on Wayland can see apps but not act in them: there is no global
+  input watch for the pause-on-your-input guard, so every act is refused with
+  `user_active_guard_unavailable`. X11 sessions act normally.
+
 ## Turn-taking for conversations with several agents (#1611, ADR-0050 decisions 7c and 7d)
 
 **What changed.** Main decides who answers a message in a conversation with
