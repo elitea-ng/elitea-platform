@@ -5,6 +5,7 @@ import type { NativeDevice } from '@/api/queries/devices';
 import { SwipeToDelete } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
 import { Button, EmptyState, Icon, IconTile, ListSection, Text, useLayoutMargin } from '@/ui';
+import { identity } from '@/config/identity';
 
 export interface DevicesViewProps {
   status: { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string };
@@ -24,7 +25,7 @@ const PLATFORM_NAME: Record<NativeDevice['platform'], string> = { ios: 'iOS', an
 
 /** "iOS · Elitea AI 0.1.0". */
 export function deviceMeta(device: Pick<NativeDevice, 'platform' | 'clientVersion'>): string {
-  return [PLATFORM_NAME[device.platform], device.clientVersion ? `Elitea AI ${device.clientVersion}` : null].filter(Boolean).join(' · ');
+  return [PLATFORM_NAME[device.platform], device.clientVersion ? `${identity.displayName} ${device.clientVersion}` : null].filter(Boolean).join(' · ');
 }
 
 /**

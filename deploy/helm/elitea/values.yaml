@@ -3010,7 +3010,11 @@ main:
     # NATIVE_CLIENTS_PATH names an optional file (JSON or YAML) of registered
     # clients — [{client_id, display_name, redirect_uris, enabled}] — under the
     # admin editor's database rows. Once any client is registered, DEPLOYMENT_URL
-    # MUST be set: it is the issuer every native sign-in carries.
+    # MUST be set: it is the issuer every native sign-in carries. The ELITEA
+    # mobile app (ADR-0052 brand/elitea) is
+    #   {client_id: ai.elitea.app, display_name: Elitea AI,
+    #    redirect_uris: ["ai.elitea.app:/oauth/callback"], enabled: true}
+    # and any other brand registers its own bundle id the same way.
     ELITEA_NATIVE_ACCESS_TOKEN_TTL: ""
     ELITEA_NATIVE_REFRESH_IDLE_TTL: ""
     ELITEA_NATIVE_SESSION_MAX_LIFETIME: ""

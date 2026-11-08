@@ -7,7 +7,7 @@ the workspace's client policy (client contract 1.3, see `src/security/policy.ts`
 
 | Surface | Shows by default | Shows more when | Wiped on |
 |---|---|---|---|
-| Widgets (`EliteaCounts`) | counts: waiting for you, unread, running | `allow_system_surfaces`: the workspace host and the titles of the waiting conversations | log out, revocation, workspace switch (signed-out snapshot) |
+| Widgets (`Counts`) | counts: waiting for you, unread, running | `allow_system_surfaces`: the workspace host and the titles of the waiting conversations | log out, revocation, workspace switch (signed-out snapshot) |
 | Live Activity (`EliteaTurn`) | "Your agent is answering" (then "answered", "needs you" or "stopped") and the phase | `notification_preview: title` AND `allow_system_surfaces`: the conversation title | the turn ending (after a short linger), leaving memory while running, a wipe or switch; a new process ends leftovers |
 | Siri / Shortcuts | the three intents, no agent names | `allow_system_surfaces`: the first agents of the selected project as `AgentEntity` | log out, revocation, switch (empty catalog, pending invocations dropped); an invocation made while signed out is dropped at once, one older than 5 min is never acted on |
 
@@ -16,8 +16,8 @@ Message content, tool names and credentials never reach any of them.
 ## Widgets
 
 `src/features/surfaces/`. One WidgetKit extension (`ExpoWidgetsTarget`, bundle id
-`ca.mlops.elitea.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
-a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ca.mlops.elitea`:
+`ai.elitea.app.widgets`) built by `expo-widgets` from `app.config.ts`. The app writes
+a snapshot (`surfaceSnapshot.ts`) to the App Group `group.ai.elitea.app`:
 
 - after a sync changed stored data (`subscribeSyncChanges` in `src/sync/appSync.ts`),
   when the offline store opens, when the unread count changes and when a live turn

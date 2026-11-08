@@ -48,3 +48,6 @@ coverage/
 
 # contract build output (scripts/contract.mjs build)
 contract/.build/
+
+# Temporary brand copies from scripts/eas-config.test.mjs
+.brand-*/

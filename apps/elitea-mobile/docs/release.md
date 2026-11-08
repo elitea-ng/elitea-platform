@@ -11,7 +11,7 @@ Store copy, privacy answers and the export-compliance reasoning live in
 | Piece | Where | State |
 |-------|-------|-------|
 | Build, submit and update profiles | [`eas.json`](../eas.json) | ready |
-| EAS project link, OTA config, privacy manifest, export-compliance key | [`app.config.ts`](../app.config.ts) | ready; project id empty until `eas init` |
+| EAS project link, OTA config, privacy manifest, export-compliance key | [`app.config.ts`](../app.config.ts), `brand/<id>/brand.json` | ready; project id null until `eas init`, updates off |
 | Widget extension privacy manifest | [`plugins/withExtensionPrivacyManifest.js`](../plugins/withExtensionPrivacyManifest.js) | ready |
 | Manual build and submit workflows | [`.github/workflows/mobile-eas-build.yml`](../../../.github/workflows/mobile-eas-build.yml), [`mobile-eas-submit.yml`](../../../.github/workflows/mobile-eas-submit.yml) (repository root) | ready; need `EXPO_TOKEN` |
 | Structural checks of all of the above | [`scripts/eas-config.test.mjs`](../scripts/eas-config.test.mjs) (runs in CI) | ready |
@@ -82,21 +82,22 @@ the first external TestFlight round.
 ## 2. App Store Connect app record (owner)
 
 1. **Certificates, Identifiers and Profiles** (developer.apple.com): EAS
-   registers `ca.mlops.elitea`, the widget extension `ca.mlops.elitea.widgets`
-   and the App Group `group.ca.mlops.elitea` on the first build (section 4), so
+   registers `ai.elitea.app`, the widget extension `ai.elitea.app.widgets`
+   and the App Group `group.ai.elitea.app` on the first build (section 4), so
    nothing is needed here first. If you prefer to create them by hand, enable
    the App Groups capability on both identifiers and attach the group.
 2. App Store Connect, **Apps, +, New App**:
    - Platform: iOS
    - Name: `Elitea AI` (docs/store/listing.md)
    - Primary language: English (U.S.) or English (Canada)
-   - Bundle ID: `ca.mlops.elitea` (permanent: it can never change)
+   - Bundle ID: `ai.elitea.app` (permanent: it can never change)
    - SKU: `elitea-mobile-ios`
    - User access: Full access
 3. Open the new app, **App Information**: copy the numeric **Apple ID** (for
-   example `6740000000`) into [`eas.json`](../eas.json) as
-   `submit.production.ios.ascAppId` and merge that one-line change. The submit
-   workflow refuses to run until it is there.
+   example `6740000000`) into the brand manifest as `mobile.ascAppId` (a string,
+   [`brand/elitea/brand.json`](../../../brand/elitea/brand.json)) and merge that
+   one-line change. The submit workflow refuses to run until it is there, and
+   writes it into the runner's `eas.json` (the committed one names no id).
 4. Fill in **App Privacy** from docs/store/privacy.md, **Age Rating** from
    docs/store/listing.md, the privacy policy URL `https://elitea.ai/privacy`,
    and the category.
@@ -133,14 +134,12 @@ eas init                   # creates the project under the organization
 ```
 
 `app.config.ts` is dynamic, so `eas init` cannot write the link itself: it
-prints the project id. Put the id and the organization name into `easLink` in
-[`app.config.ts`](../app.config.ts) and merge the change:
+prints the project id. Put the id and the organization name into the brand
+manifest, `eas` in [`brand/<id>/brand.json`](../../../brand/elitea/brand.json)
+(ADR-0052; the app config reads it from there), and merge the change:
 
-```ts
-const easLink = {
-  projectId: '<uuid from eas init>',
-  owner: 'elitea-ng',
-};
+```json
+"eas": { "projectId": "<uuid from eas init>", "owner": "elitea-ng" }
 ```
 
 Committing the link (it is not a secret) is the recommended way: every
@@ -149,10 +148,23 @@ runtime fingerprint of a build and of an update agree. `EAS_PROJECT_ID` and
 `EXPO_OWNER` in the environment override it (handy for a fork or a dry run);
 if you rely on them instead, set them as EAS environment variables in all
 three environments too (`eas env:set`), or the build server sees an unlinked
-app.
+app. `eas submit` finds the bundle id and package in the built app; `eas.json`
+names no identifier.
 
-Once linked, the app has `updates.url` and EAS Update is on (section 10).
-Unlinked builds (any local build today) have updates disabled.
+The EAS build server evaluates `app.config.ts` again with only the project's EAS
+environment variables, so an `ELITEA_BRAND` set in your shell does not reach it.
+For any brand other than `elitea`, create `ELITEA_BRAND` as a plain-text
+variable in all three environments of that brand's EAS project
+(`eas env:create --name ELITEA_BRAND --value <id> --visibility plaintext --environment production`,
+and the same for `preview` and `development`). A build whose brand is not
+linked to the project it runs for fails at once (`assertBuildWorkerBrand`).
+
+Linking does NOT turn EAS Update on. It is on only for a brand whose manifest
+says `"updates": { "mode": "on", "codeSigningCertificate": "certs/<file>.pem" }`
+AND names its own `eas.projectId` (section 10); a link from the environment
+alone, or one naming another project, leaves updates disabled. brand/elitea
+ships with updates off. `node scripts/assert-release-config.mjs` checks every
+brand in `brand/` (or only `ELITEA_BRAND`) and fails on any other combination.
 
 Then protect the production update channel so only organization admins can
 publish to it:
@@ -161,6 +173,28 @@ publish to it:
 eas channel:create production   # the first build creates channels too
 eas channel:protect production
 ```
+
+## 4a. Universal links and App Links (brand owner)
+
+A brand with a `linkDomain` declares `applinks:<linkDomain>` (iOS associated
+domains) and a verified App Link for exactly `https://<linkDomain>/connect`
+(Android intent filter, `autoVerify`; other pages of the site stay in the
+browser). Connect links on that domain then open the app instead of the browser. A brand with `linkDomain: null` declares neither and
+uses its custom scheme alone.
+
+The domain must serve, over HTTPS with no redirect:
+
+- `/.well-known/apple-app-site-association` with an `applinks.details` entry
+  whose `appIDs` holds `<Apple team id>.<bundle id>` and whose `components` (or
+  `paths`) open `/connect`: iOS takes the first pattern that matches, so put
+  `{ "/": "/connect" }` before any exclusion;
+- `/.well-known/assetlinks.json` with a `delegate_permission/common.handle_all_urls`
+  statement for the package and the SHA-256 fingerprint of the Play app
+  signing key (Play Console, Test and release, App integrity).
+
+`npm run check:link-files` fetches both and fails when they do not name this
+brand's app and certificate. The team id and fingerprint come from the
+environment, not the manifest: they belong to the brand owner's accounts.
 
 ## 5. Credentials (let EAS manage them)
 
@@ -177,7 +211,7 @@ eas build --platform ios --profile production
 
 Answer yes to logging in to Apple and to letting EAS generate everything. It
 creates the distribution certificate, the App Store provisioning profiles for
-`ca.mlops.elitea` and `ca.mlops.elitea.widgets`, and the App Group. Then create
+`ai.elitea.app` and `ai.elitea.app.widgets`, and the App Group. Then create
 the App Store Connect API key EAS uses to submit:
 
 ```bash
@@ -235,7 +269,7 @@ belongs in a mobile binary.
 
 ### First internal build, step by step
 
-1. Sections 1 to 6 done; `easLink` and `ascAppId` merged.
+1. Sections 1 to 6 done; the brand manifest's `eas` link and `mobile.ascAppId` merged.
 2. Local, interactive, once per platform (credentials, section 5):
    `eas build -p ios --profile production` and `eas build -p android --profile production`.
 3. iOS: `eas submit -p ios --profile production --latest` (or the EAS submit
@@ -314,12 +348,23 @@ an update published from it reaches no existing build.
 5. The production channel is protected (section 4): only organization admins
    publish to it. The CI robot token can still publish (keep it secret).
 
-**Hardening to decide before the first public release** (owner):
-end-to-end code signing of updates (`updates.codeSigningCertificate` in the
-app config, a private key kept outside EAS, `eas update --private-key-path`),
-so a leaked Expo token alone cannot push code to devices. Check that the Expo
-plan includes it. Some enterprise customers also forbid OTA for managed apps;
-a future workspace policy or MDM key could turn update checks off.
+**Turning updates on for a brand** (owner, ADR-0052 decision 3): updates are
+code-signed end to end, so a leaked Expo token alone cannot push code to
+devices and an update never crosses brands.
+
+1. `npx expo-updates codesigning:generate --key-output-directory <outside the repo>
+   --certificate-output-directory brand/<id>/certs --certificate-validity-duration-years 10
+   --certificate-common-name "<brand> updates"`. The certificate is public and
+   committed; the private key never enters the repository or EAS.
+2. Set `"updates": { "mode": "on", "codeSigningCertificate": "certs/certificate.pem" }`
+   and the brand's own `eas.projectId` in its `brand.json`. The app config then
+   sets `updates.codeSigningCertificate` with `codeSigningMetadata`
+   `{ keyid: "main", alg: "rsa-v1_5-sha256" }`.
+3. Publish with `eas update ... --private-key-path <the key>`. Check that the
+   Expo plan includes code signing.
+
+Some enterprise customers forbid OTA for managed apps; a future workspace
+policy or MDM key could turn update checks off.
 
 Every update check sends Expo the platform, the runtime version, the channel
 and a random per-installation id (expo-eas-client). The privacy answers in
@@ -361,6 +406,7 @@ after.
 - [ ] No new cryptography outside the operating system on iOS (docs/store/export-compliance.md); otherwise the key must be revisited.
 - [ ] Review sign-in still works (demo workspace and test account, docs/store/listing.md).
 - [ ] Screenshots still match the app (docs/store/screenshots.md).
+- [ ] The brand's link files name this app: `ELITEA_BRAND=<id> APPLE_TEAM_ID=<team> ANDROID_CERT_SHA256=<Play app signing key fingerprint> npm run check:link-files` (section 4a).
 - [ ] Submit for review; phased release (iOS) and staged rollout (Android) on.
 
 ## 13. Owner decisions still open
@@ -372,5 +418,5 @@ after.
 | Who "collects" data for the privacy labels | docs/store/privacy.md, "Who collects" | the conservative answer (declared) |
 | Age rating / target audience | docs/store/listing.md | 13+ (Apple) / Teen, 18+ audience (Play) |
 | Demo workspace and reviewer test account | docs/store/listing.md, "Review notes" | none: must exist before the first external TestFlight round |
-| OTA code signing; OTA for MDM-managed installs | section 10 | not enabled |
+| OTA code signing (per brand, `updates.mode`); OTA for MDM-managed installs | section 10 | off for every brand in the repository |
 | Trademark clearance for the name | open-questions §2 | closed (Elitea's own app) |

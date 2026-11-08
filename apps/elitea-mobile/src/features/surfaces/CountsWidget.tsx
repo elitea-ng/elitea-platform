@@ -14,7 +14,7 @@ import { createWidget, type WidgetEnvironment } from 'expo-widgets';
 import { signedOutSnapshot, type SurfaceSnapshot } from '@/features/surfaces/surfaceSnapshot';
 
 /**
- * The home-screen and lock-screen widget (`EliteaCounts` in app.config.ts):
+ * The home-screen and lock-screen widget (`Counts` in app.config.ts):
  * pending approvals, unread notifications and running answers of the active
  * workspace, from the App Group snapshot (src/features/surfaces/surfaceSnapshot.ts).
  *
@@ -24,11 +24,11 @@ import { signedOutSnapshot, type SurfaceSnapshot } from '@/features/surfaces/sur
  * visible to it). Titles and the host appear only when the snapshot carries
  * them (the policy allows titles); otherwise the widget shows counts.
  */
-export const COUNTS_WIDGET = 'EliteaCounts';
+export const COUNTS_WIDGET = 'Counts';
 
 const CountsLayout = (props: SurfaceSnapshot, environment: WidgetEnvironment) => {
   'widget';
-  const p = props ?? { signedIn: false, approvals: 0, unread: 0, running: 0, host: '', titles: [], openUrl: '' };
+  const p = props ?? { signedIn: false, approvals: 0, unread: 0, running: 0, host: '', product: '', titles: [], openUrl: '' };
   const family = environment.widgetFamily ?? 'systemSmall';
   const dark = environment.colorScheme === 'dark';
   // In full colour the widget wears the app's flat ground and signal colour (design-tokens.json:
@@ -47,13 +47,13 @@ const CountsLayout = (props: SurfaceSnapshot, environment: WidgetEnvironment) =>
   const tint = fullColor ? [foregroundStyle(accent)] : [];
 
   if (!p.signedIn) {
-    if (family === 'accessoryInline') return <Text modifiers={[widgetURL(p.openUrl)]}>Elitea AI</Text>;
+    if (family === 'accessoryInline') return <Text modifiers={[widgetURL(p.openUrl)]}>{p.product}</Text>;
     if (family === 'accessoryCircular') {
       return <Image systemName="lock.fill" modifiers={[widgetURL(p.openUrl), lockGround]} />;
     }
     return (
       <VStack alignment="leading" spacing={4} modifiers={[widgetURL(p.openUrl), family === 'accessoryRectangular' ? lockGround : ground]}>
-        <Text modifiers={[font({ textStyle: 'headline', design: 'rounded' })]}>Elitea AI</Text>
+        <Text modifiers={[font({ textStyle: 'headline', design: 'rounded' })]}>{p.product}</Text>
         <Text modifiers={[font({ textStyle: 'caption' }), muted]}>Open the app to sign in.</Text>
       </VStack>
     );
@@ -103,7 +103,7 @@ const CountsLayout = (props: SurfaceSnapshot, environment: WidgetEnvironment) =>
   // Home screen: the workspace (or the app) on top, the decisions waiting as the hero number,
   // unread and running under it; the medium widget lists the waiting conversations when the
   // workspace allows titles.
-  const header = p.host || 'Elitea AI';
+  const header = p.host || p.product;
   const hero = (
     <VStack alignment="leading" spacing={0}>
       <Text

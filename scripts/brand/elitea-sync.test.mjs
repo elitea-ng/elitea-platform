@@ -19,15 +19,8 @@ const lit = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** brand/elitea asset → the copy an app reads today. */
 const COPIES = {
-  'ios/icon-1024.png': 'apps/elitea-mobile/assets/images/icon.png',
-  'ios/app.icon/icon.json': 'apps/elitea-mobile/assets/elitea.icon/icon.json',
-  'ios/app.icon/Assets/elitea.png': 'apps/elitea-mobile/assets/elitea.icon/Assets/elitea.png',
   'android/icon-512.png': 'brand/assets/icon-pack/colored-dark/android/elitea-colored-dark-android-512.png',
-  'android/adaptive-foreground.png': 'apps/elitea-mobile/assets/images/android-icon-foreground.png',
-  'android/adaptive-background.png': 'apps/elitea-mobile/assets/images/android-icon-background.png',
-  'android/adaptive-monochrome.png': 'apps/elitea-mobile/assets/images/android-icon-monochrome.png',
-  'splash/splash-icon.png': 'apps/elitea-mobile/assets/images/splash-icon.png',
-  'web/favicon-48.png': 'apps/elitea-mobile/assets/images/favicon.png',
+  // The mobile app reads its icons from brand/elitea itself (ADR-0052 W1a); the copies are gone.
   'macos/icon.icns': 'apps/elitea-desktop/src-tauri/icons/icon.icns',
   'windows/icon.ico': 'apps/elitea-desktop/src-tauri/icons/icon.ico',
   'desktop/32x32.png': 'apps/elitea-desktop/src-tauri/icons/32x32.png',
@@ -62,12 +55,4 @@ test('brand/elitea names, hue and support address match the web default pack and
 test('brand/elitea desktop identifier and product match tauri.conf.json', () => {
   const conf = JSON.parse(repo('apps/elitea-desktop/src-tauri/tauri.conf.json'));
   assert.equal(conf.identifier, brand.manifest.desktop.identifier);
-});
-
-test('brand/elitea mobile links and connect scheme match app.config.ts', () => {
-  const config = repo('apps/elitea-mobile/app.config.ts').toString();
-  for (const key of ['webUrl', 'privacyUrl', 'supportUrl']) assert.match(config, new RegExp(`${key}: '${lit(brand.manifest[key])}'`));
-  assert.match(config, new RegExp(`connectSchemes: \\['${brand.manifest.mobile.connectSchemes.map(lit).join("', '")}'\\]`));
-  assert.match(config, new RegExp(`displayName: '${lit(brand.manifest.productName)}'`));
-  // The bundle id, redirect scheme, App Group and widget id move to brand/elitea in W1a (#1681).
 });

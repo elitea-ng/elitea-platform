@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { identity } from '@/config/identity';
 import type { BrandInput } from '@/design/brand';
 import { useDesign } from '@/design/DesignProvider';
@@ -50,7 +50,7 @@ export function SignInView({ host, origin, name, logo, brand, native, developer,
       <View style={styles.identity}>
         <View style={styles.tiles}>
           <View style={tile}>
-            <EliteaMark size={64} decorative />
+            <BrandMark size={64} decorative />
           </View>
           <View style={tile}>{logo ? <BrandLogo image={logo} size={48} /> : <WorkspaceMark origin={origin} image={null} brand={brand} size={48} />}</View>
         </View>

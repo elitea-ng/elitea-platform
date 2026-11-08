@@ -37,6 +37,8 @@ export interface SurfaceSnapshot {
    * native widget module refuses a null prop (found on the simulator).
    */
   host: string;
+  /** The app's product name (identity.displayName): the widget's heading when no host is shown. */
+  product: string;
   /** Conversations waiting for a decision, only when titles are allowed. */
   titles: string[];
   /** Tap targets (elitea://surface/…). */
@@ -77,6 +79,7 @@ export function signedOutSnapshot(now: number): SurfaceSnapshot {
     unread: 0,
     running: 0,
     host: '',
+    product: identity.displayName,
     titles: [],
     openUrl: SIGNED_OUT_URL,
     approvalsUrl: SIGNED_OUT_URL,
@@ -121,6 +124,7 @@ export function buildSnapshot(input: SnapshotInput): SurfaceSnapshot {
     unread: count(input.unread),
     running: count(input.running),
     host: input.allowTitles ? hostOf(input.origin) : '',
+    product: identity.displayName,
     titles,
     openUrl: surfaceUrl({ kind: 'home' }, ws),
     // One conversation waiting: straight to it. Several: the conversation list.

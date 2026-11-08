@@ -1,8 +1,9 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { useDesign } from '@/design/DesignProvider';
 import { ListRow, ListSection, Text, useLayoutMargin } from '@/ui';
+import { identity } from '@/config/identity';
 
 export interface AboutViewProps {
   version: string;
@@ -13,8 +14,8 @@ export interface AboutViewProps {
 }
 
 /**
- * Settings → About Elitea AI: the Elitea mark (design-system §5), the app's name and version, and the
- * policy and support links (opened in the in-app browser). The app is always "Elitea AI" here,
+ * Settings → About: the brand mark (design-system §5), the app's name and version, and the
+ * policy and support links (opened in the in-app browser). The app is always the brand's product name here,
  * never the workspace's name.
  */
 export function AboutView({ version, onPrivacy, onSupport, onDesignGallery }: AboutViewProps) {
@@ -26,9 +27,9 @@ export function AboutView({ version, onPrivacy, onSupport, onDesignGallery }: Ab
       style={{ backgroundColor: colors.background }}
       contentContainerStyle={[styles.content, { paddingHorizontal: margin }]}>
       <View style={styles.hero}>
-        <EliteaMark size={accessibilityLayout ? 72 : 112} decorative />
+        <BrandMark size={accessibilityLayout ? 72 : 112} decorative />
         <Text variant="title1" heading style={styles.center}>
-          Elitea AI
+          {identity.displayName}
         </Text>
         <Text variant="footnote" tone="secondary" style={styles.center}>
           Version {version}

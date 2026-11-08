@@ -1,6 +1,6 @@
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { useDesign } from '@/design/DesignProvider';
 import { Avatar, GradientBackground, Icon, Text } from '@/ui';
 
@@ -46,7 +46,7 @@ export function ChatEmptyState({
           {iconUri ? (
             <Avatar name={agentName} kind="agent" imageUri={iconUri} size={design.size.avatar.lg} decorative />
           ) : (
-            <EliteaMark size={design.accessibilityLayout ? 72 : 112} decorative />
+            <BrandMark size={design.accessibilityLayout ? 72 : 112} decorative />
           )}
           <Text variant="title2" heading style={styles.center}>
             {`Ask ${agentName} anything`}

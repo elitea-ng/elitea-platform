@@ -51,21 +51,29 @@ See [docs/design.md](docs/design.md) for the planned product and
 
 ## Identifiers
 
-All identifiers are defined once in [`app.config.ts`](app.config.ts). Runtime code
-reads them through [`src/config/identity.ts`](src/config/identity.ts); do not
-hardcode them anywhere else.
+Every identifier, name and link comes from the selected **brand manifest**
+(`brand/<id>/brand.json` at the repository root, ADR-0052; docs: Development →
+Brands). `app.config.ts` loads it with `scripts/brand/load.mjs`; runtime code
+reads the result through [`src/config/identity.ts`](src/config/identity.ts). Do
+not hardcode any of them anywhere else.
 
-| What | Value |
+`ELITEA_BRAND` selects the brand for every command (`expo config`, `expo start`,
+EAS builds); unset means `brand/elitea`, EPAM's ELITEA:
+
+| What | `brand/elitea` |
 |------|-------|
-| Display name | `Elitea AI` (the same for every customer; there are no per-customer builds) |
-| Expo slug | `elitea-mobile` |
-| iOS bundle identifier | `ca.mlops.elitea` (permanent) |
-| Android application id | `ca.mlops.elitea` (permanent) |
+| Display name | `Elitea AI` |
+| Expo slug | `elitea-mobile` (`<brand id>-mobile`) |
+| iOS bundle identifier | `ai.elitea.app` (permanent) |
+| Android application id | `ai.elitea.app` (permanent) |
 | Connect-link scheme | `elitea`, as in `elitea://connect?server=https://ai.example.com` |
-| OAuth redirect (RFC 8252) | `ca.mlops.elitea:/oauth/callback` |
+| OAuth redirect (RFC 8252) | `ai.elitea.app:/oauth/callback` |
 | Website | https://elitea.ai (privacy: `/privacy`, support: `/support`) |
-| App Group (widget extension) | `group.ca.mlops.elitea` |
-| Widget extension bundle id | `ca.mlops.elitea.widgets` |
+| App Group (widget extension) | `group.ai.elitea.app` (permanent) |
+| Widget extension bundle id | `ai.elitea.app.widgets` |
+
+`ELITEA_BRAND=sample npx expo config` builds the neutral test brand
+(`com.example.sample`); `scripts/eas-config.test.mjs` checks both.
 
 ## Running it
 

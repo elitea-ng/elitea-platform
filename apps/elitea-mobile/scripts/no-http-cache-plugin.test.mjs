@@ -88,7 +88,7 @@ describe('no plaintext URL cache (DEF-R2)', () => {
 // their OkHttp client with OkHttpClientProvider.createClient(context), which
 // attaches a 10 MB plaintext disk cache (cacheDir/http-cache).
 // The SDK 58 template MainApplication.kt, as `expo prebuild` writes it.
-const MAIN_APPLICATION = `package ca.mlops.elitea
+const MAIN_APPLICATION = `package ai.elitea.app
 
 import android.app.Application
 import android.content.res.Configuration

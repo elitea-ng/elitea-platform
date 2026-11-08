@@ -12,7 +12,7 @@
 // Node's standard library only.
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -56,7 +56,10 @@ export function resolveBrandDir(value, { cwd = process.cwd() } = {}) {
 
 /**
  * Read and validate the brand in `dir`. Returns
- * `{ dir, id, manifest, assetsDir, path(rel) }`; throws BrandError with every
+ * `{ dir, id, manifest, assetsDir, path(rel), has(rel), readText(rel), relativeTo(from, rel) }`:
+ * `path` is absolute; `has` says whether the file exists; `relativeTo` gives the
+ * file as a `/`-separated path relative to the directory `from`, so a generated
+ * config holds no machine path; throws BrandError with every
  * problem when the manifest is missing, unparsable or invalid, or when the
  * folder's name is not the manifest's id.
  */
@@ -81,6 +84,12 @@ export function loadBrandFrom(dir) {
     manifest: deepFreeze(manifest),
     assetsDir: join(dir, 'assets'),
     path: (rel) => join(dir, rel),
+    has: (rel) => existsSync(join(dir, rel)),
+    readText: (rel) => readFileSync(join(dir, rel), 'utf8'),
+    relativeTo: (from, rel) => {
+      const p = relative(from, join(dir, rel)).split(sep).join('/');
+      return p.startsWith('.') ? p : `./${p}`;
+    },
   });
 }
 

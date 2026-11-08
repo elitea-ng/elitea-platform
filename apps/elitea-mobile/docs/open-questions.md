@@ -29,7 +29,7 @@ Decide which legal entity publishes the app. Then:
 - Enroll in the Apple Developer Program as an organization, which requires a D-U-N-S
   number.
 - Register a Google Play developer account as an organization.
-- Assign ownership of the `ca.mlops.elitea` identifiers and the signing keys.
+- Assign ownership of the `ai.elitea.app` identifiers and the signing keys.
 - Decide whether EAS manages signing credentials. **Proposed: yes**, with the
   steps, the account list and the remaining owner decisions in
   [release.md](release.md) (§1 to §6, §13).

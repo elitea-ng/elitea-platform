@@ -56,6 +56,10 @@ test('mobile: schemes, redirect scheme, App Group and widget id', () => {
   assert.ok(hasError(mk({ appGroup: 'com.example.acme' }), 'mobile.appGroup'));
   assert.ok(hasError(mk({ appGroup: 'group.acme' }), 'mobile.appGroup'));
   assert.ok(hasError(mk({ widgetBundleId: 'com.example.widgets' }), 'mobile.widgetBundleId'));
+  assert.ok(!hasError(mk({ ascAppId: '6740000000' }), 'mobile.ascAppId'));
+  assert.ok(!hasError(mk({ ascAppId: null }), 'mobile.ascAppId'));
+  assert.ok(hasError(mk({ ascAppId: 6740000000 }), 'mobile.ascAppId'));
+  assert.ok(hasError(mk({ ascAppId: 'id6740000000' }), 'mobile.ascAppId'));
   assert.ok(isAppScheme('elitea'));
   assert.ok(!isAppScheme('mailto'));
 });
