@@ -20,9 +20,11 @@
 //!   else (`app_denied`).
 //! - **The focused element.** Neither adapter exports a focused-element
 //!   read. Untargeted typing and a key chord read the frontmost window's
-//!   tree and refuse when its focused node is secure. Untargeted typing is
-//!   also refused when no focused node can be found (the focus cannot be
-//!   shown not to be a secure field); a chord, as on macOS, is not.
+//!   tree and refuse when its focused node is secure. When no focused node
+//!   can be found (it may sit deeper than the search reads, the focus
+//!   cannot be shown not to be a secure field) untargeted typing is
+//!   refused, and so is a chord that inserts text (a character, paste;
+//!   [`platform::chord_inserts_text`]); a navigation chord passes.
 //! - **Secure input** is a macOS notion; the secure desktop (UAC, sign-in)
 //!   is part of the Windows screen check instead.
 
@@ -691,9 +693,16 @@ impl DesktopDriver for NativeDriver {
         let window = self.resolve_window(target)?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
         let front = self.require_frontmost(bundle_id, deadline)?;
-        // A chord lands in the focused element: refused when it is secure
-        // (as on macOS, a window with no focused element passes).
-        self.focused_in(&front, deadline)?;
+        // A chord lands in the focused element: refused when it is secure.
+        // When none is found, a chord that inserts text is refused too (the
+        // focus may be a password field deeper than the search reads);
+        // a navigation chord passes.
+        if self.focused_in(&front, deadline)?.is_none() && platform::chord_inserts_text(chord) {
+            return Err(DesktopError::ActionFailed(format!(
+                "the focused element of the frontmost window cannot be found, so `{}` (it inserts text) could land in a secure field: type into a ref instead",
+                chord_text(chord)
+            )));
+        }
         let lease = self.lease(deadline)?;
         let result = self
             .adapter

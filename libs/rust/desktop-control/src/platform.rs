@@ -146,6 +146,68 @@ pub fn is_denied_chord_on(os: Os, chord: &KeyChord) -> bool {
         || (os == Os::Linux && held(&[Modifier::Control, Modifier::Option]) && is_function_key(key))
 }
 
+/// The keys that move, select, submit or delete but never put text in a
+/// field. Everything else is taken to insert text ([`chord_inserts_text`]).
+const NON_INSERTING_KEYS: &[&str] = &[
+    "up",
+    "down",
+    "left",
+    "right",
+    "home",
+    "end",
+    "pageup",
+    "pagedown",
+    "tab",
+    "escape",
+    "return",
+    "enter",
+    "backspace",
+    "delete",
+    "insert",
+    "menu",
+    "apps",
+    "contextmenu",
+    "capslock",
+    "numlock",
+    "scrolllock",
+    "printscreen",
+    "pause",
+];
+
+/// Whether a chord may put text into the focused element: a character
+/// (alone, with Shift, with Alt, or with Control+Alt, which is `AltGr` on
+/// Windows), Space, paste (Control+V, Command+V, Shift+Insert, the `paste`
+/// key) or any key this list does not know. A Control or Command shortcut
+/// on a character other than V, a function key and the navigation and
+/// editing keys do not (#1586: with no focused element found, the first are
+/// refused and the rest pass). It fails closed: an unknown key inserts.
+#[must_use]
+pub fn chord_inserts_text(chord: &KeyChord) -> bool {
+    let lower = chord.key.to_ascii_lowercase();
+    let key = canonical_key(&lower);
+    let has = |m: Modifier| chord.modifiers.contains(&m);
+    let shortcut = (has(Modifier::Control) || has(Modifier::Command))
+        && !(has(Modifier::Control) && has(Modifier::Option));
+    if key == "paste" || (key == "insert" && has(Modifier::Shift)) {
+        return true;
+    }
+    if NON_INSERTING_KEYS.contains(&key) || is_any_function_key(key) {
+        return false;
+    }
+    if key.chars().count() == 1 && key != "space" {
+        return !shortcut || key == "v";
+    }
+    // Space, a dead or composed key, a key name this list does not know.
+    !shortcut
+}
+
+/// `f1` to `f24`.
+fn is_any_function_key(key: &str) -> bool {
+    key.strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=24).contains(&n))
+}
+
 /// `f1` to `f12`: Control+Alt with one of them switches the Linux virtual
 /// terminal, which leaves the session.
 fn is_function_key(key: &str) -> bool {
@@ -819,6 +881,53 @@ mod tests {
         assert!(id(Some("/usr/bin/xterm"), "XTerm").is_some_and(|i| is_denied_app(Os::Linux, &i)));
         assert!(id(Some("/usr/bin/foot"), "Foot").is_some_and(|i| is_denied_app(Os::Linux, &i)));
         assert_eq!(id(None, "gnome-terminal-"), None);
+    }
+
+    #[test]
+    fn text_inserting_chords_are_told_from_navigation() {
+        for c in [
+            "a",
+            "shift+a",
+            "1",
+            "space",
+            "ctrl+v",
+            "ctrl+shift+v",
+            "cmd+v",
+            "shift+insert",
+            "paste",
+            // AltGr on Windows, the Option layer on Linux keyboards.
+            "ctrl+alt+q",
+            "alt+e",
+            // An unknown key name fails closed.
+            "kp_1",
+            "dead_acute",
+        ] {
+            assert!(chord_inserts_text(&chord(c)), "{c} inserts text");
+        }
+        for c in [
+            "return",
+            "tab",
+            "shift+tab",
+            "escape",
+            "up",
+            "ctrl+left",
+            "shift+end",
+            "pagedown",
+            "backspace",
+            "delete",
+            "insert",
+            "ctrl+insert",
+            "f5",
+            "ctrl+f",
+            "ctrl+s",
+            "ctrl+a",
+            "ctrl+c",
+            "ctrl+z",
+            "cmd+w",
+            "ctrl+space",
+        ] {
+            assert!(!chord_inserts_text(&chord(c)), "{c} does not insert");
+        }
     }
 
     #[test]
