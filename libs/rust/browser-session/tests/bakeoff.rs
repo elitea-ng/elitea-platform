@@ -331,6 +331,56 @@ async fn run_task(session: &Session, task: &Value) -> Outcome {
 /// tunnels and absolute-form HTTP, no authentication and no allowlist (the
 /// bake-off measures engines, not egress policy). `proxy: null` would leave
 /// the engine offline, so every session gets this one.
+/// The run token the bake-off's proxy asks for, as the egress proxy asks
+/// for the run's.
+const PROXY_TOKEN: &str = "bakeoff";
+
+/// Whether a proxy request head carries `Proxy-Authorization: Basic
+/// base64(run:<token>)`, the egress proxy's rule.
+fn proxy_authorized(head: &str, token: &str) -> bool {
+    use base64::Engine as _;
+    let expected = base64::engine::general_purpose::STANDARD.encode(format!("run:{token}"));
+    head.lines().skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("proxy-authorization") && {
+                let mut words = value.split_whitespace();
+                words
+                    .next()
+                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic"))
+                    && words.next() == Some(expected.as_str())
+                    && words.next().is_none()
+            }
+        })
+    })
+}
+
+#[test]
+fn the_proxy_asks_for_the_run_token() {
+    let head =
+        |auth: &str| format!("CONNECT a.test:443 HTTP/1.1\r\nHost: a.test:443\r\n{auth}\r\n");
+    // base64("run:bakeoff")
+    assert!(proxy_authorized(
+        &head("Proxy-Authorization: Basic cnVuOmJha2VvZmY="),
+        PROXY_TOKEN
+    ));
+    assert!(proxy_authorized(
+        &head("proxy-authorization: basic cnVuOmJha2VvZmY="),
+        PROXY_TOKEN
+    ));
+    assert!(!proxy_authorized(&head(""), PROXY_TOKEN));
+    assert!(!proxy_authorized(
+        &head("Proxy-Authorization: Basic cnVuOm90aGVy"),
+        PROXY_TOKEN
+    ));
+    assert!(!proxy_authorized(
+        &head("Authorization: Basic cnVuOmJha2VvZmY="),
+        PROXY_TOKEN
+    ));
+}
+
+/// A loopback forward proxy that, like the egress proxy, answers 407 to a
+/// request without the run's credentials: every engine in the bake-off
+/// answers the challenge (`Fetch.authRequired`) or loads nothing.
 async fn forward_proxy() -> String {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -352,6 +402,12 @@ async fn forward_proxy() -> String {
                     }
                 }
                 let text = String::from_utf8_lossy(&head).into_owned();
+                if !proxy_authorized(&text, PROXY_TOKEN) {
+                    let _ = client
+                        .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"egress\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await;
+                    return;
+                }
                 let mut words = text.split_whitespace();
                 let (method, target) = (
                     words.next().unwrap_or_default(),
@@ -410,7 +466,7 @@ async fn measure(engines: &Engines, proxy: &str, engine: &str, task: &Value) -> 
         width: 1280,
         height: 800,
         // The proxy never challenges, so the token is never sent.
-        proxy: Some((proxy.to_owned(), "bakeoff".to_owned())),
+        proxy: Some((proxy.to_owned(), PROXY_TOKEN.to_owned())),
         attended: false,
     };
     let started_at = Instant::now();
@@ -435,7 +491,7 @@ async fn measure(engines: &Engines, proxy: &str, engine: &str, task: &Value) -> 
             (Arc::clone(&session), Arc::clone(&peak), Arc::clone(&source));
         tokio::spawn(async move {
             loop {
-                if let Some((_, Some(pid), _)) = session.engine_state().await
+                if let Some((_, Some(pid), _)) = session.engine_state()
                     && let Some((bytes, from)) = tree_memory(pid)
                 {
                     peak.fetch_max(bytes, Ordering::Relaxed);
@@ -449,7 +505,7 @@ async fn measure(engines: &Engines, proxy: &str, engine: &str, task: &Value) -> 
     };
     let outcome = tokio::time::timeout(TASK_LIMIT, run_task(&session, task)).await;
     sampler.abort();
-    let state = session.engine_state().await;
+    let state = session.engine_state();
     let engine_end = state.map(|(kind, _, _)| {
         if kind == EngineKind::Moli {
             "lite"

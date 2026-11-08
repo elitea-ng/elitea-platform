@@ -15,6 +15,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use elitea_browser_session::control::Control;
@@ -81,6 +82,86 @@ async fn serve_fixtures() -> u16 {
     port
 }
 
+/// A loopback forward proxy asking, like the egress proxy, for Basic
+/// `run:<token>`: 407 without it. Counts the challenges it sent and the
+/// requests it let through.
+async fn authenticating_proxy(token: &'static str) -> (String, Arc<[AtomicUsize; 2]>) {
+    use base64::Engine as _;
+    let expected = format!(
+        "basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("run:{token}"))
+    );
+    let counts = Arc::new([AtomicUsize::new(0), AtomicUsize::new(0)]);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let seen = Arc::clone(&counts);
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            let (seen, expected) = (Arc::clone(&seen), expected.clone());
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut buffer = [0_u8; 8192];
+                while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match client.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(read) => head.extend_from_slice(&buffer[..read]),
+                    }
+                    if head.len() > 64 << 10 {
+                        return;
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).into_owned();
+                let authorized = text.lines().skip(1).any(|line| {
+                    line.split_once(':').is_some_and(|(name, value)| {
+                        name.trim().eq_ignore_ascii_case("proxy-authorization")
+                            && value.trim().eq_ignore_ascii_case(&expected)
+                    })
+                });
+                if !authorized {
+                    seen[0].fetch_add(1, Ordering::SeqCst);
+                    let _ = client
+                        .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"egress\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await;
+                    return;
+                }
+                seen[1].fetch_add(1, Ordering::SeqCst);
+                let mut words = text.split_whitespace();
+                let (method, target) = (
+                    words.next().unwrap_or_default(),
+                    words.next().unwrap_or_default(),
+                );
+                let authority = if method == "CONNECT" {
+                    target.to_owned()
+                } else {
+                    let Some(rest) = target.strip_prefix("http://") else {
+                        return;
+                    };
+                    rest.split('/').next().unwrap_or_default().to_owned()
+                };
+                let Ok(mut upstream) = tokio::net::TcpStream::connect(&authority).await else {
+                    let _ = client
+                        .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                    return;
+                };
+                if method == "CONNECT" {
+                    if client
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                } else if upstream.write_all(&head).await.is_err() {
+                    return;
+                }
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+            });
+        }
+    });
+    (format!("http://{address}"), counts)
+}
+
 async fn start(moli: PathBuf) -> CdpDriver {
     let config = EngineConfig {
         engine: moli,
@@ -143,6 +224,48 @@ async fn moli_runs_the_contract_and_keeps_the_hard_limits() {
         report.failures().len()
     );
     eprintln!("moli unsupported answers: {}", driver.unsupported_errors());
+    driver.shutdown();
+}
+
+/// Moli behind a proxy that, like the egress proxy, asks for the run's
+/// credentials: the driver answers the 407 (`Fetch.authRequired`, source
+/// `Proxy`) and the page loads through it. The fixtures are on loopback,
+/// which Moli's config sends to the proxy too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moli_answers_the_egress_proxy_challenge() {
+    let Some(moli) = moli() else { return };
+    let port = serve_fixtures().await;
+    let (proxy, counts) = authenticating_proxy("moli-run-token").await;
+    let config = EngineConfig {
+        engine: moli,
+        kind: EngineKind::Moli,
+        proxy: Some(proxy),
+        proxy_token: Some("moli-run-token".to_owned()),
+        engine_log: std::env::var_os("ELITEA_BROWSER_ENGINE_LOG").is_some(),
+        ..EngineConfig::default()
+    };
+    let control = Arc::new(Control::new(false, Duration::from_secs(1)));
+    let driver = CdpDriver::start(&config, control).await.unwrap();
+    let forms = format!("http://127.0.0.1:{port}/forms.html");
+    let opened = dispatch(&driver, spec::BROWSER_OPEN, &json!({ "url": forms })).await;
+    let (challenged, through) = (
+        counts[0].load(Ordering::SeqCst),
+        counts[1].load(Ordering::SeqCst),
+    );
+    eprintln!(
+        "moli behind the authenticating proxy: {challenged} challenge(s), {through} request(s) through"
+    );
+    assert_eq!(opened.result()["status"], "ok", "{}", opened.result());
+    assert!(
+        through >= 1,
+        "no request reached the proxy with the run's credentials"
+    );
+    let snapshot = dispatch(&driver, spec::BROWSER_SNAPSHOT, &json!({})).await;
+    assert!(
+        snapshot.result()["refs"].as_u64().unwrap_or_default() > 0,
+        "the page behind the proxy did not load: {}",
+        snapshot.result()
+    );
     driver.shutdown();
 }
 

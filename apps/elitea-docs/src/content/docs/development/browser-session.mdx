@@ -44,10 +44,12 @@ Moli has no pipe mode, so the agent runs `moli serve --host 127.0.0.1 --port <fr
 An `auto` session moves to Chrome once, and never back, when:
 
 - Moli does not start (`start_failed`),
-- a call makes Moli answer a CDP method as unknown or unsupported (`unsupported_protocol`, from the `-32601` count on the connection), or
+- a command the call itself sent is answered by Moli as unknown or unsupported (`unsupported_protocol`: counted per call, so screencast acks, the page tracker and other background traffic never cause a switch), or
 - a tree snapshot has no ref and no node on a page with text (`empty_snapshot`).
 
-The agent starts Chrome, opens the page's URL again, writes the notice `engine_switched`, and answers the call on Chrome with `engine_switched: {from, to, reason}` in its result. The supervisor relays that one notice to every open view, and the web pane shows it.
+The agent starts Chrome, opens the page's URL again, and writes the notice `engine_switched`. A read call (`browser_open`, `browser_snapshot`, `browser_screenshot`, `browser_wait`) is answered again on Chrome with `engine_switched: {from, to, reason, repeated: true}` in its result. An act (a click, typing, a key, a select, a scroll, a history step) already ran on Moli, so it is never run a second time: the agent gets Moli's result with `repeated: false` and a note to snapshot again. The session keeps its one control, so a person who took over still drives on Chrome. Open views move to Chrome's screencast without reconnecting. The supervisor relays that one notice to every open view, and the web pane shows it.
+
+An `auto` start gives Moli 5 seconds to answer on its CDP port before it falls back to Chrome (`lite` gives it 20), so the fallback keeps most of the 60-second `ready` limit.
 
 ## What the driver does
 

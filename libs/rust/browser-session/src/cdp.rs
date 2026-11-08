@@ -30,6 +30,25 @@ pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 const EVENT_CAPACITY: usize = 4096;
 
+tokio::task_local! {
+    /// The unsupported-answer count of the tool call running on this task
+    /// ([`scoped_unsupported`]). Background traffic (screencast acks, the
+    /// page tracker's replies, `Fetch.enable` on new targets) runs on tasks
+    /// of its own, outside any scope, so it is never counted against a
+    /// call.
+    static CALL_UNSUPPORTED: Arc<AtomicU64>;
+}
+
+/// Run `future` (one tool call) and count the commands IT sent that the
+/// engine answered as unsupported ([`is_unsupported`]). Only commands
+/// awaited on this task count: a command another task sends at the same
+/// time does not, even on the same connection.
+pub async fn scoped_unsupported<F: std::future::Future>(future: F) -> (F::Output, u64) {
+    let counter = Arc::new(AtomicU64::new(0));
+    let output = CALL_UNSUPPORTED.scope(Arc::clone(&counter), future).await;
+    (output, counter.load(Ordering::Relaxed))
+}
+
 /// One CDP event.
 #[derive(Debug)]
 pub struct Event {
@@ -68,7 +87,8 @@ struct Shared {
     pending: Mutex<Option<Pending>>,
     events: broadcast::Sender<Arc<Event>>,
     /// Commands the engine answered as a method or feature it does not
-    /// implement ([`is_unsupported`]): `auto` switches engines on these.
+    /// implement ([`is_unsupported`]), over the whole connection, for the
+    /// record. `auto` switches on [`scoped_unsupported`], not this.
     unsupported: AtomicU64,
 }
 
@@ -158,14 +178,21 @@ impl Connection {
             self.forget(id);
             return Err(CdpError::Closed);
         }
-        match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
+        let result = match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CdpError::Closed),
             Err(_) => {
                 self.forget(id);
                 Err(CdpError::Timeout)
             }
+        };
+        if let Err(CdpError::Protocol { code, message }) = &result
+            && is_unsupported(*code, message)
+        {
+            // Outside a scope (background traffic) there is nothing to count.
+            let _ = CALL_UNSUPPORTED.try_with(|counter| counter.fetch_add(1, Ordering::Relaxed));
         }
+        result
     }
 
     fn forget(&self, id: u64) {
@@ -453,6 +480,33 @@ mod tests {
         assert_eq!(connection.unsupported_errors(), 0);
         let _ = connection.call(None, "Page.printToPDF", json!({})).await;
         assert_eq!(connection.unsupported_errors(), 1);
+        // A tool call's scope counts its own commands only: background
+        // traffic on another task, at the same time, is not the call's.
+        let background = connection.clone();
+        let ((), during) = scoped_unsupported(async {
+            let noise = tokio::spawn(async move {
+                let _ = background
+                    .call(None, "Page.screencastFrameAck", json!({}))
+                    .await;
+            });
+            noise.await.expect("the background call");
+            let _ = connection.call(None, "Runtime.evaluate", json!({})).await;
+        })
+        .await;
+        assert_eq!(during, 1, "only the call's own unsupported answer counts");
+        let ((), quiet) = scoped_unsupported(async {
+            let background = connection.clone();
+            tokio::spawn(async move {
+                let _ = background
+                    .call(None, "Page.screencastFrameAck", json!({}))
+                    .await;
+            })
+            .await
+            .unwrap();
+        })
+        .await;
+        assert_eq!(quiet, 0, "background traffic counted against the call");
+        assert_eq!(connection.unsupported_errors(), 4);
     }
 
     #[tokio::test]

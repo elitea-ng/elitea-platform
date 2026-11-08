@@ -366,6 +366,21 @@ impl CdpDriver {
         (state.url.clone(), state.title.clone())
     }
 
+    /// Open `url` outside the agent's gate: an `auto` switch reopening the
+    /// page on the new engine. It runs while a person drives too, since
+    /// their take-over carries over to the new engine. Best effort: a page
+    /// that does not load is reported by the call that follows.
+    pub(crate) async fn reopen(&self, url: &str) {
+        let before = self.tracker.marks();
+        if let Ok(navigated) = self.page("Page.navigate", json!({ "url": url })).await
+            && navigated["loaderId"]
+                .as_str()
+                .is_some_and(|loader| !loader.is_empty())
+        {
+            self.loaded(before, NAVIGATION_TIMEOUT).await;
+        }
+    }
+
     /// The engine's product, `chrome-headless-shell/<version>` or
     /// `moli/<version>`.
     ///
