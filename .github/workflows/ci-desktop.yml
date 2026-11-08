@@ -238,13 +238,24 @@ jobs:
         with:
           node-version: "26"
           package-manager-cache: false
+      # Linux only: on Windows `npm config get cache` answers a backslash
+      # path, which main-write-cache's literal-path guard (written for
+      # $HOME/.npm) refuses. The cache only speeds `npm ci` up; Windows runs it
+      # cold rather than teaching the shared guard a second path spelling.
       - name: Restore the npm cache (pull requests read, main writes)
+        if: runner.os == 'Linux'
         uses: ./.github/actions/npm-cache
         with:
           cache-dependency-path: apps/elitea-web/package-lock.json
 
       - name: Install web (locked, for tsc)
         working-directory: apps/elitea-web
+        # The npm-cache step sets these for Linux; Windows fetches cold, so it
+        # needs the same patience with the registry.
+        env:
+          NPM_CONFIG_FETCH_RETRIES: "6"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
         run: npm ci
 
       - name: The embedded web bundle is a stub (the tests render nothing)
