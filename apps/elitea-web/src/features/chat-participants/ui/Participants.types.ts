@@ -97,6 +97,8 @@ export interface ParticipantsProps {
    * participant row's `id`) for each agent row; absent renders nothing.
    */
   readonly renderAgentContext?: (props: { participantId: number }) => ReactNode;
+  /** Slot for an agent row's "Lead" badge and lead menu (ADR-0050 decision 7d, issue 1612), shown on hover too. */
+  readonly renderAgentLead?: (props: { participantId: number }) => ReactNode;
   readonly renderContextBudget?: (props: {
     conversationId: string | number | undefined;
     /**

@@ -4,6 +4,14 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Composing for several agents on web and mobile (#1612, ADR-0050 decisions 7e and 7f)
+
+No operator action. No migration, no contract change: the web and mobile
+clients now send `addressed_to` (added in #1611), write the conversation meta
+`floor` for the lead, fold agent-to-agent messages into a side-conversation
+chip, and show loop-guard lines. Roll out Main with #1611 before these
+clients. A local desktop thread still holds one agent (#1806).
+
 ## Turn-taking for conversations with several agents (#1611, ADR-0050 decisions 7c and 7d)
 
 **What changed.** Main decides who answers a message in a conversation with

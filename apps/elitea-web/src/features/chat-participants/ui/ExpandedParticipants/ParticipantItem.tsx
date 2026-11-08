@@ -44,6 +44,8 @@ export interface ParticipantItemProps {
   sharepointLoginSlot?: React.ReactNode;
   /** The agent's own context meter (issue 1610), shown at the end of its name row. */
   contextSlot?: React.ReactNode;
+  /** The agent's "Lead" badge and lead menu (issue 1612), shown on hover too. */
+  leadSlot?: React.ReactNode;
   resolveToolkitIcon?: Parameters<typeof useParticipantEntityIcon>[0]['resolveToolkitIcon'];
   // Status flags from ParticipantDetailsContext
   hasMisconfigurationErrors?: boolean;
@@ -132,6 +134,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
     shouldDisableThisItem,
     resolveToolkitIcon,
     contextSlot,
+    leadSlot,
   } = props;
 
   const nameRef = useRef<HTMLSpanElement>(null);
@@ -257,13 +260,13 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
       isPublishedAgentGone, remoteMcpLoggedOut, spOAuthLoggedOut, spConfig,
       handleEditClick, isToolkitParticipant, participant, onEdit, onDelete,
       disabledEdit, showEditButton, hasRemoteMcpLoggedIn, isHovering,
-      mcpLoginSlot, mcpLogoutSlot, sharepointLoginSlot,
+      mcpLoginSlot, mcpLogoutSlot, sharepointLoginSlot, leadSlot,
     })
     : renderNormalCard({
       isActive, collapsed, displayName, iconNode, entitySettings, versionName, isBeingEdited,
       s, onClickHandler, onMouseEnter, onMouseLeave, containerInfoRow,
       participant, onEdit, onDelete, disabledEdit, showEditButton, hasRemoteMcpLoggedIn,
-      isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot,
+      isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot, leadSlot,
     });
 
   if (disableTooltip) return content;

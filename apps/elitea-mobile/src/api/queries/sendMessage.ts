@@ -66,7 +66,15 @@ export interface TurnRequest {
   model?: TurnModel | null;
   mentions?: TurnMentions | null;
   attachments?: TurnAttachment[] | null;
+  /**
+   * ADR-0050 decision 7c: the agents (participant ids) the message is for, in order. Empty or
+   * absent: the floor decides, and the body carries no `addressed_to`.
+   */
+  addressedTo?: number[] | null;
 }
+
+/** The server refuses more addressees than this (Main's `turntaking.MaxAddressed`). */
+export const MAX_ADDRESSED_IDS = 16;
 
 export interface PreparedTurn {
   request: TurnRequest;
@@ -75,7 +83,7 @@ export interface PreparedTurn {
 }
 
 export class TurnInputError extends Error {
-  constructor(readonly reason: 'question_id' | 'too_large' | 'empty' | 'invalid' | 'mentions' | 'attachments') {
+  constructor(readonly reason: 'question_id' | 'too_large' | 'empty' | 'invalid' | 'mentions' | 'attachments' | 'addressed_to') {
     super(`invalid turn: ${reason}`);
     this.name = 'TurnInputError';
   }
@@ -103,6 +111,7 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
   const userIds = normaliseMentionIds(request.mentions?.userIds ?? []);
   const everyone = request.mentions?.everyone === true;
   const attachments = checkAttachments(request.attachments ?? [], request.conversationUuid);
+  const addressedTo = normaliseAddressees(request.addressedTo ?? []);
   const body: ChatSendRequest = {
     payload: {
       user_input: request.userInput,
@@ -114,6 +123,7 @@ export function prepareTurn(request: TurnRequest): PreparedTurn {
     question_id: request.questionId,
     ...(userIds.length > 0 ? { user_ids: userIds } : {}),
     ...(everyone ? { is_mentioning_everyone: true } : {}),
+    ...(addressedTo.length > 0 ? { addressed_to: addressedTo } : {}),
     ...(model === null
       ? {}
       : {
@@ -147,6 +157,17 @@ function normaliseMentionIds(ids: readonly unknown[]): number[] {
     if (!out.includes(id)) out.push(id);
   }
   if (out.length > MAX_MENTION_IDS) throw new TurnInputError('mentions');
+  return out;
+}
+
+/** Addressees: positive safe integers, unique (first-seen order), at most `MAX_ADDRESSED_IDS`. */
+function normaliseAddressees(ids: readonly unknown[]): number[] {
+  const out: number[] = [];
+  for (const id of ids) {
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) throw new TurnInputError('addressed_to');
+    if (!out.includes(id)) out.push(id);
+  }
+  if (out.length > MAX_ADDRESSED_IDS) throw new TurnInputError('addressed_to');
   return out;
 }
 
@@ -190,6 +211,7 @@ const StoredBody = z.object({
   question_id: z.string(),
   user_ids: z.array(z.number()).optional(),
   is_mentioning_everyone: z.boolean().optional(),
+  addressed_to: z.array(z.number()).optional(),
   llm_settings: z
     .looseObject({ model_name: z.string(), model_project_id: z.number().optional(), stream: z.boolean().optional() })
     .optional(),
@@ -225,6 +247,7 @@ export function restorePreparedTurn(bodyJson: string): PreparedTurn {
     ...(parsed.user_ids !== undefined || parsed.is_mentioning_everyone !== undefined
       ? { mentions: { userIds: parsed.user_ids ?? [], everyone: parsed.is_mentioning_everyone === true } }
       : {}),
+    ...(parsed.addressed_to !== undefined ? { addressedTo: parsed.addressed_to } : {}),
     ...(parsed.payload.attachments
       ? {
           attachments: parsed.payload.attachments.map((a) => ({ filepath: a.filepath, name: a.name ?? basenameOf(a.filepath) })),
@@ -271,6 +294,8 @@ export type TurnStartFailure =
   /** 409 for this question_id with a different body: a client bug. */
   | { kind: 'idempotency_conflict' }
   | { kind: 'unsupported_agent' }
+  /** 422 `addressee_not_in_conversation`: an `addressed_to` id is not an agent of the conversation. */
+  | { kind: 'addressee_not_in_conversation' }
   /** A continuation for a pause that was answered elsewhere (409 `*_already_resolved`). */
   | { kind: 'already_resolved' }
   /** Another 409 with the server's own message and retry hint. */
@@ -347,6 +372,9 @@ function readStarted({ data, error, response }: PostResult): StartedTurn {
   }
   if (status === 422 && errorCode === 'unsupported_agent_execution') {
     throw new TurnStartError({ kind: 'unsupported_agent' });
+  }
+  if (status === 422 && errorCode === 'addressee_not_in_conversation') {
+    throw new TurnStartError({ kind: 'addressee_not_in_conversation' });
   }
   if (status === 409) {
     if (errorCode !== null && /_already_resolved$/.test(errorCode)) {

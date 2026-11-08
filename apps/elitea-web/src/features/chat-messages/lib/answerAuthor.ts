@@ -18,6 +18,27 @@ export interface AnswerAuthor {
   readonly authorIconUrl?: string;
   /** The answering agent's application id (`entity_meta.id` of an `application` participant): its memory's key (ADR-0050 1b). */
   readonly authorApplicationId?: number;
+  /** The names of the participants the row is addressed to (`addressed_to`), for a side-talk label (ADR-0050 7e). */
+  readonly addresseeNames?: readonly string[];
+}
+
+/** The name a participant shows in the transcript: its persona's, else its own. */
+export function participantDisplayName(participant: MessageParticipantWire | undefined): string {
+  return (
+    trimmed(participant?.persona?.display_name) ??
+    trimmed(participant?.entity_meta?.name) ??
+    trimmed(participant?.meta?.name) ??
+    trimmed(participant?.meta?.user_name) ??
+    ''
+  );
+}
+
+function addresseeNamesOf(addressed: readonly unknown[] | undefined, participants: readonly MessageParticipantWire[]): string[] {
+  if (!Array.isArray(addressed)) return [];
+  return addressed
+    .map((id) => participantIdOf(id))
+    .map((id) => (id === undefined ? '' : participantDisplayName(participants.find((row) => participantIdOf(row.id) === id))))
+    .filter((name) => name !== '');
 }
 
 function trimmed(value: unknown): string | undefined {
@@ -81,6 +102,7 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
   const authorRole = trimmed(author?.persona?.role);
   const authorIconUrl = participantIconUrl(author);
   const authorApplicationId = participantApplicationId(participants, authorParticipantId);
+  const addresseeNames = addresseeNamesOf(group.addressed_to, participants);
   return {
     messageClass,
     ...(authorParticipantId !== undefined ? { authorParticipantId } : {}),
@@ -88,5 +110,6 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
     ...(authorRole !== undefined ? { authorRole } : {}),
     ...(authorIconUrl !== undefined ? { authorIconUrl } : {}),
     ...(authorApplicationId !== undefined ? { authorApplicationId } : {}),
+    ...(addresseeNames.length > 0 ? { addresseeNames } : {}),
   };
 }

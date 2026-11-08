@@ -22,6 +22,7 @@ import Skeleton from '@mui/material/Skeleton';
 
 import { ApplicationAnswer } from './ApplicationAnswer';
 import { SteeringMessages } from './SteeringMessages';
+import { foldTranscript, renderFolded } from './SideTalk';
 import { UserMessage } from './UserMessage';
 import { useStickToBottom } from './useStickToBottom';
 
@@ -266,7 +267,7 @@ export function ChatMessageList({
             ))}
           </Box>
         )}
-        {chatHistory.map((message, index) => {
+        {foldTranscript(chatHistory).map((entry) => renderFolded(entry, (message, index) => {
           const isUser = message.role === 'user';
           const messageId = message.id;
           const isLastMessage = index === chatHistory.length - 1;
@@ -390,7 +391,7 @@ export function ChatMessageList({
               )}
             </Box>
           );
-        })}
+        }))}
       </Box>
     </ScrollableContainer>
     </TraceStepDetailProvider>

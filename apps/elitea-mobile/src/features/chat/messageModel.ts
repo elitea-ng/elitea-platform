@@ -57,6 +57,8 @@ export interface ChatMessage {
   messageClass?: MessageClass;
   /** The author's persona `role`, when its soul sets one. */
   authorRole?: string | null;
+  /** Participant ids the message is addressed to (`addressed_to`, contract 1.38); empty for everyone. */
+  addressedTo?: number[];
 }
 
 /** One file of a message. */
@@ -263,6 +265,9 @@ export function toChatMessages(
         kindOfParticipant: (id) => participantKindOf(participants.get(id)?.kind),
       }),
       authorRole: role === 'assistant' ? (author?.persona?.role?.trim() || null) : null,
+      addressedTo: (Array.isArray(group.addressed_to) ? group.addressed_to : []).filter(
+        (id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0,
+      ),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.
@@ -336,6 +341,13 @@ export type ChatTarget =
       agent: AgentOption;
       /** Every agent the user may address instead (the "To:" chip, when more than one). */
       choices: AgentOption[];
+      /**
+       * Issue #1624: several agents and nothing decides who answers (no pick, no lead, no
+       * answer yet). `agent` is then only a placeholder: the chip asks instead of sending to it.
+       */
+      needsChoice: boolean;
+      /** The conversation's lead answers (floor `lead`, ADR-0050 7d) and nothing was picked. */
+      viaLead: boolean;
     }
   | {
       ok: true;
@@ -376,12 +388,15 @@ export interface TargetChoice {
   targetParticipantId?: number | null;
   /** The participant that wrote the newest answer. */
   lastAnsweredBy?: number | null;
+  /** The conversation's lead (`floorOf(meta)`, 0 or absent: no lead). */
+  leadParticipantId?: number | null;
 }
 
 /**
  * What a send addresses:
- * - agents (applications, pipelines): the one picked, else the one that
- *   answered last, else the first; several are fine (the "To:" chip
+ * - agents (applications, pipelines): the one picked, else the conversation's
+ *   lead (floor `lead`), else the one that answered last, else the first (with
+ *   several agents that first one is not sent to: `needsChoice`, issue #1624); several are fine (the "To:" chip
  *   switches). Toolkits next to agents stay read-only (the server refuses).
  * - no agent: the conversation's model (a plain model chat, adhoc). Toolkit
  *   participants are fine there (they become the model's tools); more than
@@ -394,11 +409,20 @@ export function chatTarget(detail: Pick<ConversationDetail, 'participants'> | un
   const toolkits = participants.filter((p) => p.entity_name === 'toolkit');
   if (agents.length > 0) {
     if (toolkits.length > 0) return { ok: false, reason: 'toolkit_agent' };
-    const pick =
-      agents.find((a) => a.participantId === choice.targetParticipantId) ??
-      agents.find((a) => a.participantId === choice.lastAnsweredBy) ??
-      agents[0];
-    return { ok: true, kind: 'agent', participantId: pick.participantId, name: pick.name, agent: pick, choices: agents };
+    const picked = agents.find((a) => a.participantId === choice.targetParticipantId);
+    const lead = picked ? undefined : agents.find((a) => a.participantId === choice.leadParticipantId);
+    const answered = picked || lead ? undefined : agents.find((a) => a.participantId === choice.lastAnsweredBy);
+    const pick = picked ?? lead ?? answered ?? agents[0];
+    return {
+      ok: true,
+      kind: 'agent',
+      participantId: pick.participantId,
+      name: pick.name,
+      agent: pick,
+      choices: agents,
+      needsChoice: agents.length > 1 && !picked && !lead && !answered,
+      viaLead: lead !== undefined,
+    };
   }
   const others = participants.filter((p) => p.entity_name !== 'user' && p.entity_name !== 'toolkit');
   if (others.some((p) => p.entity_name !== 'dummy' || asInt(p.id) === null || p.id <= 0)) {

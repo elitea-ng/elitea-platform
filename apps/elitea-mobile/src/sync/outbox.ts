@@ -7,6 +7,7 @@ import {
   type StartedTurn,
 } from '@/api/queries/sendMessage';
 import type { Db } from '@/db/sql';
+import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { log } from '@/lib/log';
 
 /**
@@ -39,7 +40,7 @@ import { log } from '@/lib/log';
  */
 
 export type OutboxState = 'queued' | 'sending' | 'failed';
-export type OutboxFailure = 'idempotency_conflict' | 'conflict' | 'unsupported_agent' | 'rejected' | 'bad_response' | 'invalid';
+export type OutboxFailure = 'idempotency_conflict' | 'conflict' | 'unsupported_agent' | 'rejected' | 'bad_response' | 'invalid' | 'addressee_not_in_conversation';
 
 export interface OutboxItem {
   questionId: string;
@@ -90,6 +91,7 @@ const FAILURE_TEXT: Record<OutboxFailure, string> = {
   rejected: 'Not sent: the workspace refused this message.',
   bad_response: 'Not sent: the workspace answered in a way this app cannot follow.',
   invalid: 'Not sent: this message could not be read back.',
+  addressee_not_in_conversation: TURN_TAKING_COPY.addresseeGoneQueued,
 };
 
 /** What the thread shows under an unsent message. */
@@ -180,6 +182,8 @@ function classify(error: unknown): Exclude<Classified, { kind: 'sent' }> {
         return { kind: 'failed', reason: 'idempotency_conflict' };
       case 'unsupported_agent':
         return { kind: 'failed', reason: 'unsupported_agent' };
+      case 'addressee_not_in_conversation':
+        return { kind: 'failed', reason: 'addressee_not_in_conversation' };
       case 'bad_response':
         return { kind: 'failed', reason: 'bad_response' };
       case 'rejected':

@@ -34,6 +34,8 @@ export interface UseChatBoxActionsParams {
   readonly onConversationCreated?: ((conversation: { readonly id?: string | number; readonly uuid?: string }) => void) | undefined;
   /** Tells the user a message went out without the project skills it names, which could not be read. */
   readonly onSkillsUnavailable?: ((message: string) => void) | undefined;
+  /** ADR-0050 7c: the `addressed_to` of the question (the agents its mentions address); clears the picks. */
+  readonly takeAddressedTo?: ((question: string) => readonly number[]) | undefined;
 }
 
 export interface UseChatBoxActionsResult {
@@ -60,6 +62,7 @@ export function useChatBoxActions({
   readAloudStop,
   onConversationCreated,
   onSkillsUnavailable,
+  takeAddressedTo,
 }: UseChatBoxActionsParams): UseChatBoxActionsResult {
   const resolvingSkillsRef = useRef(false);
   const sendResolved = useCallback(
@@ -77,6 +80,7 @@ export function useChatBoxActions({
         .map((u) => u.userId)
         .filter((id): id is string => typeof id === 'string' && id !== '');
       const isMentioningEveryone = state.isMentioningEveryone;
+      const addressedTo = takeAddressedTo?.(question) ?? [];
       state.setIsMentioningEveryone(false);
       state.setSelectedUsers([]);
       state.slash.resetSlash();
@@ -87,7 +91,7 @@ export function useChatBoxActions({
       chatInputRef.current?.reset?.();
       const pendingAttachments = data.attachments.state.attachments;
       data.attachments.state.onClearAttachments();
-      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone, projectSkillIds }).then((result) => {
+      void handlers.sendQuestion({ question, attachments: pendingAttachments, isSendingToUser, userIds, isMentioningEveryone, projectSkillIds, addressedTo }).then((result) => {
         // Announced on `result.createdConversation` alone, NOT on `success`:
         // the row is committed before any transport is tried, so a turn that
         // then fails still leaves a conversation the route and the rail have
@@ -95,7 +99,7 @@ export function useChatBoxActions({
         if (result.createdConversation) onConversationCreated?.(result.createdConversation);
       });
     },
-    [data.attachments.state, handlers, state, chatInputRef, onConversationCreated, readAloudStop],
+    [data.attachments.state, handlers, state, chatInputRef, onConversationCreated, readAloudStop, takeAddressedTo],
   );
 
   const handleSend = useCallback(

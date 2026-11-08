@@ -5,6 +5,7 @@ import type { ChatStreamContext } from '@/features/chat-messages';
 import { markGrantsTurnedOff } from '@/features/unattended';
 
 import type { StreamStartOutcome } from './useChatBoxHandlers.helpers';
+import { addressedField } from './useChatBoxSend.floor';
 
 // Derive these types through the public entity API; avoid a cross-slice deep import.
 type UploadAttachments = ReturnType<typeof useUploadAttachments>['uploadAttachments'];
@@ -259,6 +260,7 @@ export function buildStartBody(params: {
     interaction_uuid: crypto.randomUUID(),
     mcp_tokens: params.mcpTokens ?? {},
     ...mentions,
+    ...addressedField(payload), // ADR-0050 7c: the agents the message addresses
     ...(params.unattended === undefined ? {} : { unattended: params.unattended }),
     payload: {
       user_input: question,

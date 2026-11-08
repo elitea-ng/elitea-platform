@@ -1,5 +1,6 @@
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import { isApiError, parseRetryAfter } from '@/api/errors';
+import { metaWithLead } from '@elitea/client-core/conversation';
 
 /**
  * The Chats list's actions on one conversation, as requests:
@@ -109,4 +110,23 @@ export async function sendConversationAction(
     const outcome = classifyThrown(error);
     return action.kind === 'delete' && outcome.outcome === 'gone' ? { outcome: 'done' } : outcome;
   }
+}
+
+/**
+ * Sets (or, with 0, clears) the conversation's lead agent (ADR-0050 decision 7d): an
+ * `updateConversation` with the whole meta, its `floor` replaced (`metaWithLead`), since the
+ * route replaces the settings document. Throws when the workspace did not take it.
+ */
+export async function setConversationLead(
+  projectId: number,
+  conversationId: number,
+  currentMeta: unknown,
+  leadParticipantId: number,
+  client: ApiClient = sessionApiClient(),
+): Promise<void> {
+  const { response } = await client.PUT('/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}', {
+    params: { path: { project_id: String(projectId), conversation_id: String(conversationId) } },
+    body: { meta: metaWithLead(currentMeta, leadParticipantId) },
+  });
+  if (!response.ok) throw new Error(`lead not set: ${response.status}`);
 }

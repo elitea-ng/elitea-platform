@@ -36,6 +36,7 @@ import {
 } from "@/entities/conversation/api/conversationApi";
 import { isGrantsOffRefusal, unattendedRefusalText } from "@/features/unattended";
 import { EliteaApiError } from "@/shared/api/generated/mutator";
+import { t } from "@/shared/i18n";
 
 /**
  * Result of starting a run before the widget decides whether socket fallback is
@@ -139,6 +140,9 @@ function serverFailureMessage(body: unknown, status: number): string {
   if (refusal !== undefined) return refusal;
   if (typeof body === "object" && body !== null) {
     const value = body as Readonly<Record<string, unknown>>;
+    // ADR-0050 7c: an addressed agent left the conversation (or never was in it).
+    if (value["error"] === "addressee_not_in_conversation")
+      return t("chatMessages.floor.addresseeNotInConversation", "One of the agents you addressed is no longer in this conversation. Remove the mention or add the agent again, then send.");
     for (const field of ["safe_message", "message", "error"] as const) {
       if (typeof value[field] === "string" && value[field].trim() !== "")
         return value[field];
