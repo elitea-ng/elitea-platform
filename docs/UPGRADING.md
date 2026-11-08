@@ -64,7 +64,8 @@ person's device switch both allow it, as before.
   fails ends the watch as above.
 - On Windows and Linux, a key chord that types or pastes is refused
   (`action_failed`) when the focused control cannot be found; navigation
-  keys still pass.
+  keys still pass. Win+. and Win+; (the emoji and symbol panel) and Win+V
+  (the clipboard history) count as typing.
 - Other programs' injected input (remote-control tools, `xdotool`) does not
   pause the agent on Windows or Linux; the how-to says so.
 

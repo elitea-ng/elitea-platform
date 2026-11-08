@@ -174,13 +174,21 @@ const NON_INSERTING_KEYS: &[&str] = &[
     "pause",
 ];
 
+/// The keys that, with Command (the Windows key on Windows), open a panel
+/// that inserts what is picked in it: the emoji and symbol panel (`.`,
+/// `;`, by character or by name) and the clipboard history (`v`).
+const INSERTING_PANEL_KEYS: &[&str] = &[".", ";", "period", "semicolon", "v"];
+
 /// Whether a chord may put text into the focused element: a character
 /// (alone, with Shift, with Alt, or with Control+Alt, which is `AltGr` on
 /// Windows), Space, paste (Control+V, Command+V, Shift+Insert, the `paste`
-/// key) or any key this list does not know. A Control or Command shortcut
-/// on a character other than V, a function key and the navigation and
-/// editing keys do not (#1586: with no focused element found, the first are
-/// refused and the rest pass). It fails closed: an unknown key inserts.
+/// key), a panel that inserts what is picked in it ([`INSERTING_PANEL_KEYS`]
+/// with Command, which is the Windows key there: Win+. and Win+; open the
+/// emoji and symbol panel, Win+V the clipboard history) or any key this
+/// list does not know. A Control or Command shortcut on any other
+/// character, a function key and the navigation and editing keys do not
+/// (#1586: with no focused element found, the first are refused and the
+/// rest pass). It fails closed: an unknown key inserts.
 #[must_use]
 pub fn chord_inserts_text(chord: &KeyChord) -> bool {
     let lower = chord.key.to_ascii_lowercase();
@@ -193,6 +201,9 @@ pub fn chord_inserts_text(chord: &KeyChord) -> bool {
     }
     if NON_INSERTING_KEYS.contains(&key) || is_any_function_key(key) {
         return false;
+    }
+    if has(Modifier::Command) && INSERTING_PANEL_KEYS.contains(&key) {
+        return true;
     }
     if key.chars().count() == 1 && key != "space" {
         return !shortcut || key == "v";
@@ -1424,6 +1435,15 @@ mod tests {
             // AltGr on Windows, the Option layer on Linux keyboards.
             "ctrl+alt+q",
             "alt+e",
+            // The Windows emoji and symbol panel, and the clipboard history
+            // (Command is the Windows key there), with any extra modifier.
+            "cmd+.",
+            "cmd+;",
+            "meta+period",
+            "cmd+semicolon",
+            "cmd+v",
+            "ctrl+cmd+.",
+            "cmd+shift+v",
             // An unknown key name fails closed.
             "kp_1",
             "dead_acute",
@@ -1451,6 +1471,10 @@ mod tests {
             "ctrl+z",
             "cmd+w",
             "ctrl+space",
+            // The same keys under Control are ordinary shortcuts.
+            "ctrl+.",
+            "ctrl+;",
+            "ctrl+period",
         ] {
             assert!(!chord_inserts_text(&chord(c)), "{c} does not insert");
         }
