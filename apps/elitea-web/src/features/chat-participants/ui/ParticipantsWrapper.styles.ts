@@ -10,7 +10,7 @@ import type { Theme } from '@mui/material/styles';
 /**
  * Computes responsive grid sizes for the wrapper.
  */
-export function useWrapperGridSizes(collapsed: boolean): { xsSize: number; lgSize: number } {
+function useWrapperGridSizes(collapsed: boolean): { xsSize: number; lgSize: number } {
   return { xsSize: 12, lgSize: collapsed ? 0.5 : 3 };
 }
 
