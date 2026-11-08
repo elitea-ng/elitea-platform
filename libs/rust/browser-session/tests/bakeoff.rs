@@ -574,6 +574,21 @@ async fn the_bake_off() {
             .expect("ELITEA_BROWSER_ENGINE (chrome-headless-shell)"),
         moli: env_path("ELITEA_BROWSER_MOLI"),
     };
+    if let Some(only) = &only {
+        let known: HashSet<&str> = corpus["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .filter_map(|task| task["id"].as_str())
+            .collect();
+        let mut unknown: Vec<&str> = only
+            .iter()
+            .map(String::as_str)
+            .filter(|id| !known.contains(id))
+            .collect();
+        unknown.sort_unstable();
+        assert!(unknown.is_empty(), "not corpus task ids: {unknown:?}");
+    }
     let names =
         std::env::var("ELITEA_BAKEOFF_ENGINES").unwrap_or_else(|_| "full,lite,auto".to_owned());
     let proxy = forward_proxy().await;

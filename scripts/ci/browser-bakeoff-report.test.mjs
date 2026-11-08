@@ -22,25 +22,25 @@ test("lite below 80% on read and extract is refused", () => {
   // Two of five read/extract fail: 60%.
   const result = r.verdict([...run("full", [0, 1]), ...run("lite", [0, 1])]);
   assert.equal(result.admitted, false);
-  assert.equal(result.checks[1].pass, false);
-  assert.equal(result.checks[2].pass, true);
+  assert.equal(r.check(result, "read_extract").pass, false);
+  assert.equal(r.check(result, "behind").pass, true);
 });
 
 test("lite more than 10 points behind full overall is refused", () => {
   // Full 10/10, lite 8/10 with every read/extract passing: 20 points behind.
   const result = r.verdict([...run("full"), ...run("lite", [5, 6])]);
-  assert.equal(result.checks[1].pass, true);
-  assert.equal(result.checks[2].pass, false);
+  assert.equal(r.check(result, "read_extract").pass, true);
+  assert.equal(r.check(result, "behind").pass, false);
   assert.equal(result.admitted, false);
   // Exactly 10 points behind passes.
-  assert.equal(r.verdict([...run("full"), ...run("lite", [5])]).checks[2].pass, true);
+  assert.equal(r.check(r.verdict([...run("full"), ...run("lite", [5])]), "behind").pass, true);
 });
 
 test("one crash or hang of lite is refused, even at full success", () => {
   for (const flag of ["crashed", "hung"]) {
     const result = r.verdict([...run("full"), ...run("lite", [], { 7: { [flag]: true } })]);
     assert.equal(result.admitted, false, flag);
-    assert.equal(result.checks[3].pass, false, flag);
+    assert.equal(r.check(result, "stable").pass, false, flag);
   }
 });
 
@@ -76,8 +76,15 @@ test("a run where full itself fails is no comparison, even when lite matches it"
   const result = r.verdict([...run("full", all), ...run("lite", all)]);
   assert.equal(result.comparable, false);
   assert.equal(result.admitted, false);
-  assert.equal(result.checks[0].pass, false);
+  assert.equal(r.check(result, "baseline").pass, false);
   assert.match(r.markdown(result, []), /no comparison: the full baseline failed/);
+  // The lite rows are not shown as passing: "0 points behind" and "no
+  // crash" of an engine that never started are not evidence.
+  for (const id of ["read_extract", "behind", "stable"]) {
+    assert.equal(r.check(result, id).pass, null, id);
+    assert.match(r.check(result, id).measured, /^n\/a \(no comparison/, id);
+  }
+  assert.doesNotMatch(r.markdown(result, []), /\| yes \|/);
   // Half the corpus on full is enough to compare.
   const half = r.verdict([...run("full", [5, 6, 7, 8, 9]), ...run("lite", [5, 6, 7, 8, 9])]);
   assert.equal(half.comparable, true);

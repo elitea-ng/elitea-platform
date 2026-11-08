@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: sessions refused under current gVisor (#1599)
+
+Affects deployments that run cloud browser sessions under gVisor (runsc)
+with the engine sandbox off (`engine_sandbox: false`, the production
+arrangement).
+
+- The session agent recognised gVisor only by its old `/proc/version`
+  release, `4.4.0`. Current runsc releases (20261102 among them) report
+  `4.19.0-gvisor`, or `5.15.0-gvisor` with RDMA, so on them every such
+  session was refused at start as `isolation_refused`. It now accepts
+  `4.4.0` or a `*-gvisor` release with gVisor's fixed build line.
+- **Action:** if cloud browser sessions fail to start with
+  `isolation_refused` on a current runsc, move to this release. A refused
+  start now logs `not_gvisor kernel="…"` with the kernel string it saw.
+
 ## Cloud browser: the lite engine (Moli) and the engine bake-off (#1599, ADR-0049 decisions 2 and 9)
 
 No operator action. No migration, no contract change.
@@ -25,13 +40,6 @@ No operator action. No migration, no contract change.
 - Upgrade the supervisor and the worker together, as for every
   `BrowserEngineV1` change. The proto gains `BROWSER_ENGINE_V1_AUTO`. An
   older supervisor refuses an `auto` spec as an unknown engine.
-- The session agent now recognises current gVisor releases, which report
-  `Linux version 4.19.0-gvisor` (or `5.15.0-gvisor`) in `/proc/version`;
-  it accepted only the old `4.4.0`. On a current runsc, a session with
-  `engine_sandbox: false` was refused as `isolation_refused` (the
-  bake-off's first full run hit this on every task). Deployments that run
-  sessions under gVisor with the engine sandbox off should move to this
-  release.
 
 ## Desktop: the streamed cloud browser in the pane (#1592, ADR-0048 decision 7)
 

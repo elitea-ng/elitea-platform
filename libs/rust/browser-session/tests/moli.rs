@@ -64,9 +64,13 @@ async fn serve_fixtures() -> u16 {
                 let target = text.split_whitespace().nth(1).unwrap_or("/");
                 // A request through a forward proxy arrives in absolute form
                 // (`http://host:port/path`), which a server must accept.
-                let path = target
-                    .strip_prefix("http://")
-                    .map_or(target, |rest| rest.find('/').map_or("/", |at| &rest[at..]));
+                let path = match target.find("://") {
+                    Some(at) if !target.starts_with('/') => {
+                        let rest = &target[at + 3..];
+                        rest.find('/').map_or("/", |slash| &rest[slash..])
+                    }
+                    _ => target,
+                };
                 let path = path.split(['?', '#']).next().unwrap_or("/");
                 let page = FIXTURES
                     .iter()

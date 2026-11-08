@@ -87,6 +87,10 @@ export function summarise(lines, engine) {
   };
 }
 
+export function check(result, id) {
+  return result.checks.find((entry) => entry.id === id);
+}
+
 export function verdict(lines) {
   const full = summarise(lines, "full");
   const lite = summarise(lines, "lite");
@@ -99,33 +103,46 @@ export function verdict(lines) {
     throw new Error("full and lite ran different tasks: the comparison would not be like for like");
   }
   const behind = (full.success - lite.success) * 100;
+  const comparable = full.success !== null && full.success >= FULL_BASELINE_FLOOR;
   const checks = [
     {
+      id: "baseline",
       rule: `full (the baseline) succeeds on at least ${FULL_BASELINE_FLOOR * 100}% of the corpus`,
-      pass: full.success !== null && full.success >= FULL_BASELINE_FLOOR,
+      pass: comparable,
       measured: pct(full.success),
     },
     {
+      id: "read_extract",
       rule: `lite succeeds on at least ${READ_EXTRACT_FLOOR * 100}% of read and extract tasks`,
       pass: lite.read_extract_success !== null && lite.read_extract_success >= READ_EXTRACT_FLOOR,
       measured: lite.read_extract_success === null ? "no read or extract task" : pct(lite.read_extract_success),
     },
     {
+      id: "behind",
       rule: `lite is no more than ${MAX_POINTS_BEHIND} points behind full overall`,
       pass: behind <= MAX_POINTS_BEHIND,
       measured: `${pct(lite.success)} vs ${pct(full.success)} (${behind.toFixed(1)} points behind)`,
     },
     {
+      id: "stable",
       rule: "no crash or hang of lite",
       pass: lite.crashed.length === 0 && lite.hung.length === 0,
       measured: `${lite.crashed.length} crashed, ${lite.hung.length} hung`,
     },
   ];
+  // With no working baseline, the lite rows say nothing about Moli: they are
+  // shown as not measured, never as a pass.
+  if (!comparable) {
+    for (const check of checks) {
+      if (check.id === "baseline") continue;
+      check.pass = null;
+      check.measured = `n/a (no comparison; measured ${check.measured})`;
+    }
+  }
   const auto = summarise(lines, "auto");
-  const comparable = checks[0].pass;
   return {
     comparable,
-    admitted: checks.every((check) => check.pass),
+    admitted: comparable && checks.every((check) => check.pass === true),
     checks,
     engines: [full, lite, ...(auto.tasks ? [auto] : [])],
   };
@@ -152,7 +169,7 @@ export function markdown(result, lines) {
       : "no comparison: the full baseline failed, so this run measured the harness or the corpus, not Moli. Moli is NOT admitted";
   out.push(`**Verdict: ${said}.**`, "");
   out.push("| Rule | Measured | Pass |", "|---|---|---|");
-  for (const check of result.checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass ? "yes" : "no"} |`);
+  for (const check of result.checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass === null ? "n/a" : check.pass ? "yes" : "no"} |`);
   out.push("", "| | " + result.engines.map((e) => e.engine).join(" | ") + " |", "|---|" + result.engines.map(() => "---").join("|") + "|");
   const row = (label, fn) => out.push(`| ${label} | ${result.engines.map(fn).join(" | ")} |`);
   row("engine version", (e) => e.version ?? "n/a");

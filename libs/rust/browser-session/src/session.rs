@@ -52,7 +52,7 @@ pub const NOTICE_ENGINE_SWITCHED: &str = "engine_switched";
 /// `Linux version <release> #1 SMP Sun Jan 10 15:06:54 PST 2016`, where the
 /// release is `4.19.0-gvisor` (or `5.15.0-gvisor` with RDMA) on current
 /// releases and plain `4.4.0` on old ones
-/// (`pkg/sentry/kernel/version/version.go`).
+/// (`pkg/sentry/kernel/version/version.go`, checked at release 20261102).
 const GVISOR_BUILD: &str = "#1 SMP Sun Jan 10 15:06:54 PST 2016";
 
 /// Whether this process runs under gVisor, by the kernel version string its
@@ -61,6 +61,21 @@ const GVISOR_BUILD: &str = "#1 SMP Sun Jan 10 15:06:54 PST 2016";
 #[must_use]
 pub fn under_gvisor() -> bool {
     std::fs::read_to_string("/proc/version").is_ok_and(|version| is_gvisor_version(&version))
+}
+
+/// A start refused for want of gVisor says which kernel it saw, so a gVisor
+/// release that changes its `/proc/version` shows in the log instead of as
+/// every session refused for no visible reason. The kernel string is not
+/// run content.
+fn log_not_gvisor() {
+    let seen = std::fs::read_to_string("/proc/version").unwrap_or_default();
+    let seen: String = seen
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect();
+    log(&format!("not_gvisor kernel={seen:?}"));
 }
 
 fn is_gvisor_version(version: &str) -> bool {
@@ -347,6 +362,7 @@ impl Backend for Session {
         };
         let gvisor = (self.gvisor)();
         if !start.engine_sandbox && !gvisor {
+            log_not_gvisor();
             return Err(StartError::IsolationRefused);
         }
         let moli = match policy {
@@ -358,6 +374,7 @@ impl Backend for Session {
                 };
                 // Moli has no sandbox of its own: gVisor is the boundary.
                 if !gvisor {
+                    log_not_gvisor();
                     return Err(StartError::IsolationRefused);
                 }
                 Some(moli)
