@@ -6523,7 +6523,7 @@ async fn an_idle_thread_is_compacted_from_its_cached_last_request() {
     assert_eq!(summaries.load(Ordering::SeqCst), 0, "no in-turn compaction");
     let last = agent_bodies(&h.server).pop().unwrap();
     // The check fires (its time is the test's to choose) and compacts.
-    assert!(h.host.fire_idle(&h.workspace_id, "42").await);
+    assert!(h.host.fire_idle(&h.workspace_id, "42", 5).await);
     assert_eq!(idle_calls.load(Ordering::SeqCst), 1);
     let summary = llm_bodies(&h.server)
         .into_iter()
@@ -6577,7 +6577,7 @@ async fn an_idle_thread_is_compacted_from_its_cached_last_request() {
     assert_eq!(summaries.load(Ordering::SeqCst), 0);
     assert_eq!(idle_calls.load(Ordering::SeqCst), 1);
     // A thread too short to be worth it gets no check at all.
-    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+    assert!(!h.host.fire_idle(&h.workspace_id, "42", 5).await);
 }
 
 #[tokio::test]
@@ -6602,11 +6602,45 @@ async fn a_new_turn_cancels_the_threads_idle_check() {
     commits_settled(&h.host).await;
     // The person sends again before the check: it is gone with the turn's start.
     let started = h.host.start(turn(&h, "what next?")).await.unwrap();
-    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+    assert!(!h.host.fire_idle(&h.workspace_id, "42", 5).await);
     until_done_of(&h, &started.turn_id).await;
     commits_settled(&h.host).await;
     assert_eq!(idle_calls.load(Ordering::SeqCst), 0);
     assert!(h.emitter.app_events.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_peer_agents_turn_leaves_the_idle_check_alone() {
+    let convo = Arc::new(Mutex::new(Convo::default()));
+    let idle_calls = Arc::new(AtomicUsize::new(0));
+    let inner = reading_script(Arc::new(AtomicUsize::new(0)));
+    let counted = idle_calls.clone();
+    let script: Script = Box::new(move |body: &Value| {
+        if is_idle_summary_call(body) {
+            counted.fetch_add(1, Ordering::SeqCst);
+            return say_with_usage(&summary_record("Read big.txt and report."));
+        }
+        inner(body)
+    });
+    let server = cached_price_platform(convo, script).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let text: String = (0..600)
+        .map(|n| format!("line {n:04} of the big file, padded to be long enough to count\n"))
+        .collect();
+    std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    // #1610: another agent of the thread (application 6) starts a turn; the
+    // check of agent 5 stays and still compacts.
+    h.host.idle_turn_started(&h.workspace_id, "42", 6);
+    assert!(!h.host.fire_idle(&h.workspace_id, "42", 6).await);
+    assert!(h.host.fire_idle(&h.workspace_id, "42", 5).await);
+    assert_eq!(idle_calls.load(Ordering::SeqCst), 1);
+    // The same agent's turn start does cancel it.
+    run_turn(&h, "read big.txt 8 times").await;
+    commits_settled(&h.host).await;
+    h.host.idle_turn_started(&h.workspace_id, "42", 5);
+    assert!(!h.host.fire_idle(&h.workspace_id, "42", 5).await);
 }
 
 #[tokio::test]
@@ -6622,7 +6656,7 @@ async fn a_self_hosted_model_gets_no_idle_compaction() {
     std::fs::write(h.folder.path().join("big.txt"), text).unwrap();
     run_turn(&h, "read big.txt 8 times").await;
     commits_settled(&h.host).await;
-    assert!(!h.host.fire_idle(&h.workspace_id, "42").await);
+    assert!(!h.host.fire_idle(&h.workspace_id, "42", 5).await);
     assert!(h.emitter.app_events.lock().unwrap().is_empty());
 }
 

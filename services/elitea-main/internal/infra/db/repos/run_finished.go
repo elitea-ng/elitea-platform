@@ -255,6 +255,9 @@ JOIN elitea_runtime.execution_jobs AS job
   ON job.execution_id = binding.execution_id AND job.generation = binding.generation
 WHERE binding.execution_id = $1
   AND NOT EXISTS (SELECT 1 FROM elitea_runtime.run_chain_links AS link WHERE link.execution_id = $1)
+  -- An idle compaction (ADR-0050 decision 9b2) is no run a person waits
+  -- for: it never notifies.
+  AND NOT EXISTS (SELECT 1 FROM elitea_runtime.agent_idle_compactions AS idle WHERE idle.idle_execution_id = $1)
 ORDER BY binding.generation DESC
 LIMIT 1`, executionID).Scan(&run.TriggerOrigin, &actor, &project, &run.ConversationUUID, &run.ResponseMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {

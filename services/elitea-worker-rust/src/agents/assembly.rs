@@ -178,6 +178,14 @@ impl OrdinaryNoToolProfile {
         Self::validate_with_mode(request, CommonProfileMode::McpAuthorization)
     }
 
+    /// Validate the source turn's frozen input for one idle compaction
+    /// (ADR-0050 decision 9b2): an empty input carrying only its marker.
+    pub(crate) fn validate_idle_compaction(
+        request: &AgentExecutionRequest,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        Self::validate_with_mode(request, CommonProfileMode::IdleCompaction)
+    }
+
     /// Validate one fresh model call that continues visible root output.
     pub(crate) fn validate_output_continuation(
         request: &AgentExecutionRequest,
@@ -613,6 +621,9 @@ enum CommonProfileMode {
     /// fresh turn with an empty input, no decision fields and the wake marker
     /// as its only meta; its decisions come from the ledger.
     FanoutWake,
+    /// An idle compaction (ADR-0050 decision 9b2): the source turn's frozen
+    /// input with an empty input and the marker as its only meta.
+    IdleCompaction,
 }
 
 #[allow(clippy::too_many_lines)] // Keep profile admission visibly ordered before credential redemption.
@@ -624,7 +635,11 @@ fn validate_common_profile(
     match &payload.user_input {
         UserInput::ContentBlocks(_) => return Err(unsupported_profile()),
         UserInput::Text(text)
-            if (text.is_empty() && mode != CommonProfileMode::FanoutWake)
+            if (text.is_empty()
+                && !matches!(
+                    mode,
+                    CommonProfileMode::FanoutWake | CommonProfileMode::IdleCompaction
+                ))
                 || text.contains('\0') =>
         {
             return Err(invalid_profile());
@@ -652,6 +667,7 @@ fn validate_common_profile(
             CommonProfileMode::Fresh
                 | CommonProfileMode::Regenerate
                 | CommonProfileMode::FanoutWake
+                | CommonProfileMode::IdleCompaction
         );
     let output_continuation = mode == CommonProfileMode::OutputContinuation;
     let valid_truncated_content = payload
@@ -679,6 +695,9 @@ fn validate_common_profile(
                 && payload
                     .meta
                     .contains_key(super::graph::fanout_wake::FANOUT_WAKE_META_KEY))
+            || (mode == CommonProfileMode::IdleCompaction
+                && payload.meta.len() == 1
+                && super::idle_compaction::requested(payload))
             || (mode == CommonProfileMode::DirectGuardrailContinuation
                 && payload.meta.len() == 1
                 && super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
@@ -707,7 +726,10 @@ fn validate_common_profile(
         || !payload.hitl_decisions.is_empty();
     let starts_without_interrupt = matches!(
         mode,
-        CommonProfileMode::Fresh | CommonProfileMode::Regenerate | CommonProfileMode::FanoutWake
+        CommonProfileMode::Fresh
+            | CommonProfileMode::Regenerate
+            | CommonProfileMode::FanoutWake
+            | CommonProfileMode::IdleCompaction
     );
     if (starts_without_interrupt && has_direct_hitl_fields)
         || (!starts_without_interrupt && !has_direct_hitl_fields)

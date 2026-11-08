@@ -1018,6 +1018,7 @@ enum ProjectionState {
 }
 
 /// Stateful ordinary-text compatibility projector.
+#[allow(clippy::struct_excessive_bools)] // Independent run modes, each set once at assembly.
 pub(crate) struct AgentEventProjector {
     context: AgentEventProjectionContext,
     state: ProjectionState,
@@ -1049,6 +1050,9 @@ pub(crate) struct AgentEventProjector {
     /// stopped at its step limit under an unattended grant is
     /// `RunEnd::StepLimit` (`close_for_step_limit`).
     run_end: RunEnd,
+    /// ADR-0050 decision 9b2: an idle compaction emits no `agent_start` and
+    /// completes with an empty result.
+    idle_compaction: bool,
 }
 
 /// How the run's model loop ended, for the final `full_message`.
@@ -1212,6 +1216,7 @@ impl AgentEventProjector {
             run_steps: None,
             grounding: None,
             run_end: RunEnd::Ordinary,
+            idle_compaction: false,
         })
     }
 
@@ -1225,6 +1230,12 @@ impl AgentEventProjector {
 
     /// Restored generation replaces its interrupted browser attempt. The
     /// frozen continuation prefix is replayed before ADK starts producing.
+    /// An idle compaction (ADR-0050 decision 9b2): no transcript frame but
+    /// its context status and the empty result that settles the job.
+    pub(crate) fn mark_idle_compaction(&mut self) {
+        self.idle_compaction = true;
+    }
+
     pub(crate) fn mark_checkpoint_recovery(&mut self) {
         self.checkpoint_recovery = true;
     }
@@ -1238,6 +1249,10 @@ impl AgentEventProjector {
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         if !matches!(self.state, ProjectionState::Created) {
             return Err(AgentEventProjectionError::invalid_state());
+        }
+        if self.idle_compaction {
+            self.state = ProjectionState::Started;
+            return Ok(ProjectedAgentEventBatch::new());
         }
         let event = self.event(
             "agent_start",
@@ -3863,6 +3878,7 @@ impl AgentEventProjector {
                 ProjectionState::PrinterComplete | ProjectionState::StaticComplete
             );
         let output_limited = match &self.state {
+            ProjectionState::Started if self.idle_compaction => false,
             ProjectionState::Complete(turn) => turn.output_limited && !static_tools,
             ProjectionState::PrinterComplete | ProjectionState::StaticComplete => false,
             ProjectionState::Active(_) | ProjectionState::Started if static_tools => false,
@@ -3917,6 +3933,7 @@ impl AgentEventProjector {
         // still malformed.
         if content.is_empty()
             && self.run_end != RunEnd::StepLimit
+            && !self.idle_compaction
             && !(output_limited
                 && matches!(
                     self.context.output_limit_behavior,

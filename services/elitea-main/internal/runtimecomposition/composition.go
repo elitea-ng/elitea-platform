@@ -740,6 +740,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// anything is served.
 	interruptSignals := &repos.ExecutionInterruptSignals{}
 	var fanoutWakes *agentexecutionapp.FanoutWakeAdmitter
+	// Idle compaction per (conversation, agent) (ADR-0050 decision 9b2):
+	// the admitter of due checks and the after-settle hook that arms them.
+	var idleCompactions *agentexecutionapp.IdleCompactionAdmitter
+	var idleCompactionHook *agentexecutionapp.IdleCompactionSettleHook
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -926,6 +930,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct fanout wake admitter: %w", recoveryErr)
 		}
 		interruptSignals.Wakes = fanoutWakes
+		idleStore, idleErr := repos.NewAgentIdleCompactionsRepository(dependencies.AdmissionPool)
+		if idleErr != nil {
+			return nil, fmt.Errorf("construct idle compaction repository: %w", idleErr)
+		}
+		idleCompactions, idleErr = agentexecutionapp.NewIdleCompactionAdmitter(idleStore, agentAdmissions, dependencies.Logger)
+		if idleErr != nil {
+			return nil, fmt.Errorf("construct idle compaction admitter: %w", idleErr)
+		}
+		idleCompactionHook, idleErr = agentexecutionapp.NewIdleCompactionSettleHook(idleStore, idleCompactions, dependencies.Logger)
+		if idleErr != nil {
+			return nil, fmt.Errorf("construct idle compaction settle hook: %w", idleErr)
+		}
 		interruptSignals.Live = dependencies.InterruptLiveEvents
 		executionInterrupts.SetSignals(interruptSignals)
 		// FU-250: a fan-out authorize is checked against the delegated grant
@@ -1250,6 +1266,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
 			}
 		}
+		if idleCompactions != nil {
+			publisherRoot, err = newPublisherSet(publisherRoot, idleCompactions)
+			if err != nil {
+				return nil, fmt.Errorf("compose idle compaction admitter: %w", err)
+			}
+		}
 		// ADR-0041 decision 5 (#1491): an unattended run's skip is answered
 		// and its expired wait is closed, always with the agent runtime.
 		if agentStart != nil {
@@ -1484,6 +1506,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				interruptSignals.Wakes.Kick()
 			}
 		}))
+	if idleCompactionHook != nil {
+		settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(idleCompactionHook.AfterSettle))
+	}
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
 		return nil, err

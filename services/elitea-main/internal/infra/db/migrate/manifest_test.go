@@ -1052,7 +1052,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0050 decision 1b, issue 1607): list to the default-mode admin,
 	// editor and viewer, the other three to the default-mode admin, and the
 	// same on saved project matrices. No table.
-	require.EqualValues(t, 229, Head(shared))
+	//
+	// 230: shared/0230_agent_idle_compactions.sql, the idle compaction
+	// checks per (conversation, agent) (ADR-0050 decision 9b2, issue 1610):
+	// one active QUEUED or ADMITTED row per agent, the idle run's measurement
+	// for each agent's meter. No backfill, no permission.
+	require.EqualValues(t, 230, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

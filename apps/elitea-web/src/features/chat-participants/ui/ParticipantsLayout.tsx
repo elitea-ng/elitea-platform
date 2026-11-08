@@ -23,7 +23,7 @@
  *    every participant, colliding as duplicate React `key`s. See
  *    `lib/helpers.ts`'s doc comment.
  */
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 
 import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
@@ -37,6 +37,8 @@ import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined';
 import { t } from '@/shared/i18n';
 
 import type { TransformedParticipant } from '../model/types';
+import { agentContextOf } from '../lib/agentContextSlot';
+import { deriveEffectiveMaxVisibleUsers, useContainerWidth } from '../lib/hooks/useContainerWidth';
 import { getChatParticipantUniqueId } from '../lib/helpers';
 import { useParticipantDetailsContext } from '../lib/context/ParticipantDetailsContext';
 import { styles } from './ExpandedParticipants/participants.styles';
@@ -87,7 +89,7 @@ interface ParticipantActions {
   editingToolkit?: string;
   resolveToolkitIcon?: ParticipantsProps['resolveToolkitIcon'];
   /** Opens the consumer's add-participant picker — see `ParticipantsProps`. */
-  onAddParticipants?: () => void;
+  onAddParticipants?: () => void; renderAgentContext?: ParticipantsProps['renderAgentContext'];
 }
 
 export interface ParticipantsLayoutProps {
@@ -141,7 +143,7 @@ interface ParticipantTypeSectionProps {
   onDeleteParticipant?: (p: TransformedParticipant) => void;
   onEditParticipant?: (p: TransformedParticipant) => void;
   editingToolkit?: string;
-  resolveToolkitIcon?: ParticipantsProps['resolveToolkitIcon'];
+  resolveToolkitIcon?: ParticipantsProps['resolveToolkitIcon']; renderAgentContext?: ParticipantsProps['renderAgentContext'];
 }
 
 const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
@@ -149,7 +151,7 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
     title, inspector, participants, collapsed, disabledEdit, activeParticipantId,
     selectedManager, newConversationSelectedManager,
     onSelectParticipant, onDeleteParticipant, onEditParticipant,
-    editingToolkit, resolveToolkitIcon,
+    editingToolkit, resolveToolkitIcon, renderAgentContext,
   } = props;
 
   const [isExpanded, setIsExpanded] = useState(true);
@@ -208,6 +210,7 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
                 onEdit={onEditParticipant}
                 editingToolkit={editingToolkit}
                 resolveToolkitIcon={resolveToolkitIcon}
+                {...agentContextOf(renderAgentContext, participant)}
                 {...status}
               />
             );
@@ -219,34 +222,6 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
 });
 
 ParticipantTypeSection.displayName = 'ParticipantTypeSection';
-
-/**
- * Width-responsive users cap (adversarial review C5-wrapper #9): mirrors
- * old-app `useGetComponentWidth()` via `ResizeObserver`. Extracted to its own
- * hook to keep `ParticipantsLayout`'s own complexity within the §3.5 budget.
- */
-function useContainerWidth(containerRef: React.RefObject<HTMLDivElement | null>): number {
-  const [width, setWidth] = useState(0);
-
-  useEffect(() => {
-    const node = containerRef.current;
-    if (!node || typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) setWidth(entry.contentRect.width);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [containerRef]);
-
-  return width;
-}
-
-/** old-app: `componentWidth <= 200 ? users.slice(0, 3) : users.slice(0, 5)`. */
-function deriveEffectiveMaxVisibleUsers(componentWidth: number, maxVisibleUsers: number): number {
-  if (componentWidth > 0 && componentWidth <= 200) return Math.min(3, maxVisibleUsers);
-  return maxVisibleUsers;
-}
 
 /** ExpandedParticipantsContent — users row + type sections + empty state (same complexity-budget reason as the strip above). */
 interface ExpandedParticipantsContentProps {
@@ -296,6 +271,7 @@ function ExpandedParticipantsContent({
           onEditParticipant={actions.onEditParticipant}
           editingToolkit={actions.editingToolkit}
           resolveToolkitIcon={actions.resolveToolkitIcon}
+          renderAgentContext={actions.renderAgentContext}
         />
       ))}
 

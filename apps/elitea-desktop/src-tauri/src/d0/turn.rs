@@ -76,7 +76,7 @@ use super::definition::{self, Admitted, ModelChoice};
 use super::environment;
 use super::events::{EventEmitter, Phase, Timed, TurnEvents, UsageLane};
 use super::framing;
-use super::idle::{IdleBasis, IdleCompactor, IdleSession, ThreadKey};
+use super::idle::{AgentKey, IdleBasis, IdleCompactor, IdleSession, ThreadKey};
 use super::memory::PlatformMemoryStore;
 use super::mentions;
 use super::model::{GatewayTransport, RequestCapture, TurnTail};
@@ -1340,13 +1340,39 @@ impl AgentHost {
 
     /// Run the thread's scheduled idle compaction check now (tests).
     #[cfg(test)]
-    pub(super) async fn fire_idle(&self, workspace_id: &str, conversation: &str) -> bool {
+    pub(super) async fn fire_idle(
+        &self,
+        workspace_id: &str,
+        conversation: &str,
+        application_id: i64,
+    ) -> bool {
         self.idle
-            .fire_pending(&ThreadKey {
-                workspace_id: workspace_id.to_owned(),
-                conversation: conversation.to_owned(),
+            .fire_pending(&AgentKey {
+                thread: ThreadKey {
+                    workspace_id: workspace_id.to_owned(),
+                    conversation: conversation.to_owned(),
+                },
+                application_id,
             })
             .await
+    }
+
+    /// Another agent of the thread starts a turn (tests): only that agent's
+    /// check is cancelled.
+    #[cfg(test)]
+    pub(super) fn idle_turn_started(
+        &self,
+        workspace_id: &str,
+        conversation: &str,
+        application_id: i64,
+    ) {
+        self.idle.turn_started(&AgentKey {
+            thread: ThreadKey {
+                workspace_id: workspace_id.to_owned(),
+                conversation: conversation.to_owned(),
+            },
+            application_id,
+        });
     }
 
     /// The app is quitting: no idle compaction starts or finishes.
@@ -2119,12 +2145,16 @@ impl AgentHost {
         if let Some(pick) = &request.command {
             request.prompt = slash_commands::literal(pick);
         }
-        // A new turn cancels the thread's idle compaction (and one under
-        // way), before the turn reads its session.
+        // A new turn cancels this agent's idle compaction on the thread
+        // (and one under way), before the turn reads its session. Another
+        // agent's check stays (ADR-0050 decision 9b2).
         if let Ok(conversation) = conversation_key(&request.conversation_id) {
-            self.idle.turn_started(&ThreadKey {
-                workspace_id: request.workspace_id.clone(),
-                conversation,
+            self.idle.turn_started(&AgentKey {
+                thread: ThreadKey {
+                    workspace_id: request.workspace_id.clone(),
+                    conversation,
+                },
+                application_id: request.application_id,
             });
         }
         let turn_id = uuid::Uuid::new_v4().to_string();
@@ -3262,9 +3292,12 @@ impl AgentHost {
             .zip(memory.durable_key().zip(self.deps.sessions.as_ref()))
             .map(|(basis, (key, sessions))| {
                 (
-                    ThreadKey {
-                        workspace_id: request.workspace_id.clone(),
-                        conversation: conversation.clone(),
+                    AgentKey {
+                        thread: ThreadKey {
+                            workspace_id: request.workspace_id.clone(),
+                            conversation: conversation.clone(),
+                        },
+                        application_id: request.application_id,
                     },
                     basis,
                     IdleSession {

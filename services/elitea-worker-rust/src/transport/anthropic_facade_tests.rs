@@ -284,6 +284,7 @@ async fn distinct_execution_ids_produce_distinct_execution_id_headers() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // One request, every wire field it must carry.
 async fn native_messages_request_preserves_cache_thinking_identity_and_completion() {
     let response =
         test_model_gateway_response(Body::new(Full::new(Bytes::from(native_sse(MODEL)))));
@@ -376,10 +377,28 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
         serde_json::from_slice(&request.body).expect("native request JSON");
     assert_eq!(body["model"], MODEL);
     assert_eq!(body["messages"][0]["role"], "user");
-    assert_eq!(body["messages"][0]["content"], "explain this");
+    // A plain-text message becomes one text block so it can carry the
+    // conversation breakpoint (#1610).
+    assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(body["messages"][0]["content"][0]["text"], "explain this");
     assert_eq!(body["system"][0]["type"], "text");
     assert_eq!(body["system"][0]["text"], "review carefully\nbe concise");
     assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    // #1610: the conversation carries the second breakpoint, on the last
+    // message's last block, and no other block does.
+    let messages = body["messages"].as_array().expect("messages");
+    let last = messages.last().expect("a message");
+    let blocks = last["content"].as_array().expect("blocks");
+    assert_eq!(
+        blocks.last().expect("a block")["cache_control"]["type"],
+        "ephemeral"
+    );
+    let marked = messages
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .filter(|block| block.get("cache_control").is_some())
+        .count();
+    assert_eq!(marked, 1);
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["thinking"]["budget_tokens"], 4_096);
     assert_eq!(body["temperature"], 1.0);

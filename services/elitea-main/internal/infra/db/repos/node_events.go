@@ -55,6 +55,9 @@ type NodeEventsRepository struct {
 	agentTrace   currentAgentTraceProjector
 	agentText    currentAgentTextProjector
 	agentContext currentAgentContextProjector
+	// idleRuns tells an idle compaction run (ADR-0050 decision 9b2), whose
+	// frames have no transcript projection, from an ordinary turn.
+	idleRuns idleRunDetector
 }
 
 func NewNodeEventsRepository(pool *pgxpool.Pool) (*NodeEventsRepository, error) {
@@ -70,6 +73,7 @@ func NewNodeEventsRepository(pool *pgxpool.Pool) (*NodeEventsRepository, error) 
 	repository.agentTrace = &postgresCurrentAgentTraceProjector{}
 	repository.agentText = postgresCurrentAgentTextProjector{}
 	repository.agentContext = postgresCurrentAgentContextProjector{}
+	repository.idleRuns = postgresIdleRunDetector{}
 	return repository, nil
 }
 
@@ -91,6 +95,7 @@ func newNodeEventsRepositoryWithPolicy(store sharedStore, retention replayRetent
 		agentTrace:   noopCurrentAgentTraceProjector{},
 		agentText:    noopCurrentAgentTextProjector{},
 		agentContext: noopCurrentAgentContextProjector{},
+		idleRuns:     noopIdleRunDetector{},
 	}, nil
 }
 
@@ -317,6 +322,24 @@ SELECT COALESCE((SELECT cursor FROM updated_state LIMIT 1), 0),
 			return fmt.Errorf("append durable node event: %w", err)
 		}
 		if cursor > 0 {
+			agentRun := capabilityID == executiondomain.AgentApplicationCapability ||
+				capabilityID == executiondomain.AgentAdhocCapability
+			if agentRun {
+				idle, err := r.idleRuns.isIdleRun(ctx, tx, frame.Fence.ExecutionID)
+				if err != nil {
+					return err
+				}
+				if idle {
+					// An idle compaction writes nothing on the transcript:
+					// its frames stay in the replay log, and its root
+					// measurement goes to its row.
+					if err := projectIdleCompactionContext(ctx, tx, projectionProjectID, frame); err != nil {
+						return err
+					}
+					outcome = outputapp.ProjectionOutcome{Inserted: true, Cursor: uint64(cursor), CommittedSequence: frame.Sequence}
+					return nil
+				}
+			}
 			if capabilityID == executiondomain.IndexIngestCapability {
 				if err := r.activity.projectNodeEvent(
 					ctx,

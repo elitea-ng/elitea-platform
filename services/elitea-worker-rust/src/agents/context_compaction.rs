@@ -19,6 +19,15 @@ use super::context_management::ContextCompactionPlan;
 
 pub(super) const STATE_KEY: &str = "elitea.context.root.v1";
 
+/// The first line of the content that replaces compacted history; the
+/// validated summary follows it. An idle compaction writes the same shape.
+pub(super) const CHECKPOINT_TEXT: &str = "Platform context-compaction checkpoint, not a new user request. These notes replace earlier messages and tool results, including work already performed in this task. Continue from the recorded progress under the latest user instructions. Do not repeat completed actions merely because their raw messages were compacted. If the requested work is complete, report its result. Compaction alone does not require user clarification. Preserve distinctions between earlier tasks and the current request. Authoritative instructions, approvals, and resource bindings remain separate.";
+
+/// The replacement content of a validated summary `text`.
+pub(super) fn checkpoint_content(text: &str) -> Content {
+    Content::new("user").with_text(format!("{CHECKPOINT_TEXT}\n{text}"))
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CompactionRecord {
@@ -28,6 +37,52 @@ pub(super) struct CompactionRecord {
     covered_count: usize,
     covered_digest: [u8; 32],
     replacement: Vec<Content>,
+}
+
+impl CompactionRecord {
+    /// The record of an idle compaction (ADR-0050 decision 9b2, #1610).
+    pub(super) fn covering(
+        definition_digest: [u8; 32],
+        anchor: [u8; 32],
+        covered_count: usize,
+        covered_digest: [u8; 32],
+        replacement: Vec<Content>,
+    ) -> Self {
+        Self {
+            version: 1,
+            definition_digest,
+            anchor,
+            covered_count,
+            covered_digest,
+            replacement,
+        }
+    }
+
+    /// Whether this record already stands for exactly that prefix.
+    pub(super) fn covers(
+        &self,
+        definition_digest: [u8; 32],
+        anchor: [u8; 32],
+        covered_count: usize,
+        covered_digest: [u8; 32],
+    ) -> bool {
+        self.version == 1
+            && self.definition_digest == definition_digest
+            && self.anchor == anchor
+            && self.covered_count == covered_count
+            && self.covered_digest == covered_digest
+    }
+}
+
+/// The root record a session's state holds, if any.
+pub(super) fn saved_record(session: &dyn Session) -> adk_rust::Result<Option<CompactionRecord>> {
+    session
+        .state()
+        .get(STATE_KEY)
+        .filter(|value| !value.is_null())
+        .map(serde_json::from_value::<CompactionRecord>)
+        .transpose()
+        .map_err(|_| invalid_compaction())
 }
 
 /// A model-only projection is valid only for the exact committed source prefix.
@@ -235,9 +290,7 @@ impl DurableContextCompaction {
                 &working[..cutoff],
             )
             .await?;
-        let mut replacement = vec![Content::new("user").with_text(format!(
-            "Platform context-compaction checkpoint, not a new user request. These notes replace earlier messages and tool results, including work already performed in this task. Continue from the recorded progress under the latest user instructions. Do not repeat completed actions merely because their raw messages were compacted. If the requested work is complete, report its result. Compaction alone does not require user clarification. Preserve distinctions between earlier tasks and the current request. Authoritative instructions, approvals, and resource bindings remain separate.\n{text}"
-        ))];
+        let mut replacement = vec![checkpoint_content(&text)];
         if let Some(user) = protected_user {
             replacement.push(user);
         }

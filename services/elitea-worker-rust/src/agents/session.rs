@@ -2306,6 +2306,13 @@ pub(crate) trait BoundOrdinaryAgentModel: Send + 'static {
 
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError>;
 
+    /// The agent's own provider model without its answer-shaping wrappers
+    /// (output contract, source numbering): an idle compaction replays the
+    /// last request on it and its answer is a summary, not the agent's.
+    fn idle_adk_model(&self) -> Arc<dyn Llm> {
+        self.adk_model()
+    }
+
     fn durable_completion(&self) -> Option<Arc<dyn DurableModelCompletion>> {
         None
     }
@@ -2580,6 +2587,9 @@ pub(crate) struct OrdinaryAgentCompletion<M> {
     /// the selector (a failure, a cap, a cancellation, a lost lease), and
     /// the guard ends the session at once.
     browser: crate::browser_run::BrowserRunEnd,
+    /// ADR-0050 decision 9b2: an idle compaction completes with an empty
+    /// result; the model's text was the summary, never the agent's answer.
+    idle_compaction: bool,
 }
 
 impl<M> OrdinaryAgentCompletion<M> {
@@ -2619,7 +2629,13 @@ where
         // A run stopped at its step limit under an unattended grant may also
         // have no final text. It completes with the text it has.
         let step_limited = self.step_limit.as_ref().is_some_and(|stop| stop.reached());
-        let mut content = match self.model.take_completed_text() {
+        let completed = if self.idle_compaction {
+            drop(self.model);
+            Ok(String::new())
+        } else {
+            self.model.take_completed_text()
+        };
+        let mut content = match completed {
             Ok(content) => content,
             Err(_) if wrapped_up || step_limited => String::new(),
             Err(error) => {
@@ -3771,9 +3787,93 @@ where
                 workspace: None,
                 step_limit: step_limit_stop,
                 browser: crate::browser_run::BrowserRunEnd::new(None),
+                idle_compaction: false,
             },
         ),
         evidence,
+    ))
+}
+
+/// Assemble one idle compaction (ADR-0050 decision 9b2, #1610) over the
+/// claim-fenced session: a Runner whose root agent never runs the agent loop
+/// and yields only one `agent_context_status` frame. The empty Runner input
+/// is not persisted, so no user message is appended.
+pub(crate) async fn assemble_idle_compaction<M>(
+    model: M,
+    plan: OrdinaryNativeAgentPlan,
+    runtime: OrdinaryRuntimeBindings,
+    sessions: Arc<dyn SessionService>,
+) -> Result<AssembledNativeAgentInvocation<OrdinaryAgentCompletion<M>>, NativeAgentAssemblyError>
+where
+    M: BoundOrdinaryAgentModel,
+{
+    let identity = plan.session_identity()?;
+    let OrdinaryNativeAgentPlan {
+        user_id,
+        session_id,
+        projection,
+        thread_id,
+        context_management,
+        step_compaction,
+        definition_digest,
+        step_limit_stop,
+        ..
+    } = plan;
+    // The tools are bound so the agent's system prompt is the one its last
+    // request was sent with; none is ever called.
+    drop(runtime);
+    restore_or_create_session(sessions.as_ref(), &user_id, &session_id).await?;
+    // Only durable root compaction (`elitea.context.root.v1`) has a record
+    // the next turn reads; step compaction (`session_compaction`, #1368)
+    // keeps its summary in the history snapshot of a model request, which an
+    // idle run does not write. Without one the job completes doing nothing.
+    let run = match (
+        &context_management,
+        step_compaction.is_none(),
+        model.request_budget(),
+    ) {
+        (ContextManagementPlan::Summarize(compaction), true, Some(budget)) => {
+            Some(super::idle_compaction::IdleCompactionRun {
+                sessions: Arc::clone(&sessions),
+                identity,
+                model: super::replay_history::provider_model(model.idle_adk_model()),
+                budget,
+                definition_digest,
+                agent_name: ROOT_AGENT_NAME.to_owned(),
+                guidance: compaction.summary_instructions.clone(),
+                completion: model.durable_completion(),
+            })
+        }
+        _ => None,
+    };
+    let agent: Arc<dyn Agent> = Arc::new(super::idle_compaction::IdleCompactionAgent::new(
+        ROOT_AGENT_NAME,
+        run,
+    ));
+    let mut projector = AgentEventProjector::new(projection).map_err(projection_configuration)?;
+    projector.mark_idle_compaction();
+    let runner_sessions = Arc::new(
+        RunnerSessionService::new(sessions, None)
+            .with_recovery(true)
+            .with_history_scope(definition_digest, ROOT_AGENT_NAME),
+    );
+    let runner = adk_rust::runner::Runner::builder()
+        .app_name(APP_NAME)
+        .agent(agent)
+        .session_service(runner_sessions)
+        .build()
+        .map_err(|_| invalid_configuration())?;
+    Ok(AssembledNativeAgentInvocation::new(
+        NativeAgentInvocation::new(runner, user_id, session_id, Content::new("user")),
+        projector,
+        OrdinaryAgentCompletion {
+            model,
+            thread_id,
+            workspace: None,
+            step_limit: step_limit_stop,
+            browser: crate::browser_run::BrowserRunEnd::new(None),
+            idle_compaction: true,
+        },
     ))
 }
 
@@ -4264,6 +4364,7 @@ where
             workspace: None,
             step_limit: step_limit_stop,
             browser: crate::browser_run::BrowserRunEnd::new(None),
+            idle_compaction: false,
         },
     ))
 }

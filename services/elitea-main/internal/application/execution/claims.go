@@ -27,15 +27,19 @@ type ClaimRequest struct {
 	// `authorize` with its credential (FU-250); a wake whose response carries
 	// an authorize decision is granted only with it, under every disposition.
 	FanoutDelegatedCredentials bool
-	CommandID                  string
-	OutboxID                   string
-	ExecutionID                string
-	Generation                 uint64
-	CapabilityID               string
-	SignedEnvelopeDigest       runtimedomain.Digest
-	WorkloadIdentity           string
-	WorkloadSessionID          string
-	ProducerID                 string
+	// IdleCompaction is the worker's opt-in to the idle compaction
+	// continuation (issue 1610); an idle compaction job is granted only with
+	// it, so an older worker never runs its empty input as a fresh turn.
+	IdleCompaction       bool
+	CommandID            string
+	OutboxID             string
+	ExecutionID          string
+	Generation           uint64
+	CapabilityID         string
+	SignedEnvelopeDigest runtimedomain.Digest
+	WorkloadIdentity     string
+	WorkloadSessionID    string
+	ProducerID           string
 }
 
 // ClaimAbortDisposition records why a live, fully fenced claim was released

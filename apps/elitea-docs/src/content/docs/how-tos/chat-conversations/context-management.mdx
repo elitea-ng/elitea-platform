@@ -1,6 +1,6 @@
 ---
 title: "Manage conversation context"
-description: "Read the context budget widget and configure how a conversation prunes, summarizes, and preserves its history."
+description: "Read the context budget widget, each agent's meter, and how a conversation prunes, summarizes, and compacts its history while idle."
 ---
 
 Every conversation, agent run, and pipeline execution tracks how many tokens its history is using and manages that automatically once the limit gets close. This is enabled by default — there's nothing to turn on to start seeing it.
@@ -50,6 +50,25 @@ The provider keeps a conversation's prompt in its cache for 5 minutes, counted f
 ### Which threads are compacted while idle
 
 Only threads with at least 60k tokens of conversation, on paid models with a prompt cache. A thread is skipped while its composer holds text you haven't sent, and after the computer slept past the cache's lifetime, since the cache is gone by then.
+
+### One check per agent
+
+In a thread with several agents, each agent has its own check. Another agent's answer doesn't cancel it; only that same agent's next turn does.
+
+## Idle compaction in the cloud
+
+Conversations on the platform are compacted while idle too, once per agent. When an agent's answer ends, the platform schedules one check for that agent in that conversation, 4 minutes after the agent's last model request started. If nothing has changed by then, the platform summarizes that agent's history as a continuation of its own last request, while the provider's prompt cache is still warm. The agent's next answer starts from the summary.
+
+- **Per agent.** Each agent in a conversation has its own check, its own model and its own history. A person's message or another agent's answer doesn't cancel it. The same agent's next turn does: that turn starts normally and the check is dropped.
+- **Skipped** when the agent's model has no paid prompt cache, when the agent's history is under 60k tokens, when the cache has already expired (for example, after the platform was briefly unavailable), or when the agent's answer failed, was stopped or waits for someone.
+- **Quiet.** The summary adds nothing to the conversation: no message, no notification. It uses no tools.
+- **Billed to the agent.** The summary request is the agent's own model call, recorded under its own run, so it shows in the agent's usage like any other call.
+
+The platform also marks the end of the conversation for the provider's prompt cache. Each request then reads everything up to the previous request from the cache, not only the system prompt. That's what keeps a long conversation cheap, and what makes the idle summary cost about a tenth of re-reading the history.
+
+### Each agent's meter
+
+In the participants panel, each agent's row shows how full that agent's own context is, as a percentage. Hover over it for the token counts. When the agent was last summarized while idle, the tooltip says so, and the figure is the size its next answer starts from. The **Context budget** panel below the list still shows the latest answer's figures.
 
 ## Related
 

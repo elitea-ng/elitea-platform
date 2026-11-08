@@ -246,6 +246,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		NodeRecovery:                 request.GetNodeRecovery(),
 		FanoutInterruptDecisions:     request.GetFanoutInterruptDecisions(),
 		FanoutDelegatedCredentials:   request.GetFanoutDelegatedCredentials(),
+		IdleCompaction:               request.GetIdleCompaction(),
 	})
 	if err != nil {
 		logClaimRejection(ctx, "claim", command, err)

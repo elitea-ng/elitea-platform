@@ -219,6 +219,21 @@ func (r *AgentExecutionJobsRepository) AdmitAgentExecution(
 			return executionapp.AdmissionOutcome{}, executionapp.ErrInvalidAdmission
 		}
 	}
+	if admission.CurrentIdleCompactionTurn != nil {
+		turn := admission.CurrentIdleCompactionTurn
+		if admission.CurrentTurn != nil || admission.CurrentAdhocTurn != nil || admission.CurrentRegenerateTurn != nil ||
+			admission.CurrentContinueTurn != nil || admission.CurrentFanoutWakeTurn != nil ||
+			admission.HandoffCompletion != nil || admission.CloudThread || admission.Unattended != nil ||
+			turn.Validate() != nil || turn.ProjectID > math.MaxInt32 ||
+			turn.ProjectID != resourceProjectIDUnchecked(admission.Record.Job.ResourceProjectID) ||
+			admission.Record.IdempotencyKey != agentexecutionapp.IdleCompactionIdempotencyKey(turn.SourceExecutionID) ||
+			turn.ResponseMessageID != admission.Binding.ClientMessageID ||
+			turn.ConversationUUID != admission.Binding.ClientStreamID ||
+			turn.ExecutionGeneration != admission.Binding.ClientExecutionGeneration ||
+			admission.Binding.SIOEvent != "chat_continue_predict" {
+			return executionapp.AdmissionOutcome{}, executionapp.ErrInvalidAdmission
+		}
+	}
 
 	resourceProject, err := parseProjectID(admission.Record.Job.ResourceProjectID)
 	if err != nil || resourceProject > math.MaxInt32 {
@@ -488,6 +503,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 		currentProjectID = admission.CurrentContinueTurn.ProjectID
 	} else if admission.CurrentFanoutWakeTurn != nil {
 		currentProjectID = admission.CurrentFanoutWakeTurn.ProjectID
+	} else if admission.CurrentIdleCompactionTurn != nil {
+		currentProjectID = admission.CurrentIdleCompactionTurn.ProjectID
 	}
 	if currentProjectID > 0 {
 		if err := tenant.BindProject(
@@ -506,6 +523,8 @@ func (r *AgentExecutionJobsRepository) materializeAgentAdmission(
 			conversationID = admission.CurrentRegenerateTurn.ConversationUUID
 		} else if admission.CurrentFanoutWakeTurn != nil {
 			conversationID = admission.CurrentFanoutWakeTurn.ConversationUUID
+		} else if admission.CurrentIdleCompactionTurn != nil {
+			conversationID = admission.CurrentIdleCompactionTurn.ConversationUUID
 		} else {
 			conversationID = admission.CurrentContinueTurn.ConversationUUID
 		}
@@ -696,6 +715,19 @@ WHERE job.execution_id = $1 AND job.generation = $2
 			wake.ParkedExecutionID, wake.ParkedGeneration); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the woken run's participant: %w", err)
 		}
+	} else if idle := admission.CurrentIdleCompactionTurn; idle != nil {
+		// An idle compaction continues the source's session as the same
+		// participant, to the same addressees.
+		if _, err := tx.Exec(ctx, `
+UPDATE elitea_runtime.agent_execution_jobs AS job
+SET participant_id = source.participant_id, addressed_to = source.addressed_to
+FROM elitea_runtime.agent_execution_jobs AS source
+WHERE job.execution_id = $1 AND job.generation = $2
+  AND source.execution_id = $3 AND source.generation = $4`,
+			admission.Record.Job.ID, int64(admission.Record.Job.Generation),
+			idle.SourceExecutionID, idle.SourceGeneration); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, fmt.Errorf("record the idle run's participant: %w", err)
+		}
 	}
 	// The release the run executes (shared 0198, ADR-0040 decision 2), so
 	// audit and incident review can name the exact definition of a run.
@@ -795,6 +827,13 @@ WHERE execution_id = $1 AND generation = $2`,
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
 		notices = append(notices, notice)
+	} else if admission.CurrentIdleCompactionTurn != nil {
+		// No transcript write, no supersede, no live event (ADR-0050
+		// decision 9b2): only the row moves QUEUED -> ADMITTED.
+		if err := admitCurrentIdleCompaction(ctx, pgxExecutor{queryer: tx}, admission.Record.Job.ID,
+			*admission.CurrentIdleCompactionTurn); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 	} else if admission.CurrentContinueTurn != nil {
 		turn := *admission.CurrentContinueTurn
 		// FU-269: read before the resume below consumes the pause.
@@ -817,6 +856,16 @@ WHERE execution_id = $1 AND generation = $2`,
 		}
 		if resumeErr != nil {
 			return executionapp.AdmissionOutcome{}, nil, resumeErr
+		}
+	}
+	// A turn of an agent participant ends that agent's idle compaction in
+	// this conversation (ADR-0050 decision 9b2): its QUEUED check, or its
+	// running idle run, which is asked to stop. A peer's or a person's turn
+	// never reaches here with this participant.
+	if participantID := admission.ParticipantID(); participantID > 0 && participantID <= math.MaxInt32 && currentProjectID > 0 {
+		if err := cancelParticipantIdleCompactions(ctx, pgxExecutor{queryer: tx}, currentProjectID,
+			admission.Binding.ClientStreamID, participantID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
 		}
 	}
 	// The unattended chain (ADR-0045 decision 4): the chain's first run, or
@@ -1722,6 +1771,10 @@ func agentAdmissionPin(admission agentexecutionapp.Admission) admissionPin {
 	case admission.CurrentFanoutWakeTurn != nil:
 		// A parked fan-out resumes the same response under its run's pin.
 		conversationID, responseID = admission.CurrentFanoutWakeTurn.ConversationUUID, admission.CurrentFanoutWakeTurn.ResponseMessageID
+		pin.continuation = true
+	case admission.CurrentIdleCompactionTurn != nil:
+		// An idle compaction continues the source's session under its pin.
+		conversationID, responseID = admission.CurrentIdleCompactionTurn.ConversationUUID, admission.CurrentIdleCompactionTurn.ResponseMessageID
 		pin.continuation = true
 	}
 	if conversationID != "" && responseID != "" {

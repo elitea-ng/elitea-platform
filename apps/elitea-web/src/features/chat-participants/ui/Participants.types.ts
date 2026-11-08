@@ -90,6 +90,13 @@ export interface ParticipantsProps {
    * fetch — see that file's own note.
    */
   readonly conversationId?: string | number | undefined;
+  /**
+   * Slot for one agent's own context meter in its row (ADR-0050 decision
+   * 9b2, issue 1610), filled by the page with `widgets/context-budget`'s
+   * `AgentContextMeter`. Called with the agent's chat participant id (the
+   * participant row's `id`) for each agent row; absent renders nothing.
+   */
+  readonly renderAgentContext?: (props: { participantId: number }) => ReactNode;
   readonly renderContextBudget?: (props: {
     conversationId: string | number | undefined;
     /**

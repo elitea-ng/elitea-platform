@@ -7,6 +7,10 @@
 export { ContextBudget } from './ui/ContextBudget';
 export type { ContextBudgetProps } from './ui/ContextBudget';
 export { ContextBudgetPanel } from './ui/ContextBudgetPanel';
+export { AgentContextMeter } from './ui/AgentContextMeter';
+export type { AgentContextMeterProps } from './ui/AgentContextMeter';
+export { readAgentContexts } from './lib/agentContexts';
+export type { AgentContextMeter as AgentContextMeterStats } from './lib/agentContexts';
 export type { ContextBudgetPanelProps } from './ui/ContextBudgetPanel';
 export { toContextBudgetStats, formatNumberWithSpaces } from './lib/contextStatus';
 export type { ContextBudgetStats } from './lib/contextStatus';

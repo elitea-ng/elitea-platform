@@ -10,7 +10,7 @@ import type { Theme } from '@mui/material/styles';
 /**
  * Computes responsive grid sizes for the wrapper.
  */
-export function useWrapperGridSizes(collapsed: boolean): { xsSize: number; lgSize: number } {
+function useWrapperGridSizes(collapsed: boolean): { xsSize: number; lgSize: number } {
   return { xsSize: 12, lgSize: collapsed ? 0.5 : 3 };
 }
 
@@ -70,3 +70,11 @@ export const wrapperSx = (
   paddingRight: '1rem',
   paddingLeft,
 });
+
+/** The wrapper's grid sizes, style parameters and padding, together. */
+export function useResponsiveSizes(collapsed: boolean, isSmallWindow: boolean, panelWidth: number) {
+  const { xsSize, lgSize } = useWrapperGridSizes(collapsed);
+  const styleParams = deriveWrapperStyleParams(isSmallWindow, panelWidth, collapsed);
+  const paddingLeft = derivePaddingLeft(collapsed);
+  return { xsSize, lgSize, styleParams, paddingLeft };
+}

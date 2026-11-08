@@ -1656,7 +1656,12 @@ async fn application_and_adhoc_select_native_anthropic_without_changing_the_life
         assert_eq!(body["messages"][1]["role"], "assistant");
         assert_eq!(body["messages"][1]["content"][0]["text"], "earlier ");
         assert_eq!(body["messages"][1]["content"][1]["text"], "answer");
-        assert_eq!(body["messages"][2]["content"], "current");
+        // The last message carries the conversation's cache breakpoint
+        // (ADR-0050 decision 9b2, #1610), so it is sent as a text block.
+        assert_eq!(
+            body["messages"][2]["content"],
+            serde_json::json!([{"type":"text","text":"current","cache_control":{"type":"ephemeral"}}])
+        );
         assert_eq!(captured[0].headers["x-project-id"], "17");
         assert!(captured[0].headers["authorization"].is_sensitive());
         assert!(captured[0].headers["x-api-key"].is_sensitive());

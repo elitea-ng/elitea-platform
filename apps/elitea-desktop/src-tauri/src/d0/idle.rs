@@ -34,9 +34,15 @@
 //!   next turn starts from it. `workspace-context-compacted` says so.
 //! * **Failure** of any kind is logged and leaves the thread as it was: the
 //!   next message's threshold compaction still protects it.
-//! * **Cancelled** by a new turn on the thread, a settings change, the
-//!   thread's deletion, the workspace's removal, a sign-out and the app's
-//!   exit.
+//! * **Per agent** (ADR-0050 decision 9b2, #1610): a thread holds one check
+//!   per agent that answers in it ([`AgentKey`]), each from that agent's own
+//!   last request. A turn of one agent cancels only that agent's check: a
+//!   peer's answer or a person's message leaves it, since the next turn's
+//!   history reconciliation appends after the marker anyway. Unsent text in
+//!   the composer holds every agent's check of the thread.
+//! * **Cancelled** by a new turn of the same agent on the thread, a settings
+//!   change, the thread's deletion, the workspace's removal, a sign-out and
+//!   the app's exit.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -73,6 +79,14 @@ pub const MIN_MESSAGE_TOKENS: u64 = 60_000;
 pub struct ThreadKey {
     pub workspace_id: String,
     pub conversation: String,
+}
+
+/// One agent of a thread: the application the answering participant names
+/// (another participant row of the same application is the same agent).
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct AgentKey {
+    pub thread: ThreadKey,
+    pub application_id: i64,
 }
 
 /// What a turn's model leaves for its thread's idle compaction (set where
@@ -189,14 +203,19 @@ struct Work {
 }
 
 #[derive(Default)]
-struct Thread {
-    /// Bumped by every turn start.
+struct Agent {
+    /// Bumped by every turn start of this agent on the thread.
     generation: u64,
-    held: bool,
     pending: Option<Pending>,
 }
 
-/// The app's idle compactions, one check at most per thread.
+#[derive(Default)]
+struct Thread {
+    held: bool,
+    agents: HashMap<i64, Agent>,
+}
+
+/// The app's idle compactions, one check at most per (thread, agent).
 pub struct IdleCompactor {
     threads: Mutex<HashMap<ThreadKey, Thread>>,
     emitter: Arc<dyn EventEmitter>,
@@ -223,19 +242,25 @@ impl IdleCompactor {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// A turn starts on `key`: its check (and a summary under way) is
-    /// cancelled, and a check scheduled before it never compacts.
-    pub fn turn_started(&self, key: &ThreadKey) {
+    /// A turn of `key`'s agent starts on its thread: that agent's check (and
+    /// a summary under way) is cancelled, and a check scheduled before it
+    /// never compacts. Other agents' checks stay.
+    pub fn turn_started(&self, key: &AgentKey) {
         let mut threads = self.threads();
-        let thread = threads.entry(key.clone()).or_default();
-        thread.generation = thread.generation.wrapping_add(1);
-        thread.pending = None;
+        let agent = threads
+            .entry(key.thread.clone())
+            .or_default()
+            .agents
+            .entry(key.application_id)
+            .or_default();
+        agent.generation = agent.generation.wrapping_add(1);
+        agent.pending = None;
     }
 
-    /// `key`'s turn committed: schedule its check under `settings`.
+    /// `key`'s turn committed: schedule its agent's check under `settings`.
     pub fn turn_ended(
         self: &Arc<Self>,
-        key: ThreadKey,
+        key: AgentKey,
         basis: IdleBasis,
         session: IdleSession,
         settings: &CompactionSettings,
@@ -248,13 +273,15 @@ impl IdleCompactor {
         };
         let work = Arc::new(Work { basis, session });
         let mut threads = self.threads();
-        let thread = threads.entry(key.clone()).or_default();
-        let generation = thread.generation;
+        let thread = threads.entry(key.thread.clone()).or_default();
+        let held = thread.held;
+        let agent = thread.agents.entry(key.application_id).or_default();
+        let generation = agent.generation;
         // What is known now already rules most threads out.
-        let state = state_of(&work, &last, generation, generation, false, thread.held);
+        let state = state_of(&work, &last, generation, generation, false, held);
         if let IdleDecision::Skip(why) = decide(&state, last.started) {
             log::debug!("no idle compaction scheduled: {why}");
-            thread.pending = None;
+            agent.pending = None;
             return;
         }
         let due = last.started + delay;
@@ -268,7 +295,7 @@ impl IdleCompactor {
             compactor.fire(&task_key, generation).await;
         })
         .abort_handle();
-        thread.pending = Some(Pending {
+        agent.pending = Some(Pending {
             work,
             generation,
             due,
@@ -279,7 +306,8 @@ impl IdleCompactor {
     }
 
     /// The composer of `key` holds unsent text (`hold`), or no longer does:
-    /// a check that fired meanwhile runs now (when still in its window).
+    /// every agent's check that fired meanwhile runs now (when still in its
+    /// window).
     pub fn hold(self: &Arc<Self>, key: &ThreadKey, hold: bool) {
         let mut threads = self.threads();
         if !hold && !threads.contains_key(key) {
@@ -290,24 +318,36 @@ impl IdleCompactor {
         if hold {
             return;
         }
-        let Some(pending) = thread.pending.as_mut() else {
+        if thread.agents.values().all(|agent| agent.pending.is_none()) {
             threads.remove(key);
             return;
-        };
-        if !pending.fired_while_held || SystemTime::now() < pending.due {
-            return;
         }
-        pending.fired_while_held = false;
-        let (compactor, task_key, generation) = (self.clone(), key.clone(), pending.generation);
-        pending.task = Some(
-            tokio::spawn(async move { compactor.fire(&task_key, generation).await }).abort_handle(),
-        );
+        for (application_id, agent) in &mut thread.agents {
+            let Some(pending) = agent.pending.as_mut() else {
+                continue;
+            };
+            if !pending.fired_while_held || SystemTime::now() < pending.due {
+                continue;
+            }
+            pending.fired_while_held = false;
+            let task_key = AgentKey {
+                thread: key.clone(),
+                application_id: *application_id,
+            };
+            let (compactor, generation) = (self.clone(), pending.generation);
+            pending.task = Some(
+                tokio::spawn(async move { compactor.fire(&task_key, generation).await })
+                    .abort_handle(),
+            );
+        }
     }
 
     /// Cancel every check (a settings change, a sign-out, the app's exit).
     pub fn cancel_all(&self) {
         for thread in self.threads().values_mut() {
-            thread.pending = None;
+            for agent in thread.agents.values_mut() {
+                agent.pending = None;
+            }
         }
     }
 
@@ -325,11 +365,12 @@ impl IdleCompactor {
     /// Fire `key`'s scheduled check now, whatever its time (tests); `false`
     /// when none is scheduled.
     #[cfg(test)]
-    pub(super) async fn fire_pending(self: &Arc<Self>, key: &ThreadKey) -> bool {
+    pub(super) async fn fire_pending(self: &Arc<Self>, key: &AgentKey) -> bool {
         let generation = self
             .threads()
-            .get(key)
-            .and_then(|thread| thread.pending.as_ref())
+            .get(&key.thread)
+            .and_then(|thread| thread.agents.get(&key.application_id))
+            .and_then(|agent| agent.pending.as_ref())
             .map(|pending| pending.generation);
         let Some(generation) = generation else {
             return false;
@@ -339,29 +380,33 @@ impl IdleCompactor {
     }
 
     /// The scheduled check of `key` (for `generation`) fires.
-    async fn fire(self: &Arc<Self>, key: &ThreadKey, generation: u64) {
+    async fn fire(self: &Arc<Self>, key: &AgentKey, generation: u64) {
         let work = {
             let mut threads = self.threads();
-            let Some(thread) = threads.get_mut(key) else {
+            let Some(thread) = threads.get_mut(&key.thread) else {
                 return;
             };
-            let Some(pending) = thread.pending.as_mut() else {
+            let held = thread.held;
+            let Some(agent) = thread.agents.get_mut(&key.application_id) else {
+                return;
+            };
+            let Some(pending) = agent.pending.as_mut() else {
                 return;
             };
             if pending.generation != generation {
                 return;
             }
             let Some(last) = pending.work.basis.capture.last() else {
-                thread.pending = None;
+                agent.pending = None;
                 return;
             };
             let state = state_of(
                 &pending.work,
                 &last,
                 generation,
-                thread.generation,
-                (self.busy)(&key.workspace_id),
-                thread.held,
+                agent.generation,
+                (self.busy)(&key.thread.workspace_id),
+                held,
             );
             match decide(&state, SystemTime::now()) {
                 IdleDecision::Compact => pending.work.clone(),
@@ -374,17 +419,18 @@ impl IdleCompactor {
                     // Dropping the pending check would abort this very task:
                     // take its handle out first.
                     pending.task = None;
-                    thread.pending = None;
+                    agent.pending = None;
                     return;
                 }
             }
         };
         let still_current = || {
-            !(self.busy)(&key.workspace_id)
+            !(self.busy)(&key.thread.workspace_id)
                 && self
                     .threads()
-                    .get(key)
-                    .is_some_and(|thread| thread.generation == generation)
+                    .get(&key.thread)
+                    .and_then(|thread| thread.agents.get(&key.application_id))
+                    .is_some_and(|agent| agent.generation == generation)
         };
         match compact(&work, &still_current).await {
             Ok(done) => {
@@ -398,12 +444,14 @@ impl IdleCompactor {
             Err(why) => log::info!("idle compaction did not run to the end: {why}"),
         }
         let mut threads = self.threads();
-        if let Some(thread) = threads.get_mut(key)
-            && thread
+        if let Some(agent) = threads
+            .get_mut(&key.thread)
+            .and_then(|thread| thread.agents.get_mut(&key.application_id))
+            && agent
                 .pending
                 .as_ref()
                 .is_some_and(|pending| pending.generation == generation)
-            && let Some(mut pending) = thread.pending.take()
+            && let Some(mut pending) = agent.pending.take()
         {
             pending.task = None;
         }
@@ -452,7 +500,7 @@ struct Compacted {
 }
 
 impl Compacted {
-    fn payload(&self, key: &ThreadKey) -> Value {
+    fn payload(&self, key: &AgentKey) -> Value {
         let context = ContextMeter {
             used_tokens: self.after_tokens,
             window_tokens: self.window_tokens,
@@ -466,8 +514,9 @@ impl Compacted {
             measured_at: None,
         };
         json!({
-            "workspace_id": key.workspace_id,
-            "conversation_id": key.conversation,
+            "workspace_id": key.thread.workspace_id,
+            "conversation_id": key.thread.conversation,
+            "application_id": key.application_id,
             "reason": "idle",
             "before_tokens": self.before_tokens,
             "after_tokens": self.after_tokens,

@@ -37,6 +37,8 @@ type ConfigurationValidationResultsRepository struct {
 type RuntimeFailureResultsRepository struct {
 	projects projectStore
 	activity currentIndexActivityProjector
+	// idleRuns: an idle compaction's failure ends its row, not a response.
+	idleRuns idleRunDetector
 }
 
 func NewConfigurationValidationResultsRepository(pool *pgxpool.Pool) (*ConfigurationValidationResultsRepository, error) {
@@ -66,6 +68,7 @@ func NewRuntimeFailureResultsRepository(pool *pgxpool.Pool) (*RuntimeFailureResu
 	return &RuntimeFailureResultsRepository{
 		projects: projects,
 		activity: &postgresCurrentIndexActivityProjector{},
+		idleRuns: postgresIdleRunDetector{},
 	}, nil
 }
 
@@ -76,6 +79,7 @@ func newRuntimeFailureResultsRepository(projects projectStore) (*RuntimeFailureR
 	return &RuntimeFailureResultsRepository{
 		projects: projects,
 		activity: noopCurrentIndexActivityProjector{},
+		idleRuns: noopIdleRunDetector{},
 	}, nil
 }
 
@@ -384,6 +388,29 @@ func (r *RuntimeFailureResultsRepository) ProjectRuntimeFailure(ctx context.Cont
 				return runtimedomain.ErrStaleFence
 			}
 			return loadErr
+		}
+		// An idle compaction (ADR-0050 decision 9b2) has no response to
+		// present: the failure stays in the replay log and ends its row.
+		if agentExecutionCapability(projection.CapabilityID) {
+			idle, err := r.idleRuns.isIdleRun(ctx, tx, record.ExecutionID)
+			if err != nil {
+				return err
+			}
+			if idle {
+				cursor, err := appendReplayEvent(ctx, tx, record, replayEventRuntimeFailure, projection.BrowserData)
+				if err != nil {
+					return err
+				}
+				if err := settleIdleCompactionRun(ctx, tx, record.ExecutionID,
+					idleRunTerminalSkip(projection.Frame.Failure.Code)); err != nil {
+					return err
+				}
+				if err := markOutputProjected(ctx, tx, record.EventID); err != nil {
+					return err
+				}
+				outcome = outputapp.ProjectionOutcome{Inserted: true, Cursor: cursor, CommittedSequence: record.Sequence}
+				return nil
+			}
 		}
 		// A run Main cancelled at a run cap shows CAP_REACHED, not a quiet
 		// stop (cap_reached_presentation.go). The durable outcome stays

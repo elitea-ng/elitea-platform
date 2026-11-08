@@ -273,6 +273,10 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
         self.grounding.as_ref().map(|(_, sources)| sources.clone())
     }
 
+    fn idle_adk_model(&self) -> Arc<dyn adk_rust::Llm> {
+        self.primary_model()
+    }
+
     fn take_completed_text(self) -> Result<String, NativeAgentAssemblyError> {
         match self.primary {
             BoundProviderModel::OpenAiCompatible(model) => model.take_completed_text(),

@@ -82,7 +82,7 @@ fn input_fixture(kind: AgentExecutionKind) -> Vec<u8> {
 
 struct TestControlState {
     calls: Mutex<Vec<&'static str>>,
-    claim_opt_ins: Mutex<Vec<bool>>,
+    claim_opt_ins: Mutex<Vec<(bool, bool)>>,
     claim: ClaimCommandResponseV1,
     begin: Mutex<BeginExecutionResponseV1>,
     authorize: Mutex<AuthorizeInvocationResponseV1>,
@@ -133,11 +133,10 @@ impl ControlRpc for TestControlRpc {
         &self,
         request: Request<ClaimCommandRequestV1>,
     ) -> Result<Response<ClaimCommandResponseV1>, Status> {
-        self.0
-            .claim_opt_ins
-            .lock()
-            .expect("claim opt-ins")
-            .push(request.get_ref().fanout_interrupt_decisions);
+        self.0.claim_opt_ins.lock().expect("claim opt-ins").push((
+            request.get_ref().fanout_interrupt_decisions,
+            request.get_ref().idle_compaction,
+        ));
         self.0.calls.lock().expect("calls").push("claim");
         Ok(Response::new(self.0.claim.clone()))
     }
@@ -426,11 +425,15 @@ async fn prepared_for_authorization(
 #[tokio::test(flavor = "current_thread")]
 async fn ordinary_agent_claims_opt_into_fanout_interrupt_decisions() {
     // fanout-interrupt-decisions v1.1 §8.1: Main grants a fanout_wake
-    // continuation only to a claim that opts in; both agent kinds do.
+    // continuation only to a claim that opts in; both agent kinds do. The
+    // same holds for an idle compaction job (ADR-0050 decision 9b2, #1610).
     for kind in [AgentExecutionKind::Application, AgentExecutionKind::Adhoc] {
         let (control, state) = control();
         fresh(control.as_ref(), &state, kind).await;
-        assert_eq!(*state.claim_opt_ins.lock().expect("claim opt-ins"), [true]);
+        assert_eq!(
+            *state.claim_opt_ins.lock().expect("claim opt-ins"),
+            [(true, true)]
+        );
     }
 }
 

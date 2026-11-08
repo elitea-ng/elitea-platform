@@ -470,6 +470,11 @@ fn encode_anthropic_body(
         })
         .map(|(index, content)| anthropic_message(&content, index + 1 == contents.len()))
         .collect::<Result<Vec<_>, _>>()?;
+    // ADR-0050 decision 9b2 (#1610): the conversation is cached too, not
+    // only the system prompt, so the next turn and an idle compaction read
+    // it at the cached price.
+    let mut messages = messages;
+    mark_conversation_breakpoint(&mut messages);
     let mut params = MessageCreateParams::new_streaming(
         generation.max_tokens,
         messages,
@@ -561,6 +566,50 @@ pub(super) fn anthropic_message_for_test(
     is_last: bool,
 ) -> Result<MessageParam, AdkError> {
     anthropic_message(content, is_last)
+}
+
+/// Put an ephemeral prompt-cache breakpoint on the last block of the last
+/// message that can carry one (text, image, tool use, tool result), so the
+/// whole conversation up to it is cached with the system prompt (Anthropic
+/// allows four breakpoints; this is the second). A message whose last block
+/// is thinking is skipped for the one before it. A string message becomes
+/// one text block.
+fn mark_conversation_breakpoint(messages: &mut [MessageParam]) {
+    for message in messages.iter_mut().rev() {
+        if let adk_anthropic::MessageParamContent::String(text) = &message.content {
+            let block = TextBlock::new(text).with_cache_control(CacheControlEphemeral::new());
+            message.content =
+                adk_anthropic::MessageParamContent::Array(vec![ContentBlock::Text(block)]);
+            return;
+        }
+        let adk_anthropic::MessageParamContent::Array(blocks) = &mut message.content else {
+            continue;
+        };
+        if let Some(block) = blocks.last_mut() {
+            let marked = match block {
+                ContentBlock::Text(text) => {
+                    text.cache_control = Some(CacheControlEphemeral::new());
+                    true
+                }
+                ContentBlock::Image(image) => {
+                    image.cache_control = Some(CacheControlEphemeral::new());
+                    true
+                }
+                ContentBlock::ToolUse(tool) => {
+                    tool.cache_control = Some(CacheControlEphemeral::new());
+                    true
+                }
+                ContentBlock::ToolResult(result) => {
+                    result.cache_control = Some(CacheControlEphemeral::new());
+                    true
+                }
+                _ => false,
+            };
+            if marked {
+                return;
+            }
+        }
+    }
 }
 
 fn anthropic_message(content: &Content, is_last: bool) -> Result<MessageParam, AdkError> {
