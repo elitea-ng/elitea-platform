@@ -13,6 +13,8 @@ export interface BrandManifest {
     readonly oauthRedirectScheme: string;
     readonly appGroup: string;
     readonly widgetBundleId: string;
+    /** The numeric Apple ID of the brand's App Store Connect app, when it exists. */
+    readonly ascAppId?: string | null;
   };
   readonly desktop: { readonly identifier: string };
   readonly linkDomain: string | null;

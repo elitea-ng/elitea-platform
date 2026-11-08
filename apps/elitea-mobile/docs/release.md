@@ -94,9 +94,10 @@ the first external TestFlight round.
    - SKU: `elitea-mobile-ios`
    - User access: Full access
 3. Open the new app, **App Information**: copy the numeric **Apple ID** (for
-   example `6740000000`) into [`eas.json`](../eas.json) as
-   `submit.production.ios.ascAppId` and merge that one-line change. The submit
-   workflow refuses to run until it is there.
+   example `6740000000`) into the brand manifest as `mobile.ascAppId` (a string,
+   [`brand/elitea/brand.json`](../../../brand/elitea/brand.json)) and merge that
+   one-line change. The submit workflow refuses to run until it is there, and
+   writes it into the runner's `eas.json` (the committed one names no id).
 4. Fill in **App Privacy** from docs/store/privacy.md, **Age Rating** from
    docs/store/listing.md, the privacy policy URL `https://elitea.ai/privacy`,
    and the category.
@@ -150,6 +151,14 @@ three environments too (`eas env:set`), or the build server sees an unlinked
 app. `eas submit` finds the bundle id and package in the built app; `eas.json`
 names no identifier.
 
+The EAS build server evaluates `app.config.ts` again with only the project's EAS
+environment variables, so an `ELITEA_BRAND` set in your shell does not reach it.
+For any brand other than `elitea`, create `ELITEA_BRAND` as a plain-text
+variable in all three environments of that brand's EAS project
+(`eas env:create --name ELITEA_BRAND --value <id> --visibility plaintext --environment production`,
+and the same for `preview` and `development`). A build whose brand is not
+linked to the project it runs for fails at once (`assertBuildWorkerBrand`).
+
 Linking does NOT turn EAS Update on. It is on only for a brand whose manifest
 says `"updates": { "mode": "on", "codeSigningCertificate": "certs/<file>.pem" }`
 AND names its own `eas.projectId` (section 10); a link from the environment
@@ -168,16 +177,17 @@ eas channel:protect production
 ## 4a. Universal links and App Links (brand owner)
 
 A brand with a `linkDomain` declares `applinks:<linkDomain>` (iOS associated
-domains) and a verified `https://<linkDomain>/connect` App Link (Android
-intent filter, `autoVerify`). Connect links on that domain then open the app
-instead of the browser. A brand with `linkDomain: null` declares neither and
+domains) and a verified App Link for exactly `https://<linkDomain>/connect`
+(Android intent filter, `autoVerify`; other pages of the site stay in the
+browser). Connect links on that domain then open the app instead of the browser. A brand with `linkDomain: null` declares neither and
 uses its custom scheme alone.
 
 The domain must serve, over HTTPS with no redirect:
 
 - `/.well-known/apple-app-site-association` with an `applinks.details` entry
   whose `appIDs` holds `<Apple team id>.<bundle id>` and whose `components` (or
-  `paths`) cover `/connect`;
+  `paths`) open `/connect`: iOS takes the first pattern that matches, so put
+  `{ "/": "/connect" }` before any exclusion;
 - `/.well-known/assetlinks.json` with a `delegate_permission/common.handle_all_urls`
   statement for the package and the SHA-256 fingerprint of the Play app
   signing key (Play Console, Test and release, App integrity).
@@ -259,7 +269,7 @@ belongs in a mobile binary.
 
 ### First internal build, step by step
 
-1. Sections 1 to 6 done; the brand manifest's `eas` link and `ascAppId` merged.
+1. Sections 1 to 6 done; the brand manifest's `eas` link and `mobile.ascAppId` merged.
 2. Local, interactive, once per platform (credentials, section 5):
    `eas build -p ios --profile production` and `eas build -p android --profile production`.
 3. iOS: `eas submit -p ios --profile production --latest` (or the EAS submit

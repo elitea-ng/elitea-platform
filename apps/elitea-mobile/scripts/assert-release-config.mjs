@@ -23,8 +23,9 @@ import { RESERVED_IDS } from '../../../scripts/brand/schema.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
-function expoConfig(brandDir, type) {
-  const output = execFileSync(npx, ['expo', 'config', '--type', type, '--json'], {
+/** The prebuild config: the public one plus what `--type public` strips (the update certificate). */
+function expoConfig(brandDir) {
+  const output = execFileSync(npx, ['expo', 'config', '--type', 'prebuild', '--json'], {
     cwd: root,
     env: { ...process.env, ELITEA_BRAND: brandDir },
     encoding: 'utf8',
@@ -36,11 +37,10 @@ function expoConfig(brandDir, type) {
 /** The problems with `brand`'s release config (empty when it passes). */
 function problemsFor(brand) {
   const problems = [];
-  const extra = expoConfig(brand.dir, 'public').extra ?? {};
+  const { extra = {}, updates } = expoConfig(brand.dir);
   const switches = Object.keys(extra).filter((key) => /dev.?sign.?in|pat/i.test(key));
   if (switches.length > 0) problems.push(`developer sign-in must not be configurable, found extra.${switches.join(', extra.')}`);
 
-  const { updates } = expoConfig(brand.dir, 'prebuild');
   const m = brand.manifest;
   const project = m.eas.projectId?.toLowerCase();
   if (m.updates.mode !== 'on' || !project) {

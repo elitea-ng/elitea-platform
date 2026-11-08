@@ -37,6 +37,7 @@ export const DISTINCT_FIELDS = Object.freeze([
   'mobile.oauthRedirectScheme',
   'mobile.appGroup',
   'mobile.widgetBundleId',
+  'mobile.ascAppId',
   'desktop.identifier',
   'linkDomain',
   'webUrl',

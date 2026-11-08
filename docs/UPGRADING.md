@@ -22,9 +22,14 @@ been uploaded under the earlier placeholder identity, so no installed app moves.
   manifest's `eas` (environment variables still override). EAS Update is now
   off unless the brand sets `updates.mode: "on"` with its own project and a
   code signing certificate; a project id from the environment alone no longer
-  turns it on. brand/elitea ships with updates off.
+  turns it on. brand/elitea ships with updates off. The App Store Connect app id
+  moves from `eas.json` to the manifest's `mobile.ascAppId`.
+- **Other brands on EAS:** set `ELITEA_BRAND` as an EAS environment variable of
+  the brand's project; the build server does not see your shell's.
+- **Widget kind** is now `Counts` (was a product-named kind): a widget already on
+  a home screen from an earlier test build must be added again.
 - **Universal links and App Links:** builds declare `applinks:elitea.ai` and a
-  verified App Link for `https://elitea.ai/connect`. Until the domain serves
+  verified App Link for exactly `https://elitea.ai/connect`. Until the domain serves
   matching well-known files (`npm run check:link-files`), connect links on it
   open in the browser; the `elitea://` scheme is unchanged.
 

@@ -12,7 +12,10 @@
  * manifest. A brand with no `linkDomain` passes: it declares no links.
  * Exit 1 when a file is missing or wrong, 2 on a usage error.
  */
+import { execFileSync } from 'node:child_process';
+import { dirname, resolve } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 import { loadBrand } from '../../../scripts/brand/load.mjs';
 import { aasaProblems, assetlinksProblems, normalizeFingerprint } from './link-files.mjs';
@@ -30,6 +33,22 @@ if (!/^[A-Z0-9]{10}$/.test(team) || fingerprints.length === 0 || fingerprints.in
   process.exit(2);
 }
 
+// The App Link path the build declares (app.config.ts), so this checks what ships.
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const config = JSON.parse(
+  execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['expo', 'config', '--type', 'public', '--json'], {
+    cwd: root,
+    env: process.env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'inherit'],
+  }),
+);
+const linkPath = config.android?.intentFilters?.find((f) => f.autoVerify)?.data?.[0]?.path;
+if (!linkPath) {
+  console.error(`link files [${brand.id}]: the built config declares no verified App Link for ${linkDomain}`);
+  process.exit(1);
+}
+
 async function fetchJson(path) {
   const url = `https://${linkDomain}${path}`;
   const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
@@ -39,7 +58,7 @@ async function fetchJson(path) {
 
 const problems = [];
 for (const [path, check] of [
-  ['/.well-known/apple-app-site-association', (doc) => aasaProblems(doc, `${team}.${mobile.bundleId}`)],
+  ['/.well-known/apple-app-site-association', (doc) => aasaProblems(doc, `${team}.${mobile.bundleId}`, linkPath)],
   ['/.well-known/assetlinks.json', (doc) => assetlinksProblems(doc, mobile.bundleId, fingerprints)],
 ]) {
   try {
@@ -52,4 +71,4 @@ if (problems.length) {
   for (const p of problems) console.error(`link files [${brand.id}]: ${p}`);
   process.exit(1);
 }
-console.log(`link files [${brand.id}]: ${linkDomain} names ${team}.${mobile.bundleId} and ${mobile.bundleId} with its certificate`);
+console.log(`link files [${brand.id}]: ${linkDomain}${linkPath} opens ${team}.${mobile.bundleId}, and ${mobile.bundleId} is linked with its certificate`);

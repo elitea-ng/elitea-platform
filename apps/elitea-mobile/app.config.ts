@@ -221,26 +221,47 @@ const privacyManifests = (updatesOn: boolean): NonNullable<ExpoConfig['ios']>['p
 
 /**
  * Universal links (iOS) and verified App Links (Android) on the brand's `linkDomain`, for
- * connect links only (`https://<linkDomain>/connect?server=...`, the same screen as
- * `<scheme>://connect`). The domain serves apple-app-site-association and assetlinks.json
- * naming this brand's app (`npm run check:link-files` before a release). No `linkDomain`:
- * nothing is declared, and the custom scheme works alone.
+ * connect links only: exactly `https://<linkDomain>/connect?server=...` (the same screen as
+ * `<scheme>://connect`), never another page of the site. The domain serves
+ * apple-app-site-association and assetlinks.json naming this brand's app
+ * (`npm run check:link-files`, which reads this path from the built config). No
+ * `linkDomain`: nothing is declared, and the custom scheme works alone.
  */
-export const LINK_PATH_PREFIX = '/connect';
+const LINK_PATH = '/connect';
 const associatedDomains = identity.linkDomain ? [`applinks:${identity.linkDomain}`] : [];
 const appLinkFilters: NonNullable<ExpoConfig['android']>['intentFilters'] = identity.linkDomain
   ? [
       {
         action: 'VIEW',
         autoVerify: true,
-        data: [{ scheme: 'https', host: identity.linkDomain, pathPrefix: LINK_PATH_PREFIX }],
+        data: [{ scheme: 'https', host: identity.linkDomain, path: LINK_PATH }],
         category: ['BROWSABLE', 'DEFAULT'],
       },
     ]
   : [];
 
+/**
+ * On an EAS Build worker the config is evaluated again, with only the EAS project's
+ * environment variables: an `ELITEA_BRAND` set in a local shell does not get there. So the
+ * worker must build the brand of the project it runs for (each brand has its own EAS
+ * project, ADR-0052 decision 8): the resolved link must be `EAS_BUILD_PROJECT_ID`. Set
+ * `ELITEA_BRAND` as a plain-text EAS environment variable of the brand's project.
+ */
+export function assertBuildWorkerBrand(link: EasProjectLink, env: Record<string, string | undefined> = process.env): void {
+  if (env.EAS_BUILD !== 'true') return;
+  const running = env.EAS_BUILD_PROJECT_ID?.trim().toLowerCase();
+  if (running && link.projectId !== running) {
+    throw new Error(
+      `app.config.ts: this EAS build runs for project ${running}, but brand "${brand.id}" is linked to ${link.projectId ?? 'no project'}. ` +
+        'Set ELITEA_BRAND (and the link) as EAS environment variables of the brand\'s project (`eas env:create`), not only in a local shell.',
+    );
+  }
+}
+
 /** Read once per evaluation of this file (each `expo config` run, each EAS build). */
 const eas = resolveEasLink();
+assertBuildWorkerBrand(eas);
+const updates = updatesConfig(eas);
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -261,7 +282,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: 'automatic',
   ios: {
     bundleIdentifier: identity.bundleId,
-    privacyManifests: privacyManifests(updatesConfig(eas)?.enabled === true),
+    privacyManifests: privacyManifests(updates?.enabled === true),
     supportsTablet: true,
     ...(associatedDomains.length ? { associatedDomains } : {}),
     // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
@@ -392,7 +413,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         frequentUpdates: false,
         widgets: [
           {
-            name: 'EliteaCounts',
+            // The widget kind: fixed and product-free, so every brand's extension has the same one.
+            name: 'Counts',
             displayName: identity.displayName,
             description: 'Pending approvals, unread notifications and running answers in your workspace.',
             ios: {
@@ -416,7 +438,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   // Binaries and OTA updates match by fingerprint; eas.json's build profiles set the channel.
   runtimeVersion: { policy: 'fingerprint' },
-  updates: updatesConfig(eas),
+  updates,
   extra: {
     ...config.extra,
     identity,

@@ -2,10 +2,8 @@
 // `/.well-known/apple-app-site-association` naming `<Apple team id>.<bundle id>` for
 // the connect path, and `/.well-known/assetlinks.json` naming the package with the
 // SHA-256 fingerprint of the certificate the store signs it with. Pure checks here;
-// check-link-files.mjs fetches. Node's standard library only.
-
-/** The app config's link path (app.config.ts LINK_PATH_PREFIX). */
-export const LINK_PATH = '/connect';
+// check-link-files.mjs reads the path from the built Expo config and fetches. Node's
+// standard library only.
 
 const SHA256 = /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/;
 
@@ -17,25 +15,37 @@ export function normalizeFingerprint(value) {
   return SHA256.test(out) ? out : null;
 }
 
-/** Does an AASA `components` or `paths` entry cover `LINK_PATH`? */
-function coversConnect(detail) {
-  const matches = (pattern) => {
-    if (typeof pattern !== 'string' || pattern.startsWith('NOT ')) return false;
-    const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
-    return re.test(LINK_PATH);
-  };
-  if (Array.isArray(detail.components)) return detail.components.some((c) => c && !c.exclude && matches(c['/'] ?? '*'));
-  if (Array.isArray(detail.paths)) return detail.paths.some(matches);
+/** An AASA path pattern (`*` any run, `?` one character) as a RegExp. */
+const patternRe = (pattern) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`);
+
+/**
+ * Does an AASA entry open `path` in the app? Apple reads `components` (or the older
+ * `paths`) in order and the FIRST pattern that matches decides: an `exclude: true`
+ * component or a `NOT ` path that matches first keeps the link in the browser.
+ */
+export function entryOpens(detail, path) {
+  if (Array.isArray(detail.components)) {
+    const first = detail.components.find((c) => c && typeof c === 'object' && patternRe(typeof c['/'] === 'string' ? c['/'] : '*').test(path));
+    return Boolean(first) && first.exclude !== true;
+  }
+  if (Array.isArray(detail.paths)) {
+    for (const entry of detail.paths) {
+      if (typeof entry !== 'string') continue;
+      const not = entry.startsWith('NOT ');
+      if (patternRe(not ? entry.slice(4) : entry).test(path)) return !not;
+    }
+  }
   return false;
 }
 
-/** Problems with an apple-app-site-association document for `appId` (`TEAMID.bundle.id`). */
-export function aasaProblems(doc, appId) {
+/** Problems with an apple-app-site-association document for `appId` (`TEAMID.bundle.id`) on `path`. */
+export function aasaProblems(doc, appId, path) {
   const details = doc?.applinks?.details;
   if (!Array.isArray(details)) return ['apple-app-site-association: no applinks.details array'];
   const mine = details.filter((d) => (Array.isArray(d.appIDs) ? d.appIDs : [d.appID]).includes(appId));
   if (mine.length === 0) return [`apple-app-site-association: no applinks entry names ${appId}`];
-  if (!mine.some(coversConnect)) return [`apple-app-site-association: the entry for ${appId} does not cover ${LINK_PATH}`];
+  // The first entry naming the app is the one iOS uses for it.
+  if (!entryOpens(mine[0], path)) return [`apple-app-site-association: the entry for ${appId} does not open ${path} in the app`];
   return [];
 }
 

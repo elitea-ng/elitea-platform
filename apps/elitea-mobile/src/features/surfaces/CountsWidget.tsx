@@ -14,7 +14,7 @@ import { createWidget, type WidgetEnvironment } from 'expo-widgets';
 import { signedOutSnapshot, type SurfaceSnapshot } from '@/features/surfaces/surfaceSnapshot';
 
 /**
- * The home-screen and lock-screen widget (`EliteaCounts` in app.config.ts):
+ * The home-screen and lock-screen widget (`Counts` in app.config.ts):
  * pending approvals, unread notifications and running answers of the active
  * workspace, from the App Group snapshot (src/features/surfaces/surfaceSnapshot.ts).
  *
@@ -24,7 +24,7 @@ import { signedOutSnapshot, type SurfaceSnapshot } from '@/features/surfaces/sur
  * visible to it). Titles and the host appear only when the snapshot carries
  * them (the policy allows titles); otherwise the widget shows counts.
  */
-export const COUNTS_WIDGET = 'EliteaCounts';
+export const COUNTS_WIDGET = 'Counts';
 
 const CountsLayout = (props: SurfaceSnapshot, environment: WidgetEnvironment) => {
   'widget';

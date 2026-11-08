@@ -1,18 +1,14 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { aasaProblems, assetlinksProblems, LINK_PATH, normalizeFingerprint } from './link-files.mjs';
+import { aasaProblems, assetlinksProblems, normalizeFingerprint } from './link-files.mjs';
+
+const PATH = '/connect';
 
 const FP = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':');
 const APP = 'ABCDE12345.com.example.sample';
 
 describe('link files', () => {
-  it('checks the same path the app config declares', () => {
-    const config = readFileSync(new URL('../app.config.ts', import.meta.url), 'utf8');
-    assert.match(config, new RegExp(`LINK_PATH_PREFIX = '${LINK_PATH}'`));
-  });
-
   it('normalizes SHA-256 fingerprints and refuses anything else', () => {
     assert.equal(normalizeFingerprint(FP.toLowerCase().replace(/:/g, '')), FP);
     assert.equal(normalizeFingerprint('AB:CD'), null);
@@ -20,16 +16,26 @@ describe('link files', () => {
   });
 
   it('apple-app-site-association: passes for the app on /connect, in either format', () => {
-    assert.deepEqual(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '/connect*' }] }] } }, APP), []);
-    assert.deepEqual(aasaProblems({ applinks: { apps: [], details: [{ appID: APP, paths: ['/connect'] }] } }, APP), []);
-    assert.deepEqual(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '*' }] }] } }, APP), []);
+    assert.deepEqual(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '/connect*' }] }] } }, APP, PATH), []);
+    assert.deepEqual(aasaProblems({ applinks: { apps: [], details: [{ appID: APP, paths: ['/connect'] }] } }, APP, PATH), []);
+    assert.deepEqual(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '*' }] }] } }, APP, PATH), []);
+  });
+
+  it('apple-app-site-association: the first matching pattern decides, as on iOS', () => {
+    const paths = (p) => aasaProblems({ applinks: { details: [{ appIDs: [APP], paths: p }] } }, APP, PATH);
+    const components = (c) => aasaProblems({ applinks: { details: [{ appIDs: [APP], components: c }] } }, APP, PATH);
+    assert.equal(paths(['NOT /connect*', '*']).length, 1);
+    assert.deepEqual(paths(['/connect', 'NOT *']), []);
+    assert.equal(components([{ '/': '/conn*', exclude: true }, { '/': '*' }]).length, 1);
+    assert.deepEqual(components([{ '/': '/connect' }, { '/': '*', exclude: true }]), []);
+    assert.equal(paths(['/connections']).length, 1);
   });
 
   it('apple-app-site-association: fails for another app, an excluded or missing path, or no details', () => {
-    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: ['ABCDE12345.ai.elitea.app'], paths: ['*'] }] } }, APP).length, 1);
-    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '/connect*', exclude: true }] }] } }, APP).length, 1);
-    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: [APP], paths: ['NOT /connect', '/chats/*'] }] } }, APP).length, 1);
-    assert.equal(aasaProblems({}, APP).length, 1);
+    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: ['ABCDE12345.ai.elitea.app'], paths: ['*'] }] } }, APP, PATH).length, 1);
+    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: [APP], components: [{ '/': '/connect*', exclude: true }] }] } }, APP, PATH).length, 1);
+    assert.equal(aasaProblems({ applinks: { details: [{ appIDs: [APP], paths: ['NOT /connect', '/chats/*'] }] } }, APP, PATH).length, 1);
+    assert.equal(aasaProblems({}, APP, PATH).length, 1);
   });
 
   const statement = (pkg, fps) => ({

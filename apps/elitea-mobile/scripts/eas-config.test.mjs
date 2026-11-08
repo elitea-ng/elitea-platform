@@ -239,16 +239,15 @@ describe('EAS workflow preflight', async () => {
   const linked = { extra: { eas: { projectId: '0f5e1c1e-1111-4222-8333-444455556666' } } };
 
   it('refuses to build an unlinked project', () => {
-    assert.equal(preflightProblems('build', undefined, { config: { extra: {} }, eas }).length, 1);
-    assert.deepEqual(preflightProblems('build', undefined, { config: linked, eas }), []);
+    assert.equal(preflightProblems('build', undefined, { config: { extra: {} }, ascAppId: null }).length, 1);
+    assert.deepEqual(preflightProblems('build', undefined, { config: linked, ascAppId: null }), []);
   });
 
-  it('refuses an iOS submit until the App Store Connect app id is in eas.json', () => {
-    assert.equal(preflightProblems('submit', 'ios', { config: linked, eas }).length, 1);
-    assert.equal(preflightProblems('submit', 'all', { config: linked, eas }).length, 1);
-    assert.deepEqual(preflightProblems('submit', 'android', { config: linked, eas }), []);
-    const ready = { ...eas, submit: { production: { ...eas.submit.production, ios: { ascAppId: '6740000000' } } } };
-    assert.deepEqual(preflightProblems('submit', 'ios', { config: linked, eas: ready }), []);
+  it("refuses an iOS submit until the brand manifest has the App Store Connect app id", () => {
+    assert.equal(preflightProblems('submit', 'ios', { config: linked, ascAppId: null }).length, 1);
+    assert.equal(preflightProblems('submit', 'all', { config: linked, ascAppId: undefined }).length, 1);
+    assert.deepEqual(preflightProblems('submit', 'android', { config: linked, ascAppId: null }), []);
+    assert.deepEqual(preflightProblems('submit', 'ios', { config: linked, ascAppId: '6740000000' }), []);
   });
 });
 
@@ -297,6 +296,23 @@ describe('Expo config per brand (ADR-0052 decisions 2 and 3)', () => {
     for (const id of [elitea.mobile.bundleId, elitea.mobile.appGroup, elitea.mobile.widgetBundleId, elitea.linkDomain]) assert.ok(!text.includes(id), `sample config holds ${id}`);
   });
 
+  it('the sample prebuild config names no ELITEA product, id or domain anywhere (ADR-0052 acceptance)', () => {
+    const { _internal, ...config } = expoConfig({ ELITEA_BRAND: 'sample' }, 'prebuild');
+    const text = JSON.stringify(config);
+    assert.doesNotMatch(text, /elitea|epam/i);
+  });
+
+  it('on an EAS Build worker, the brand must be the one linked to the project the build runs for', () => {
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
+    const worker = { EAS_BUILD: 'true', EAS_BUILD_PROJECT_ID: projectId };
+    // ELITEA_BRAND set only in a local shell: the worker evaluates brand/elitea, unlinked.
+    assert.throws(() => expoConfig({ ...worker, ELITEA_BRAND: '' }), /EAS environment variables/);
+    // Set on the project (with its link): the build is that brand.
+    assert.equal(expoConfig({ ...worker, ELITEA_BRAND: 'sample', EAS_PROJECT_ID: projectId }).extra.brand, 'sample');
+    // Not on a worker, nothing is enforced.
+    assert.equal(expoConfig({ EAS_BUILD_PROJECT_ID: projectId }).extra.brand, 'elitea');
+  });
+
   it('a path in ELITEA_BRAND selects that folder; an invalid brand fails the build', () => {
     const config = expoConfig({ ELITEA_BRAND: resolve(root, '../../brand/sample') });
     assert.equal(config.extra.brand, 'sample');
@@ -310,7 +326,7 @@ describe('Universal links and App Links on the brand linkDomain (ADR-0052 decisi
   const declared = (domain) => ({
     associatedDomains: [`applinks:${domain}`],
     intentFilters: [
-      { action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: domain, pathPrefix: '/connect' }], category: ['BROWSABLE', 'DEFAULT'] },
+      { action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: domain, path: '/connect' }], category: ['BROWSABLE', 'DEFAULT'] },
     ],
   });
 

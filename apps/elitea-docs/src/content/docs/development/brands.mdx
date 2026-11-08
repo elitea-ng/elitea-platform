@@ -56,6 +56,7 @@ The folder name is the brand id. Any other file at the top fails the check (OS f
 | `mobile.oauthRedirectScheme` | Reverse-DNS private-use scheme (RFC 8252): the bundle id, or under it; not a connect scheme | `ai.elitea.app` |
 | `mobile.appGroup` | `group.` and a reverse-DNS id. **Permanent** | `group.ai.elitea.app` |
 | `mobile.widgetBundleId` | Under the bundle id | `ai.elitea.app.widgets` |
+| `mobile.ascAppId` | Optional: the numeric Apple ID of the App Store Connect app, as a string; `eas submit` uploads to it | not set yet |
 | `desktop.identifier` | Reverse-DNS; not ending in `.app`. **Permanent** | `ai.elitea.desktop` |
 | `linkDomain` | Host for universal links and App Links, or `null` (the custom scheme then works alone) | `elitea.ai` |
 | `webUrl`, `privacyUrl`, `supportUrl` | Absolute `https` URLs with a host name, no port, credentials or fragment | `https://elitea.ai`, `/privacy`, `/support` |
@@ -123,17 +124,18 @@ CI runs it on both brands, with the unit tests (`scripts/brand-check.test.mjs`, 
 ```bash
 cd apps/elitea-mobile
 ELITEA_BRAND=sample npx expo config --type public   # the sample brand's config
-ELITEA_BRAND=sample eas build -p ios --profile preview
 ```
+
+EAS builds run the config again on Expo's servers, which see only the EAS project's environment variables: set `ELITEA_BRAND` there as a plain-text variable of the brand's own EAS project (`eas env:create`). A build whose brand is not linked to the project it runs for stops at once.
 
 From the manifest the app takes:
 
 - **Identity:** `productName` (app name, `CFBundleName`, permission texts), `shortName`, `mobile.bundleId` (iOS bundle id and Android package), `mobile.appGroup`, `mobile.widgetBundleId`, `mobile.connectSchemes` and `mobile.oauthRedirectScheme` (URL schemes), and the web, privacy and support URLs. Runtime code reads them from `src/config/identity.ts`; none is written in the app's source.
 - **Assets:** the app icon (`ios/icon-1024.png`, or the Icon Composer document `ios/app.icon/` when present), Android adaptive icon layers, splash, favicon and the mark (`logo/logo-mark.svg`, drawn by `BrandMark`). Paths in the config are relative to the app folder.
 - **Firebase:** `firebase/GoogleService-Info.plist` and `firebase/google-services.json` when the brand carries them; otherwise push is not wired.
-- **EAS:** `eas.projectId` and `eas.owner`; `EAS_PROJECT_ID` and `EXPO_OWNER` override them. `eas.json` names no identifier.
+- **EAS:** `eas.projectId` and `eas.owner`; `EAS_PROJECT_ID` and `EXPO_OWNER` override them. `mobile.ascAppId` (optional) is the App Store Connect app's numeric Apple ID, which the submit workflow passes to `eas submit`. `eas.json` names no identifier.
 - **Updates:** EAS Update is off unless `updates.mode` is `"on"` and the manifest names its own `eas.projectId` and `updates.codeSigningCertificate` (a public certificate under `certs/`). Updates are then signed with the brand's key, which never enters the repository. `npm run check:release-config` checks every brand.
-- **Links:** with a `linkDomain`, the app declares `applinks:<linkDomain>` and a verified Android App Link for `https://<linkDomain>/connect`. The domain must serve `apple-app-site-association` and `assetlinks.json` naming the brand's app; `npm run check:link-files` (with `APPLE_TEAM_ID` and `ANDROID_CERT_SHA256`) verifies them before a release. `linkDomain: null` declares neither.
+- **Links:** with a `linkDomain`, the app declares `applinks:<linkDomain>` and a verified Android App Link for exactly `https://<linkDomain>/connect`. The domain must serve `apple-app-site-association` and `assetlinks.json` naming the brand's app; `npm run check:link-files` (with `APPLE_TEAM_ID` and `ANDROID_CERT_SHA256`) verifies them before a release. `linkDomain: null` declares neither.
 
 Siri and Shortcuts phrases name the app by its installed name, so the App Intents source holds no product name. Building with `brand/sample` yields a config with no ELITEA identifier, name or domain (`scripts/eas-config.test.mjs`, `src/config/sampleBrand.test.tsx`).
 
