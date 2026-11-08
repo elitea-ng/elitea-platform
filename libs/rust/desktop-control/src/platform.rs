@@ -260,10 +260,15 @@ pub const PLATFORM_APP_DENY_WINDOWS: &[&str] = &[
     "hyper.exe",
     "tabby.exe",
     "warp.exe",
-    // Script hosts and the Run box's targets.
+    // Script hosts and the Run box's targets. `rundll32.exe` and
+    // `control.exe` host the Control Panel pages that are not Explorer
+    // windows (Credential Manager's and User Accounts' dialogs among them);
+    // `mmc.exe` every management console snap-in.
     "wscript.exe",
     "cscript.exe",
     "mshta.exe",
+    "rundll32.exe",
+    "control.exe",
     "regedit.exe",
     "mmc.exe",
     "taskmgr.exe",
@@ -273,11 +278,118 @@ pub const PLATFORM_APP_DENY_WINDOWS: &[&str] = &[
     "lockapp.exe",
     "winlogon.exe",
     // Settings (its security pages cannot be told apart from the rest) and
-    // Windows Security.
+    // Windows Security. Both are packaged apps framed by
+    // `applicationframehost.exe`: [`windows_window_verdict`] names a framed
+    // window by the app it hosts, so these entries match.
     "systemsettings.exe",
+    "sechealthui.exe",
     "securityhealthui.exe",
     "securityhealthhost.exe",
 ];
+
+/// The process that frames every packaged (UWP) app's window on Windows:
+/// Settings, Windows Security and Calculator alike. Its own image says
+/// nothing about the app inside.
+pub const WINDOWS_FRAME_HOST: &str = "applicationframehost.exe";
+/// The Windows shell. It owns File Explorer's folder windows, and also the
+/// Run box, the Control Panel, Credential Manager, User Accounts, the
+/// taskbar and the Start menu.
+pub const WINDOWS_SHELL: &str = "explorer.exe";
+/// The window class of a File Explorer folder window (the Control Panel is
+/// shown in one too, so the class alone does not make a folder).
+pub const WINDOWS_FOLDER_CLASS: &str = "CabinetWClass";
+
+/// What Windows says about one top-level window, for
+/// [`windows_window_verdict`]. Every field is `None` when it could not be
+/// read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowsWindowFacts<'a> {
+    /// The image of the process that owns the window handle
+    /// (`applicationframehost.exe` for a packaged app's frame).
+    pub owner_image: Option<&'a str>,
+    /// The window class (`ApplicationFrameWindow`, `CabinetWClass`, `#32770`).
+    pub class: Option<&'a str>,
+    /// For a frame of [`WINDOWS_FRAME_HOST`], the image of the app it hosts
+    /// (the process of its `Windows.UI.Core.CoreWindow` child).
+    pub hosted_image: Option<&'a str>,
+    /// For an Explorer folder window, the shell's location of it
+    /// (`IWebBrowserApp::LocationURL`: `file:///C:/Users/...`; empty for the
+    /// Control Panel and the other shell namespaces).
+    pub folder_location: Option<&'a str>,
+}
+
+/// Whether the driver may touch a Windows window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WindowVerdict {
+    Allow,
+    /// The window belongs to a denied app (`app_denied`); why.
+    Deny(String),
+    /// What the window is cannot be told, so it is refused (`app_denied`);
+    /// why.
+    Unresolved(String),
+}
+
+/// The Windows window rule of ADR-0047 decisions 3 and 10, a pure function
+/// over what the OS says about one window, so that every case is tested on
+/// every OS. The owning process's image alone lets three kinds of window
+/// through that the deny list means to stop:
+///
+/// - **A packaged app's frame** is owned by [`WINDOWS_FRAME_HOST`] whatever
+///   it hosts: the window is judged by the hosted app's image instead, and
+///   refused when that cannot be read (a suspended app's frame, a frame with
+///   no app in it).
+/// - **The shell** owns the Run box, the Control Panel (Credential Manager,
+///   User Accounts), the taskbar and the Start menu as well as File
+///   Explorer: only a folder window ([`WINDOWS_FOLDER_CLASS`]) whose location
+///   is a file-system path (`file:` URL) is allowed; every other window of
+///   [`WINDOWS_SHELL`] is refused, the shell's own namespaces (This PC, Home,
+///   the Control Panel) included.
+/// - **Anything else** is judged by its owner's image against
+///   [`PLATFORM_APP_DENY_WINDOWS`]; an unreadable owner is refused.
+#[must_use]
+pub fn windows_window_verdict(facts: &WindowsWindowFacts<'_>) -> WindowVerdict {
+    let Some(owner) = facts.owner_image.and_then(windows_app_id) else {
+        return WindowVerdict::Unresolved("the window's process cannot be read".into());
+    };
+    if owner == WINDOWS_FRAME_HOST {
+        return match facts.hosted_image.and_then(windows_app_id) {
+            None => WindowVerdict::Unresolved(format!(
+                "the app framed by {WINDOWS_FRAME_HOST} cannot be told"
+            )),
+            Some(hosted) if hosted == WINDOWS_FRAME_HOST => {
+                WindowVerdict::Unresolved(format!("{WINDOWS_FRAME_HOST} frames itself"))
+            }
+            Some(hosted) if is_denied_app(Os::Windows, &hosted) => WindowVerdict::Deny(hosted),
+            Some(_) => WindowVerdict::Allow,
+        };
+    }
+    if owner == WINDOWS_SHELL {
+        let folder = facts.class == Some(WINDOWS_FOLDER_CLASS)
+            && facts.folder_location.is_some_and(is_file_location);
+        return if folder {
+            WindowVerdict::Allow
+        } else {
+            WindowVerdict::Deny(format!(
+                "{WINDOWS_SHELL} ({}): only File Explorer folder windows are allowed",
+                facts.class.unwrap_or("unknown class")
+            ))
+        };
+    }
+    if is_denied_app(Os::Windows, &owner) {
+        WindowVerdict::Deny(owner)
+    } else {
+        WindowVerdict::Allow
+    }
+}
+
+/// A `file:` URL with a path (`file:///C:/...`, `file://server/share`).
+fn is_file_location(location: &str) -> bool {
+    let location = location.trim();
+    location
+        .get(..7)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
+        && location.len() > 7
+}
 
 /// The applications of ADR-0047 decision 3 by their Linux ids (the
 /// desktop entry id, else the executable, [`linux_app_id`]).
@@ -626,6 +738,158 @@ mod tests {
         ] {
             assert!(!is_denied_app(os, app), "{os:?} {app} must pass");
         }
+    }
+
+    fn facts<'a>(
+        owner: &'a str,
+        class: &'a str,
+        hosted: Option<&'a str>,
+        location: Option<&'a str>,
+    ) -> WindowsWindowFacts<'a> {
+        WindowsWindowFacts {
+            owner_image: Some(owner),
+            class: Some(class),
+            hosted_image: hosted,
+            folder_location: location,
+        }
+    }
+
+    #[test]
+    fn the_new_windows_deny_entries_are_denied() {
+        for app in [
+            "rundll32.exe",
+            "control.exe",
+            "mmc.exe",
+            "regedit.exe",
+            "consent.exe",
+            "CredentialUIBroker.exe",
+        ] {
+            assert!(is_denied_app(Os::Windows, app), "{app} must be denied");
+        }
+    }
+
+    /// The values a Windows 11 desktop reports for each window (owner image
+    /// as `ToolHelp` spells it, class as `GetClassNameW` returns it).
+    #[test]
+    fn a_framed_app_is_judged_by_the_app_it_hosts() {
+        let frame = "ApplicationFrameWindow";
+        for hosted in ["SystemSettings.exe", "SecHealthUI.exe"] {
+            assert!(
+                matches!(
+                    windows_window_verdict(&facts(
+                        "ApplicationFrameHost.exe",
+                        frame,
+                        Some(hosted),
+                        None
+                    )),
+                    WindowVerdict::Deny(_)
+                ),
+                "{hosted} must be denied"
+            );
+        }
+        assert_eq!(
+            windows_window_verdict(&facts(
+                "ApplicationFrameHost.exe",
+                frame,
+                Some("CalculatorApp.exe"),
+                None
+            )),
+            WindowVerdict::Allow
+        );
+        // A suspended app's frame has no CoreWindow: what it hosts cannot be
+        // told, so it is refused.
+        for hosted in [None, Some(""), Some("ApplicationFrameHost.exe")] {
+            assert!(
+                matches!(
+                    windows_window_verdict(&facts("ApplicationFrameHost.exe", frame, hosted, None)),
+                    WindowVerdict::Unresolved(_)
+                ),
+                "{hosted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_explorer_folder_windows_on_a_path_are_allowed() {
+        for location in [
+            "file:///C:/Users/ada/Documents",
+            "FILE:///D:/",
+            "file://fileserver/share/reports",
+        ] {
+            assert_eq!(
+                windows_window_verdict(&facts(
+                    "explorer.exe",
+                    "CabinetWClass",
+                    None,
+                    Some(location)
+                )),
+                WindowVerdict::Allow,
+                "{location}"
+            );
+        }
+        // The Control Panel (Credential Manager, User Accounts) is a
+        // CabinetWClass window too, with no file location; so are This PC
+        // and Home. An unread location is refused.
+        for location in [None, Some(""), Some("file://"), Some("shell:::{26EE0668}")] {
+            assert!(
+                matches!(
+                    windows_window_verdict(&facts("explorer.exe", "CabinetWClass", None, location)),
+                    WindowVerdict::Deny(_)
+                ),
+                "{location:?}"
+            );
+        }
+        // The Run box, the taskbar, the Start menu, the desktop.
+        for class in [
+            "#32770",
+            "Shell_TrayWnd",
+            "Windows.UI.Core.CoreWindow",
+            "Progman",
+            "WorkerW",
+        ] {
+            assert!(
+                matches!(
+                    windows_window_verdict(&facts(
+                        "Explorer.EXE",
+                        class,
+                        None,
+                        Some("file:///C:/")
+                    )),
+                    WindowVerdict::Deny(_)
+                ),
+                "{class}"
+            );
+        }
+        let no_class = WindowsWindowFacts {
+            owner_image: Some("explorer.exe"),
+            folder_location: Some("file:///C:/"),
+            ..WindowsWindowFacts::default()
+        };
+        assert!(matches!(
+            windows_window_verdict(&no_class),
+            WindowVerdict::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn other_windows_are_judged_by_their_owner() {
+        assert_eq!(
+            windows_window_verdict(&facts("notepad.exe", "Notepad", None, None)),
+            WindowVerdict::Allow
+        );
+        for owner in ["cmd.exe", "rundll32.exe", "mmc.exe", "consent.exe"] {
+            assert!(
+                matches!(
+                    windows_window_verdict(&facts(owner, "#32770", None, None)),
+                    WindowVerdict::Deny(_)
+                ),
+                "{owner}"
+            );
+        }
+        assert!(matches!(
+            windows_window_verdict(&WindowsWindowFacts::default()),
+            WindowVerdict::Unresolved(_)
+        ));
     }
 
     #[test]

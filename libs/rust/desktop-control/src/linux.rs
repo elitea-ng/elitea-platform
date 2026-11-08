@@ -48,6 +48,7 @@ impl NativeDriver {
                 screen,
                 marker: SyntheticMarker::new(LINUX_MARKER).unwrap_or_else(|| unreachable!()),
                 watch: crate::linux_input::watch,
+                check_window: |_| Ok(()),
             },
         )
     }

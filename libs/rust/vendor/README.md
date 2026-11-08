@@ -658,12 +658,12 @@ Each OS crate is compiled only on its own OS.
 **Why vendored.** The upstream crates are not published, and they are a
 new, fast-moving project. A copy keeps the code that drives a person's other
 applications as a reviewed diff in this tree. The patches add a tag on
-synthetic events and three small readers that upstream does not have.
+synthetic events and a few small read-only accessors that upstream does not have.
 
 | | |
 | --- | --- |
 | Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core`, `crates/macos`, `crates/windows` and `crates/linux` |
-| Tree digest | `4922d8584572cec71efcc4f24c803a3f8964936957edadd71a394293dc68c731` (1429 files, 9.1 MB, after the patches; command below) |
+| Tree digest | `fea3dadbe960c77f037208a72ec5f146468ed8e54e418759f3bfb6ad1aac826b` (1429 files, 9.1 MB, after the patches; command below) |
 | Licence | `Apache-2.0`; the repository's `LICENSE` is at `agent-desktop/LICENSE`. Upstream has no `NOTICE` file. The root `NOTICE` names the copy. |
 | Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`, `windows/src/**`, `linux/src/**`; the upstream manifests as `<crate>/Cargo.toml.orig` |
 | Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, `testdata/` and the `.py` helper scripts of the Windows and Linux crates, the CLI crate (`src/` at the root), `skills/`, `npm/`, `apps/`, benchmarks, probes |
@@ -708,6 +708,16 @@ synthetic events and three small readers that upstream does not have.
    stubs. `lib.rs` declares the module, and the manifest adds the
    `windows-sys` features `Win32_System_RemoteDesktop` and
    `Win32_System_StationsAndDesktops` for it.
+5. `windows/src/elitea_ext.rs` adds `window_facts(window_id)` and its
+   `WindowFacts` (#1586): the owner's image name, the window class, the
+   image of the app an `ApplicationFrameWindow` hosts (the adapter's own
+   `frame_identity::hosted_application_pid`), and, for a `CabinetWClass`
+   window, its `IShellWindows` / `IWebBrowserApp::LocationURL`. Reads only.
+   The driver's deny rule needs them because Settings and Windows Security
+   are framed by `applicationframehost.exe`, and the Run box and the Control
+   Panel are `explorer.exe` windows. The manifest adds the `windows`
+   features `Win32_System_Ole`, `Win32_System_Variant` and `Win32_UI_Shell`
+   for it (the VARIANT comes from `uiautomation`, already a dependency).
 
 The four `Cargo.toml` files are rewritten as standalone manifests:
 

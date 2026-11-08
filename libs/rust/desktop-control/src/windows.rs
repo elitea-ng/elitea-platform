@@ -5,6 +5,12 @@
 //! - **Application ids** are executable images (`notepad.exe`,
 //!   [`crate::platform::windows_app_id`]); `open_app` takes one and the
 //!   vendor resolves a bare name in the system directories only.
+//! - **Windows the owner does not name** ([`check_window`]): every
+//!   packaged app (Settings, Windows Security) is framed by
+//!   `applicationframehost.exe`, and the shell, `explorer.exe`, owns the Run
+//!   box and the Control Panel as well as File Explorer. A frame is judged
+//!   by the app it hosts (refused when that cannot be read); of the shell's
+//!   windows only File Explorer folder windows on a file-system path pass.
 //! - **The screen** ([`screen`]): no session, another session on the
 //!   console, the lock or sign-in screen or a UAC/credential secure desktop
 //!   (the input desktop is not `Default`), or the screensaver is
@@ -44,6 +50,7 @@ impl NativeDriver {
                 screen,
                 marker: SyntheticMarker::new(WINDOWS_MARKER).unwrap_or_else(|| unreachable!()),
                 watch: crate::windows_input::watch,
+                check_window,
             },
         )
     }
@@ -57,6 +64,24 @@ impl Default for NativeDriver {
 
 fn app_id(app: &ad::AppInfo) -> Option<String> {
     platform::windows_app_id(&app.name)
+}
+
+/// The window rule beyond the owner's image
+/// ([`platform::windows_window_verdict`]): a packaged app's frame is judged
+/// by the app it hosts, and only Explorer's folder windows pass.
+fn check_window(window: &ad::WindowInfo) -> Result<(), crate::DesktopError> {
+    let facts = agent_desktop_windows::elitea_ext::window_facts(&window.id);
+    match platform::windows_window_verdict(&platform::WindowsWindowFacts {
+        owner_image: facts.owner_image.as_deref(),
+        class: facts.class.as_deref(),
+        hosted_image: facts.hosted_image.as_deref(),
+        folder_location: facts.folder_location.as_deref(),
+    }) {
+        platform::WindowVerdict::Allow => Ok(()),
+        platform::WindowVerdict::Deny(why) | platform::WindowVerdict::Unresolved(why) => {
+            Err(crate::DesktopError::AppDenied(why))
+        }
+    }
 }
 
 fn screen() -> ScreenStatus {

@@ -22,9 +22,31 @@ pub struct ScreenState {
     pub screensaver: bool,
 }
 
+/// What Windows says about one top-level window (Elitea patch,
+/// vendor/README.md "agent-desktop" change 5): the facts the driver's deny
+/// rule needs to tell what a window is when its owning process does not
+/// (#1586). Each field is `None` when it cannot be read. Reads only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowFacts {
+    /// The image name of the process that owns the window handle.
+    pub owner_image: Option<String>,
+    /// The window class (`GetClassNameW`).
+    pub class: Option<String>,
+    /// For an `ApplicationFrameWindow` hosting a live packaged app, that
+    /// app's image name (the process of the frame's foreign-owned
+    /// `Windows.UI.Core.CoreWindow` child, the adapter's own A26-8 rule).
+    pub hosted_image: Option<String>,
+    /// For a `CabinetWClass` window, its location as the shell reports it
+    /// (`IShellWindows` -> `IWebBrowserApp::LocationURL`): a `file:` URL
+    /// for a folder, empty for the Control Panel and the other namespaces.
+    pub folder_location: Option<String>,
+}
+
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::ScreenState;
+    use super::{ScreenState, WindowFacts};
+    use crate::system::process_identity::process_image_name;
+    use crate::system::window::{frame_identity, window_identity, window_ops};
     use windows_sys::Win32::System::RemoteDesktop::{
         ProcessIdToSessionId, WTS_CONNECTSTATE_CLASS, WTS_CURRENT_SERVER_HANDLE, WTSActive,
         WTSConnectState, WTSFreeMemory, WTSGetActiveConsoleSessionId, WTSQuerySessionInformationW,
@@ -139,11 +161,67 @@ mod imp {
         unsafe { GetWindowThreadProcessId(window, &mut pid) };
         (pid != 0).then_some(pid)
     }
+
+    pub(super) fn window_facts(window_id: &str) -> WindowFacts {
+        let handle = window_ops::parse_handle(window_id);
+        if handle.is_null() {
+            return WindowFacts::default();
+        }
+        let class = window_ops::window_class_name(handle);
+        let folder_location = if class.as_deref() == Some("CabinetWClass") {
+            folder_location(handle as isize)
+        } else {
+            None
+        };
+        WindowFacts {
+            owner_image: window_identity::live_window_owner(handle).and_then(process_image_name),
+            class,
+            hosted_image: frame_identity::hosted_application_pid(handle)
+                .and_then(process_image_name),
+            folder_location,
+        }
+    }
+
+    /// The location of the shell window `handle`, from the shell's own list
+    /// of its folder windows. The calling thread is in the process's
+    /// multithreaded apartment (`ensure_hosted_library_mta_and_dpi`).
+    fn folder_location(handle: isize) -> Option<String> {
+        use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
+        use windows::Win32::UI::Shell::{IShellWindows, IWebBrowserApp, ShellWindows};
+        use windows::core::Interface;
+
+        // SAFETY: a CLSID constant and no outer object.
+        let shell: IShellWindows =
+            unsafe { CoCreateInstance(&ShellWindows, None, CLSCTX_ALL) }.ok()?;
+        // SAFETY: a live interface; COM calls with no raw pointers.
+        let count = unsafe { shell.Count() }.ok()?;
+        for index in 0..count {
+            let index = uiautomation::variants::Variant::from(index);
+            // SAFETY: the VARIANT lives for the call.
+            let Ok(item) = (unsafe { shell.Item(index.as_ref()) }) else {
+                continue;
+            };
+            let Ok(browser) = item.cast::<IWebBrowserApp>() else {
+                continue;
+            };
+            // SAFETY: a live interface.
+            if unsafe { browser.HWND() }.ok().map(|h| h.0) != Some(handle) {
+                continue;
+            }
+            // SAFETY: a live interface; the BSTR is owned by the result.
+            return unsafe { browser.LocationURL() }.ok().map(|url| url.to_string());
+        }
+        None
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
-    use super::ScreenState;
+    use super::{ScreenState, WindowFacts};
+
+    pub(super) fn window_facts(_window_id: &str) -> WindowFacts {
+        WindowFacts::default()
+    }
 
     pub(super) fn screen_state() -> ScreenState {
         ScreenState {
@@ -167,4 +245,10 @@ pub fn screen_state() -> ScreenState {
 /// The process that owns the foreground window, when there is one.
 pub fn foreground_pid() -> Option<u32> {
     imp::foreground_pid()
+}
+
+/// What Windows says about the top-level window `window_id` (a `w-<n>` id
+/// as `list_windows` reports it).
+pub fn window_facts(window_id: &str) -> WindowFacts {
+    imp::window_facts(window_id)
 }

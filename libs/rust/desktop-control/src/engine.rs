@@ -77,6 +77,11 @@ pub(crate) struct OsHooks {
     pub marker: SyntheticMarker,
     /// Starts the user-active guard's watch.
     pub watch: WatchFn,
+    /// The OS's own rule on one window, beyond its owner's id: on Windows
+    /// a packaged app's frame is judged by the app it hosts and only
+    /// Explorer's folder windows pass (`app_denied`,
+    /// [`platform::windows_window_verdict`]). Linux has none.
+    pub check_window: fn(&ad::WindowInfo) -> Result<(), DesktopError>,
 }
 
 /// The Windows or Linux [`DesktopDriver`]: `WindowsDriver` and
@@ -230,6 +235,7 @@ impl NativeDriver {
             }
         };
         self.refuse_pid(window.pid, deadline, "an Elitea window")?;
+        (self.hooks.check_window)(&window)?;
         if let Some(id) = target.bundle_id()
             && !bundle_matches(self.id_of(window.pid, deadline).as_deref(), id)
         {
@@ -265,6 +271,7 @@ impl NativeDriver {
                 app_id.as_deref(),
                 "Elitea is the frontmost application",
             )?;
+            (self.hooks.check_window)(window)?;
         }
         let frontmost = match (&window, app_id.as_deref()) {
             (None, _) => guard::Frontmost::None,
@@ -282,12 +289,14 @@ impl NativeDriver {
         deadline: ad::Deadline,
     ) -> Result<(Binding<ad::RefEntry>, ad::NativeHandle), DesktopError> {
         self.refuse_id(id)?;
-        let (binding, pid, taken_of) = {
+        let (binding, window, taken_of) = {
             let registry = self.registry();
             let (binding, (window, app)) = registry.resolve(element_ref)?;
-            (binding.clone(), window.pid, app.clone())
+            (binding.clone(), window.clone(), app.clone())
         };
+        let pid = window.pid;
         self.refuse_pid(pid, deadline, "an Elitea window")?;
+        (self.hooks.check_window)(&window)?;
         if !bundle_matches(taken_of.as_deref(), id)
             || !bundle_matches(self.id_of(pid, deadline).as_deref(), id)
         {
@@ -568,7 +577,11 @@ impl DesktopDriver for NativeDriver {
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
         let refused = self.refused_pids(deadline)?;
         let mut windows = self.vendor_windows(bundle_id, deadline)?;
-        windows.retain(|w| !refused.contains(&w.pid) && !self.own.is_own(w.pid.get(), None));
+        windows.retain(|w| {
+            !refused.contains(&w.pid)
+                && !self.own.is_own(w.pid.get(), None)
+                && (self.hooks.check_window)(w).is_ok()
+        });
         Ok(windows
             .iter()
             .map(|w| self.to_window(w, deadline))
