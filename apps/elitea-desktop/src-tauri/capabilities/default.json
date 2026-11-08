@@ -101,6 +101,8 @@
     "allow-http-fetch",
     "allow-http-read-body",
     "allow-http-cancel",
+    "allow-browser-view-open",
+    "allow-browser-view-send",
     "allow-app-ready",
     "allow-doctor-run",
     "allow-doctor-fix",

@@ -55,6 +55,7 @@ mod sessions;
 mod settings;
 mod store;
 mod tokens;
+mod view_socket;
 mod window;
 mod workspaces;
 mod worktree_commands;
@@ -157,6 +158,10 @@ pub fn run() {
                 if let Some(fetches) = webview.try_state::<net::WebFetch>() {
                     fetches.table.clear();
                 }
+                // Nor its browser view sockets.
+                if let Some(sockets) = webview.try_state::<Arc<view_socket::ViewSockets>>() {
+                    sockets.clear();
+                }
             }
         })
         .menu(menu::build)
@@ -237,6 +242,8 @@ pub fn run() {
                 scope,
                 table: net::FetchTable::default(),
             });
+            // The cloud browser view's sockets, opened for the page (#1592).
+            app.manage(Arc::new(view_socket::ViewSockets::default()));
             // Signed in: start the launch's token refresh now, while the
             // window and the page load, instead of when the page first asks.
             // The page's own request joins it (refresh_inner re-checks the
@@ -608,6 +615,8 @@ pub fn run() {
             net::http_fetch,
             net::http_read_body,
             net::http_cancel,
+            view_socket::browser_view_open,
+            view_socket::browser_view_send,
             app_events::app_ready,
             doctor::doctor_run,
             doctor::doctor_fix,

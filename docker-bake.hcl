@@ -265,6 +265,24 @@ target "elitea-browser-session" {
   platforms  = ["linux/amd64", "linux/arm64"]
 }
 
+# The cloud browser's `lite` session image (ADR-0049 decision 2, #1599): the
+# session image plus Moli at a pinned, checksum-verified version, for `lite`
+# and `auto` sessions. Built, not published: it ships only once the bake-off
+# admits Moli (platformconfig.BrowserLiteAdmitted), and the change that
+# admits it adds the publish entries and drops it from UNPUBLISHED in
+# scripts/ci/image-matrix.sh. The bake-off workflow builds it.
+target "elitea-browser-session-lite" {
+  context    = "."
+  dockerfile = "libs/rust/browser-session/Containerfile"
+  target     = "lite"
+  tags       = ["${REGISTRY}/elitea-browser-session-lite:${TAG}"]
+  cache-from = [
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-browser-session:release-linux-amd64",
+    "type=registry,ref=ghcr.io/elitea-ng/ci-cache-elitea-browser-session:linux-amd64",
+  ]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 target "elitea-llm-gateway" {
   context    = "."
   dockerfile = "services/elitea-llm-gateway/Containerfile"

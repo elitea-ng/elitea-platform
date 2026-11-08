@@ -1,5 +1,15 @@
-//! The engine process: chrome-headless-shell with the flags ADR-0049
-//! decisions 1, 4 and 5 require, and CDP on its debugging pipe.
+//! The engine process: chrome-headless-shell (`full`) or Moli (`lite`) with
+//! the flags ADR-0049 decisions 1, 2, 4 and 5 require, and CDP to it.
+//!
+//! **Moli** (`lite`, admitted only by the bake-off of decision 9) has no
+//! debugging pipe: `moli serve` listens for CDP on a WebSocket. It is bound
+//! to the session container's loopback on a port chosen here, CDP is
+//! carried over [`crate::cdp::websocket_bridge`], and the page's own traffic
+//! still goes only to the egress proxy (`--http-proxy`, no bypass list), so
+//! the page cannot reach that port. Moli has no process sandbox of its own:
+//! [`crate::session`] starts it only under gVisor. It has no WebRTC, QUIC or
+//! DNS-over-HTTPS client; the proxy resolves every name. The rest of this
+//! list is chrome-headless-shell's:
 //!
 //! * **CDP never leaves the process pair.** `--remote-debugging-pipe` and
 //!   never `--remote-debugging-port`: there is no listener, not even on the
@@ -34,6 +44,35 @@ use crate::cdp::Connection;
 
 /// The image's engine.
 pub const DEFAULT_ENGINE: &str = "/opt/chrome-headless-shell/chrome-headless-shell";
+/// The image's Moli (`lite`).
+pub const DEFAULT_MOLI: &str = "/opt/moli/moli";
+/// How long Moli may take to answer its discovery endpoint.
+pub const MOLI_READY: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long an `auto` start waits for Moli before it falls back to Chrome:
+/// the fallback must leave Chrome most of the protocol's 60 s `ready`
+/// limit, and a Moli that is not up in 5 s is not the engine to keep.
+pub const AUTO_MOLI_READY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Which engine a binary is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EngineKind {
+    /// chrome-headless-shell: CDP on `--remote-debugging-pipe`.
+    #[default]
+    Chrome,
+    /// Moli: CDP on a loopback WebSocket.
+    Moli,
+}
+
+impl EngineKind {
+    /// The product name in `engine_version` (`<name>/<version>`).
+    #[must_use]
+    pub const fn product(self) -> &'static str {
+        match self {
+            Self::Chrome => "chrome-headless-shell",
+            Self::Moli => "moli",
+        }
+    }
+}
 /// The view's default size (ADR-0049 decision 6).
 pub const DEFAULT_WIDTH: u32 = 1280;
 pub const DEFAULT_HEIGHT: u32 = 800;
@@ -51,6 +90,8 @@ const DISABLED_FEATURES: &str = "DnsOverHttps,BackForwardCache,Translate,MediaRo
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub engine: PathBuf,
+    /// What `engine` is.
+    pub kind: EngineKind,
     /// The egress proxy, `http://host:port`; `None` only in tests.
     pub proxy: Option<String>,
     /// The run token the proxy wants (`Proxy-Authorization: Basic run:<token>`).
@@ -65,12 +106,16 @@ pub struct EngineConfig {
     /// No network at all (the `start` line's `proxy: null`): every request,
     /// loopback included, goes to a proxy address nothing listens on.
     pub offline: bool,
+    /// How long Moli may take to answer on its CDP port ([`MOLI_READY`], or
+    /// [`AUTO_MOLI_READY`] for an `auto` start).
+    pub moli_ready: std::time::Duration,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             engine: PathBuf::from(DEFAULT_ENGINE),
+            kind: EngineKind::Chrome,
             proxy: None,
             proxy_token: None,
             gvisor: false,
@@ -78,6 +123,7 @@ impl Default for EngineConfig {
             height: DEFAULT_HEIGHT,
             engine_log: false,
             offline: false,
+            moli_ready: MOLI_READY,
         }
     }
 }
@@ -105,6 +151,9 @@ impl EngineConfig {
     pub fn args(&self, user_data_dir: &Path) -> Result<Vec<String>, ConfigError> {
         if !(320..=3840).contains(&self.width) || !(240..=2160).contains(&self.height) {
             return Err(ConfigError("the view size is out of range".to_owned()));
+        }
+        if self.kind == EngineKind::Moli {
+            return Err(ConfigError("Moli takes moli_args".to_owned()));
         }
         let mut args = vec![
             "--remote-debugging-pipe".to_owned(),
@@ -154,6 +203,53 @@ impl EngineConfig {
     }
 }
 
+impl EngineConfig {
+    /// Moli's `serve` arguments, CDP on `127.0.0.1:<port>`.
+    ///
+    /// * `--layout`: real geometry, coordinate input, screenshots and the
+    ///   screencast, which the contract needs.
+    /// * `--http-proxy` names the egress proxy and `--http-no-proxy` is left
+    ///   unset; with a cleared environment there is no bypass at all, so
+    ///   loopback, the CDP port included, also goes to the proxy, which
+    ///   refuses it. The run token is answered from `Fetch.authRequired`,
+    ///   as for Chrome, never put on the command line.
+    /// * No `--profile-dir`, `--http-cache-dir` or cookie file: storage is
+    ///   temporary and dies with the session.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::args`].
+    pub fn moli_args(&self, port: u16) -> Result<Vec<String>, ConfigError> {
+        if !(320..=3840).contains(&self.width) || !(240..=2160).contains(&self.height) {
+            return Err(ConfigError("the view size is out of range".to_owned()));
+        }
+        let mut args = vec![
+            "serve".to_owned(),
+            "--host".to_owned(),
+            "127.0.0.1".to_owned(),
+            "--port".to_owned(),
+            port.to_string(),
+            "--layout".to_owned(),
+            "--screencast-interval-ms".to_owned(),
+            "100".to_owned(),
+        ];
+        match (&self.proxy, self.offline) {
+            (Some(proxy), _) => {
+                check_proxy(proxy)?;
+                args.push("--http-proxy".to_owned());
+                args.push(proxy.clone());
+            }
+            (None, true) => {
+                args.push("--http-proxy".to_owned());
+                args.push(OFFLINE_PROXY.to_owned());
+            }
+            // Tests only: the conformance kit's fixtures on loopback.
+            (None, false) => {}
+        }
+        Ok(args)
+    }
+}
+
 fn check_proxy(proxy: &str) -> Result<(), ConfigError> {
     let refused = || ConfigError("the proxy must be http://host:port".to_owned());
     let rest = proxy.strip_prefix("http://").ok_or_else(refused)?;
@@ -181,7 +277,7 @@ impl Engine {
     /// # Errors
     ///
     /// A refused configuration, or the engine failing to start.
-    pub fn start(config: &EngineConfig) -> Result<(Self, Connection), std::io::Error> {
+    pub async fn start(config: &EngineConfig) -> Result<(Self, Connection), std::io::Error> {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let user_data_dir = std::env::temp_dir().join(format!(
             "elitea-browser-{}-{}",
@@ -189,6 +285,9 @@ impl Engine {
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&user_data_dir)?;
+        if config.kind == EngineKind::Moli {
+            return Self::start_moli(config, user_data_dir).await;
+        }
         let args = config
             .args(&user_data_dir)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
@@ -237,10 +336,117 @@ impl Engine {
         ))
     }
 
+    async fn start_moli(
+        config: &EngineConfig,
+        user_data_dir: PathBuf,
+    ) -> Result<(Self, Connection), std::io::Error> {
+        // A free loopback port: bound, read and released. The container is
+        // the session's alone, so nothing else races for it.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let args = config
+            .moli_args(port)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let child = Command::new(&config.engine)
+            .args(&args)
+            .env_clear()
+            .env("HOME", &user_data_dir)
+            .env("TMPDIR", &user_data_dir)
+            .current_dir(&user_data_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(if config.engine_log {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .kill_on_drop(true)
+            .spawn()?;
+        // From here a failure drops `engine`, which kills Moli.
+        let engine = Self {
+            child,
+            user_data_dir,
+        };
+        let url = tokio::time::timeout(config.moli_ready, moli_endpoint(port))
+            .await
+            .map_err(|_| std::io::Error::other("Moli did not answer in time"))?;
+        let stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+        let (socket, _) =
+            tokio_tungstenite::client_async_with_config(url.as_str(), stream, Some(ws_config()))
+                .await
+                .map_err(|_| std::io::Error::other("Moli refused the CDP connection"))?;
+        let (reads, writes) = crate::cdp::websocket_bridge(socket);
+        Ok((engine, Connection::new(reads, writes)))
+    }
+
     /// Whether the engine is still running.
     pub fn is_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
+
+    /// The engine's process id.
+    #[must_use]
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+}
+
+/// Poll Moli's discovery endpoint until it answers with its browser
+/// WebSocket URL on `127.0.0.1:<port>`.
+async fn moli_endpoint(port: u16) -> String {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    loop {
+        if let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+            let request = format!(
+                "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            );
+            if stream.write_all(request.as_bytes()).await.is_ok() {
+                let mut body = Vec::new();
+                let mut limited = (&mut stream).take(64 << 10);
+                if limited.read_to_end(&mut body).await.is_ok()
+                    && let Some(url) = websocket_url(&body, port)
+                {
+                    return url;
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// The bridge's WebSocket limits: the same ceiling as the pipe
+/// ([`crate::cdp::MAX_MESSAGE_BYTES`]), not tungstenite's defaults (16 MiB
+/// frames, 64 MiB messages), which a full-page screenshot or a large
+/// accessibility tree passes.
+fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(crate::cdp::MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(crate::cdp::MAX_MESSAGE_BYTES))
+}
+
+/// `webSocketDebuggerUrl` from a `/json/version` response, only when it
+/// names the engine's own loopback port. The host may be `127.0.0.1` or
+/// `localhost`; the URL connected to is always rebuilt on `127.0.0.1` and
+/// the port, with the engine's path, so a name never decides where the
+/// agent connects.
+fn websocket_url(response: &[u8], port: u16) -> Option<String> {
+    let text = std::str::from_utf8(response).ok()?;
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") && !head.starts_with("HTTP/1.0 200") {
+        return None;
+    }
+    let version: serde_json::Value = serde_json::from_str(body.trim()).ok()?;
+    let url = version["webSocketDebuggerUrl"].as_str()?;
+    let rest = url.strip_prefix("ws://")?;
+    let (authority, path) = rest.split_at(rest.find('/')?);
+    let (host, named_port) = authority.rsplit_once(':')?;
+    let host_ok = host == "127.0.0.1" || host.eq_ignore_ascii_case("localhost");
+    let path_ok = path
+        .bytes()
+        .all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'@');
+    (host_ok && named_port.parse::<u16>().ok() == Some(port) && path_ok)
+        .then(|| format!("ws://127.0.0.1:{port}{path}"))
 }
 
 impl Drop for Engine {
@@ -326,6 +532,109 @@ mod tests {
         let args = args(&config);
         assert!(args.contains(&"--proxy-server=http://127.0.0.1:9".to_owned()));
         assert!(args.contains(&"--proxy-bypass-list=<-loopback>".to_owned()));
+    }
+
+    #[test]
+    fn moli_listens_on_loopback_and_sends_everything_to_the_proxy() {
+        let config = EngineConfig {
+            kind: EngineKind::Moli,
+            proxy: Some("http://10.0.0.7:3128".to_owned()),
+            proxy_token: Some("secret-token".to_owned()),
+            ..EngineConfig::default()
+        };
+        let joined = config.moli_args(40123).unwrap().join(" ");
+        assert!(joined.starts_with("serve --host 127.0.0.1 --port 40123 --layout"));
+        assert!(joined.contains("--http-proxy http://10.0.0.7:3128"));
+        assert!(!joined.contains("--http-no-proxy"));
+        assert!(!joined.contains("secret-token"));
+        assert!(!joined.contains("--profile-dir") && !joined.contains("--cookie"));
+        let offline = EngineConfig {
+            kind: EngineKind::Moli,
+            offline: true,
+            ..EngineConfig::default()
+        };
+        let offline = offline.moli_args(1).unwrap().join(" ");
+        assert!(offline.contains("--http-proxy http://127.0.0.1:9"));
+        // Moli takes no Chrome flags.
+        assert!(config.args(Path::new("/tmp/p")).is_err());
+        let bad = EngineConfig {
+            kind: EngineKind::Moli,
+            proxy: Some("http://run:t@proxy:3128".to_owned()),
+            ..EngineConfig::default()
+        };
+        assert!(bad.moli_args(1).is_err());
+    }
+
+    #[test]
+    fn the_moli_endpoint_must_be_its_own_loopback_port() {
+        let ok = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"Browser\":\"Moli/1.1.22\",\"webSocketDebuggerUrl\":\"ws://127.0.0.1:9333/devtools/browser/abc\"}";
+        assert_eq!(
+            websocket_url(ok, 9333).as_deref(),
+            Some("ws://127.0.0.1:9333/devtools/browser/abc")
+        );
+        assert_eq!(websocket_url(ok, 9334), None);
+        let elsewhere =
+            b"HTTP/1.1 200 OK\r\n\r\n{\"webSocketDebuggerUrl\":\"ws://10.0.0.1:9333/x\"}";
+        assert_eq!(websocket_url(elsewhere, 9333), None);
+        assert_eq!(
+            websocket_url(b"HTTP/1.1 404 Not Found\r\n\r\n{}", 9333),
+            None
+        );
+        // `localhost` is the same loopback: accepted, and rebuilt on
+        // 127.0.0.1 so a name never decides where the agent connects.
+        let named = b"HTTP/1.1 200 OK\r\n\r\n{\"webSocketDebuggerUrl\":\"ws://localhost:9333/devtools/browser/abc\"}";
+        assert_eq!(
+            websocket_url(named, 9333).as_deref(),
+            Some("ws://127.0.0.1:9333/devtools/browser/abc")
+        );
+        for refused in [
+            "ws://localhost.evil.test:9333/x",
+            "ws://user@127.0.0.1:9333/x",
+            "wss://127.0.0.1:9333/x",
+            "ws://127.0.0.1:9333",
+            "ws://127.0.0.1:9333/x y",
+        ] {
+            let body = format!("HTTP/1.1 200 OK\r\n\r\n{{\"webSocketDebuggerUrl\":\"{refused}\"}}");
+            assert_eq!(websocket_url(body.as_bytes(), 9333), None, "{refused}");
+        }
+    }
+
+    /// The bridge takes messages up to the pipe's own ceiling, past
+    /// tungstenite's 16 MiB frame and 64 MiB message defaults.
+    #[test]
+    fn the_websocket_limits_are_the_pipe_ceiling() {
+        let config = ws_config();
+        assert_eq!(config.max_message_size, Some(crate::cdp::MAX_MESSAGE_BYTES));
+        assert_eq!(config.max_frame_size, Some(crate::cdp::MAX_MESSAGE_BYTES));
+        let defaults = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+        assert!(defaults.max_frame_size < config.max_frame_size);
+    }
+
+    /// An `auto` start gives Moli a short bound, so the Chrome fallback
+    /// keeps most of the protocol's 60 s `ready` limit.
+    #[tokio::test]
+    async fn an_unready_moli_fails_within_its_bound() {
+        // A "Moli" that never answers on its port: `sleep`.
+        let Ok(sleep) = which("sleep") else { return };
+        let config = EngineConfig {
+            engine: sleep,
+            kind: EngineKind::Moli,
+            moli_ready: std::time::Duration::from_millis(300),
+            ..EngineConfig::default()
+        };
+        let started = std::time::Instant::now();
+        assert!(Engine::start(&config).await.is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        assert!(AUTO_MOLI_READY < MOLI_READY);
+        assert!(AUTO_MOLI_READY <= std::time::Duration::from_secs(5));
+    }
+
+    fn which(name: &str) -> Result<PathBuf, ()> {
+        ["/bin", "/usr/bin"]
+            .iter()
+            .map(|dir| Path::new(dir).join(name))
+            .find(|path| path.exists())
+            .ok_or(())
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 title: "The cloud browser session agent"
-description: "How libs/rust/browser-session runs the cloud browser in its sandbox pod: the elitea-browser-session binary and its supervisor line protocol, the CDP driver over a debugging pipe, the engine flags and hard limits, the session image with its pinned chrome-headless-shell, and how to run the conformance kit against a real engine."
+description: "How libs/rust/browser-session runs the cloud browser in its sandbox pod: the elitea-browser-session binary and its supervisor line protocol, the CDP driver over a debugging pipe or Moli's loopback WebSocket, the engine flags and hard limits, auto switching, the session images, the conformance kit and the engine bake-off."
 ---
 
 In the cloud, a browser tool call runs in a session pod (ADR-0049). The sandbox supervisor (`elitea-sandbox-supervisor`) starts and owns the pod. Inside it, `elitea-browser-session` drives a headless Chrome. `libs/rust/browser-session` (crate `elitea-browser-session`) holds both the binary and its driver, `CdpDriver`. `CdpDriver` implements the `BrowserDriver` trait from [the browser tool contract](/development/browser-tools/). It passes the same conformance kit as every other driver.
@@ -10,7 +10,7 @@ In the cloud, a browser tool call runs in a session pod (ADR-0049). The sandbox 
 | Command | Does |
 | --- | --- |
 | `elitea-browser-session idle` | Holds the container until SIGTERM. This is the image's default command. |
-| `elitea-browser-session serve [--engine <path>] [--engine-log]` | The supervisor execs this into the container. It speaks the agent line protocol on stdin and stdout. |
+| `elitea-browser-session serve [--engine <path>] [--moli <path>] [--engine-log]` | The supervisor execs this into the container. It speaks the agent line protocol on stdin and stdout. |
 
 The protocol is specified in `libs/proto/elitea/runtime/v1/browser_session_agent_v1.md`. Each message is one JSON object on one line, at most 12 MiB, with binary data in base64.
 
@@ -34,6 +34,22 @@ The engine starts with these settings:
 - **Leaks closed.** WebRTC sends no UDP that bypasses the proxy, and QUIC and DNS over HTTPS are off. Downloads are denied, and there is no extension or component update.
 - **Sandbox.** The engine keeps its own sandbox. `--no-sandbox` is passed only when `start` says `engine_sandbox: false` and the agent sees that it runs under gVisor, which is then the boundary. Without gVisor, it refuses with `isolation_refused`.
 - **One pane.** The viewport is 1280×800 by default. Popups and new windows are folded into the pane: their URL is checked, then opened there.
+
+## Moli (`lite` and `auto`)
+
+`start` names the engine: `full` (Chrome), `lite` (Moli) or `auto` (Moli, then Chrome). Moli is found with `--moli`, or at `/opt/moli/moli` when that file exists. An image without Moli answers `engine_start_failed` for `lite` and `auto`.
+
+Moli has no pipe mode, so the agent runs `moli serve --host 127.0.0.1 --port <free port> --layout --screencast-interval-ms 100`. It reads the CDP WebSocket address from `/json/version` and accepts only `ws://127.0.0.1:<that port>/`. It then bridges the WebSocket into the same CDP connection Chrome's pipe uses, so the driver, the hard limits and the conformance kit are the same code on both engines. The environment is cleared, `HOME` and `TMPDIR` are the session's profile directory, and every request goes through `--http-proxy` with no bypass list. With no proxy, `--http-proxy` points at a closed loopback port. The run token is answered through `Fetch.authRequired`, as on Chrome. Moli has no process sandbox, so `lite` and `auto` are refused (`isolation_refused`) unless the agent runs under gVisor.
+
+An `auto` session moves to Chrome once, and never back, when:
+
+- Moli does not start (`start_failed`),
+- a command the call itself sent is answered by Moli as unknown or unsupported (`unsupported_protocol`: counted per call, so screencast acks, the page tracker and other background traffic never cause a switch), or
+- a tree snapshot has no ref and no node on a page with text (`empty_snapshot`).
+
+The agent starts Chrome, opens the page's URL again, and writes the notice `engine_switched`. A read call (`browser_open`, `browser_snapshot`, `browser_screenshot`, `browser_wait`) is answered again on Chrome with `engine_switched: {from, to, reason, repeated: true}` in its result. An act (a click, typing, a key, a select, a scroll, a history step) already ran on Moli, so it is never run a second time: the agent gets Moli's result with `repeated: false` and a note to snapshot again. The session keeps its one control, so a person who took over still drives on Chrome. Open views move to Chrome's screencast without reconnecting. The supervisor relays that one notice to every open view, and the web pane shows it.
+
+An `auto` start gives Moli 5 seconds to answer on its CDP port before it falls back to Chrome (`lite` gives it 20), so the fallback keeps most of the 60-second `ready` limit.
 
 ## What the driver does
 
@@ -61,6 +77,8 @@ The image is a Debian userland, so the release scan reports it but does not bloc
 
 To move the engine, change `CFT_VERSION` and both checksums in the Containerfile and the same values in `.github/workflows/ci-browser-session.yml` together. The workflow fails when the two disagree.
 
+The `lite` stage (`--target lite`, bake target `elitea-browser-session-lite`) adds Moli at `/opt/moli/moli`. It is fetched from the lexmount/moli release named by `MOLI_VERSION`, checked against a SHA-256 per architecture, and unpacked in its own stage. The full image stays the last stage, so a build without `--target` is unchanged. The lite image is built but not published until the bake-off admits Moli. The Moli pin moves only when the bake-off passes on the new version: change `MOLI_VERSION` and both checksums together, from the release's asset digests.
+
 ## Run the tests
 
 Without an engine, the conformance tests report a skip. Point `ELITEA_BROWSER_ENGINE` at a chrome-headless-shell binary to run them:
@@ -74,3 +92,27 @@ ELITEA_BROWSER_ENGINE=/path/to/chrome-headless-shell cargo test -p elitea-browse
 `tests/conformance.rs` serves the contract's fixture pages on loopback. It runs `conformance::run` with no listed differences, then the hard limits and the view stream, then the line protocol against the real binary. `ELITEA_BROWSER_ENGINE_LOG=1` passes the engine's stderr through.
 
 `ci-browser-session.yml` runs the same tests with `ELITEA_REQUIRE_BROWSER_CONFORMANCE=1`, so a skip fails the job. It then builds the image and runs the protocol test inside it under gVisor (`runsc`), read-only, with no network, as uid 10001. The image size and the engine version the image reports go to the job summary.
+
+`tests/moli.rs` runs the same contract against Moli when `ELITEA_BROWSER_MOLI` names a Moli binary. It checks that Moli starts and reports `moli/<version>`, that its snapshot has refs, and that the hard limits hold. It prints the conformance kit's differences without asserting them. Under gVisor, and with `ELITEA_BROWSER_ENGINE` set, it also drives an `auto` session through the binary.
+
+## The engine bake-off
+
+ADR-0049 decision 9 offers `lite` and `auto` only after a bake-off. The pieces:
+
+- `bakeoff/corpus.json` holds 40 tasks on public pages: Atlassian, Microsoft 365, Salesforce, ServiceNow, GitHub, documentation sites, government forms and single-page apps. Each task is `read`, `extract` or `act`, and has a URL, optional steps (click or type by role and name, wait) and what must hold afterwards (text, a minimum number of refs, a URL).
+- `tests/bakeoff.rs` (`the_bake_off`) runs every task on each engine, one fresh session per task, through the browser tools. The same scripted steps run on every engine. It writes one JSON line per engine and task: success, refs, time to first snapshot, peak memory of the engine's process tree, crash, hang and any `auto` switch. It only runs with `ELITEA_BAKEOFF_OUT` set.
+- `scripts/ci/browser-bakeoff-report.mjs` applies the admission rule to those lines and writes the report. A run is only a comparison when `full` succeeds on at least half the corpus; below that the verdict is "no comparison", because the run measured the harness or sites that moved, not Moli.
+- `.github/workflows/browser-bakeoff.yml` (manual dispatch only) builds the lite image, runs `tests/moli.rs` and the corpus inside it under gVisor, applies the rule, and keeps the lines, the report and the verdict as the `browser-bakeoff` artifact.
+
+A passing verdict does not admit Moli by itself. The report goes into the ADR-0049 appendix, and the change that records it sets `platformconfig.BrowserLiteAdmitted` and publishes the lite image.
+
+To run part of it locally on Linux:
+
+```sh
+ELITEA_BAKEOFF_OUT=/tmp/bakeoff.jsonl ELITEA_BAKEOFF_ONLY=docs-rust-std,github-repo \
+ELITEA_BROWSER_ENGINE=/path/to/chrome-headless-shell ELITEA_BROWSER_MOLI=/path/to/moli \
+cargo test -p elitea-browser-session --test bakeoff -- the_bake_off --nocapture
+node scripts/ci/browser-bakeoff-report.mjs /tmp/bakeoff.jsonl
+```
+
+Outside gVisor the agent refuses `lite` and `auto`, and `full` with `engine_sandbox: false`, so a local run outside gVisor records start failures. Use the workflow for the numbers that count.

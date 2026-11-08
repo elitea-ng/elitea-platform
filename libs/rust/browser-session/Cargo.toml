@@ -20,6 +20,11 @@ base64 = "0.22.1"
 # rather than here (the workspace forbids unsafe code).
 command-fds = { version = "0.3.3", features = ["tokio"] }
 elitea-browser-tools = { path = "../browser-tools" }
+# Moli (`lite`, ADR-0049 decision 2) serves CDP on a loopback WebSocket
+# only; the client half carries it into the same CDP connection as Chrome's
+# pipe. No TLS feature: the endpoint is plain ws:// on the pod's loopback.
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 

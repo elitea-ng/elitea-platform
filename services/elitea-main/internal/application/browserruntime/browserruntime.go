@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,8 +29,8 @@ import (
 // RuntimeContextField is the accept-field name and the JSON key.
 const RuntimeContextField = "browser"
 
-// EngineFull is the one engine (configurations.BrowserEngineFull).
-const EngineFull = "full"
+// EngineFull is the default engine (platformconfig.BrowserEngineFull).
+const EngineFull = platformconfig.BrowserEngineFull
 
 // The egress modes of the browser field. The browser has no direct route.
 const (
@@ -159,6 +160,9 @@ type Resolver struct {
 	egress   Egress
 	logger   *slog.Logger
 	now      func() time.Time
+	// engines are the engines the platform admits
+	// (platformconfig.BrowserEngines).
+	engines []string
 }
 
 // NewResolver returns nil when a reader is nil: the composition root then
@@ -170,7 +174,16 @@ func NewResolver(platform PlatformReader, project ProjectReader, usage UsageRead
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Resolver{platform: platform, project: project, usage: usage, trigger: trigger, egress: egress, logger: logger, now: time.Now}
+	return &Resolver{platform: platform, project: project, usage: usage, trigger: trigger, egress: egress, logger: logger, now: time.Now,
+		engines: platformconfig.BrowserEngines(platformconfig.BrowserLiteAdmitted)}
+}
+
+// WithEngines replaces the admitted engines, for tests.
+func (r *Resolver) WithEngines(engines []string) *Resolver {
+	if r != nil && engines != nil {
+		r.engines = engines
+	}
+	return r
 }
 
 // WithClock replaces time.Now, for tests.
@@ -203,7 +216,11 @@ func (r *Resolver) ResolveBrowserContext(ctx context.Context, claim Claim) (*Run
 		return nil, nil
 	}
 	domains := append([]string{}, setting.AllowDomains...)
-	if setting.Engine != "" && setting.Engine != EngineFull {
+	engine := setting.Engine
+	if engine == "" {
+		engine = EngineFull
+	}
+	if !slices.Contains(r.engines, engine) {
 		// A stored engine nobody admits: the browser stays off for the run.
 		r.logger.WarnContext(ctx, "browser context: the project names an engine that is not admitted; the browser is unavailable",
 			"execution_id", claim.ExecutionID, "project_id", claim.ProjectID, "engine", setting.Engine)
@@ -238,7 +255,7 @@ func (r *Resolver) ResolveBrowserContext(ctx context.Context, claim Claim) (*Run
 	}
 	egress := r.egressFor(ctx, claim, platform, setting)
 	return &RuntimeContext{
-		Engine:              EngineFull,
+		Engine:              engine,
 		Egress:              egress,
 		MaxRunSeconds:       platform.MaxRunSeconds,
 		MonthlyQuotaSeconds: platform.MonthlyQuotaSeconds,

@@ -14,6 +14,7 @@
 //!  "max_wall_seconds": 3600, "engine_sandbox": false,
 //!  "full": {"max_cpu_millis": 2000, "max_memory_bytes": 2147483648},
 //!  "lite": {"max_cpu_millis": 1000, "max_memory_bytes": 536870912},
+//!  "lite_image": "ghcr.io/.../elitea-browser-session-lite@sha256:<64 hex>",
 //!  "backend": {"kind": "kubernetes", "namespace": "elitea-execution",
 //!              "runtime_class": "gvisor",
 //!              "node_selector": {"elitea.ai/browser": "true"},
@@ -25,9 +26,11 @@
 //! (the engine runs with `--no-sandbox`) is admitted only where the runtime
 //! is gVisor: on Docker the profile is refused at startup without
 //! `"runtime": "runsc"`, and on Kubernetes each start is refused unless the
-//! `RuntimeClass`'s handler is gVisor's. `lite` is absent until the bake-off
-//! admits Moli (decision 9). The chart renders the profile from
-//! `sandboxKubernetes.browserSessions`.
+//! `RuntimeClass`'s handler is gVisor's. `lite` and `lite_image` come
+//! together or not at all: absent until the bake-off admits Moli (decision
+//! 9), and then they let the profile run `lite` and `auto` sessions in the
+//! `lite` image (Moli beside chrome-headless-shell). The chart renders the
+//! profile from `sandboxKubernetes.browserSessions`.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -110,6 +113,9 @@ pub struct BrowserProfileConfig {
     full: EngineConfig,
     #[serde(default)]
     lite: Option<EngineConfig>,
+    /// The `lite` session image, by digest; required with `lite`.
+    #[serde(default)]
+    lite_image: Option<String>,
     backend: BackendConfig,
 }
 
@@ -166,6 +172,11 @@ impl BrowserProfileConfig {
             || !(60..=MAX_WALL_SECONDS).contains(&self.max_wall_seconds)
             || !self.full.valid()
             || self.lite.is_some_and(|lite| !lite.valid())
+            || self.lite.is_some() != self.lite_image.is_some()
+            || self
+                .lite_image
+                .as_deref()
+                .is_some_and(|image| !pinned(image) || image == self.image)
         {
             return Err(StartupError("validate the browser profile"));
         }
@@ -221,6 +232,7 @@ impl BrowserProfileConfig {
         };
         BrowserCeilings {
             image: self.image.clone(),
+            lite_image: self.lite_image.clone(),
             full: ceiling(self.full),
             lite: self.lite.map(ceiling),
             max_wall_seconds: self.max_wall_seconds,
@@ -361,8 +373,9 @@ mod tests {
 
     fn profile(engine_sandbox: bool, backend: &str) -> String {
         format!(
-            r#"{{"revision":1,"purpose":"browser","listen_address":"127.0.0.1:9471","owner":"browser-sessions","audience":"dns:elitea-sandbox-browser","ca_path":"/run/ca.pem","certificate_path":"/run/c.pem","private_key_path":"/run/k.pem","verification_keyring_path":"/run/keys.json","image":"registry.example/browser@sha256:{}","concurrency":100,"sessions_per_run":3,"max_pages":3,"max_wall_seconds":3600,"engine_sandbox":{engine_sandbox},"full":{{"max_cpu_millis":2000,"max_memory_bytes":2147483648}},"lite":{{"max_cpu_millis":1000,"max_memory_bytes":536870912}},"backend":{backend}}}"#,
-            "f".repeat(64)
+            r#"{{"revision":1,"purpose":"browser","listen_address":"127.0.0.1:9471","owner":"browser-sessions","audience":"dns:elitea-sandbox-browser","ca_path":"/run/ca.pem","certificate_path":"/run/c.pem","private_key_path":"/run/k.pem","verification_keyring_path":"/run/keys.json","image":"registry.example/browser@sha256:{}","concurrency":100,"sessions_per_run":3,"max_pages":3,"max_wall_seconds":3600,"engine_sandbox":{engine_sandbox},"full":{{"max_cpu_millis":2000,"max_memory_bytes":2147483648}},"lite":{{"max_cpu_millis":1000,"max_memory_bytes":536870912}},"lite_image":"registry.example/browser-lite@sha256:{}","backend":{backend}}}"#,
+            "f".repeat(64),
+            "c".repeat(64)
         )
     }
 
@@ -451,16 +464,45 @@ mod tests {
             BrowserProfileConfig::parse(missing.as_bytes()).is_err(),
             "engine_sandbox is required"
         );
-        let no_lite = base.replace(
+        let lite_image = format!(
+            r#","lite_image":"registry.example/browser-lite@sha256:{}""#,
+            "c".repeat(64)
+        );
+        let no_lite = base
+            .replace(
+                r#","lite":{"max_cpu_millis":1000,"max_memory_bytes":536870912}"#,
+                "",
+            )
+            .replace(&lite_image, "");
+        let ceilings = BrowserProfileConfig::parse(no_lite.as_bytes())
+            .expect("lite is optional")
+            .ceilings();
+        assert!(ceilings.lite.is_none() && ceilings.lite_image.is_none());
+        // `lite` and its image come together, the image pinned and its own.
+        let lite_without_image = base.replace(&lite_image, "");
+        assert!(BrowserProfileConfig::parse(lite_without_image.as_bytes()).is_err());
+        let image_without_lite = base.replace(
             r#","lite":{"max_cpu_millis":1000,"max_memory_bytes":536870912}"#,
             "",
         );
-        assert!(
-            BrowserProfileConfig::parse(no_lite.as_bytes())
-                .expect("lite is optional")
-                .ceilings()
-                .lite
-                .is_none()
+        assert!(BrowserProfileConfig::parse(image_without_lite.as_bytes()).is_err());
+        let mutable_lite = base.replace(&format!("@sha256:{}", "c".repeat(64)), ":latest");
+        assert!(BrowserProfileConfig::parse(mutable_lite.as_bytes()).is_err());
+        let same_image = base.replace(
+            &format!("browser-lite@sha256:{}", "c".repeat(64)),
+            &format!("browser@sha256:{}", "f".repeat(64)),
+        );
+        assert!(BrowserProfileConfig::parse(same_image.as_bytes()).is_err());
+        let lite = BrowserProfileConfig::parse(base.as_bytes())
+            .expect("valid")
+            .ceilings()
+            .lite_image;
+        assert_eq!(
+            lite,
+            Some(format!(
+                "registry.example/browser-lite@sha256:{}",
+                "c".repeat(64)
+            ))
         );
     }
 

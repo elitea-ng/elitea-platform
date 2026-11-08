@@ -33,7 +33,7 @@ export interface BrowserViewFrameHeader {
   readonly control: BrowserControl;
 }
 
-/** `notice` (`input_refused`, `session_lingering`, `control_revoked`), `refused` (`input_refused`, `malformed`) and `end`. */
+/** `notice` (`input_refused`, `session_lingering`, `control_revoked`, `engine_switched`), `refused` (`input_refused`, `malformed`) and `end`. */
 export interface BrowserViewCode {
   readonly type: 'notice' | 'refused' | 'end';
   readonly code: string;

@@ -225,11 +225,13 @@ pub use elitea_egress_guard::{
 pub use families::artifact::ArtifactToolAuthority;
 pub use families::browser::{
     BrowserBudget, BrowserLimits, BrowserRun, BrowserSession, BrowserToolHost, BrowserToolsetError,
-    Classified, ENGINE_FULL as BROWSER_ENGINE_FULL, Escalation as BrowserEscalation,
-    Focus as BrowserFocus, MAX_SUBMIT_HOSTS, METERED_OPERATION as BROWSER_METERED_OPERATION,
-    METERED_PROVIDER as BROWSER_METERED_PROVIDER, RunOrigin, SessionAnswer, SessionError,
-    SessionImage, TOOLKIT_TYPE as BROWSER_TOOLKIT_TYPE, browser_tool_names,
-    classify as classify_browser_call, classify_with_focus as classify_browser_call_with_focus,
+    Classified, ENGINE_AUTO as BROWSER_ENGINE_AUTO, ENGINE_FULL as BROWSER_ENGINE_FULL,
+    ENGINE_LITE as BROWSER_ENGINE_LITE, ENGINES as BROWSER_ENGINES,
+    Escalation as BrowserEscalation, Focus as BrowserFocus, MAX_SUBMIT_HOSTS,
+    METERED_OPERATION as BROWSER_METERED_OPERATION, METERED_PROVIDER as BROWSER_METERED_PROVIDER,
+    RunOrigin, SessionAnswer, SessionError, SessionImage, TOOLKIT_TYPE as BROWSER_TOOLKIT_TYPE,
+    browser_tool_names, classify as classify_browser_call,
+    classify_with_focus as classify_browser_call_with_focus,
     contract_name as browser_contract_name, offered_browser_toolset,
 };
 #[cfg(feature = "toolkit-data-analysis")]

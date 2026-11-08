@@ -60,7 +60,8 @@ pub(crate) struct BrowserEgress {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BrowserRuntimeContext {
-    /// Only `full` (ADR-0049 decision 2).
+    /// `full`, `lite` or `auto` (ADR-0049 decision 2); Main names `lite`
+    /// and `auto` only once the platform admitted Moli (decision 9).
     pub(crate) engine: String,
     pub(crate) egress: BrowserEgress,
     /// The run's cap in engine seconds; 0 is no cap.
@@ -83,7 +84,7 @@ impl BrowserRuntimeContext {
     ///
     /// A fixed sentence naming what is wrong.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if self.engine != elitea_agent_runtime::toolkits::BROWSER_ENGINE_FULL {
+        if !elitea_agent_runtime::toolkits::BROWSER_ENGINES.contains(&self.engine.as_str()) {
             return Err("the browser engine is not admitted");
         }
         if self.max_run_seconds > MAX_RUN_SECONDS
@@ -172,6 +173,15 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_engine_main_may_name_parses() {
+        for engine in ["full", "lite", "auto"] {
+            let mut value = field();
+            value["engine"] = json!(engine);
+            assert_eq!(parse(value).expect("valid").engine, engine);
+        }
+    }
+
+    #[test]
     fn an_unavailable_field_parses() {
         let mut value = field();
         value["egress"] = json!({
@@ -198,8 +208,8 @@ pub(crate) mod tests {
     fn a_malformed_field_is_refused() {
         let mut unknown = field();
         unknown["headless"] = json!(false);
-        let mut lite = field();
-        lite["engine"] = json!("lite");
+        let mut turbo = field();
+        turbo["engine"] = json!("turbo");
         let mut direct = field();
         direct["egress"]["mode"] = json!("direct");
         let mut credentialed = field();
@@ -216,7 +226,7 @@ pub(crate) mod tests {
         bad_domain["allow_domains"] = json!(["a b"]);
         for value in [
             unknown,
-            lite,
+            turbo,
             direct,
             credentialed,
             no_token,

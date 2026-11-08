@@ -15,7 +15,7 @@
  * Threads are remembered per folder on this machine (`features/workspace`
  * `threads.ts`) because a conversation does not know its folder.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -36,6 +36,7 @@ import { useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { NoAgents } from './AgentPickers';
 import { CloudTranscript } from './CloudTranscript';
+import { cloudBrowserTabSession } from './cloudBrowserTab';
 import { CreateAgentDialog } from './CreateAgentDialog';
 import { HandoffDialogs } from './HandoffControls';
 import { ForkNotices } from './forkNotices';
@@ -103,6 +104,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const codingAgent = useLocalCodingAgent(projectId, raw.empty);
   // A thread away from this computer is chatted with on the server (the cloud copy); `cloud` is idle otherwise.
   const cloud = useCloudChat({ conversationId, workspace, active: handoff.offLaptop, mayChat: handoff.status?.executor === 'cloud' });
+  // Away from this computer, the Browser tab streams the cloud run's browser (ADR-0048 decision 7).
+  const cloudBrowser = useMemo(() => cloudBrowserTabSession(handoff.offLaptop, cloud.history), [handoff.offLaptop, cloud.history]);
 
   useSessionMenuActions({ handoff, conversationId, workspace, hasIndex, agentRef: commands.agentRef, openIndexSettings: () => useDesktopLayout.getState().showInspector('index'), createAgent: () => setCreateAgentOpen(true) });
   useBrowserEvents();
@@ -187,6 +190,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         planMode={commands.planMode}
         context={inspectorMeter(handoff, turn, session.history, idleCompacted)}
         conversationId={conversationId}
+        cloudBrowserSession={cloudBrowser}
       />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog

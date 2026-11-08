@@ -5784,6 +5784,7 @@
   "cloudBrowser.handBack.tooLong": "The note is too long.",
   "cloudBrowser.lingering": "The run ended. The last page stays here for a few minutes; nobody can take over.",
   "cloudBrowser.notice.controlRevoked": "You can no longer take over this browser. The agent has it back.",
+  "cloudBrowser.notice.engineSwitched": "The page needed the full browser, so it was reopened there.",
   "cloudBrowser.notice.inputRefused": "The browser did not take that input.",
   "cloudBrowser.page": "The cloud browser page",
   "cloudBrowser.pill.agent": "Agent",
@@ -5860,5 +5861,6 @@
   "features.agentMemory.writer.agent": "The agent",
   "features.agentMemory.writer.person": "A person",
   "pages.agents.editApplication.tabs.memory": "Memory",
-  "features.agentMemory.chip.archived": "archived"
+  "features.agentMemory.chip.archived": "archived",
+  "cloudBrowser.failure.upgradeRequired": "Update the app to see the browser: this version is older than the workspace allows."
 }

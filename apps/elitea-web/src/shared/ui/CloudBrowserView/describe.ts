@@ -18,6 +18,8 @@ export function describeFailure(failure: BrowserViewFailure): string {
       return t('cloudBrowser.failure.forbidden', 'This page cannot open the browser view. Open Elitea at its own address.');
     case 'disconnected':
       return t('cloudBrowser.failure.disconnected', 'The connection to the browser dropped. Reconnecting…');
+    case 'upgrade_required':
+      return t('cloudBrowser.failure.upgradeRequired', 'Update the app to see the browser: this version is older than the workspace allows.');
     case 'unavailable':
     default:
       return t('cloudBrowser.failure.unavailable', 'The browser is not available right now. Trying again…');
@@ -43,6 +45,8 @@ export function describeNotice(code: string | null): string | null {
       return t('cloudBrowser.notice.controlRevoked', 'You can no longer take over this browser. The agent has it back.');
     case 'input_refused':
       return t('cloudBrowser.notice.inputRefused', 'The browser did not take that input.');
+    case 'engine_switched':
+      return t('cloudBrowser.notice.engineSwitched', 'The page needed the full browser, so it was reopened there.');
     case 'malformed':
       return null;
     default:

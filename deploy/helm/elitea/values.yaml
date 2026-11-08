@@ -7342,7 +7342,10 @@ worker:
     # example elitea-sandbox-browser:9471), audience, cpu_millis,
     # memory_bytes (at least 512 MiB), wall_seconds (60 to the profile's
     # maxWallSeconds), max_pages (at most the profile's maxPages). Each is at
-    # most the profile's `full` ceiling.
+    # most the profile's `full` ceiling. Optional, both or neither:
+    # lite_cpu_millis and lite_memory_bytes, the size of a `lite` session
+    # (ADR-0049 decision 1: 1000 and 536870912), at most the profile's `lite`
+    # ceiling; unset, a lite session asks for the full size.
     browserSessions: {}
     # The disk the worker gives workspaceRuns.scratch_root (segments and
     # checkouts of handed-off threads): a dedicated emptyDir of this size,
@@ -7769,10 +7772,17 @@ sandboxKubernetes:
       full:
         maxCpuMillis: 2000
         maxMemoryBytes: 2147483648
-      # Moli, admitted only after the bake-off (ADR-0049 decision 9). Off
-      # until then: an empty map renders no `lite` and the profile refuses it.
+      # Moli (ADR-0049 decision 2), for `lite` and `auto` sessions. Off by
+      # default: an empty map renders no `lite` and the supervisor refuses
+      # both engines. Set it together with liteImage. A project can choose
+      # lite or auto only once the bake-off admits Moli (ADR-0049 decision 9,
+      # the appendix); until then Main serves every session as `full`.
       lite: {}
-      # Example once admitted: {maxCpuMillis: 1000, maxMemoryBytes: 536870912}
+      # Example: {maxCpuMillis: 1000, maxMemoryBytes: 536870912}
+      # The lite session image by digest (elitea-browser-session-lite: the
+      # session image plus Moli at a pinned version). Required with `lite`,
+      # refused without it, and it must differ from `image`.
+      liteImage: ""
       # Key names in the material Secret.
       material:
         ca: browser-client-ca.pem

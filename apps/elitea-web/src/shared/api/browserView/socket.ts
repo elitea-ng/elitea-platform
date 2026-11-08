@@ -13,6 +13,11 @@ export interface BrowserViewSocket {
   onmessage: ((event: MessageEvent) => void) | null;
   onclose: ((event: CloseEvent) => void) | null;
   onerror: ((event: Event) => void) | null;
+  /**
+   * The HTTP status a refused upgrade was answered with. A browser's
+   * `WebSocket` cannot read it (absent); the desktop host's socket can.
+   */
+  readonly refusedStatus?: number | undefined;
 }
 
 export type BrowserViewSocketFactory = (url: string) => BrowserViewSocket;

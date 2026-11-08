@@ -145,6 +145,7 @@ impl BrowserGrants for ClaimBrowserGrants {
 /// The session's resources: the supervisor's profile bounds each one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BrowserSessionShape {
+    pub(crate) engine: BrowserEngineV1,
     pub(crate) cpu_millis: u64,
     pub(crate) memory_bytes: u64,
     pub(crate) wall_seconds: u64,
@@ -194,7 +195,7 @@ impl GrpcBrowserSession {
             spec: BrowserSessionSpecV1 {
                 revision: 1,
                 name: session_name(execution_id),
-                engine: BrowserEngineV1::Full as i32,
+                engine: shape.engine as i32,
                 cpu_millis: shape.cpu_millis,
                 memory_bytes: shape.memory_bytes,
                 wall_seconds: shape.wall_seconds,
@@ -618,6 +619,7 @@ mod tests {
             Arc::new(RefusedGrants),
             "0123456789abcdef0123456789abcdef",
             BrowserSessionShape {
+                engine: BrowserEngineV1::Full,
                 cpu_millis: 1000,
                 memory_bytes: 1 << 30,
                 wall_seconds: 600,

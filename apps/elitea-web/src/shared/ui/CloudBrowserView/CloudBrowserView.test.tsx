@@ -147,6 +147,16 @@ describe('CloudBrowserView', () => {
     expect(screen.getByTestId('cloud-browser-notice')).toHaveTextContent('no longer take over');
   });
 
+  it('says so when an auto session moves to the full browser', async () => {
+    const { last } = mount();
+    act(() => {
+      last().hello(false);
+      last().frame(1);
+    });
+    act(() => last().text({ type: 'notice', code: 'engine_switched' }));
+    expect(await screen.findByTestId('cloud-browser-notice')).toHaveTextContent('reopened there');
+  });
+
   it('shows the end of the session', () => {
     const { last } = mount();
     act(() => {
@@ -168,6 +178,19 @@ describe('CloudBrowserView', () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(sockets).toHaveLength(2);
+  });
+
+  it('asks for an app update when the desktop host says the build is too old, and does not retry', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fake = fakeSocketFactory();
+    const factory = (url: string) => Object.assign(fake.factory(url), { refusedStatus: 426 });
+    renderWithTheme(<CloudBrowserView sessionId={SESSION} streamOptions={{ socketFactory: factory, url: 'ws://host/view' }} />);
+    act(() => fake.last().serverClose(1006));
+    expect(screen.getByTestId('cloud-browser-status')).toHaveTextContent('Update the app');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fake.sockets).toHaveLength(1);
   });
 
   it('does not retry a revoked viewer', async () => {

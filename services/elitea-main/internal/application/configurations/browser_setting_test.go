@@ -3,6 +3,8 @@ package configurations
 import (
 	"reflect"
 	"testing"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 func TestNormalizeBrowserSetting(t *testing.T) {
@@ -44,6 +46,30 @@ func TestNormalizeBrowserSetting(t *testing.T) {
 		if _, err := normalizeBrowserSetting(data); err == nil {
 			t.Errorf("%v: want a refusal", data)
 		}
+	}
+}
+
+// Until the bake-off admits Moli only `full` is accepted; once admitted the
+// stored engine is kept.
+func TestBrowserSettingEnginesFollowAdmission(t *testing.T) {
+	t.Parallel()
+	if platformconfig.BrowserLiteAdmitted {
+		t.Fatal("lite is admitted without a recorded bake-off appendix")
+	}
+	for _, engine := range []string{"lite", "auto"} {
+		if _, err := normalizeBrowserSetting(map[string]any{"engine": engine}); err == nil {
+			t.Errorf("%s accepted before admission", engine)
+		}
+	}
+	admitted := platformconfig.BrowserEngines(true)
+	for _, engine := range []string{"full", "lite", "auto"} {
+		normalized, err := normalizeBrowserSettingFor(map[string]any{"engine": engine}, admitted)
+		if err != nil || normalized["engine"] != engine {
+			t.Errorf("%s: normalized=%v err=%v", engine, normalized, err)
+		}
+	}
+	if _, err := normalizeBrowserSettingFor(map[string]any{"engine": "turbo"}, admitted); err == nil {
+		t.Error("an unknown engine was accepted")
 	}
 }
 

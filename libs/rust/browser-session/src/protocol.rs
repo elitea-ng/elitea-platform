@@ -37,7 +37,8 @@ const OUT_QUEUE: usize = 64;
 /// The `start` line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Start {
-    /// `full` (chrome-headless-shell); `lite` is not admitted yet.
+    /// `full` (chrome-headless-shell), `lite` (Moli) or `auto` (Moli, then
+    /// Chrome on an unsupported protocol or an empty snapshot).
     pub engine: String,
     /// `false` is `--no-sandbox`, admitted under gVisor only.
     pub engine_sandbox: bool,
@@ -153,6 +154,9 @@ pub trait Backend: Send + Sync + 'static {
     async fn view(&self, max_fps: u32) -> Option<Box<dyn FrameSource>>;
     /// A driving viewer's input event.
     async fn input(&self, event: &Value) -> Result<(), &'static str>;
+    /// Where the backend sends its non-fatal notices (stable codes, such as
+    /// `engine_switched`); the protocol writes each as a `notice` line.
+    fn notices(&self, _sender: mpsc::UnboundedSender<&'static str>) {}
     /// The run ended: no more calls.
     async fn run_ended(&self);
     /// Stop the engine.
@@ -264,6 +268,11 @@ where
             let _ = out.send(line).await;
         }
     };
+    // The backend's notices, as `notice` lines. Registered before `start`:
+    // `auto` may already switch engines there. A notice sent before `ready`
+    // is written right after it, so `ready` stays the answer to `start`.
+    let (notice_tx, mut notice_rx) = mpsc::unbounded_channel::<&'static str>();
+    backend.notices(notice_tx);
 
     // The first line must be `start`.
     let started = match read_line(&mut input).await {
@@ -282,7 +291,12 @@ where
         Err(_) => Err("protocol"),
     };
     match started {
-        Ok(version) => send(json!({ "op": "ready", "engine_version": version })).await,
+        Ok(version) => {
+            send(json!({ "op": "ready", "engine_version": version })).await;
+            while let Ok(code) = notice_rx.try_recv() {
+                send(json!({ "op": "notice", "code": code })).await;
+            }
+        }
         Err(code) => {
             log(code);
             backend.stop().await;
@@ -292,6 +306,19 @@ where
             return writer.await.unwrap_or(Ok(()));
         }
     }
+
+    let notice_out = out.clone();
+    let notifier = tokio::spawn(async move {
+        while let Some(code) = notice_rx.recv().await {
+            if notice_out
+                .send(json!({ "op": "notice", "code": code }))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
 
     // Calls run one at a time, in order, on their own task.
     let (calls, mut call_queue) = mpsc::unbounded_channel::<(Value, String, Value)>();
@@ -390,6 +417,7 @@ where
     }
     drop(calls);
     caller.abort();
+    notifier.abort();
     backend.stop().await;
     send(json!({ "op": "bye" })).await;
     drop(out);
@@ -440,6 +468,7 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         seen: StdMutex<Vec<String>>,
+        notices: StdMutex<Option<mpsc::UnboundedSender<&'static str>>>,
     }
 
     struct Frames(u64);
@@ -467,6 +496,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("start {}", start.engine));
+            // `auto` switching at start: a notice before `ready`.
+            if start.engine == "auto"
+                && let Some(notices) = self.notices.lock().unwrap().as_ref()
+            {
+                notices.send("engine_switched").unwrap();
+            }
             if start.engine_sandbox {
                 Ok("chrome-headless-shell/1.0".to_owned())
             } else {
@@ -494,6 +529,9 @@ mod tests {
                 .unwrap()
                 .push(format!("input {}", event["type"].as_str().unwrap_or("?")));
             Ok(())
+        }
+        fn notices(&self, sender: mpsc::UnboundedSender<&'static str>) {
+            *self.notices.lock().unwrap() = Some(sender);
         }
         async fn run_ended(&self) {
             self.seen.lock().unwrap().push("run_ended".to_owned());
@@ -560,6 +598,21 @@ mod tests {
         assert_eq!(replies.last().unwrap(), &json!({"op": "bye"}));
         assert_eq!(seen.last().map(String::as_str), Some("stop"));
         assert!(!seen.iter().any(|line| line.contains("never")));
+    }
+
+    #[tokio::test]
+    async fn a_notice_from_start_follows_ready() {
+        let mut auto = start(true);
+        auto["engine"] = json!("auto");
+        let (replies, _) = run(&[auto, json!({"op": "destroy"})]).await;
+        assert_eq!(replies[0]["op"], "ready");
+        assert!(
+            replies
+                .iter()
+                .any(|reply| *reply == json!({"op": "notice", "code": "engine_switched"})),
+            "{replies:?}"
+        );
+        assert_eq!(replies.last().unwrap(), &json!({"op": "bye"}));
     }
 
     #[test]

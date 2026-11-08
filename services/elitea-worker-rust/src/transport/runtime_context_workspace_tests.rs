@@ -150,10 +150,12 @@ async fn a_browser_field_is_parsed_and_a_malformed_one_refused() {
     assert!(field.unattended);
     assert_eq!(field.monthly_quota_seconds, 36_000);
 
-    let mut lite = token(None);
-    lite["browser"] = crate::browser_run::context::tests::field();
-    lite["browser"]["engine"] = serde_json::json!("lite");
-    let (client, _) = fake(&lite);
+    // An engine Main never names is refused (Main admits `lite` and `auto`,
+    // ADR-0049 decision 9; the worker accepts every engine Main may name).
+    let mut unknown = token(None);
+    unknown["browser"] = crate::browser_run::context::tests::field();
+    unknown["browser"]["engine"] = serde_json::json!("turbo");
+    let (client, _) = fake(&unknown);
     assert!(matches!(
         client.redeem(&test_runtime_context_authority()).await,
         Err(RuntimeContextError::InvalidResponse(_))
