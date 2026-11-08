@@ -969,6 +969,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-fds"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b60b5124979fccd9addd89d8b97a1d6eebb4950694520c75ddd722535ea443f"
+dependencies = [
+ "nix 0.31.3",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1656,6 +1667,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-browser-driver-linux"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cairo-rs",
+ "elitea-browser-driver-dom",
+ "elitea-browser-tools",
+ "gtk",
+ "javascriptcore-rs",
+ "serde_json",
+ "tauri",
+ "tokio",
+ "webkit2gtk",
+]
+
+[[package]]
 name = "elitea-browser-driver-macos"
 version = "0.1.0"
 dependencies = [
@@ -1685,8 +1712,21 @@ dependencies = [
  "tauri",
  "tokio",
  "webview2-com",
- "windows",
  "windows-core",
+]
+
+[[package]]
+name = "elitea-browser-session"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "command-fds",
+ "elitea-browser-tools",
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -1764,10 +1804,14 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "bytes",
+ "cairo-rs",
  "chrono",
  "dirs",
  "elitea-agent-runtime",
+ "elitea-browser-driver-dom",
  "elitea-browser-driver-macos",
+ "elitea-browser-driver-windows",
+ "elitea-browser-session",
  "elitea-browser-tools",
  "elitea-desktop-control",
  "elitea-egress-guard",
@@ -1778,6 +1822,7 @@ dependencies = [
  "elitea-workspace-store",
  "futures",
  "glob",
+ "gtk",
  "hmac",
  "keepawake",
  "log",
@@ -1809,6 +1854,7 @@ dependencies = [
  "unicode-general-category",
  "url",
  "uuid",
+ "webkit2gtk",
 ]
 
 [[package]]

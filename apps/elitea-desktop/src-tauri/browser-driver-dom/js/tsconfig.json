@@ -1,9 +1,10 @@
 {
-  // The browser driver's page script (driver.ts). build.rs runs
+  // The browser driver's page scripts: driver.ts (macOS and Linux) and
+  // input.ts (the Windows pane's input reporter). build.rs runs
   // `tsc -p js/tsconfig.json --outDir $OUT_DIR`, and src/lib.rs embeds the
-  // emitted driver.js with include_str!; no JavaScript is committed. One
-  // classic script, no imports or exports: WebKit runs it as a user script
-  // in the driver's content world, and with evaluateJavaScript.
+  // emitted driver.js and input.js with include_str!; no JavaScript is
+  // committed. Classic scripts, no imports or exports: each runs as a user
+  // script in an isolated world.
   "compilerOptions": {
     // WebKit on macOS 12 and later runs ES2022.
     "target": "ES2022",
@@ -25,5 +26,5 @@
     "declaration": false,
     "newLine": "lf"
   },
-  "files": ["driver.ts"]
+  "files": ["driver.ts", "input.ts"]
 }

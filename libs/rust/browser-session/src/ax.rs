@@ -341,6 +341,13 @@ impl<S: std::hash::BuildHasher> Walk<'_, '_, S> {
     }
 }
 
+/// A Chromium role as the contract's role, for one node read on its own
+/// (the focused element): what a snapshot would show for it.
+#[must_use]
+pub fn role_of(role: &str) -> &str {
+    map_role(role).unwrap_or("generic")
+}
+
 /// A Chromium role as the contract's role; `None` drops the node and its
 /// subtree (text boxes that only repeat their `StaticText`).
 fn map_role(role: &str) -> Option<&str> {

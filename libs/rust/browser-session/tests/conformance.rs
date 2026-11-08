@@ -116,6 +116,52 @@ async fn conformance_kit_passes_on_chrome_headless_shell() {
     );
 }
 
+/// The desktop host's pre-call reads (the Windows pane drives `WebView2`
+/// through this driver): the address, the focused control and an element's
+/// details.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_host_reads_the_address_the_focus_and_an_element() {
+    use elitea_browser_tools::call::ElementRef;
+    use elitea_browser_tools::driver::BrowserDriver as _;
+    let Some(engine) = engine() else { return };
+    let port = serve_fixtures().await;
+    let driver = start(engine).await;
+    let forms = format!("http://127.0.0.1:{port}/forms.html");
+    let opened = dispatch(&driver, spec::BROWSER_OPEN, &json!({ "url": forms })).await;
+    assert_eq!(opened.result()["status"], "ok", "{}", opened.result());
+    assert_eq!(driver.current_url().await.unwrap(), forms);
+    assert_eq!(
+        driver.focused().await.unwrap(),
+        None,
+        "nothing has the focus"
+    );
+    let snapshot = driver.snapshot(500).await.unwrap();
+    let field = snapshot
+        .find("textbox", "Email")
+        .and_then(|node| node.ref_index)
+        .expect("the email field");
+    let target = ElementRef::parse(&format!("e{field}")).unwrap();
+    let inspected = driver.inspect(&target).await.unwrap();
+    assert_eq!(inspected.role, "textbox");
+    assert_eq!(inspected.input_type.as_deref(), Some("email"));
+    let clicked = dispatch(
+        &driver,
+        spec::BROWSER_CLICK,
+        &json!({ "ref": format!("e{field}") }),
+    )
+    .await;
+    assert_eq!(clicked.result()["status"], "ok", "{}", clicked.result());
+    let focused = driver
+        .focused()
+        .await
+        .unwrap()
+        .expect("the field has the focus");
+    assert_eq!(
+        (focused.role.as_str(), focused.name.as_str()),
+        ("textbox", "Email")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hard_limits_and_the_view_stream() {
     let Some(engine) = engine() else { return };

@@ -210,6 +210,9 @@ pub struct Watch {
     pub page_target: String,
     /// The proxy's run token: answered on `Fetch.authRequired` from the proxy.
     pub proxy_token: Option<String>,
+    /// Answer the page's dialogs (the cloud page has no person at it). Off
+    /// for the desktop's page, whose person answers them.
+    pub answer_dialogs: bool,
 }
 
 /// Start the event task. Subscribe before the first command whose events
@@ -302,7 +305,7 @@ fn handle(
             let url = params["url"].as_str().unwrap_or_default().to_owned();
             tracker.update(|state| state.url = url);
         }
-        "Page.javascriptDialogOpening" => {
+        "Page.javascriptDialogOpening" if watch.answer_dialogs => {
             // The agent cannot see a dialog: an alert or a "leave this
             // page?" is accepted, a confirm or prompt declined, so the page
             // never decides something on the agent's behalf.

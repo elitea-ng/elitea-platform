@@ -23,9 +23,10 @@
 //!
 //! The engines are elsewhere: `elitea-browser-driver-macos` (WebKit FFI,
 //! the one crate allowed `unsafe` for WebKit) and the desktop host's
-//! `browser_linux` (the safe `webkit2gtk` API). Windows does not use this
-//! crate: WebView2 has CDP, so its driver is the cloud's CDP driver
-//! (`elitea-browser-session`) over `CallDevToolsProtocolMethod`.
+//! `browser_linux` (the safe `webkit2gtk` API). Windows uses only
+//! [`INPUT_SCRIPT`] and [`input`] from this crate: `WebView2` has CDP, so
+//! its driver is the cloud's CDP driver (`elitea-browser-session`) over
+//! `CallDevToolsProtocolMethod`.
 //!
 //! No JavaScript ever comes from the model: the host sends an operation
 //! name and JSON arguments to a fixed function body.
@@ -58,6 +59,18 @@ pub const MISSING: &str = "elitea-driver-missing";
 /// name is not a secret (a world is reached through the API, not by name).
 pub const WORLD_NAME: &str = "elitea-browser-driver";
 
+/// The Windows pane's input reporter: `js/input.ts` compiled by `build.rs`
+/// into `$OUT_DIR/input.js`. Installed over CDP in [`INPUT_WORLD`], it
+/// calls the [`INPUT_BINDING`] binding with the type of each trusted input
+/// event of the person (the list of [`input::REPORTED`]).
+pub const INPUT_SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/input.js"));
+
+/// The isolated world [`INPUT_SCRIPT`] runs in (Windows).
+pub const INPUT_WORLD: &str = "elitea_browser_input";
+
+/// The binding [`INPUT_SCRIPT`] reports on, in [`INPUT_WORLD`] only.
+pub const INPUT_BINDING: &str = "eliteaBrowserInput";
+
 /// The message handler a subframe announces itself on, in the driver world.
 pub const FRAME_HANDLER: &str = "eliteaBrowserFrame";
 
@@ -65,10 +78,21 @@ pub const FRAME_HANDLER: &str = "eliteaBrowserFrame";
 /// world.
 pub const INPUT_HANDLER: &str = "eliteaBrowserInput";
 
-
 #[cfg(test)]
 mod tests {
-    use super::SCRIPT;
+    use super::{INPUT_BINDING, INPUT_SCRIPT, SCRIPT};
+
+    #[test]
+    fn the_input_reporter_reports_the_same_kinds_through_its_binding() {
+        assert!(INPUT_SCRIPT.contains(INPUT_BINDING));
+        assert!(INPUT_SCRIPT.contains("isTrusted"));
+        for kind in super::input::REPORTED {
+            assert!(INPUT_SCRIPT.contains(&format!("'{kind}'")), "{kind}");
+        }
+        for banned in ["eval(", "new Function", "Function("] {
+            assert!(!INPUT_SCRIPT.contains(banned), "{banned}");
+        }
+    }
 
     #[test]
     fn the_script_is_one_self_installing_function_with_no_eval() {

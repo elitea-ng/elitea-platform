@@ -38,7 +38,7 @@ use elitea_browser_tools::call::{
     Direction, ElementRef, Key, ScrollTarget, WaitCondition, url_matches,
 };
 use elitea_browser_tools::driver::{
-    BrowserDriver, Handback, HistoryStep, PageInfo, PageText, Screenshot,
+    BrowserDriver, ControlInfo, Handback, HistoryStep, PageInfo, PageText, Screenshot,
 };
 use elitea_browser_tools::rate::ActRate;
 use elitea_browser_tools::snapshot::{Snapshot, SnapshotSlot, is_secure_field};
@@ -66,6 +66,7 @@ const WORLD: &str = "elitea_browser_driver";
 const INSPECT: &str = r"function () {
   const el = this;
   const tag = el.tagName;
+  const download = tag === 'A' && el.hasAttribute('download');
   const nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
   const editable = el.isContentEditable || tag === 'TEXTAREA' ||
     (tag === 'INPUT' && !nonText.includes(String(el.type || '').toLowerCase()));
@@ -75,6 +76,7 @@ const INSPECT: &str = r"function () {
     editable: !!editable,
     disabled: !!(el.disabled || el.readOnly),
     connected: el.isConnected,
+    download,
   };
 }";
 
@@ -117,8 +119,25 @@ const FOCUSED: &str = r"function () {
     autocomplete: el.getAttribute('autocomplete'),
     crossFrame: false,
     focused: document.hasFocus(),
+    element: true,
   };
 }";
+
+/// The element `FOCUSED` describes, as a remote object (same-origin frames
+/// and shadow roots followed; the body when nothing has the focus).
+const FOCUSED_ELEMENT: &str = r"(() => {
+  let el = document.activeElement;
+  for (let hops = 0; el && hops < 64; hops += 1) {
+    if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+    if (el.tagName === 'IFRAME' || el.tagName === 'FRAME') {
+      let inner = null;
+      try { inner = el.contentDocument; } catch (error) {}
+      if (inner) { el = inner.activeElement; continue; }
+    }
+    break;
+  }
+  return el;
+})()";
 
 const SELECT: &str = r"function (values) {
   if (this.tagName !== 'SELECT') return { error: 'not_select' };
@@ -340,6 +359,66 @@ impl CdpDriver {
             .as_str()
             .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page did not attach"))?
             .to_owned();
+        Self::set_up(cdp, events, config, control, session, target, true).await
+    }
+
+    /// Set up a connection that IS one page already (the desktop's
+    /// `WebView2`, whose CDP is the page's own: no browser target, no
+    /// `Target.attachToTarget`). Commands to `session` go to the page; the
+    /// page's child frames and workers still attach under it. The page
+    /// keeps its own size: no device metrics are overridden, and
+    /// `config.width` and `config.height` are only the page size a
+    /// scroll pages by. The page's dialogs are left to the person at it.
+    ///
+    /// # Errors
+    ///
+    /// The page did not answer.
+    pub async fn attach_page(
+        cdp: Connection,
+        config: &EngineConfig,
+        control: Arc<Control>,
+        session: &str,
+    ) -> Result<Self, BrowserError> {
+        let events = cdp.events();
+        let tree = cdp
+            .call(Some(session), "Page.getFrameTree", json!({}))
+            .await
+            .map_err(|error| engine_error(&error))?;
+        // A page target's id is its main frame's.
+        let target = tree["frameTree"]["frame"]["id"]
+            .as_str()
+            .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page has no frame"))?
+            .to_owned();
+        Self::set_up(
+            cdp,
+            events,
+            config,
+            control,
+            session.to_owned(),
+            target,
+            false,
+        )
+        .await
+    }
+
+    async fn set_up(
+        cdp: Connection,
+        events: tokio::sync::broadcast::Receiver<Arc<crate::cdp::Event>>,
+        config: &EngineConfig,
+        control: Arc<Control>,
+        session: String,
+        target: String,
+        // The cloud's own page: its size is set, its dialogs answered.
+        emulate: bool,
+    ) -> Result<Self, BrowserError> {
+        let call = |session: Option<String>, method: &'static str, params: Value| {
+            let cdp = cdp.clone();
+            async move {
+                cdp.call(session.as_deref(), method, params)
+                    .await
+                    .map_err(|error| engine_error(&error))
+            }
+        };
         let tracker = Tracker::new();
         page::spawn(
             Watch {
@@ -347,6 +426,7 @@ impl CdpDriver {
                 page_session: session.clone(),
                 page_target: target.clone(),
                 proxy_token: config.proxy_token.clone(),
+                answer_dialogs: emulate,
             },
             tracker.clone(),
             events,
@@ -358,15 +438,17 @@ impl CdpDriver {
         for method in ["Page.enable", "Network.enable"] {
             call(on_page.clone(), method, json!({})).await?;
         }
-        call(
-            on_page.clone(),
-            "Emulation.setDeviceMetricsOverride",
-            json!({
-                "width": config.width, "height": config.height,
-                "deviceScaleFactor": 1, "mobile": false,
-            }),
-        )
-        .await?;
+        if emulate {
+            call(
+                on_page.clone(),
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": config.width, "height": config.height,
+                    "deviceScaleFactor": 1, "mobile": false,
+                }),
+            )
+            .await?;
+        }
         call(
             on_page.clone(),
             "Target.setAutoAttach",
@@ -898,16 +980,25 @@ impl CdpDriver {
     // ── page info and settling ──────────────────────────────────────────
 
     async fn title(&self) -> String {
-        self.cdp
+        let title = |info: Value| info["targetInfo"]["title"].as_str().map(str::to_owned);
+        let browser = self
+            .cdp
             .call(
                 None,
                 "Target.getTargetInfo",
                 json!({ "targetId": self.target }),
             )
-            .await
-            .ok()
-            .and_then(|info| info["targetInfo"]["title"].as_str().map(str::to_owned))
-            .unwrap_or_default()
+            .await;
+        match browser {
+            Ok(info) => title(info).unwrap_or_default(),
+            // A page-only connection (`attach_page`): the page's own info.
+            Err(_) => self
+                .call(&self.session, "Target.getTargetInfo", json!({}))
+                .await
+                .ok()
+                .and_then(title)
+                .unwrap_or_default(),
+        }
     }
 
     async fn info(&self, before: Marks) -> Result<PageInfo, BrowserError> {
@@ -1674,6 +1765,90 @@ impl BrowserDriver for CdpDriver {
             )),
         }
     }
+
+    // The desktop host's rules read these before a call (the Windows pane,
+    // `attach_page`); the cloud session does not call them.
+
+    async fn focused(&self) -> Result<Option<ControlInfo>, BrowserError> {
+        let focused = self.main_frame(FOCUSED, Vec::new()).await?;
+        if focused["crossFrame"] == true {
+            // In an out-of-process frame: not known, so the host fails closed.
+            return Err(BrowserError::stale_ref("the focused frame is out of reach"));
+        }
+        if focused["element"] != true {
+            return Ok(None);
+        }
+        // The focused node's role and name, as the accessibility tree has them.
+        let context = self.world(&self.session, &self.target, false).await?;
+        let object = self
+            .call(
+                &self.session,
+                "Runtime.evaluate",
+                json!({ "expression": FOCUSED_ELEMENT, "contextId": context }),
+            )
+            .await?;
+        let object_id = object["result"]["objectId"]
+            .as_str()
+            .ok_or_else(|| BrowserError::stale_ref("the focus moved: try again"))?
+            .to_owned();
+        let tree = self
+            .call(
+                &self.session,
+                "Accessibility.getPartialAXTree",
+                json!({ "objectId": object_id, "fetchRelatives": false }),
+            )
+            .await;
+        let _ = self
+            .call(
+                &self.session,
+                "Runtime.releaseObject",
+                json!({ "objectId": object_id }),
+            )
+            .await;
+        let tree = tree?;
+        let node = tree["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .ok_or_else(|| BrowserError::stale_ref("the focus moved: try again"))?;
+        Ok(Some(ControlInfo {
+            role: ax::role_of(node["role"]["value"].as_str().unwrap_or_default()).to_owned(),
+            name: node["name"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            input_type: focused["type"].as_str().map(str::to_ascii_lowercase),
+            download: false,
+        }))
+    }
+
+    async fn inspect(&self, target: &ElementRef) -> Result<ControlInfo, BrowserError> {
+        let (role, name) = {
+            self.sync();
+            let refs = lock(&self.refs);
+            let node = refs.slot.resolve(target)?;
+            (node.role.clone(), node.name.clone())
+        };
+        let handle = self.handle(target, false)?;
+        let inspected = self.on_element(&handle, INSPECT, Vec::new()).await?;
+        Ok(ControlInfo {
+            role,
+            name,
+            input_type: inspected["type"].as_str().map(str::to_ascii_lowercase),
+            download: inspected["download"] == true,
+        })
+    }
+
+    async fn current_url(&self) -> Result<String, BrowserError> {
+        let history = self.page("Page.getNavigationHistory", json!({})).await?;
+        let index = history["currentIndex"]
+            .as_u64()
+            .and_then(|i| usize::try_from(i).ok());
+        index
+            .and_then(|index| history["entries"].get(index))
+            .and_then(|entry| entry["url"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| BrowserError::new(ErrorCode::Internal, "the page has no address"))
+    }
 }
 
 #[cfg(test)]
@@ -1806,5 +1981,69 @@ mod tests {
             script_value(&json!({"result": {"value": 3}})).unwrap(),
             json!(3)
         );
+    }
+
+    /// A connection that is one page (`WebView2`'s CDP): the commands it
+    /// got, by method and session.
+    type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
+    fn one_page() -> (Connection, Seen) {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (client_write, page_read) = tokio::io::duplex(1 << 16);
+        let (mut page_write, client_read) = tokio::io::duplex(1 << 16);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(page_read);
+            let mut record = Vec::new();
+            while reader.read_until(0, &mut record).await.unwrap_or(0) > 0 {
+                record.pop();
+                let command: Value = serde_json::from_slice(&record).unwrap();
+                record.clear();
+                let method = command["method"].as_str().unwrap_or_default().to_owned();
+                let session = command["sessionId"].as_str().map(str::to_owned);
+                lock(&log).push((method.clone(), session));
+                let reply = if method.starts_with("Target.") && method != "Target.setAutoAttach" {
+                    json!({"id": command["id"], "error": {"code": -32601, "message": "not found"}})
+                } else if method == "Page.getFrameTree" {
+                    json!({"id": command["id"], "result": {"frameTree": {"frame": {"id": "MAIN"}}}})
+                } else {
+                    json!({"id": command["id"], "result": {}})
+                };
+                let mut bytes = serde_json::to_vec(&reply).unwrap();
+                bytes.push(0);
+                page_write.write_all(&bytes).await.unwrap();
+            }
+        });
+        (Connection::new(client_read, client_write), seen)
+    }
+
+    #[tokio::test]
+    async fn a_page_connection_is_set_up_without_browser_targets_or_emulation() {
+        let (cdp, seen) = one_page();
+        let control = Arc::new(Control::new(false, Duration::from_secs(1)));
+        let driver = CdpDriver::attach_page(cdp, &EngineConfig::default(), control, "PAGE")
+            .await
+            .unwrap();
+        assert_eq!(driver.target, "MAIN", "the main frame is the page target");
+        let seen = lock(&seen).clone();
+        let methods: Vec<&str> = seen.iter().map(|(method, _)| method.as_str()).collect();
+        assert_eq!(
+            methods,
+            [
+                "Page.getFrameTree",
+                "Page.enable",
+                "Network.enable",
+                "Target.setAutoAttach"
+            ]
+        );
+        assert!(
+            seen.iter()
+                .all(|(_, session)| session.as_deref() == Some("PAGE")),
+            "every command goes to the page session: {seen:?}"
+        );
+        assert!(driver.engine_pid().is_none());
+        // The title falls back to the page's own target info.
+        assert_eq!(driver.title().await, "");
     }
 }

@@ -1,5 +1,6 @@
-//! Compiles the driver's page script, `js/driver.ts`, into
-//! `$OUT_DIR/driver.js`, which `src/lib.rs` embeds as `SCRIPT`.
+//! Compiles the driver's page scripts, `js/driver.ts` and `js/input.ts`,
+//! into `$OUT_DIR/driver.js` and `$OUT_DIR/input.js`, which `src/lib.rs`
+//! embeds as `SCRIPT` and `INPUT_SCRIPT`.
 //!
 //! The compiler is the web app's pinned TypeScript
 //! (`apps/elitea-web/node_modules/.bin/tsc`, from `npm ci` in
@@ -16,10 +17,9 @@ fn main() {
     let js_dir = manifest_dir.join("js");
     let tsconfig = js_dir.join("tsconfig.json");
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        js_dir.join("driver.ts").display()
-    );
+    for script in ["driver.ts", "input.ts"] {
+        println!("cargo:rerun-if-changed={}", js_dir.join(script).display());
+    }
     println!("cargo:rerun-if-changed={}", tsconfig.display());
     println!("cargo:rerun-if-env-changed=ELITEA_TSC");
 
@@ -48,7 +48,7 @@ fn main() {
     };
     if !output.status.success() {
         panic!(
-            "{} -p {} failed ({}): fix js/driver.ts. If tsc itself is broken, run `npm ci` \
+            "{} -p {} failed ({}): fix js/driver.ts or js/input.ts. If tsc itself is broken, run `npm ci` \
              in apps/elitea-web, or set ELITEA_TSC.\n--- stdout ---\n{}\n--- stderr ---\n{}",
             tsc.display(),
             tsconfig.display(),
@@ -58,13 +58,15 @@ fn main() {
         );
     }
 
-    let script = out_dir.join("driver.js");
-    if !script.is_file() {
-        panic!(
-            "{} succeeded but wrote no {}",
-            tsc.display(),
-            script.display()
-        );
+    for script in ["driver.js", "input.js"] {
+        let script = out_dir.join(script);
+        if !script.is_file() {
+            panic!(
+                "{} succeeded but wrote no {}",
+                tsc.display(),
+                script.display()
+            );
+        }
     }
 }
 
