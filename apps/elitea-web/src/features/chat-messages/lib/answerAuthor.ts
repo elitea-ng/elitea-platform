@@ -23,7 +23,7 @@ export interface AnswerAuthor {
 }
 
 /** The name a participant shows in the transcript: its persona's, else its own. */
-export function participantDisplayName(participant: MessageParticipantWire | undefined): string {
+function participantDisplayName(participant: MessageParticipantWire | undefined): string {
   return (
     trimmed(participant?.persona?.display_name) ??
     trimmed(participant?.entity_meta?.name) ??

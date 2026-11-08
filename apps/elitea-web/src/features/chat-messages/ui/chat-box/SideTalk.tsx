@@ -38,11 +38,11 @@ export function foldTranscript(chatHistory: readonly ChatMessage[]): FoldedEntry
 }
 
 /** Whether a row is a platform line. */
-export function isSystemLine(message: ChatMessage): boolean {
+function isSystemLine(message: ChatMessage): boolean {
   return message.messageClass === MESSAGE_CLASS.System;
 }
 
-export function SystemLine({ message }: { readonly message: ChatMessage }): ReactNode {
+function SystemLine({ message }: { readonly message: ChatMessage }): ReactNode {
   return (
     <Box data-testid="chat-system-line" sx={{ display: 'flex', justifyContent: 'center', paddingX: 2 }}>
       <Typography variant="bodySmall" color="text.secondary" sx={{ textAlign: 'center', fontStyle: 'italic' }}>
@@ -66,7 +66,7 @@ function SideTalkRow({ message }: { readonly message: ChatMessage }): ReactNode 
   );
 }
 
-export function SideTalk({ rows }: { readonly rows: readonly IndexedRow[] }): ReactNode {
+function SideTalk({ rows }: { readonly rows: readonly IndexedRow[] }): ReactNode {
   const [open, setOpen] = useState(false);
   const label = t('chatMessages.sideTalk.chip', 'Side conversation ({{n}})', { n: rows.length });
   return (

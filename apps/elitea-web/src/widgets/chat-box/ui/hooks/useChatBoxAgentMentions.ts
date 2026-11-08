@@ -18,7 +18,7 @@ import { triggerQueryEnd } from './triggerQueryRange';
 import { positiveParticipantId } from './useChatBoxSend.floor';
 
 /** The prefix that marks an agent row in the "@" list, which is keyed by participant id. */
-export const AGENT_CANDIDATE_PREFIX = 'agent:';
+const AGENT_CANDIDATE_PREFIX = 'agent:';
 
 /** An agent row of the "@" list (`UserMentionCandidate`'s shape). */
 export interface AgentMentionCandidate {
@@ -46,7 +46,7 @@ function participantId(value: unknown): number {
 }
 
 /** The name an agent participant shows and a mention spells: its persona's name, else the agent's. */
-export function agentDisplayName(participant: unknown): string {
+function agentDisplayName(participant: unknown): string {
   const row = (participant ?? {}) as AgentWire;
   return text(row.persona?.display_name) || text(row.entity_meta?.name) || text(row.entityMeta?.name) || text(row.meta?.name);
 }
