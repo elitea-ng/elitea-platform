@@ -181,6 +181,8 @@ const HAS_TEXT: &str = r"function (needle) {
 /// counts only when it is rendered (`getClientRects`) and not inside
 /// `aria-hidden="true"`: Chrome's tree leaves both out too, so neither
 /// is a ref Moli missed.
+// Read by `session` (the unix-only `auto` switch).
+#[cfg(unix)]
 const CONTENT: &str = r#"function (limit) {
   const body = document.body;
   const text = !!body && /[\p{L}\p{N}]/u.test(body.innerText.slice(0, 4000));
@@ -205,6 +207,7 @@ const CONTENT: &str = r#"function (limit) {
 }"#;
 
 /// The most elements [`CONTENT`] walks.
+#[cfg(unix)]
 const CONTENT_WALK_LIMIT: u64 = 20_000;
 
 /// [`PageContent`] from the page script's answer (`None`: it did not
@@ -212,6 +215,7 @@ const CONTENT_WALK_LIMIT: u64 = 20_000;
 /// layout and `aria-hidden`, so its answer stands; the DOM count, which
 /// sees neither, is a "yes" only when the script did not run (on Moli it
 /// may not).
+#[cfg(unix)]
 #[must_use]
 pub(crate) fn page_content_of(script: Option<&Value>, in_dom: bool) -> PageContent {
     match script {
@@ -546,6 +550,7 @@ impl CdpDriver {
     /// page script involved) and a page script, which also tells text.
     /// Outside the agent's gate, like [`Self::reopen`]; a script that does
     /// not run finds no text.
+    #[cfg(unix)]
     pub(crate) async fn page_content(&self) -> PageContent {
         let in_dom = lock(&self.refs).dom_controls > 0;
         let script = self
@@ -557,6 +562,7 @@ impl CdpDriver {
 
     /// How many main-frame documents the page has had: an `auto` open
     /// that timed out reached one when this rose during the call.
+    #[cfg(unix)]
     pub(crate) fn documents(&self) -> u64 {
         self.tracker.marks().documents
     }
