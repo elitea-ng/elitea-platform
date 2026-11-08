@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Agents are summarized while idle, each with its own meter
+
+When an agent's answer ends and the conversation goes quiet, the platform summarizes that agent's history just before the provider's prompt cache expires, as a cached continuation of the agent's own last request. Each agent has its own check: a person's message or another agent's answer doesn't cancel it, and the same agent's next turn does. Each agent's row in the participants panel shows how full its own context is. The desktop app does the same for each agent of a local thread. See [Idle compaction in the cloud](/how-tos/chat-conversations/context-management#idle-compaction-in-the-cloud).
+
 ## Watch and take over a cloud browser
 
 When an answer's run used the cloud browser, the chat's side panel now has a **Browser** tab with the live page, its address and who drives it: **Agent** or **You**. Select **Take over**, or just click or type in the page, to use the browser yourself, for example to sign in; select **Hand back** and leave the agent a note. A person who may only read the conversation can watch but not take over. The view needs an administrator to turn on the live view. The desktop app gets the tab in a later release. See [Watch and take over](/integrations/toolkits/cloud_browser_toolkit#watch-and-take-over).
