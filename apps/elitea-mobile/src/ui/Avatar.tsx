@@ -1,6 +1,6 @@
 import { Image, StyleSheet, View, type ViewProps } from 'react-native';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { useDesign } from '@/design/DesignProvider';
 import type { Scheme } from '@/design/tokens';
 
@@ -85,7 +85,7 @@ export function Avatar({ name, kind = 'person', imageUri, mark = false, size = 3
     );
   }
   if (kind === 'agent' && mark) {
-    return <EliteaMark variant="avatar" size={size} label={name} decorative={decorative} style={style} />;
+    return <BrandMark variant="avatar" size={size} label={name} decorative={decorative} style={style} />;
   }
   // An agent is AI: its monogram takes the AI text colour on the neutral tile (violet = AI only).
   const [fill, text] = kind === 'agent' ? [colors.secondarySoft, colors.aiText] : AVATAR_TONES[scheme][toneIndex(name)];

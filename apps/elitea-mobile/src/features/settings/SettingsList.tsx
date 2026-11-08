@@ -7,6 +7,7 @@ import { COPY_ADDRESS_ACTION, copyWorkspaceAddress, workspaceAddressTitle } from
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { BrandImage } from '@/theme/brandPack';
 import { Avatar, Icon, ListRow, ListSection, SegmentedControl, Text } from '@/ui';
+import { identity } from '@/config/identity';
 
 export interface SettingsListProps {
   /** The signed-in person's display name ("who am I"), when the workspace has one: the account row. */
@@ -171,7 +172,7 @@ export function SettingsList({
       ) : null}
 
       <ListSection title="About">
-        {onAbout ? <ListRow icon="sparkles" title="About Elitea AI" value={appVersion ?? null} onPress={onAbout} /> : null}
+        {onAbout ? <ListRow icon="sparkles" title={`About ${identity.displayName}`} value={appVersion ?? null} onPress={onAbout} /> : null}
         <ListRow icon="info" title="Privacy policy" onPress={onPrivacy} />
         <ListRow icon="link" title="Support" onPress={onSupport} />
         {onDesignGallery ? <ListRow icon="palette" title="Design gallery" subtitle="Development builds only" onPress={onDesignGallery} /> : null}

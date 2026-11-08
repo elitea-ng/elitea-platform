@@ -4,7 +4,8 @@
 #
 # Needs the EXPO_TOKEN repository secret, and on EAS: the App Store Connect API
 # key and the Google Play service account key (`eas credentials`), plus
-# submit.production.ios.ascAppId in eas.json once the App Store Connect app exists.
+# the brand manifest's mobile.ascAppId once the App Store Connect app exists (the
+# preflight writes it into the runner's eas.json; the committed file names no id).
 name: Mobile EAS submit
 
 on:

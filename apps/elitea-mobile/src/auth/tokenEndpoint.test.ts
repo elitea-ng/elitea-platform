@@ -51,7 +51,7 @@ describe('exchangeAuthorizationCode', () => {
     const outcome = await exchangeAuthorizationCode(
       FIXTURE_ORIGIN,
       TOKEN,
-      { code: 'c0de', codeVerifier: 'v'.repeat(43), redirectUri: 'ca.mlops.elitea:/oauth/callback', clientId: 'ca.mlops.elitea' },
+      { code: 'c0de', codeVerifier: 'v'.repeat(43), redirectUri: 'ai.elitea.app:/oauth/callback', clientId: 'ai.elitea.app' },
       { fetch, now: () => 1000 },
     );
     expect(outcome).toEqual({ kind: 'ok', response: tokenResponse(), receivedAt: 1000 });
@@ -62,8 +62,8 @@ describe('exchangeAuthorizationCode', () => {
     expect(parseForm(seen[0].body)).toEqual({
       grant_type: 'authorization_code',
       code: 'c0de',
-      redirect_uri: 'ca.mlops.elitea:/oauth/callback',
-      client_id: 'ca.mlops.elitea',
+      redirect_uri: 'ai.elitea.app:/oauth/callback',
+      client_id: 'ai.elitea.app',
       code_verifier: 'v'.repeat(43),
     });
   });
@@ -77,7 +77,7 @@ describe('exchangeAuthorizationCode', () => {
 });
 
 describe('refreshTokens: outcome mapping (server handler shapes)', () => {
-  const request = { refreshToken: opaqueToken('elnrt_', 1), clientId: 'ca.mlops.elitea', clientVersion: '0.1.0' };
+  const request = { refreshToken: opaqueToken('elnrt_', 1), clientId: 'ai.elitea.app', clientVersion: '0.1.0' };
 
   it('sends the refresh grant with client_version', async () => {
     const { fetch, seen } = server(200, tokenResponse(2));
@@ -86,7 +86,7 @@ describe('refreshTokens: outcome mapping (server handler shapes)', () => {
     expect(parseForm(seen[0].body)).toEqual({
       grant_type: 'refresh_token',
       refresh_token: opaqueToken('elnrt_', 1),
-      client_id: 'ca.mlops.elitea',
+      client_id: 'ai.elitea.app',
       client_version: '0.1.0',
     });
   });
@@ -137,12 +137,12 @@ describe('refreshTokens: outcome mapping (server handler shapes)', () => {
 describe('revokeToken', () => {
   it('posts token, hint and client id and reports 200', async () => {
     const { fetch, seen } = server(200);
-    expect(await revokeToken(FIXTURE_ORIGIN, REVOKE, { token: 'elnrt_refresh1', clientId: 'ca.mlops.elitea' }, { fetch })).toBe(true);
+    expect(await revokeToken(FIXTURE_ORIGIN, REVOKE, { token: 'elnrt_refresh1', clientId: 'ai.elitea.app' }, { fetch })).toBe(true);
     expect(seen[0].headers.get('Authorization')).toBeNull();
     expect(parseForm(seen[0].body)).toEqual({
       token: 'elnrt_refresh1',
       token_type_hint: 'refresh_token',
-      client_id: 'ca.mlops.elitea',
+      client_id: 'ai.elitea.app',
     });
   });
 
@@ -155,8 +155,8 @@ describe('revokeToken', () => {
 });
 
 it('form-encodes reserved characters', () => {
-  expect(__formBodyForTests({ redirect_uri: 'ca.mlops.elitea:/oauth/callback', x: 'a b&c=d' })).toBe(
-    'redirect_uri=ca.mlops.elitea%3A%2Foauth%2Fcallback&x=a%20b%26c%3Dd',
+  expect(__formBodyForTests({ redirect_uri: 'ai.elitea.app:/oauth/callback', x: 'a b&c=d' })).toBe(
+    'redirect_uri=ai.elitea.app%3A%2Foauth%2Fcallback&x=a%20b%26c%3Dd',
   );
 });
 
@@ -169,7 +169,7 @@ describe('refreshTokens: re-delivery', () => {
     const outcome = await refreshTokens(
       FIXTURE_ORIGIN,
       TOKEN,
-      { refreshToken: opaqueToken('elnrt_', 1), clientId: 'ca.mlops.elitea', clientVersion: '0.1.0' },
+      { refreshToken: opaqueToken('elnrt_', 1), clientId: 'ai.elitea.app', clientVersion: '0.1.0' },
       { fetch, now: () => 5000 },
     );
     expect(outcome).toMatchObject({ kind: 'ok', receivedAt: 5000 });

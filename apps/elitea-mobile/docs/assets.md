@@ -10,13 +10,31 @@ is never recoloured with the workspace brand.
 
 ## In the app
 
-The mark is drawn as vector art by `<EliteaMark variant size />` (`src/components/EliteaMark.tsx`)
-from `ELITEA_MARK_SVG` in `@elitea/client-core/brand`. Its one canonical source is
+The mark is drawn as vector art by `<BrandMark variant size />` (`src/components/BrandMark.tsx`)
+from `identity.markSvg`, the built brand's `assets/logo/logo-mark.svg`. ELITEA's copy
+(`brand/elitea/assets/logo/logo-mark.svg`) equals `ELITEA_MARK_SVG` in `@elitea/client-core/brand`. Its one canonical source is
 `libs/ts/client-core/src/brand/logo-mark.svg`; `libs/ts/client-core/scripts/gen-brand.mjs`
 derives the string the app imports and the web app's copies from it, and
 `node libs/ts/client-core/scripts/gen-brand.mjs --check` fails in CI when any copy drifts.
 Variants: `mark` (the mark alone) and `avatar` (the mark in a circle on the theme surface, the
 primary agent's fallback avatar).
+
+## Where the files live
+
+The app holds no icon of its own. `app.config.ts` takes every icon, the splash image, the
+favicon and the optional Firebase files from the **brand folder** that `ELITEA_BRAND` selects
+(`brand/<id>/assets/` at the repository root, ADR-0052; unset means `brand/elitea`). The
+asset table and the sizes are in the docs (Development → Brands); `node scripts/brand-check.mjs`
+validates them. A brand with an `assets/ios/app.icon/` Icon Composer document uses it for
+`ios.icon`; otherwise `ios/icon-1024.png`. A brand with `firebase/GoogleService-Info.plist` or
+`firebase/google-services.json` gets `googleServicesFile`; with no `firebase/`, nothing is wired.
+The splash and adaptive icon backgrounds are the brand's `background.default` scheme colours,
+else Paper and Ink.
+
+The tables below describe ELITEA's files (`brand/elitea/assets/`). The old app path in the left
+column maps to the brand path: `assets/elitea.icon/` → `ios/app.icon/`, `images/icon.png` →
+`ios/icon-1024.png`, `images/android-icon-*.png` → `android/adaptive-*.png`,
+`images/favicon.png` → `web/favicon-48.png`, `images/splash-icon.png` → `splash/splash-icon.png`.
 
 ## App icon (wired in `app.config.ts`)
 

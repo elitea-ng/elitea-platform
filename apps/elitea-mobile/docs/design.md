@@ -22,7 +22,7 @@ comes from the server at runtime.
   192.168.x.
 - **SSO** in the system browser (ASWebAuthenticationSession / Custom Tabs). The flow is
   OAuth 2.0 authorization code with PKCE, as a public client with no client secret. The
-  redirect URI is `ca.mlops.elitea:/oauth/callback`, following RFC 8252. The app relies
+  redirect URI is `ai.elitea.app:/oauth/callback`, following RFC 8252. The app relies
   on the server's native-client support. That server-side work is tracked upstream as a
   generic "native client support" ADR in the Elitea docs, not in this repository.
 - **Biometric lock** with `expo-local-authentication`, required on launch and on resume

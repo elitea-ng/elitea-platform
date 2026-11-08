@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createApiClient, type ApiClient } from '@/api/client';
 import { isApiError } from '@/api/errors';
 import { getSession } from '@/state/session';
+import { identity } from '@/config/identity';
 
 /**
  * Chat attachment upload (`uploadConversationAttachment`), through the
@@ -67,7 +68,7 @@ export function uploadErrorText(error: unknown, name: string): string {
     case 'session':
       return 'You were signed out.';
     case 'upgrade_required':
-      return 'Update Elitea AI to attach files.';
+      return `Update ${identity.displayName} to attach files.`;
     case 'cancelled':
       return `The upload of ${name} was cancelled.`;
     default:

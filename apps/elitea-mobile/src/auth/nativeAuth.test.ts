@@ -21,7 +21,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 jest.mock('expo-web-browser', () => ({ openAuthSessionAsync: jest.fn(async () => ({ type: 'cancel' })) }));
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
-const REDIRECT = 'ca.mlops.elitea:/oauth/callback';
+const REDIRECT = 'ai.elitea.app:/oauth/callback';
 const CANCELLED = { type: 'cancel' } as WebBrowserAuthSessionResult;
 const doc = DiscoveryDocumentSchema.parse(discoveryDocument());
 const endpoints = doc.native_auth!;
@@ -89,7 +89,7 @@ describe('buildAuthorizeUrl', () => {
   it('carries every parameter the server requires', () => {
     const url = buildAuthorizeUrl({
       endpoints,
-      clientId: 'ca.mlops.elitea',
+      clientId: 'ai.elitea.app',
       redirectUri: REDIRECT,
       codeChallenge: 'c'.repeat(43),
       state: 's t&ate',
@@ -100,7 +100,7 @@ describe('buildAuthorizeUrl', () => {
     expect(url.startsWith(`${endpoints.authorization_endpoint}?`)).toBe(true);
     expect(query(url)).toEqual({
       response_type: 'code',
-      client_id: 'ca.mlops.elitea',
+      client_id: 'ai.elitea.app',
       redirect_uri: REDIRECT,
       code_challenge: 'c'.repeat(43),
       code_challenge_method: 'S256',
@@ -120,11 +120,11 @@ describe('parseRedirect', () => {
       iss: 'https://ai.example.com',
       error_description: 'not allowed',
     });
-    expect(parseRedirect('ca.mlops.elitea:///oauth/callback?code=a')).toEqual({ code: 'a' });
+    expect(parseRedirect('ai.elitea.app:///oauth/callback?code=a')).toEqual({ code: 'a' });
   });
 
   it.each([
-    'ca.mlops.elitea:/oauth/other?code=a',
+    'ai.elitea.app:/oauth/other?code=a',
     'elitea://oauth/callback?code=a',
     'https://ai.example.com/oauth/callback?code=a',
     `${REDIRECT}?code=a&code=b`,
@@ -166,7 +166,7 @@ describe('signInWithWorkspace', () => {
     const authorize = query(seen[0]);
     expect(authorize).toMatchObject({
       response_type: 'code',
-      client_id: 'ca.mlops.elitea',
+      client_id: 'ai.elitea.app',
       redirect_uri: REDIRECT,
       code_challenge_method: 'S256',
       code_challenge: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
@@ -179,7 +179,7 @@ describe('signInWithWorkspace', () => {
       code: 'one-time-code',
       codeVerifier: STATE, // same deterministic bytes
       redirectUri: REDIRECT,
-      clientId: 'ca.mlops.elitea',
+      clientId: 'ai.elitea.app',
     });
     expect(getSession().credential).toEqual({ kind: 'oauth' });
     expect(getBearerToken()).toBe(tokenResponse().access_token);
@@ -263,7 +263,7 @@ describe('signInWithWorkspace', () => {
   });
 
   it('shows the update screen instead of signing in when the app is below the minimum', async () => {
-    acceptDiscovery(FIXTURE_ORIGIN, DiscoveryDocumentSchema.parse(discoveryDocument({ min_client_version: { 'ca.mlops.elitea': '9.0.0' } })));
+    acceptDiscovery(FIXTURE_ORIGIN, DiscoveryDocumentSchema.parse(discoveryDocument({ min_client_version: { 'ai.elitea.app': '9.0.0' } })));
     const { openAuthSession } = browser(success);
     expect(await signInWithWorkspace({ openAuthSession, pkce })).toEqual({ ok: false, error: 'upgrade_required' });
     expect(getSession().upgradeRequired).toEqual({ minVersion: '9.0.0' });
@@ -284,7 +284,7 @@ describe('signInWithWorkspace', () => {
     expect(revoke).toHaveBeenCalledWith(
       FIXTURE_ORIGIN,
       endpoints.revocation_endpoint,
-      { token: tokenResponse().refresh_token, clientId: 'ca.mlops.elitea' },
+      { token: tokenResponse().refresh_token, clientId: 'ai.elitea.app' },
     );
   });
 

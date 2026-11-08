@@ -4,7 +4,7 @@
 // Run with `npm run test:scripts` (node:test).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,26 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const eas = JSON.parse(readFileSync(resolve(root, 'eas.json'), 'utf8'));
+/**
+ * A copy of brand/sample as brand `id` with `patch` over its manifest, in a temp folder
+ * beside this app (so its relative paths stay short). The caller removes `dirname(dir)`.
+ */
+function tempBrand(id, patch) {
+  const parent = mkdtempSync(resolve(root, `.brand-${id}-`));
+  const dir = resolve(parent, id);
+  cpSync(resolve(root, '../../brand/sample'), dir, { recursive: true });
+  writeFileSync(resolve(dir, 'brand.json'), JSON.stringify({ ...brandManifest('sample'), id, ...patch }));
+  return dir;
+}
+
+/** brand/sample as brand "ota" with updates on: its own EAS project and a certificate. */
+function otaBrand(projectId) {
+  const dir = tempBrand('ota', { eas: { projectId, owner: 'ota-owner' }, updates: { mode: 'on', codeSigningCertificate: 'certs/update.pem' } });
+  mkdirSync(resolve(dir, 'certs'));
+  writeFileSync(resolve(dir, 'certs/update.pem'), '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+  return dir;
+}
+const brandManifest = (id) => JSON.parse(readFileSync(resolve(root, '../../brand', id, 'brand.json'), 'utf8'));
 
 /** A build profile with its `extends` chain applied (shallow per platform, like EAS). */
 function profile(name, seen = []) {
@@ -28,10 +48,10 @@ function profile(name, seen = []) {
   };
 }
 
-function expoConfig(env) {
-  const output = execFileSync(npx, ['expo', 'config', '--type', 'public', '--json'], {
+function expoConfig(env, type = 'public') {
+  const output = execFileSync(npx, ['expo', 'config', '--type', type, '--json'], {
     cwd: root,
-    env: { ...process.env, EAS_PROJECT_ID: '', EXPO_OWNER: '', ...env },
+    env: { ...process.env, EAS_PROJECT_ID: '', EXPO_OWNER: '', ELITEA_BRAND: '', ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -77,8 +97,12 @@ describe('eas.json', () => {
   it('submits the production app to Play internal testing and to TestFlight', () => {
     const submit = eas.submit.production;
     assert.equal(submit.android.track, 'internal');
-    assert.equal(submit.android.applicationId, 'ca.mlops.elitea');
-    assert.equal(submit.ios.bundleIdentifier, 'ca.mlops.elitea');
+  });
+
+  it('names no app identifier: EAS reads them from the brand\'s Expo config (ADR-0052 decision 3)', () => {
+    const text = JSON.stringify(eas);
+    for (const key of ['bundleIdentifier', 'applicationId', 'ascAppId', 'projectId', 'owner']) assert.ok(!text.includes(`"${key}"`), `eas.json must not carry ${key}`);
+    for (const id of ['elitea', 'sample']) assert.ok(!text.includes(brandManifest(id).mobile.bundleId), `eas.json names brand/${id}'s bundle id`);
   });
 
   it('holds no credential or key path (EAS-managed credentials only)', () => {
@@ -98,18 +122,35 @@ describe('Expo config for EAS', () => {
     assert.deepEqual(config.runtimeVersion, { policy: 'fingerprint' });
   });
 
-  it('linked: project id and owner from the environment, update URL for that project', () => {
+  it('linked from the environment: project id and owner set, EAS Update still OFF (the brand did not turn it on)', () => {
     const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
     const config = expoConfig({ EAS_PROJECT_ID: projectId, EXPO_OWNER: 'elitea-ng' });
     assert.equal(config.owner, 'elitea-ng');
     assert.equal(config.extra.eas.projectId, projectId);
-    assert.equal(config.updates.enabled, true);
-    assert.equal(config.updates.url, `https://u.expo.dev/${projectId}`);
-    assert.equal(config.updates.fallbackToCacheTimeout, 0);
+    assert.deepEqual(config.updates, { enabled: false });
     // expo-widgets' extension entry survives the merge (EAS signs the extension from it).
-    assert.equal(config.extra.eas.build.experimental.ios.appExtensions[0].bundleIdentifier, 'ca.mlops.elitea.widgets');
-    assert.equal(config.ios.bundleIdentifier, 'ca.mlops.elitea');
-    assert.equal(config.android.package, 'ca.mlops.elitea');
+    const elitea = brandManifest('elitea');
+    assert.equal(config.extra.eas.build.experimental.ios.appExtensions[0].bundleIdentifier, elitea.mobile.widgetBundleId);
+    assert.equal(config.ios.bundleIdentifier, elitea.mobile.bundleId);
+    assert.equal(config.android.package, elitea.mobile.bundleId);
+  });
+
+  it('a brand that turns updates on with its own project and certificate gets signed updates', () => {
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
+    const dir = otaBrand(projectId);
+    try {
+      const config = expoConfig({ ELITEA_BRAND: dir }, 'prebuild');
+      assert.equal(config.updates.enabled, true);
+      assert.equal(config.updates.url, `https://u.expo.dev/${projectId}`);
+      assert.equal(config.updates.fallbackToCacheTimeout, 0);
+      assert.ok(config.updates.codeSigningCertificate.endsWith('/ota/certs/update.pem'), config.updates.codeSigningCertificate);
+      assert.ok(!config.updates.codeSigningCertificate.startsWith('/'), 'certificate path is absolute');
+      assert.deepEqual(config.updates.codeSigningMetadata, { keyid: 'main', alg: 'rsa-v1_5-sha256' });
+      // The environment cannot point a brand's updates at another project.
+      assert.deepEqual(expoConfig({ ELITEA_BRAND: dir, EAS_PROJECT_ID: '1f5e1c1e-1111-4222-8333-444455556666' }).updates, { enabled: false });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
   });
 
   it('refuses a malformed project id instead of building an unreachable update URL', () => {
@@ -130,8 +171,16 @@ describe('Expo config for EAS', () => {
 
   it("declares Expo's update installation id only when EAS Update is on", () => {
     const collected = (env) => expoConfig(env).ios.privacyManifests.NSPrivacyCollectedDataTypes.map((t) => t.NSPrivacyCollectedDataType);
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
     assert.ok(!collected({}).includes('NSPrivacyCollectedDataTypeDeviceID'));
-    assert.ok(collected({ EAS_PROJECT_ID: '0f5e1c1e-1111-4222-8333-444455556666' }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    // Linked but updates off (the brand did not turn them on): no update checks, no id.
+    assert.ok(!collected({ EAS_PROJECT_ID: projectId }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    const dir = otaBrand(projectId);
+    try {
+      assert.ok(collected({ ELITEA_BRAND: dir }).includes('NSPrivacyCollectedDataTypeDeviceID'));
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
   });
 
   // Apple does not read static pods' manifests, so the app's manifest must carry every
@@ -190,15 +239,149 @@ describe('EAS workflow preflight', async () => {
   const linked = { extra: { eas: { projectId: '0f5e1c1e-1111-4222-8333-444455556666' } } };
 
   it('refuses to build an unlinked project', () => {
-    assert.equal(preflightProblems('build', undefined, { config: { extra: {} }, eas }).length, 1);
-    assert.deepEqual(preflightProblems('build', undefined, { config: linked, eas }), []);
+    assert.equal(preflightProblems('build', undefined, { config: { extra: {} }, ascAppId: null }).length, 1);
+    assert.deepEqual(preflightProblems('build', undefined, { config: linked, ascAppId: null }), []);
   });
 
-  it('refuses an iOS submit until the App Store Connect app id is in eas.json', () => {
-    assert.equal(preflightProblems('submit', 'ios', { config: linked, eas }).length, 1);
-    assert.equal(preflightProblems('submit', 'all', { config: linked, eas }).length, 1);
-    assert.deepEqual(preflightProblems('submit', 'android', { config: linked, eas }), []);
-    const ready = { ...eas, submit: { production: { ...eas.submit.production, ios: { ascAppId: '6740000000' } } } };
-    assert.deepEqual(preflightProblems('submit', 'ios', { config: linked, eas: ready }), []);
+  it("refuses an iOS submit until the brand manifest has the App Store Connect app id", () => {
+    assert.equal(preflightProblems('submit', 'ios', { config: linked, ascAppId: null }).length, 1);
+    assert.equal(preflightProblems('submit', 'all', { config: linked, ascAppId: undefined }).length, 1);
+    assert.deepEqual(preflightProblems('submit', 'android', { config: linked, ascAppId: null }), []);
+    assert.deepEqual(preflightProblems('submit', 'ios', { config: linked, ascAppId: '6740000000' }), []);
   });
 });
+
+describe('Expo config per brand (ADR-0052 decisions 2 and 3)', () => {
+  /** Every identifier and name the config takes from the manifest. */
+  const fromManifest = (config) => ({
+    name: config.name,
+    bundleIdentifier: config.ios.bundleIdentifier,
+    package: config.android.package,
+    scheme: config.scheme,
+    widget: config.extra.eas?.build?.experimental?.ios?.appExtensions?.[0]?.bundleIdentifier,
+    appGroup: config.extra.identity.appGroup,
+    widgetBundleId: config.extra.identity.widgetBundleId,
+    webUrl: config.extra.identity.webUrl,
+    privacyUrl: config.extra.identity.privacyUrl,
+    supportUrl: config.extra.identity.supportUrl,
+    linkDomain: config.extra.identity.linkDomain,
+    brand: config.extra.brand,
+  });
+  const expected = (m) => ({
+    name: m.productName,
+    bundleIdentifier: m.mobile.bundleId,
+    package: m.mobile.bundleId,
+    scheme: [...m.mobile.connectSchemes, m.mobile.oauthRedirectScheme],
+    widget: m.mobile.widgetBundleId,
+    appGroup: m.mobile.appGroup,
+    widgetBundleId: m.mobile.widgetBundleId,
+    webUrl: m.webUrl,
+    privacyUrl: m.privacyUrl,
+    supportUrl: m.supportUrl,
+    linkDomain: m.linkDomain,
+    brand: m.id,
+  });
+
+  it('unset ELITEA_BRAND builds brand/elitea: ai.elitea.app', () => {
+    const config = expoConfig({ EAS_PROJECT_ID: '0f5e1c1e-1111-4222-8333-444455556666', EXPO_OWNER: 'elitea-ng' });
+    assert.deepEqual(fromManifest(config), expected(brandManifest('elitea')));
+    assert.equal(config.ios.bundleIdentifier, 'ai.elitea.app');
+  });
+
+  it('ELITEA_BRAND=sample builds the sample brand with no ELITEA identifier or name', () => {
+    const config = expoConfig({ ELITEA_BRAND: 'sample', EAS_PROJECT_ID: '0f5e1c1e-1111-4222-8333-444455556666', EXPO_OWNER: 'elitea-ng' });
+    assert.deepEqual(fromManifest(config), expected(brandManifest('sample')));
+    const text = JSON.stringify(config);
+    const elitea = brandManifest('elitea');
+    for (const id of [elitea.mobile.bundleId, elitea.mobile.appGroup, elitea.mobile.widgetBundleId, elitea.linkDomain]) assert.ok(!text.includes(id), `sample config holds ${id}`);
+  });
+
+  it('the sample prebuild config names no ELITEA product, id or domain anywhere (ADR-0052 acceptance)', () => {
+    const { _internal, ...config } = expoConfig({ ELITEA_BRAND: 'sample' }, 'prebuild');
+    const text = JSON.stringify(config);
+    assert.doesNotMatch(text, /elitea|epam/i);
+  });
+
+  it('on an EAS Build worker, the brand must be the one linked to the project the build runs for', () => {
+    const projectId = '0f5e1c1e-1111-4222-8333-444455556666';
+    const worker = { EAS_BUILD: 'true', EAS_BUILD_PROJECT_ID: projectId };
+    // ELITEA_BRAND set only in a local shell: the worker evaluates brand/elitea, unlinked.
+    assert.throws(() => expoConfig({ ...worker, ELITEA_BRAND: '' }), /EAS environment variables/);
+    // Set on the project (with its link): the build is that brand.
+    assert.equal(expoConfig({ ...worker, ELITEA_BRAND: 'sample', EAS_PROJECT_ID: projectId }).extra.brand, 'sample');
+    // Not on a worker, nothing is enforced.
+    assert.equal(expoConfig({ EAS_BUILD_PROJECT_ID: projectId }).extra.brand, 'elitea');
+  });
+
+  it('a path in ELITEA_BRAND selects that folder; an invalid brand fails the build', () => {
+    const config = expoConfig({ ELITEA_BRAND: resolve(root, '../../brand/sample') });
+    assert.equal(config.extra.brand, 'sample');
+    assert.throws(() => expoConfig({ ELITEA_BRAND: 'assets' }));
+    assert.throws(() => expoConfig({ ELITEA_BRAND: resolve(root, 'no-such-brand') }));
+  });
+});
+
+describe('Universal links and App Links on the brand linkDomain (ADR-0052 decision 11)', () => {
+  const links = (config) => ({ associatedDomains: config.ios.associatedDomains, intentFilters: config.android.intentFilters });
+  const declared = (domain) => ({
+    associatedDomains: [`applinks:${domain}`],
+    intentFilters: [
+      { action: 'VIEW', autoVerify: true, data: [{ scheme: 'https', host: domain, path: '/connect' }], category: ['BROWSABLE', 'DEFAULT'] },
+    ],
+  });
+
+  it('each brand declares its own linkDomain, for connect links only', () => {
+    for (const id of ['elitea', 'sample']) {
+      assert.deepEqual(links(expoConfig({ ELITEA_BRAND: id })), declared(brandManifest(id).linkDomain), id);
+    }
+  });
+
+  it('a brand with no linkDomain declares no associated domain and no App Link filter', () => {
+    const dir = tempBrand('nolinks', { linkDomain: null });
+    try {
+      assert.deepEqual(links(expoConfig({ ELITEA_BRAND: dir })), { associatedDomains: undefined, intentFilters: undefined });
+    } finally {
+      rmSync(dirname(dir), { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Icons, splash and Firebase from the brand folder (ADR-0052 decision 3)', () => {
+  const brandPath = (id, rel) => `../../brand/${id}/${rel}`;
+
+  for (const id of ['elitea', 'sample']) {
+    it(`brand/${id}: every image path points into its brand folder and exists`, () => {
+      const config = expoConfig({ ELITEA_BRAND: id === 'elitea' ? '' : id });
+      const splash = config.plugins.find((p) => Array.isArray(p) && p[0] === 'expo-splash-screen')[1];
+      const paths = {
+        icon: config.icon,
+        ios: config.ios.icon,
+        foreground: config.android.adaptiveIcon.foregroundImage,
+        background: config.android.adaptiveIcon.backgroundImage,
+        monochrome: config.android.adaptiveIcon.monochromeImage,
+        favicon: config.web.favicon,
+        splash: splash.image,
+        splashDark: splash.dark.image,
+      };
+      for (const [key, path] of Object.entries(paths)) {
+        assert.ok(path.startsWith(`../../brand/${id}/assets/`), `${key}: ${path} is not in brand/${id}`);
+        statSync(resolve(root, path));
+      }
+      assert.equal(paths.icon, brandPath(id, 'assets/ios/icon-1024.png'));
+      // No Firebase files in either repository brand, so no push files are wired.
+      assert.equal(config.ios.googleServicesFile, undefined);
+      assert.equal(config.android.googleServicesFile, undefined);
+    });
+  }
+
+  it('the Icon Composer document is used when the brand has one, the 1024 icon otherwise', () => {
+    assert.equal(expoConfig({}).ios.icon, '../../brand/elitea/assets/ios/app.icon');
+    assert.equal(expoConfig({ ELITEA_BRAND: 'sample' }).ios.icon, '../../brand/sample/assets/ios/icon-1024.png');
+  });
+
+  it('no path in the config is absolute (EAS evaluates it on another machine)', () => {
+    const text = JSON.stringify(expoConfig({}));
+    assert.ok(!text.includes(resolve(root, '../..')), 'config holds this checkout\'s absolute path');
+  });
+});
+

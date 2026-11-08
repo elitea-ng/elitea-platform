@@ -12,7 +12,7 @@ stores'; counts are given where they are tight. Wording rules:
 | Field | Value |
 |---|---|
 | App name (App Store 30, Play 30) | `Elitea AI` (11) |
-| Bundle ID / package | `ca.mlops.elitea` |
+| Bundle ID / package | `ai.elitea.app` |
 | Privacy policy URL | `https://elitea.ai/privacy` |
 | Support URL | `https://elitea.ai/support` |
 | Marketing URL | `https://elitea.ai` |
@@ -153,7 +153,7 @@ round and before each review**:
 
 1. **A demo workspace** reachable from the internet (for example
    `https://demo.elitea.ai`, or the existing demo server), with native
-   clients enabled for `ca.mlops.elitea`, a public agent or two in Discover, a
+   clients enabled for `ai.elitea.app`, a public agent or two in Discover, a
    project with a few sample conversations, and models that answer.
 2. **A reviewer test account** on that workspace's identity provider: a
    username and password sign-in that needs **no** MFA app, SMS, hardware key or

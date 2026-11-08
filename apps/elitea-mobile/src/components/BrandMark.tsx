@@ -1,45 +1,61 @@
-import { DEFAULT_PRODUCT, ELITEA_MARK_ASPECT, ELITEA_MARK_SVG } from '@elitea/client-core/brand';
 import { StyleSheet, View, type ViewProps } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 
+import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
 
 /**
- * The Elitea logo mark, the product's own fixed identity (docs/design-system.md §5).
+ * The brand's logo mark, the app's own fixed identity (docs/design-system.md §5): the
+ * `assets/logo/logo-mark.svg` of the brand the app was built for (ADR-0052;
+ * `identity.markSvg`). For ELITEA it is the LE-03 mark.
  *
  *  - `mark`:   the mark alone; empty states, the welcome hero, About, the lock and privacy covers.
  *  - `avatar`: the mark in a circle on the theme surface; the fallback avatar of the
  *              conversation's primary agent (24 pt minimum).
  *
- * The mark is vector art, the canonical SVG of `@elitea/client-core/brand` (libs/ts/client-core,
- * the same source as the web app's copies), so it is sharp at every size. It is never
+ * The mark is vector art, so it is sharp at every size. ELITEA's is a copy of the canonical SVG
+ * of `@elitea/client-core/brand` (scripts/brand/elitea-sync.test.mjs keeps them equal). It is never
  * recoloured or tinted with the workspace brand, and it never overlaps or replaces the workspace's
  * own logo (the runtime brand pack, src/theme/BrandLogo.tsx), nor appears on approval, security
  * or destructive surfaces.
  *
- * Accessibility: an image labelled "Elitea" by default. Pass `label` (e.g. the agent's name when
+ * Accessibility: an image labelled with the brand's short name by default. Pass `label` (e.g. the agent's name when
  * it stands in for an agent avatar), or `decorative` when a heading next to it carries the meaning.
  */
 
-export type EliteaMarkVariant = 'mark' | 'avatar';
+export type BrandMarkVariant = 'mark' | 'avatar';
 
-export const ELITEA_MARK_NAME: string = DEFAULT_PRODUCT.shortName;
+/** The default accessibility label: the brand's short name. */
+export const BRAND_MARK_NAME: string = identity.shortName;
+
+/** The mark's markup. */
+export const BRAND_MARK_SVG: string = identity.markSvg;
+
+/** Width over height, from the mark's viewBox (1 when it cannot be read). */
+export const BRAND_MARK_ASPECT: number = aspectOf(BRAND_MARK_SVG);
+
+function aspectOf(svg: string): number {
+  const box = /\bviewBox="\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)\s*"/.exec(svg);
+  const w = box ? Number(box[1]) : NaN;
+  const h = box ? Number(box[2]) : NaN;
+  return w > 0 && h > 0 ? w / h : 1;
+}
 
 /** Minimum rendered size (pt). */
-export const ELITEA_MARK_MIN_SIZE = 24;
+export const BRAND_MARK_MIN_SIZE = 24;
 
 /** The mark's share of the avatar circle's diameter. */
 const AVATAR_MARK_SHARE = 0.62;
 
-export function EliteaMark({
+export function BrandMark({
   variant = 'mark',
   size = 96,
-  label = ELITEA_MARK_NAME,
+  label = BRAND_MARK_NAME,
   decorative = false,
   style,
   testID,
 }: {
-  variant?: EliteaMarkVariant;
+  variant?: BrandMarkVariant;
   /** Rendered width in pt (for `avatar`, the circle's diameter). Clamped to the 24 pt minimum. */
   size?: number;
   label?: string;
@@ -49,7 +65,7 @@ export function EliteaMark({
   testID?: string;
 }) {
   const { colors } = useDesign();
-  const width = Math.max(ELITEA_MARK_MIN_SIZE, size);
+  const width = Math.max(BRAND_MARK_MIN_SIZE, size);
   const a11y = decorative
     ? ({ accessible: false, importantForAccessibility: 'no-hide-descendants', accessibilityElementsHidden: true } as const)
     : ({ accessible: true, accessibilityRole: 'image', accessibilityLabel: label } as const);
@@ -65,15 +81,15 @@ export function EliteaMark({
           { width, height: width, borderRadius: width / 2, backgroundColor: colors.surface, borderColor: colors.separator },
           style,
         ]}>
-        <SvgXml xml={ELITEA_MARK_SVG} width={inner} height={Math.round(inner / ELITEA_MARK_ASPECT)} />
+        <SvgXml xml={BRAND_MARK_SVG} width={inner} height={Math.round(inner / BRAND_MARK_ASPECT)} />
       </View>
     );
   }
 
-  const height = Math.round(width / ELITEA_MARK_ASPECT);
+  const height = Math.round(width / BRAND_MARK_ASPECT);
   return (
     <View testID={testID} {...a11y} style={[{ width, height }, style]}>
-      <SvgXml xml={ELITEA_MARK_SVG} width={width} height={height} />
+      <SvgXml xml={BRAND_MARK_SVG} width={width} height={height} />
     </View>
   );
 }

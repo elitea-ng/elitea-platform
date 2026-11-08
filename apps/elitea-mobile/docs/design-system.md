@@ -762,7 +762,7 @@ the app moved into the Elitea platform repository. The files and how they are ma
 
 ## 5. Elitea mark usage rules
 
-The product's own identity is the Elitea logo mark (`src/components/EliteaMark.tsx`, the same
+The product's own identity is the Elitea logo mark (`src/components/BrandMark.tsx`, the same
 SVG as `libs/ts/client-core/src/brand/logo-mark.svg`, the LE-03 mark: four flat rounded
 layers in cyan, violet + an orange dot, and indigo, 1:1). It is vector art, so one source serves
 every size.
@@ -844,7 +844,7 @@ The foundation landed on `feat/design-foundation` (additive only; no screen was 
   tokens, the corrected brand accent and accessibility modifiers (Reduce Transparency,
   Increase Contrast, Reduce Motion, font scale). `<DesignProvider scheme>` is optional and
   only needed to force a scheme.
-- `src/components/EliteaMark.tsx`: `<EliteaMark variant="mark|avatar" size label decorative />`.
+- `src/components/BrandMark.tsx`: `<BrandMark variant="mark|avatar" size label decorative />`.
 - `app.config.ts`: Elitea icon (`assets/elitea.icon`), adaptive icon, splash light/dark.
 
 Follow-ups (not in the foundation):

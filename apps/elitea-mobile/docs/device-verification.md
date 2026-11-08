@@ -17,7 +17,7 @@ bug against the module named in its row.
 | Date / tester | | |
 
 Test setup: a workspace reachable from the phone with Elitea AI registered as a
-native client (redirect URI `ca.mlops.elitea:/oauth/callback`), or a personal access
+native client (redirect URI `ai.elitea.app:/oauth/callback`), or a personal access
 token for developer sign-in (development profile only, `__DEV__`),
 a device passcode, and Face ID / Touch ID / fingerprint enrolled unless an item
 says otherwise.
@@ -152,8 +152,8 @@ says otherwise.
 
 ## 8. Native sign-in (ADR-0025, `src/auth/*`, `src/app/+native-intent.tsx`)
 
-Needs a workspace with Elitea AI registered (`client_id` `ca.mlops.elitea`,
-redirect URI `ca.mlops.elitea:/oauth/callback`) and `DEPLOYMENT_URL` set.
+Needs a workspace with Elitea AI registered (`client_id` `ai.elitea.app`,
+redirect URI `ai.elitea.app:/oauth/callback`) and `DEPLOYMENT_URL` set.
 
 - [ ] **Connect confirmation.** Typing the workspace address shows the host in large
       text, the workspace name and logo, "Self-hosted"/"Hosted service" and the
@@ -163,7 +163,7 @@ redirect URI `ca.mlops.elitea:/oauth/callback`) and `DEPLOYMENT_URL` set.
       a Custom Tab (Android), never an in-app web view; the workspace's usual sign-in
       runs, then its one-line confirmation names Elitea AI and this device.
 - [ ] **Redirect delivery.** After confirming, the browser closes and the app signs in.
-      On Android, confirm the single-slash `ca.mlops.elitea:/oauth/callback?…` intent
+      On Android, confirm the single-slash `ai.elitea.app:/oauth/callback?…` intent
       reaches the app and the router does not show an "unmatched route" screen.
 - [ ] **Cancel.** Closing the browser sheet returns to "Sign in" without an error.
 - [ ] **Killed during sign-in.** Kill the app while the browser is open, then finish
@@ -192,7 +192,7 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
 
 - [ ] **SQLCipher is linked.** On a dev build, open a conversation, then pull the
       app container (Xcode → Devices → Download Container; `adb exec-out run-as
-      ca.mlops.elitea` on Android) and run `sqlite3 az-offline.db .tables` on
+      ai.elitea.app` on Android) and run `sqlite3 az-offline.db .tables` on
       `SQLite/az-offline.db`: it must fail with "file is not a database" (the file is
       encrypted). `PRAGMA cipher_version` was non-empty (the app refuses to store
       anything otherwise; a warning "this build has no SQLCipher" in the log means the

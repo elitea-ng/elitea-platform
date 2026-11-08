@@ -5,7 +5,7 @@ import { getSession } from '@/state/session';
 /**
  * expo-router hands every URL the OS opens the app with to
  * `src/app/+native-intent.tsx`. The OAuth redirect
- * (`ca.mlops.elitea:/oauth/callback?code=…`) is not a screen: the system
+ * (`ai.elitea.app:/oauth/callback?code=…`) is not a screen: the system
  * browser session (`openAuthSessionAsync`) consumes it. On Android the same
  * intent also reaches the router, which would otherwise try to open a
  * non-existent `/oauth/callback` route.

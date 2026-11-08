@@ -20,6 +20,10 @@ on:
       - "apps/elitea-mobile/**"
       - "services/elitea-main/api/openapi/v2.yaml"
       - "libs/ts/client-core/**"
+      # app.config.ts builds the identity from the brand manifest (ADR-0052).
+      - "brand/elitea/**"
+      - "brand/sample/**"
+      - "scripts/brand/**"
       - ".github/workflows/ci-mobile.yml"
       - ".github/actions/npm-cache/**"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).

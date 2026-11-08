@@ -1,36 +1,91 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
+// The brand manifest loader (ADR-0052 decision 2). It is plain ESM with node's
+// standard library only; Expo evaluates this file in node, which loads it with
+// require(esm), and so does the jest setup (src/test/setupExpoConfig.ts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { loadBrand, REPO_ROOT } = require('../../scripts/brand/load.mjs') as typeof import('../../scripts/brand/load.mjs');
+
 /**
- * Single source of truth for Elitea AI's fixed identifiers.
+ * The selected brand: `ELITEA_BRAND` (a brand id under `brand/`, or a path to a
+ * brand folder), unset meaning `brand/elitea`, EPAM's ELITEA. Read once per
+ * evaluation of this file (each `expo config` run, each EAS build).
+ */
+const brand = loadBrand();
+const manifest = brand.manifest;
+
+/** A text file of the brand folder, trimmed (the loader reads; nothing here opens files). */
+function readBrandText(rel: string): string {
+  return brand.readText(rel).trim();
+}
+
+/**
+ * A brand folder file as a path relative to this app (`../../brand/elitea/...`): the
+ * config, and the native fingerprint EAS Update matches on, then hold no machine path.
+ * Anchored on the repository root the loader reports, not the working directory.
+ */
+const APP_DIR = `${REPO_ROOT}/apps/elitea-mobile`;
+const brandFile = (rel: string): string => brand.relativeTo(APP_DIR, rel);
+const brandAsset = (rel: string): string => brandFile(`assets/${rel}`);
+
+/** A brand folder file only when it exists (optional files: the Firebase pair). */
+const optionalBrandFile = (rel: string): string | undefined => (brand.has(rel) ? brandFile(rel) : undefined);
+
+/**
+ * The scheme backgrounds behind the icon and splash: the brand's
+ * `brand.schemes.<scheme>["background.default"]`, else Paper and Ink (the
+ * same defaults brand-check measures the hue against).
+ */
+const background = {
+  light: manifest.brand.schemes?.light?.['background.default'] ?? '#FFFFFF',
+  dark: manifest.brand.schemes?.dark?.['background.default'] ?? '#0B0B18',
+};
+
+/**
+ * The app's fixed identifiers, built from the brand manifest
+ * (`brand/<id>/brand.json`, the only place they are written down).
  *
- * Nothing else in the codebase may hardcode these values: runtime code reads
- * them through `src/config/identity.ts`, which reads `expoConfig.extra.identity`.
+ * Runtime code reads them through `src/config/identity.ts`, which reads
+ * `expoConfig.extra.identity`. Nothing else in the app may hardcode them.
  *
- * `bundleId` is PERMANENT once published to the App Store / Play Store.
+ * `bundleId` and `appGroup` are PERMANENT once a build of the brand is
+ * uploaded to a store (`node scripts/brand-check.mjs` marks them).
  */
 const identity = {
-  displayName: 'Elitea AI',
-  slug: 'elitea-mobile',
-  bundleId: 'ca.mlops.elitea',
-  /** Schemes accepted for connect links, e.g. `elitea://connect?server=https://...`. */
-  connectSchemes: ['elitea'],
+  displayName: manifest.productName,
+  shortName: manifest.shortName,
+  slug: `${manifest.id}-mobile`,
+  bundleId: manifest.mobile.bundleId,
+  /** Schemes accepted for connect links, e.g. `<scheme>://connect?server=https://...`. */
+  connectSchemes: [...manifest.mobile.connectSchemes],
   /** RFC 8252 private-use (reverse-DNS) scheme for the OAuth redirect. */
-  oauthRedirectScheme: 'ca.mlops.elitea',
+  oauthRedirectScheme: manifest.mobile.oauthRedirectScheme,
   oauthRedirectPath: '/oauth/callback',
-  webUrl: 'https://elitea.ai',
-  privacyUrl: 'https://elitea.ai/privacy',
-  supportUrl: 'https://elitea.ai/support',
+  /** Universal links and App Links host, or null: the custom scheme then works alone. */
+  linkDomain: manifest.linkDomain,
+  webUrl: manifest.webUrl,
+  privacyUrl: manifest.privacyUrl,
+  supportUrl: manifest.supportUrl,
   /**
    * App Group shared with the widget extension (widgets and Live Activities,
    * src/features/surfaces/). It carries COUNTS only unless the workspace
    * policy allows titles (`allow_system_surfaces`); never a credential.
    */
-  appGroup: 'group.ca.mlops.elitea',
+  appGroup: manifest.mobile.appGroup,
   /** The widget extension's bundle id (home-screen and lock-screen widgets, Live Activities). */
-  widgetBundleId: 'ca.mlops.elitea.widgets',
-} as const;
+  widgetBundleId: manifest.mobile.widgetBundleId,
+  /**
+   * The brand's mark (`assets/logo/logo-mark.svg`) as markup, drawn by `<BrandMark>`: the
+   * app's own identity on the welcome, lock, About and empty screens. brand-check holds it to
+   * an SVG with a viewBox.
+   */
+  markSvg: readBrandText('assets/logo/logo-mark.svg'),
+};
 
 export type AppIdentity = typeof identity;
+
+/** The brand id this config was built for (`extra.brand`); never used to branch behaviour. */
+export const BRAND_ID = brand.id;
 
 /** NSMicrophoneUsageDescription: the microphone is used only for on-device dictation. */
 const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while you dictate a message. Speech is recognised on this device.`;
@@ -38,16 +93,14 @@ const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while
 /**
  * The EAS project this app is linked to (docs/release.md, "Link the EAS project").
  *
- * Not a secret. Until the owner runs `eas init`, both values are empty and the
- * app is simply not linked: no `owner`, no `extra.eas.projectId`, and EAS Update
- * is OFF (`updates.enabled: false`, no `updates.url`). After `eas init`, write the
- * project id and owner here (recommended: every machine and CI then computes the
- * same runtime fingerprint), or set EAS_PROJECT_ID / EXPO_OWNER in the
- * environment, which win over the committed values.
+ * Not a secret. The brand manifest's `eas.projectId` / `eas.owner` (null until the
+ * brand owner runs `eas init`); EAS_PROJECT_ID / EXPO_OWNER in the environment win
+ * over them. Unlinked: no `owner`, no `extra.eas.projectId`. Linked or not, EAS
+ * Update stays OFF unless the manifest turns it on (`updatesConfig` below).
  */
 const easLink = {
-  projectId: '',
-  owner: '',
+  projectId: manifest.eas.projectId ?? '',
+  owner: manifest.eas.owner ?? '',
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -78,17 +131,27 @@ export function resolveEasLink(env: Record<string, string | undefined> = process
  * runtimeVersion `fingerprint`: an update reaches only binaries whose native layer
  * (native modules, config plugins, this config) hashes the same, so JS that needs a
  * native change can never be sent to an old binary. The build's channel (eas.json)
- * picks the branch. On by link only: an unlinked build has no update URL at all.
+ * picks the branch. On only for a brand that turns it on (below): every other build has
+ * no update URL at all.
  * Downloads never block launch (fallbackToCacheTimeout 0): a new update applies on
  * the next cold start.
  */
 function updatesConfig(link: EasProjectLink): ExpoConfig['updates'] {
-  if (!link.projectId) return { enabled: false };
+  // Off unless the BRAND turns updates on (ADR-0052 decision 3): its manifest says
+  // `updates.mode: "on"` and names the brand's own EAS project and code signing
+  // certificate (brand-check holds those to the manifest). An update is then signed with
+  // the brand's key and checked against this certificate, so it never crosses brands.
+  // A link from the environment alone (EAS_PROJECT_ID) never turns updates on.
+  if (manifest.updates.mode !== 'on' || !link.projectId || link.projectId !== manifest.eas.projectId?.toLowerCase()) {
+    return { enabled: false };
+  }
   return {
     enabled: true,
     url: `https://u.expo.dev/${link.projectId}`,
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
+    codeSigningCertificate: brandFile(manifest.updates.codeSigningCertificate as string),
+    codeSigningMetadata: { keyid: 'main', alg: 'rsa-v1_5-sha256' },
   };
 }
 
@@ -99,7 +162,7 @@ function updatesConfig(link: EasProjectLink): ExpoConfig['updates'] {
  * native sources of modules that ship none (docs/store/privacy.md, "Privacy manifest").
  * Collected data types match the App Store privacy label draft (same doc).
  */
-const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>['privacyManifests'] => ({
+const privacyManifests = (updatesOn: boolean): NonNullable<ExpoConfig['ios']>['privacyManifests'] => ({
   NSPrivacyTracking: false,
   NSPrivacyTrackingDomains: [],
   NSPrivacyAccessedAPITypes: [
@@ -140,9 +203,10 @@ const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>[
         NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
       }),
     ),
-    // EAS Update, only when it is on (a linked build): a random per-installation id
-    // (expo-eas-client) sent to Expo with each update check, not linked to the user.
-    ...(link.projectId
+    // EAS Update, only when it is on (the brand turns it on, updatesConfig): a random
+    // per-installation id (expo-eas-client) sent to Expo with each update check, not linked
+    // to the user.
+    ...(updatesOn
       ? [
           {
             NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
@@ -155,8 +219,49 @@ const privacyManifests = (link: EasProjectLink): NonNullable<ExpoConfig['ios']>[
   ],
 });
 
+/**
+ * Universal links (iOS) and verified App Links (Android) on the brand's `linkDomain`, for
+ * connect links only: exactly `https://<linkDomain>/connect?server=...` (the same screen as
+ * `<scheme>://connect`), never another page of the site. The domain serves
+ * apple-app-site-association and assetlinks.json naming this brand's app
+ * (`npm run check:link-files`, which reads this path from the built config). No
+ * `linkDomain`: nothing is declared, and the custom scheme works alone.
+ */
+const LINK_PATH = '/connect';
+const associatedDomains = identity.linkDomain ? [`applinks:${identity.linkDomain}`] : [];
+const appLinkFilters: NonNullable<ExpoConfig['android']>['intentFilters'] = identity.linkDomain
+  ? [
+      {
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'https', host: identity.linkDomain, path: LINK_PATH }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      },
+    ]
+  : [];
+
+/**
+ * On an EAS Build worker the config is evaluated again, with only the EAS project's
+ * environment variables: an `ELITEA_BRAND` set in a local shell does not get there. So the
+ * worker must build the brand of the project it runs for (each brand has its own EAS
+ * project, ADR-0052 decision 8): the resolved link must be `EAS_BUILD_PROJECT_ID`. Set
+ * `ELITEA_BRAND` as a plain-text EAS environment variable of the brand's project.
+ */
+export function assertBuildWorkerBrand(link: EasProjectLink, env: Record<string, string | undefined> = process.env): void {
+  if (env.EAS_BUILD !== 'true') return;
+  const running = env.EAS_BUILD_PROJECT_ID?.trim().toLowerCase();
+  if (running && link.projectId !== running) {
+    throw new Error(
+      `app.config.ts: this EAS build runs for project ${running}, but brand "${brand.id}" is linked to ${link.projectId ?? 'no project'}. ` +
+        'Set ELITEA_BRAND (and the link) as EAS environment variables of the brand\'s project (`eas env:create`), not only in a local shell.',
+    );
+  }
+}
+
 /** Read once per evaluation of this file (each `expo config` run, each EAS build). */
 const eas = resolveEasLink();
+assertBuildWorkerBrand(eas);
+const updates = updatesConfig(eas);
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -170,18 +275,23 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // and UIRequiresFullScreen false. The Chats tab is two panes at regular width
   // (src/features/chats/twoPane.ts). scripts/ipad-orientation.test.mjs pins the Info.plist.
   orientation: 'portrait',
-  // App icons and splash: the Elitea logo mark (docs/assets.md). One icon; no alternate icons.
-  icon: './assets/images/icon.png',
+  // App icons and splash come from the brand folder (brand/<id>/assets/, docs/assets.md).
+  // One icon; no alternate icons.
+  icon: brandAsset('ios/icon-1024.png'),
   scheme: [...identity.connectSchemes, identity.oauthRedirectScheme],
   userInterfaceStyle: 'automatic',
   ios: {
     bundleIdentifier: identity.bundleId,
-    privacyManifests: privacyManifests(eas),
+    privacyManifests: privacyManifests(updates?.enabled === true),
     supportsTablet: true,
+    ...(associatedDomains.length ? { associatedDomains } : {}),
     // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
     requireFullScreen: false,
-    // Icon Composer document: the mark on a solid Ink fill; the system derives Dark, Tinted, Clear.
-    icon: './assets/elitea.icon',
+    // The brand's Icon Composer document when it has one (the system derives Dark, Tinted,
+    // Clear), else its 1024 icon.
+    icon: brand.has('assets/ios/app.icon/icon.json') ? brandAsset('ios/app.icon') : brandAsset('ios/icon-1024.png'),
+    // Firebase (push) only when the brand folder carries it; with no firebase/, nothing is wired.
+    ...(optionalBrandFile('firebase/GoogleService-Info.plist') ? { googleServicesFile: optionalBrandFile('firebase/GoogleService-Info.plist') } : {}),
     infoPlist: {
       // iOS names the app by CFBundleName in system prompts, e.g. the sign-in sheet's
       // '"<name>" Wants to Use "<host>" to Sign In'. Prebuild leaves it as $(PRODUCT_NAME),
@@ -201,12 +311,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   android: {
     package: identity.bundleId,
     allowBackup: false,
+    ...(appLinkFilters.length ? { intentFilters: appLinkFilters } : {}),
     adaptiveIcon: {
-      backgroundColor: '#0B0B18',
-      foregroundImage: './assets/images/android-icon-foreground.png',
-      backgroundImage: './assets/images/android-icon-background.png',
-      monochromeImage: './assets/images/android-icon-monochrome.png',
+      backgroundColor: background.dark,
+      foregroundImage: brandAsset('android/adaptive-foreground.png'),
+      backgroundImage: brandAsset('android/adaptive-background.png'),
+      monochromeImage: brandAsset('android/adaptive-monochrome.png'),
     },
+    ...(optionalBrandFile('firebase/google-services.json') ? { googleServicesFile: optionalBrandFile('firebase/google-services.json') } : {}),
     // Android 16 (API 36) turns the predictive-back system animations on for apps that target
     // it; the app opts in (audit §3 S1). Back is handled through OnBackPressedDispatcher only:
     // react-native-screens pops stacks and dismisses sheets, RN Modal's onRequestClose closes
@@ -221,20 +333,20 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   web: {
     output: 'static',
-    favicon: './assets/images/favicon.png',
+    favicon: brandAsset('web/favicon-48.png'),
   },
   plugins: [
     'expo-router',
     [
       'expo-splash-screen',
       {
-        // The `background` tokens (src/design/tokens.ts: Paper light, Ink dark), so the splash hands
-        // over to the first screen without a flash.
-        backgroundColor: '#FFFFFF',
-        image: './assets/images/splash-icon.png',
+        // The brand's scheme backgrounds (ELITEA: Paper light, Ink dark, the src/design/tokens.ts
+        // `background` tokens), so the splash hands over to the first screen without a flash.
+        backgroundColor: background.light,
+        image: brandAsset('splash/splash-icon.png'),
         imageWidth: 200,
         resizeMode: 'contain',
-        dark: { backgroundColor: '#0B0B18', image: './assets/images/splash-icon.png' },
+        dark: { backgroundColor: background.dark, image: brandAsset('splash/splash-icon.png') },
       },
     ],
     // iOS crashes on Face ID use without NSFaceIDUsageDescription.
@@ -301,7 +413,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         frequentUpdates: false,
         widgets: [
           {
-            name: 'EliteaCounts',
+            // The widget kind: fixed and product-free, so every brand's extension has the same one.
+            name: 'Counts',
             displayName: identity.displayName,
             description: 'Pending approvals, unread notifications and running answers in your workspace.',
             ios: {
@@ -325,10 +438,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   // Binaries and OTA updates match by fingerprint; eas.json's build profiles set the channel.
   runtimeVersion: { policy: 'fingerprint' },
-  updates: updatesConfig(eas),
+  updates,
   extra: {
     ...config.extra,
     identity,
+    brand: brand.id,
     // Merged, not replaced: config plugins (expo-widgets) add extra.eas.build for the extension.
     ...(eas.projectId ? { eas: { ...(config.extra?.eas as object | undefined), projectId: eas.projectId } } : {}),
   },

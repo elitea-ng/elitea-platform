@@ -36,6 +36,7 @@ import { getSession, useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { runConversationAction, subscribeActionFailures, useConversationOverlay } from '@/sync/appConversationOps';
 import { Button, EmptyState, haptic, ListRow, ListSection, searchBarOptions, SegmentedControl } from '@/ui';
+import { identity } from '@/config/identity';
 
 interface DeleteScope {
   workspaceId: string | null;
@@ -314,7 +315,7 @@ export default function ConversationsScreen() {
           ) : localWorkOnly ? (
             <EmptyState
               title="No Local work yet"
-              body="Threads you start in the Elitea desktop app appear here. Send one to the cloud to continue it from your phone."
+              body={`Threads you start in the ${identity.shortName} desktop app appear here. Send one to the cloud to continue it from your phone.`}
             />
           ) : (
             <EmptyState

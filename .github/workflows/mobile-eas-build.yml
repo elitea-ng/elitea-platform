@@ -3,7 +3,8 @@
 # talks to Expo.
 #
 # Needs the EXPO_TOKEN repository secret (an Expo robot-user access token) and a
-# linked EAS project (app.config.ts `easLink`). The build itself runs on EAS
+# linked EAS project (the brand manifest's `eas`). Builds brand/elitea; another
+# brand builds from its own repository with ELITEA_BRAND set on its EAS project. The build itself runs on EAS
 # servers: this job queues it (--no-wait) and prints the build page links, so it
 # takes a few minutes of Actions time, not the length of a native build.
 name: Mobile EAS build

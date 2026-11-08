@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { EliteaMark } from '@/components/EliteaMark';
+import { BrandMark } from '@/components/BrandMark';
 import { identity } from '@/config/identity';
 import { MaxContentWidth } from '@/constants/theme';
 import { useDesign } from '@/design/DesignProvider';
@@ -121,7 +121,7 @@ export function LockView({
               { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 16, paddingHorizontal: space.screenGutter },
             ]}>
             <View style={styles.content}>
-              <EliteaMark size={96} decorative />
+              <BrandMark size={96} decorative />
               <Text variant="title2" heading style={styles.center}>
                 {noSecurity ? 'Set a device passcode' : `${identity.displayName} is locked`}
               </Text>

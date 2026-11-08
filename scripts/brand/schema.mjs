@@ -222,7 +222,7 @@ export function validateManifest(m) {
   if (!isObject(m.mobile)) fail('mobile', 'must be an object');
   else {
     const mob = m.mobile;
-    allowed(mob, 'mobile', ['bundleId', 'connectSchemes', 'oauthRedirectScheme', 'appGroup', 'widgetBundleId']);
+    allowed(mob, 'mobile', ['bundleId', 'connectSchemes', 'oauthRedirectScheme', 'appGroup', 'widgetBundleId', 'ascAppId']);
     if (!isAppId(mob.bundleId)) fail('mobile.bundleId', 'must be a reverse-DNS id of three or more labels, each a lowercase letter then letters or digits (valid on iOS and Android), e.g. com.example.app');
     else ids.push(['mobile.bundleId', mob.bundleId]);
     if (!Array.isArray(mob.connectSchemes) || mob.connectSchemes.length === 0) fail('mobile.connectSchemes', 'must be a non-empty array of URI schemes');
@@ -244,6 +244,9 @@ export function validateManifest(m) {
     if (!isReverseDns(mob.widgetBundleId)) fail('mobile.widgetBundleId', 'must be a reverse-DNS id');
     else if (isAppId(mob.bundleId) && !mob.widgetBundleId.startsWith(`${mob.bundleId}.`)) fail('mobile.widgetBundleId', `must start with "${mob.bundleId}." (Apple requires an extension id under its app's id)`);
     else ids.push(['mobile.widgetBundleId', mob.widgetBundleId]);
+    // The numeric Apple ID of the brand's App Store Connect app (`eas submit` uploads to it);
+    // optional until the record exists.
+    if (mob.ascAppId !== undefined && mob.ascAppId !== null && !(typeof mob.ascAppId === 'string' && /^\d{6,12}$/.test(mob.ascAppId))) fail('mobile.ascAppId', 'must be the numeric Apple ID of the App Store Connect app, as a string, or null');
   }
 
   // desktop

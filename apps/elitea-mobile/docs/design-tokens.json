@@ -200,7 +200,7 @@
   },
   "eliteaMark": {
     "name": "Elitea",
-    "source": "libs/ts/client-core/src/brand/logo-mark.svg (LE-03, vector; src/components/EliteaMark.tsx)",
+    "source": "libs/ts/client-core/src/brand/logo-mark.svg (LE-03, vector; src/components/BrandMark.tsx)",
     "variants": {
       "mark": { "use": "connect hero, empty states, About, lock and privacy covers", "sizes": [64, 96, 112, 160] },
       "avatar": { "use": "the primary agent avatar fallback, on the theme surface", "sizes": [24, 28, 36, 48] }
