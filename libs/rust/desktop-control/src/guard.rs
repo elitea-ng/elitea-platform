@@ -27,9 +27,6 @@
 
 use crate::{DesktopError, Rect};
 
-/// The bundle id of the Elitea desktop app (`apps/elitea-desktop`).
-pub const ELITEA_BUNDLE_ID: &str = "ai.elitea.desktop";
-
 /// The frontmost process while the screensaver is up.
 const SCREENSAVER_BUNDLE_ID: &str = "com.apple.ScreenSaver.Engine";
 const SCREENSAVER_NAME: &str = "ScreenSaverEngine";
@@ -132,8 +129,10 @@ pub(crate) fn before_act(host: &impl HostState) -> Result<(), DesktopError> {
     Ok(())
 }
 
-/// The processes that are Elitea: this process, the `ai.elitea.desktop`
-/// bundle, and whatever the host adds (its helper processes).
+/// The processes that are the host app: this process, the app's bundle id
+/// ([`OwnApps::for_app`]), and whatever the host adds (its helper processes).
+/// The app is branded at build time (ADR-0052), so the library names no app
+/// of its own: the host passes its bundle id to [`crate::default_driver`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnApps {
     pids: Vec<u32>,
@@ -141,30 +140,42 @@ pub struct OwnApps {
 }
 
 impl Default for OwnApps {
+    /// This process only: no bundle id (see [`OwnApps::for_app`]).
     fn default() -> Self {
         Self {
             pids: vec![std::process::id()],
-            bundle_ids: vec![ELITEA_BUNDLE_ID.to_owned()],
+            bundle_ids: Vec::new(),
         }
     }
 }
 
 impl OwnApps {
-    /// The default set plus `extra_pids` and `extra_bundle_ids`.
+    /// This process and the app with bundle id `bundle_id` (every process of
+    /// it). A blank id adds nothing.
     #[must_use]
-    pub fn with_extra(extra_pids: &[u32], extra_bundle_ids: &[String]) -> Self {
+    pub fn for_app(bundle_id: &str) -> Self {
+        let bundle_id = bundle_id.trim();
         let mut own = Self::default();
+        if !bundle_id.is_empty() {
+            own.bundle_ids.push(bundle_id.to_owned());
+        }
+        own
+    }
+
+    /// This set plus `extra_pids` and `extra_bundle_ids`.
+    #[must_use]
+    pub fn with_extra(mut self, extra_pids: &[u32], extra_bundle_ids: &[String]) -> Self {
         for pid in extra_pids {
-            if !own.pids.contains(pid) {
-                own.pids.push(*pid);
+            if !self.pids.contains(pid) {
+                self.pids.push(*pid);
             }
         }
         for bundle in extra_bundle_ids {
-            if !own.is_own_bundle(bundle) {
-                own.bundle_ids.push(bundle.clone());
+            if !self.is_own_bundle(bundle) {
+                self.bundle_ids.push(bundle.clone());
             }
         }
-        own
+        self
     }
 
     #[must_use]
@@ -358,17 +369,20 @@ mod tests {
     }
 
     #[test]
-    fn elitea_itself_and_the_extras_are_own() {
-        let own = OwnApps::with_extra(&[4242], &["ai.elitea.helper".to_owned()]);
+    fn the_app_itself_and_the_extras_are_own() {
+        let own = OwnApps::for_app("com.example.host.desktop")
+            .with_extra(&[4242], &["com.example.helper".to_owned()]);
+        assert!(!OwnApps::default().is_own_bundle("com.example.host.desktop"));
+        assert_eq!(OwnApps::for_app("  "), OwnApps::default());
         assert!(own.is_own(std::process::id(), None));
-        assert!(own.is_own(1, Some("ai.elitea.desktop")));
-        assert!(own.is_own(1, Some("AI.Elitea.Desktop")));
+        assert!(own.is_own(1, Some("com.example.host.desktop")));
+        assert!(own.is_own(1, Some("COM.Example.Host.Desktop")));
         assert!(own.is_own(4242, Some("com.apple.TextEdit")));
-        assert!(own.is_own(1, Some("ai.elitea.helper")));
+        assert!(own.is_own(1, Some("com.example.helper")));
         assert!(!own.is_own(1, Some("com.apple.TextEdit")));
         assert!(!own.is_own(1, None));
         assert_eq!(
-            own.refuse(1, Some("ai.elitea.desktop"), "snapshot")
+            own.refuse(1, Some("com.example.host.desktop"), "snapshot")
                 .unwrap_err()
                 .code(),
             "own_window_refused"

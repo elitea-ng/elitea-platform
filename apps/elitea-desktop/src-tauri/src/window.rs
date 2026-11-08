@@ -107,7 +107,7 @@ fn build_panel_window(
     features: NewWindowFeatures,
 ) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(app, label, WebviewUrl::External(url.clone()))
-        .title("Elitea")
+        .title(crate::brand::product())
         .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
         .min_inner_size(PANEL_MIN_SIZE.0, PANEL_MIN_SIZE.1)
         // The opener's webview configuration (macOS) and the size it asked for.
@@ -152,7 +152,7 @@ pub fn quiet_input_source_indicator() {
 pub fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
     let dev = cfg!(debug_assertions);
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-        .title("Elitea")
+        .title(crate::brand::product())
         .inner_size(1280.0, 820.0)
         .min_inner_size(MIN_SIZE.0, MIN_SIZE.1)
         .on_navigation(move |url| is_bundled_origin(url, dev));

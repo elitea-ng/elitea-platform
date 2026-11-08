@@ -30,7 +30,7 @@ pub enum HostError {
         "this deployment does not recognise the desktop client; ask an administrator to register client id \"{0}\""
     )]
     ClientNotRegistered(String),
-    #[error("this version of Elitea is older than the deployment allows; update the app")]
+    #[error("this version of the app is older than the deployment allows; update the app")]
     UpgradeRequired,
     #[error("the device session was revoked")]
     DeviceRevoked,

@@ -174,7 +174,7 @@ pub async fn fetch_discovery(
         200 => {}
         404 => {
             return Err(HostError::Unsupported(
-                "this address is not an Elitea deployment that supports desktop clients".into(),
+                "this address is not a deployment that supports desktop clients".into(),
             ));
         }
         _ => return Err(HostError::Unavailable),

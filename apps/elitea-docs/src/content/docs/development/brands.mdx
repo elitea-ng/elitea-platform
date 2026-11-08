@@ -26,7 +26,7 @@ Every build reads the brand that `ELITEA_BRAND` names:
 | a bare id, such as `sample` | `brand/sample` |
 | a path, such as `../acme-brand/brand/acme` | that folder, relative to the current directory or absolute |
 
-The generators (mobile `app.config.ts`, the desktop `tauri.brand.json` writer and the web default pack) read the brand only through `scripts/brand/load.mjs`. Nothing else opens a `brand.json`. Today `brand-check` is the only reader; the mobile, desktop and web clients move to it in the next steps of ADR-0052.
+The generators (mobile `app.config.ts`, the desktop `tauri.brand.json` writer and the web default pack) read the brand only through `scripts/brand/load.mjs`. Nothing else opens a `brand.json`. The mobile and desktop clients read it today; the web client moves to it in the next step of ADR-0052.
 
 ## The folder
 
@@ -96,7 +96,7 @@ Every file is required unless marked optional. PNGs are square.
 | `web/favicon-48.png` | 48 | either | Mobile web favicon |
 | `logo/logo-full.svg`, `logo/logo-mark.svg` | | | The lockup and the mark |
 
-`brand/elitea`'s assets are copies of the approved LE-03 icon pack's colored-dark rasters (`brand/assets/icon-pack/`) and the client-core logos. Until each client reads its icons from the brand folder, `scripts/brand/elitea-sync.test.mjs` keeps `brand/elitea` byte-equal to the copies the apps ship. To change ELITEA's artwork, change both.
+`brand/elitea`'s assets are copies of the approved LE-03 icon pack's colored-dark rasters (`brand/assets/icon-pack/`) and the client-core logos. The mobile and desktop apps read their icons from the brand folder itself. Until the web client does too, `scripts/brand/elitea-sync.test.mjs` keeps `brand/elitea` byte-equal to the copies it still ships. To change ELITEA's artwork, change both.
 
 `brand/sample`'s assets are a plain disc on a tile, written by `node scripts/brand/placeholder-assets.mjs brand/sample` (deterministic). The script writes a full placeholder set into any brand folder, which is a quick way to start a new brand.
 
@@ -138,6 +138,25 @@ From the manifest the app takes:
 - **Links:** with a `linkDomain`, the app declares `applinks:<linkDomain>` and a verified Android App Link for exactly `https://<linkDomain>/connect`. The domain must serve `apple-app-site-association` and `assetlinks.json` naming the brand's app; `npm run check:link-files` (with `APPLE_TEAM_ID` and `ANDROID_CERT_SHA256`) verifies them before a release. `linkDomain: null` declares neither.
 
 Siri and Shortcuts phrases name the app by its installed name, so the App Intents source holds no product name. Building with `brand/sample` yields a config with no ELITEA identifier, name or domain (`scripts/eas-config.test.mjs`, `src/config/sampleBrand.test.tsx`).
+
+## Desktop app
+
+`apps/elitea-desktop/scripts/tauri-brand.mjs` writes `src-tauri/tauri.brand.json`, the brand's Tauri configuration overlay. Every build merges it over `tauri.conf.json`, which holds brand/sample's neutral values, so a build without the overlay is the sample brand. The npm scripts write it first:
+
+```bash
+cd apps/elitea-desktop
+ELITEA_BRAND=sample npm run build      # the sample brand's app
+npm run brand -- --print               # the overlay of the selected brand
+```
+
+Cargo alone (`cargo test`, `cargo clippy`) reads the overlay from `TAURI_CONFIG`: `export TAURI_CONFIG="$(cat src-tauri/tauri.brand.json)"`. The overlay is generated, never committed.
+
+From the manifest the app takes:
+
+- **Identity:** `shortName` is the product name: the app bundle (`Elitea.app`), the macOS app menu, the window title, the tray tooltip and every message the host writes ("Quit Elitea?"). `desktop.identifier` is the bundle identifier and names the config, data, log and cache folders and the credentials file, so it never changes for a brand. `publisher` sets the bundle's publisher and copyright.
+- **Assets:** the bundle icons (`desktop/32x32.png`, `desktop/128x128.png`, `desktop/128x128@2x.png`, `macos/icon.icns`, `windows/icon.ico`) and the menu-bar template image (`desktop/tray-template.png`), by paths relative to `src-tauri`.
+
+The host reads the product name and identifier from the configuration compiled into it (`src/brand.rs`); none is written in its source. The menu labels the web page translates keep `{product}` in place, and the host fills in its own name. The computer-use guards treat the brand's identifier as the app's own windows, which an agent never reads or acts on. CI builds the host as ELITEA (`ci-desktop.yml`, host job) and as brand/sample (the pane-drivers job on Linux and Windows); `scripts/tauri-brand.test.mjs` checks the overlay of both.
 
 ## Add a field
 

@@ -121,8 +121,9 @@ impl NativeDriver {
         }
     }
 
-    /// The same driver, refusing `own` as Elitea's processes. The default
-    /// set is this process and `ai.elitea.desktop`.
+    /// The same driver, refusing `own` as the host app's processes. The
+    /// default set is this process only; the host passes
+    /// [`OwnApps::for_app`] with its bundle id.
     #[must_use]
     pub fn with_own_apps(mut self, own: OwnApps) -> Self {
         self.own = own;

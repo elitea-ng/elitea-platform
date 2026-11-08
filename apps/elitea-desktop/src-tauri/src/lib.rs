@@ -10,6 +10,7 @@ mod activity;
 mod app_events;
 mod attention;
 mod auth;
+mod brand;
 mod browser_control;
 mod browser_pane;
 mod browser_tools;
@@ -121,8 +122,19 @@ pub fn run_acp() -> i32 {
     acp::run()
 }
 
+/// The identifier of the neutral `tauri.conf.json` (brand/sample): a build
+/// that runs with it was made without its brand overlay.
+const SAMPLE_IDENTIFIER: &str = "com.example.sample.desktop";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // The brand compiled into this build (src/brand.rs): its identifier names every
+    // folder below, so a build without one stops here.
+    let mut context = brand::context();
+    if let Err(error) = brand::init(&mut context) {
+        eprintln!("elitea-desktop failed to start: {error}");
+        std::process::exit(1);
+    }
     // Logging first, so every later plugin and the setup below can report.
     let builder = tauri::Builder::default().plugin(logging::plugin());
     // First, so a second launch exits before it can touch the credentials file: two
@@ -176,13 +188,20 @@ pub fn run() {
             let log_dir = optional_app_dir("log", app.path().app_log_dir());
             let cache_dir = optional_app_dir("cache", app.path().app_cache_dir());
             log::info!(
-                "Elitea {} starting (logs: {})",
+                "{} {} starting (logs: {})",
+                brand::product(),
                 env!("CARGO_PKG_VERSION"),
                 log_dir
                     .as_ref()
                     .map(|d| d.display().to_string())
                     .unwrap_or_default()
             );
+            if brand::identifier() == SAMPLE_IDENTIFIER {
+                log::warn!(
+                    "built without a brand overlay: running as the sample brand ({SAMPLE_IDENTIFIER}), \
+                     with its own data folders (npm run brand)"
+                );
+            }
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let config_dir_for_browser = config_dir.clone();
@@ -477,7 +496,7 @@ pub fn run() {
             // lifetime; the toolset is offered per turn while the policy
             // and the person's device switch allow it.
             agents.set_computer(computer_tools::ComputerSetup::from_settings(
-                Arc::from(elitea_desktop_control::default_driver()),
+                Arc::from(elitea_desktop_control::default_driver(brand::own_apps())),
                 config_dir.clone(),
             ));
             app.manage(computer_commands::ComputerConfig(config_dir.clone()));
@@ -498,7 +517,7 @@ pub fn run() {
                 .path()
                 .download_dir()
                 .unwrap_or_else(|_| data_dir_for_browser.join("downloads"))
-                .join("Elitea");
+                .join(brand::product());
             app.manage(Arc::new(browser_pane::BrowserPanes::new(
                 config_dir_for_browser,
                 &data_dir_for_browser,
@@ -648,7 +667,7 @@ pub fn run() {
             computer_commands::computer_open_privacy,
             computer_commands::computer_session,
         ])
-        .build(tauri::generate_context!());
+        .build(context);
     let app = match built {
         Ok(app) => app,
         Err(error) => {
@@ -759,7 +778,7 @@ fn optional_app_dir(
 }
 
 /// The identifier local tools deny the app's default directories under:
-/// the bundle identifier in the Tauri config (`tauri.conf.json`).
+/// the bundle identifier in the Tauri config (the brand's, src/brand.rs).
 pub(crate) fn sandbox_app_id(config: &tauri::Config) -> Option<String> {
     let identifier = config.identifier.trim();
     (!identifier.is_empty()).then(|| identifier.to_owned())

@@ -1,7 +1,7 @@
 # Elitea AI assets
 
 The app's fixed identity is the Elitea AI logo mark (LE-03, brand guide v3), the same artwork
-as the web app and the desktop app (`apps/elitea-desktop/src-tauri/icons/`); its canonical
+as the web app and the desktop app (both apps read `brand/elitea/assets/`); its canonical
 source is `libs/ts/client-core/src/brand/logo-mark.svg`. Rules for using it are in `docs/design-system.md` §5.
 
 A workspace's own branding (its brand pack: accent, logo, fonts) is applied at runtime by

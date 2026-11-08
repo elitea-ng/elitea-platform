@@ -107,7 +107,7 @@ impl CloudChildAgentTool {
     #[must_use]
     pub fn new(spec: ChildAgentSpec, context: Arc<ChildAgentContext>) -> Self {
         let mut description = format!(
-            "Delegate a task to the agent \"{}\". It runs on the Elitea platform as its own conversation, \
+            "Delegate a task to the agent \"{}\". It runs on the platform as its own conversation, \
              with its own tools, and answers with its result. Give it everything it needs in `task`.",
             spec.name
         );
@@ -426,7 +426,7 @@ async fn follow(
             let mut result = error_result(
                 "child_agent_paused",
                 &format!(
-                    "the agent {what}; the person can finish it in the Elitea web app (its conversation is linked)"
+                    "the agent {what}; the person can finish it in the web app (its conversation is linked)"
                 ),
             );
             result["child_conversation_uuid"] = json!(started.conversation_uuid);

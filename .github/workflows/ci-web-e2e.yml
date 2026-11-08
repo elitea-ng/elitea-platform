@@ -1474,6 +1474,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: apps/elitea-desktop/src-tauri
           prefix-key: handoff-journey
+      # The ELITEA build of the host (ADR-0052 decision 4): the brand overlay
+      # as TAURI_CONFIG for the cargo build the journey runs.
+      - name: Brand overlay (brand/elitea)
+        working-directory: apps/elitea-desktop
+        run: node scripts/tauri-brand.mjs --github-env
       - name: Run the handoff journey against a fresh standalone stack
         working-directory: ${{ github.workspace }}
         env:

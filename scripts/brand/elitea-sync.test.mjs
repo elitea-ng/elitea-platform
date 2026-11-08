@@ -21,13 +21,7 @@ const lit = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const COPIES = {
   'android/icon-512.png': 'brand/assets/icon-pack/colored-dark/android/elitea-colored-dark-android-512.png',
   // The mobile app reads its icons from brand/elitea itself (ADR-0052 W1a); the copies are gone.
-  'macos/icon.icns': 'apps/elitea-desktop/src-tauri/icons/icon.icns',
-  'windows/icon.ico': 'apps/elitea-desktop/src-tauri/icons/icon.ico',
-  'desktop/32x32.png': 'apps/elitea-desktop/src-tauri/icons/32x32.png',
-  'desktop/128x128.png': 'apps/elitea-desktop/src-tauri/icons/128x128.png',
-  'desktop/128x128@2x.png': 'apps/elitea-desktop/src-tauri/icons/128x128@2x.png',
-  'desktop/icon.png': 'apps/elitea-desktop/src-tauri/icons/icon.png',
-  'desktop/tray-template.png': 'apps/elitea-desktop/src-tauri/icons/tray-template.png',
+  // The desktop app reads its icons from brand/elitea too (ADR-0052 W2a); its copies are gone.
   'web/favicon.svg': 'apps/elitea-web/public/brand/favicon.svg',
   'logo/logo-full.svg': 'libs/ts/client-core/src/brand/logo-full.svg',
   'logo/logo-mark.svg': 'libs/ts/client-core/src/brand/logo-mark.svg',
@@ -50,9 +44,4 @@ test('brand/elitea names, hue and support address match the web default pack and
   assert.match(identity, new RegExp(`DEFAULT_BRAND_HUE = '${lit(brand.manifest.brand.hue)}'`, 'i'));
   const links = repo('apps/elitea-web/src/shared/brand/brandLinks.ts').toString();
   assert.match(links, new RegExp(`FALLBACK_SUPPORT_EMAIL = '${lit(brand.manifest.supportEmail)}'`));
-});
-
-test('brand/elitea desktop identifier and product match tauri.conf.json', () => {
-  const conf = JSON.parse(repo('apps/elitea-desktop/src-tauri/tauri.conf.json'));
-  assert.equal(conf.identifier, brand.manifest.desktop.identifier);
 });

@@ -156,7 +156,7 @@ pub async fn computer_settings_set(
         if current.accessibility != elitea_desktop_control::Grant::Granted {
             return Err(IpcError::new(
                 "computer_accessibility_missing",
-                "Grant Accessibility to Elitea first.",
+                format!("Grant Accessibility to {} first.", crate::brand::product()),
             ));
         }
     }
@@ -333,7 +333,7 @@ fn build_panel(app: &AppHandle) -> tauri::Result<()> {
         PANEL,
         WebviewUrl::App("index.html#computer-panel".into()),
     )
-    .title("Elitea")
+    .title(crate::brand::product())
     .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
     .resizable(false)
     .maximizable(false)
