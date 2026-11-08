@@ -58,7 +58,7 @@ export function toolGroupDescriptor(groupId: string): ToolGroupDescriptor {
       return {
         label: t('features.toolkits.toolGroups.delete.label', 'Delete'),
         badge: t('features.toolkits.toolGroups.delete.badge', 'Destructive'),
-        hint: t('features.toolkits.toolGroups.delete.hint', 'Destroys data. Not reversible from Elitea.'),
+        hint: t('features.toolkits.toolGroups.delete.hint', 'Destroys data. Not reversible from {{product}}.'),
       };
     case 'execute':
       return {

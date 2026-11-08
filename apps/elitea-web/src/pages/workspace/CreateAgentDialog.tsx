@@ -51,7 +51,7 @@ function BranchChoice({ onPick }: { readonly onPick: (branch: AgentBranch) => vo
     },
     {
       branch: 'elitea',
-      title: t('workspace.createAgent.eliteaTitle', 'Elitea agent'),
+      title: t('workspace.createAgent.eliteaTitle', '{{product}} agent'),
       body: t('workspace.createAgent.eliteaBody', 'Generated with AI and saved to the project. It runs here, on the web and on mobile.'),
     },
   ];

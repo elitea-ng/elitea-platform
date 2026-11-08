@@ -24,7 +24,7 @@ export interface WebPushToggleProps {
 function hint(state: string | undefined, failed: boolean): string {
   if (failed) return t('notifications.webPush.failed', 'Web push did not change. Try again.');
   if (state === 'blocked') return t('notifications.webPush.blocked', 'Your browser blocks notifications from this site. Allow them in the site settings of your browser.');
-  return t('notifications.webPush.hint', 'This browser shows a notice when a run finishes or waits for you, also when no Elitea tab is open.');
+  return t('notifications.webPush.hint', 'This browser shows a notice when a run finishes or waits for you, also when no {{product}} tab is open.');
 }
 
 export function WebPushToggle({ projectId, env }: WebPushToggleProps): React.JSX.Element | null {

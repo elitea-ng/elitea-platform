@@ -15,7 +15,7 @@ export function describeFailure(failure: BrowserViewFailure): string {
     case 'signed_out':
       return t('cloudBrowser.failure.signedOut', 'Sign in again to see the browser.');
     case 'forbidden':
-      return t('cloudBrowser.failure.forbidden', 'This page cannot open the browser view. Open Elitea at its own address.');
+      return t('cloudBrowser.failure.forbidden', 'This page cannot open the browser view. Open {{product}} at its own address.');
     case 'disconnected':
       return t('cloudBrowser.failure.disconnected', 'The connection to the browser dropped. Reconnecting…');
     case 'upgrade_required':

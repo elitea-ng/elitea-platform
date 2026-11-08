@@ -60,7 +60,7 @@ export function AdminNavFooter({ collapsed }: AdminNavFooterProps): ReactNode {
             <MenuRowIcon>
               <ArrowBackIcon />
             </MenuRowIcon>
-            <MenuRowText>{t('pages.admin.nav.backToApp', 'Back to Elitea')}</MenuRowText>
+            <MenuRowText>{t('pages.admin.nav.backToApp', 'Back to {{product}}')}</MenuRowText>
           </MenuRow>,
         ]}
       </AccountMenuFrame>

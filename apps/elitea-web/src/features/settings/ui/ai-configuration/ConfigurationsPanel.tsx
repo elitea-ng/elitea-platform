@@ -262,7 +262,7 @@ export default memo(function ConfigurationsPanel({
             t('ai-configuration.section.default', 'Default'),
             t(
               'ai-configuration.section.imageTooltip',
-              'Default image generation model used when creating images in Elitea.',
+              'Default image generation model used when creating images in {{product}}.',
             ),
           )}
           defaultSettingValue={defaultValueOf(imageDefaults)}

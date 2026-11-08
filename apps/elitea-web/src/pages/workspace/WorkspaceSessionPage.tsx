@@ -261,7 +261,7 @@ export default function WorkspaceSessionPage(): React.JSX.Element {
   if (ipc === undefined || workspaceId === undefined) {
     return (
       <Box sx={{ padding: 3 }}>
-        <Alert severity="info">{t('workspace.noHost', 'Workspaces need the Elitea desktop app.')}</Alert>
+        <Alert severity="info">{t('workspace.noHost', 'Workspaces need the {{product}} desktop app.')}</Alert>
       </Box>
     );
   }

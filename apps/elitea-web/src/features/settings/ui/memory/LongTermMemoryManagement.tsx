@@ -70,7 +70,7 @@ export const LongTermMemoryManagement = memo(function LongTermMemoryManagement({
                 <Typography variant="bodyMedium" color="text.secondary">
                   {t(
                     'settings.longTermMemory.description',
-                    'Facts Elitea remembers about you across every conversation in this project — not just the current one.',
+                    'Facts {{product}} remembers about you across every conversation in this project — not just the current one.',
                   )}
                 </Typography>
 

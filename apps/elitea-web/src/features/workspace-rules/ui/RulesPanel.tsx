@@ -328,7 +328,7 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           'workspace.rules.help',
-          'Rules decide which commands run without asking, which are asked, and which are refused. An Allow rule covers one plain command, never a command line with pipes or lists. Forbidden rules are advisory: they catch the commands Elitea can see, not what a script starts; the sandbox is what bounds a command. Your organisation’s policy always comes first.',
+          'Rules decide which commands run without asking, which are asked, and which are refused. An Allow rule covers one plain command, never a command line with pipes or lists. Forbidden rules are advisory: they catch the commands {{product}} can see, not what a script starts; the sandbox is what bounds a command. Your organisation’s policy always comes first.',
         )}
       </Typography>
       {failure !== null && <Alert severity="error">{failure}</Alert>}

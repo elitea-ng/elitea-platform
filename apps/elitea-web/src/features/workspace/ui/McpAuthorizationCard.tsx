@@ -30,7 +30,7 @@ export interface McpAuthorizationCardProps {
 const SAFE_PATH = /^\/app\/\d+\/(mcps|toolkits)\/all\/\d+$/;
 
 function hintText(toolkit: string, path: string | undefined, opened: boolean): string {
-  if (path === undefined) return t('workspace.mcpAuthorization.inWebApp', 'Sign in to {{toolkit}} in the Elitea web app, then continue.', { toolkit });
+  if (path === undefined) return t('workspace.mcpAuthorization.inWebApp', 'Sign in to {{toolkit}} in the {{product}} web app, then continue.', { toolkit });
   return opened
     ? t('workspace.mcpAuthorization.waiting', 'Finish signing in in your browser, then continue.')
     : t('workspace.mcpAuthorization.hint', 'Sign in in your browser; the agent waits here and then runs the same tool again.');
