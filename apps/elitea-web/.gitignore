@@ -25,3 +25,6 @@ playwright-report/
 # had written them.
 scripts/deepwiki-oracle/jsxReducer.generated.mjs
 scripts/deepwiki-oracle/chatReducer.generated.mjs
+
+# The build-time brand files of a non-default ELITEA_BRAND (vite.config.ts).
+/.brand/
