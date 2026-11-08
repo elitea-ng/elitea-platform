@@ -210,6 +210,9 @@ struct Refs {
     /// Isolated worlds by `(session, frame)`, for `worlds_document`.
     worlds: HashMap<(String, String), i64>,
     worlds_document: u64,
+    /// Controls in the DOM the latest snapshot read (shadow roots and
+    /// frames pierced), for `auto`'s empty-snapshot rule.
+    dom_controls: usize,
 }
 
 /// A browser session's one pane, driven over CDP.
@@ -423,16 +426,21 @@ impl CdpDriver {
     /// What the page shows, read from the DOM rather than the
     /// accessibility tree. `auto` asks after a tree snapshot gave out no
     /// ref: text or a control there is something the tree should have
-    /// shown. Outside the agent's gate, like [`Self::reopen`]; a script that
-    /// does not run finds nothing.
+    /// shown. Controls come from two reads: the `DOM.getDocument` the
+    /// latest snapshot already made (shadow roots and frames pierced, no
+    /// page script involved) and a page script, which also tells text.
+    /// Outside the agent's gate, like [`Self::reopen`]; a script that does
+    /// not run finds no text.
     pub(crate) async fn page_content(&self) -> PageContent {
-        self.main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
+        let in_dom = lock(&self.refs).dom_controls > 0;
+        let script = self
+            .main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
             .await
-            .map(|content| PageContent {
-                text: content["text"] == true,
-                controls: content["controls"].as_u64().is_some_and(|found| found > 0),
-            })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        PageContent {
+            text: script["text"] == true,
+            controls: in_dom || script["controls"].as_u64().is_some_and(|found| found > 0),
+        }
     }
 
     /// The engine's product, `chrome-headless-shell/<version>` or
@@ -986,6 +994,13 @@ impl CdpDriver {
                 continue;
             }
             let converted = ax::convert(&self.target, &frames);
+            // One element map per CDP session, shared by its frames.
+            let mut counted = HashSet::new();
+            let dom_controls = frames
+                .values()
+                .filter(|tree| counted.insert(tree.session.clone()))
+                .map(|tree| tree.elements.values().filter(|e| e.is_control()).count())
+                .sum();
             let url = self.tracker.lock().url.clone();
             let title = self.title().await;
             let mut refs = lock(&self.refs);
@@ -994,6 +1009,7 @@ impl CdpDriver {
             refs.slot.install(snapshot.clone());
             refs.handles = converted.handles;
             refs.hosts = converted.hosts;
+            refs.dom_controls = dom_controls;
             refs.taken_at = Some((before.documents, before.dom_epoch, input));
             return Ok(snapshot);
         }

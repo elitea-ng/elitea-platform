@@ -1311,6 +1311,36 @@ mod tests {
         assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
     }
 
+    /// The page script finds nothing (on Moli it may not run at all, as in
+    /// the second bake-off run), but the DOM the snapshot read holds a
+    /// link inside a shadow root: still an empty snapshot.
+    #[tokio::test]
+    async fn controls_in_the_snapshots_dom_switch_without_the_script() {
+        let (session, moli, _chrome, mut noticed) = started_auto().await;
+        moli.set(
+            "Accessibility.getFullAXTree",
+            Behaviour::Reply(ax_tree(&[("heading", "Docs")])),
+        );
+        moli.set(
+            "DOM.getDocument",
+            Behaviour::Reply(json!({"root": {
+                "nodeType": 9, "backendNodeId": 1,
+                "children": [{
+                    "nodeType": 1, "backendNodeId": 2, "localName": "dx-header", "attributes": [],
+                    "shadowRoots": [{
+                        "nodeType": 11, "backendNodeId": 3,
+                        "children": [{
+                            "nodeType": 1, "backendNodeId": 4, "localName": "a",
+                            "attributes": ["href", "/docs/apex"],
+                        }],
+                    }],
+                }],
+            }})),
+        );
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert_read_switched(&session, &output, "empty_snapshot", &mut noticed);
+    }
+
     /// A page of text alone has no ref on any engine, and a page that
     /// renders by the second read is Moli's to keep.
     #[tokio::test]

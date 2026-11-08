@@ -4,7 +4,7 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
-## Cloud browser: more `auto` switch reasons, bake-off corpus revision 2 (#1599)
+## Cloud browser: more `auto` switch reasons, bake-off corpus revision 3 (#1599)
 
 No operator action. No migration, no contract change for Main or the
 supervisor.
@@ -21,8 +21,8 @@ supervisor.
   three new values. The `engine_switched` notice to viewers is
   unchanged.
 - The bake-off corpus (`libs/rust/browser-session/bakeoff/corpus.json`)
-  is at revision 2: 8 tasks whose sites had moved were fixed or replaced
-  in the same class and kind. Bake-off numbers from revision 1 do not
+  is at revision 3: 11 tasks whose sites had moved were fixed or replaced
+  in the same class and kind. Bake-off numbers from revisions 1 and 2 do not
   compare task for task with later runs.
 
 ## Idle compaction per agent (#1610, ADR-0050 decision 9b2)
