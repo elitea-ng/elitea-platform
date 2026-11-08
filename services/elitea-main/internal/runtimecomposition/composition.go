@@ -1522,9 +1522,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if idleCompactionHook != nil {
 		settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(idleCompactionHook.AfterSettle))
 	}
-	// After the unattended chain hook, on purpose: that hook reads the
-	// exchange's QUEUED turns to keep the chain open for the next one, and
-	// this hook takes that turn out of QUEUED when it starts it.
+	// After-settle hooks run concurrently. The unattended chain hook keeps a
+	// chain open while its message owes a floor turn, QUEUED or STARTED by
+	// this hook (PendingFloorTurns), so their order does not matter.
 	if floorHook != nil {
 		settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(floorHook.AfterSettle))
 	}

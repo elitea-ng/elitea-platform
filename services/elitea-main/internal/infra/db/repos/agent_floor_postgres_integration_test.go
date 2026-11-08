@@ -115,7 +115,7 @@ func TestAgentFloorExchangeQueuesAndSupersedes(t *testing.T) {
 	if got := f.turnStates(floorQuestion1); len(got) != 2 || got[0] != "QUEUED" || got[1] != "QUEUED" {
 		t.Fatalf("turns = %v", got)
 	}
-	pending, err := f.floors.PendingFloorTurns(t.Context(), 1, f.conversation)
+	pending, err := f.floors.PendingFloorTurns(t.Context(), 1, f.conversation, "")
 	if err != nil || !pending {
 		t.Fatalf("pending=%v err=%v", pending, err)
 	}

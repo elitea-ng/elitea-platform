@@ -64,14 +64,19 @@ func (s *AgentMemory) WithActiveLimit(limit int) *AgentMemory {
 
 // agentMemoryRunSQL reads what a memory call needs off the claimed
 // execution: its agent, actor, conversation, response message, trigger
-// origin, whether it is a continuation of an unattended chain, whether the
+// origin, whether it is a continuation of an unattended chain or an
+// agent-to-agent turn, whether the
 // project is personal and whether the conversation is tainted, and the
 // frozen input (for the version's memory block).
 const agentMemoryRunSQL = `
 SELECT COALESCE(a.application_id, 0), j.actor_id, a.client_stream_id, a.client_message_id,
        j.trigger_origin,
        EXISTS (SELECT 1 FROM elitea_runtime.run_chain_links AS link
-               WHERE link.execution_id = j.execution_id AND link.kind <> 'root'),
+               WHERE link.execution_id = j.execution_id AND link.kind <> 'root')
+       -- An agent-to-agent turn (ADR-0050 decision 7d, #1611): another
+       -- agent asked, nobody watches it, so it is not attended either.
+       OR EXISTS (SELECT 1 FROM elitea_runtime.agent_floor_turns AS floor_turn
+                  WHERE floor_turn.execution_id = j.execution_id AND floor_turn.cause = 'agent_mention'),
        COALESCE((SELECT project.name = $4 || project.owner_id::text
                  FROM centry.project AS project WHERE project.id = j.resource_project_id), false),
        EXISTS (SELECT 1 FROM elitea_runtime.memory_conversation_taints AS taint

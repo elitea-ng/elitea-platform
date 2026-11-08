@@ -86,7 +86,7 @@ func (c chainSettleViews) SettleView(ctx context.Context, executionID string) (u
 	return unattendedchain.SettleView{
 		Chain: view.Chain, Latest: view.Latest, OutputLimitReached: view.OutputLimitReached,
 		OutputLimitSequence: view.OutputLimitSequence, StepLimitReached: view.StepLimitReached,
-		Paused: view.Paused, IsError: view.IsError,
+		Paused: view.Paused, IsError: view.IsError, ParticipantID: view.ParticipantID,
 	}, true, nil
 }
 

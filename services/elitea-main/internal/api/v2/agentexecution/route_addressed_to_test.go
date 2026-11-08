@@ -49,3 +49,15 @@ func TestCurrentStartRouteNamesAnAddresseeOutsideTheConversation(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+// A model chat has no floor: addressing agents through it is refused, not
+// dropped.
+func TestCurrentAdhocStartRouteRefusesAddressedTo(t *testing.T) {
+	useCase := &currentStartUseCaseStub{}
+	route := newCurrentStartRoute(t, useCase, allowCurrentStartPermission())
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentAdhocStartRequest(withAddressedTo(validCurrentAdhocStartBody(), `[22]`)))
+	if response.Code != http.StatusUnprocessableEntity || useCase.adhocCalls != 0 {
+		t.Fatalf("status=%d adhoc_calls=%d body=%s", response.Code, useCase.adhocCalls, response.Body.String())
+	}
+}

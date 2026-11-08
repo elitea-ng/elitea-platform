@@ -922,7 +922,8 @@ WITH resolved AS MATERIALIZED (
 ), response_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, reply_to_id, meta,
-        is_streaming, created_at, task_id
+        is_streaming, created_at, task_id,
+        addressed_to, visibility, cause
     )
     SELECT $17::uuid,
            resolved.target_participant_id,
@@ -941,7 +942,14 @@ WITH resolved AS MATERIALIZED (
                clock_timestamp() AT TIME ZONE 'UTC',
                question_ref.created_at + interval '1 microsecond'
            ),
-           $19::text
+           $19::text,
+           -- ADR-0050 decision 7d: the answer to an agent-to-agent question
+           -- is side talk, addressed back to the agent that asked.
+           CASE WHEN resolved.question_author_participant_id IS NOT NULL
+                THEN ARRAY[resolved.question_author_participant_id]::integer[]
+                ELSE '{}'::integer[] END,
+           COALESCE($13::text, 'all'),
+           $14::text
     FROM question_ref
     CROSS JOIN resolved
     RETURNING id, uuid, reply_to_id

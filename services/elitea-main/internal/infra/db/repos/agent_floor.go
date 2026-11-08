@@ -412,15 +412,21 @@ WHERE project_id = $1 AND conversation_uuid = $2::uuid AND question_id = $3::uui
 	return nil
 }
 
-// PendingFloorTurns reports whether the conversation has a QUEUED floor
-// turn: the unattended chain hook does not end a chain as completed while
-// its message still owes a turn.
-func (r *AgentFloorRepository) PendingFloorTurns(ctx context.Context, projectID int64, conversationUUID string) (bool, error) {
+// PendingFloorTurns reports whether the conversation still owes a floor
+// turn other than the settling run's own: a QUEUED turn, or a STARTED turn
+// of another execution. The unattended chain hook does not end a chain as
+// completed while it does. The after-settle hooks run concurrently, so the
+// floor hook may already have moved the next turn QUEUED -> STARTED when
+// this runs; counting STARTED turns makes the answer the same either way.
+func (r *AgentFloorRepository) PendingFloorTurns(
+	ctx context.Context, projectID int64, conversationUUID, settlingExecutionID string,
+) (bool, error) {
 	var pending bool
 	err := r.pool.QueryRow(ctx, `
 SELECT EXISTS (SELECT 1 FROM elitea_runtime.agent_floor_turns
-               WHERE project_id = $1 AND conversation_uuid = $2::uuid AND state = 'QUEUED')`,
-		projectID, conversationUUID).Scan(&pending)
+               WHERE project_id = $1 AND conversation_uuid = $2::uuid
+                 AND (state = 'QUEUED' OR (state = 'STARTED' AND execution_id <> $3)))`,
+		projectID, conversationUUID, settlingExecutionID).Scan(&pending)
 	if err != nil {
 		if undefinedColumnOrTable(err) {
 			return false, nil

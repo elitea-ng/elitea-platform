@@ -10,7 +10,7 @@ import (
 
 type floorStub struct{ pending bool }
 
-func (f floorStub) PendingFloorTurns(context.Context, int64, string) (bool, error) {
+func (f floorStub) PendingFloorTurns(context.Context, int64, string, string) (bool, error) {
 	return f.pending, nil
 }
 
@@ -40,5 +40,23 @@ func TestSettleKeepsTheChainOpenForAQueuedFloorTurn(t *testing.T) {
 	}
 	if len(chains.ended) != 1 || chains.ended[0] != unattended.EndFailed {
 		t.Fatalf("ended = %v", chains.ended)
+	}
+}
+
+// A floor turn's step-limit continuation goes to the agent that stopped,
+// not the agent the chain started with.
+func TestSettleContinuesTheAgentThatStopped(t *testing.T) {
+	chains := &chainsStub{view: cloudView()}
+	chains.view.StepLimitReached = true
+	chains.view.ParticipantID = 9
+	starter := &starterStub{}
+	if err := New(chains, starter, nil).Settle(t.Context(), chains.view.Chain.ExecutionID, executionapp.SettlementSucceeded); err != nil {
+		t.Fatal(err)
+	}
+	if len(starter.applications) != 1 || starter.applications[0].TargetParticipantID != 9 {
+		t.Fatalf("starts = %+v", starter.applications)
+	}
+	if chains.view.Chain.Grant.Start.ParticipantID != 5 {
+		t.Fatal("the grant's start was mutated")
 	}
 }

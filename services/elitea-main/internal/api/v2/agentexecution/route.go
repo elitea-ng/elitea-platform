@@ -361,7 +361,10 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 			},
 		)
 	case CurrentAdhocStartContract:
-		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) || body.ReleaseID != 0 {
+		// A model chat has no floor (ADR-0050 decision 7c): addressing
+		// agents through it is refused, not dropped.
+		if body.ParticipantID < 0 || !currentJSONObject(body.LLMSettings) || body.ReleaseID != 0 ||
+			len(body.AddressedTo) > 0 {
 			writeUnsupported(writer)
 			return
 		}
@@ -379,8 +382,6 @@ func (handler *currentApplicationStartHandler) Start(writer http.ResponseWriter,
 				MentionsEveryone: body.SendingToEveryone,
 				TriggerOrigin:    origin,
 				Unattended:       body.Unattended.request(),
-				// A model chat has no floor: addressed_to is validated
-				// above and not used.
 			},
 		)
 	}
