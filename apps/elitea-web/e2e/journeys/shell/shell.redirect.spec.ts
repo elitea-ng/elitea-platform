@@ -239,18 +239,14 @@ test('J4: logout clears user state and el.* storage', async ({ browser }) => {
 
   const context = await browser.newContext({ storageState: undefined });
   const page = await context.newPage();
-  await signInThroughOidc(page, 'e2e-member@autotest.local');
-
-  // The helper proves the cookie, while the app can still load its modules.
-  // CI navigated with an empty app root. WebKit cancelled those module loads
-  // and failed the next document's entry script. Wait for the signed-in shell
-  // before another document navigation. Keep the deep link and logout checks.
-  await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
-  // The visible shell is not a settled one: the sidebar's own reads are still
-  // in flight, and a WebKit navigation over them can drop the session cookie.
-  await page.waitForLoadState('networkidle');
-
-  await page.goto(BASE_URL + '/app/settings/profile', { waitUntil: 'domcontentloaded' });
+  // Sign in STRAIGHT ONTO the Profile page. The earlier revision signed in to
+  // the app root, waited for the shell and `networkidle`, then fired a second
+  // `page.goto` here — and WebKit still failed that navigation with "WebKit
+  // encountered an internal error" (PR 1812's webkit-3of3, two attempts of
+  // three): the shell's background reads restart after `networkidle`, so no
+  // wait made the second navigation safe. One document, no race.
+  await signInThroughOidc(page, 'e2e-member@autotest.local', '/app/settings/profile');
+  await page.waitForURL('**/app/settings/profile', { timeout: 15_000 });
 
   /*
    * Wait for the logout control to be interactive before touching storage.
