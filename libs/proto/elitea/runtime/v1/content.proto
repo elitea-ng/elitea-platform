@@ -72,6 +72,12 @@ service RuntimeContentService {
   rpc RememberAgentMemory(RememberAgentMemoryRequestV1) returns (RememberAgentMemoryResponseV1);
   rpc RecallAgentMemory(RecallAgentMemoryRequestV1) returns (RecallAgentMemoryResponseV1);
   rpc ForgetAgentMemory(ForgetAgentMemoryRequestV1) returns (ForgetAgentMemoryResponseV1);
+  // Hand the floor to named agents of the conversation (ADR-0050 decision
+  // 7c, #1611): the reader's `hand_floor` tool. The conversation, the
+  // reader and the person come from the claim; the request carries only the
+  // participant ids and the message. Main starts their turns after this run
+  // settles.
+  rpc HandFloor(HandFloorRequestV1) returns (HandFloorResponseV1);
   // The `artifact` toolkit family (#906).
   rpc ListArtifacts(ListArtifactsRequestV1) returns (ListArtifactsResponseV1);
   rpc ReadArtifact(ReadArtifactRequestV1) returns (ReadArtifactResponseV1);
@@ -287,6 +293,19 @@ message ForgetAgentMemoryRequestV1 {
 }
 
 message ForgetAgentMemoryResponseV1 {
+  bytes response_json = 1;
+  reserved 2 to 15;
+}
+
+message HandFloorRequestV1 {
+  RuntimeContentScopeV1 scope = 1;
+  // {"participant_ids": [int64, ...], "message": string}
+  bytes request_json = 2;
+  reserved 3 to 15;
+}
+
+message HandFloorResponseV1 {
+  // {"handed_to": [{"participant_id": int64, "name": string}, ...]}
   bytes response_json = 1;
   reserved 2 to 15;
 }

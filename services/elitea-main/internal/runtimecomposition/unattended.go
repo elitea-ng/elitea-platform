@@ -39,7 +39,7 @@ func unattendedGrantPolicy(
 // settles. Without a start service there is no chain to continue.
 func unattendedSettlementHooks(
 	pool *pgxpool.Pool, start *agentexecutionapp.CurrentApplicationStartService, briefs *runbrief.Service,
-	logger *slog.Logger,
+	floors *repos.AgentFloorRepository, logger *slog.Logger,
 ) []executionapp.SettlementOption {
 	if pool == nil || start == nil {
 		return nil
@@ -50,6 +50,9 @@ func unattendedSettlementHooks(
 	}
 	if briefs != nil {
 		hook.WithGoals(briefs)
+	}
+	if floors != nil {
+		hook.WithFloor(floors)
 	}
 	return []executionapp.SettlementOption{executionapp.WithAfterSettleHooks(hook.AfterSettle)}
 }

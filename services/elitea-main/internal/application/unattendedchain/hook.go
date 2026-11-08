@@ -80,12 +80,30 @@ type Goals interface {
 	CheckCloud(ctx context.Context, root, executionID string) (runbrief.Result, bool, error)
 }
 
+// Floor reports a conversation's QUEUED floor turns (ADR-0050 decision
+// 7c, repos.AgentFloorRepository): a chain whose message still owes an
+// agent turn does not end as completed; the floor hook starts that turn as
+// a link of the chain.
+type Floor interface {
+	PendingFloorTurns(ctx context.Context, projectID int64, conversationUUID string) (bool, error)
+}
+
 // Hook is the after-settle hook.
 type Hook struct {
 	chains  Chains
 	starter Starter
 	goals   Goals
+	floor   Floor
 	logger  *slog.Logger
+}
+
+// WithFloor adds the turn-taking gate. Without it, a chain ends as
+// completed when its run would end it.
+func (h *Hook) WithFloor(floor Floor) *Hook {
+	if h != nil {
+		h.floor = floor
+	}
+	return h
 }
 
 // WithGoals adds the run brief and the goal check. Without it, every
@@ -167,6 +185,16 @@ func (h *Hook) Settle(ctx context.Context, executionID string, outcome execution
 // ends the chain completed ("not checked"); only a continuation's start
 // error stays for a replay.
 func (h *Hook) finish(ctx context.Context, chain unattended.Chain) error {
+	if h.floor != nil {
+		pending, err := h.floor.PendingFloorTurns(ctx, chain.ProjectID, chain.ConversationUUID)
+		if err != nil {
+			return err
+		}
+		if pending {
+			// The message's next agent turn continues the chain.
+			return nil
+		}
+	}
 	if h.goals == nil {
 		return h.end(ctx, chain, unattended.EndCompleted)
 	}

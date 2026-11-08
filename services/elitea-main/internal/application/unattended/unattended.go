@@ -57,6 +57,10 @@ const (
 	// origin becomes cloud with it. Only Main starts one; a desktop host
 	// never names it.
 	LinkHandoff = "handoff"
+	// LinkAgentTurn is a later agent turn of a human message in a
+	// conversation with several agents: another addressed agent, or one
+	// handed the floor (ADR-0050 decision 7c). Only Main starts one.
+	LinkAgentTurn = "agent_turn"
 )
 
 // ValidDesktopContinuationKind reports whether kind is a link kind that a
@@ -81,6 +85,11 @@ const (
 	LimitContinuations = "continuations"
 	LimitSpend         = "spend"
 	LimitDeadline      = "deadline"
+	// The loop guards of agent-to-agent turns (ADR-0050 decision 7d,
+	// turntaking.Stop*): a guard ends the human message's chain.
+	LimitAgentHops        = "agent_hops"
+	LimitConsecutiveTurns = "consecutive_turns"
+	LimitPairExchanges    = "pair_exchanges"
 )
 
 // ValidEndState reports whether state is a chain end state.

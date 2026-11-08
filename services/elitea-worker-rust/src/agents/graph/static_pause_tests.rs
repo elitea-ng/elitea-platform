@@ -999,6 +999,7 @@ fn resume_payload(input: &str) -> AgentExecutionPayload {
         platform_preamble: None,
         model_reasoning: None,
         chat_history_refs: Vec::new(),
+        floor: None,
     }
 }
 

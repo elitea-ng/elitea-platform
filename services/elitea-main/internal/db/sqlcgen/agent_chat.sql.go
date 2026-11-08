@@ -675,7 +675,10 @@ WITH resolved AS MATERIALIZED (
            target_participant.id AS target_participant_id,
            target_mapping.id AS target_mapping_id,
            application_version.id AS local_version_id,
-           application_version.soul AS target_soul
+           application_version.soul AS target_soul,
+           question_author.id AS question_author_participant_id,
+           reused_question.id AS reused_question_group_id,
+           reused_question.created_at AS reused_question_created_at
     FROM chat_conversations AS conversation
     JOIN chat_participant_mapping AS author_mapping
       ON author_mapping.conversation_id = conversation.id
@@ -707,16 +710,33 @@ WITH resolved AS MATERIALIZED (
      AND application_version.id = (target_mapping.entity_settings ->> 'version_id')::integer
      AND application_version.application_id = $4::integer
      AND application_version.application_id = (target_participant.entity_meta ->> 'id')::integer
-    WHERE conversation.uuid = $5::uuid
+    -- ADR-0050 decision 7d (issue 1611): an agent-to-agent turn's question
+    -- is the handing agent's message, authored by that agent of the
+    -- conversation. NULL: the person asks, as before.
+    LEFT JOIN chat_participant_mapping AS question_author_mapping
+      ON question_author_mapping.conversation_id = conversation.id
+     AND question_author_mapping.participant_id = $5::integer
+    LEFT JOIN chat_participants AS question_author
+      ON question_author.id = question_author_mapping.participant_id
+     AND question_author.entity_name = 'application'
+    -- ADR-0050 decision 7c: a second agent addressed by the same message
+    -- answers the person's own question; no new question is written.
+    LEFT JOIN chat_message_group AS reused_question
+      ON reused_question.conversation_id = conversation.id
+     AND reused_question.uuid = $6::uuid
+     AND reused_question.author_participant_id = author_participant.id
+    WHERE conversation.uuid = $7::uuid
+      AND ($5::integer IS NULL OR question_author.id IS NOT NULL)
+      AND ($6::uuid IS NULL OR reused_question.id IS NOT NULL)
       AND (
           (
-              (target_participant.entity_meta ->> 'project_id')::integer = $6::integer
+              (target_participant.entity_meta ->> 'project_id')::integer = $8::integer
               AND application_version.id IS NOT NULL
           )
           OR (
-              (target_participant.entity_meta ->> 'project_id')::integer <> $6::integer
+              (target_participant.entity_meta ->> 'project_id')::integer <> $8::integer
               AND (target_participant.entity_meta ->> 'project_id')::integer
-                  = $7::integer
+                  = $9::integer
               AND (target_mapping.entity_settings ->> 'version_id')::integer
                   = $3::integer
               AND (target_participant.entity_meta ->> 'id')::integer
@@ -858,22 +878,36 @@ WITH resolved AS MATERIALIZED (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,
         is_streaming,
-        created_at
+        created_at,
+        addressed_to, visibility, cause
     )
-    SELECT $8::uuid,
-           resolved.author_participant_id,
+    SELECT $10::uuid,
+           COALESCE(resolved.question_author_participant_id, resolved.author_participant_id),
            resolved.conversation_id,
            resolved.target_participant_id,
-           $9::jsonb,
+           $11::jsonb,
            FALSE,
-           (clock_timestamp() AT TIME ZONE 'UTC')
+           (clock_timestamp() AT TIME ZONE 'UTC'),
+           -- Empty: the trigger (tenant/0162) derives it from sent_to_id.
+           $12::integer[],
+           COALESCE($13::text, 'all'),
+           -- NULL: the trigger derives it from the author.
+           $14::text
     FROM resolved
+    WHERE resolved.reused_question_group_id IS NULL
     RETURNING id, uuid, conversation_id, sent_to_id, created_at
+), question_ref AS (
+    SELECT question_group.id, question_group.conversation_id, question_group.created_at
+    FROM question_group
+    UNION ALL
+    SELECT resolved.reused_question_group_id, resolved.conversation_id, resolved.reused_question_created_at
+    FROM resolved
+    WHERE resolved.reused_question_group_id IS NOT NULL
 ), question_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id, created_at
     )
-    SELECT $10::uuid,
+    SELECT $15::uuid,
            'text_message',
            0,
            '{}'::jsonb,
@@ -883,20 +917,20 @@ WITH resolved AS MATERIALIZED (
     RETURNING id
 ), question_text AS (
     INSERT INTO chat_messages_text (id, content)
-    SELECT question_item.id, $11::text
+    SELECT question_item.id, $16::text
     FROM question_item
 ), response_group AS (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, reply_to_id, meta,
         is_streaming, created_at, task_id
     )
-    SELECT $12::uuid,
-           question_group.sent_to_id,
-           question_group.conversation_id,
-           question_group.id,
+    SELECT $17::uuid,
+           resolved.target_participant_id,
+           question_ref.conversation_id,
+           question_ref.id,
            jsonb_build_object(
                'execution_generation',
-               $13::text
+               $18::text
            ),
            TRUE,
            -- Strictly after its question, and NEVER in the future (#1082).
@@ -905,10 +939,11 @@ WITH resolved AS MATERIALIZED (
            -- answer from the next turn's ` + "`" + `created_at < now` + "`" + ` history window.
            GREATEST(
                clock_timestamp() AT TIME ZONE 'UTC',
-               question_group.created_at + interval '1 microsecond'
+               question_ref.created_at + interval '1 microsecond'
            ),
-           $14::text
-    FROM question_group
+           $19::text
+    FROM question_ref
+    CROSS JOIN resolved
     RETURNING id, uuid, reply_to_id
 )
 SELECT response_group.id AS response_message_group_id,
@@ -918,20 +953,25 @@ FROM response_group
 `
 
 type InsertCurrentApplicationTurnParams struct {
-	ActorUserID          int64       `db:"actor_user_id" json:"actor_user_id"`
-	TargetParticipantID  int32       `db:"target_participant_id" json:"target_participant_id"`
-	ApplicationVersionID int32       `db:"application_version_id" json:"application_version_id"`
-	ApplicationID        int32       `db:"application_id" json:"application_id"`
-	ConversationUuid     pgtype.UUID `db:"conversation_uuid" json:"conversation_uuid"`
-	ProjectID            int32       `db:"project_id" json:"project_id"`
-	CatalogueProjectID   int32       `db:"catalogue_project_id" json:"catalogue_project_id"`
-	QuestionID           pgtype.UUID `db:"question_id" json:"question_id"`
-	QuestionMeta         []byte      `db:"question_meta" json:"question_meta"`
-	QuestionItemID       pgtype.UUID `db:"question_item_id" json:"question_item_id"`
-	UserInput            string      `db:"user_input" json:"user_input"`
-	ResponseMessageID    pgtype.UUID `db:"response_message_id" json:"response_message_id"`
-	ExecutionGeneration  string      `db:"execution_generation" json:"execution_generation"`
-	ExecutionID          string      `db:"execution_id" json:"execution_id"`
+	ActorUserID                 int64       `db:"actor_user_id" json:"actor_user_id"`
+	TargetParticipantID         int32       `db:"target_participant_id" json:"target_participant_id"`
+	ApplicationVersionID        int32       `db:"application_version_id" json:"application_version_id"`
+	ApplicationID               int32       `db:"application_id" json:"application_id"`
+	QuestionAuthorParticipantID *int32      `db:"question_author_participant_id" json:"question_author_participant_id"`
+	ReplyToQuestionID           pgtype.UUID `db:"reply_to_question_id" json:"reply_to_question_id"`
+	ConversationUuid            pgtype.UUID `db:"conversation_uuid" json:"conversation_uuid"`
+	ProjectID                   int32       `db:"project_id" json:"project_id"`
+	CatalogueProjectID          int32       `db:"catalogue_project_id" json:"catalogue_project_id"`
+	QuestionID                  pgtype.UUID `db:"question_id" json:"question_id"`
+	QuestionMeta                []byte      `db:"question_meta" json:"question_meta"`
+	QuestionAddressedTo         []int32     `db:"question_addressed_to" json:"question_addressed_to"`
+	QuestionVisibility          *string     `db:"question_visibility" json:"question_visibility"`
+	QuestionCause               *string     `db:"question_cause" json:"question_cause"`
+	QuestionItemID              pgtype.UUID `db:"question_item_id" json:"question_item_id"`
+	UserInput                   string      `db:"user_input" json:"user_input"`
+	ResponseMessageID           pgtype.UUID `db:"response_message_id" json:"response_message_id"`
+	ExecutionGeneration         string      `db:"execution_generation" json:"execution_generation"`
+	ExecutionID                 string      `db:"execution_id" json:"execution_id"`
 }
 
 type InsertCurrentApplicationTurnRow struct {
@@ -946,11 +986,16 @@ func (q *Queries) InsertCurrentApplicationTurn(ctx context.Context, arg InsertCu
 		arg.TargetParticipantID,
 		arg.ApplicationVersionID,
 		arg.ApplicationID,
+		arg.QuestionAuthorParticipantID,
+		arg.ReplyToQuestionID,
 		arg.ConversationUuid,
 		arg.ProjectID,
 		arg.CatalogueProjectID,
 		arg.QuestionID,
 		arg.QuestionMeta,
+		arg.QuestionAddressedTo,
+		arg.QuestionVisibility,
+		arg.QuestionCause,
 		arg.QuestionItemID,
 		arg.UserInput,
 		arg.ResponseMessageID,

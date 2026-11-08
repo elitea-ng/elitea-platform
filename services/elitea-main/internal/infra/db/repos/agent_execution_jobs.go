@@ -779,6 +779,12 @@ WHERE execution_id = $1 AND generation = $2`,
 		if err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
+		// The turn-taking rows (ADR-0050 decision 7c, agent_floor.go): a
+		// new human message's exchange and its queued turns, or the start
+		// of a queued turn, in this transaction.
+		if err := admitFloor(ctx, tx, *turn, admission.Floor, admission.Record.Job.ID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 	} else if admission.CurrentAdhocTurn != nil {
 		turn := admission.CurrentAdhocTurn
 		if err := insertCurrentAdhocTurn(
@@ -1333,23 +1339,32 @@ func insertCurrentApplicationTurn(
 	if !ok {
 		return executionapp.ErrInvalidAdmission
 	}
+	floor, ok := currentTurnFloorParams(turn)
+	if !ok {
+		return executionapp.ErrInvalidAdmission
+	}
 	row, err := queries.InsertCurrentApplicationTurn(
 		ctx,
 		sqlcgen.InsertCurrentApplicationTurnParams{
-			ActorUserID:          turn.ActorUserID,
-			TargetParticipantID:  targetParticipantID,
-			ApplicationVersionID: applicationVersionID,
-			ApplicationID:        applicationID,
-			ConversationUuid:     conversationUUID,
-			ProjectID:            projectID,
-			QuestionID:           questionID,
-			QuestionMeta:         append([]byte(nil), turn.QuestionMeta...),
-			QuestionItemID:       questionItemID,
-			UserInput:            turn.UserInput,
-			ResponseMessageID:    responseMessageID,
-			ExecutionID:          executionID,
-			ExecutionGeneration:  turn.QuestionID,
-			CatalogueProjectID:   catalogueProjectID,
+			QuestionAuthorParticipantID: floor.author,
+			ReplyToQuestionID:           floor.replyTo,
+			QuestionAddressedTo:         floor.addressedTo,
+			QuestionVisibility:          floor.visibility,
+			QuestionCause:               floor.cause,
+			ActorUserID:                 turn.ActorUserID,
+			TargetParticipantID:         targetParticipantID,
+			ApplicationVersionID:        applicationVersionID,
+			ApplicationID:               applicationID,
+			ConversationUuid:            conversationUUID,
+			ProjectID:                   projectID,
+			QuestionID:                  questionID,
+			QuestionMeta:                append([]byte(nil), turn.QuestionMeta...),
+			QuestionItemID:              questionItemID,
+			UserInput:                   turn.UserInput,
+			ResponseMessageID:           responseMessageID,
+			ExecutionID:                 executionID,
+			ExecutionGeneration:         turn.QuestionID,
+			CatalogueProjectID:          catalogueProjectID,
 		},
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1362,6 +1377,51 @@ func insertCurrentApplicationTurn(
 		return errors.New("current agent chat turn returned an invalid response binding")
 	}
 	return insertCurrentTurnAttachments(ctx, queries, row.QuestionMessageGroupID, turn.Attachments)
+}
+
+// currentTurnFloorParams are the turn-taking question parameters of a turn
+// (ADR-0050 decisions 7c and 7d): nils and an empty list for an ordinary
+// turn, which writes its question as before.
+type currentTurnFloor struct {
+	author      *int32
+	replyTo     pgtype.UUID
+	addressedTo []int32
+	visibility  *string
+	cause       *string
+}
+
+func currentTurnFloorParams(turn agentexecutionapp.CurrentApplicationTurn) (currentTurnFloor, bool) {
+	floor := currentTurnFloor{addressedTo: make([]int32, 0, len(turn.QuestionAddressedTo))}
+	if turn.QuestionAuthorParticipantID > 0 {
+		author, ok := narrowRowID(turn.QuestionAuthorParticipantID)
+		if !ok {
+			return currentTurnFloor{}, false
+		}
+		floor.author = &author
+	}
+	if turn.ReplyToQuestionID != "" {
+		replyTo, err := currentPGUUID(turn.ReplyToQuestionID)
+		if err != nil {
+			return currentTurnFloor{}, false
+		}
+		floor.replyTo = replyTo
+	}
+	for _, id := range turn.QuestionAddressedTo {
+		narrowed, ok := narrowRowID(id)
+		if !ok {
+			return currentTurnFloor{}, false
+		}
+		floor.addressedTo = append(floor.addressedTo, narrowed)
+	}
+	if turn.QuestionVisibility != "" {
+		visibility := turn.QuestionVisibility
+		floor.visibility = &visibility
+	}
+	if turn.QuestionCause != "" {
+		cause := turn.QuestionCause
+		floor.cause = &cause
+	}
+	return floor, true
 }
 
 func insertCurrentAdhocTurn(

@@ -165,6 +165,37 @@ message AgentExecutionInputV1 {
   // is the shared projection. Workers are upgraded before Main, because a
   // worker from an earlier release refuses this tag.
   ContextViewV1 context_view = 72;
+  // ADR-0050 decisions 7c and 7d (#1611): the conversation's floor for this
+  // turn. ABSENT: a conversation with one agent; no hand_floor tool and every
+  // tool bound as before. Workers are upgraded before Main, because a worker
+  // from an earlier release refuses this tag.
+  AgentFloorV1 floor = 73;
+}
+
+// What the turn-taking engine tells the reader about the floor
+// (ADR-0050 decisions 7c and 7d).
+message AgentFloorV1 {
+  // What started this turn: human_message or agent_mention.
+  string cause = 1;
+  // The other agents of the conversation the reader may hand the floor to,
+  // at most 16. Empty: no hand_floor tool.
+  repeated AgentFloorPeerV1 peers = 2;
+  // An agent-to-agent turn: nobody answers its approvals, so only the
+  // reader's unattended tools are bound. Until the per-agent envelope
+  // (#1613) names them, they are its read-only tools.
+  bool unattended_tools_only = 3;
+  reserved 4 to 15;
+}
+
+// One agent the reader may hand the floor to.
+message AgentFloorPeerV1 {
+  // The chat_participants row id in the conversation's project.
+  int64 participant_id = 1;
+  // The agent's display name and role in this conversation, from its
+  // persona snapshot; role may be empty.
+  string name = 2;
+  string role = 3;
+  reserved 4 to 15;
 }
 
 // How one reader's view of the conversation was built (ADR-0050 decision 9).

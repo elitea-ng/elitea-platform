@@ -73,7 +73,7 @@ pub(crate) struct ContextCall {
     /// replaced: `elitea-client-token`, `applications/{a}/versions/{v}`,
     /// `attachments/{bucket}/{name}`, `skills`, `project-context`,
     /// `artifacts/{list,read,write,delete}` or
-    /// `agent-memory/{remember,recall,forget}`.
+    /// `agent-memory/{remember,recall,forget}` or `turn-taking/hand-floor`.
     pub(crate) route: String,
     pub(crate) execution_id: String,
     pub(crate) generation: u64,
@@ -273,6 +273,20 @@ impl<R: ContextRoutes> ContentFake for Routes<R> {
             .await?;
         reply(pb::RecallAgentMemoryResponseV1 { response_json })
     }
+    async fn hand_floor(
+        &self,
+        request: Request<pb::HandFloorRequestV1>,
+    ) -> Result<Response<pb::HandFloorResponseV1>, Status> {
+        let response_json = self
+            .json(
+                request,
+                "turn-taking/hand-floor".to_owned(),
+                |message| message.scope.clone(),
+                |message| (message.request_json, Vec::new()),
+            )
+            .await?;
+        reply(pb::HandFloorResponseV1 { response_json })
+    }
     async fn forget_agent_memory(
         &self,
         request: Request<pb::ForgetAgentMemoryRequestV1>,
@@ -426,6 +440,7 @@ content_fake! {
     remember_agent_memory(RememberAgentMemoryRequestV1) -> RememberAgentMemoryResponseV1;
     recall_agent_memory(RecallAgentMemoryRequestV1) -> RecallAgentMemoryResponseV1;
     forget_agent_memory(ForgetAgentMemoryRequestV1) -> ForgetAgentMemoryResponseV1;
+    hand_floor(HandFloorRequestV1) -> HandFloorResponseV1;
     list_artifacts(ListArtifactsRequestV1) -> ListArtifactsResponseV1;
     read_artifact(ReadArtifactRequestV1) -> ReadArtifactResponseV1;
     write_artifact(WriteArtifactRequestV1) -> WriteArtifactResponseV1;

@@ -744,6 +744,10 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// the admitter of due checks and the after-settle hook that arms them.
 	var idleCompactions *agentexecutionapp.IdleCompactionAdmitter
 	var idleCompactionHook *agentexecutionapp.IdleCompactionSettleHook
+	// The turn-taking engine (ADR-0050 decisions 7c and 7d, #1611): the
+	// floor store, its after-settle hook and the hand_floor tool's sink.
+	var agentFloors *repos.AgentFloorRepository
+	var floorHook *agentexecutionapp.FloorSettleHook
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -1115,6 +1119,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			unattendedGrantPolicy(dependencies.AdmissionPool, approvalSettings, runCapsSettings, egressSources))
 		if dependencies.RunBriefs != nil {
 			agentStart = agentStart.WithRunBriefs(runBriefStarter{dependencies.RunBriefs})
+		}
+		var floorErr error
+		if agentFloors, floorErr = repos.NewAgentFloorRepository(dependencies.AdmissionPool); floorErr != nil {
+			return nil, fmt.Errorf("construct agent floor repository: %w", floorErr)
+		}
+		agentStart = agentStart.WithFloor(agentFloors)
+		if floorHook, floorErr = agentexecutionapp.NewFloorSettleHook(agentFloors, agentStart,
+			repos.NewRunChainsRepository(dependencies.AdmissionPool), dependencies.Logger); floorErr != nil {
+			return nil, fmt.Errorf("construct floor settle hook: %w", floorErr)
 		}
 		agentDispatcher, err := agentexecutionapp.NewDispatcher(agentJobs, agentProducer)
 		if err != nil {
@@ -1496,7 +1509,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	settlementOptions = append(settlementOptions, workspaceSettlementHooks(dependencies.Workspace, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, activitySettlementHooks(dependencies.ConversationActivity)...)
 	settlementOptions = append(settlementOptions,
-		unattendedSettlementHooks(dependencies.AdmissionPool, agentStart, dependencies.RunBriefs, dependencies.Logger)...)
+		unattendedSettlementHooks(dependencies.AdmissionPool, agentStart, dependencies.RunBriefs, agentFloors, dependencies.Logger)...)
 	settlementOptions = append(settlementOptions, runFinishedSettlementHooks(dependencies.AdmissionPool, dependencies.Logger)...)
 	// A run that ended without parking leaves cards nothing can apply; the
 	// wake sweep closes them (contract §5, §8a). Kick it once the turn settles.
@@ -1508,6 +1521,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}))
 	if idleCompactionHook != nil {
 		settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(idleCompactionHook.AfterSettle))
+	}
+	// After the unattended chain hook, on purpose: that hook reads the
+	// exchange's QUEUED turns to keep the chain open for the next one, and
+	// this hook takes that turn out of QUEUED when it starts it.
+	if floorHook != nil {
+		settlementOptions = append(settlementOptions, executionapp.WithAfterSettleHooks(floorHook.AfterSettle))
 	}
 	settlements, err := executionapp.NewSettlementService(settlementsRepository, settlementOptions...)
 	if err != nil {
@@ -2525,6 +2544,15 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// present-and-refusing wherever agent execution is not dispatched.
 	contentServer = contentServer.WithRuntimeEntityBuilders(entityBuilders)
 	contentServer = contentServer.WithRuntimeAgentMemory(agentMemoryTools)
+	// hand_floor (#1611): the same claim and pool, absent wherever agent
+	// execution is not dispatched.
+	if agentFloors != nil {
+		handFloor, floorErr := storage.NewRuntimeHandFloorService(contentRepository, agentFloors)
+		if floorErr != nil {
+			return nil, fmt.Errorf("construct hand floor tool: %w", floorErr)
+		}
+		contentServer = contentServer.WithRuntimeHandFloor(handFloor)
+	}
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object
 	// store, leaves them ABSENT rather than present-and-failing. A mixed

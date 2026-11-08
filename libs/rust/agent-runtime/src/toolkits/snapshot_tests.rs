@@ -76,6 +76,7 @@ fn request(kind: AgentExecutionKind, tools: Vec<Value>) -> AgentExecutionRequest
             platform_preamble: None,
             model_reasoning: None,
             chat_history_refs: Vec::new(),
+            floor: None,
         },
     }
 }

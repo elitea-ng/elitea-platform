@@ -194,6 +194,81 @@ mod chat_history_ref_tests {
     }
 }
 
+#[cfg(test)]
+mod agent_floor_tests {
+    use super::agent_floor;
+    use crate::agents::request::{AgentFloorPeer, FloorCause};
+    use crate::protocol::elitea::runtime::v1::{AgentFloorPeerV1, AgentFloorV1};
+
+    fn peer(id: i64) -> AgentFloorPeerV1 {
+        AgentFloorPeerV1 {
+            participant_id: id,
+            name: format!("agent-{id}"),
+            role: "reviewer".to_owned(),
+        }
+    }
+
+    fn floor(cause: &str, peers: Vec<AgentFloorPeerV1>) -> AgentFloorV1 {
+        AgentFloorV1 {
+            cause: cause.to_owned(),
+            peers,
+            unattended_tools_only: true,
+        }
+    }
+
+    #[test]
+    fn agent_floor_decodes_both_causes() {
+        let decoded = agent_floor(&floor("agent_mention", vec![peer(7), peer(9)])).expect("ok");
+        assert_eq!(decoded.cause, FloorCause::AgentMention);
+        assert!(decoded.unattended_tools_only);
+        assert_eq!(
+            decoded.peers[0],
+            AgentFloorPeer {
+                participant_id: 7,
+                name: "agent-7".to_owned(),
+                role: "reviewer".to_owned(),
+            }
+        );
+        let human = agent_floor(&floor("human_message", Vec::new())).expect("ok");
+        assert_eq!(human.cause, FloorCause::HumanMessage);
+        assert_eq!(human.peers, Vec::new());
+    }
+
+    #[test]
+    fn agent_floor_absent_is_none() {
+        let message = crate::protocol::elitea::runtime::v1::AgentExecutionInputV1::default();
+        assert!(
+            message
+                .floor
+                .as_ref()
+                .map(agent_floor)
+                .transpose()
+                .expect("none")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn agent_floor_refuses_malformed_input() {
+        assert!(agent_floor(&floor("", vec![peer(1)])).is_err());
+        assert!(agent_floor(&floor("timer", vec![peer(1)])).is_err());
+        assert!(agent_floor(&floor("human_message", (1..=17).map(peer).collect())).is_err());
+        assert!(agent_floor(&floor("human_message", (1..=16).map(peer).collect())).is_ok());
+        assert!(agent_floor(&floor("human_message", vec![peer(0)])).is_err());
+        assert!(agent_floor(&floor("human_message", vec![peer(-3)])).is_err());
+        assert!(agent_floor(&floor("human_message", vec![peer(4), peer(4)])).is_err());
+        let mut long_name = peer(2);
+        long_name.name = "n".repeat(257);
+        assert!(agent_floor(&floor("human_message", vec![long_name])).is_err());
+        let mut long_role = peer(2);
+        long_role.role = "r".repeat(257);
+        assert!(agent_floor(&floor("human_message", vec![long_role])).is_err());
+        let mut edge = peer(2);
+        edge.name = "n".repeat(256);
+        assert!(agent_floor(&floor("human_message", vec![edge])).is_ok());
+    }
+}
+
 /// Validate every semantic field and bind it to the exact materialized input.
 ///
 /// # Errors
@@ -399,6 +474,7 @@ pub fn request_from(
                 .map(platform_preamble_snapshot)
                 .transpose()?,
             chat_history_refs: chat_history_refs(&message.chat_history_refs, chat_len)?,
+            floor: message.floor.as_ref().map(agent_floor).transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -481,6 +557,58 @@ fn context_view_digest(
             let _ = write!(out, "{byte:02x}");
             out
         })
+}
+
+/// The most peers one floor names (ADR-0050 decision 11).
+const MAX_FLOOR_PEERS: usize = 16;
+/// The longest peer name or role, in bytes.
+const MAX_FLOOR_PEER_TEXT: usize = 256;
+
+/// ADR-0050 decision 11 (#1611): the floor Main hands this invocation. A
+/// cause this worker does not know, too many peers, a non-positive or
+/// repeated participant, or an oversized name or role is refused.
+fn agent_floor(
+    floor: &crate::protocol::elitea::runtime::v1::AgentFloorV1,
+) -> Result<super::request::AgentFloor, AgentProtocolError> {
+    use super::request::{AgentFloor, AgentFloorPeer, FloorCause};
+    let cause = match floor.cause.as_str() {
+        "human_message" => FloorCause::HumanMessage,
+        "agent_mention" => FloorCause::AgentMention,
+        _ => {
+            return Err(AgentProtocolError::InvalidInput(
+                "the agent floor cause is unknown",
+            ));
+        }
+    };
+    if floor.peers.len() > MAX_FLOOR_PEERS {
+        return Err(AgentProtocolError::InvalidInput(
+            "the agent floor names too many peers",
+        ));
+    }
+    let mut seen = HashSet::with_capacity(floor.peers.len());
+    let mut peers = Vec::with_capacity(floor.peers.len());
+    for peer in &floor.peers {
+        if peer.participant_id <= 0 || !seen.insert(peer.participant_id) {
+            return Err(AgentProtocolError::InvalidInput(
+                "the agent floor peers must be distinct positive participants",
+            ));
+        }
+        if peer.name.len() > MAX_FLOOR_PEER_TEXT || peer.role.len() > MAX_FLOOR_PEER_TEXT {
+            return Err(AgentProtocolError::InvalidInput(
+                "the agent floor peer name or role is too long",
+            ));
+        }
+        peers.push(AgentFloorPeer {
+            participant_id: peer.participant_id,
+            name: peer.name.clone(),
+            role: peer.role.clone(),
+        });
+    }
+    Ok(AgentFloor {
+        cause,
+        peers,
+        unattended_tools_only: floor.unattended_tools_only,
+    })
 }
 
 /// ADR-0050 decision 9c: one reference per history entry, each a uuid, or

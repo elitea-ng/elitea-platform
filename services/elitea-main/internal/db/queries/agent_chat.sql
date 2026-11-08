@@ -2907,7 +2907,10 @@ WITH resolved AS MATERIALIZED (
            target_participant.id AS target_participant_id,
            target_mapping.id AS target_mapping_id,
            application_version.id AS local_version_id,
-           application_version.soul AS target_soul
+           application_version.soul AS target_soul,
+           question_author.id AS question_author_participant_id,
+           reused_question.id AS reused_question_group_id,
+           reused_question.created_at AS reused_question_created_at
     FROM chat_conversations AS conversation
     JOIN chat_participant_mapping AS author_mapping
       ON author_mapping.conversation_id = conversation.id
@@ -2939,7 +2942,24 @@ WITH resolved AS MATERIALIZED (
      AND application_version.id = (target_mapping.entity_settings ->> 'version_id')::integer
      AND application_version.application_id = sqlc.arg(application_id)::integer
      AND application_version.application_id = (target_participant.entity_meta ->> 'id')::integer
+    -- ADR-0050 decision 7d (issue 1611): an agent-to-agent turn's question
+    -- is the handing agent's message, authored by that agent of the
+    -- conversation. NULL: the person asks, as before.
+    LEFT JOIN chat_participant_mapping AS question_author_mapping
+      ON question_author_mapping.conversation_id = conversation.id
+     AND question_author_mapping.participant_id = sqlc.narg(question_author_participant_id)::integer
+    LEFT JOIN chat_participants AS question_author
+      ON question_author.id = question_author_mapping.participant_id
+     AND question_author.entity_name = 'application'
+    -- ADR-0050 decision 7c: a second agent addressed by the same message
+    -- answers the person's own question; no new question is written.
+    LEFT JOIN chat_message_group AS reused_question
+      ON reused_question.conversation_id = conversation.id
+     AND reused_question.uuid = sqlc.narg(reply_to_question_id)::uuid
+     AND reused_question.author_participant_id = author_participant.id
     WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
+      AND (sqlc.narg(question_author_participant_id)::integer IS NULL OR question_author.id IS NOT NULL)
+      AND (sqlc.narg(reply_to_question_id)::uuid IS NULL OR reused_question.id IS NOT NULL)
       AND (
           (
               (target_participant.entity_meta ->> 'project_id')::integer = sqlc.arg(project_id)::integer
@@ -3090,17 +3110,31 @@ WITH resolved AS MATERIALIZED (
     INSERT INTO chat_message_group (
         uuid, author_participant_id, conversation_id, sent_to_id, meta,
         is_streaming,
-        created_at
+        created_at,
+        addressed_to, visibility, cause
     )
     SELECT sqlc.arg(question_id)::uuid,
-           resolved.author_participant_id,
+           COALESCE(resolved.question_author_participant_id, resolved.author_participant_id),
            resolved.conversation_id,
            resolved.target_participant_id,
            sqlc.arg(question_meta)::jsonb,
            FALSE,
-           (clock_timestamp() AT TIME ZONE 'UTC')
+           (clock_timestamp() AT TIME ZONE 'UTC'),
+           -- Empty: the trigger (tenant/0162) derives it from sent_to_id.
+           sqlc.arg(question_addressed_to)::integer[],
+           COALESCE(sqlc.narg(question_visibility)::text, 'all'),
+           -- NULL: the trigger derives it from the author.
+           sqlc.narg(question_cause)::text
     FROM resolved
+    WHERE resolved.reused_question_group_id IS NULL
     RETURNING id, uuid, conversation_id, sent_to_id, created_at
+), question_ref AS (
+    SELECT question_group.id, question_group.conversation_id, question_group.created_at
+    FROM question_group
+    UNION ALL
+    SELECT resolved.reused_question_group_id, resolved.conversation_id, resolved.reused_question_created_at
+    FROM resolved
+    WHERE resolved.reused_question_group_id IS NOT NULL
 ), question_item AS (
     INSERT INTO chat_message_items (
         uuid, item_type, order_index, meta, message_group_id, created_at
@@ -3123,9 +3157,9 @@ WITH resolved AS MATERIALIZED (
         is_streaming, created_at, task_id
     )
     SELECT sqlc.arg(response_message_id)::uuid,
-           question_group.sent_to_id,
-           question_group.conversation_id,
-           question_group.id,
+           resolved.target_participant_id,
+           question_ref.conversation_id,
+           question_ref.id,
            jsonb_build_object(
                'execution_generation',
                sqlc.arg(execution_generation)::text
@@ -3137,10 +3171,11 @@ WITH resolved AS MATERIALIZED (
            -- answer from the next turn's `created_at < now` history window.
            GREATEST(
                clock_timestamp() AT TIME ZONE 'UTC',
-               question_group.created_at + interval '1 microsecond'
+               question_ref.created_at + interval '1 microsecond'
            ),
            sqlc.arg(execution_id)::text
-    FROM question_group
+    FROM question_ref
+    CROSS JOIN resolved
     RETURNING id, uuid, reply_to_id
 )
 SELECT response_group.id AS response_message_group_id,

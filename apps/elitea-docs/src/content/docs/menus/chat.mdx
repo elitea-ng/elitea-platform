@@ -50,6 +50,25 @@ Each agent in the conversation keeps its own view of it. An agent sees what othe
 
 An agent also sees what was written since it last answered. If another agent or person writes between two of its turns, the next turn shows those messages to it, once each, in the order they were written.
 
+### Who answers, and agents talking to each other
+
+A conversation with several agents has a **floor** that decides who answers a message:
+
+- **Addressed** (the default). The agents you address answer. Address several and each answers in turn, one after another, in the order you named them; each answers your message as you wrote it. With no address, the message goes to the agent you last addressed, as above.
+- **Lead**. One agent is the lead. A message with no address goes to the lead, which answers it, hands it to other agents, or stays silent. A message that names agents still goes to them.
+
+An agent can hand the floor to other agents of the conversation with its **hand floor** tool, saying what it wants them to do. They answer after its turn ends, one at a time. The chat shows such a hand-off as agent-to-agent talk.
+
+An agent that was handed the floor:
+
+- runs with its own permissions, on behalf of the person whose message started the exchange;
+- reads the other agent's message as information from another agent, not as instructions from you;
+- uses only its read-only tools, because nobody is there to approve anything else.
+
+A loop guard bounds every exchange. For one message from you, agents hand the floor at most **6** times, one agent answers at most **2** times, and the same two agents hand it to each other at most **3** times. When a hand-off would pass a limit, nothing more is handed: the chat shows a line such as "Loop guard stopped the exchange after 6 hops." When you let the agents run to completion, the turns of one message count against that run's limits too, and a loop guard ends the run.
+
+A new message from you ends the exchange of your earlier message: agents that were still waiting their turn do not answer it.
+
 ### Who is speaking
 
 Every participant has a kind: a **person**, an **agent**, a short-lived **ephemeral agent** that an agent starts for one task, or the **system**. A toolkit, a prompt or an MCP has no kind: it is in the conversation but never writes. An agent with a [persona](/menus/agents#persona) shows its persona's display name, pronouns and role in this conversation. They come from the agent version the conversation runs, and change with the next answer after a new release.

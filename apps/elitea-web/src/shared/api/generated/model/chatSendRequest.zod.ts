@@ -47,6 +47,8 @@ import { ChatUnattendedRequest } from "./chatUnattendedRequest.zod";
 
 export const chatSendRequestPayloadSkillsMax = 5;
 
+export const chatSendRequestAddressedToMax = 16;
+
 export const chatSendRequestReleaseIdMin = 0;
 
 export const ChatSendRequest = zod
@@ -68,6 +70,13 @@ export const ChatSendRequest = zod
       .optional()
       .describe(
         "The participant that answers. Required (> 0) for `agent.execute.application.v1`; 0 or absent for a model chat (`agent.execute.adhoc.v1`).\n",
+      ),
+    addressed_to: zod
+      .array(zod.int().min(1))
+      .max(chatSendRequestAddressedToMax)
+      .optional()
+      .describe(
+        "ADR-0050 decision 7c — the agents this message is for, by participant id (positive, unique). In a conversation with several agents the first answers now and the others answer after it, in order. Empty or absent: the floor decides. An id that is not an agent of the conversation answers 422 `addressee_not_in_conversation`.",
       ),
     conversation_uuid: zod
       .uuid()

@@ -42,7 +42,8 @@ use crate::protocol::elitea::runtime::v1::{
     WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
 use crate::protocol::elitea::runtime::v1::{
-    ForgetAgentMemoryRequestV1, RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
+    ForgetAgentMemoryRequestV1, HandFloorRequestV1, RecallAgentMemoryRequestV1,
+    RememberAgentMemoryRequestV1,
 };
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
@@ -84,6 +85,8 @@ const PROJECT_CONTEXT_WRITE_SCHEMA: &str = "elitea.runtime.project-context-write
 const AGENT_MEMORY_REMEMBER_SCHEMA: &str = "elitea.runtime.agent-memory-remember.v1";
 const AGENT_MEMORY_RECALL_SCHEMA: &str = "elitea.runtime.agent-memory-recall.v1";
 const AGENT_MEMORY_FORGET_SCHEMA: &str = "elitea.runtime.agent-memory-forget.v1";
+/// The turn-taking hand-off's schema (ADR-0050 decision 11, #1611).
+const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
 /// The `artifact` toolkit family's four schemas (#906).
@@ -994,6 +997,47 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the agent memory forget timed out"))?
     }
 
+    /// Hand the floor to other agents in the claimed run's conversation
+    /// (ADR-0050 decision 11, #1611). Main decides who may take it and when
+    /// the loop guard stops the exchange; the answer is passed through as
+    /// JSON once its schema is checked.
+    pub(crate) async fn hand_floor(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &HandFloorRequest,
+    ) -> Result<Value, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            HandFloorRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_agent_memory_body(request)?,
+            },
+            HAND_FLOOR_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .hand_floor(request)
+                .await
+                .map_err(|status| {
+                    context_status(
+                        status,
+                        Some(RuntimeContextError::Rejected(
+                            "the turn-taking hand-off was refused",
+                        )),
+                    )
+                })?
+                .into_inner()
+                .response_json;
+            hand_floor_response(&bounded_document(body, self.config.max_response_bytes)?)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the turn-taking hand-off timed out"))?
+    }
+
     /// One artifact response document, within the artifact family's own
     /// envelope ceiling.
     fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
@@ -1829,6 +1873,28 @@ pub(crate) struct AgentMemoryRecallRequest {
 #[derive(Clone, Debug, serde::Serialize)]
 pub(crate) struct AgentMemoryForgetRequest {
     pub(crate) entry_id: String,
+}
+
+/// The `hand_floor` tool's request (`RuntimeHandFloorRequest` in Main).
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct HandFloorRequest {
+    pub(crate) participant_ids: Vec<i64>,
+    pub(crate) message: String,
+}
+
+const HAND_FLOOR_AUTHORITY_MALFORMED: &str = "the turn-taking request authority is malformed";
+
+/// Main's hand-floor answer: a JSON object of the expected schema.
+fn hand_floor_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
+    let decoded: Value = serde_json::from_slice(body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the turn-taking response is malformed")
+    })?;
+    if decoded.get("schema_version").and_then(Value::as_str) != Some(HAND_FLOOR_SCHEMA) {
+        return Err(RuntimeContextError::InvalidResponse(
+            "the turn-taking response has an unexpected schema",
+        ));
+    }
+    Ok(decoded)
 }
 
 /// Every agent memory response carries these two, checked against the

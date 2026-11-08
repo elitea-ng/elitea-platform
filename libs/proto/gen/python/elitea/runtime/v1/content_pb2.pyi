@@ -211,6 +211,20 @@ class ForgetAgentMemoryResponseV1(_message.Message):
     response_json: bytes
     def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
 
+class HandFloorRequestV1(_message.Message):
+    __slots__ = ("scope", "request_json")
+    SCOPE_FIELD_NUMBER: _ClassVar[int]
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    scope: RuntimeContentScopeV1
+    request_json: bytes
+    def __init__(self, scope: _Optional[_Union[RuntimeContentScopeV1, _Mapping]] = ..., request_json: _Optional[bytes] = ...) -> None: ...
+
+class HandFloorResponseV1(_message.Message):
+    __slots__ = ("response_json",)
+    RESPONSE_JSON_FIELD_NUMBER: _ClassVar[int]
+    response_json: bytes
+    def __init__(self, response_json: _Optional[bytes] = ...) -> None: ...
+
 class ListArtifactsRequestV1(_message.Message):
     __slots__ = ("scope", "request_json")
     SCOPE_FIELD_NUMBER: _ClassVar[int]
