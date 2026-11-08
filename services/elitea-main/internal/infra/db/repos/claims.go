@@ -319,7 +319,10 @@ WHERE claim_id = $1 AND released_at IS NULL`, existing.ClaimID); err != nil {
 		// turn) run by a worker without the mode would answer an empty question
 		// into the transcript. It is answered retry-later until an opted-in
 		// worker claims it; the sweep's lease bounds how long it waits.
-		if !request.IdleCompaction &&
+		// Recovery-mode claims inspect a run and never start a turn, as for
+		// the fan-out wake gate above.
+		if !request.IdleCompaction && !request.NodeRecovery && !request.AgentModelCheckpointRecovery &&
+			!terminalRecoveryOnly && !runningRecoveryOnly && !nodeRecoveryOnly &&
 			(request.CapabilityID == executiondomain.AgentApplicationCapability || request.CapabilityID == executiondomain.AgentAdhocCapability) {
 			idle, err := isIdleCompactionRun(ctx, tx, request.ExecutionID)
 			if err != nil {
