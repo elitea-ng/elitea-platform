@@ -2,7 +2,8 @@
 // libs/rust/browser-session/tests/bakeoff.rs (one per engine and task) and
 // applies the admission rule.
 //
-// Moli (`lite`) is admitted only when all three hold:
+// Moli (`lite`) is admitted only when the run is comparable (below) and all
+// three hold:
 //
 //   1. it succeeds on at least 80% of the read and extract tasks;
 //   2. its overall success rate is no more than 10 points below `full`'s;
@@ -10,6 +11,12 @@
 //      recovered from is not counted here: the agent never restarts an engine
 //      in place, so every crash or hang in a line is unrecoverable for its
 //      session.
+//
+// The run must also be a fair comparison: `full` (Chrome, the engine every
+// session runs today) has to succeed on at least half the corpus. Below
+// that the run measured the harness or the corpus (sites that moved, a
+// start refused), not Moli, and the verdict is "no comparison" whatever
+// lite scored (the first real run, 42434760930, had full at 0/40).
 //
 // `auto` is reported beside them, and is admitted with `lite`: it runs Moli
 // first and falls back to `full`, which already passed.
@@ -28,6 +35,7 @@ import { fileURLToPath } from "node:url";
 
 export const READ_EXTRACT_FLOOR = 0.8;
 export const MAX_POINTS_BEHIND = 10;
+export const FULL_BASELINE_FLOOR = 0.5;
 
 export function parse(text) {
   return text
@@ -79,6 +87,10 @@ export function summarise(lines, engine) {
   };
 }
 
+export function check(result, id) {
+  return result.checks.find((entry) => entry.id === id);
+}
+
 export function verdict(lines) {
   const full = summarise(lines, "full");
   const lite = summarise(lines, "lite");
@@ -91,26 +103,46 @@ export function verdict(lines) {
     throw new Error("full and lite ran different tasks: the comparison would not be like for like");
   }
   const behind = (full.success - lite.success) * 100;
+  const comparable = full.success !== null && full.success >= FULL_BASELINE_FLOOR;
   const checks = [
     {
+      id: "baseline",
+      rule: `full (the baseline) succeeds on at least ${FULL_BASELINE_FLOOR * 100}% of the corpus`,
+      pass: comparable,
+      measured: pct(full.success),
+    },
+    {
+      id: "read_extract",
       rule: `lite succeeds on at least ${READ_EXTRACT_FLOOR * 100}% of read and extract tasks`,
       pass: lite.read_extract_success !== null && lite.read_extract_success >= READ_EXTRACT_FLOOR,
       measured: lite.read_extract_success === null ? "no read or extract task" : pct(lite.read_extract_success),
     },
     {
+      id: "behind",
       rule: `lite is no more than ${MAX_POINTS_BEHIND} points behind full overall`,
       pass: behind <= MAX_POINTS_BEHIND,
       measured: `${pct(lite.success)} vs ${pct(full.success)} (${behind.toFixed(1)} points behind)`,
     },
     {
+      id: "stable",
       rule: "no crash or hang of lite",
       pass: lite.crashed.length === 0 && lite.hung.length === 0,
       measured: `${lite.crashed.length} crashed, ${lite.hung.length} hung`,
     },
   ];
+  // With no working baseline, the lite rows say nothing about Moli: they are
+  // shown as not measured, never as a pass.
+  if (!comparable) {
+    for (const check of checks) {
+      if (check.id === "baseline") continue;
+      check.pass = null;
+      check.measured = `n/a (no comparison; measured ${check.measured})`;
+    }
+  }
   const auto = summarise(lines, "auto");
   return {
-    admitted: checks.every((check) => check.pass),
+    comparable,
+    admitted: comparable && checks.every((check) => check.pass === true),
     checks,
     engines: [full, lite, ...(auto.tasks ? [auto] : [])],
   };
@@ -130,9 +162,14 @@ function msOr(value) {
 
 export function markdown(result, lines) {
   const out = [];
-  out.push(`**Verdict: ${result.admitted ? "Moli is admitted" : "Moli is NOT admitted"}.**`, "");
+  const said = result.admitted
+    ? "Moli is admitted"
+    : result.comparable
+      ? "Moli is NOT admitted"
+      : "no comparison: the full baseline failed, so this run measured the harness or the corpus, not Moli. Moli is NOT admitted";
+  out.push(`**Verdict: ${said}.**`, "");
   out.push("| Rule | Measured | Pass |", "|---|---|---|");
-  for (const check of result.checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass ? "yes" : "no"} |`);
+  for (const check of result.checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass === null ? "n/a" : check.pass ? "yes" : "no"} |`);
   out.push("", "| | " + result.engines.map((e) => e.engine).join(" | ") + " |", "|---|" + result.engines.map(() => "---").join("|") + "|");
   const row = (label, fn) => out.push(`| ${label} | ${result.engines.map(fn).join(" | ")} |`);
   row("engine version", (e) => e.version ?? "n/a");

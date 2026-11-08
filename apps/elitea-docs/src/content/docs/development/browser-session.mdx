@@ -101,7 +101,7 @@ ADR-0049 decision 9 offers `lite` and `auto` only after a bake-off. The pieces:
 
 - `bakeoff/corpus.json` holds 40 tasks on public pages: Atlassian, Microsoft 365, Salesforce, ServiceNow, GitHub, documentation sites, government forms and single-page apps. Each task is `read`, `extract` or `act`, and has a URL, optional steps (click or type by role and name, wait) and what must hold afterwards (text, a minimum number of refs, a URL).
 - `tests/bakeoff.rs` (`the_bake_off`) runs every task on each engine, one fresh session per task, through the browser tools. The same scripted steps run on every engine. It writes one JSON line per engine and task: success, refs, time to first snapshot, peak memory of the engine's process tree, crash, hang and any `auto` switch. It only runs with `ELITEA_BAKEOFF_OUT` set.
-- `scripts/ci/browser-bakeoff-report.mjs` applies the admission rule to those lines and writes the report.
+- `scripts/ci/browser-bakeoff-report.mjs` applies the admission rule to those lines and writes the report. A run is only a comparison when `full` succeeds on at least half the corpus; below that the verdict is "no comparison", because the run measured the harness or sites that moved, not Moli.
 - `.github/workflows/browser-bakeoff.yml` (manual dispatch only) builds the lite image, runs `tests/moli.rs` and the corpus inside it under gVisor, applies the rule, and keeps the lines, the report and the verdict as the `browser-bakeoff` artifact.
 
 A passing verdict does not admit Moli by itself. The report goes into the ADR-0049 appendix, and the change that records it sets `platformconfig.BrowserLiteAdmitted` and publishes the lite image.

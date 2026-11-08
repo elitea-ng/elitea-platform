@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: sessions refused under current gVisor (#1599)
+
+Affects deployments that run cloud browser sessions under gVisor (runsc)
+with the engine sandbox off (`engine_sandbox: false`, the production
+arrangement).
+
+- The session agent recognised gVisor only by its old `/proc/version`
+  release, `4.4.0`. Current runsc releases (20261102 among them) report
+  `4.19.0-gvisor`, or `5.15.0-gvisor` with RDMA, so on them every such
+  session was refused at start as `isolation_refused`. It now accepts
+  `4.4.0` or a `*-gvisor` release with gVisor's fixed build line.
+- **Action:** if cloud browser sessions fail to start with
+  `isolation_refused` on a current runsc, move to this release. A refused
+  start now logs `not_gvisor kernel="…"` with the kernel string it saw.
+
 ## Cloud browser: the lite engine (Moli) and the engine bake-off (#1599, ADR-0049 decisions 2 and 9)
 
 No operator action. No migration, no contract change.
