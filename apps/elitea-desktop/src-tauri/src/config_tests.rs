@@ -304,6 +304,12 @@ fn the_committed_config_names_no_product() {
             "tauri.conf.json names {word}"
         );
     }
+    let conf: serde_json::Value = serde_json::from_str(&text).expect("json");
+    assert_eq!(
+        conf["identifier"],
+        crate::SAMPLE_IDENTIFIER,
+        "the overlay-less warning names the committed identifier"
+    );
 }
 
 /// An app directory that cannot be resolved is left out with a warning,

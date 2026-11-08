@@ -1675,11 +1675,11 @@ enum Outcome {
 /// The policy's denied apps, read at the call: the list leaves them out
 /// (the rules deny each call on one anyway).
 fn listed(apps: Vec<AppInfo>, policy: &LocalWorkPolicy) -> Vec<AppInfo> {
+    let own = crate::brand::own_apps();
     apps.into_iter()
         .filter(|app| {
             app.bundle_id.as_deref().is_some_and(|bundle| {
-                !crate::brand::own_apps().is_own_bundle(bundle)
-                    && policy.computer_use_refusal(bundle, None).is_none()
+                !own.is_own_bundle(bundle) && policy.computer_use_refusal(bundle, None).is_none()
             })
         })
         .collect()

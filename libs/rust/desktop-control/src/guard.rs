@@ -27,26 +27,6 @@
 
 use crate::{DesktopError, Rect};
 
-/// The bundle id of the app this library runs in, set once by the host at
-/// startup ([`set_app_bundle_id`]): the app is branded at build time
-/// (ADR-0052), so the library names no app of its own.
-static APP_BUNDLE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
-/// Register the host app's bundle id, which [`OwnApps::default`] then counts
-/// as its own. The first call wins; later calls are ignored.
-pub fn set_app_bundle_id(bundle_id: &str) {
-    let bundle_id = bundle_id.trim();
-    if !bundle_id.is_empty() {
-        let _ = APP_BUNDLE_ID.set(bundle_id.to_owned());
-    }
-}
-
-/// The host app's bundle id, when it registered one.
-#[must_use]
-pub fn app_bundle_id() -> Option<&'static str> {
-    APP_BUNDLE_ID.get().map(String::as_str)
-}
-
 /// The frontmost process while the screensaver is up.
 const SCREENSAVER_BUNDLE_ID: &str = "com.apple.ScreenSaver.Engine";
 const SCREENSAVER_NAME: &str = "ScreenSaverEngine";
@@ -149,8 +129,10 @@ pub(crate) fn before_act(host: &impl HostState) -> Result<(), DesktopError> {
     Ok(())
 }
 
-/// The processes that are the host app: this process, its bundle id
-/// ([`set_app_bundle_id`]), and whatever the host adds (its helper processes).
+/// The processes that are the host app: this process, the app's bundle id
+/// ([`OwnApps::for_app`]), and whatever the host adds (its helper processes).
+/// The app is branded at build time (ADR-0052), so the library names no app
+/// of its own: the host passes its bundle id to [`crate::default_driver`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnApps {
     pids: Vec<u32>,
@@ -158,30 +140,42 @@ pub struct OwnApps {
 }
 
 impl Default for OwnApps {
+    /// This process only: no bundle id (see [`OwnApps::for_app`]).
     fn default() -> Self {
         Self {
             pids: vec![std::process::id()],
-            bundle_ids: app_bundle_id().map(str::to_owned).into_iter().collect(),
+            bundle_ids: Vec::new(),
         }
     }
 }
 
 impl OwnApps {
-    /// The default set plus `extra_pids` and `extra_bundle_ids`.
+    /// This process and the app with bundle id `bundle_id` (every process of
+    /// it). A blank id adds nothing.
     #[must_use]
-    pub fn with_extra(extra_pids: &[u32], extra_bundle_ids: &[String]) -> Self {
+    pub fn for_app(bundle_id: &str) -> Self {
+        let bundle_id = bundle_id.trim();
         let mut own = Self::default();
+        if !bundle_id.is_empty() {
+            own.bundle_ids.push(bundle_id.to_owned());
+        }
+        own
+    }
+
+    /// This set plus `extra_pids` and `extra_bundle_ids`.
+    #[must_use]
+    pub fn with_extra(mut self, extra_pids: &[u32], extra_bundle_ids: &[String]) -> Self {
         for pid in extra_pids {
-            if !own.pids.contains(pid) {
-                own.pids.push(*pid);
+            if !self.pids.contains(pid) {
+                self.pids.push(*pid);
             }
         }
         for bundle in extra_bundle_ids {
-            if !own.is_own_bundle(bundle) {
-                own.bundle_ids.push(bundle.clone());
+            if !self.is_own_bundle(bundle) {
+                self.bundle_ids.push(bundle.clone());
             }
         }
-        own
+        self
     }
 
     #[must_use]
@@ -376,8 +370,10 @@ mod tests {
 
     #[test]
     fn the_app_itself_and_the_extras_are_own() {
-        set_app_bundle_id("com.example.host.desktop");
-        let own = OwnApps::with_extra(&[4242], &["com.example.helper".to_owned()]);
+        let own = OwnApps::for_app("com.example.host.desktop")
+            .with_extra(&[4242], &["com.example.helper".to_owned()]);
+        assert!(!OwnApps::default().is_own_bundle("com.example.host.desktop"));
+        assert_eq!(OwnApps::for_app("  "), OwnApps::default());
         assert!(own.is_own(std::process::id(), None));
         assert!(own.is_own(1, Some("com.example.host.desktop")));
         assert!(own.is_own(1, Some("COM.Example.Host.Desktop")));

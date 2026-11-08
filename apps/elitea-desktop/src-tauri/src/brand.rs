@@ -89,14 +89,7 @@ pub fn init(context: &mut tauri::Context<tauri::Wry>) -> Result<&'static Brand, 
     context.set_tray_icon(None);
     context.config_mut().app.tray_icon = None;
     let brand = Brand::from_config(context.config(), tray)?;
-    Ok(BRAND.get_or_init(|| registered(brand)))
-}
-
-/// `brand`, after telling the computer-use library that its bundle id is this
-/// app's own (never read or acted on, ADR-0047 decision 3).
-fn registered(brand: Brand) -> Brand {
-    elitea_desktop_control::set_app_bundle_id(brand.identifier());
-    brand
+    Ok(BRAND.get_or_init(|| brand))
 }
 
 /// The brand. Set by [`init`] at startup; read from the compiled context when
@@ -111,7 +104,7 @@ pub fn get() -> &'static Brand {
     BRAND.get_or_init(|| {
         let context = context();
         let tray = context.tray_icon().cloned().map(Image::to_owned);
-        registered(Brand::from_config(context.config(), tray).expect("the compiled brand"))
+        Brand::from_config(context.config(), tray).expect("the compiled brand")
     })
 }
 
@@ -127,12 +120,11 @@ pub fn identifier() -> &'static str {
     get().identifier()
 }
 
-/// The processes that are this app, for the computer-use guards: this
-/// process and the brand's bundle id.
+/// The processes that are this app, for the computer-use guards (never read
+/// or acted on, ADR-0047 decision 3): this process and the brand's bundle id.
 #[must_use]
 pub fn own_apps() -> elitea_desktop_control::OwnApps {
-    let _ = get();
-    elitea_desktop_control::OwnApps::default()
+    elitea_desktop_control::OwnApps::for_app(identifier())
 }
 
 #[cfg(test)]
@@ -170,7 +162,6 @@ mod tests {
         assert_eq!(identifier(), context.config().identifier);
         assert_eq!(Some(product()), context.config().product_name.as_deref());
         assert!(get().tray_icon().is_some(), "the build names a tray image");
-        assert_eq!(elitea_desktop_control::app_bundle_id(), Some(identifier()));
         assert!(own_apps().is_own_bundle(identifier()));
     }
 }

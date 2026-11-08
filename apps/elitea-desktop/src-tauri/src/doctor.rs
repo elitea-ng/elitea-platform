@@ -1690,9 +1690,10 @@ impl Doctor {
         log::warn!("diagnostics: signed out locally after moving the stored sign-in aside");
         Ok(format!(
             "Moved to {}. You are signed out on this computer; sign in again to continue. \
-             The session in the moved file was not ended on the server (Elitea does not read a \
+             The session in the moved file was not ended on the server ({} does not read a \
              file it does not trust): end it from Settings › Devices on the web if you need to.",
-            aside.display()
+            aside.display(),
+            crate::brand::product()
         ))
     }
 }

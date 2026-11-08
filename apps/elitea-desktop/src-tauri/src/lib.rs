@@ -122,6 +122,10 @@ pub fn run_acp() -> i32 {
     acp::run()
 }
 
+/// The identifier of the neutral `tauri.conf.json` (brand/sample): a build
+/// that runs with it was made without its brand overlay.
+const SAMPLE_IDENTIFIER: &str = "com.example.sample.desktop";
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The brand compiled into this build (src/brand.rs): its identifier names every
@@ -192,6 +196,12 @@ pub fn run() {
                     .map(|d| d.display().to_string())
                     .unwrap_or_default()
             );
+            if brand::identifier() == SAMPLE_IDENTIFIER {
+                log::warn!(
+                    "built without a brand overlay: running as the sample brand ({SAMPLE_IDENTIFIER}), \
+                     with its own data folders (npm run brand)"
+                );
+            }
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let config_dir_for_browser = config_dir.clone();
@@ -486,7 +496,7 @@ pub fn run() {
             // lifetime; the toolset is offered per turn while the policy
             // and the person's device switch allow it.
             agents.set_computer(computer_tools::ComputerSetup::from_settings(
-                Arc::from(elitea_desktop_control::default_driver()),
+                Arc::from(elitea_desktop_control::default_driver(brand::own_apps())),
                 config_dir.clone(),
             ));
             app.manage(computer_commands::ComputerConfig(config_dir.clone()));
