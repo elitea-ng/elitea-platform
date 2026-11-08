@@ -706,22 +706,23 @@ func (x *AgentExecutionInputV1) GetToolEnvelope() *AgentToolEnvelopeV1 {
 }
 
 // The per-agent tool envelope (ADR-0050 decision 3). A tool key is
-// "<toolkit>/<tool>": the toolkit by its name in the agent or by its type,
+// "toolkit/tool": the toolkit by its name in the agent or by its type,
 // and "*" for every tool of the toolkit.
 type AgentToolEnvelopeV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The most calls of each matching tool in one run, at most 256 entries,
+	// The most calls of each matching tool in one turn, at most 256 entries,
 	// each from 1. A tool several entries match takes the lowest.
 	ToolLimits []*AgentToolLimitV1 `protobuf:"bytes,1,rep,name=tool_limits,json=toolLimits,proto3" json:"tool_limits,omitempty"`
 	// The platform's per-tool ceiling (agents.max_tool_limit): the most calls
-	// of any one tool in a run. 0 is none.
+	// of any one toolkit tool in a turn. 0 is none.
 	MaxToolLimit uint32 `protobuf:"varint,2,opt,name=max_tool_limit,json=maxToolLimit,proto3" json:"max_tool_limit,omitempty"`
 	// The tools a turn nobody waits on may bind (an agent-to-agent turn).
 	// Used only when unattended_tools_set; otherwise the read-only tools.
 	UnattendedTools    []string `protobuf:"bytes,3,rep,name=unattended_tools,json=unattendedTools,proto3" json:"unattended_tools,omitempty"`
 	UnattendedToolsSet bool     `protobuf:"varint,4,opt,name=unattended_tools_set,json=unattendedToolsSet,proto3" json:"unattended_tools_set,omitempty"`
 	// The platform's ceiling (agents.unattended_tools_allowlist): a tool that
-	// is not read-only is unattended only when this names it too.
+	// is not read-only is unattended only when this names it too, by its
+	// toolkit's type.
 	UnattendedToolsAllowlist []string `protobuf:"bytes,5,rep,name=unattended_tools_allowlist,json=unattendedToolsAllowlist,proto3" json:"unattended_tools_allowlist,omitempty"`
 	// The tools a sub-agent may be given, writes included. Used only when
 	// subagent_tools_set; otherwise the read-only tools.

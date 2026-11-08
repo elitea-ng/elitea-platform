@@ -180,21 +180,22 @@ message AgentExecutionInputV1 {
 }
 
 // The per-agent tool envelope (ADR-0050 decision 3). A tool key is
-// "<toolkit>/<tool>": the toolkit by its name in the agent or by its type,
+// "toolkit/tool": the toolkit by its name in the agent or by its type,
 // and "*" for every tool of the toolkit.
 message AgentToolEnvelopeV1 {
-  // The most calls of each matching tool in one run, at most 256 entries,
+  // The most calls of each matching tool in one turn, at most 256 entries,
   // each from 1. A tool several entries match takes the lowest.
   repeated AgentToolLimitV1 tool_limits = 1;
   // The platform's per-tool ceiling (agents.max_tool_limit): the most calls
-  // of any one tool in a run. 0 is none.
+  // of any one toolkit tool in a turn. 0 is none.
   uint32 max_tool_limit = 2;
   // The tools a turn nobody waits on may bind (an agent-to-agent turn).
   // Used only when unattended_tools_set; otherwise the read-only tools.
   repeated string unattended_tools = 3;
   bool unattended_tools_set = 4;
   // The platform's ceiling (agents.unattended_tools_allowlist): a tool that
-  // is not read-only is unattended only when this names it too.
+  // is not read-only is unattended only when this names it too, by its
+  // toolkit's type.
   repeated string unattended_tools_allowlist = 5;
   // The tools a sub-agent may be given, writes included. Used only when
   // subagent_tools_set; otherwise the read-only tools.

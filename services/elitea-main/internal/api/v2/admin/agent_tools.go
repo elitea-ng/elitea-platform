@@ -35,7 +35,7 @@ func agentToolsSection() map[string]any {
 		"id":    section,
 		"title": "Agent tools",
 		"description": "Ceilings on each agent's tool envelope. An agent's author can limit how often a tool " +
-			"may be called in a run, which tools the agent may use when nobody is present (a turn another " +
+			"may be called in a turn, which tools the agent may use when nobody is present (a turn another " +
 			"agent handed it), and which tools its sub-agents may get. These settings can only narrow an " +
 			"agent's tools; they never lift an approval, a guardrail or a blocked tool.",
 		"order":               7,
