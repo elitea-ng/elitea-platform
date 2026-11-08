@@ -60,9 +60,9 @@ use elitea_agent_runtime::host::{
 use elitea_agent_runtime::image_result::{IMAGE_FIELD, IMAGE_KIND};
 use elitea_desktop_control::{
     Action, AppInfo, CaptureTarget, ClickAt, DesktopDriver, DesktopError, ElementRef, KeyChord,
-    MAX_TYPED_CHARS, Node, OwnApps, Point, PointerButton, Rect, ScrollDirection, Snapshot,
-    SnapshotBudget, WaitCondition, WindowInfo, WindowTarget, bundle_matches, is_denied_chord,
-    is_denied_menu_item, platform::unnameable_app,
+    MAX_TYPED_CHARS, Node, Point, PointerButton, Rect, ScrollDirection, Snapshot, SnapshotBudget,
+    WaitCondition, WindowInfo, WindowTarget, bundle_matches, is_denied_chord, is_denied_menu_item,
+    platform::unnameable_app,
 };
 use elitea_local_tools::approvals::{
     ComputerControl, ComputerTarget, PAYLOAD_KEY, RulesEngine, ToolCall, ToolKind,
@@ -437,7 +437,8 @@ impl From<DesktopError> for CallError {
                 format!("the screen is not available ({why}): nothing runs until the person unlocks and wakes it")
             }
             DesktopError::PermissionDenied(why) => format!(
-                "{why}: the person grants it in System Settings > Privacy & Security, then restarts Elitea"
+                "{why}: the person grants it in System Settings > Privacy & Security, then restarts {}",
+                crate::brand::product()
             ),
             other => other.to_string(),
         };
@@ -1304,7 +1305,10 @@ impl ComputerTool {
         {
             return Err(CallError::new(
                 "user_active_guard_unavailable",
-                format!("Elitea cannot notice the person's input ({why}), so it does not act: ask the person to grant Accessibility (and Input Monitoring) and restart Elitea"),
+                format!(
+                    "{product} cannot notice the person's input ({why}), so it does not act: ask the person to grant Accessibility (and Input Monitoring) and restart {product}",
+                    product = crate::brand::product()
+                ),
             )
             .into());
         }
@@ -1570,11 +1574,12 @@ impl ComputerTool {
 /// a field the call's snapshot showed as secure (`secure_field_refused`).
 fn refuse_hard_limits(call: &Call, seen: &SeenSnapshots) -> Result<(), DesktopError> {
     if let Some(bundle_id) = call.bundle_id()
-        && OwnApps::default().is_own_bundle(bundle_id.trim())
+        && crate::brand::own_apps().is_own_bundle(bundle_id.trim())
     {
-        return Err(DesktopError::OwnWindowRefused(
-            "Elitea's own windows are never read or acted on".to_owned(),
-        ));
+        return Err(DesktopError::OwnWindowRefused(format!(
+            "{}'s own windows are never read or acted on",
+            crate::brand::product()
+        )));
     }
     // On Linux an interpreter (`python3`, `node`) is never an application's
     // id: refused before the person is asked, so "always for this app" can
@@ -1673,7 +1678,7 @@ fn listed(apps: Vec<AppInfo>, policy: &LocalWorkPolicy) -> Vec<AppInfo> {
     apps.into_iter()
         .filter(|app| {
             app.bundle_id.as_deref().is_some_and(|bundle| {
-                !OwnApps::default().is_own_bundle(bundle)
+                !crate::brand::own_apps().is_own_bundle(bundle)
                     && policy.computer_use_refusal(bundle, None).is_none()
             })
         })

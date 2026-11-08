@@ -87,7 +87,7 @@ impl MacDriver {
     }
 
     /// The same driver, refusing `own` as Elitea's processes. The default
-    /// set is this process and `ai.elitea.desktop`; the host adds its
+    /// set is this process and the host's bundle id ([`crate::set_app_bundle_id`]); the host adds its
     /// helper processes with [`OwnApps::with_extra`].
     #[must_use]
     pub fn with_own_apps(mut self, own: OwnApps) -> Self {

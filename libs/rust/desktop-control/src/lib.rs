@@ -62,7 +62,9 @@ mod windows_input;
 
 pub use driver::{DesktopDriver, Unsupported};
 pub use error::DesktopError;
-pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlaps};
+pub use guard::{
+    OwnApps, ScreenStatus, app_bundle_id, is_screensaver, overlaps, set_app_bundle_id,
+};
 pub use input::{Halt, InputFilter, InputWatch, STOP_SHORTCUT, Signal, SignalSink};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxDriver;

@@ -122,7 +122,7 @@ impl NativeDriver {
     }
 
     /// The same driver, refusing `own` as Elitea's processes. The default
-    /// set is this process and `ai.elitea.desktop`.
+    /// set is this process and the host's bundle id ([`crate::set_app_bundle_id`]).
     #[must_use]
     pub fn with_own_apps(mut self, own: OwnApps) -> Self {
         self.own = own;

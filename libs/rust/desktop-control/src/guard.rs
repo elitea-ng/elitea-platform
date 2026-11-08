@@ -27,8 +27,25 @@
 
 use crate::{DesktopError, Rect};
 
-/// The bundle id of the Elitea desktop app (`apps/elitea-desktop`).
-pub const ELITEA_BUNDLE_ID: &str = "ai.elitea.desktop";
+/// The bundle id of the app this library runs in, set once by the host at
+/// startup ([`set_app_bundle_id`]): the app is branded at build time
+/// (ADR-0052), so the library names no app of its own.
+static APP_BUNDLE_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Register the host app's bundle id, which [`OwnApps::default`] then counts
+/// as its own. The first call wins; later calls are ignored.
+pub fn set_app_bundle_id(bundle_id: &str) {
+    let bundle_id = bundle_id.trim();
+    if !bundle_id.is_empty() {
+        let _ = APP_BUNDLE_ID.set(bundle_id.to_owned());
+    }
+}
+
+/// The host app's bundle id, when it registered one.
+#[must_use]
+pub fn app_bundle_id() -> Option<&'static str> {
+    APP_BUNDLE_ID.get().map(String::as_str)
+}
 
 /// The frontmost process while the screensaver is up.
 const SCREENSAVER_BUNDLE_ID: &str = "com.apple.ScreenSaver.Engine";
@@ -132,8 +149,8 @@ pub(crate) fn before_act(host: &impl HostState) -> Result<(), DesktopError> {
     Ok(())
 }
 
-/// The processes that are Elitea: this process, the `ai.elitea.desktop`
-/// bundle, and whatever the host adds (its helper processes).
+/// The processes that are the host app: this process, its bundle id
+/// ([`set_app_bundle_id`]), and whatever the host adds (its helper processes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnApps {
     pids: Vec<u32>,
@@ -144,7 +161,7 @@ impl Default for OwnApps {
     fn default() -> Self {
         Self {
             pids: vec![std::process::id()],
-            bundle_ids: vec![ELITEA_BUNDLE_ID.to_owned()],
+            bundle_ids: app_bundle_id().map(str::to_owned).into_iter().collect(),
         }
     }
 }
@@ -358,17 +375,18 @@ mod tests {
     }
 
     #[test]
-    fn elitea_itself_and_the_extras_are_own() {
-        let own = OwnApps::with_extra(&[4242], &["ai.elitea.helper".to_owned()]);
+    fn the_app_itself_and_the_extras_are_own() {
+        set_app_bundle_id("com.example.host.desktop");
+        let own = OwnApps::with_extra(&[4242], &["com.example.helper".to_owned()]);
         assert!(own.is_own(std::process::id(), None));
-        assert!(own.is_own(1, Some("ai.elitea.desktop")));
-        assert!(own.is_own(1, Some("AI.Elitea.Desktop")));
+        assert!(own.is_own(1, Some("com.example.host.desktop")));
+        assert!(own.is_own(1, Some("COM.Example.Host.Desktop")));
         assert!(own.is_own(4242, Some("com.apple.TextEdit")));
-        assert!(own.is_own(1, Some("ai.elitea.helper")));
+        assert!(own.is_own(1, Some("com.example.helper")));
         assert!(!own.is_own(1, Some("com.apple.TextEdit")));
         assert!(!own.is_own(1, None));
         assert_eq!(
-            own.refuse(1, Some("ai.elitea.desktop"), "snapshot")
+            own.refuse(1, Some("com.example.host.desktop"), "snapshot")
                 .unwrap_err()
                 .code(),
             "own_window_refused"
