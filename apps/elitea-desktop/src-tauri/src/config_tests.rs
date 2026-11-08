@@ -279,16 +279,31 @@ fn no_keychain_crate_is_linked() {
 
 /// The host passes its bundle identifier from the Tauri config to the local
 /// tools, which deny the app's default directories under it: the shared
-/// library names no app.
+/// library names no app. With a brand overlay, the overlay's identifier.
 #[test]
 fn the_sandbox_gets_the_tauri_identifier() {
-    let config: tauri::Config =
-        serde_json::from_value(json("tauri.conf.json")).expect("tauri config");
+    let mut value = json("tauri.conf.json");
+    value["identifier"] = "com.example.acme.desktop".into();
+    let config: tauri::Config = serde_json::from_value(value).expect("tauri config");
     assert_eq!(
         crate::sandbox_app_id(&config).as_deref(),
-        Some("ai.elitea.desktop")
+        Some("com.example.acme.desktop")
     );
-    assert_eq!(config.identifier, "ai.elitea.desktop");
+}
+
+/// tauri.conf.json is neutral (ADR-0052 decision 4): brand/sample's values,
+/// never ELITEA's; the brand comes from the generated overlay.
+#[test]
+fn the_committed_config_names_no_product() {
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
+        .expect("tauri.conf.json");
+    let lower = text.to_lowercase();
+    for word in ["elitea", "epam"] {
+        assert!(
+            !lower.replace("elitea-web", "").contains(word),
+            "tauri.conf.json names {word}"
+        );
+    }
 }
 
 /// An app directory that cannot be resolved is left out with a warning,

@@ -1409,18 +1409,24 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: >
-          npx tauri build --target aarch64-apple-darwin --bundles app,dmg
-          --config src-tauri/tauri.sidecar.conf.json
+        # The brand overlay (ADR-0052 decision 4; ELITEA_BRAND unset is
+        # brand/elitea) names the product, identifier and icons; the committed
+        # tauri.conf.json is the neutral brand/sample.
+        run: |
+          set -euo pipefail
+          node scripts/tauri-brand.mjs
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg \
+            --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
+          echo "DESKTOP_APP=$(node -p 'require("./src-tauri/tauri.brand.json").productName').app" >> "$GITHUB_ENV"
 
       # Proven, not assumed: Gatekeeper accepts the app and the ticket is stapled.
       - name: The app is signed, notarised and stapled
         working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
         run: |
           set -euo pipefail
-          codesign --verify --deep --strict --verbose=2 macos/Elitea.app
-          spctl --assess --type execute --verbose=4 macos/Elitea.app
-          xcrun stapler validate macos/Elitea.app
+          codesign --verify --deep --strict --verbose=2 "macos/${DESKTOP_APP}"
+          spctl --assess --type execute --verbose=4 "macos/${DESKTOP_APP}"
+          xcrun stapler validate "macos/${DESKTOP_APP}"
 
       - name: Remove the notarisation key
         if: always()
