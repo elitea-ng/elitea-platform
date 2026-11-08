@@ -526,9 +526,10 @@ impl Connection {
             "initialize" => self.initialize(params),
             // No method is advertised: the sign-in is the app's.
             "authenticate" => parse::<AuthenticateRequest>(params).and_then(|_| {
-                Err(RpcError::invalid_params(
-                    "this agent uses the Elitea app's sign-in and offers no other method",
-                ))
+                Err(RpcError::invalid_params(format!(
+                    "this agent uses the {} app's sign-in and offers no other method",
+                    crate::brand::product()
+                )))
             }),
             "session/new" => self.new_session(params).await.map(|(answer, session)| {
                 opened = Some(session);
@@ -646,7 +647,7 @@ impl Connection {
             auth_methods: Vec::new(),
             agent_info: Some(Implementation {
                 name: "elitea".to_owned(),
-                title: Some("Elitea".to_owned()),
+                title: Some(crate::brand::product().to_owned()),
                 version: self.config.client_version.clone(),
             }),
         })
@@ -880,7 +881,10 @@ impl Connection {
                 let project_id = defaults.project_id.ok_or_else(|| {
                     RpcError::refused(
                         "workspace_unbound",
-                        "Bind this folder to a project in the Elitea app, or set ELITEA_PROJECT_ID.",
+                        format!(
+                            "Bind this folder to a project in the {} app, or set ELITEA_PROJECT_ID.",
+                            crate::brand::product()
+                        ),
                     )
                 })?;
                 self.config

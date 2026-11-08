@@ -102,7 +102,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         Some(&text("about")),
         Some(
             AboutMetadataBuilder::new()
-                .name(Some("Elitea"))
+                .name(Some(crate::brand::product()))
                 .version(Some(env!("CARGO_PKG_VERSION")))
                 .build(),
         ),
@@ -239,7 +239,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let mut menus: Vec<Submenu<Wry>> = Vec::new();
     if cfg!(target_os = "macos") {
         menus.push(
-            SubmenuBuilder::new(app, "Elitea")
+            SubmenuBuilder::new(app, crate::brand::product())
                 .item(&about)
                 .item(&separator()?)
                 .item(&forwarded(app, "settings")?)

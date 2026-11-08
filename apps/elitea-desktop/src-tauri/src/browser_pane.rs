@@ -539,8 +539,8 @@ impl PendingDownloads {
 /// system's own downloaders write: `<flags>;<seconds since 1970, hex>;
 /// <agent>;<event UUID>`. Flags `0081`: downloaded (`0x0001`) by an app
 /// that is not sandboxed (`0x0080`), as Edge and Chrome write; Gatekeeper
-/// checks the file on first open. The agent, `Elitea`, is the app Finder
-/// names as the downloader.
+/// checks the file on first open. The agent, the product name (src/brand.rs),
+/// is the app Finder names as the downloader.
 #[cfg_attr(
     not(any(target_os = "macos", test)),
     expect(dead_code, reason = "macOS only")
@@ -548,7 +548,8 @@ impl PendingDownloads {
 #[must_use]
 pub fn quarantine_value(unix_seconds: u64, event: uuid::Uuid) -> String {
     format!(
-        "0081;{unix_seconds:08x};Elitea;{}",
+        "0081;{unix_seconds:08x};{};{}",
+        crate::brand::product().replace(';', " "),
         event
             .hyphenated()
             .encode_upper(&mut uuid::Uuid::encode_buffer())
@@ -2251,11 +2252,17 @@ mod tests {
         let event = uuid::Uuid::parse_str("89387f8c-3c2e-4230-8d57-23c6e2bdcba6").unwrap();
         assert_eq!(
             quarantine_value(0x6aea_4fc9, event),
-            "0081;6aea4fc9;Elitea;89387F8C-3C2E-4230-8D57-23C6E2BDCBA6"
+            format!(
+                "0081;6aea4fc9;{};89387F8C-3C2E-4230-8D57-23C6E2BDCBA6",
+                crate::brand::product()
+            )
         );
         assert_eq!(
             quarantine_value(5, event),
-            "0081;00000005;Elitea;89387F8C-3C2E-4230-8D57-23C6E2BDCBA6",
+            format!(
+                "0081;00000005;{};89387F8C-3C2E-4230-8D57-23C6E2BDCBA6",
+                crate::brand::product()
+            ),
             "the time is eight hex digits"
         );
     }
@@ -2274,7 +2281,7 @@ mod tests {
         let fields: Vec<&str> = value.split(';').collect();
         assert_eq!(fields.len(), 4, "{value}");
         assert_eq!(fields[0], "0081");
-        assert_eq!(fields[2], "Elitea");
+        assert_eq!(fields[2], crate::brand::product());
         assert!(uuid::Uuid::parse_str(fields[3]).is_ok(), "{value}");
 
         let n = rustix::fs::getxattr(

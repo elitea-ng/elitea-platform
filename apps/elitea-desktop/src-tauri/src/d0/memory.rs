@@ -140,7 +140,7 @@ fn status_error(status: u16) -> HostError {
         // person has to update the app (the sign-in's UpgradeRequired).
         426 => HostError::new(
             HostErrorCode::InvalidConfiguration,
-            "this version of Elitea is older than the deployment allows; update the app",
+            "this version of the app is older than the deployment allows; update the app",
         )
         .with_reason("upgrade_required"),
         _ => HostError::new(

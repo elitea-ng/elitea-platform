@@ -203,9 +203,9 @@ impl RemoteToolkitTool {
             |tool| format!("{}: {tool}", spec.toolkit_name),
         );
         let mut description = if spec.description.is_empty() {
-            format!("{what} (runs on the Elitea platform).")
+            format!("{what} (runs on the platform).")
         } else {
-            format!("{what} (runs on the Elitea platform). {}", spec.description)
+            format!("{what} (runs on the platform). {}", spec.description)
         };
         if spec.tool_name.is_none() && !spec.tools.is_empty() {
             description.push_str(&tools_listing(&spec));
@@ -481,7 +481,7 @@ pub async fn call(
             (409, "mcp_authorization_required") => {
                 return error_result(
                     "authorization_required",
-                    "this tool's MCP server still needs your sign-in; sign in in the Elitea web app, then try again",
+                    "this tool's MCP server still needs your sign-in; sign in in the web app, then try again",
                 );
             }
             _ => {

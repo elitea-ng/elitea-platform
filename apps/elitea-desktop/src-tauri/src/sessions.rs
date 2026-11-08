@@ -496,7 +496,10 @@ fn checkpoint_wal(conn: &Connection) {
 }
 
 fn closed() -> HostError {
-    HostError::Storage("the session store is closed; restart Elitea".into())
+    HostError::Storage(format!(
+        "the session store is closed; restart {}",
+        crate::brand::product()
+    ))
 }
 
 /// `PRAGMA auto_vacuum` of a file under incremental vacuum.
@@ -766,8 +769,9 @@ impl SessionStore {
             (Err(_), Err(_)) => return moved,
             (Ok(aside), Err(error)) => {
                 return Err(HostError::Storage(format!(
-                    "moved to {}, but a new session store could not start ({error}); restart Elitea",
-                    aside.display()
+                    "moved to {}, but a new session store could not start ({error}); restart {}",
+                    aside.display(),
+                    crate::brand::product()
                 )));
             }
         };
@@ -809,7 +813,8 @@ impl SessionStore {
             (Err(_), Err(_)) => return before,
             (Ok(_), Err(error)) => {
                 return Err(HostError::Storage(format!(
-                    "a new session store could not start after reclaim ({error}); restart Elitea"
+                    "a new session store could not start after reclaim ({error}); restart {}",
+                    crate::brand::product()
                 )));
             }
         };

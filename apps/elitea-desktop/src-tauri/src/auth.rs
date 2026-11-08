@@ -770,7 +770,7 @@ fn device_name() -> String {
         "linux" => "Linux",
         other => other,
     };
-    format!("Elitea Desktop on {os}")
+    format!("{} Desktop on {os}", crate::brand::product())
 }
 
 fn platform() -> &'static str {
