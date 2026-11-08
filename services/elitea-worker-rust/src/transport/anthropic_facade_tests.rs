@@ -376,7 +376,10 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
         serde_json::from_slice(&request.body).expect("native request JSON");
     assert_eq!(body["model"], MODEL);
     assert_eq!(body["messages"][0]["role"], "user");
-    assert_eq!(body["messages"][0]["content"], "explain this");
+    // A plain-text message becomes one text block so it can carry the
+    // conversation breakpoint (#1610).
+    assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+    assert_eq!(body["messages"][0]["content"][0]["text"], "explain this");
     assert_eq!(body["system"][0]["type"], "text");
     assert_eq!(body["system"][0]["text"], "review carefully\nbe concise");
     assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
@@ -385,7 +388,10 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
     let messages = body["messages"].as_array().expect("messages");
     let last = messages.last().expect("a message");
     let blocks = last["content"].as_array().expect("blocks");
-    assert_eq!(blocks.last().expect("a block")["cache_control"]["type"], "ephemeral");
+    assert_eq!(
+        blocks.last().expect("a block")["cache_control"]["type"],
+        "ephemeral"
+    );
     let marked = messages
         .iter()
         .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())

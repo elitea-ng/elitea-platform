@@ -578,7 +578,8 @@ fn mark_conversation_breakpoint(messages: &mut [MessageParam]) {
     for message in messages.iter_mut().rev() {
         if let adk_anthropic::MessageParamContent::String(text) = &message.content {
             let block = TextBlock::new(text).with_cache_control(CacheControlEphemeral::new());
-            message.content = adk_anthropic::MessageParamContent::Array(vec![ContentBlock::Text(block)]);
+            message.content =
+                adk_anthropic::MessageParamContent::Array(vec![ContentBlock::Text(block)]);
             return;
         }
         let adk_anthropic::MessageParamContent::Array(blocks) = &mut message.content else {
