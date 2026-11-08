@@ -5,7 +5,10 @@
 //! - **Application ids** are desktop entry ids (`org.gnome.TextEditor`),
 //!   or the executable's own name when it has none (`xterm`, read from
 //!   `/proc/<pid>/exe`; [`crate::platform::linux_app_id`],
-//!   [`crate::platform::linux_executable_name`]). `open_app` takes either; the
+//!   [`crate::platform::linux_executable_name`]). An interpreter
+//!   (`python3.12`, `node`, `bash`) is never the name: the app is named by
+//!   the script it runs (`/proc/<pid>/cmdline`, or `comm`), and has no id
+//!   when neither names it. `open_app` takes either; the
 //!   vendor never launches a path outside the XDG data directories.
 //! - **The screen** ([`screen`], decided by
 //!   [`crate::platform::linux_screen_status`]): no display, a logind session
@@ -67,13 +70,25 @@ impl Default for NativeDriver {
 }
 
 /// The desktop entry id, else the executable's own name read from
-/// `/proc/<pid>/exe` ([`platform::linux_executable_name`]), never the
-/// display name.
+/// `/proc/<pid>` ([`platform::linux_executable_name`]: `exe`, `comm` and,
+/// for an interpreter, the script `cmdline` names), never the display name
+/// and never an interpreter's.
 fn app_id(app: &ad::AppInfo) -> Option<String> {
-    let link = std::fs::read_link(format!("/proc/{}/exe", app.pid.get())).ok();
+    let pid = app.pid.get();
+    let link = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
     let link = link.as_deref().and_then(std::path::Path::to_str);
-    let executable = platform::linux_executable_name(link, &app.name).unwrap_or_default();
-    platform::linux_app_id(app.bundle_id.as_deref(), &executable)
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+    let cmdline: Vec<String> = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|bytes| {
+            bytes
+                .split(|b| *b == 0)
+                .filter(|word| !word.is_empty())
+                .map(|word| String::from_utf8_lossy(word).into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let executable = platform::linux_executable_name(link, comm.trim(), &cmdline);
+    platform::linux_app_id(app.bundle_id.as_deref(), &executable.unwrap_or_default())
 }
 
 /// Why the user-active guard cannot run in this session, or `None` on a

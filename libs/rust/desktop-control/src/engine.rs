@@ -141,6 +141,11 @@ impl NativeDriver {
 
     /// `own_window_refused` for Elitea, `app_denied` for a denied app.
     fn refuse_id(&self, id: &str) -> Result<(), DesktopError> {
+        if self.hooks.os == Os::Linux
+            && let Some(why) = platform::unnameable_app(id)
+        {
+            return Err(DesktopError::InvalidArgs(why));
+        }
         if self.own.is_own_bundle(id) {
             return Err(DesktopError::OwnWindowRefused(id.to_owned()));
         }

@@ -22,7 +22,7 @@ macOS keeps these grants for the app's bundle id (`ai.elitea.desktop`) and its s
 </Note>
 
 <Note>
-Windows and Linux ask for no grant: the page shows what the system reports. On Linux the accessibility bus (AT-SPI) must be running, as it is on GNOME and KDE. Apps are named by their executable on Windows (`notepad.exe`) and by their desktop entry on Linux (`org.gnome.TextEditor`, or the executable, such as `xterm`, when the app has none), in questions and in **Always allowed apps**.
+Windows and Linux ask for no grant: the page shows what the system reports. On Linux the accessibility bus (AT-SPI) must be running, as it is on GNOME and KDE. Apps are named by their executable on Windows (`notepad.exe`) and by their desktop entry on Linux (`org.gnome.TextEditor`, or the executable, such as `xterm`, when the app has none), in questions and in **Always allowed apps**. A Linux app written in Python, JavaScript or another scripting language is named by its script (`terminator`, `secrets`), never by its interpreter (`python3`): the agent cannot name an interpreter as an app, and such an app with no readable script name cannot be used.
 </Note>
 
 ## While the agent uses your computer

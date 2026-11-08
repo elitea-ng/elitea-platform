@@ -43,7 +43,11 @@ person's device switch both allow it, as before.
   (`org.gnome.Settings`, `gnome-control-center`, `org.kde.systemsettings`,
   `systemsettings`). An app with no desktop entry is named by its
   executable (`xterm`), never by its display name: review policy app lists
-  that used a display name.
+  that used a display name. An interpreted app (Python, Node, a shell
+  script) is named by its script (`terminator`, `secrets`), never by its
+  interpreter: an id such as `python3.12` or `node` is refused
+  (`invalid_args`) and cannot be remembered, and an app with no readable
+  script name has no id. Policy entries naming an interpreter match nothing.
 - Linux fails closed on the lock screen: with no screensaver service that
   answers (i3lock, slock, xsecurelock), every call is refused with
   `screen_unavailable`. There is no override; a desktop without one cannot

@@ -248,8 +248,9 @@ pub fn windows_app_id(image: &str) -> Option<String> {
 }
 
 /// The application id of a Linux process: its desktop entry id without the
-/// `.desktop` suffix when it has one, else its executable name. `None` when
-/// it has neither.
+/// `.desktop` suffix when it has one, else its executable name
+/// ([`linux_executable_name`]). `None` when it has neither, and never an
+/// interpreter's name ([`is_interpreter_name`]).
 #[must_use]
 pub fn linux_app_id(desktop_id: Option<&str>, executable: &str) -> Option<String> {
     if let Some(id) = desktop_id
@@ -259,23 +260,299 @@ pub fn linux_app_id(desktop_id: Option<&str>, executable: &str) -> Option<String
         return Some(id.to_owned());
     }
     let base = executable.rsplit('/').next().unwrap_or(executable).trim();
-    (!base.is_empty()).then(|| base.to_owned())
+    (!base.is_empty() && !is_interpreter_name(base)).then(|| base.to_owned())
+}
+
+/// Why no call may name the application `id` at all, before anything is
+/// asked: an interpreter's name ([`is_interpreter_name`]: `python3`,
+/// `node`, `bash`) is never an application's id, so it is refused rather
+/// than asked for, and "Always allow" can never be granted to it.
+#[must_use]
+pub fn unnameable_app(id: &str) -> Option<String> {
+    is_interpreter_name(id).then(|| {
+        format!(
+            "`{}` is an interpreter, not an application: name the app by its desktop entry id or its script's name",
+            id.trim()
+        )
+    })
 }
 
 /// The longest name the kernel keeps in `/proc/<pid>/comm`
 /// (`TASK_COMM_LEN` - 1): a name this long may have been cut.
 const COMM_MAX: usize = 15;
 
-/// The executable name a Linux application's id falls back to when it has
-/// no desktop entry ([`linux_app_id`]), never its display name. `exe_link`
-/// is the target of `/proc/<pid>/exe`; `listed` is the name the adapter
-/// lists the process under (the same basename, else `comm`). A `comm` the
-/// kernel may have cut (15 bytes) is not trusted, since `gnome-terminal-`
-/// must not slip past `gnome-terminal-server`: with no readable link the
-/// id is then `None`, and an application with no id cannot be named by a
-/// call.
+/// The interpreters and runtimes a Linux application can run under, by
+/// their executable's name without a trailing version (`python3.12`,
+/// `lua5.4`, `electron29`). A process of one of them is named by the script
+/// it runs, never by the interpreter ([`linux_executable_name`]).
+const LINUX_INTERPRETERS: &[&str] = &[
+    "python",
+    "pypy",
+    "perl",
+    "ruby",
+    "node",
+    "nodejs",
+    "bun",
+    "deno",
+    "electron",
+    "bash",
+    "sh",
+    "dash",
+    "zsh",
+    "fish",
+    "ksh",
+    "mksh",
+    "ash",
+    "csh",
+    "tcsh",
+    "busybox",
+    "gjs",
+    "gjs-console",
+    "cjs",
+    "seed",
+    "java",
+    "lua",
+    "luajit",
+    "php",
+    "tclsh",
+    "wish",
+    "guile",
+    "qjs",
+    "osascript",
+];
+
+/// Whether `name` (an executable's basename) is an interpreter or runtime
+/// ([`LINUX_INTERPRETERS`]), ignoring a version suffix and ASCII case. Such
+/// a name is never an application id on Linux: it says nothing about the
+/// app (Terminator and GNOME Secrets both run as `python3.12`).
 #[must_use]
-pub fn linux_executable_name(exe_link: Option<&str>, listed: &str) -> Option<String> {
+pub fn is_interpreter_name(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    let stem = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    !stem.is_empty() && LINUX_INTERPRETERS.contains(&stem)
+}
+
+/// The interpreter options that take the next argument as their value, by
+/// interpreter (the stem [`is_interpreter_name`] matches). Long options
+/// written `--name=value` take nothing more.
+fn option_takes_value(interpreter: &str, option: &str) -> bool {
+    let list: &[&str] = match interpreter {
+        "python" | "pypy" => &["-W", "-X", "--check-hash-based-pycs"],
+        "perl" => &["-I", "-M", "-m"],
+        "ruby" => &["-I", "-r", "-C", "-E", "--encoding"],
+        "node" | "nodejs" | "bun" | "deno" | "electron" => &[
+            "-r",
+            "--require",
+            "--import",
+            "--loader",
+            "--experimental-loader",
+            "-C",
+            "--conditions",
+            "--title",
+            "--inspect-port",
+        ],
+        "bash" | "sh" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "busybox" | "fish" => &[
+            "-o",
+            "-O",
+            "+o",
+            "+O",
+            "--rcfile",
+            "--init-file",
+            "--init-command",
+            "-C",
+        ],
+        "gjs" | "cjs" | "seed" => &["-I", "--include-path", "--coverage-prefix", "--profile"],
+        "java" => &[
+            "-cp",
+            "-classpath",
+            "--class-path",
+            "-p",
+            "--module-path",
+            "--upgrade-module-path",
+            "--add-modules",
+            "--add-opens",
+            "--add-exports",
+            "--add-reads",
+            "--patch-module",
+            "--enable-native-access",
+        ],
+        "lua" | "luajit" => &["-l"],
+        "php" => &["-c", "-d", "-z"],
+        "tclsh" | "wish" => &["-encoding", "-name", "-display", "-geometry", "-class"],
+        "guile" => &["-L", "-C", "-x", "-l", "--use-srfi"],
+        _ => &[],
+    };
+    list.contains(&option)
+}
+
+/// What one interpreter option says about the program the process runs.
+enum Opt {
+    /// The program is inline code (`python -c`, `perl -e`): it has no name.
+    Inline,
+    /// The next argument is the program (`java -jar app.jar`, `php -f`,
+    /// `gjs -m file`) or a module named instead of a file (`python -m pkg`,
+    /// `java -m mod/Main`).
+    Program { module: bool },
+    /// The next argument is the option's value.
+    Value,
+    /// A flag on its own.
+    Flag,
+}
+
+fn read_option(interpreter: &str, option: &str) -> Opt {
+    let inline: &[&str] = match interpreter {
+        "python" | "pypy" | "bash" | "sh" | "dash" | "zsh" | "ksh" | "mksh" | "ash" | "busybox"
+        | "fish" | "gjs" | "cjs" | "qjs" | "csh" | "tcsh" => &["-c", "--command"],
+        "perl" | "ruby" | "lua" | "luajit" | "guile" | "osascript" => &["-e", "-E", "-c"],
+        "node" | "nodejs" | "bun" | "deno" | "electron" => &["-e", "--eval", "-p", "--print"],
+        "php" => &["-r", "-R", "-B", "-E"],
+        _ => &[],
+    };
+    if inline.contains(&option) {
+        return Opt::Inline;
+    }
+    match (interpreter, option) {
+        ("python" | "pypy", "-m") | ("java", "-m" | "--module") => Opt::Program { module: true },
+        ("java", "-jar") | ("php", "-f") | ("gjs" | "cjs", "-m" | "--module") => {
+            Opt::Program { module: false }
+        }
+        _ if option_takes_value(interpreter, option) => Opt::Value,
+        _ => Opt::Flag,
+    }
+}
+
+/// The stems of an entry point that say nothing about the app
+/// (`/usr/lib/bitwarden/app.asar`, `/opt/foo/main.js`): the app is named by
+/// the directory instead.
+const GENERIC_ENTRY_STEMS: &[&str] = &[
+    "app", "main", "index", "__main__", "run", "start", "launcher", "cli", "server", "entry",
+];
+/// Directories an entry point's name is never taken from.
+const GENERIC_DIRS: &[&str] = &[
+    "resources",
+    "app",
+    "lib",
+    "lib64",
+    "libexec",
+    "share",
+    "bin",
+    "sbin",
+    "dist",
+    "src",
+    "build",
+    "out",
+    "usr",
+    "opt",
+    "local",
+    "node_modules",
+    "site-packages",
+    "dist-packages",
+];
+/// The script suffixes dropped from a name (`secrets.py` is `secrets`).
+const SCRIPT_SUFFIXES: &[&str] = &[
+    ".py", ".pyw", ".pyc", ".pl", ".rb", ".js", ".mjs", ".cjs", ".ts", ".lua", ".php", ".sh",
+    ".bash", ".zsh", ".fish", ".tcl", ".jar", ".asar", ".scm",
+];
+
+/// The application name of the program `path` an interpreter runs: its
+/// basename without a script suffix, or its directory's name when the
+/// basename is generic. `None` when no usable name is left.
+fn program_name(path: &str) -> Option<String> {
+    let mut parts = path.trim().trim_end_matches('/').rsplit('/');
+    let base = parts.next()?.trim();
+    let strip = |name: &str| {
+        let lower = name.to_ascii_lowercase();
+        SCRIPT_SUFFIXES
+            .iter()
+            .find(|suffix| lower.ends_with(*suffix) && lower.len() > suffix.len())
+            .map_or_else(
+                || name.to_owned(),
+                |suffix| name[..name.len() - suffix.len()].to_owned(),
+            )
+    };
+    let stem = strip(base);
+    let generic = |name: &str| GENERIC_ENTRY_STEMS.contains(&name.to_ascii_lowercase().as_str());
+    let name = if stem.is_empty() || generic(&stem) {
+        parts
+            .map(str::trim)
+            .find(|dir| {
+                !dir.is_empty() && !GENERIC_DIRS.contains(&dir.to_ascii_lowercase().as_str())
+            })
+            .map(strip)?
+    } else {
+        stem
+    };
+    usable_name(&name)
+}
+
+/// A name that can be an application id: a plain id ([`valid_app_id`])
+/// that is not an interpreter.
+fn usable_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (valid_app_id(Os::Linux, name) && !is_interpreter_name(name)).then(|| name.to_owned())
+}
+
+/// The program an interpreter process runs, read from its command line
+/// (`cmdline[0]` is the interpreter; the first argument that is not an
+/// option, or the module `-m` names). `None` for inline code (`-c`, `-e`),
+/// standard input (`-`) or no program at all.
+fn script_of(interpreter: &str, cmdline: &[String]) -> Option<String> {
+    let mut args = cmdline.iter().skip(1).map(String::as_str);
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args.next().and_then(program_name);
+        }
+        if arg == "-" {
+            return None;
+        }
+        if !(arg.starts_with('-') || (arg.starts_with('+') && arg.len() > 1)) {
+            return program_name(arg);
+        }
+        if arg.starts_with("--") && arg.contains('=') {
+            continue;
+        }
+        match read_option(interpreter, arg) {
+            Opt::Inline => return None,
+            Opt::Program { module: true } => {
+                // `pkg.app`, `mod/pkg.Main`: the module as named.
+                return args.next().and_then(|m| usable_name(m.rsplit('/').next()?));
+            }
+            Opt::Program { module: false } => return args.next().and_then(program_name),
+            Opt::Value => {
+                args.next();
+            }
+            Opt::Flag => {}
+        }
+    }
+    None
+}
+
+/// The name a Linux application's id falls back to when it has no desktop
+/// entry ([`linux_app_id`]), never its display name. Pure over what
+/// `/proc/<pid>` says: `exe_link` is the target of `exe`, `comm` the
+/// kernel's name of the process, `cmdline` its arguments.
+///
+/// - **A plain binary** is named by its executable (`xterm`).
+/// - **An interpreter** ([`is_interpreter_name`]: `python3.12`, `node`,
+///   `bash`, `java`, ...) is never the name: Terminator and GNOME Secrets
+///   are both `python3.12`, and their deny entries must match. The app is
+///   named by the script it runs (the first argument after the
+///   interpreter's options, or the module of `-m`), and by `comm` when that
+///   is not an interpreter (a `#!` script's `comm` is the script's name).
+///   When both are read and disagree, or neither gives a name (inline code,
+///   standard input), the process has no name.
+/// - **No readable link**: `comm`, unless the kernel may have cut it (15
+///   bytes: `gnome-terminal-` must not slip past `gnome-terminal-server`)
+///   or it is an interpreter.
+///
+/// An application with no name has no id, and an application with no id
+/// is never matched by a call (`app_not_found`, `not_frontmost`).
+#[must_use]
+pub fn linux_executable_name(
+    exe_link: Option<&str>,
+    comm: &str,
+    cmdline: &[String],
+) -> Option<String> {
     let base = |path: &str| {
         let name = path.rsplit('/').next().unwrap_or(path);
         name.strip_suffix(" (deleted)")
@@ -283,17 +560,41 @@ pub fn linux_executable_name(exe_link: Option<&str>, listed: &str) -> Option<Str
             .trim()
             .to_owned()
     };
-    if let Some(name) = exe_link.map(base).filter(|n| !n.is_empty()) {
-        return Some(name);
+    let comm = comm.trim();
+    // A comm the kernel may have cut, or an interpreter's, names nothing.
+    // `#!` scripts get the script's file name (`secrets`, `tool.py`).
+    let comm_name = (comm.len() < COMM_MAX)
+        .then(|| program_name(comm))
+        .flatten();
+    let exe = exe_link.map(base).filter(|n| !n.is_empty());
+    let interpreter = match exe {
+        Some(exe) if is_interpreter_name(&exe) => exe,
+        Some(exe) => return Some(exe),
+        // No link: comm is the name, unless it is an interpreter's.
+        None if is_interpreter_name(comm) => comm.to_owned(),
+        None => return comm_name,
+    };
+    let stem = interpreter
+        .to_ascii_lowercase()
+        .trim_end_matches(|c: char| c.is_ascii_digit() || c == '.')
+        .to_owned();
+    let stem = if stem == "gjs-console" {
+        "gjs".to_owned()
+    } else {
+        stem
+    };
+    match (script_of(&stem, cmdline), comm_name) {
+        (Some(script), Some(comm)) if !script.eq_ignore_ascii_case(&comm) => None,
+        (Some(name), _) | (None, Some(name)) => Some(name),
+        (None, None) => None,
     }
-    let listed = base(listed);
-    (!listed.is_empty() && listed.len() < COMM_MAX).then_some(listed)
 }
 
 /// Whether `id` names an application `open_app` may launch on `os`. Never
 /// a path, a command line or an argument: on macOS a bundle id; on Windows
 /// an image name ending in `.exe` (resolved by the vendor in the system
-/// directories only); on Linux a desktop entry id or a bare command name.
+/// directories only); on Linux a desktop entry id or a bare command name,
+/// never an interpreter's ([`is_interpreter_name`]).
 #[must_use]
 pub fn valid_app_id(os: Os, id: &str) -> bool {
     let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
@@ -310,7 +611,9 @@ pub fn valid_app_id(os: Os, id: &str) -> bool {
             .checked_sub(4)
             .and_then(|at| id.get(at..))
             .is_some_and(|ext| ext.eq_ignore_ascii_case(".exe")),
-        Os::Linux => true,
+        // An interpreter names no application (`python3` is Terminator
+        // and GNOME Secrets alike): never launched, never an id.
+        Os::Linux => !is_interpreter_name(id),
     }
 }
 
@@ -866,12 +1169,16 @@ mod tests {
         assert_eq!(linux_app_id(None, ""), None);
     }
 
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|&w| w.to_owned()).collect()
+    }
+
     #[test]
     fn a_linux_app_without_a_desktop_entry_is_named_by_its_executable() {
         // xterm and foot have no desktop entry on many systems: their id is
         // the executable, so the deny entries match.
-        for (link, listed, want) in [
-            (Some("/usr/bin/xterm"), "XTerm", Some("xterm")),
+        for (link, comm, want) in [
+            (Some("/usr/bin/xterm"), "xterm", Some("xterm")),
             (Some("/usr/bin/foot"), "foot", Some("foot")),
             (
                 Some("/usr/libexec/gnome-terminal-server"),
@@ -880,27 +1187,215 @@ mod tests {
             ),
             // A binary replaced by a package upgrade while it runs.
             (Some("/usr/bin/kitty (deleted)"), "kitty", Some("kitty")),
-            // No readable link: the listed name, unless the kernel may have
-            // cut it.
+            // No readable link: comm, unless the kernel may have cut it.
             (None, "xterm", Some("xterm")),
             (None, "gnome-terminal-", None),
             (Some(""), "", None),
         ] {
             assert_eq!(
-                linux_executable_name(link, listed).as_deref(),
+                linux_executable_name(link, comm, &[]).as_deref(),
                 want,
-                "{link:?} {listed:?}"
+                "{link:?} {comm:?}"
             );
         }
-        let id = |link, listed| {
+        let id = |link, comm| {
             linux_app_id(
                 None,
-                &linux_executable_name(link, listed).unwrap_or_default(),
+                &linux_executable_name(link, comm, &[]).unwrap_or_default(),
             )
         };
-        assert!(id(Some("/usr/bin/xterm"), "XTerm").is_some_and(|i| is_denied_app(Os::Linux, &i)));
-        assert!(id(Some("/usr/bin/foot"), "Foot").is_some_and(|i| is_denied_app(Os::Linux, &i)));
+        assert!(id(Some("/usr/bin/xterm"), "xterm").is_some_and(|i| is_denied_app(Os::Linux, &i)));
+        assert!(id(Some("/usr/bin/foot"), "foot").is_some_and(|i| is_denied_app(Os::Linux, &i)));
         assert_eq!(id(None, "gnome-terminal-"), None);
+    }
+
+    /// What `/proc/<pid>` reads for real interpreted apps (Ubuntu 24.04:
+    /// `exe` is the versioned interpreter, a `#!` script's `comm` is the
+    /// script's file name, `cmdline` starts with the `#!` line's program).
+    #[test]
+    fn an_interpreted_linux_app_is_named_by_its_script() {
+        let py = Some("/usr/bin/python3.12");
+        for (link, comm, cmdline, want) in [
+            // Terminator and GNOME Secrets: both `python3.12` by exe.
+            (
+                py,
+                "terminator",
+                args(&["/usr/bin/python3", "/usr/bin/terminator"]),
+                Some("terminator"),
+            ),
+            (
+                py,
+                "secrets",
+                args(&["/usr/bin/python3", "/usr/bin/secrets"]),
+                Some("secrets"),
+            ),
+            // Started by hand through the interpreter: comm is python3.
+            (
+                py,
+                "python3",
+                args(&["python3", "-u", "/usr/bin/terminator", "--new-tab"]),
+                Some("terminator"),
+            ),
+            // `-m module`: the module, options before it skipped.
+            (
+                py,
+                "python3",
+                args(&["python3", "-W", "ignore", "-m", "foo", "--x"]),
+                Some("foo"),
+            ),
+            (
+                py,
+                "python3",
+                args(&["python3", "-m", "pkg.app"]),
+                Some("pkg.app"),
+            ),
+            // A `.py` script whose comm keeps the suffix.
+            (
+                py,
+                "tool.py",
+                args(&["/usr/bin/python3", "/opt/tool/tool.py"]),
+                Some("tool"),
+            ),
+            // A node app: the script, or its directory when generic.
+            (
+                Some("/usr/bin/node"),
+                "node",
+                args(&[
+                    "node",
+                    "--max-old-space-size=4096",
+                    "/opt/notesapp/index.js",
+                ]),
+                Some("notesapp"),
+            ),
+            (
+                Some("/usr/lib/node_modules/.bin/node22"),
+                "node",
+                args(&["node", "-r", "dotenv/config", "/srv/bridge.mjs"]),
+                Some("bridge"),
+            ),
+            // java -jar, gjs -m, a bash script.
+            (
+                Some("/usr/lib/jvm/java-21/bin/java"),
+                "java",
+                args(&[
+                    "java",
+                    "-Xmx1g",
+                    "-cp",
+                    "lib/*",
+                    "-jar",
+                    "/opt/keystore-explorer/kse.jar",
+                ]),
+                Some("kse"),
+            ),
+            (
+                Some("/usr/bin/gjs-console"),
+                "gjs",
+                args(&["gjs", "-m", "/usr/share/org.example.App/main.js"]),
+                Some("org.example.App"),
+            ),
+            (
+                Some("/usr/bin/bash"),
+                "launch-foo",
+                args(&["/bin/bash", "/usr/local/bin/launch-foo"]),
+                Some("launch-foo"),
+            ),
+        ] {
+            assert_eq!(
+                linux_executable_name(link, comm, &cmdline).as_deref(),
+                want,
+                "{link:?} {comm:?} {cmdline:?}"
+            );
+        }
+        let id = |comm, cmdline: &[&str]| {
+            linux_executable_name(py, comm, &args(cmdline))
+                .and_then(|name| linux_app_id(None, &name))
+        };
+        assert!(
+            id("terminator", &["/usr/bin/python3", "/usr/bin/terminator"])
+                .is_some_and(|i| is_denied_app(Os::Linux, &i))
+        );
+        assert!(
+            id("secrets", &["/usr/bin/python3", "/usr/bin/secrets"])
+                .is_some_and(|i| is_denied_app(Os::Linux, &i))
+        );
+    }
+
+    #[test]
+    fn an_interpreter_with_no_script_name_has_no_id() {
+        let py = Some("/usr/bin/python3.12");
+        for (link, comm, cmdline) in [
+            // Inline code and standard input name nothing.
+            (
+                py,
+                "python3",
+                args(&["python3", "-c", "import x; x.main()"]),
+            ),
+            (py, "python3", args(&["python3", "-"])),
+            (py, "python3", args(&["python3"])),
+            (Some("/usr/bin/bash"), "bash", args(&["bash", "-c", "foo"])),
+            (
+                Some("/usr/bin/node"),
+                "node",
+                args(&["node", "-e", "run()"]),
+            ),
+            // A generic entry point under generic directories only.
+            (
+                Some("/usr/bin/node"),
+                "node",
+                args(&["node", "/usr/lib/main.js"]),
+            ),
+            // The script and comm disagree: fail closed.
+            (
+                py,
+                "notepad",
+                args(&["/usr/bin/python3", "/usr/bin/terminator"]),
+            ),
+            // No readable cmdline, comm cut by the kernel.
+            (py, "a-very-long-nam", Vec::new()),
+            // No link, an interpreter's comm, no script.
+            (None, "python3.12", Vec::new()),
+            // The script is itself an interpreter's name.
+            (py, "python3", args(&["python3", "/usr/bin/node"])),
+        ] {
+            assert_eq!(
+                linux_executable_name(link, comm, &cmdline),
+                None,
+                "{link:?} {comm:?} {cmdline:?}"
+            );
+        }
+        // Whatever reached it, an interpreter is never an id.
+        for name in [
+            "python3.12",
+            "python3",
+            "node",
+            "bash",
+            "sh",
+            "java",
+            "lua5.4",
+            "Perl",
+        ] {
+            assert!(is_interpreter_name(name), "{name}");
+            assert_eq!(linux_app_id(None, name), None, "{name}");
+            assert!(!valid_app_id(Os::Linux, name), "{name}");
+            assert!(unnameable_app(name).is_some(), "{name}");
+        }
+        // A desktop entry id still wins, and ordinary names are not
+        // interpreters.
+        assert_eq!(
+            linux_app_id(Some("org.gnome.World.Secrets.desktop"), "python3.12").as_deref(),
+            Some("org.gnome.World.Secrets")
+        );
+        for name in [
+            "gedit",
+            "st",
+            "nodepad",
+            "shotwell",
+            "javelin",
+            "org.gnome.Shell",
+        ] {
+            assert!(!is_interpreter_name(name), "{name}");
+            assert_eq!(unnameable_app(name), None, "{name}");
+        }
     }
 
     #[test]
