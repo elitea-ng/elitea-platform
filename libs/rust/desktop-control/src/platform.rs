@@ -182,7 +182,7 @@ const INSERTING_PANEL_KEYS: &[&str] = &[".", ";", "period", "semicolon", "v"];
 /// Whether a chord may put text into the focused element: a character
 /// (alone, with Shift, with Alt, or with Control+Alt, which is `AltGr` on
 /// Windows), Space, paste (Control+V, Command+V, Shift+Insert, the `paste`
-/// key), a panel that inserts what is picked in it ([`INSERTING_PANEL_KEYS`]
+/// key), a panel that inserts what is picked in it (`INSERTING_PANEL_KEYS`
 /// with Command, which is the Windows key there: Win+. and Win+; open the
 /// emoji and symbol panel, Win+V the clipboard history) or any key this
 /// list does not know. A Control or Command shortcut on any other
@@ -333,7 +333,7 @@ const LINUX_INTERPRETERS: &[&str] = &[
 ];
 
 /// Whether `name` (an executable's basename) is an interpreter or runtime
-/// ([`LINUX_INTERPRETERS`]), ignoring a version suffix and ASCII case. Such
+/// (`LINUX_INTERPRETERS`), ignoring a version suffix and ASCII case. Such
 /// a name is never an application id on Linux: it says nothing about the
 /// app (Terminator and GNOME Secrets both run as `python3.12`).
 #[must_use]
