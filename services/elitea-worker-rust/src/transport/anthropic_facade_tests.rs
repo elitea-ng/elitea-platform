@@ -380,6 +380,18 @@ async fn native_messages_request_preserves_cache_thinking_identity_and_completio
     assert_eq!(body["system"][0]["type"], "text");
     assert_eq!(body["system"][0]["text"], "review carefully\nbe concise");
     assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    // #1610: the conversation carries the second breakpoint, on the last
+    // message's last block, and no other block does.
+    let messages = body["messages"].as_array().expect("messages");
+    let last = messages.last().expect("a message");
+    let blocks = last["content"].as_array().expect("blocks");
+    assert_eq!(blocks.last().expect("a block")["cache_control"]["type"], "ephemeral");
+    let marked = messages
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .filter(|block| block.get("cache_control").is_some())
+        .count();
+    assert_eq!(marked, 1);
     assert_eq!(body["thinking"]["type"], "enabled");
     assert_eq!(body["thinking"]["budget_tokens"], 4_096);
     assert_eq!(body["temperature"], 1.0);
