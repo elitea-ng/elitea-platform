@@ -70,6 +70,12 @@ pub enum DesktopError {
     /// posted nothing more (`interrupted`).
     #[error("interrupted: the person paused or stopped the session")]
     Interrupted,
+    /// The user-active guard's input watch stopped on its own (the display
+    /// went away, the OS dropped its hook), so the person's input could no
+    /// longer pause the agent: every act is refused until a new watch runs
+    /// (`user_active_guard_unavailable`).
+    #[error("user-active guard unavailable: {0}")]
+    UserActiveGuardUnavailable(String),
 }
 
 impl DesktopError {
@@ -95,6 +101,7 @@ impl DesktopError {
             Self::PlatformNotSupported => "platform_not_supported",
             Self::Internal(_) => "internal",
             Self::Interrupted => "interrupted",
+            Self::UserActiveGuardUnavailable(_) => "user_active_guard_unavailable",
         }
     }
 
@@ -152,6 +159,10 @@ mod tests {
             (DesktopError::PlatformNotSupported, "platform_not_supported"),
             (DesktopError::Internal(String::new()), "internal"),
             (DesktopError::Interrupted, "interrupted"),
+            (
+                DesktopError::UserActiveGuardUnavailable(String::new()),
+                "user_active_guard_unavailable",
+            ),
         ];
         for (err, code) in all {
             assert_eq!(err.code(), code);

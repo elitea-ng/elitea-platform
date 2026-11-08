@@ -183,10 +183,15 @@ pub(crate) fn is_xtest_device(name: &[u8]) -> bool {
 
 struct X11Watch {
     stop: Arc<AtomicBool>,
+    alive: crate::input::Alive,
     thread: Option<JoinHandle<()>>,
 }
 
-impl InputWatch for X11Watch {}
+impl InputWatch for X11Watch {
+    fn alive(&self) -> bool {
+        self.alive.get()
+    }
+}
 
 impl Drop for X11Watch {
     fn drop(&mut self) {
@@ -202,6 +207,7 @@ pub(crate) fn watch(
     marker: SyntheticMarker,
     filter: InputFilter,
     sink: SignalSink,
+    alive: crate::input::Alive,
 ) -> Result<Box<dyn InputWatch>, DesktopError> {
     if let Some(why) = crate::linux::guard_unavailable() {
         return Err(DesktopError::PermissionDenied(wayland_refusal(why)));
@@ -209,12 +215,19 @@ pub(crate) fn watch(
     let watcher = Watcher::open()?;
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
+    let living = alive.guard();
     let thread = std::thread::Builder::new()
         .name("elitea-computer-input".into())
-        .spawn(move || watcher.run(marker, &filter, &sink, &stopping))
+        .spawn(move || {
+            // Cleared however the thread ends: the display going away
+            // ends the guard, and the driver refuses every act after.
+            let _living = living;
+            watcher.run(marker, &filter, &sink, &stopping);
+        })
         .map_err(|e| DesktopError::Internal(format!("input watch thread: {e}")))?;
     Ok(Box::new(X11Watch {
         stop,
+        alive,
         thread: Some(thread),
     }))
 }
@@ -323,7 +336,8 @@ impl Watcher {
                     std::thread::sleep(PASS);
                     continue;
                 }
-                // The display went away: nothing more to hear.
+                // The display went away: nothing more to hear. The thread
+                // ends and the watch reads as dead (`InputWatch::alive`).
                 Err(_) => return,
             };
             let (reading, source) = match &event {

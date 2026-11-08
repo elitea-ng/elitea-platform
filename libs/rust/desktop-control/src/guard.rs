@@ -101,6 +101,11 @@ pub(crate) trait HostState {
     fn screen(&self) -> ScreenStatus;
     /// Whether macOS secure event input is on (a password prompt anywhere).
     fn secure_input(&self) -> bool;
+    /// Whether the input watch this driver last started has died (its
+    /// thread ended on its own). `false` while it runs, and before any.
+    fn guard_dead(&self) -> bool {
+        false
+    }
 }
 
 /// The gate of every call except `permissions`: `screen_unavailable`.
@@ -112,10 +117,15 @@ pub(crate) fn before_call(host: &impl HostState) -> Result<(), DesktopError> {
 }
 
 /// The gate of every act (`act` of any kind, `type_text`, `key`): the
-/// screen, then secure input. It runs before any ref is resolved, so no act
-/// kind gets past secure input.
+/// screen, then the user-active guard's watch, then secure input. It runs
+/// before any ref is resolved, so no act kind gets past them.
 pub(crate) fn before_act(host: &impl HostState) -> Result<(), DesktopError> {
     before_call(host)?;
+    if host.guard_dead() {
+        return Err(DesktopError::UserActiveGuardUnavailable(
+            "the input watch stopped, so the person's input can no longer pause the agent".into(),
+        ));
+    }
     if host.secure_input() {
         return Err(DesktopError::SecureFieldRefused);
     }
@@ -234,6 +244,7 @@ mod tests {
         screen: ScreenStatus,
         secure: bool,
         secure_reads: Cell<u32>,
+        guard: crate::input::GuardState,
     }
 
     impl Stub {
@@ -242,6 +253,7 @@ mod tests {
                 screen,
                 secure,
                 secure_reads: Cell::new(0),
+                guard: crate::input::GuardState::default(),
             }
         }
     }
@@ -254,6 +266,28 @@ mod tests {
             self.secure_reads.set(self.secure_reads.get() + 1);
             self.secure
         }
+        fn guard_dead(&self) -> bool {
+            self.guard.dead()
+        }
+    }
+
+    /// A fake watch: the driver's record of it, and the thread guard the
+    /// test drops to end it.
+    #[test]
+    fn a_dead_watch_refuses_every_act_but_not_reads() {
+        let host = Stub::new(ScreenStatus::available(), false);
+        let alive = host.guard.start();
+        let thread = alive.guard();
+        assert_eq!(before_act(&host), Ok(()));
+        drop(thread);
+        assert_eq!(before_call(&host), Ok(()));
+        assert_eq!(
+            before_act(&host).unwrap_err().code(),
+            "user_active_guard_unavailable"
+        );
+        // A new watch acts again.
+        let _next = host.guard.start().guard();
+        assert_eq!(before_act(&host), Ok(()));
     }
 
     #[test]

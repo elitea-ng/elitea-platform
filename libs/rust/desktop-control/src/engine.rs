@@ -60,10 +60,13 @@ const FOCUS_SEARCH_DEPTH: u8 = 30;
 type Payload = (ad::WindowInfo, Option<String>);
 
 /// Starts an OS's user-active watch.
+/// The thread it starts holds the [`crate::input::Alive`]'s guard, so the
+/// driver sees the watch die.
 pub(crate) type WatchFn = fn(
     SyntheticMarker,
     crate::InputFilter,
     crate::SignalSink,
+    crate::input::Alive,
 ) -> Result<Box<dyn crate::InputWatch>, DesktopError>;
 
 /// The OS reads and the input watch the engine leaves to its OS file.
@@ -96,6 +99,7 @@ pub struct NativeDriver {
     refs: Mutex<RefRegistry<ad::RefEntry, Payload>>,
     own: OwnApps,
     halt: Mutex<Option<crate::Halt>>,
+    guard: crate::input::GuardState,
 }
 
 impl NativeDriver {
@@ -106,6 +110,7 @@ impl NativeDriver {
             refs: Mutex::new(RefRegistry::new(HELD_SNAPSHOTS)),
             own: OwnApps::default(),
             halt: Mutex::new(None),
+            guard: crate::input::GuardState::default(),
         }
     }
 
@@ -513,6 +518,10 @@ impl HostState for NativeDriver {
     fn secure_input(&self) -> bool {
         false
     }
+
+    fn guard_dead(&self) -> bool {
+        self.guard.dead()
+    }
 }
 
 impl DesktopDriver for NativeDriver {
@@ -894,7 +903,7 @@ impl DesktopDriver for NativeDriver {
         filter: crate::InputFilter,
         sink: crate::SignalSink,
     ) -> Result<Box<dyn crate::InputWatch>, DesktopError> {
-        (self.hooks.watch)(self.hooks.marker, filter, sink)
+        (self.hooks.watch)(self.hooks.marker, filter, sink, self.guard.start())
     }
 
     fn set_halt(&self, halt: Option<crate::Halt>) {

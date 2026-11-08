@@ -174,10 +174,15 @@ pub(crate) fn to_input(
 
 struct WinWatch {
     stop: Arc<AtomicBool>,
+    alive: crate::input::Alive,
     thread: Option<JoinHandle<()>>,
 }
 
-impl InputWatch for WinWatch {}
+impl InputWatch for WinWatch {
+    fn alive(&self) -> bool {
+        self.alive.get()
+    }
+}
 
 impl Drop for WinWatch {
     fn drop(&mut self) {
@@ -193,17 +198,24 @@ pub(crate) fn watch(
     marker: SyntheticMarker,
     filter: InputFilter,
     sink: SignalSink,
+    alive: crate::input::Alive,
 ) -> Result<Box<dyn InputWatch>, DesktopError> {
     let (ready, started) = std::sync::mpsc::channel::<Result<(), DesktopError>>();
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
+    let living = alive.guard();
     let thread = std::thread::Builder::new()
         .name("elitea-computer-input".into())
-        .spawn(move || run(marker, &filter, &sink, &stopping, &ready))
+        .spawn(move || {
+            // Cleared however the thread ends, a dropped hook included.
+            let _living = living;
+            run(marker, &filter, &sink, &stopping, &ready);
+        })
         .map_err(|e| DesktopError::Internal(format!("input watch thread: {e}")))?;
     match started.recv() {
         Ok(Ok(())) => Ok(Box::new(WinWatch {
             stop,
+            alive,
             thread: Some(thread),
         })),
         Ok(Err(error)) => {
@@ -252,9 +264,10 @@ fn run(
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::sleep(PASS / 10),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                std::thread::sleep(PASS);
-            }
+            // The hook's channel closed: the OS removed the hook (or its
+            // thread ended), so nothing more will be heard. End the thread:
+            // the watch reads as dead and the driver refuses every act.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
         }
     }
     drop(hook);

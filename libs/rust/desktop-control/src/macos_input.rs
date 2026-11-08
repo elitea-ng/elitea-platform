@@ -89,10 +89,15 @@ fn mode(name: &'static str) -> CFString {
 struct MacWatch {
     run_loop: CFRunLoop,
     stop: Arc<AtomicBool>,
+    alive: crate::input::Alive,
     thread: Option<JoinHandle<()>>,
 }
 
-impl InputWatch for MacWatch {}
+impl InputWatch for MacWatch {
+    fn alive(&self) -> bool {
+        self.alive.get()
+    }
+}
 
 impl Drop for MacWatch {
     fn drop(&mut self) {
@@ -110,18 +115,24 @@ pub(crate) fn watch(
     marker: SyntheticMarker,
     filter: InputFilter,
     sink: SignalSink,
+    alive: crate::input::Alive,
 ) -> Result<Box<dyn InputWatch>, DesktopError> {
     let (ready, started) = mpsc::channel::<Result<CFRunLoop, DesktopError>>();
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
+    let living = alive.guard();
     let thread = std::thread::Builder::new()
         .name("elitea-computer-input".into())
-        .spawn(move || run(marker, &filter, &sink, &stopping, &ready))
+        .spawn(move || {
+            let _living = living;
+            run(marker, &filter, &sink, &stopping, &ready);
+        })
         .map_err(|e| DesktopError::Internal(format!("input watch thread: {e}")))?;
     match started.recv() {
         Ok(Ok(run_loop)) => Ok(Box::new(MacWatch {
             run_loop,
             stop,
+            alive,
             thread: Some(thread),
         })),
         Ok(Err(error)) => {
