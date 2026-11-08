@@ -1357,6 +1357,24 @@ impl AgentHost {
             .await
     }
 
+    /// Another agent of the thread starts a turn (tests): only that agent's
+    /// check is cancelled.
+    #[cfg(test)]
+    pub(super) fn idle_turn_started(
+        &self,
+        workspace_id: &str,
+        conversation: &str,
+        application_id: i64,
+    ) {
+        self.idle.turn_started(&AgentKey {
+            thread: ThreadKey {
+                workspace_id: workspace_id.to_owned(),
+                conversation: conversation.to_owned(),
+            },
+            application_id,
+        });
+    }
+
     /// The app is quitting: no idle compaction starts or finishes.
     pub fn cancel_idle_compactions(&self) {
         self.idle.cancel_all();
