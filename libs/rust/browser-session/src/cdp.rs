@@ -25,28 +25,63 @@ use tokio::sync::{broadcast, oneshot};
 /// this; a larger record means something is wrong, and the connection ends.
 pub const MAX_MESSAGE_BYTES: usize = 128 << 20;
 
+/// JSON-RPC's "Internal error": the engine failed in itself. Protocol
+/// errors about the page (no such node, not attached) use other codes.
+pub const INTERNAL_ERROR: i64 = -32603;
+
 /// How long one command may take before it fails (`timeout`).
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 const EVENT_CAPACITY: usize = 4096;
 
 tokio::task_local! {
-    /// The unsupported-answer count of the tool call running on this task
-    /// ([`scoped_unsupported`]). Background traffic (screencast acks, the
-    /// page tracker's replies, `Fetch.enable` on new targets) runs on tasks
-    /// of its own, outside any scope, so it is never counted against a
-    /// call.
-    static CALL_UNSUPPORTED: Arc<AtomicU64>;
+    /// The faults of the tool call running on this task
+    /// ([`scoped_faults`]). Background traffic (screencast acks, the page
+    /// tracker's replies, `Fetch.enable` on new targets) runs on tasks of
+    /// its own, outside any scope, so it is never counted against a call.
+    static CALL_FAULTS: Arc<Faults>;
 }
 
-/// Run `future` (one tool call) and count the commands IT sent that the
-/// engine answered as unsupported ([`is_unsupported`]). Only commands
-/// awaited on this task count: a command another task sends at the same
-/// time does not, even on the same connection.
-pub async fn scoped_unsupported<F: std::future::Future>(future: F) -> (F::Output, u64) {
-    let counter = Arc::new(AtomicU64::new(0));
-    let output = CALL_UNSUPPORTED.scope(Arc::clone(&counter), future).await;
-    (output, counter.load(Ordering::Relaxed))
+#[derive(Default)]
+struct Faults {
+    unsupported: AtomicU64,
+    timeouts: AtomicU64,
+    closed: AtomicU64,
+    engine_errors: AtomicU64,
+}
+
+/// What went wrong with the commands one tool call sent itself.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CallFaults {
+    /// Answered as unknown or unsupported ([`is_unsupported`]).
+    pub unsupported: u64,
+    /// Not answered within [`COMMAND_TIMEOUT`].
+    pub timeouts: u64,
+    /// Failed because the connection was gone.
+    pub closed: u64,
+    /// Answered with JSON-RPC's internal error ([`INTERNAL_ERROR`]): the
+    /// engine's own fault, not the page's.
+    pub engine_errors: u64,
+}
+
+/// Run `future` (one tool call) and count the faults of the commands IT
+/// sent. Only commands awaited on this task count: a command another task
+/// sends at the same time does not, even on the same connection.
+pub async fn scoped_faults<F: std::future::Future>(future: F) -> (F::Output, CallFaults) {
+    let faults = Arc::new(Faults::default());
+    let output = CALL_FAULTS.scope(Arc::clone(&faults), future).await;
+    let counted = CallFaults {
+        unsupported: faults.unsupported.load(Ordering::Relaxed),
+        timeouts: faults.timeouts.load(Ordering::Relaxed),
+        closed: faults.closed.load(Ordering::Relaxed),
+        engine_errors: faults.engine_errors.load(Ordering::Relaxed),
+    };
+    (output, counted)
+}
+
+/// Count a fault against the call running on this task, if any.
+fn count_fault(pick: fn(&Faults) -> &AtomicU64) {
+    let _ = CALL_FAULTS.try_with(|faults| pick(faults).fetch_add(1, Ordering::Relaxed));
 }
 
 /// One CDP event.
@@ -88,7 +123,7 @@ struct Shared {
     events: broadcast::Sender<Arc<Event>>,
     /// Commands the engine answered as a method or feature it does not
     /// implement ([`is_unsupported`]), over the whole connection, for the
-    /// record. `auto` switches on [`scoped_unsupported`], not this.
+    /// record. `auto` switches on [`scoped_faults`], not this.
     unsupported: AtomicU64,
 }
 
@@ -155,6 +190,28 @@ impl Connection {
         method: &str,
         params: Value,
     ) -> Result<Value, CdpError> {
+        let result = self.exchange(session, method, params).await;
+        // Outside a scope (background traffic) there is nothing to count.
+        match &result {
+            Err(CdpError::Protocol { code, message }) if is_unsupported(*code, message) => {
+                count_fault(|faults| &faults.unsupported);
+            }
+            Err(CdpError::Protocol { code, .. }) if *code == INTERNAL_ERROR => {
+                count_fault(|faults| &faults.engine_errors);
+            }
+            Err(CdpError::Timeout) => count_fault(|faults| &faults.timeouts),
+            Err(CdpError::Closed) => count_fault(|faults| &faults.closed),
+            _ => {}
+        }
+        result
+    }
+
+    async fn exchange(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, CdpError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (reply, answer) = oneshot::channel();
         {
@@ -178,21 +235,14 @@ impl Connection {
             self.forget(id);
             return Err(CdpError::Closed);
         }
-        let result = match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
+        match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CdpError::Closed),
             Err(_) => {
                 self.forget(id);
                 Err(CdpError::Timeout)
             }
-        };
-        if let Err(CdpError::Protocol { code, message }) = &result
-            && is_unsupported(*code, message)
-        {
-            // Outside a scope (background traffic) there is nothing to count.
-            let _ = CALL_UNSUPPORTED.try_with(|counter| counter.fetch_add(1, Ordering::Relaxed));
         }
-        result
     }
 
     fn forget(&self, id: u64) {
@@ -483,7 +533,7 @@ mod tests {
         // A tool call's scope counts its own commands only: background
         // traffic on another task, at the same time, is not the call's.
         let background = connection.clone();
-        let ((), during) = scoped_unsupported(async {
+        let ((), during) = scoped_faults(async {
             let noise = tokio::spawn(async move {
                 let _ = background
                     .call(None, "Page.screencastFrameAck", json!({}))
@@ -493,8 +543,11 @@ mod tests {
             let _ = connection.call(None, "Runtime.evaluate", json!({})).await;
         })
         .await;
-        assert_eq!(during, 1, "only the call's own unsupported answer counts");
-        let ((), quiet) = scoped_unsupported(async {
+        assert_eq!(
+            during.unsupported, 1,
+            "only the call's own unsupported answer counts"
+        );
+        let ((), quiet) = scoped_faults(async {
             let background = connection.clone();
             tokio::spawn(async move {
                 let _ = background
@@ -505,8 +558,69 @@ mod tests {
             .unwrap();
         })
         .await;
-        assert_eq!(quiet, 0, "background traffic counted against the call");
+        assert_eq!(
+            quiet,
+            CallFaults::default(),
+            "background traffic counted against the call"
+        );
         assert_eq!(connection.unsupported_errors(), 4);
+    }
+
+    /// A call's internal errors, unanswered commands and a closed pipe are
+    /// counted against it; page-side protocol errors are not.
+    #[tokio::test(start_paused = true)]
+    async fn a_calls_engine_faults_are_counted() {
+        let (client_write, engine_read) = tokio::io::duplex(1 << 16);
+        let (engine_write, client_read) = tokio::io::duplex(1 << 16);
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(engine_read);
+            let mut engine_write = engine_write;
+            let mut record = Vec::new();
+            while reader.read_until(0, &mut record).await.unwrap_or(0) > 0 {
+                record.pop();
+                let command: Value = serde_json::from_slice(&record).unwrap();
+                record.clear();
+                let error = match command["method"].as_str() {
+                    Some("Hang.up") => break,
+                    Some("Never.answer") => continue,
+                    Some("Engine.fail") => json!({"code": -32603, "message": "Internal error"}),
+                    _ => json!({"code": -32000, "message": "No node with given id found"}),
+                };
+                let mut bytes =
+                    serde_json::to_vec(&json!({"id": command["id"], "error": error})).unwrap();
+                bytes.push(0);
+                engine_write.write_all(&bytes).await.unwrap();
+            }
+        });
+        let connection = Connection::new(client_read, client_write);
+        let ((), page_side) = scoped_faults(async {
+            let _ = connection.call(None, "DOM.resolveNode", json!({})).await;
+        })
+        .await;
+        assert_eq!(page_side, CallFaults::default());
+        let ((), faults) = scoped_faults(async {
+            let _ = connection.call(None, "Engine.fail", json!({})).await;
+            assert_eq!(
+                connection.call(None, "Never.answer", json!({})).await,
+                Err(CdpError::Timeout)
+            );
+            assert_eq!(
+                connection.call(None, "Hang.up", json!({})).await,
+                Err(CdpError::Closed)
+            );
+            // After the end, a command fails at once, and still counts.
+            let _ = connection.call(None, "Page.enable", json!({})).await;
+        })
+        .await;
+        assert_eq!(
+            faults,
+            CallFaults {
+                unsupported: 0,
+                timeouts: 1,
+                closed: 2,
+                engine_errors: 1,
+            }
+        );
     }
 
     #[tokio::test]

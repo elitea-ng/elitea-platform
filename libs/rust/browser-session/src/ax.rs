@@ -58,6 +58,40 @@ impl Element {
         is_secure_field(self.attribute("type"), self.attribute("autocomplete"))
     }
 
+    /// A link, button or field by its tag or ARIA role: something an
+    /// accessibility tree gives a ref. `auto` counts these to tell a page
+    /// with controls from one of text alone, without a page script.
+    #[must_use]
+    pub fn is_control(&self) -> bool {
+        let tag = match self.local_name.as_str() {
+            "a" | "area" => self.attribute("href").is_some(),
+            "button" | "select" | "textarea" | "summary" => true,
+            "input" => !self
+                .attribute("type")
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("hidden")),
+            _ => false,
+        };
+        tag || self.attribute("role").is_some_and(|role| {
+            matches!(
+                role,
+                "button"
+                    | "link"
+                    | "textbox"
+                    | "searchbox"
+                    | "combobox"
+                    | "checkbox"
+                    | "tab"
+                    | "menuitem"
+            )
+        }) || self
+            .attribute("tabindex")
+            .and_then(|index| index.trim().parse::<i64>().ok())
+            .is_some_and(|index| index >= 0)
+            || self
+                .attribute("contenteditable")
+                .is_some_and(|value| !value.eq_ignore_ascii_case("false"))
+    }
+
     fn is_actionable(&self) -> bool {
         self.attribute("tabindex").is_some()
             || self
@@ -535,6 +569,31 @@ mod tests {
         assert_ne!(inner.key, combo.children[0].children[1].key);
         let host = converted.hosts["F2"];
         assert_eq!(converted.handles[host].backend_id, 6);
+    }
+
+    #[test]
+    fn controls_are_links_buttons_and_fields() {
+        let element = |tag: &str, attributes: &[(&str, &str)]| Element {
+            local_name: tag.to_owned(),
+            attributes: attributes
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+            content_frame: None,
+        };
+        assert!(element("a", &[("href", "/x")]).is_control());
+        assert!(!element("a", &[]).is_control(), "an anchor without href");
+        assert!(element("button", &[]).is_control());
+        assert!(element("input", &[("type", "text")]).is_control());
+        assert!(!element("input", &[("type", "HIDDEN")]).is_control());
+        assert!(element("div", &[("role", "link")]).is_control());
+        assert!(element("span", &[("tabindex", "0")]).is_control());
+        // A focus target only for scripts (skip links land on it), not a
+        // control: Chrome's tree gives it no ref.
+        assert!(!element("main", &[("tabindex", "-1")]).is_control());
+        assert!(!element("div", &[("tabindex", "x")]).is_control());
+        assert!(!element("p", &[]).is_control());
+        assert!(!element("div", &[("role", "presentation")]).is_control());
     }
 
     #[test]
