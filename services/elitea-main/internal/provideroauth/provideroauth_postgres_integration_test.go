@@ -366,14 +366,17 @@ func TestStaleFenceWriteBackIsRejected(t *testing.T) {
 	ctx := context.Background()
 	partition := refresh.Partition("test", "stale-fence")
 
-	first, ok, err := leases.Acquire(ctx, partition, "main-0", 50*time.Millisecond, 1)
+	// A long lease, expired explicitly below: a 50 ms lease could already be
+	// past when a slow runner reaches the second Acquire, which then (rightly)
+	// takes it over and the "live lease" check flakes.
+	first, ok, err := leases.Acquire(ctx, partition, "main-0", time.Minute, 1)
 	require.NoError(t, err)
 	require.True(t, ok)
 	_, ok, err = leases.Acquire(ctx, partition, "main-1", time.Minute, 1)
 	require.NoError(t, err)
 	require.False(t, ok, "a live lease was taken")
 
-	time.Sleep(100 * time.Millisecond)
+	expireLease(t, pool, partition)
 	second, ok, err := leases.Acquire(ctx, partition, "main-1", time.Minute, 1)
 	require.NoError(t, err)
 	require.True(t, ok, "an expired lease was not taken over")
@@ -405,11 +408,12 @@ func TestStaleFenceGrantWriteLeavesTheGrant(t *testing.T) {
 	partition := refresh.Partition("test", "grant")
 	snap, err := grants.load(ctx, tKey)
 	require.NoError(t, err)
-	stale, _, err := leases.Acquire(ctx, partition, "main-0", time.Millisecond, snap.Generation)
+	stale, _, err := leases.Acquire(ctx, partition, "main-0", time.Minute, snap.Generation)
 	require.NoError(t, err)
-	time.Sleep(10 * time.Millisecond)
-	_, _, err = leases.Acquire(ctx, partition, "main-1", time.Minute, snap.Generation)
+	expireLease(t, pool, partition)
+	_, taken, err := leases.Acquire(ctx, partition, "main-1", time.Minute, snap.Generation)
 	require.NoError(t, err)
+	require.True(t, taken, "an expired lease was not taken over")
 	err = leases.Commit(ctx, stale, func(ctx context.Context, tx pgx.Tx) error {
 		_, err := grants.writeRefreshed(ctx, tx, snap, TokenResponse{AccessToken: "at-stale", RefreshToken: "rt-stale"})
 		return err
@@ -649,4 +653,16 @@ SELECT count(*) FROM elitea_identity.provider_oauth_grants
  WHERE position(convert_to('at-consent', 'UTF8') in access_token_ciphertext) > 0`).Scan(&plaintext))
 		require.Zero(t, plaintext)
 	})
+}
+
+// expireLease moves a partition's lease into the past, as its TTL running
+// out would, without the test depending on how fast the runner is.
+func expireLease(t *testing.T, pool *pgxpool.Pool, partition refresh.PartitionHash) {
+	t.Helper()
+	tag, err := pool.Exec(context.Background(),
+		`UPDATE elitea_runtime.credential_refresh_leases
+		    SET expires_at = clock_timestamp() - interval '1 second'
+		  WHERE partition_hash = $1`, partition[:])
+	require.NoError(t, err)
+	require.EqualValues(t, 1, tag.RowsAffected(), "no lease row to expire")
 }

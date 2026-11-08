@@ -152,6 +152,68 @@ const HAS_TEXT: &str = r"function (needle) {
   return !!body && body.innerText.includes(needle);
 }";
 
+/// What the page shows, read from the DOM (`CdpDriver::page_content`):
+/// whether its body has readable text, and whether it has controls
+/// (links, buttons, fields), looking through open shadow roots too
+/// (web-component pages keep their links there). The walk stops at the
+/// first root with a control or after `limit` elements. A control
+/// counts only when it is rendered (`getClientRects`) and not inside
+/// `aria-hidden="true"`: Chrome's tree leaves both out too, so neither
+/// is a ref Moli missed.
+const CONTENT: &str = r#"function (limit) {
+  const body = document.body;
+  const text = !!body && /[\p{L}\p{N}]/u.test(body.innerText.slice(0, 4000));
+  const controls = 'a[href],button,input:not([type=hidden]),select,textarea,summary,' +
+    '[role=button],[role=link],[role=textbox],[role=searchbox],[role=combobox],' +
+    '[role=checkbox],[role=tab],[role=menuitem],[contenteditable=""],[contenteditable=true]';
+  let found = 0;
+  let seen = 0;
+  const roots = [document];
+  while (roots.length && found === 0 && seen < limit) {
+    const root = roots.pop();
+    for (const el of root.querySelectorAll(controls)) {
+      if (el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"]')) { found += 1; break; }
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    for (let el = walker.nextNode(); el && seen < limit; el = walker.nextNode()) {
+      seen += 1;
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    }
+  }
+  return { text, controls: found };
+}"#;
+
+/// The most elements [`CONTENT`] walks.
+const CONTENT_WALK_LIMIT: u64 = 20_000;
+
+/// [`PageContent`] from the page script's answer (`None`: it did not
+/// run) and whether the snapshot's DOM read had a control. The script sees
+/// layout and `aria-hidden`, so its answer stands; the DOM count, which
+/// sees neither, is a "yes" only when the script did not run (on Moli it
+/// may not).
+#[must_use]
+pub(crate) fn page_content_of(script: Option<&Value>, in_dom: bool) -> PageContent {
+    match script {
+        Some(script) if script["text"].is_boolean() => PageContent {
+            text: script["text"] == true,
+            controls: script["controls"].as_u64().is_some_and(|found| found > 0),
+        },
+        _ => PageContent {
+            text: false,
+            controls: in_dom,
+        },
+    }
+}
+
+/// What `CdpDriver::page_content` found.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PageContent {
+    /// The body has a letter or a digit.
+    pub text: bool,
+    /// The page has a control.
+    pub controls: bool,
+}
+
 /// What a call's start recorded, for its end.
 #[derive(Clone, Copy)]
 struct Gate {
@@ -171,6 +233,9 @@ struct Refs {
     /// Isolated worlds by `(session, frame)`, for `worlds_document`.
     worlds: HashMap<(String, String), i64>,
     worlds_document: u64,
+    /// Controls in the DOM the latest snapshot read (shadow roots and
+    /// frames pierced), for `auto`'s empty-snapshot rule.
+    dom_controls: usize,
 }
 
 /// A browser session's one pane, driven over CDP.
@@ -379,6 +444,29 @@ impl CdpDriver {
         {
             self.loaded(before, NAVIGATION_TIMEOUT).await;
         }
+    }
+
+    /// What the page shows, read from the DOM rather than the
+    /// accessibility tree. `auto` asks after a tree snapshot gave out no
+    /// ref: text or a control there is something the tree should have
+    /// shown. Controls come from two reads: the `DOM.getDocument` the
+    /// latest snapshot already made (shadow roots and frames pierced, no
+    /// page script involved) and a page script, which also tells text.
+    /// Outside the agent's gate, like [`Self::reopen`]; a script that does
+    /// not run finds no text.
+    pub(crate) async fn page_content(&self) -> PageContent {
+        let in_dom = lock(&self.refs).dom_controls > 0;
+        let script = self
+            .main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
+            .await
+            .ok();
+        page_content_of(script.as_ref(), in_dom)
+    }
+
+    /// How many main-frame documents the page has had: an `auto` open
+    /// that timed out reached one when this rose during the call.
+    pub(crate) fn documents(&self) -> u64 {
+        self.tracker.marks().documents
     }
 
     /// The engine's product, `chrome-headless-shell/<version>` or
@@ -932,6 +1020,13 @@ impl CdpDriver {
                 continue;
             }
             let converted = ax::convert(&self.target, &frames);
+            // One element map per CDP session, shared by its frames.
+            let mut counted = HashSet::new();
+            let dom_controls = frames
+                .values()
+                .filter(|tree| counted.insert(tree.session.clone()))
+                .map(|tree| tree.elements.values().filter(|e| e.is_control()).count())
+                .sum();
             let url = self.tracker.lock().url.clone();
             let title = self.title().await;
             let mut refs = lock(&self.refs);
@@ -940,6 +1035,7 @@ impl CdpDriver {
             refs.slot.install(snapshot.clone());
             refs.handles = converted.handles;
             refs.hosts = converted.hosts;
+            refs.dom_controls = dom_controls;
             refs.taken_at = Some((before.documents, before.dom_epoch, input));
             return Ok(snapshot);
         }
