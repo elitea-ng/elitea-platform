@@ -214,16 +214,16 @@ const CONTENT: &str = r#"function (limit) {
   // Custom elements the page never defined: a web-component app whose
   // scripts did not run (Moli on developer.salesforce.com/docs). Only
   // counted while the walk saw no control.
-  let undefined = 0;
+  let undefinedTags = 0;
   if (found === 0 && typeof customElements === 'object' && customElements) {
     const named = new Set();
     for (const el of document.querySelectorAll('*')) {
       if (el.localName.includes('-')) named.add(el.localName);
       if (named.size > 64) break;
     }
-    for (const name of named) if (!customElements.get(name)) undefined += 1;
+    for (const name of named) if (!customElements.get(name)) undefinedTags += 1;
   }
-  return { text, controls: found, undefined };
+  return { text, controls: found, undefined: undefinedTags };
 }"#;
 
 /// The most elements [`CONTENT`] walks.
@@ -1076,7 +1076,15 @@ impl CdpDriver {
             )
             .await
         });
-        let _ = tokio::time::timeout(LAYOUT_REFRESH_LIMIT, paint).await;
+        // A paint past the limit is cancelled, so slow pages never pile up
+        // screenshot calls (a text wait refreshes every 500 ms).
+        let abort = paint.abort_handle();
+        if tokio::time::timeout(LAYOUT_REFRESH_LIMIT, paint)
+            .await
+            .is_err()
+        {
+            abort.abort();
+        }
     }
 
     // ── page info and settling ──────────────────────────────────────────
