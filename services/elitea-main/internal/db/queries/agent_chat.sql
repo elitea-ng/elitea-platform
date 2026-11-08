@@ -3121,7 +3121,7 @@ WITH resolved AS MATERIALIZED (
            FALSE,
            (clock_timestamp() AT TIME ZONE 'UTC'),
            -- Empty: the trigger (tenant/0162) derives it from sent_to_id.
-           sqlc.arg(question_addressed_to)::integer[],
+           COALESCE(sqlc.arg(question_addressed_to)::integer[], '{}'::integer[]),
            COALESCE(sqlc.narg(question_visibility)::text, 'all'),
            -- NULL: the trigger derives it from the author.
            sqlc.narg(question_cause)::text

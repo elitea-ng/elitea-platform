@@ -889,7 +889,7 @@ WITH resolved AS MATERIALIZED (
            FALSE,
            (clock_timestamp() AT TIME ZONE 'UTC'),
            -- Empty: the trigger (tenant/0162) derives it from sent_to_id.
-           $12::integer[],
+           COALESCE($12::integer[], '{}'::integer[]),
            COALESCE($13::text, 'all'),
            -- NULL: the trigger derives it from the author.
            $14::text
