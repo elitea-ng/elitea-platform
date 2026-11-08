@@ -100,9 +100,9 @@ An `auto` session moves to chrome-headless-shell once, and never back, when:
 | `start_failed` | Moli does not start. The session starts on Chrome. |
 | `unsupported_protocol` | A call made Moli answer a CDP method as unknown or unsupported (`-32601`, or a message that says so). |
 | `engine_lost` | Moli exited, or its CDP connection closed, during a call. |
-| `timeout` | Moli did not answer a command of a call in time, or a `browser_open` did not finish loading in time. A `browser_wait` whose condition does not hold is not one. |
+| `timeout` | Moli did not answer a command of a call in time and the call failed, or a navigation (`browser_open`, `browser_reload`, `browser_back`, `browser_forward`) timed out without reaching a new document. A navigation that reached its document and was slow to load, or a `browser_wait` whose condition does not hold, is not one. |
 | `engine_error` | Moli answered a command of a call with JSON-RPC's internal error (`-32603`), and the call failed. |
-| `empty_snapshot` | A tree `browser_snapshot` gave out no ref where the page's DOM has links, buttons or fields, or had no node at all where the page has text, on a second read too. |
+| `empty_snapshot` | A whole tree `browser_snapshot` (not cut by `max_nodes`) gave out no ref where the page has visible links, buttons or fields, or had no node at all where the page has text, on a second read too. |
 
 Only the commands a call sent itself count; background traffic never
 causes a switch.
@@ -116,10 +116,16 @@ On a switch the agent:
 3. writes `notice` with `code` `engine_switched` (the viewer shows it, and
    the supervisor logs it), and
 4. answers a read (`browser_open`, `browser_snapshot`,
-   `browser_screenshot`, `browser_wait`) again on Chrome, and gives an act
-   Moli's own result without running it again, with `engine_switched`
-   `{from: "lite", to: "full", reason, repeated}` added to the result so
-   the agent model knows the page was reloaded.
+   `browser_screenshot`) again on Chrome, and gives an act or a
+   `browser_wait` Moli's own result without running it again, with
+   `engine_switched` `{from: "lite", to: "full", reason, repeated}` added
+   to the result so the agent model knows the page was reloaded. A wait
+   is not run again because the reopened page lost the state it waited on.
+
+The whole call, switch included, keeps within 80 s of its `call`, under
+the 90 s `result` limit. When too little is left to answer a read again,
+the switch still happens and the call gets Moli's result with
+`repeated: false`.
 
 ### `input` events
 

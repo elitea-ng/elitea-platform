@@ -53,6 +53,24 @@ pub const REQUEST_USER_TIMEOUT: Duration = Duration::from_secs(80);
 /// so a page still rendering is not taken for one Moli cannot read.
 const EMPTY_SNAPSHOT_RETRY: Duration = Duration::from_millis(500);
 
+/// How long one call may take, end to end, switch included: the agent
+/// line protocol's 90 s result limit (`CALL_TIMEOUT` in the worker's
+/// `browser_session_agent.rs`), under the worker's own 120 s.
+const CALL_BUDGET: Duration = Duration::from_secs(90);
+
+/// Kept back from [`CALL_BUDGET`] for the answer itself and the steps
+/// that are not bounded here (the switch's bookkeeping, writing the line).
+const CALL_HEADROOM: Duration = Duration::from_secs(10);
+
+/// What Chrome's start and the reopen get at most within a switch: the
+/// rest of the budget goes to the call answered again.
+const SWITCH_REOPEN_LIMIT: Duration = Duration::from_secs(30);
+
+/// The least budget left for a read to be answered again on Chrome.
+/// Below it the switch still happens (the next call runs on Chrome), but
+/// this call gets Moli's answer, marked `repeated: false`.
+const REPEAT_MIN: Duration = Duration::from_secs(10);
+
 /// The notice the agent sends when `auto` moves from Moli to Chrome.
 pub const NOTICE_ENGINE_SWITCHED: &str = "engine_switched";
 
@@ -185,11 +203,14 @@ fn engine_launcher() -> Launcher {
 
 /// The calls an `auto` switch answers again on Chrome: they only read, or
 /// (`browser_open`) set the page the switch reopens anyway. Every other
-/// call may have acted on the page already and is never repeated.
+/// call may have acted on the page already and is never repeated. A
+/// `browser_wait` is not either: it waits on state the page reached on
+/// Moli (a list after a search, a step of a form), which the reopened page
+/// on Chrome no longer has, so waiting again would only time out.
 fn repeatable(name: &str) -> bool {
     matches!(
         name,
-        spec::BROWSER_OPEN | spec::BROWSER_SNAPSHOT | spec::BROWSER_SCREENSHOT | spec::BROWSER_WAIT
+        spec::BROWSER_OPEN | spec::BROWSER_SNAPSHOT | spec::BROWSER_SCREENSHOT
     )
 }
 
@@ -205,6 +226,8 @@ pub struct Session {
     launcher: Launcher,
     /// The protocol's notices (`engine_switched`).
     notices: std::sync::Mutex<Option<mpsc::UnboundedSender<&'static str>>>,
+    /// One call's budget, switch included ([`CALL_BUDGET`]; tests shorten it).
+    call_budget: Duration,
 }
 
 impl Session {
@@ -230,6 +253,7 @@ impl Session {
             started: Mutex::new(None),
             launcher: engine_launcher(),
             notices: std::sync::Mutex::new(None),
+            call_budget: CALL_BUDGET,
         }
     }
 
@@ -272,14 +296,17 @@ impl Session {
 
     /// Move an `auto` session to Chrome: start it, reopen `url` (unless
     /// `reopen` is false: the call answered again opens a page itself), and
-    /// swap the driver. `None` when it could not start (the Moli driver
-    /// stays).
+    /// swap the driver, all within `limit` (a reopen still loading then is
+    /// left to finish on its own). `None` when Chrome could not start in
+    /// time (the Moli driver stays).
     async fn switch(
         &self,
         url: &str,
         reason: SwitchReason,
         reopen: bool,
+        limit: Duration,
     ) -> Option<Arc<CdpDriver>> {
+        let deadline = tokio::time::Instant::now() + limit;
         let (config, control) = {
             let started = self.started.lock().await;
             let started = started.as_ref()?;
@@ -295,9 +322,12 @@ impl Session {
                 Arc::clone(&started.control),
             )
         };
-        let (chrome, _) = self.launch(&config, control).await.ok()?;
+        let (chrome, _) = tokio::time::timeout_at(deadline, self.launch(&config, control))
+            .await
+            .ok()?
+            .ok()?;
         if reopen && (url.starts_with("http://") || url.starts_with("https://")) {
-            chrome.reopen(url).await;
+            let _ = tokio::time::timeout_at(deadline, chrome.reopen(url)).await;
         }
         // Views follow the watch to Chrome's screencast before Moli stops.
         let previous = self.driver.send_replace(Some(Arc::clone(&chrome)));
@@ -319,11 +349,17 @@ impl Session {
 /// not have what a `browser_wait` waits for, a stale ref or a refused
 /// scheme fails the same way on Chrome and never switches. The empty
 /// snapshot rule needs a look at the page and is [`empty_snapshot`].
+///
+/// `reached_document`: a navigation of the call reached a new document.
+/// A load that then did not finish in time is the site's slowness, not
+/// Moli's, and a slow site would otherwise move a session to Chrome for
+/// good; only a navigation that reached no document at all counts.
 fn switch_reason(
     name: &str,
     output: &ToolOutput,
     faults: CallFaults,
     alive: bool,
+    reached_document: bool,
 ) -> Option<SwitchReason> {
     if faults.unsupported > 0 {
         return Some(SwitchReason::Unsupported);
@@ -332,25 +368,44 @@ fn switch_reason(
         return Some(SwitchReason::EngineLost);
     }
     let result = output.result();
-    if faults.timeouts > 0 || (name == spec::BROWSER_OPEN && result["code"] == "timeout") {
+    let failed = result["status"] == "error";
+    // An unanswered command counts only when it failed the call: a wait
+    // loop gets past one timed-out text check, a snapshot past its title.
+    if faults.timeouts > 0 && failed {
+        return Some(SwitchReason::Timeout);
+    }
+    // A navigation that did not load: an open, a reload, a history step.
+    if navigates(name) && result["code"] == "timeout" && !reached_document {
         return Some(SwitchReason::Timeout);
     }
     // The driver tolerates some failed commands (a child frame's tree that
     // went away): an internal error counts only when it failed the call.
-    if faults.engine_errors > 0 && result["status"] == "error" {
+    if faults.engine_errors > 0 && failed {
         return Some(SwitchReason::EngineError);
     }
     None
 }
 
-/// A tree snapshot that gave out no ref, the one kind of answer the empty
-/// snapshot rule looks at.
+/// The calls whose own `timeout` is a navigation that did not load:
+/// open, reload and the history steps alike.
+fn navigates(name: &str) -> bool {
+    matches!(
+        name,
+        spec::BROWSER_OPEN | spec::BROWSER_RELOAD | spec::BROWSER_BACK | spec::BROWSER_FORWARD
+    )
+}
+
+/// A whole tree snapshot that gave out no ref, the one kind of answer the
+/// empty snapshot rule looks at. A snapshot cut by its node budget is not
+/// whole: its refs may sit past the cut.
 fn zero_ref_tree(name: &str, output: &ToolOutput) -> bool {
     let result = output.result();
     name == spec::BROWSER_SNAPSHOT
         && result["status"] == "ok"
         && result.get("snapshot").is_some()
         && result["refs"].as_u64() == Some(0)
+        && result["truncated"] != true
+        && result["omitted"].as_u64().unwrap_or_default() == 0
 }
 
 /// Whether a zero-ref tree snapshot misses what the page's DOM shows: a
@@ -382,7 +437,7 @@ fn mark_switched(output: ToolOutput, reason: SwitchReason, repeated: bool) -> To
             });
             if !repeated {
                 switched["note"] = json!(
-                    "this call ran on lite before the switch and was not repeated; the page was reopened on full: snapshot again before the next act"
+                    "this call ran on lite before the switch and was not repeated; the page was reopened on full (or is still loading there): snapshot again before the next call"
                 );
             }
             object.insert("engine_switched".to_owned(), switched);
@@ -500,6 +555,8 @@ impl Backend for Session {
                 .await
                 .as_ref()
                 .is_some_and(|started| started.policy == Policy::Auto);
+        let started_at = tokio::time::Instant::now();
+        let documents = driver.documents();
         // Only the call's own commands count: screencast acks, the page
         // tracker and `Fetch.enable` on new targets run on tasks of their
         // own.
@@ -507,7 +564,8 @@ impl Backend for Session {
         if !watching_moli {
             return output;
         }
-        let mut reason = switch_reason(name, &output, faults, driver.is_alive());
+        let reached = || driver.documents() > documents;
+        let mut reason = switch_reason(name, &output, faults, driver.is_alive(), reached());
         // The page check is one more engine round trip, only for a tree
         // snapshot that gave out no ref. A page still rendering gets one
         // more read on Moli before it counts.
@@ -517,7 +575,7 @@ impl Backend for Session {
         {
             tokio::time::sleep(EMPTY_SNAPSHOT_RETRY).await;
             let (again, faults) = scoped_faults(dispatch(driver.as_ref(), name, args)).await;
-            reason = switch_reason(name, &again, faults, driver.is_alive());
+            reason = switch_reason(name, &again, faults, driver.is_alive(), reached());
             if reason.is_none()
                 && zero_ref_tree(name, &again)
                 && empty_snapshot(&again, driver.page_content().await)
@@ -530,16 +588,37 @@ impl Backend for Session {
             return output;
         };
         let (url, _) = driver.location();
-        // An open is answered again with its own URL: reopening the old
-        // one first would only spend the call's time.
-        let reopen = name != spec::BROWSER_OPEN;
-        match self.switch(&url, reason, reopen).await {
+        // The call's budget: what Moli used is spent, and headroom is kept
+        // for the answer. What is left bounds the switch and the read
+        // answered again.
+        let deadline = started_at + self.call_budget.saturating_sub(CALL_HEADROOM);
+        let left = || deadline.saturating_duration_since(tokio::time::Instant::now());
+        // A read answered again needs time after the switch; without it
+        // the switch still happens, but this call keeps Moli's answer.
+        let repeat = repeatable(name) && left() > REPEAT_MIN;
+        // An open answered again opens its own URL: reopening the old one
+        // first would only spend the budget.
+        let reopen = !(repeat && name == spec::BROWSER_OPEN);
+        let switch_limit = if repeat {
+            left().saturating_sub(REPEAT_MIN).min(SWITCH_REOPEN_LIMIT)
+        } else {
+            left().min(SWITCH_REOPEN_LIMIT)
+        };
+        match self.switch(&url, reason, reopen, switch_limit).await {
             // A read again, on Chrome: the page was reopened, so a ref call
             // starts from a fresh snapshot (`stale_ref` tells the agent).
-            Some(chrome) if repeatable(name) => {
-                mark_switched(dispatch(chrome.as_ref(), name, args).await, reason, true)
+            Some(chrome) if repeat => {
+                match tokio::time::timeout_at(deadline, dispatch(chrome.as_ref(), name, args)).await
+                {
+                    Ok(again) => mark_switched(again, reason, true),
+                    // Chrome did not answer within the budget: Moli's
+                    // answer, and the next call runs on Chrome.
+                    Err(_) => mark_switched(output, reason, false),
+                }
             }
-            // An act already ran (or half ran) on Moli: never twice.
+            // An act already ran (or half ran) on Moli: never twice. A wait
+            // is not run again either, nor a read the budget has no room
+            // left for.
             Some(_) => mark_switched(output, reason, false),
             None => output,
         }
@@ -718,34 +797,37 @@ mod tests {
     fn auto_switches_on_moli_faults_only() {
         let ok = ToolOutput::Json(json!({"status": "ok"}));
         let none = CallFaults::default();
-        assert_eq!(switch_reason(spec::BROWSER_CLICK, &ok, none, true), None);
+        assert_eq!(
+            switch_reason(spec::BROWSER_CLICK, &ok, none, true, false),
+            None
+        );
         let unsupported = CallFaults {
             unsupported: 1,
             ..none
         };
         assert_eq!(
-            switch_reason(spec::BROWSER_CLICK, &ok, unsupported, true),
+            switch_reason(spec::BROWSER_CLICK, &ok, unsupported, true, false),
             Some(SwitchReason::Unsupported)
         );
         // The engine gone, by its process or its connection.
         assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &ok, none, false),
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, none, false, false),
             Some(SwitchReason::EngineLost)
         );
         let closed = CallFaults { closed: 1, ..none };
         assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &ok, closed, true),
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, closed, true, false),
             Some(SwitchReason::EngineLost)
         );
         let timeout = ToolOutput::Json(json!({"status": "error", "code": "timeout"}));
         // An open that did not load in time is Moli's; a wait whose
         // condition never held is the page's, on any engine.
         assert_eq!(
-            switch_reason(spec::BROWSER_OPEN, &timeout, none, true),
+            switch_reason(spec::BROWSER_OPEN, &timeout, none, true, false),
             Some(SwitchReason::Timeout)
         );
         assert_eq!(
-            switch_reason(spec::BROWSER_WAIT, &timeout, none, true),
+            switch_reason(spec::BROWSER_WAIT, &timeout, none, true, false),
             None
         );
         let unanswered = CallFaults {
@@ -753,27 +835,60 @@ mod tests {
             ..none
         };
         assert_eq!(
-            switch_reason(spec::BROWSER_WAIT, &timeout, unanswered, true),
+            switch_reason(spec::BROWSER_WAIT, &timeout, unanswered, true, false),
             Some(SwitchReason::Timeout)
         );
+        // Review 2: an unanswered command the call got past (a wait's
+        // timed-out text check, a snapshot's title) did not fail it.
+        for name in [spec::BROWSER_WAIT, spec::BROWSER_SNAPSHOT] {
+            assert_eq!(
+                switch_reason(name, &ok, unanswered, true, false),
+                None,
+                "{name}"
+            );
+        }
+        // Review 7: a reload or a history step that did not load is the
+        // same as an open that did not.
+        for name in [
+            spec::BROWSER_OPEN,
+            spec::BROWSER_RELOAD,
+            spec::BROWSER_BACK,
+            spec::BROWSER_FORWARD,
+        ] {
+            assert_eq!(
+                switch_reason(name, &timeout, none, true, false),
+                Some(SwitchReason::Timeout),
+                "{name}"
+            );
+            // Review 6: one that reached a document and was slow to load
+            // is the site's.
+            assert_eq!(
+                switch_reason(name, &timeout, none, true, true),
+                None,
+                "{name}"
+            );
+        }
         let internal = ToolOutput::Json(json!({"status": "error", "code": "internal"}));
         let engine_error = CallFaults {
             engine_errors: 1,
             ..none
         };
         assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &internal, engine_error, true),
+            switch_reason(spec::BROWSER_SNAPSHOT, &internal, engine_error, true, false),
             Some(SwitchReason::EngineError)
         );
         // An internal error the driver got past (a child frame's tree) did
         // not fail the call.
         assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &ok, engine_error, true),
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, engine_error, true, false),
             None
         );
         // A page-side refusal is not Moli's.
         let stale = ToolOutput::Json(json!({"status": "error", "code": "stale_ref"}));
-        assert_eq!(switch_reason(spec::BROWSER_CLICK, &stale, none, true), None);
+        assert_eq!(
+            switch_reason(spec::BROWSER_CLICK, &stale, none, true, false),
+            None
+        );
     }
 
     #[test]
@@ -789,6 +904,31 @@ mod tests {
             "content": framed("# snapshot s1\n- heading \"Hello\"\n"),
         }));
         assert!(zero_ref_tree(spec::BROWSER_SNAPSHOT, &empty));
+        // Review 5: a snapshot cut by a small node budget is not a whole
+        // tree; its refs may sit past the cut.
+        let cut = ToolOutput::Json(json!({
+            "status": "ok", "snapshot": "s1", "refs": 0, "truncated": true, "omitted": 40,
+            "content": framed("# snapshot s1\n- heading \"Hello\"\n# omitted 40\n"),
+        }));
+        assert!(!zero_ref_tree(spec::BROWSER_SNAPSHOT, &cut));
+        let omitted = ToolOutput::Json(json!({
+            "status": "ok", "snapshot": "s1", "refs": 0, "omitted": 3,
+            "content": framed("# snapshot s1\n- heading \"Hello\"\n"),
+        }));
+        assert!(!zero_ref_tree(spec::BROWSER_SNAPSHOT, &omitted));
+        // Review 4: the page script's answer, which sees layout and
+        // aria-hidden, stands; the DOM count only fills in when it did not
+        // run.
+
+        let hidden_only = json!({"text": true, "controls": 0});
+        assert!(!crate::driver::page_content_of(Some(&hidden_only), true).controls);
+        assert!(crate::driver::page_content_of(None, true).controls);
+        assert!(crate::driver::page_content_of(Some(&json!({})), true).controls);
+        assert!(!crate::driver::page_content_of(None, false).controls);
+        assert!(
+            crate::driver::page_content_of(Some(&json!({"text": false, "controls": 2})), false)
+                .controls
+        );
         assert!(!zero_ref_tree(spec::BROWSER_SCREENSHOT, &empty));
         let text = PageContent {
             text: true,
@@ -828,7 +968,7 @@ mod tests {
         );
         assert_eq!(act.result()["engine_switched"]["repeated"], false);
         assert!(act.result()["engine_switched"]["note"].is_string());
-        assert!(repeatable(spec::BROWSER_SNAPSHOT) && repeatable(spec::BROWSER_WAIT));
+        assert!(repeatable(spec::BROWSER_SNAPSHOT) && repeatable(spec::BROWSER_OPEN));
         for act in [
             spec::BROWSER_CLICK,
             spec::BROWSER_TYPE,
@@ -836,6 +976,8 @@ mod tests {
             spec::BROWSER_SELECT,
             spec::BROWSER_BACK,
             spec::BROWSER_REQUEST_USER,
+            // Review 8: a wait waits on state the reopened page lost.
+            spec::BROWSER_WAIT,
         ] {
             assert!(!repeatable(act), "{act}");
         }
@@ -850,6 +992,8 @@ mod tests {
         Internal,
         /// No answer at all.
         Silent,
+        /// This result, then this event (a navigation's new document).
+        ReplyThen(Value, Value),
         /// The engine drops the connection, as one that died does.
         HangUp,
     }
@@ -961,6 +1105,10 @@ mod tests {
                     }
                     Some(Behaviour::Reply(result)) => {
                         json!({"id": command["id"], "result": result})
+                    }
+                    Some(Behaviour::ReplyThen(result, event)) => {
+                        let _ = out.send(Some(json!({"id": command["id"], "result": result})));
+                        event
                     }
                     None if unsupported.contains(&method.as_str()) => {
                         json!({"id": command["id"], "error": {"code": -32601, "message": format!("'{method}' wasn't found")}})
@@ -1378,6 +1526,141 @@ mod tests {
         );
         assert_eq!(output.result()["refs"], 1, "{}", output.result());
         assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
+    }
+
+    /// A navigation Moli starts, with the new document it reaches.
+    fn navigation_reaching_a_document() -> Behaviour {
+        Behaviour::ReplyThen(
+            json!({"frameId": "T", "loaderId": "L1"}),
+            json!({
+                "method": "Page.frameNavigated", "sessionId": "S",
+                "params": {"frame": {"id": "T", "url": "https://slow.test/"}},
+            }),
+        )
+    }
+
+    /// Review 6: an open that reached its document but did not finish
+    /// loading is a slow site, not Moli: the session stays on Moli.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_site_that_reached_its_document_does_not_switch() {
+        let (session, moli, chrome, _) = started_auto().await;
+        moli.set("Page.navigate", navigation_reaching_a_document());
+        let output = session
+            .call(spec::BROWSER_OPEN, &json!({ "url": "https://slow.test/" }))
+            .await;
+        assert_eq!(output.result()["code"], "timeout", "{}", output.result());
+        assert!(output.result().get("engine_switched").is_none());
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
+        assert_eq!(chrome.sent("Page.navigate"), 0);
+    }
+
+    /// Review 7: a reload that reached no document is Moli's, as an open
+    /// is. A reload is an act, so Chrome only reopens the page.
+    #[tokio::test(start_paused = true)]
+    async fn a_reload_that_timed_out_switches_without_repeating() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        moli.navigated("https://earlier.test/");
+        while session.driver().unwrap().location().0.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let output = session.call(spec::BROWSER_RELOAD, &json!({})).await;
+        let switched = &output.result()["engine_switched"];
+        assert_eq!(switched["reason"], "timeout", "{}", output.result());
+        assert_eq!(switched["repeated"], false);
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Chrome);
+        assert_eq!(noticed.try_recv(), Ok(NOTICE_ENGINE_SWITCHED));
+        assert_eq!(chrome.sent("Page.reload"), 0, "the reload ran twice");
+        assert_eq!(chrome.sent("Page.navigate"), 1, "the page was reopened");
+    }
+
+    /// Review 2: a call that succeeded although one of its commands went
+    /// unanswered (here the snapshot's title) is not a Moli failure.
+    #[tokio::test(start_paused = true)]
+    async fn a_call_that_got_past_an_unanswered_command_does_not_switch() {
+        let (session, moli, _chrome, _) = started_auto().await;
+        moli.set(
+            "Accessibility.getFullAXTree",
+            Behaviour::Reply(ax_tree(&[("link", "Docs")])),
+        );
+        moli.set("Target.getTargetInfo", Behaviour::Silent);
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert_eq!(output.result()["status"], "ok", "{}", output.result());
+        assert!(
+            output.result().get("engine_switched").is_none(),
+            "{}",
+            output.result()
+        );
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
+    }
+
+    /// Review 8: a wait that met a Moli fault is not waited again on the
+    /// reopened page, which lost the state it waited on.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_is_not_repeated_after_a_switch() {
+        let (session, moli, chrome, _) = started_auto().await;
+        moli.set("Runtime.callFunctionOn", Behaviour::Internal);
+        let output = session
+            .call(
+                spec::BROWSER_WAIT,
+                &json!({ "text": "Results", "timeout_ms": 1000 }),
+            )
+            .await;
+        let switched = &output.result()["engine_switched"];
+        assert_eq!(switched["repeated"], false, "{}", output.result());
+        assert!(switched["note"].is_string());
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Chrome);
+        assert_eq!(
+            chrome.sent("Runtime.callFunctionOn"),
+            0,
+            "the wait ran again on Chrome"
+        );
+    }
+
+    /// Review 1: the switch keeps within the call's budget. Moli spends
+    /// most of it; Chrome's reopen hangs. The call still answers before the
+    /// budget, with Moli's result, and the session is on Chrome.
+    #[tokio::test(start_paused = true)]
+    async fn a_switch_keeps_within_the_calls_budget() {
+        let (mut session, moli, chrome, _) = auto_over_fakes(&[]);
+        session.call_budget = Duration::from_secs(50);
+        session.start(&start("auto", true)).await.unwrap();
+        moli.navigated("https://earlier.test/");
+        while session.driver().unwrap().location().0.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // Moli spends the 30 s command timeout on the tree, then fails.
+        moli.set("Accessibility.getFullAXTree", Behaviour::Silent);
+        // Chrome's reopen never answers.
+        chrome.set("Page.navigate", Behaviour::Silent);
+        let begun = tokio::time::Instant::now();
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        let took = begun.elapsed();
+        assert!(
+            took <= Duration::from_secs(50).saturating_sub(CALL_HEADROOM),
+            "the call took {took:?}"
+        );
+        let switched = &output.result()["engine_switched"];
+        assert_eq!(switched["reason"], "timeout", "{}", output.result());
+        assert_eq!(
+            switched["repeated"],
+            false,
+            "no time left to repeat: {}",
+            output.result()
+        );
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Chrome);
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 0);
+    }
+
+    /// With the budget's room, the same read is answered again on Chrome.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_is_repeated_when_the_budget_has_room() {
+        let (session, moli, chrome, _) = started_auto().await;
+        moli.set("Accessibility.getFullAXTree", Behaviour::Silent);
+        let begun = tokio::time::Instant::now();
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert!(begun.elapsed() <= CALL_BUDGET.saturating_sub(CALL_HEADROOM));
+        assert_eq!(output.result()["engine_switched"]["repeated"], true);
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
     }
 
     #[test]

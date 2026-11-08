@@ -31,7 +31,7 @@ Today only `full` is offered. `lite` and `auto` are not offered until Moli passe
 
 Until then, a project setting that names `lite` or `auto` is refused, and Main serves every session on `full`.
 
-When an `auto` session moves to Chrome, the page opens again in Chrome, and anything typed into a form that was not sent is lost. The agent's tool result says `engine_switched`, with the reason. A click or typing that caused the switch is not done a second time on Chrome, so the agent looks at the page again before it carries on. If a person had taken over, they keep control. A person who is watching sees *The page needed the full browser, so it was reopened there.* A switch happens when Moli fails where Chrome would not:
+When an `auto` session moves to Chrome, the page opens again in Chrome, and anything typed into a form that was not sent is lost. The agent's tool result says `engine_switched`, with the reason. A click, typing or a wait that caused the switch is not done a second time on Chrome, so the agent looks at the page again before it carries on. If a person had taken over, they keep control. A person who is watching sees *The page needed the full browser, so it was reopened there.* A switch happens when Moli fails where Chrome would not:
 
 - Moli does not support a command the page needs.
 - Moli stops, or stops answering, or a page does not finish opening in time.

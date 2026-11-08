@@ -152,12 +152,14 @@ const HAS_TEXT: &str = r"function (needle) {
   return !!body && body.innerText.includes(needle);
 }";
 
-/// What the page shows, read from the DOM ([`CdpDriver::page_content`]):
+/// What the page shows, read from the DOM (`CdpDriver::page_content`):
 /// whether its body has readable text, and whether it has controls
 /// (links, buttons, fields), looking through open shadow roots too
 /// (web-component pages keep their links there). The walk stops at the
-/// first root with a control or after `limit` elements. Hidden controls
-/// count too: a false "yes" only sends `auto` to Chrome, the safe engine.
+/// first root with a control or after `limit` elements. A control
+/// counts only when it is rendered (`getClientRects`) and not inside
+/// `aria-hidden="true"`: Chrome's tree leaves both out too, so neither
+/// is a ref Moli missed.
 const CONTENT: &str = r#"function (limit) {
   const body = document.body;
   const text = !!body && /[\p{L}\p{N}]/u.test(body.innerText.slice(0, 4000));
@@ -169,7 +171,9 @@ const CONTENT: &str = r#"function (limit) {
   const roots = [document];
   while (roots.length && found === 0 && seen < limit) {
     const root = roots.pop();
-    found += root.querySelectorAll(controls).length;
+    for (const el of root.querySelectorAll(controls)) {
+      if (el.getClientRects().length > 0 && !el.closest('[aria-hidden="true"]')) { found += 1; break; }
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
     for (let el = walker.nextNode(); el && seen < limit; el = walker.nextNode()) {
       seen += 1;
@@ -182,7 +186,26 @@ const CONTENT: &str = r#"function (limit) {
 /// The most elements [`CONTENT`] walks.
 const CONTENT_WALK_LIMIT: u64 = 20_000;
 
-/// What [`CdpDriver::page_content`] found.
+/// [`PageContent`] from the page script's answer (`None`: it did not
+/// run) and whether the snapshot's DOM read had a control. The script sees
+/// layout and `aria-hidden`, so its answer stands; the DOM count, which
+/// sees neither, is a "yes" only when the script did not run (on Moli it
+/// may not).
+#[must_use]
+pub(crate) fn page_content_of(script: Option<&Value>, in_dom: bool) -> PageContent {
+    match script {
+        Some(script) if script["text"].is_boolean() => PageContent {
+            text: script["text"] == true,
+            controls: script["controls"].as_u64().is_some_and(|found| found > 0),
+        },
+        _ => PageContent {
+            text: false,
+            controls: in_dom,
+        },
+    }
+}
+
+/// What `CdpDriver::page_content` found.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PageContent {
     /// The body has a letter or a digit.
@@ -436,11 +459,14 @@ impl CdpDriver {
         let script = self
             .main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
             .await
-            .unwrap_or_default();
-        PageContent {
-            text: script["text"] == true,
-            controls: in_dom || script["controls"].as_u64().is_some_and(|found| found > 0),
-        }
+            .ok();
+        page_content_of(script.as_ref(), in_dom)
+    }
+
+    /// How many main-frame documents the page has had: an `auto` open
+    /// that timed out reached one when this rose during the call.
+    pub(crate) fn documents(&self) -> u64 {
+        self.tracker.marks().documents
     }
 
     /// The engine's product, `chrome-headless-shell/<version>` or

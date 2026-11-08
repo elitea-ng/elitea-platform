@@ -17,6 +17,9 @@ supervisor.
   `empty_snapshot` rule now also applies to a snapshot with no ref on a
   page whose DOM has links, buttons or fields, after a second read on
   Moli.
+- A `browser_wait` that hits one of these is no longer run again on
+  Chrome: the result comes back with `engine_switched.repeated: false`.
+  A switch keeps within the agent line protocol's 90 s call limit.
 - The `engine_switched.reason` field of a tool result can carry the
   three new values. The `engine_switched` notice to viewers is
   unchanged.

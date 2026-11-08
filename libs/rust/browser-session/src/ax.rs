@@ -83,7 +83,13 @@ impl Element {
                     | "tab"
                     | "menuitem"
             )
-        }) || self.is_actionable()
+        }) || self
+            .attribute("tabindex")
+            .and_then(|index| index.trim().parse::<i64>().ok())
+            .is_some_and(|index| index >= 0)
+            || self
+                .attribute("contenteditable")
+                .is_some_and(|value| !value.eq_ignore_ascii_case("false"))
     }
 
     fn is_actionable(&self) -> bool {
@@ -582,6 +588,10 @@ mod tests {
         assert!(!element("input", &[("type", "HIDDEN")]).is_control());
         assert!(element("div", &[("role", "link")]).is_control());
         assert!(element("span", &[("tabindex", "0")]).is_control());
+        // A focus target only for scripts (skip links land on it), not a
+        // control: Chrome's tree gives it no ref.
+        assert!(!element("main", &[("tabindex", "-1")]).is_control());
+        assert!(!element("div", &[("tabindex", "x")]).is_control());
         assert!(!element("p", &[]).is_control());
         assert!(!element("div", &[("role", "presentation")]).is_control());
     }
