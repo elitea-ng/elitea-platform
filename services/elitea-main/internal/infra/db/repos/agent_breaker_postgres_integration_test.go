@@ -501,3 +501,49 @@ VALUES (now(), 1, 7, '/tools', 'POST', 200, 10, 'firecrawl', 'scrape', $1, 'tool
 	// A high tier limit tighter than the override applies.
 	check(map[agentlifecycle.Tier]float64{agentlifecycle.TierHigh: 1.5}, map[breaker.AgentKey]float64{over: 2})
 }
+
+// Issue 1610: an idle compaction run is upkeep, not a run of the agent's.
+// The breaker's window never copies it, so a failed summary neither trips
+// the agent nor dilutes its failure rate.
+func TestAgentBreaker_IdleCompactionRunsAreNotInTheWindow(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
+	ctx := t.Context()
+	store := newBreakerTestStore(t, pool)
+	store.settleGrace = breaker.IngestSettleGrace
+
+	const source, idle = "0123456789abcdef0123456789abcd01", "0123456789abcdef0123456789abcd02"
+	seedEndedAgentRun(t, pool, source, 1, 33, "SUCCEEDED")
+	seedEndedAgentRun(t, pool, idle, 1, 33, "FAILED")
+	if _, err := pool.Exec(ctx, `
+UPDATE elitea_runtime.execution_jobs SET settled_at = clock_timestamp() - interval '1 minute'
+WHERE execution_id IN ($1, $2)`, source, idle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.agent_idle_compactions (project_id, conversation_uuid, participant_id,
+    source_execution_id, source_generation, request_started_at, cache_ttl_seconds, due_at,
+    idempotency_key, state, idle_execution_id)
+VALUES (1, gen_random_uuid(), 7, $1, 1, now() - interval '5 minutes', 300, now() - interval '1 minute',
+    'idle-compaction/' || $1, 'DONE', $2)`, source, idle); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.IngestRuns(ctx, breaker.IngestLookback); err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	rows, err := pool.Query(ctx, `SELECT execution_id FROM elitea_runtime.agent_breaker_runs WHERE application_id = 33 ORDER BY 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		copied = append(copied, id)
+	}
+	if rows.Err() != nil || len(copied) != 1 || copied[0] != source {
+		t.Fatalf("window = %v (%v); want only the agent's own run", copied, rows.Err())
+	}
+}
