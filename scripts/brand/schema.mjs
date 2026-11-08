@@ -42,7 +42,7 @@ export const PERMANENT_FIELDS = Object.freeze({
 export const ASSETS = Object.freeze([
   { path: 'ios/icon-1024.png', kind: 'png', size: 1024, alpha: false, use: 'iOS app icon and App Store listing (Apple rejects alpha)' },
   { path: 'ios/app.icon/icon.json', kind: 'json', optional: true, use: 'iOS 26 Icon Composer document (with its Assets/ folder)' },
-  { path: 'android/icon-512.png', kind: 'png', size: 512, alpha: false, use: 'Google Play listing icon' },
+  { path: 'android/icon-512.png', kind: 'png', size: 512, use: 'Google Play listing icon' },
   { path: 'android/adaptive-foreground.png', kind: 'png', size: 1024, alpha: true, use: 'Android adaptive icon foreground (108 dp canvas)' },
   { path: 'android/adaptive-background.png', kind: 'png', size: 1024, alpha: false, use: 'Android adaptive icon background' },
   { path: 'android/adaptive-monochrome.png', kind: 'png', size: 1024, alpha: true, use: 'Android 13+ themed (monochrome) icon' },

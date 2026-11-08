@@ -6,37 +6,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { BRANDS_DIR, BrandError, loadBrand, loadBrandFrom, resolveBrandDir } from './load.mjs';
+import { validManifest } from './fixtures.mjs';
 import { contrastFindings, contrastRatio, isAppId, isAppScheme, isHost, isHttpsUrl, isReverseDns, PERMANENT_FIELDS, RESERVED_IDS, validateManifest } from './schema.mjs';
-
-/** A valid manifest; each test breaks one thing in a copy. */
-export function validManifest(over = {}) {
-  return {
-    formatVersion: 1,
-    id: 'acme',
-    productName: 'Acme Assistant',
-    shortName: 'Acme',
-    publisher: 'Acme Corp',
-    mobile: {
-      bundleId: 'com.example.acme',
-      connectSchemes: ['acme'],
-      oauthRedirectScheme: 'com.example.acme',
-      appGroup: 'group.com.example.acme',
-      widgetBundleId: 'com.example.acme.widgets',
-    },
-    desktop: { identifier: 'com.example.acme.desktop' },
-    linkDomain: 'acme.example.com',
-    webUrl: 'https://acme.example.com',
-    privacyUrl: 'https://acme.example.com/privacy',
-    supportUrl: 'https://acme.example.com/support',
-    supportEmail: 'support@acme.example.com',
-    docsUrl: '/docs/',
-    brand: { hue: '#0e7490' },
-    eas: { projectId: null, owner: null },
-    updates: { mode: 'off' },
-    push: { relay: 'none' },
-    ...over,
-  };
-}
 
 const errorsFor = (m) => validateManifest(m);
 const hasError = (m, field) => errorsFor(m).some((e) => e.startsWith(`${field}:`) || e.startsWith(`${field}[`));
