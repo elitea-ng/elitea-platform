@@ -26,9 +26,31 @@ const RUN_TOKEN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}
 const TEAM_BUCKET = `autotest-manage-access-scope-${RUN_TOKEN}`;
 const PERSONAL_BUCKET = `autotest-manage-access-personal-${RUN_TOKEN}`;
 
+/**
+ * Settle the document before any next navigation. On webkit, a `goto` or
+ * `reload` fired while boot calls are still in flight cancels them, and the
+ * next document's session probe can go out without the session cookie: the
+ * app then lands on the OIDC authorize page and the bucket is "not found"
+ * (the artifacts.lifecycle / pinning trap). A visible shell is not settled,
+ * since the sidebar keeps the activity SSE open; `networkidle` still fires
+ * with it open.
+ */
+async function settle(page: Page): Promise<void> {
+  await expect(page.getByTestId('sidebar-collapse-toggle')).toBeVisible({ timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+}
+
 async function openArtifacts(page: Page): Promise<void> {
   const response = await page.goto(ARTIFACTS_URL);
   expect(response?.status(), 'the artifacts page must be served at /app/artifacts').toBeLessThan(400);
+  await settle(page);
+}
+
+async function reloadArtifacts(page: Page): Promise<void> {
+  await settle(page);
+  await page.reload();
+  await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+  await settle(page);
 }
 
 async function selectedProjectId(page: Page): Promise<string> {
@@ -48,6 +70,9 @@ test('bucket "Manage access" is visible in the shared Team project but must be a
   page,
   request,
 }) => {
+  // Two projects, two reloads, each settled: past the 30 s default under a
+  // loaded webkit shard (the first goto alone timed out at 30 s).
+  test.setTimeout(90_000);
   let teamProjectId = '';
   let personalProjectId = '';
   try {
@@ -56,8 +81,7 @@ test('bucket "Manage access" is visible in the shared Team project but must be a
     await openArtifacts(page);
     teamProjectId = await selectedProjectId(page);
     await ensureBucket(request, teamProjectId, TEAM_BUCKET);
-    await page.reload();
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reloadArtifacts(page);
     await expect(page.getByLabel(`Manage access to ${TEAM_BUCKET}`)).toBeVisible({ timeout: 15_000 });
 
     // Half 2 (the actual claim under test — expected to FAIL here): switch
@@ -85,8 +109,7 @@ test('bucket "Manage access" is visible in the shared Team project but must be a
 
     personalProjectId = await selectedProjectId(page);
     await ensureBucket(request, personalProjectId, PERSONAL_BUCKET);
-    await page.reload();
-    await page.waitForURL('**/artifacts**', { timeout: 15_000 });
+    await reloadArtifacts(page);
     await expect(page.getByRole('button', { name: PERSONAL_BUCKET, exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByLabel(`Manage access to ${PERSONAL_BUCKET}`)).toHaveCount(0);
   } finally {
