@@ -55,6 +55,8 @@ permissions:
 
 env:
   KUBECONFORM_VERSION: v0.6.7
+  # From the release's CHECKSUMS file (kubeconform-linux-amd64.tar.gz).
+  KUBECONFORM_SHA256: 95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
   # Read by the LLM-path gate below. Pinned, not "latest".
   YQ_VERSION: v4.44.6
   # CRD schemas (argoproj.io Application, cert-manager Certificate) come from
@@ -79,6 +81,9 @@ jobs:
       # and our elitea-sandbox-runtime) are not committed: build them from
       # Chart.lock before anything lints, renders or packages the chart.
       - name: Build the chart dependencies
+        env:
+          # build-deps.sh's fallback fetches release assets through the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash deploy/helm/elitea/build-deps.sh
 
       # A bare loop takes the status of its LAST iteration, so a broken early
@@ -427,9 +432,13 @@ jobs:
       # renders, the HA ones being shapes the template matrix does not render.
       # NATS_REQUIRE_KUBECONFORM makes a missing binary a failure, not a skip.
       - name: Install kubeconform (for the NATS renders)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          # Through the API, not the github.com download link (504s).
+          gh release download "${KUBECONFORM_VERSION}" --repo yannh/kubeconform \
+            --pattern kubeconform-linux-amd64.tar.gz --output /tmp/kubeconform.tar.gz --clobber
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
@@ -461,14 +470,16 @@ jobs:
       # binary fail instead of skip.
       - name: Scheduler and safety alerts — promtool proves the rules fire
         env:
+          GH_TOKEN: ${{ github.token }}
           PROMETHEUS_VERSION: "3.15.0"
           PROMETHEUS_SHA256: "2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0"
           SCHEDULER_ALERTS_REQUIRE_PROMTOOL: "1"
           SAFETY_ALERTS_REQUIRE_PROMTOOL: "1"
         run: |
           tarball="${RUNNER_TEMP}/prometheus.tar.gz"
-          curl -fsSL -o "$tarball" \
-            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          # Through the API, not the github.com download link (504s).
+          gh release download "v${PROMETHEUS_VERSION}" --repo prometheus/prometheus \
+            --pattern "prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" --output "$tarball" --clobber
           echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" -C "${RUNNER_TEMP}"
           PROMTOOL="${RUNNER_TEMP}/prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" \
@@ -681,12 +692,19 @@ jobs:
       # and our elitea-sandbox-runtime) are not committed: build them from
       # Chart.lock before anything lints, renders or packages the chart.
       - name: Build the chart dependencies
+        env:
+          # build-deps.sh's fallback fetches release assets through the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash deploy/helm/elitea/build-deps.sh
 
       - name: Install kubeconform
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          # Through the API, not the github.com download link (504s).
+          gh release download "${KUBECONFORM_VERSION}" --repo yannh/kubeconform \
+            --pattern kubeconform-linux-amd64.tar.gz --output /tmp/kubeconform.tar.gz --clobber
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 
@@ -893,9 +911,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install kubeconform
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -sSL -o /tmp/kubeconform.tar.gz \
-            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          # Through the API, not the github.com download link (504s).
+          gh release download "${KUBECONFORM_VERSION}" --repo yannh/kubeconform \
+            --pattern kubeconform-linux-amd64.tar.gz --output /tmp/kubeconform.tar.gz --clobber
+          echo "${KUBECONFORM_SHA256}  /tmp/kubeconform.tar.gz" | sha256sum -c -
           tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
           kubeconform -v
 

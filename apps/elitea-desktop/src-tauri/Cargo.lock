@@ -969,6 +969,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-fds"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b60b5124979fccd9addd89d8b97a1d6eebb4950694520c75ddd722535ea443f"
+dependencies = [
+ "nix 0.31.3",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1645,12 +1656,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-browser-driver-dom"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "elitea-browser-session",
+ "elitea-browser-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "elitea-browser-driver-linux"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cairo-rs",
+ "elitea-browser-driver-dom",
+ "elitea-browser-tools",
+ "gdkx11",
+ "gtk",
+ "javascriptcore-rs",
+ "serde_json",
+ "tauri",
+ "tokio",
+ "webkit2gtk",
+ "x11rb",
+]
+
+[[package]]
 name = "elitea-browser-driver-macos"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "block2",
  "dispatch2",
+ "elitea-browser-driver-dom",
  "elitea-browser-tools",
  "libc",
  "objc2",
@@ -1663,6 +1705,35 @@ dependencies = [
  "serde_json",
  "tauri",
  "tokio",
+]
+
+[[package]]
+name = "elitea-browser-driver-windows"
+version = "0.1.0"
+dependencies = [
+ "elitea-browser-session",
+ "elitea-browser-tools",
+ "serde_json",
+ "tao",
+ "tauri",
+ "tokio",
+ "webview2-com",
+ "windows-core",
+ "wry",
+]
+
+[[package]]
+name = "elitea-browser-session"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "command-fds",
+ "elitea-browser-tools",
+ "futures-util",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -1743,7 +1814,11 @@ dependencies = [
  "chrono",
  "dirs",
  "elitea-agent-runtime",
+ "elitea-browser-driver-dom",
+ "elitea-browser-driver-linux",
  "elitea-browser-driver-macos",
+ "elitea-browser-driver-windows",
+ "elitea-browser-session",
  "elitea-browser-tools",
  "elitea-desktop-control",
  "elitea-egress-guard",
@@ -2721,6 +2796,16 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "gethostname"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
+dependencies = [
+ "rustix",
+ "windows-link",
 ]
 
 [[package]]
@@ -9305,6 +9390,23 @@ dependencies = [
  "once_cell",
  "pkg-config",
 ]
+
+[[package]]
+name = "x11rb"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a8885a854a8bfdf87a301e53e41b17c5f8f33639903131338b997b1eb614f44"
+dependencies = [
+ "gethostname",
+ "rustix",
+ "x11rb-protocol",
+]
+
+[[package]]
+name = "x11rb-protocol"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
 
 [[package]]
 name = "yoke"

@@ -5,34 +5,36 @@ description: "How the desktop app drives the browser pane's WKWebView for the ag
 
 The desktop browser pane (#1588) shows a web page in a WKWebView, a Tauri child webview. The macOS driver lets the agent of a Local work thread read and use that page. It implements the shared contract, so the agent gets the same tools, results and errors as it would from the cloud driver (see [The browser tool contract](/development/browser-tools)). The driver follows ADR-0048 decisions 5 and 6.
 
-The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-desktop/src-tauri/browser-driver-macos`. It is a separate crate because the desktop host forbids `unsafe`, and the WebKit, AppKit and CoreGraphics calls need it. It is the only first-party crate that may contain `unsafe` (see [Unsafe code](#unsafe-code)). The crate is a member of the `src-tauri` workspace, so the host and the driver share one `Cargo.lock`. Its bindings are `objc2-web-kit` 0.3, `objc2-app-kit` and `objc2-core-graphics`, which are already in the lock through wry and tao.
+The code lives in the crate `elitea-browser-driver-macos`, at `apps/elitea-desktop/src-tauri/browser-driver-macos`. It is a separate crate because the desktop host forbids `unsafe`, and the WebKit, AppKit and CoreGraphics calls need it. It is one of the two first-party crates that may contain `unsafe` (see [Unsafe code](#unsafe-code)); the other is the Windows driver. The crate is a member of the `src-tauri` workspace, so the host and the driver share one `Cargo.lock`. Its bindings are `objc2-web-kit` 0.3, `objc2-app-kit` and `objc2-core-graphics`, which are already in the lock through wry and tao.
+
+The page script, the reply reader, `WebDriver` and the input filter are not in this crate. They are in the safe crate `elitea-browser-driver-dom` (`browser-driver-dom`), which the Linux driver uses too, and this crate re-exports them. See [The Windows and Linux browser drivers](/development/browser-driver-windows-linux).
 
 ## Layout
 
 | Part | Holds |
 | --- | --- |
-| `js/driver.ts` | The driver's page script, in strict TypeScript, and the only script file in the repository. It builds the snapshot and performs the actions. Its types are the raw node and answer shapes that `src/reply.rs` reads. |
-| `js/tsconfig.json` | Compiles `driver.ts` to one classic script (no imports or exports), ES2022, comments kept. |
-| `build.rs` | Compiles `driver.ts` with `tsc` into the build's `OUT_DIR`. The crate embeds the result (`driver.js`) with `include_str!`. |
-| `src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
-| `src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
-| `src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
-| `src/native.rs` | The pane's own controls that wry and Tauri do not expose: `install_content_rules` and `go` (Back, Forward, Stop). |
+| `browser-driver-dom/js/driver.ts` | The driver's page script, in strict TypeScript, and the only script file in the repository. It builds the snapshot and performs the actions. Its types are the raw node and answer shapes that `src/reply.rs` reads. |
+| `browser-driver-dom/js/tsconfig.json` | Compiles `driver.ts` and `input.ts` to one classic script (no imports or exports), ES2022, comments kept. |
+| `browser-driver-dom/build.rs` | Compiles both scripts with `tsc` into the build's `OUT_DIR`. The crate embeds the results (`driver.js`, `input.js`) with `include_str!`. |
+| `browser-driver-dom/src/reply.rs` | Reads the script's answers on the host and turns its raw nodes into contract nodes. Secure fields are decided again here. |
+| `browser-driver-dom/src/driver.rs` | `WebDriver`, the contract's `BrowserDriver`: refs, the hard limits, the act rate, cross-origin frames and the trusted-input fallback. It is plain Rust over an `Engine` trait and is tested with a fake engine. |
+| `browser-driver-macos/src/webkit.rs` | `WebKitEngine`, the macOS calls: the content world, `callAsyncJavaScript`, `takeSnapshot(with:)` and CGEvent clicks. |
+| `browser-driver-macos/src/native.rs` | The pane's own controls that wry and Tauri do not expose: `install_content_rules` and `go` (Back, Forward, Stop). |
 | `src-tauri/src/browser_tools.rs` | The host's `browser` toolset. It holds the drivers of a turn's thread, plus the `gate` seam for approvals and policy (#1590). |
 
 The host attaches a driver when it makes the pane's webview (`browser_pane.rs`, through `with_webview`). It detaches the driver when the pane closes or the person signs out. The `browser` toolset is added next to the local, index and MCP toolsets of a turn. It is never one of the workspace tools, and sub-agents do not get it. If a thread's pane is not open, every browser tool answers `unsupported` and tells the model to ask the person to open the pane.
 
 ### Changing the page script
 
-Edit `js/driver.ts`. No JavaScript is committed: the crate's `build.rs` compiles `driver.ts` every time cargo builds the crate, with the web app's pinned TypeScript, and the crate embeds the output. The build runs the equivalent of this, from the repository root:
+Edit `browser-driver-dom/js/driver.ts`. No JavaScript is committed: the dom crate's `build.rs` compiles `driver.ts` every time cargo builds the crate, with the web app's pinned TypeScript, and the crate embeds the output. The build runs the equivalent of this, from the repository root:
 
 ```sh
-apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-macos/js/tsconfig.json --outDir "$OUT_DIR"
+apps/elitea-web/node_modules/.bin/tsc -p apps/elitea-desktop/src-tauri/browser-driver-dom/js/tsconfig.json --outDir "$OUT_DIR"
 ```
 
-So any cargo build that compiles the driver crate needs the web app's `node_modules`: every build of the desktop host on macOS (the host depends on the driver there), and `cargo clippy --workspace`, `cargo test --workspace` or `-p elitea-browser-driver-macos` on any OS (the snapshot reader and the reply parser are plain Rust and build everywhere). Run `npm ci` in `apps/elitea-web` first, or set `ELITEA_TSC` to the path of another `tsc`. When `tsc` is missing, or `driver.ts` has a type error, the build fails and prints what `tsc` printed.
+So any cargo build that compiles the dom crate needs the web app's `node_modules`: every build of the desktop host on macOS, Windows and Linux (the host depends on a driver on each), and `cargo clippy --workspace`, `cargo test --workspace` or `-p elitea-browser-driver-dom` on any OS (the snapshot reader and the reply parser are plain Rust and build everywhere). Run `npm ci` in `apps/elitea-web` first, or set `ELITEA_TSC` to the path of another `tsc`. When `tsc` is missing, or `driver.ts` has a type error, the build fails and prints what `tsc` printed.
 
-There is no separate CI check for the script: a type error fails the `desktop` job's Clippy and test steps in `ci-desktop.yml`, which run after "Install web (locked)". The output must stay one self-contained classic script (the header comments, `'use strict'`, then `(function install() { … })();`), because WebKit runs it as a user script and through `evaluateJavaScript`. The crate's unit tests check the emitted script: no `eval` or `Function`, the secure-field tokens, and the error codes.
+There is no separate CI check for the script: a type error fails the Clippy and test steps of the `desktop` and `pane-drivers` jobs in `ci-desktop.yml`, which run after "Install web (locked)". The output must stay one self-contained classic script (the header comments, `'use strict'`, then `(function install() { … })();`), because WebKit runs it as a user script and through `evaluateJavaScript`. The crate's unit tests check the emitted script: no `eval` or `Function`, the secure-field tokens, and the error codes.
 
 ## The driver world
 
@@ -42,7 +44,7 @@ The host calls the script through `callAsyncJavaScript:arguments:inFrame:inConte
 
 A frame announces itself by posting to a message handler (`eliteaBrowserFrame`) that exists only in the driver world. The host keeps a `WKFrameInfo` for each announced frame. It accepts only messages that come from the driver world and from a subframe.
 
-The person's input reaches the host the same way (#1591). The script listens, in the capture phase, for `pointerdown`, `keydown`, `wheel`, `touchstart`, `beforeinput` (input methods and dictation), `paste` and `drop`. It keeps only trusted events (`isTrusted`: a page script cannot make one), except while it inserts text itself, at most one every 50 ms per type. It posts the event type to a second driver-world handler, `eliteaBrowserInput`. Each trusted-input click the driver posts is remembered as the `pointerdown` reports it will cause (`src/input.rs`); such a report consumes one, within 300 ms, and every other report is the person's. The host passes those to the callback that `attach` takes: the desktop host's pane control, which pauses the agent (`user_active`). Who drives the page, take over and hand back are the host's (`src/browser_control.rs`), not the driver's.
+The person's input reaches the host the same way (#1591). The script listens, in the capture phase, for `pointerdown`, `keydown`, `wheel`, `touchstart`, `beforeinput` (input methods and dictation), `paste` and `drop`. It keeps only trusted events (`isTrusted`: a page script cannot make one), except while it inserts text itself, at most one every 50 ms per type. It posts the event type to a second driver-world handler, `eliteaBrowserInput`. Each trusted-input click the driver posts is remembered as the `pointerdown` reports it will cause (`browser-driver-dom/src/input.rs`); such a report consumes one, within 300 ms, and every other report is the person's. The host passes those to the callback that `attach` takes: the desktop host's pane control, which pauses the agent (`user_active`). Who drives the page, take over and hand back are the host's (`src/browser_control.rs`), not the driver's.
 
 ## The snapshot
 
@@ -97,18 +99,18 @@ The policy, and so the rules, is fixed when the pane is made. A change to `allow
 
 Content rules match URLs, not resolved addresses. A public name that resolves to a private address still passes. That residual gap needs a filtering proxy, which is a separate decision.
 
-`native::go(webview, Back | Forward | Stop)` calls `goBack`, `goForward` and `stopLoading` on the WKWebView. The toolbar's `browser_go` uses it on macOS, so a page that replaces `history.back` or `window.stop` cannot stop the buttons. Windows and Linux keep the in-page scripts until #1593.
+`native::go(webview, Back | Forward | Stop)` calls `goBack`, `goForward` and `stopLoading` on the WKWebView. The toolbar's `browser_go` uses it on macOS, so a page that replaces `history.back` or `window.stop` cannot stop the buttons. Windows and Linux use their own engine's native calls in the same way.
 
 ## Unsafe code
 
-objc2-web-kit declares every WebKit method as an `unsafe fn`, and Tauri hands the webview over as a raw pointer. wry and Tauri expose neither content rules nor native history. So this crate is the one first-party exception to `unsafe_code = "forbid"` (owner decision on #1634, recorded in the repository's `AGENTS.md`):
+objc2-web-kit declares every WebKit method as an `unsafe fn`, and Tauri hands the webview over as a raw pointer. wry and Tauri expose neither content rules nor native history. So this crate is a first-party exception to `unsafe_code = "forbid"` (owner decision on #1634, recorded in the repository's `AGENTS.md`). The Windows driver crate is the only other one (owner decision on #1593). The rules are the same for both:
 
 - The crate's lints set `unsafe_code = "deny"`, not `allow`.
 - Each function that holds an `unsafe` block, or each `unsafe fn`, has `#[allow(unsafe_code)]`.
 - Each `unsafe` block has a `// SAFETY:` comment that says why it is sound. Clippy's `undocumented_unsafe_blocks` is `deny`.
 - The crate exports safe functions only. The raw pointer from Tauri is turned into a retained `WKWebView` in one place (`native::webview_of`).
 
-The desktop host and every other crate stay `forbid`. A new crate with `unsafe` needs its own owner decision.
+The desktop host and every other crate, the Linux driver and the dom crate included, stay `forbid`. A new crate with `unsafe` needs its own owner decision.
 
 ## Run the tests
 
@@ -116,7 +118,7 @@ The contract logic is tested with a fake engine. These tests run everywhere:
 
 ```sh
 cd apps/elitea-desktop/src-tauri
-cargo test -p elitea-browser-driver-macos
+cargo test -p elitea-browser-driver-dom -p elitea-browser-driver-macos
 ```
 
 The WebKit tests drive a real WKWebView, so they need a Mac with a logged-in session. They open three small windows for a few seconds:

@@ -113,24 +113,38 @@ prototype shortcuts into new code merely to preserve current behavior.
   Build outputs such as `services/elitea-main/elitea-main` and `cutover-ctl`
   should not be updated or newly committed.
 
-## Unsafe Rust: one exception
+## Unsafe Rust: two exceptions
 
 First-party Rust crates set `unsafe_code = "forbid"`. Vendored code
-(`libs/rust/vendor/`) is reviewed as vendored code. There is ONE
-first-party exception (owner decision on #1634, 2026-11-05):
-`apps/elitea-desktop/src-tauri/browser-driver-macos`, the desktop browser
-pane's macOS WebKit FFI crate.
+(`libs/rust/vendor/`) is reviewed as vendored code. There are TWO
+first-party exceptions, and no others:
 
-- Why: objc2-web-kit declares every WebKit method as an `unsafe fn`, Tauri
-  gives the webview as a raw `WKWebView` pointer, and wry and Tauri expose
-  neither content rule lists nor native Back, Forward and Stop.
-- Rules in that crate: `unsafe_code = "deny"` (not `allow`) in its lints;
+1. `apps/elitea-desktop/src-tauri/browser-driver-macos` (owner decision on
+   #1634, 2026-11-05), the desktop browser pane's macOS WebKit FFI crate.
+   Why: objc2-web-kit declares every WebKit method as an `unsafe fn`, Tauri
+   gives the webview as a raw `WKWebView` pointer, and wry and Tauri expose
+   neither content rule lists nor native Back, Forward and Stop.
+2. `apps/elitea-desktop/src-tauri/browser-driver-windows` (owner decision
+   on #1593, 2026-11-08), the desktop browser pane's Windows `WebView2` COM
+   crate. Why: webview2-com declares every `ICoreWebView2` method as an
+   `unsafe fn`. The crate may call ONLY the `WebView2` COM methods that
+   give the page's own CDP (`CoreWebView2`,
+   `CallDevToolsProtocolMethod`, `CallDevToolsProtocolMethodForSession`,
+   `GetDevToolsProtocolEventReceiver`, `add_`/`remove_DevToolsProtocolEventReceived`,
+   the event arguments' `ParameterObjectAsJson` and `SessionId`) and the
+   native `GoBack`, `GoForward` and `Stop`.
+
+- Rules in both crates: `unsafe_code = "deny"` (not `allow`) in the lints;
   `#[allow(unsafe_code)]` on each function or block that needs it; a
   `// SAFETY:` comment on every `unsafe` block that says why it is sound
   (clippy `undocumented_unsafe_blocks = "deny"`); safe functions only in
-  its public API.
+  the public API.
 - The desktop host crate (`apps/elitea-desktop/src-tauri`) and every other
-  crate stay `forbid`. Put new FFI in that crate, behind a safe function.
+  crate stay `forbid`, the Linux pane driver
+  (`browser-driver-linux`, safe webkit2gtk bindings) and the shared driver
+  core (`browser-driver-dom`) included. Put new WebKit FFI in
+  `browser-driver-macos` and new `WebView2` FFI in `browser-driver-windows`,
+  behind a safe function.
 - Any other crate that needs `unsafe` needs its own owner decision first,
   recorded here.
 

@@ -12,6 +12,8 @@
 //!
 //! `auto` (Moli, then Chrome) is driven through the agent binary when
 //! `ELITEA_BROWSER_ENGINE` names a Chrome as well.
+// The engines run on unix only (their debugging pipe).
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

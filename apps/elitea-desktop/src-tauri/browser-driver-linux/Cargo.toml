@@ -1,0 +1,61 @@
+[package]
+name = "elitea-browser-driver-linux"
+version = "0.1.0"
+description = "The desktop browser pane's Linux driver (ADR-0048 decision 6): the shared page script and WebDriver over WebKitGTK, in an isolated WebKitScriptWorld, through the safe webkit2gtk bindings."
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+# Safe Rust only (`unsafe_code = "forbid"`): every WebKitGTK, GTK, GDK and
+# cairo call goes through their safe bindings. The page script, the reply
+# parser and `WebDriver` are elitea-browser-driver-dom, shared with macOS.
+# A crate of its own (not a module of the host) so its WebKitGTK
+# conformance run can own `main` under a virtual display, as the macOS
+# crate's does. Off Linux the crate is empty.
+
+[features]
+default = []
+# `attach`: a Tauri child webview's WebKitGTK view (the desktop host).
+tauri = ["dep:tauri"]
+
+[dependencies]
+elitea-browser-driver-dom = { path = "../browser-driver-dom" }
+elitea-browser-tools = { path = "../../../../libs/rust/browser-tools" }
+async-trait = "0.1.92"
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+# Every one of these is already in the desktop's tree through tauri and wry
+# (same versions); `png` is the only feature turned on here.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
+# The script's answers are JavaScriptCore values (`to_str`).
+javascriptcore-rs = "1.1"
+gtk = "0.18"
+cairo-rs = { version = "0.18", features = ["png"] }
+tauri = { version = "2.12", default-features = false, features = ["wry"], optional = true }
+# The toplevel's X window id (`gdk_x11_window_get_xid`, safe), to check the
+# pointer is over the pane before a trusted click. In the tree through tao.
+gdkx11 = "0.18"
+# The trusted click: XTEST fake input over a pure-Rust X connection (no
+# libxcb, no unsafe; `allow-unsafe-code` stays off). GTK3 reads pointer
+# events through XInput2, which ignores the core events GDK's
+# `gdk_test_simulate_button` sends; XTEST's are real device events.
+x11rb = { version = "0.14", default-features = false, features = ["xtest"] }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "time", "sync"] }
+
+# The WebKitGTK conformance and isolation runs: they need GTK's main thread
+# and a display, so they own `main` (no libtest harness). Ignored unless
+# asked for with `-- --ignored` (README in tests/webkitgtk.rs).
+[[test]]
+name = "webkitgtk"
+harness = false
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

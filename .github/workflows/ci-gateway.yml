@@ -119,9 +119,27 @@ jobs:
       # version (go1.26) used to build golangci-lint is lower than the targeted
       # Go version (1.27.3)". v2.15.0 is built with go1.27.0. The workspace
       # stays on 1.26, so ci-go.yml keeps v2.9.0 until it is raised on its own.
+      # Installed here through the API, not by the action from the github.com
+      # release download link (504s); the action then runs the binary on PATH.
+      - name: Install golangci-lint
+        working-directory: .
+        env:
+          GOLANGCI_LINT_VERSION: "2.15.0"
+          GOLANGCI_LINT_SHA256: 9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
+          gh release download "v${GOLANGCI_LINT_VERSION}" --repo golangci/golangci-lint \
+            --pattern "${archive}" --output "/tmp/${archive}" --clobber
+          echo "${GOLANGCI_LINT_SHA256}  /tmp/${archive}" | sha256sum -c -
+          bin="${RUNNER_TEMP}/golangci-lint-bin"
+          mkdir -p "$bin"
+          tar -xzf "/tmp/${archive}" -C "$bin" --strip-components=1 "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"
+          echo "$bin" >> "$GITHUB_PATH"
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.15.0
+          install-mode: none
           # No `golangci-lint config verify`: it validates against a JSON
           # schema it downloads from golangci-lint.run at run time, so an
           # outage of that site redded this gate on code nobody had touched
@@ -196,6 +214,9 @@ jobs:
 
       - name: Provision the secured NATS permission test
         working-directory: .
+        env:
+          # The chart dependency fallback and the nats CLI fetch use the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/nats/ci-secure-test-env.sh
 
       - name: Run tests

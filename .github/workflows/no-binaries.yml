@@ -603,6 +603,7 @@ jobs:
           node scripts/ci/check-e2e-paths.mjs
       - name: actionlint over every workflow
         env:
+          GH_TOKEN: ${{ github.token }}
           ACTIONLINT_VERSION: 1.7.12
           ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
           # actionlint runs shellcheck over every `run:` script. Pinned too:
@@ -613,13 +614,16 @@ jobs:
         run: |
           set -euo pipefail
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -sSfL -o "${RUNNER_TEMP}/${archive}" \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          # Through the API (`gh release download`), not the github.com
+          # download link: that one has answered 504 for every repository
+          # for long stretches while the API served the same asset.
+          gh release download "v${ACTIONLINT_VERSION}" --repo rhysd/actionlint \
+            --pattern "${archive}" --output "${RUNNER_TEMP}/${archive}" --clobber
           echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}" actionlint
           sc="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-          curl -sSfL -o "${RUNNER_TEMP}/${sc}" \
-            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${sc}"
+          gh release download "v${SHELLCHECK_VERSION}" --repo koalaman/shellcheck \
+            --pattern "${sc}" --output "${RUNNER_TEMP}/${sc}" --clobber
           echo "${SHELLCHECK_SHA256}  ${RUNNER_TEMP}/${sc}" | sha256sum -c -
           tar -xJf "${RUNNER_TEMP}/${sc}" -C "${RUNNER_TEMP}"
           shellcheck="${RUNNER_TEMP}/shellcheck-v${SHELLCHECK_VERSION}/shellcheck"

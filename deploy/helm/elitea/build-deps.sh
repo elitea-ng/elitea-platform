@@ -55,5 +55,55 @@ done
 # A stale archive of our own sandbox-runtime chart would otherwise survive a
 # local edit to it: rebuild from scratch every time.
 rm -rf "${here}/charts"
-retry "$HELM" dependency build "${here}" >/dev/null
+if ! retry "$HELM" dependency build "${here}" >/dev/null; then
+  # The upstream charts' archives live on github.com release download links,
+  # which answer 504 for long stretches while the API serves the same asset.
+  # Fetch every pinned archive ourselves instead: the URL and sha256 digest
+  # come from the repository index helm just cached, a GitHub release asset
+  # goes through `gh release download` (the API; needs GH_TOKEN), and every
+  # archive must match its digest. Our file:// charts are packaged locally.
+  echo "build-deps: helm dependency build failed; fetching the pinned archives directly" >&2
+  cache="$("$HELM" env HELM_REPOSITORY_CACHE)"
+  rm -rf "${here}/charts"; mkdir -p "${here}/charts"
+  # name<TAB>version<TAB>repository, one row per Chart.lock dependency.
+  rows="$(awk '
+    $1 == "-" && $2 == "name:" { n = $3; next }
+    $1 == "name:" { n = $2; next }
+    $1 == "repository:" { r = $2; next }
+    $1 == "version:" && n != "" { print n "\t" $2 "\t" r; n = "" }
+  ' "${here}/Chart.lock")"
+  while IFS=$'\t' read -r dep ver url; do
+    [ -n "$dep" ] || continue
+    case "$url" in
+      file://*)
+        "$HELM" package "${here}/${url#file://}" --destination "${here}/charts" >/dev/null
+        continue ;;
+    esac
+    name="elitea-dep-$(printf '%s' "${url#https://}" | tr -c 'A-Za-z0-9' '-' | sed 's/-*$//')"
+    index="${cache}/${name}-index.yaml"
+    # The entry for this chart and version: its digest and first URL.
+    read -r digest asset < <(awk -v chart="$dep" -v want="$ver" '
+      /^  [^ -][^:]*:$/ { cur = $1; sub(/:$/, "", cur); next }
+      cur != chart { next }
+      /^  - / { dg = ""; u = ""; inurls = 0 }
+      /^    digest: / { dg = $2 }
+      /^    urls:/ { inurls = 1; next }
+      inurls && /^    - / { if (u == "") u = $2; next }
+      /^    [a-z]/ { inurls = 0 }
+      /^    version: / { v = $2; gsub(/"/, "", v); if (v == want) { print dg, u; exit } }
+    ' "$index")
+    [ -n "${digest:-}" ] && [ -n "${asset:-}" ] || { echo "build-deps: ${dep} ${ver} not in ${index}" >&2; exit 1; }
+    # A relative URL is relative to the repository.
+    case "$asset" in https://*) ;; *) asset="${url%/}/${asset}" ;; esac
+    out="${here}/charts/${dep}-${ver}.tgz"
+    if [[ "$asset" =~ ^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/([^/]+)$ ]] && [ -n "${GH_TOKEN:-}" ]; then
+      retry gh release download "${BASH_REMATCH[2]}" --repo "${BASH_REMATCH[1]}" \
+        --pattern "${BASH_REMATCH[3]}" --output "$out" --clobber
+    else
+      retry curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$out" "$asset"
+    fi
+    echo "${digest}  ${out}" | sha256sum -c - >/dev/null \
+      || { echo "build-deps: ${dep} ${ver} does not match its index digest" >&2; exit 1; }
+  done <<< "$rows"
+fi
 "$HELM" dependency list "${here}" 2>/dev/null

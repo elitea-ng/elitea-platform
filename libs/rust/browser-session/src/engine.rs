@@ -31,15 +31,22 @@
 //!   (decision 1). The supervisor's profile refuses the flag on a shared
 //!   kernel; this binary refuses it unless told the runtime is gVisor.
 
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Stdio;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(unix)]
 use command_fds::{CommandFdExt, FdMapping};
+#[cfg(unix)]
 use tokio::net::unix::pipe;
+#[cfg(unix)]
 use tokio::process::{Child, Command};
 
+#[cfg(unix)]
 use crate::cdp::Connection;
 
 /// The image's engine.
@@ -266,11 +273,16 @@ fn check_proxy(proxy: &str) -> Result<(), ConfigError> {
 }
 
 /// A running engine. Dropping it kills the engine and removes its profile.
+/// Unix only: the engine is started with its debugging pipe on fds 3 and
+/// 4. The desktop's Windows driver reuses [`crate::driver::CdpDriver`]
+/// over `WebView2`'s own CDP and starts no engine.
+#[cfg(unix)]
 pub struct Engine {
     child: Child,
     user_data_dir: PathBuf,
 }
 
+#[cfg(unix)]
 impl Engine {
     /// Start the engine and connect to its debugging pipe.
     ///
@@ -392,6 +404,7 @@ impl Engine {
     }
 }
 
+#[cfg(unix)]
 /// Poll Moli's discovery endpoint until it answers with its browser
 /// WebSocket URL on `127.0.0.1:<port>`.
 async fn moli_endpoint(port: u16) -> String {
@@ -419,12 +432,14 @@ async fn moli_endpoint(port: u16) -> String {
 /// ([`crate::cdp::MAX_MESSAGE_BYTES`]), not tungstenite's defaults (16 MiB
 /// frames, 64 MiB messages), which a full-page screenshot or a large
 /// accessibility tree passes.
+#[cfg(unix)]
 fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
     tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(crate::cdp::MAX_MESSAGE_BYTES))
         .max_frame_size(Some(crate::cdp::MAX_MESSAGE_BYTES))
 }
 
+#[cfg(unix)]
 /// `webSocketDebuggerUrl` from a `/json/version` response, only when it
 /// names the engine's own loopback port. The host may be `127.0.0.1` or
 /// `localhost`; the URL connected to is always rebuilt on `127.0.0.1` and
@@ -449,6 +464,7 @@ fn websocket_url(response: &[u8], port: u16) -> Option<String> {
         .then(|| format!("ws://127.0.0.1:{port}{path}"))
 }
 
+#[cfg(unix)]
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = self.child.start_kill();
@@ -456,7 +472,7 @@ impl Drop for Engine {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

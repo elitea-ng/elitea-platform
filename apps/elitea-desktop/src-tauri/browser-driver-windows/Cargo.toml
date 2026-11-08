@@ -1,0 +1,56 @@
+[package]
+name = "elitea-browser-driver-windows"
+version = "0.1.0"
+description = "The desktop browser pane's Windows driver (ADR-0048 decision 6): WebView2's own CDP (CallDevToolsProtocolMethod and the DevTools event receivers) as a NUL-delimited CDP stream, which the browser-session CdpDriver drives."
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+# A crate of its own because the WebView2 calls are COM FFI (`unsafe`),
+# which the desktop host forbids for itself (`unsafe_code = "forbid"`). One
+# of the TWO first-party crates allowed `unsafe` (owner decisions on #1634
+# and #1593, recorded in the repo-root AGENTS.md): `unsafe_code = "deny"`,
+# each unsafe block opted in with `#[allow(unsafe_code)]` and explained by a
+# `// SAFETY:` comment, and only safe functions exported. The CDP mapping
+# itself (the accessibility tree, DOM, input, screenshots) is the safe
+# elitea-browser-session crate's `CdpDriver`, shared with the cloud browser
+# (#1594). Off Windows the crate is empty.
+
+[dependencies]
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["io-util", "sync", "rt", "macros"] }
+
+# Both already in the desktop's tree through tauri and wry (same versions).
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+tauri = { version = "2.12", default-features = false, features = ["wry"] }
+
+[dev-dependencies]
+# The bridge tests (`#[tokio::test]`).
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "sync"] }
+
+# The WebView2 conformance run (tests/webview2.rs): a plain tao window with
+# a wry webview, driven by the cloud CdpDriver over this crate's bridge. It
+# owns `main` (UI thread) and is ignored unless asked for with `-- --ignored`.
+[target.'cfg(windows)'.dev-dependencies]
+elitea-browser-session = { path = "../../../../libs/rust/browser-session" }
+elitea-browser-tools = { path = "../../../../libs/rust/browser-tools" }
+tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
+wry = "0.57"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time", "sync", "io-util", "macros"] }
+
+[[test]]
+name = "webview2"
+harness = false
+
+[lints.rust]
+# Not `forbid` (every other first-party crate): FFI here is opted in per
+# block with `#[allow(unsafe_code)]` and a `// SAFETY:` comment (AGENTS.md).
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"

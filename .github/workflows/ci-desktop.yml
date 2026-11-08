@@ -1,7 +1,8 @@
 name: CI — Desktop client
 
 # apps/elitea-desktop (ADR-0029 decision 9): the Tauri host and the elitea-web
-# `desktop` build mode it bundles. ONE job on macOS (the first platform): the
+# `desktop` build mode it bundles. ONE job on macOS (the first platform), plus
+# `pane-drivers` (Windows and Linux: the browser pane's drivers, #1593): the
 # organisation is on the GitHub free plan with a 20-concurrent-job cap, and a
 # macOS minute costs ten Linux ones, so this is deliberately a single cached job
 # that does the cheap, decisive work — Rust format, lint and tests for the host,
@@ -29,6 +30,9 @@ on:
       - "libs/rust/content-source/**"
       # The browser tool contract the pane driver implements (ADR-0048).
       - "libs/rust/browser-tools/**"
+      # The cloud browser's CDP driver the Windows pane drives WebView2 with
+      # (ADR-0048 decision 6, #1593).
+      - "libs/rust/browser-session/**"
       # The desktop control driver the computer toolset drives (ADR-0047)
       # and the vendored agent-desktop crates it is built on.
       - "libs/rust/desktop-control/**"
@@ -201,3 +205,110 @@ jobs:
           cargo fmt -p elitea-local-index -- --check
           cargo clippy --locked -p elitea-local-index --all-targets -- -D warnings
           cargo test --locked -p elitea-local-index --all-targets
+
+  # The browser pane's Windows and Linux drivers (ADR-0048 decision 6,
+  # #1593). The macOS job above is the one that builds and tests the whole
+  # host; this job checks that the host and its pane drivers BUILD on the
+  # other two systems (clippy on the workspace on Linux; on Windows the pane
+  # driver crates only, see the matrix), runs the pane's unit tests there, and runs each system's real-engine conformance run: the WebView2
+  # bridge with the cloud CdpDriver on Windows, WebKitGTK under xvfb (X11, so
+  # the XTEST trusted-input fallback is on) on Linux. Not the full host suite:
+  # that is the macOS job's, and the host's other modules are unchanged here.
+  # The web bundle is a stub (the tests render nothing); `npm ci` is for the
+  # pinned tsc the page scripts are compiled with (browser-driver-dom).
+  pane-drivers:
+    name: Browser pane drivers — ${{ matrix.os }} (clippy, tests, real engine)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows lints and tests the pane driver crates only: the host links
+        # elitea-local-tools, which is Unix-only today (PTY sessions, file
+        # descriptors, rustix), so the host itself does not build on Windows
+        # until the Windows desktop build (#1697) ports it. Linux builds the
+        # whole host.
+        include:
+          - os: windows-latest
+            clippy: -p elitea-browser-driver-dom -p elitea-browser-driver-windows
+            tests: -p elitea-browser-driver-dom -p elitea-browser-driver-windows
+            host_tests: false
+            engine_run: cargo test --locked -p elitea-browser-driver-windows --test webview2 -- --ignored
+          - os: ubuntu-latest
+            clippy: --workspace
+            tests: -p elitea-browser-driver-dom -p elitea-browser-driver-windows -p elitea-browser-driver-linux
+            host_tests: true
+            engine_run: xvfb-run -a cargo test --locked -p elitea-browser-driver-linux --test webkitgtk -- --ignored
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      # Linux only: on Windows `npm config get cache` answers a backslash
+      # path, which main-write-cache's literal-path guard (written for
+      # $HOME/.npm) refuses. The cache only speeds `npm ci` up; Windows runs it
+      # cold rather than teaching the shared guard a second path spelling.
+      - name: Restore the npm cache (pull requests read, main writes)
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      - name: Install web (locked, for tsc)
+        working-directory: apps/elitea-web
+        # The npm-cache step sets these for Linux; Windows fetches cold, so it
+        # needs the same patience with the registry.
+        env:
+          NPM_CONFIG_FETCH_RETRIES: "6"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
+        run: npm ci
+
+      - name: The embedded web bundle is a stub (the tests render nothing)
+        run: |
+          mkdir -p apps/elitea-web/dist-desktop
+          printf '<!doctype html><title>stub</title>' > apps/elitea-web/dist-desktop/index.html
+
+      - name: Host build dependencies (Tauri on Linux, and a virtual display)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev pkg-config xvfb
+
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: apps/elitea-desktop/src-tauri
+          prefix-key: pane-drivers
+
+      - name: Run Clippy (Linux the host and every pane driver, Windows its drivers)
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo clippy --locked ${{ matrix.clippy }} --all-targets -- -D warnings
+
+      - name: Pane driver tests
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo test --locked ${{ matrix.tests }}
+
+      - name: The host's pane tests
+        if: matrix.host_tests
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo test --locked -p elitea-desktop --lib browser_
+
+      # The conformance kit, the rules' reads and a page that takes real
+      # input only, against the system's own engine. It opens one window.
+      - name: Pane driver on the system's engine
+        working-directory: apps/elitea-desktop/src-tauri
+        timeout-minutes: 10
+        run: ${{ matrix.engine_run }}

@@ -210,6 +210,30 @@ pub struct Watch {
     pub page_target: String,
     /// The proxy's run token: answered on `Fetch.authRequired` from the proxy.
     pub proxy_token: Option<String>,
+    /// Answer the page's dialogs (the cloud page has no person at it). Off
+    /// for the desktop's page, whose person answers them.
+    pub answer_dialogs: bool,
+    /// More set-up for each out-of-process frame, before it runs (the
+    /// desktop's input reporter); `None` for the cloud page.
+    pub child_setup: Option<ChildSetup>,
+}
+
+/// The commands each attached out-of-process frame gets before it runs
+/// (`Runtime.runIfWaitingForDebugger`), and what to do when one of them
+/// fails: the frame is then not set up as asked (the desktop: its person's
+/// input is not reported, so the agent pauses: fail closed).
+#[derive(Clone)]
+pub struct ChildSetup {
+    pub commands: Vec<(&'static str, Value)>,
+    pub failed: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl std::fmt::Debug for ChildSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChildSetup")
+            .field("commands", &self.commands)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Start the event task. Subscribe before the first command whose events
@@ -302,7 +326,7 @@ fn handle(
             let url = params["url"].as_str().unwrap_or_default().to_owned();
             tracker.update(|state| state.url = url);
         }
-        "Page.javascriptDialogOpening" => {
+        "Page.javascriptDialogOpening" if watch.answer_dialogs => {
             // The agent cannot see a dialog: an alert or a "leave this
             // page?" is accepted, a confirm or prompt declined, so the page
             // never decides something on the agent's behalf.
@@ -442,6 +466,7 @@ fn attached(watch: &Watch, tracker: &Tracker, params: &Value) {
     }
     let cdp = watch.cdp.clone();
     let token = watch.proxy_token.is_some();
+    let child_setup = watch.child_setup.clone();
     tokio::spawn(async move {
         let session = Some(session.as_str());
         if token {
@@ -454,6 +479,14 @@ fn attached(watch: &Watch, tracker: &Tracker, params: &Value) {
             let _ = cdp
                 .call(session, "Target.setAutoAttach", auto_attach_params())
                 .await;
+            if let Some(setup) = child_setup {
+                for (method, params) in setup.commands {
+                    if cdp.call(session, method, params).await.is_err() {
+                        (setup.failed)();
+                        break;
+                    }
+                }
+            }
         }
         let _ = cdp
             .call(session, "Runtime.runIfWaitingForDebugger", json!({}))

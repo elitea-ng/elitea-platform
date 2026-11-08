@@ -13,6 +13,8 @@ mod auth;
 mod browser_control;
 mod browser_pane;
 mod browser_tools;
+#[cfg(windows)]
+mod browser_windows;
 mod commands;
 mod compaction_settings;
 mod computer_commands;

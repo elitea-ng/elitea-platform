@@ -1,6 +1,7 @@
 //! [`WebDriver`]: the contract's [`BrowserDriver`] over an [`Engine`].
 //!
-//! The engine is the WebKit part ([`crate::webkit::WebKitEngine`] on macOS):
+//! The engine is the native part (`WebKitEngine` on macOS, the WebKitGTK
+//! engine of the desktop host on Linux):
 //! it runs the page script in the driver's private content world, in one
 //! frame, and does what only the native side can (load, history, the page
 //! state, the screenshot, trusted input). Everything the contract asks a
@@ -162,7 +163,7 @@ fn split_key(key: u64) -> (usize, u64) {
     )
 }
 
-/// The macOS (WebKit) browser driver of one pane.
+/// The webview browser driver of one pane (macOS and Linux).
 pub struct WebDriver<E: Engine> {
     engine: E,
     check: NavigationCheck,

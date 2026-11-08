@@ -32,6 +32,8 @@
 //! steps (click or type by role and name, wait), so every engine sees the
 //! same calls in the same order and no model cost or variance enters the
 //! comparison.
+// The engines run on unix only (their debugging pipe).
+#![cfg(unix)]
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
