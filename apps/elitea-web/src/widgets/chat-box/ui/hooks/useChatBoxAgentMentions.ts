@@ -3,9 +3,10 @@
  *
  * In a conversation with two or more agents, the "@" list and the "#" picker
  * also offer the conversation's agents. A pick inserts the mention as a
- * highlighted token and records the agent; the send then carries
- * `addressed_to = addressedTo(text, chosen)` (`@elitea/client-core`), so a
- * mention the person deleted again addresses no one.
+ * highlighted token; the send carries `addressed_to = addressedTo(text,
+ * agents)` (`@elitea/client-core`), read from the message's own text, so a
+ * mention the person deleted again addresses no one and a queued message
+ * keeps its own addressing.
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -14,6 +15,7 @@ import { addressedTo, type AddressableAgent } from '@elitea/client-core/conversa
 import type { ChatInputHandle } from '@/features/chat-input';
 
 import { triggerQueryEnd } from './triggerQueryRange';
+import { positiveParticipantId } from './useChatBoxSend.floor';
 
 /** The prefix that marks an agent row in the "@" list, which is keyed by participant id. */
 export const AGENT_CANDIDATE_PREFIX = 'agent:';
@@ -40,8 +42,7 @@ function text(value: unknown): string {
 }
 
 function participantId(value: unknown): number {
-  const id = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value;
-  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? id : 0;
+  return positiveParticipantId(value) ?? 0;
 }
 
 /** The name an agent participant shows and a mention spells: its persona's name, else the agent's. */
@@ -113,15 +114,13 @@ export interface UseChatBoxAgentMentionsResult {
    * text) with the agent's mention and records the agent.
    */
   readonly insert: (agent: AddressableAgent, sigil: '@' | '#', anchor: number | null, countedQuery: string) => void;
-  /** The `addressed_to` of `question`; clears the picks. */
+  /** The `addressed_to` of `question`: the conversation's agents its text mentions. */
   readonly takeAddressedTo: (question: string) => number[];
 }
 
 export function useChatBoxAgentMentions(participants: readonly unknown[] | undefined, chatInput: RefObject<ChatInputHandle | null>): UseChatBoxAgentMentionsResult {
   const agents = useMemo(() => conversationAgents(participants), [participants]);
   const [chosen, setChosen] = useState<readonly AddressableAgent[]>([]);
-  const chosenRef = useRef(chosen);
-  chosenRef.current = chosen;
   const [content, setContent] = useState('');
 
   const insert = useCallback((agent: AddressableAgent, sigil: '@' | '#', anchor: number | null, countedQuery: string) => {
@@ -135,12 +134,12 @@ export function useChatBoxAgentMentions(participants: readonly unknown[] | undef
     setChosen((prev) => (prev.some((a) => a.participantId === agent.participantId) ? prev : [...prev, agent]));
   }, [chatInput]);
 
-  const takeAddressedTo = useCallback((question: string) => {
-    const ids = addressedTo(question, chosenRef.current);
-    setChosen([]);
-    setContent('');
-    return ids;
-  }, []);
+  // Read from the message's own text against the conversation's agents, so a
+  // message that waited in the queue keeps its addressing and the draft being
+  // typed keeps its picks. The picks only drive the highlight.
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
+  const takeAddressedTo = useCallback((question: string) => (agentsRef.current.length >= 2 ? addressedTo(question, agentsRef.current) : []), []);
 
   const highlightRanges = useMemo(() => agentMentionRanges(content, chosen), [content, chosen]);
   return { agents, enabled: isMultiAgent(agents), chosen, highlightRanges, onInputChange: setContent, insert, takeAddressedTo };

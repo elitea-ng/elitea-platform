@@ -71,36 +71,48 @@ export interface AddressableAgent {
 }
 
 /**
- * The `addressed_to` of a message: the agents chosen in the composer, in the
- * order chosen, kept only while the composer text still mentions them
- * (`@Name` or `#Name`), deduplicated and capped. An empty list addresses no
- * one, and the request then omits the field.
+ * The `addressed_to` of a message: the agents its text mentions (`@Name` or
+ * `#Name`, a whole name), in the order the text first names them,
+ * deduplicated and capped. It is read from the text alone, so a message that
+ * waits in a queue keeps its own addressing, and a mention deleted again
+ * addresses no one. An empty list addresses no one, and the request then
+ * omits the field. Of two agents whose names overlap, the longer name wins
+ * where both match.
  */
-export function addressedTo(text: string, chosen: readonly AddressableAgent[]): number[] {
-  const out: number[] = [];
-  for (const agent of chosen) {
+export function addressedTo(text: string, agents: readonly AddressableAgent[]): number[] {
+  const found: { at: number; id: number }[] = [];
+  const longestFirst = [...agents].sort((a, b) => b.name.length - a.name.length);
+  const taken: [number, number][] = [];
+  for (const agent of longestFirst) {
     const id = positiveId(agent.participantId);
-    if (id === 0 || out.includes(id) || agent.name === '') continue;
-    if (!mentions(text, agent.name)) continue;
-    out.push(id);
-    if (out.length === MAX_ADDRESSED) break;
+    if (id === 0 || agent.name === '' || found.some((entry) => entry.id === id)) continue;
+    const at = firstMention(text, agent.name, taken);
+    if (at < 0) continue;
+    taken.push([at, at + 1 + agent.name.length]);
+    found.push({ at, id });
   }
-  return out;
+  return found
+    .sort((a, b) => a.at - b.at)
+    .map((entry) => entry.id)
+    .slice(0, MAX_ADDRESSED);
 }
 
-function mentions(text: string, name: string): boolean {
+/** Where the text first mentions `name` outside the `taken` spans; -1 when it does not. */
+function firstMention(text: string, name: string, taken: readonly [number, number][]): number {
+  let first = -1;
   for (const sigil of ['@', '#']) {
-    let from = 0;
-    for (;;) {
-      const at = text.indexOf(sigil + name, from);
-      if (at < 0) break;
+    for (let at = text.indexOf(sigil + name); at >= 0; at = text.indexOf(sigil + name, at + 1)) {
       const before = at === 0 ? '' : (text[at - 1] ?? '');
       const after = text[at + 1 + name.length] ?? '';
-      if ((before === '' || !isWordChar(before)) && (after === '' || !isWordChar(after))) return true;
-      from = at + 1;
+      const whole = (before === '' || !isWordChar(before)) && (after === '' || !isWordChar(after));
+      const inside = taken.some(([from, to]) => at >= from && at < to);
+      if (whole && !inside) {
+        if (first < 0 || at < first) first = at;
+        break;
+      }
     }
   }
-  return false;
+  return first;
 }
 
 function isWordChar(char: string): boolean {

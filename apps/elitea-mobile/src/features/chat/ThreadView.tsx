@@ -511,8 +511,11 @@ export function ThreadView({
       setChipOpen(true);
       return TURN_TAKING_COPY.chooseAgentFirst;
     }
+    // Main lets the chip's agent answer first only when it is addressed; otherwise the first
+    // addressee answers, so the turn starts as that agent (its live reply carries its name).
+    const redirected = addressedTo.length > 0 && !(target.ok && addressedTo.includes(target.participantId) && !needsChoice);
     const addressing: Pick<SendExtras, 'addressedTo' | 'participantId'> =
-      addressedTo.length > 0 ? { addressedTo, ...(needsChoice ? { participantId: addressedTo[0] } : {}) } : {};
+      addressedTo.length > 0 ? { addressedTo, ...(redirected ? { participantId: addressedTo[0] } : {}) } : {};
     // The first addressee becomes the chosen target, so the next message (a steer while it answers) has one.
     if (needsChoice && addressedTo.length > 0 && chosenKey !== null) setTarget(chosenKey, addressedTo[0]);
     if (trayItems.length === 0) return turn.send(text, { mentions, ...addressing });
@@ -842,7 +845,8 @@ export function ThreadView({
           canAddAgent={agentsCanJoin(detail)}
           onChanged={() => void queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, ref) })}
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
-          conversationMeta={isOfflineCopy(detail) ? undefined : (detail?.meta ?? {})}
+          // The update replaces the whole meta: no lead control without the meta that was read.
+          conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
         />
       ) : null}
       <ThreadLayout

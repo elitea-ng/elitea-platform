@@ -7,10 +7,14 @@
  */
 import { MAX_ADDRESSED } from '@elitea/client-core/conversation';
 
-function positiveId(value: unknown): number | undefined {
-  const numeric = typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : value;
-  return typeof numeric === 'number' && Number.isSafeInteger(numeric) && numeric > 0 ? numeric : undefined;
+/** A positive integer participant id, from a number or its decimal string; `undefined` otherwise. */
+export function positiveParticipantId(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const numeric = Number(raw);
+  return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : undefined;
 }
+
+const positiveId = positiveParticipantId;
 
 /**
  * The addressed participant ids a composer payload carries (`addressedTo`):

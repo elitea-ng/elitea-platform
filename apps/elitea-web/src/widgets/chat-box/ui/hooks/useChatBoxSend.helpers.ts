@@ -5,7 +5,7 @@ import type { ChatStreamContext } from '@/features/chat-messages';
 import { markGrantsTurnedOff } from '@/features/unattended';
 
 import type { StreamStartOutcome } from './useChatBoxHandlers.helpers';
-import { addressedField } from './useChatBoxSend.floor';
+import { addressedField, positiveParticipantId } from './useChatBoxSend.floor';
 
 // Derive these types through the public entity API; avoid a cross-slice deep import.
 type UploadAttachments = ReturnType<typeof useUploadAttachments>['uploadAttachments'];
@@ -138,11 +138,7 @@ function executionStepsLimit(
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-export function positiveParticipantId(raw: unknown): number | undefined {
-  if (raw === undefined || raw === null || raw === '') return undefined;
-  const numeric = Number(raw);
-  return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
-}
+export { positiveParticipantId };
 
 /** ADR-0050 D7c sticky target: the newest history row whose `participantId` (its `sent_to_id`) names an agent or the conversation's model. */
 export function stickyAgentParticipantId(

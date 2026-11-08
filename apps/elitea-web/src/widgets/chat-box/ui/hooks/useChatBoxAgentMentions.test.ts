@@ -64,3 +64,20 @@ describe('floorTarget', () => {
     expect(floorTarget({ ...input, agents: agents.slice(0, 1), meta: {} })).toBeUndefined();
   });
 });
+
+describe('queuedSend', () => {
+  it('addresses a queued message from its own text, whatever the composer holds now', async () => {
+    const { renderHook } = await import('@testing-library/react');
+    const { useChatBoxMentions } = await import('./useChatBoxMentions');
+    const sent: unknown[] = [];
+    const sendQuestion = (params: unknown) => { sent.push(params); return Promise.resolve({ success: true }); };
+    const state = { onInputChange: () => undefined, combinedHighlightRanges: [], skill: {}, keyDown: {} } as never;
+    const { result } = renderHook(() => useChatBoxMentions({ state, onChangeParticipant: undefined, participants: PARTICIPANTS, sendQuestion }));
+    await result.current.queuedSend({ question: 'please #CI Doctor', attachments: [] });
+    await result.current.queuedSend({ question: 'no one', attachments: [] });
+    expect(sent).toEqual([
+      { question: 'please #CI Doctor', attachments: [], addressedTo: [13] },
+      { question: 'no one', attachments: [], addressedTo: [] },
+    ]);
+  });
+});

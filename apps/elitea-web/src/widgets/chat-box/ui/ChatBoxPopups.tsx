@@ -100,12 +100,11 @@ export function buildChatBoxPopupsProps(input: {
   readonly onSelectTool: ChatBoxPopupsSkill['onSelectTool'];
   /** Attaches a "#"-picked agent or pipeline (the "+" menu's `onSelectParticipant`). */
   readonly onAddParticipant?: ((selection: unknown) => void) | undefined;
-  /** ADR-0050 7c: the conversation's agents "@" and "#" can address, and the "#" pick. */
-  readonly agents?: readonly AddressableAgent[] | undefined;
-  readonly onSelectHashAgent?: ((agent: AddressableAgent) => void) | undefined;
+  /** ADR-0050 7c: the conversation's agents "@" and "#" can address (`addressableAgents`), and the "#" pick. */
+  readonly mentions?: { readonly addressableAgents: readonly AddressableAgent[]; readonly handleSelectHashAgent: (agent: AddressableAgent) => void } | undefined;
 }): ChatBoxPopupsProps {
   const { state, onChangeParticipant, existingParticipants, projectId, onSelectUser, onSelectTool, onAddParticipant } = input;
-  const agents = input.agents ?? [];
+  const agents = input.mentions?.addressableAgents ?? [];
   // "#" lists the conversation's agents while one matches; otherwise the project picker attaches a new one.
   const hashAgents = state.keyDown.isProcessingSymbols ? matchingAgents(agents, state.keyDown.query) : [];
   return {
@@ -113,7 +112,7 @@ export function buildChatBoxPopupsProps(input: {
       agents: hashAgents,
       hashOpen: hashAgents.length > 0,
       hashQuery: state.keyDown.query,
-      onSelectHash: (agent) => { input.onSelectHashAgent?.(agent); },
+      onSelectHash: (agent) => { input.mentions?.handleSelectHashAgent?.(agent); },
       onCloseHash: state.keyDown.stopProcessingSymbols,
     },
     hashPicker: {

@@ -28,10 +28,17 @@ describe('metaWithLead', () => {
 describe('addressedTo', () => {
   const a = { participantId: 21, name: 'Analyst' };
   const r = { participantId: 22, name: 'Reviewer' };
-  it('keeps the chosen agents the text still mentions, in the order chosen', () => {
-    assert.deepEqual(addressedTo('@Reviewer and #Analyst please', [r, a]), [22, 21]);
+  it('addresses the agents the text mentions, in the order it names them', () => {
+    assert.deepEqual(addressedTo('@Reviewer and #Analyst please', [a, r]), [22, 21]);
+    assert.deepEqual(addressedTo('#Analyst then @Reviewer', [r, a]), [21, 22]);
     assert.deepEqual(addressedTo('only @Analyst', [r, a]), [21]);
     assert.deepEqual(addressedTo('no one', [r, a]), []);
+  });
+  it('prefers the longer of two overlapping names', () => {
+    const ci = { participantId: 31, name: 'CI' };
+    const doctor = { participantId: 32, name: 'CI Doctor' };
+    assert.deepEqual(addressedTo('@CI Doctor look', [ci, doctor]), [32]);
+    assert.deepEqual(addressedTo('@CI Doctor and @CI', [ci, doctor]), [32, 31]);
   });
   it('matches a whole name only', () => {
     assert.deepEqual(addressedTo('@Analysts', [a]), []);

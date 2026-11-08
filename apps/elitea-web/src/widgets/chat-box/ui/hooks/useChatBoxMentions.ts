@@ -11,6 +11,7 @@ import type { AddressableAgent } from '@elitea/client-core/conversation';
 import type { ChatInputHandle } from '@/features/chat-input';
 
 import { agentOfCandidate, useChatBoxAgentMentions } from './useChatBoxAgentMentions';
+import type { SendQuestionParams, SendResult } from './useChatBoxHandlers.helpers';
 import type { useChatBoxState, ResolvedUserMention } from './useChatBoxState';
 
 export interface UseChatBoxMentionsParams {
@@ -19,7 +20,12 @@ export interface UseChatBoxMentionsParams {
   /** The conversation's participants (raw rows): its agents can be addressed. */
   readonly participants?: readonly unknown[] | undefined;
   readonly chatInput?: RefObject<ChatInputHandle | null> | undefined;
+  /** The send the queue delivers through; `queuedSend` adds each message's own `addressedTo`. */
+  readonly sendQuestion?: QueuedSend | undefined;
 }
+
+type QueuedSend = (params: SendQuestionParams) => Promise<SendResult>;
+const NO_SEND: QueuedSend = () => Promise.resolve({ success: false });
 
 export interface UseChatBoxMentionsResult {
   readonly handleMentionChange: (mentions: readonly { readonly user: unknown; readonly isValid: boolean }[]) => void;
@@ -36,12 +42,20 @@ export interface UseChatBoxMentionsResult {
   readonly takeAddressedTo: (question: string) => number[];
   /** Puts `@Name` at the start of the composer text and records the agent ("To:" with a lead). */
   readonly handleAddressAgent: (agent: AddressableAgent) => void;
+  /**
+   * `sendQuestion` with each message's `addressedTo` read from its own text:
+   * the queue delivers a message after the turn ends, when the composer may
+   * hold the next draft.
+   */
+  readonly queuedSend: QueuedSend;
 }
 
 const NO_CHAT_INPUT: RefObject<ChatInputHandle | null> = { current: null };
 
-export function useChatBoxMentions({ state, onChangeParticipant, participants, chatInput = NO_CHAT_INPUT }: UseChatBoxMentionsParams): UseChatBoxMentionsResult {
+export function useChatBoxMentions({ state, onChangeParticipant, participants, chatInput = NO_CHAT_INPUT, sendQuestion = NO_SEND }: UseChatBoxMentionsParams): UseChatBoxMentionsResult {
   const agentMentions = useChatBoxAgentMentions(participants, chatInput);
+  const { takeAddressedTo } = agentMentions;
+  const queuedSend = useCallback<QueuedSend>((params) => sendQuestion({ ...params, addressedTo: takeAddressedTo(params.question) }), [sendQuestion, takeAddressedTo]);
   const handleMentionChange = useCallback(
     (mentions: readonly { readonly user: unknown; readonly isValid: boolean }[]) => {
       const mentionedEveryone = mentions.find((m) => (m.user as ResolvedUserMention | undefined)?.id === '@everyone');
@@ -106,7 +120,9 @@ export function useChatBoxMentions({ state, onChangeParticipant, participants, c
     handleSelectHashAgent,
     highlightRanges,
     onInputChange,
-    takeAddressedTo: agentMentions.takeAddressedTo,
+    takeAddressedTo,
     handleAddressAgent,
+    queuedSend,
   };
 }
+

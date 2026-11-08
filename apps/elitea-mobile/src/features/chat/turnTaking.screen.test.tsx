@@ -110,8 +110,8 @@ describe('send body: addressed_to', () => {
     await fireEvent.changeText(screen.getByLabelText('Message'), 'ask @Writer to check');
     await fireEvent.press(screen.getByRole('button', { name: /send/i }));
     await waitFor(() => expect(sends(server)).toHaveLength(1));
-    // The sticky target (Research answered last) stays the participant; the mention addresses Writer.
-    expect(JSON.parse(sends(server)[0].body ?? '{}')).toMatchObject({ participant_id: 2, addressed_to: [5] });
+    // Research (the sticky target) is not addressed, so Main routes to Writer: the turn starts as Writer.
+    expect(JSON.parse(sends(server)[0].body ?? '{}')).toMatchObject({ participant_id: 5, addressed_to: [5] });
   });
 
   it('a 422 addressee_not_in_conversation reads as a sentence, not a code', async () => {
