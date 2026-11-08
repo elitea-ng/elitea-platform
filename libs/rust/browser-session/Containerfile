@@ -143,6 +143,11 @@ CMD ["idle"]
 # needs and the image lacks fails the build here.
 FROM runtime AS lite
 USER 0:0
+# Moli links fontconfig (the bake-off's first build found it missing);
+# chrome-headless-shell does not, so the full image stays without it.
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y libfontconfig1 && \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=moli /opt/moli/ /opt/moli/
 RUN set -eu; \
     missing="$(ldd /opt/moli/moli | grep 'not found' || true)"; \
