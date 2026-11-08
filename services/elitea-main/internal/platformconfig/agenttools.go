@@ -15,7 +15,7 @@ import (
 // meta.tool_envelope can only narrow the tools a run has; these ceilings
 // narrow the envelope again:
 //
-//   - max_tool_limit is the most calls of any one tool in a run (0 is none);
+//   - max_tool_limit is the most calls of any one toolkit tool in a turn (0 is none);
 //   - unattended_tools_allowlist names the tools that are not read-only and
 //     that an agent may still use in a turn nobody waits on. A tool that
 //     writes and is not named stays out of unattended turns whatever the
