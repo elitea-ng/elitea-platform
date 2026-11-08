@@ -208,11 +208,14 @@ fn reach(path: &Path) -> Reach {
 }
 
 /// How to let the app read a folder the OS keeps from it.
-fn grant_access_hint() -> &'static str {
+fn grant_access_hint() -> String {
     if cfg!(target_os = "macos") {
-        "Allow Elitea in System Settings › Privacy & Security › Files and Folders (or Full Disk Access), then run the checks again."
+        format!(
+            "Allow {} in System Settings › Privacy & Security › Files and Folders (or Full Disk Access), then run the checks again.",
+            crate::brand::product()
+        )
     } else {
-        "Check that your user may read them, then run the checks again."
+        "Check that your user may read them, then run the checks again.".to_owned()
     }
 }
 
@@ -742,15 +745,19 @@ impl LocalDoctor {
                 id,
                 title,
                 Status::Fail,
-                format!("Written by a newer version of Elitea (schema {version}); update the app."),
+                format!(
+                    "Written by a newer version of {} (schema {version}); update the app.",
+                    crate::brand::product()
+                ),
             ),
             Ok(_) if !db.open => Check::new(
                 id,
                 title,
                 Status::Warn,
                 format!(
-                    "The {} looks fine now but did not open at launch; restart Elitea.",
-                    db.noun
+                    "The {} looks fine now but did not open at launch; restart {}.",
+                    db.noun,
+                    crate::brand::product()
                 ),
             ),
             Ok(_) => {
@@ -890,7 +897,8 @@ impl LocalDoctor {
         }
         if !no_access.is_empty() {
             parts.push(format!(
-                "Elitea is not allowed to read: {}. {}",
+                "{} is not allowed to read: {}. {}",
+                crate::brand::product(),
                 no_access.join(", "),
                 grant_access_hint()
             ));
@@ -908,10 +916,11 @@ impl LocalDoctor {
         check
             .fix("workspaces.drop_missing", "Remove them from the list")
             .confirming(format!(
-                "Remove {} from the list? What Elitea keeps for them on this computer is deleted: \
+                "Remove {} from the list? What {} keeps for them on this computer is deleted: \
                  remembered approvals, undo checkpoints and their thread history here. \
                  The folders themselves are not touched.",
-                missing.join(", ")
+                missing.join(", "),
+                crate::brand::product()
             ))
     }
 
@@ -947,9 +956,10 @@ impl LocalDoctor {
         )
         .fix("worktrees.prune", "Prune them")
         .confirming(format!(
-            "Prune {}? Their folders, git admin directories and what Elitea keeps for them are \
+            "Prune {}? Their folders, git admin directories and what {} keeps for them are \
              deleted; branches with commits on them are kept.",
-            names.join(", ")
+            names.join(", "),
+            crate::brand::product()
         ))
     }
 
@@ -975,9 +985,10 @@ impl LocalDoctor {
             .split_once(':')
             .map_or((fix_id, None), |(repair, id)| (repair, Some(id)));
         if CONFIRMED_FIXES.contains(&repair) && !confirm {
-            return Err(HostError::Unsupported(
-                "this repair deletes what Elitea keeps for these folders; confirm it first".into(),
-            ));
+            return Err(HostError::Unsupported(format!(
+                "this repair deletes what {} keeps for these folders; confirm it first",
+                crate::brand::product()
+            )));
         }
         if let Some(workspace_id) = workspace_id {
             return self.fix_index(repair, workspace_id);
@@ -1103,8 +1114,9 @@ impl LocalDoctor {
             aside.display()
         );
         Ok(format!(
-            "Moved to {}. Restart Elitea to start a new session memory.",
-            aside.display()
+            "Moved to {}. Restart {} to start a new session memory.",
+            aside.display(),
+            crate::brand::product()
         ))
     }
 
@@ -1148,8 +1160,9 @@ impl LocalDoctor {
             aside.display()
         );
         Ok(format!(
-            "Moved to {}. Restart Elitea to start a new history.",
-            aside.display()
+            "Moved to {}. Restart {} to start a new history.",
+            aside.display(),
+            crate::brand::product()
         ))
     }
 
@@ -1331,7 +1344,8 @@ impl LocalDoctor {
                 TITLE,
                 Status::Fail,
                 format!(
-                    "{name}: written by a newer version of Elitea (schema {version}); update the app."
+                    "{name}: written by a newer version of {} (schema {version}); update the app.",
+                    crate::brand::product()
                 ),
             ),
             Ok(_) => match index_last_build(&file) {
@@ -1676,9 +1690,10 @@ impl Doctor {
         log::warn!("diagnostics: signed out locally after moving the stored sign-in aside");
         Ok(format!(
             "Moved to {}. You are signed out on this computer; sign in again to continue. \
-             The session in the moved file was not ended on the server (Elitea does not read a \
+             The session in the moved file was not ended on the server ({} does not read a \
              file it does not trust): end it from Settings › Devices on the web if you need to.",
-            aside.display()
+            aside.display(),
+            crate::brand::product()
         ))
     }
 }

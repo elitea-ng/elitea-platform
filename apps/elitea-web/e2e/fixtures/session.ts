@@ -42,8 +42,12 @@ import { BASE_URL } from '../../playwright.config';
  * can run, and a hardcoded 9400 makes this wait out its whole timeout on a URL
  * that can never appear.
  */
-export async function signInThroughOidc(page: Page, email: string): Promise<void> {
-  await page.goto(BASE_URL + '/auth/oidc/login', { waitUntil: 'domcontentloaded' });
+export async function signInThroughOidc(page: Page, email: string, targetTo?: string): Promise<void> {
+  // `targetTo` lands the round trip on that page, so the caller needs no
+  // second document navigation over the signed-in shell's boot traffic (the
+  // one WebKit fails with "WebKit encountered an internal error").
+  const target = targetTo ? '?target_to=' + encodeURIComponent(targetTo) : '';
+  await page.goto(BASE_URL + '/auth/oidc/login' + target, { waitUntil: 'domcontentloaded' });
   await page.waitForURL(new RegExp(`oidc\\.localhost:${process.env['E2E_OIDC_PORT'] ?? '9400'}`), {
     timeout: 15_000,
   });

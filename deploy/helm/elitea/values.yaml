@@ -7776,16 +7776,19 @@ sandboxKubernetes:
       full:
         maxCpuMillis: 2000
         maxMemoryBytes: 2147483648
-      # Moli (ADR-0049 decision 2), for `lite` and `auto` sessions. Off by
-      # default: an empty map renders no `lite` and the supervisor refuses
-      # both engines. Set it together with liteImage. A project can choose
-      # lite or auto only once the bake-off admits Moli (ADR-0049 decision 9,
-      # the appendix); until then Main serves every session as `full`.
+      # Moli (ADR-0049 decision 2), for `auto` sessions (Moli first, Chrome
+      # when Moli cannot serve the page) and `lite` ones. Off by default: an
+      # empty map renders no `lite`, and the supervisor refuses both engines
+      # (browser_engine_unavailable). Set it together with liteImage to run
+      # `auto`, which projects can choose since the bake-off admitted it
+      # (ADR-0049 decision 9, Appendix A). `lite` alone is not admitted: Main
+      # refuses it in the project setting whatever the chart sets.
       lite: {}
       # Example: {maxCpuMillis: 1000, maxMemoryBytes: 536870912}
-      # The lite session image by digest (elitea-browser-session-lite: the
-      # session image plus Moli at a pinned version). Required with `lite`,
-      # refused without it, and it must differ from `image`.
+      # The lite session image by digest (elitea-browser-session-lite, published
+      # with each release beside elitea-browser-session: the session image
+      # plus Moli at a pinned version). Required with `lite`, refused without
+      # it, and it must differ from `image`.
       liteImage: ""
       # Key names in the material Secret.
       material:

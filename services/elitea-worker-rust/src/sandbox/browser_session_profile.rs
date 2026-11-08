@@ -27,8 +27,9 @@
 //! is gVisor: on Docker the profile is refused at startup without
 //! `"runtime": "runsc"`, and on Kubernetes each start is refused unless the
 //! `RuntimeClass`'s handler is gVisor's. `lite` and `lite_image` come
-//! together or not at all: absent until the bake-off admits Moli (decision
-//! 9), and then they let the profile run `lite` and `auto` sessions in the
+//! together or not at all: absent by default, and set they let the profile
+//! run `auto` sessions (admitted by the bake-off, decision 9) and `lite` ones
+//! (not admitted: Main never sends one) in the
 //! `lite` image (Moli beside chrome-headless-shell). The chart renders the
 //! profile from `sandboxKubernetes.browserSessions`.
 

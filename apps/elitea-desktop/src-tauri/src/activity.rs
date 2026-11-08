@@ -14,7 +14,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::window::{ProgressBarState, ProgressBarStatus};
@@ -341,7 +340,7 @@ impl ActivityState {
     pub fn tooltip(&self, now: Instant) -> String {
         let title = self.title(now);
         let base = if title.is_empty() {
-            "Elitea"
+            crate::brand::product()
         } else {
             title.as_str()
         };
@@ -790,12 +789,15 @@ fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
 ///
 /// The OS refused the tray item.
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let icon = Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    let brand = crate::brand::get();
     let menu = build_menu(app, &ActivityState::default().entries(&|_| None))?;
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
-        .icon_as_template(true)
-        .tooltip("Elitea")
+    let mut tray = TrayIconBuilder::with_id(TRAY_ID);
+    // The brand's template image (tauri.brand.json `app.trayIcon`, compiled in).
+    if let Some(icon) = brand.tray_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.icon_as_template(true)
+        .tooltip(brand.product())
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {
@@ -1185,7 +1187,7 @@ mod tests {
     fn the_tray_says_when_it_keeps_the_computer_awake() {
         let t0 = Instant::now();
         let mut state = ActivityState::default();
-        assert_eq!(state.tooltip(t0), "Elitea");
+        assert_eq!(state.tooltip(t0), crate::brand::product());
         state.observe_agent(&running("t1"), t0);
         state.set_awake(true);
         let awake = Entry::Note("Keeping the computer awake".into());

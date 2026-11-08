@@ -30,7 +30,7 @@ flowchart LR
 | Rule | Value |
 |---|---|
 | Ceiling, `full` engine | 2 CPUs, 2 GiB |
-| Ceiling, `lite` engine | 1 CPU, 512 MiB. Off unless `profile.lite` and `profile.liteImage` are set; projects can choose it only once the engine bake-off admits Moli |
+| Ceiling, `lite` engine | 1 CPU, 512 MiB. Off unless `profile.lite` and `profile.liteImage` are set. Needed for `auto` sessions, which projects can choose; `lite` alone is not offered |
 | Wall limit per session | 60 minutes (`maxWallSeconds`) |
 | Pages per session | 3 (`maxPages`) |
 | Sessions per run | 3 (`sessionsPerRun`) |
@@ -116,9 +116,9 @@ worker:
       max_pages: 3
 ```
 
-### Optional: the lite engine (Moli)
+### Optional: the lite engine (Moli), for `auto`
 
-`lite` and `auto` sessions run Moli from a second image, `elitea-browser-session-lite`. It is the session image with Moli added at a pinned, checksum-verified release. Projects can choose these engines only after the ADR-0049 engine bake-off admits Moli. The [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit#the-engine) page lists the rules. Until then Main serves every session as `full`, whatever the chart sets, so these values only matter once Moli is admitted:
+`auto` sessions (and `lite` ones, once admitted) run Moli from a second image, `elitea-browser-session-lite`. It is the session image with Moli added at a pinned, checksum-verified release, and each release publishes it beside `elitea-browser-session`. The ADR-0049 engine bake-off admitted `auto`, so projects can choose it; `lite` alone is not admitted, and Main refuses it in the project setting whatever the chart sets. The [Cloud Browser](/integrations/toolkits/cloud_browser_toolkit#the-engine) page has the results. Set these values to let projects run `auto`; without them an `auto` session fails with `browser_engine_unavailable`:
 
 ```yaml
 sandboxKubernetes:

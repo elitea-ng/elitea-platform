@@ -134,31 +134,34 @@ enum Outcome {
 }
 
 fn page(outcome: Outcome) -> String {
+    let product = crate::brand::product();
     let (icon, warn, title, body) = match outcome {
         Outcome::Done => (
             CHECK_ICON,
             false,
             "You're signed in",
-            "Return to the Elitea desktop app to continue. You can close this tab.",
+            format!("Return to the {product} desktop app to continue. You can close this tab."),
         ),
         Outcome::Declined => (
             ALERT_ICON,
             true,
             "Sign-in did not finish",
-            "Return to the Elitea desktop app to see why and try again. You can close this tab.",
+            format!(
+                "Return to the {product} desktop app to see why and try again. You can close this tab."
+            ),
         ),
         Outcome::Stale => (
             ALERT_ICON,
             true,
             "This sign-in link has expired",
-            "Start again from the Elitea desktop app. You can close this tab.",
+            format!("Start again from the {product} desktop app. You can close this tab."),
         ),
     };
     let class = if warn { "mark warn" } else { "mark" };
     format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8>\
 <meta name=viewport content=\"width=device-width,initial-scale=1\">\
-<title>Elitea sign-in</title>{PAGE_STYLE}</head><body><main>\
+<title>{product} sign-in</title>{PAGE_STYLE}</head><body><main>\
 <div class=\"{class}\">{icon}</div><h1>{title}</h1><p>{body}</p></main></body></html>"
     )
 }

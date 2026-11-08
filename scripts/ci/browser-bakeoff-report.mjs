@@ -18,12 +18,18 @@
 // start refused), not Moli, and the verdict is "no comparison" whatever
 // lite scored (the first real run, 42434760930, had full at 0/40).
 //
-// `auto` is reported beside them, and is admitted with `lite`: it runs Moli
-// first and falls back to `full`, which already passed.
+// `auto` (Moli first, `full` when Moli loses the page) gets its own verdict
+// under the same rules, applied to the auto engine: read/extract floor,
+// points behind `full`, and no crash or hang. It is admitted on its own
+// result, not with `lite` (owner decision of 2026-11-08, run 42513255705:
+// auto 40/40, lite 37/40 with 3 Moli crashes that auto recovered from by
+// switching to `full`). A run without auto lines has no auto verdict.
 //
 // The report is Markdown for the ADR-0049 appendix and the job summary, and
 // the verdict a JSON object. Nothing here flips the admission: the change
-// that records a passing appendix sets platformconfig.BrowserLiteAdmitted.
+// that records a passing appendix sets platformconfig.BrowserAutoAdmitted or
+// platformconfig.BrowserLiteAdmitted, and elitea-browser-session-lite is
+// published since auto was admitted.
 //
 //   node scripts/ci/browser-bakeoff-report.mjs results.jsonl [--json verdict.json]
 //
@@ -91,19 +97,16 @@ export function check(result, id) {
   return result.checks.find((entry) => entry.id === id);
 }
 
-export function verdict(lines) {
-  const full = summarise(lines, "full");
-  const lite = summarise(lines, "lite");
-  if (full.tasks === 0 || lite.tasks === 0) {
-    throw new Error("the results hold no full or no lite run");
-  }
-  const fullTasks = new Set(lines.filter((l) => l.engine === "full").map((l) => l.task));
-  const liteTasks = new Set(lines.filter((l) => l.engine === "lite").map((l) => l.task));
-  if (fullTasks.size !== liteTasks.size || [...fullTasks].some((task) => !liteTasks.has(task))) {
-    throw new Error("full and lite ran different tasks: the comparison would not be like for like");
-  }
-  const behind = (full.success - lite.success) * 100;
-  const comparable = full.success !== null && full.success >= FULL_BASELINE_FLOOR;
+function sameTasks(lines, a, b) {
+  const left = new Set(lines.filter((l) => l.engine === a).map((l) => l.task));
+  const right = new Set(lines.filter((l) => l.engine === b).map((l) => l.task));
+  return left.size === right.size && [...left].every((task) => right.has(task));
+}
+
+// The rules for one candidate engine (`lite` or `auto`) against `full`.
+function engineChecks(full, candidate, comparable) {
+  const name = candidate.engine;
+  const behind = (full.success - candidate.success) * 100;
   const checks = [
     {
       id: "baseline",
@@ -113,25 +116,25 @@ export function verdict(lines) {
     },
     {
       id: "read_extract",
-      rule: `lite succeeds on at least ${READ_EXTRACT_FLOOR * 100}% of read and extract tasks`,
-      pass: lite.read_extract_success !== null && lite.read_extract_success >= READ_EXTRACT_FLOOR,
-      measured: lite.read_extract_success === null ? "no read or extract task" : pct(lite.read_extract_success),
+      rule: `${name} succeeds on at least ${READ_EXTRACT_FLOOR * 100}% of read and extract tasks`,
+      pass: candidate.read_extract_success !== null && candidate.read_extract_success >= READ_EXTRACT_FLOOR,
+      measured: candidate.read_extract_success === null ? "no read or extract task" : pct(candidate.read_extract_success),
     },
     {
       id: "behind",
-      rule: `lite is no more than ${MAX_POINTS_BEHIND} points behind full overall`,
+      rule: `${name} is no more than ${MAX_POINTS_BEHIND} points behind full overall`,
       pass: behind <= MAX_POINTS_BEHIND,
-      measured: `${pct(lite.success)} vs ${pct(full.success)} (${behind.toFixed(1)} points behind)`,
+      measured: `${pct(candidate.success)} vs ${pct(full.success)} (${behind.toFixed(1)} points behind)`,
     },
     {
       id: "stable",
-      rule: "no crash or hang of lite",
-      pass: lite.crashed.length === 0 && lite.hung.length === 0,
-      measured: `${lite.crashed.length} crashed, ${lite.hung.length} hung`,
+      rule: `no crash or hang of ${name}`,
+      pass: candidate.crashed.length === 0 && candidate.hung.length === 0,
+      measured: `${candidate.crashed.length} crashed, ${candidate.hung.length} hung`,
     },
   ];
-  // With no working baseline, the lite rows say nothing about Moli: they are
-  // shown as not measured, never as a pass.
+  // With no working baseline, the candidate rows say nothing about Moli:
+  // they are shown as not measured, never as a pass.
   if (!comparable) {
     for (const check of checks) {
       if (check.id === "baseline") continue;
@@ -139,11 +142,35 @@ export function verdict(lines) {
       check.measured = `n/a (no comparison; measured ${check.measured})`;
     }
   }
+  return checks;
+}
+
+export function verdict(lines) {
+  const full = summarise(lines, "full");
+  const lite = summarise(lines, "lite");
+  if (full.tasks === 0 || lite.tasks === 0) {
+    throw new Error("the results hold no full or no lite run");
+  }
+  if (!sameTasks(lines, "full", "lite")) {
+    throw new Error("full and lite ran different tasks: the comparison would not be like for like");
+  }
+  const comparable = full.success !== null && full.success >= FULL_BASELINE_FLOOR;
+  const checks = engineChecks(full, lite, comparable);
   const auto = summarise(lines, "auto");
+  let autoVerdict = null;
+  if (auto.tasks) {
+    if (!sameTasks(lines, "full", "auto")) {
+      throw new Error("full and auto ran different tasks: the comparison would not be like for like");
+    }
+    const autoChecks = engineChecks(full, auto, comparable);
+    autoVerdict = { admitted: comparable && autoChecks.every((check) => check.pass === true), checks: autoChecks };
+  }
   return {
     comparable,
+    // `admitted` is lite's verdict (Moli alone), kept under its old key.
     admitted: comparable && checks.every((check) => check.pass === true),
     checks,
+    auto: autoVerdict,
     engines: [full, lite, ...(auto.tasks ? [auto] : [])],
   };
 }
@@ -160,16 +187,34 @@ function msOr(value) {
   return value === null ? "n/a" : `${value} ms`;
 }
 
+function rulesTable(out, checks) {
+  out.push("| Rule | Measured | Pass |", "|---|---|---|");
+  for (const check of checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass === null ? "n/a" : check.pass ? "yes" : "no"} |`);
+}
+
 export function markdown(result, lines) {
   const out = [];
+  const noComparison = "no comparison: the full baseline failed, so this run measured the harness or the corpus, not Moli.";
   const said = result.admitted
     ? "Moli is admitted"
     : result.comparable
       ? "Moli is NOT admitted"
-      : "no comparison: the full baseline failed, so this run measured the harness or the corpus, not Moli. Moli is NOT admitted";
+      : `${noComparison} Moli is NOT admitted`;
   out.push(`**Verdict: ${said}.**`, "");
-  out.push("| Rule | Measured | Pass |", "|---|---|---|");
-  for (const check of result.checks) out.push(`| ${check.rule} | ${check.measured} | ${check.pass === null ? "n/a" : check.pass ? "yes" : "no"} |`);
+  if (result.auto) {
+    const autoSaid = result.auto.admitted
+      ? "auto is admitted"
+      : result.comparable
+        ? "auto is NOT admitted"
+        : `${noComparison} auto is NOT admitted`;
+    out.push(`**Verdict (auto): ${autoSaid}.**`, "");
+  }
+  out.push("Rules for lite (Moli alone):", "");
+  rulesTable(out, result.checks);
+  if (result.auto) {
+    out.push("", "Rules for auto (Moli first, full on engine loss):", "");
+    rulesTable(out, result.auto.checks);
+  }
   out.push("", "| | " + result.engines.map((e) => e.engine).join(" | ") + " |", "|---|" + result.engines.map(() => "---").join("|") + "|");
   const row = (label, fn) => out.push(`| ${label} | ${result.engines.map(fn).join(" | ")} |`);
   row("engine version", (e) => e.version ?? "n/a");

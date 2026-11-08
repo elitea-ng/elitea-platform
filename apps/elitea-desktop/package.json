@@ -2,12 +2,14 @@
   "name": "elitea-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Elitea desktop client: a Tauri 2 host around the elitea-web desktop build (ADR-0029)",
+  "description": "The desktop client: a Tauri 2 host around the elitea-web desktop build (ADR-0029); branded at build time (ADR-0052)",
   "license": "Apache-2.0",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "build:debug": "tauri build --debug --bundles app",
+    "brand": "node scripts/tauri-brand.mjs",
+    "dev": "npm run brand && tauri dev --config src-tauri/tauri.brand.json",
+    "build": "npm run brand && tauri build --config src-tauri/tauri.brand.json",
+    "build:debug": "npm run brand && tauri build --debug --bundles app --config src-tauri/tauri.brand.json",
+    "test:scripts": "node --test \"scripts/**/*.test.mjs\"",
     "tauri": "tauri"
   },
   "devDependencies": {

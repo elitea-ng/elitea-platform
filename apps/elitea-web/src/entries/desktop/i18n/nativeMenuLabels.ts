@@ -2,19 +2,20 @@
  * The host's own menus — the menu bar, the menu-bar (tray) item and its
  * activity lines — in the app's language. The keys are the host's
  * (`src-tauri/src/labels.rs`, `KEYS`), which checks them and keeps English
- * for any it does not get. `{tool}` stays in place: the host puts the tool's
- * name there.
+ * for any it does not get. `{tool}` and `{product}` stay in place: the host
+ * puts the tool's name and the build's product name there (ADR-0052), so one
+ * catalogue serves every brand.
  */
 import { t } from '@/shared/i18n';
 
 export function nativeMenuLabels(): Record<string, string> {
   return {
-    about: t('desktop.nativeMenu.about', 'About Elitea'),
+    about: t('desktop.nativeMenu.about', 'About {product}'),
     services: t('desktop.nativeMenu.services', 'Services'),
-    hide: t('desktop.nativeMenu.hide', 'Hide Elitea'),
+    hide: t('desktop.nativeMenu.hide', 'Hide {product}'),
     hide_others: t('desktop.nativeMenu.hideOthers', 'Hide Others'),
     show_all: t('desktop.nativeMenu.showAll', 'Show All'),
-    quit: t('desktop.nativeMenu.quit', 'Quit Elitea'),
+    quit: t('desktop.nativeMenu.quit', 'Quit {product}'),
     file: t('desktop.nativeMenu.file', 'File'),
     new_thread: t('desktop.nativeMenu.newThread', 'New Thread'),
     open_folder: t('desktop.nativeMenu.openFolder', 'Open Folder…'),
@@ -51,10 +52,10 @@ export function nativeMenuLabels(): Record<string, string> {
     minimize: t('desktop.nativeMenu.minimize', 'Minimize'),
     maximize: t('desktop.nativeMenu.maximize', 'Zoom'),
     help_menu: t('desktop.nativeMenu.helpMenu', 'Help'),
-    help: t('desktop.nativeMenu.help', 'Elitea Help'),
+    help: t('desktop.nativeMenu.help', '{product} Help'),
     run_diagnostics: t('desktop.nativeMenu.runDiagnostics', 'Run Diagnostics…'),
-    tray_show: t('desktop.nativeMenu.trayShow', 'Show Elitea'),
-    tray_quit: t('desktop.nativeMenu.trayQuit', 'Quit Elitea'),
+    tray_show: t('desktop.nativeMenu.trayShow', 'Show {product}'),
+    tray_quit: t('desktop.nativeMenu.trayQuit', 'Quit {product}'),
     activity_nothing: t('desktop.nativeMenu.activityNothing', 'Nothing running'),
     activity_running: t('desktop.nativeMenu.activityRunning', 'Running'),
     activity_approve: t('desktop.nativeMenu.activityApprove', 'Approve {tool}'),
@@ -68,8 +69,8 @@ export function nativeMenuLabels(): Record<string, string> {
     computer_pause: t('desktop.nativeMenu.computerPause', 'Pause'),
     computer_resume: t('desktop.nativeMenu.computerResume', 'Resume'),
     computer_stop: t('desktop.nativeMenu.computerStop', 'Stop'),
-    quit_running_title: t('desktop.nativeMenu.quitRunningTitle', 'Quit Elitea?'),
-    quit_running_message: t('desktop.nativeMenu.quitRunningMessage', 'A turn is running. Quit stops it until you open Elitea again.'),
+    quit_running_title: t('desktop.nativeMenu.quitRunningTitle', 'Quit {product}?'),
+    quit_running_message: t('desktop.nativeMenu.quitRunningMessage', 'A turn is running. Quit stops it until you open {product} again.'),
     quit_running_confirm: t('desktop.nativeMenu.quitRunningConfirm', 'Quit'),
     quit_running_cancel: t('desktop.nativeMenu.quitRunningCancel', 'Keep running'),
   };

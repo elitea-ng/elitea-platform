@@ -41,10 +41,6 @@ use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
 
-/// The app's bundle identifier (`tauri.conf.json`): the directories below
-/// are named after it, as Tauri names them.
-pub const APP_IDENTIFIER: &str = "ai.elitea.desktop";
-
 /// The app's directories, resolved the way Tauri 2's path resolver does
 /// (`app_config_dir`, `app_data_dir`, `app_log_dir`, `app_cache_dir`).
 #[derive(Clone, Debug)]
@@ -56,21 +52,28 @@ pub struct AppDirs {
 }
 
 impl AppDirs {
+    /// The directories of the app with bundle identifier `identifier` (the
+    /// brand's, src/brand.rs), as the app itself resolves them.
+    ///
     /// # Errors
     ///
-    /// The OS names no config or data directory (no home).
-    pub fn resolve() -> Result<Self, String> {
+    /// The OS names no config or data directory (no home), or `identifier`
+    /// is empty.
+    pub fn resolve(identifier: &str) -> Result<Self, String> {
+        if identifier.trim().is_empty() {
+            return Err("no app identifier".to_owned());
+        }
         let config = dirs::config_dir()
             .ok_or("no config directory")?
-            .join(APP_IDENTIFIER);
+            .join(identifier);
         let data = dirs::data_dir()
             .ok_or("no data directory")?
-            .join(APP_IDENTIFIER);
+            .join(identifier);
         #[cfg(target_os = "macos")]
-        let log = dirs::home_dir().map(|home| home.join("Library/Logs").join(APP_IDENTIFIER));
+        let log = dirs::home_dir().map(|home| home.join("Library/Logs").join(identifier));
         #[cfg(not(target_os = "macos"))]
-        let log = dirs::data_local_dir().map(|dir| dir.join(APP_IDENTIFIER).join("logs"));
-        let cache = dirs::cache_dir().map(|dir| dir.join(APP_IDENTIFIER));
+        let log = dirs::data_local_dir().map(|dir| dir.join(identifier).join("logs"));
+        let cache = dirs::cache_dir().map(|dir| dir.join(identifier));
         Ok(Self {
             config,
             data,
@@ -105,7 +108,15 @@ pub fn run() -> i32 {
     };
     // Library code that spawns on Tauri's runtime gets this one.
     tauri::async_runtime::set(runtime.handle().clone());
-    let dirs = match AppDirs::resolve() {
+    let mut context = crate::brand::context();
+    let brand = match crate::brand::init(&mut context) {
+        Ok(brand) => brand,
+        Err(error) => {
+            eprintln!("elitea-desktop --acp: {error}");
+            return 1;
+        }
+    };
+    let dirs = match AppDirs::resolve(brand.identifier()) {
         Ok(dirs) => dirs,
         Err(error) => {
             eprintln!("elitea-desktop --acp: {error}");
@@ -113,7 +124,11 @@ pub fn run() -> i32 {
         }
     };
     crate::logging::init_acp(dirs.log.as_deref());
-    log::info!("Elitea {} starting in ACP mode", env!("CARGO_PKG_VERSION"));
+    log::info!(
+        "{} {} starting in ACP mode",
+        brand.product(),
+        env!("CARGO_PKG_VERSION")
+    );
     match runtime.block_on(start(dirs)) {
         Ok(()) => {
             log::info!("ACP client disconnected");
@@ -152,7 +167,10 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
     }));
     let state = auth.state().map_err(|error| error.to_string())?;
     if !state.signed_in {
-        return Err("not signed in: open the Elitea app and sign in first".to_owned());
+        return Err(format!(
+            "not signed in: open the {} app and sign in first",
+            crate::brand::product()
+        ));
     }
     let policy = Arc::new(StoredPolicy(SettingsFiles::new(dirs.config.clone())));
     let allowed = policy
@@ -178,7 +196,7 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
             .as_deref(),
-        Some(APP_IDENTIFIER),
+        Some(crate::brand::identifier()),
         true,
         app_dirs.iter().cloned(),
     ));
@@ -204,7 +222,7 @@ async fn start(dirs: AppDirs) -> Result<(), String> {
             sessions,
             index: Some(index),
             sandbox_deny: app_dirs.clone(),
-            app_id: Some(APP_IDENTIFIER.to_owned()),
+            app_id: Some(crate::brand::identifier().to_owned()),
             user_rules_dir: Some(dirs.config.clone()),
             user_commands_dir: Some(dirs.config.join("commands")),
             cache_dir: dirs.cache.clone(),

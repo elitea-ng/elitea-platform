@@ -275,10 +275,27 @@ fn defaults_come_from_the_environment_and_are_checked() {
     }
 }
 
+/// ACP mode keeps its data where the app does: under the build's identifier.
 #[test]
-fn the_identifier_is_the_bundles() {
-    let config: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
-    assert_eq!(config["identifier"], super::APP_IDENTIFIER);
+fn the_acp_folders_follow_the_identifier() {
+    let dirs = super::AppDirs::resolve("com.example.acme.desktop").expect("dirs");
+    for dir in [
+        Some(&dirs.config),
+        Some(&dirs.data),
+        dirs.log.as_ref(),
+        dirs.cache.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        assert!(
+            dir.components()
+                .any(|c| c.as_os_str() == "com.example.acme.desktop"),
+            "{} is not under the identifier",
+            dir.display()
+        );
+    }
+    assert!(super::AppDirs::resolve(" ").is_err());
 }
 
 // ---- stage 2: the agent on the mock platform ------------------------------

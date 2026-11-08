@@ -299,7 +299,7 @@ func TestFailuresDegradeTheField(t *testing.T) {
 			reason: EgressUnavailableAllowlistTooLarge},
 		{name: "bad stored entry", edit: func(s *fakeSources) { s.projectHosts = []string{"https://example.com/path"} },
 			reason: EgressUnavailableAllowlistInvalid},
-		{name: "unknown engine", edit: func(s *fakeSources) { s.setting.Engine = "lite" },
+		{name: "engine not admitted", edit: func(s *fakeSources) { s.setting.Engine = "lite" },
 			reason: EgressUnavailableSourceFailed, unattended: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -322,12 +322,23 @@ func TestFailuresDegradeTheField(t *testing.T) {
 			}
 		})
 	}
-	// Once the platform admits Moli the stored engine is served as is.
+	// The platform admits `auto` (ADR-0049 appendix): it is served as is
+	// under the platform's own admission.
+	{
+		sources := enabledSources()
+		sources.setting.Engine = "auto"
+		field, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
+			ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
+		if err != nil || field == nil || field.Engine != "auto" || field.Egress.Mode != EgressModeProxy {
+			t.Fatalf("auto: field=%+v err=%v", field, err)
+		}
+	}
+	// Once the platform admits Moli alone the stored engine is served as is.
 	for _, engine := range []string{"lite", "auto"} {
 		sources := enabledSources()
 		sources.setting.Engine = engine
 		field, err := resolver(t, sources, Egress{ProxyURL: "http://egress.svc:3128", Minter: minter}).
-			WithEngines(platformconfig.BrowserEngines(true)).
+			WithEngines(platformconfig.BrowserEngines(platformconfig.BrowserAdmission{Auto: true, Lite: true})).
 			ResolveBrowserContext(context.Background(), Claim{ExecutionID: "exec-1", ProjectID: 7})
 		if err != nil || field == nil || field.Engine != engine || field.Egress.Mode != EgressModeProxy {
 			t.Fatalf("%s: field=%+v err=%v", engine, field, err)

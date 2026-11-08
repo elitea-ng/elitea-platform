@@ -38,6 +38,10 @@ const (
 	// type whose provider terms bar one account serving every project
 	// (SharedConfigurationAllowed).
 	CurrentConfigurationMutationSharedNotAllowed CurrentConfigurationMutationErrorCode = "shared_config_not_allowed"
+	// CurrentConfigurationMutationEngineNotAdmitted refuses a cloud browser
+	// engine the ADR-0049 bake-off did not admit (`lite` today; see
+	// platformconfig.BrowserEngineNotAdmittedMessage).
+	CurrentConfigurationMutationEngineNotAdmitted CurrentConfigurationMutationErrorCode = "engine_not_admitted"
 )
 
 // CurrentConfigurationMutationError is safe to return through the API. Field

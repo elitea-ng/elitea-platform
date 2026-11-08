@@ -1,4 +1,14 @@
 fn main() {
+    // A build without the brand overlay (ADR-0052 decision 4) is brand/sample:
+    // another name and other data folders. Say so; `npm run build` and CI
+    // pass the overlay (`--config src-tauri/tauri.brand.json`, TAURI_CONFIG).
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    if std::env::var_os("TAURI_CONFIG").is_none() {
+        println!(
+            "cargo:warning=no brand overlay: this build is brand/sample (com.example.sample.desktop); \
+             run `npm run brand` and export TAURI_CONFIG, or build with the npm scripts"
+        );
+    }
     // The host commands are an explicit allowlist: with an app manifest, Tauri
     // generates one `allow-<command>` permission per command and refuses any
     // command a capability does not name (capabilities/default.json).

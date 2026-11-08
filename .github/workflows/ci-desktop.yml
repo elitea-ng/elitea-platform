@@ -21,6 +21,10 @@ on:
       - "rust-toolchain.toml"
       - "scripts/ci/assert-rust-toolchain.sh"
       - "apps/elitea-desktop/**"
+      # The brand the build is made for (ADR-0052 decision 4): its manifest and
+      # assets, and the loader the overlay generator reads them with.
+      - "brand/**"
+      - "scripts/brand/**"
       # The host links the shared runtime, the local tools and the /llm
       # contract (ADR-0029 D0), and their path dependencies.
       - "libs/rust/agent-runtime/**"
@@ -127,6 +131,16 @@ jobs:
         working-directory: apps/elitea-web
         run: npm run build:desktop
 
+      # The ELITEA build (ADR-0052 decision 4): the brand overlay, exported as
+      # TAURI_CONFIG for every cargo step below (tauri-build and
+      # generate_context! read it). The pane-drivers job builds without it, so
+      # the neutral tauri.conf.json (brand/sample) compiles and passes too.
+      - name: Brand overlay (brand/elitea) and its tests
+        working-directory: apps/elitea-desktop
+        run: |
+          npm run test:scripts
+          node scripts/tauri-brand.mjs --github-env
+
       - name: Assert the pinned toolchain
         working-directory: apps/elitea-desktop/src-tauri
         run: |
@@ -215,7 +229,9 @@ jobs:
   # the XTEST trusted-input fallback is on) on Linux. Not the full host suite:
   # that is the macOS job's, and the host's other modules are unchanged here.
   # The web bundle is a stub (the tests render nothing); `npm ci` is for the
-  # pinned tsc the page scripts are compiled with (browser-driver-dom).
+  # pinned tsc the page scripts are compiled with (browser-driver-dom). It
+  # builds with no brand overlay: the neutral tauri.conf.json, brand/sample
+  # (ADR-0052 decision 4), so the sample brand compiles in CI as well.
   pane-drivers:
     name: Browser pane drivers — ${{ matrix.os }} (clippy, tests, real engine)
     runs-on: ${{ matrix.os }}

@@ -844,8 +844,9 @@ impl HistoryStore {
             (Err(_), Err(_)) => return moved,
             (Ok(aside), Err(error)) => {
                 return Err(HostError::Storage(format!(
-                    "moved to {}, but a new history could not start ({error}); restart Elitea",
-                    aside.display()
+                    "moved to {}, but a new history could not start ({error}); restart {}",
+                    aside.display(),
+                    crate::brand::product()
                 )));
             }
         };
@@ -891,7 +892,8 @@ impl HistoryStore {
             (Err(_), Err(_)) => return before,
             (Ok(_), Err(error)) => {
                 return Err(HostError::Storage(format!(
-                    "a new history could not start after reclaim ({error}); restart Elitea"
+                    "a new history could not start after reclaim ({error}); restart {}",
+                    crate::brand::product()
                 )));
             }
         };
@@ -962,7 +964,8 @@ impl HistoryStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(conn) = conn.as_mut() else {
             return Err(HostError::Storage(format!(
-                "{what}: the thread history is closed; restart Elitea"
+                "{what}: the thread history is closed; restart {}",
+                crate::brand::product()
             )));
         };
         work(conn).map_err(|e| storage(what, &e))

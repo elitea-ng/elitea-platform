@@ -8,6 +8,10 @@
 //! and for any key the page leaves out, a menu reads the English in
 //! [`KEYS`]. Labels are plain text, checked against the key list and a
 //! length limit; they never carry an accelerator, an id or a URL.
+//!
+//! `{product}` in a label is the brand's product name (src/brand.rs), put in
+//! when the label is read: the page's translations keep the placeholder, so
+//! one catalogue serves every brand (ADR-0052).
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -15,14 +19,14 @@ use std::sync::{OnceLock, RwLock};
 use tauri::{AppHandle, Manager as _};
 
 /// Every translatable label: (key, English). `{tool}` in a template is
-/// replaced with the tool's name.
+/// replaced with the tool's name, `{product}` with the brand's product name.
 pub const KEYS: &[(&str, &str)] = &[
-    ("about", "About Elitea"),
+    ("about", "About {product}"),
     ("services", "Services"),
-    ("hide", "Hide Elitea"),
+    ("hide", "Hide {product}"),
     ("hide_others", "Hide Others"),
     ("show_all", "Show All"),
-    ("quit", "Quit Elitea"),
+    ("quit", "Quit {product}"),
     ("file", "File"),
     ("new_thread", "New Thread"),
     ("open_folder", "Open Folder…"),
@@ -59,10 +63,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("minimize", "Minimize"),
     ("maximize", "Zoom"),
     ("help_menu", "Help"),
-    ("help", "Elitea Help"),
+    ("help", "{product} Help"),
     ("run_diagnostics", "Run Diagnostics…"),
-    ("tray_show", "Show Elitea"),
-    ("tray_quit", "Quit Elitea"),
+    ("tray_show", "Show {product}"),
+    ("tray_quit", "Quit {product}"),
     ("activity_nothing", "Nothing running"),
     ("activity_running", "Running"),
     ("activity_approve", "Approve {tool}"),
@@ -76,10 +80,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("computer_pause", "Pause"),
     ("computer_resume", "Resume"),
     ("computer_stop", "Stop"),
-    ("quit_running_title", "Quit Elitea?"),
+    ("quit_running_title", "Quit {product}?"),
     (
         "quit_running_message",
-        "A turn is running. Quit stops it until you open Elitea again.",
+        "A turn is running. Quit stops it until you open {product} again.",
     ),
     ("quit_running_confirm", "Quit"),
     ("quit_running_cancel", "Keep running"),
@@ -92,15 +96,24 @@ fn store() -> &'static RwLock<HashMap<String, String>> {
     LABELS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-/// The label for `key`: the page's translation, else the English in [`KEYS`].
+/// The label for `key`: the page's translation, else the English in [`KEYS`],
+/// with `{product}` the brand's product name.
 #[must_use]
 pub fn text(key: &str) -> String {
+    text_for(key, crate::brand::product())
+}
+
+/// [`text`] for the product name `product`.
+#[must_use]
+pub fn text_for(key: &str, product: &str) -> String {
     let chosen = store()
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(key)
         .cloned();
-    chosen.unwrap_or_else(|| english(key).to_owned())
+    chosen
+        .unwrap_or_else(|| english(key).to_owned())
+        .replace("{product}", product)
 }
 
 fn english(key: &str) -> &'static str {
@@ -110,7 +123,8 @@ fn english(key: &str) -> &'static str {
 }
 
 /// The labels the page sent, checked: known keys only, short plain text, and
-/// `{tool}` kept wherever the English has it.
+/// `{tool}` kept wherever the English has it. A label may name the product as
+/// `{product}` (or in words, from a catalogue made before the placeholder).
 ///
 /// # Errors
 ///
@@ -201,6 +215,89 @@ mod tests {
         assert!(validate(&labels(&[("file", &"x".repeat(81))])).is_err());
         assert!(validate(&labels(&[("file", "a\nb")])).is_err());
         assert!(validate(&labels(&[("activity_approve", "Approuver")])).is_err());
+    }
+
+    /// The menus name the brand's product, never a fixed one (ADR-0052).
+    #[test]
+    fn product_names_come_from_the_brand() {
+        assert_eq!(text_for("about", "Acme"), "About Acme");
+        assert_eq!(text_for("help", "Acme"), "Acme Help");
+        assert_eq!(
+            text_for("quit_running_message", "Acme"),
+            "A turn is running. Quit stops it until you open Acme again."
+        );
+        for (key, english) in KEYS {
+            assert!(
+                !english.to_lowercase().contains("elitea"),
+                "{key} names a product: {english}"
+            );
+        }
+    }
+
+    /// The page's catalogues (`apps/elitea-web`, `*.desktop.json`) name the
+    /// product as `{product}`, never in words, so a branded build's menus say
+    /// its own name in every language, and each catalogue passes [`validate`].
+    #[test]
+    fn the_web_catalogues_name_no_product() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../elitea-web/src/entries/desktop/i18n");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).expect("the desktop catalogues") {
+            let path = entry.expect("entry").path();
+            if !path.to_string_lossy().ends_with(".desktop.json") {
+                continue;
+            }
+            seen += 1;
+            let catalogue: HashMap<String, String> =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read"))
+                    .expect("a flat catalogue");
+            let menu: HashMap<String, String> = KEYS
+                .iter()
+                .filter_map(|(key, _)| {
+                    let web = format!("desktop.nativeMenu.{}", camel(key));
+                    catalogue
+                        .get(&web)
+                        .map(|label| ((*key).to_owned(), label.clone()))
+                })
+                .collect();
+            validate(&menu).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            for (key, label) in &menu {
+                assert!(
+                    !label.to_lowercase().contains("elitea"),
+                    "{}: {key} names the product in words: {label}",
+                    path.display()
+                );
+            }
+            for key in ["about", "quit", "tray_show"] {
+                assert!(
+                    menu.get(key).is_some_and(|l| l.contains("{product}")),
+                    "{}: {key} has no {{product}}",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            seen >= 19,
+            "found {seen} desktop catalogues in {}",
+            dir.display()
+        );
+    }
+
+    /// `quit_running_title` → `quitRunningTitle` (the page's key names).
+    fn camel(key: &str) -> String {
+        let mut out = String::new();
+        let mut upper = false;
+        for c in key.chars() {
+            if c == '_' {
+                upper = true;
+            } else if upper {
+                out.extend(c.to_uppercase());
+                upper = false;
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 
     #[test]

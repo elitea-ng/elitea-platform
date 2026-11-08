@@ -62,7 +62,7 @@ mod windows_input;
 
 pub use driver::{DesktopDriver, Unsupported};
 pub use error::DesktopError;
-pub use guard::{ELITEA_BUNDLE_ID, OwnApps, ScreenStatus, is_screensaver, overlaps};
+pub use guard::{OwnApps, ScreenStatus, is_screensaver, overlaps};
 pub use input::{Halt, InputFilter, InputWatch, STOP_SHORTCUT, Signal, SignalSink};
 #[cfg(target_os = "linux")]
 pub use linux::LinuxDriver;
@@ -97,23 +97,26 @@ pub fn read_only_reason() -> Option<&'static str> {
 }
 
 /// The driver of this OS: `MacDriver` on macOS, `WindowsDriver` on
-/// Windows, `LinuxDriver` on Linux, [`Unsupported`] elsewhere.
+/// Windows, `LinuxDriver` on Linux, [`Unsupported`] elsewhere. `own` is the
+/// host app ([`OwnApps::for_app`] with its bundle id): its windows are never
+/// read or acted on.
 #[must_use]
-pub fn default_driver() -> Box<dyn DesktopDriver> {
+pub fn default_driver(own: OwnApps) -> Box<dyn DesktopDriver> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(MacDriver::new())
+        Box::new(MacDriver::new().with_own_apps(own))
     }
     #[cfg(target_os = "windows")]
     {
-        Box::new(WindowsDriver::new())
+        Box::new(WindowsDriver::new().with_own_apps(own))
     }
     #[cfg(target_os = "linux")]
     {
-        Box::new(LinuxDriver::new())
+        Box::new(LinuxDriver::new().with_own_apps(own))
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
+        let _ = own;
         Box::new(Unsupported)
     }
 }

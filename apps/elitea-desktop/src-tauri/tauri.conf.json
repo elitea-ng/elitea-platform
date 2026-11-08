@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Elitea",
+  "productName": "Sample",
   "version": "0.1.0",
-  "identifier": "ai.elitea.desktop",
+  "identifier": "com.example.sample.desktop",
   "build": {
     "frontendDist": "../../elitea-web/dist-desktop",
     "devUrl": "http://localhost:5173",
@@ -11,6 +11,7 @@
   },
   "app": {
     "windows": [],
+    "trayIcon": { "iconPath": "../../../brand/sample/assets/desktop/tray-template.png", "iconAsTemplate": true },
     "withGlobalTauri": false,
     "security": {
       "dangerousDisableAssetCspModification": ["style-src"],
@@ -32,7 +33,9 @@
     "active": true,
     "targets": ["app"],
     "category": "DeveloperTool",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "icon": ["../../../brand/sample/assets/desktop/32x32.png", "../../../brand/sample/assets/desktop/128x128.png", "../../../brand/sample/assets/desktop/128x128@2x.png", "../../../brand/sample/assets/macos/icon.icns", "../../../brand/sample/assets/windows/icon.ico"],
+    "publisher": "Example Publisher",
+    "copyright": "Copyright © Example Publisher",
     "macOS": {
       "minimumSystemVersion": "12.0",
       "hardenedRuntime": true

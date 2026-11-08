@@ -291,8 +291,8 @@ impl PowerBackend for OsPower {
                     .sleep(false)
                     .display(false)
                     .reason("A local agent turn is running")
-                    .app_name("Elitea")
-                    .app_reverse_domain("ai.elitea.desktop")
+                    .app_name(crate::brand::product())
+                    .app_reverse_domain(crate::brand::identifier())
                     .create();
                 match builder {
                     Ok(assertion) => {

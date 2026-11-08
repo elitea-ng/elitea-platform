@@ -208,7 +208,7 @@ impl DesktopDriver for Fake {
         Ok(vec![
             app("TextEdit", 42, APP),
             app("Notes", 43, OTHER),
-            app("Elitea", 7, elitea_desktop_control::ELITEA_BUNDLE_ID),
+            app("Elitea", 7, crate::brand::identifier()),
             app("Keychain Access", 9, "com.apple.keychainaccess"),
         ])
     }
@@ -675,8 +675,8 @@ async fn a_denied_chord_is_never_sent() {
 }
 
 #[tokio::test]
-async fn elitea_is_never_read_or_acted_on() {
-    let own = elitea_desktop_control::ELITEA_BUNDLE_ID;
+async fn the_app_itself_is_never_read_or_acted_on() {
+    let own = crate::brand::identifier();
     for profile in BUILD_AND_BYPASS {
         let rig = rig(profile);
         for (name, args) in [
@@ -1027,11 +1027,7 @@ async fn click_at_maps_through_its_screenshots_window_and_refuses_a_moved_one() 
 #[tokio::test]
 async fn untargeted_input_goes_only_into_the_named_frontmost_app() {
     for profile in BUILD_AND_BYPASS {
-        for front in [
-            Some(OTHER),
-            Some(elitea_desktop_control::ELITEA_BUNDLE_ID),
-            None,
-        ] {
+        for front in [Some(OTHER), Some(crate::brand::identifier()), None] {
             let rig = rig(profile);
             let shot = rig
                 .call(COMPUTER_SCREENSHOT, json!({ "bundle_id": APP }))

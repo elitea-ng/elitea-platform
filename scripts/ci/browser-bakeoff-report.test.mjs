@@ -89,3 +89,51 @@ test("a run where full itself fails is no comparison, even when lite matches it"
   const half = r.verdict([...run("full", [5, 6, 7, 8, 9]), ...run("lite", [5, 6, 7, 8, 9])]);
   assert.equal(half.comparable, true);
 });
+
+test("auto is admitted on its own result while lite crashes (run 42513255705's shape)", () => {
+  // Lite crashes on two tasks; auto switched to full on both and passes them.
+  const crash = { crashed: true };
+  const lines = [
+    ...run("full"),
+    ...run("lite", [2, 8], { 2: crash, 8: crash }),
+    ...run("auto", [], { 2: { switched: "engine_lost" }, 8: { switched: "engine_lost" } }),
+  ];
+  const result = r.verdict(lines);
+  assert.equal(result.admitted, false);
+  assert.equal(r.check(result, "stable").pass, false);
+  assert.equal(result.auto.admitted, true);
+  assert.ok(result.auto.checks.every((check) => check.pass === true));
+  assert.match(r.check(result.auto, "stable").rule, /of auto$/);
+  const text = r.markdown(result, lines);
+  assert.match(text, /\*\*Verdict: Moli is NOT admitted\.\*\*/);
+  assert.match(text, /\*\*Verdict \(auto\): auto is admitted\.\*\*/);
+  assert.match(text, /t2:engine_lost, t8:engine_lost/);
+});
+
+test("auto is held to the same rules: a crash or hang of auto refuses it", () => {
+  for (const flag of ["crashed", "hung"]) {
+    const result = r.verdict([...run("full"), ...run("lite"), ...run("auto", [], { 3: { [flag]: true } })]);
+    assert.equal(result.admitted, true, flag);
+    assert.equal(result.auto.admitted, false, flag);
+    assert.equal(r.check(result.auto, "stable").pass, false, flag);
+  }
+  // More than 10 points behind full refuses auto too.
+  const behind = r.verdict([...run("full"), ...run("lite"), ...run("auto", [5, 6])]);
+  assert.equal(r.check(behind.auto, "behind").pass, false);
+  assert.equal(behind.auto.admitted, false);
+});
+
+test("auto has no verdict without auto lines, and none over different tasks", () => {
+  const result = r.verdict([...run("full"), ...run("lite")]);
+  assert.equal(result.auto, null);
+  assert.doesNotMatch(r.markdown(result, []), /Verdict \(auto\)/);
+  assert.throws(() => r.verdict([...run("full"), ...run("lite"), ...run("auto").slice(1)]), /full and auto ran different tasks/);
+});
+
+test("with no working baseline, auto is no comparison either", () => {
+  const all = kinds.map((_, i) => i);
+  const result = r.verdict([...run("full", all), ...run("lite", all), ...run("auto", all)]);
+  assert.equal(result.auto.admitted, false);
+  for (const id of ["read_extract", "behind", "stable"]) assert.equal(r.check(result.auto, id).pass, null, id);
+  assert.match(r.markdown(result, []), /auto is NOT admitted/);
+});

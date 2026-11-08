@@ -348,6 +348,15 @@ jobs:
           - name: elitea-browser-session
             context: .
             dockerfile: ./libs/rust/browser-session/Containerfile
+          # elitea-browser-session-lite (ADR-0049 decision 2, #1599): the
+          # session image plus Moli at a pinned, checksum-verified version, for
+          # `auto` sessions, which start on Moli (admitted by the bake-off,
+          # ADR-0049 Appendix A). The `lite` stage of the same Containerfile;
+          # the chart pins it by digest (profile.liteImage).
+          - name: elitea-browser-session-lite
+            context: .
+            dockerfile: ./libs/rust/browser-session/Containerfile
+            target: lite
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -585,6 +594,12 @@ jobs:
           - name: elitea-browser-session
             expect_type: debian
             blocking: false
+          # elitea-browser-session-lite (#1599): the same Debian 13 base plus
+          # Moli and fontconfig, so a `debian` Result, exempt on the same
+          # grounds (.github/image-scan-exempt.txt).
+          - name: elitea-browser-session-lite
+            expect_type: debian
+            blocking: false
 
     steps:
       - name: Checkout
@@ -764,6 +779,12 @@ jobs:
           # Result, exempt for the base's unfixed findings
           # (.github/image-scan-exempt.txt).
           - name: elitea-browser-session
+            expect_type: debian
+            blocking: false
+          # elitea-browser-session-lite (#1599): the same Debian 13 base plus
+          # Moli and fontconfig, so a `debian` Result, exempt on the same
+          # grounds (.github/image-scan-exempt.txt).
+          - name: elitea-browser-session-lite
             expect_type: debian
             blocking: false
 
@@ -1409,18 +1430,24 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-        run: >
-          npx tauri build --target aarch64-apple-darwin --bundles app,dmg
-          --config src-tauri/tauri.sidecar.conf.json
+        # The brand overlay (ADR-0052 decision 4; ELITEA_BRAND unset is
+        # brand/elitea) names the product, identifier and icons; the committed
+        # tauri.conf.json is the neutral brand/sample.
+        run: |
+          set -euo pipefail
+          node scripts/tauri-brand.mjs
+          npx tauri build --target aarch64-apple-darwin --bundles app,dmg \
+            --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
+          echo "DESKTOP_APP=$(node -p 'require("./src-tauri/tauri.brand.json").productName').app" >> "$GITHUB_ENV"
 
       # Proven, not assumed: Gatekeeper accepts the app and the ticket is stapled.
       - name: The app is signed, notarised and stapled
         working-directory: apps/elitea-desktop/src-tauri/target/aarch64-apple-darwin/release/bundle
         run: |
           set -euo pipefail
-          codesign --verify --deep --strict --verbose=2 macos/Elitea.app
-          spctl --assess --type execute --verbose=4 macos/Elitea.app
-          xcrun stapler validate macos/Elitea.app
+          codesign --verify --deep --strict --verbose=2 "macos/${DESKTOP_APP}"
+          spctl --assess --type execute --verbose=4 "macos/${DESKTOP_APP}"
+          xcrun stapler validate "macos/${DESKTOP_APP}"
 
       - name: Remove the notarisation key
         if: always()
@@ -1544,7 +1571,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner" "elitea-browser-session")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-egress-proxy" "elitea-web" "elitea-llm-gateway" "elitea-worker-rust" "elitea-sandbox-supervisor" "elitea-inventory-engine" "elitea-deepwiki-engine-native" "elitea-vector" "elitea-doc-extractor" "elitea-workspace-runner" "elitea-browser-session" "elitea-browser-session-lite")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 
