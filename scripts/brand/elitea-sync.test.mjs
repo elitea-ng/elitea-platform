@@ -19,15 +19,8 @@ const lit = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** brand/elitea asset → the copy an app reads today. */
 const COPIES = {
-  'ios/icon-1024.png': 'apps/elitea-mobile/assets/images/icon.png',
-  'ios/app.icon/icon.json': 'apps/elitea-mobile/assets/elitea.icon/icon.json',
-  'ios/app.icon/Assets/elitea.png': 'apps/elitea-mobile/assets/elitea.icon/Assets/elitea.png',
   'android/icon-512.png': 'brand/assets/icon-pack/colored-dark/android/elitea-colored-dark-android-512.png',
-  'android/adaptive-foreground.png': 'apps/elitea-mobile/assets/images/android-icon-foreground.png',
-  'android/adaptive-background.png': 'apps/elitea-mobile/assets/images/android-icon-background.png',
-  'android/adaptive-monochrome.png': 'apps/elitea-mobile/assets/images/android-icon-monochrome.png',
-  'splash/splash-icon.png': 'apps/elitea-mobile/assets/images/splash-icon.png',
-  'web/favicon-48.png': 'apps/elitea-mobile/assets/images/favicon.png',
+  // The mobile app reads its icons from brand/elitea itself (ADR-0052 W1a); the copies are gone.
   'macos/icon.icns': 'apps/elitea-desktop/src-tauri/icons/icon.icns',
   'windows/icon.ico': 'apps/elitea-desktop/src-tauri/icons/icon.ico',
   'desktop/32x32.png': 'apps/elitea-desktop/src-tauri/icons/32x32.png',

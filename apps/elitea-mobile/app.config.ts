@@ -4,7 +4,7 @@ import type { ConfigContext, ExpoConfig } from 'expo/config';
 // standard library only; Expo evaluates this file in node, which loads it with
 // require(esm), and so does the jest setup (src/test/setupExpoConfig.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { loadBrand } = require('../../scripts/brand/load.mjs') as typeof import('../../scripts/brand/load.mjs');
+const { loadBrand, REPO_ROOT } = require('../../scripts/brand/load.mjs') as typeof import('../../scripts/brand/load.mjs');
 
 /**
  * The selected brand: `ELITEA_BRAND` (a brand id under `brand/`, or a path to a
@@ -14,8 +14,27 @@ const { loadBrand } = require('../../scripts/brand/load.mjs') as typeof import('
 const brand = loadBrand();
 const manifest = brand.manifest;
 
-/** A file of the brand folder, as a path Expo resolves from this directory. */
-const brandFile = (rel: string): string => brand.path(rel);
+/**
+ * A brand folder file as a path relative to this app (`../../brand/elitea/...`): the
+ * config, and the native fingerprint EAS Update matches on, then hold no machine path.
+ * Anchored on the repository root the loader reports, not the working directory.
+ */
+const APP_DIR = `${REPO_ROOT}/apps/elitea-mobile`;
+const brandFile = (rel: string): string => brand.relativeTo(APP_DIR, rel);
+const brandAsset = (rel: string): string => brandFile(`assets/${rel}`);
+
+/** A brand folder file only when it exists (optional files: the Firebase pair). */
+const optionalBrandFile = (rel: string): string | undefined => (brand.has(rel) ? brandFile(rel) : undefined);
+
+/**
+ * The scheme backgrounds behind the icon and splash: the brand's
+ * `brand.schemes.<scheme>["background.default"]`, else Paper and Ink (the
+ * same defaults brand-check measures the hue against).
+ */
+const background = {
+  light: manifest.brand.schemes?.light?.['background.default'] ?? '#FFFFFF',
+  dark: manifest.brand.schemes?.dark?.['background.default'] ?? '#0B0B18',
+};
 
 /**
  * The app's fixed identifiers, built from the brand manifest
@@ -195,8 +214,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // and UIRequiresFullScreen false. The Chats tab is two panes at regular width
   // (src/features/chats/twoPane.ts). scripts/ipad-orientation.test.mjs pins the Info.plist.
   orientation: 'portrait',
-  // App icons and splash: the Elitea logo mark (docs/assets.md). One icon; no alternate icons.
-  icon: './assets/images/icon.png',
+  // App icons and splash come from the brand folder (brand/<id>/assets/, docs/assets.md).
+  // One icon; no alternate icons.
+  icon: brandAsset('ios/icon-1024.png'),
   scheme: [...identity.connectSchemes, identity.oauthRedirectScheme],
   userInterfaceStyle: 'automatic',
   ios: {
@@ -205,8 +225,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supportsTablet: true,
     // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
     requireFullScreen: false,
-    // Icon Composer document: the mark on a solid Ink fill; the system derives Dark, Tinted, Clear.
-    icon: './assets/elitea.icon',
+    // The brand's Icon Composer document when it has one (the system derives Dark, Tinted,
+    // Clear), else its 1024 icon.
+    icon: brand.has('assets/ios/app.icon/icon.json') ? brandAsset('ios/app.icon') : brandAsset('ios/icon-1024.png'),
+    // Firebase (push) only when the brand folder carries it; with no firebase/, nothing is wired.
+    ...(optionalBrandFile('firebase/GoogleService-Info.plist') ? { googleServicesFile: optionalBrandFile('firebase/GoogleService-Info.plist') } : {}),
     infoPlist: {
       // iOS names the app by CFBundleName in system prompts, e.g. the sign-in sheet's
       // '"<name>" Wants to Use "<host>" to Sign In'. Prebuild leaves it as $(PRODUCT_NAME),
@@ -227,11 +250,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     package: identity.bundleId,
     allowBackup: false,
     adaptiveIcon: {
-      backgroundColor: '#0B0B18',
-      foregroundImage: './assets/images/android-icon-foreground.png',
-      backgroundImage: './assets/images/android-icon-background.png',
-      monochromeImage: './assets/images/android-icon-monochrome.png',
+      backgroundColor: background.dark,
+      foregroundImage: brandAsset('android/adaptive-foreground.png'),
+      backgroundImage: brandAsset('android/adaptive-background.png'),
+      monochromeImage: brandAsset('android/adaptive-monochrome.png'),
     },
+    ...(optionalBrandFile('firebase/google-services.json') ? { googleServicesFile: optionalBrandFile('firebase/google-services.json') } : {}),
     // Android 16 (API 36) turns the predictive-back system animations on for apps that target
     // it; the app opts in (audit §3 S1). Back is handled through OnBackPressedDispatcher only:
     // react-native-screens pops stacks and dismisses sheets, RN Modal's onRequestClose closes
@@ -246,20 +270,20 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   web: {
     output: 'static',
-    favicon: './assets/images/favicon.png',
+    favicon: brandAsset('web/favicon-48.png'),
   },
   plugins: [
     'expo-router',
     [
       'expo-splash-screen',
       {
-        // The `background` tokens (src/design/tokens.ts: Paper light, Ink dark), so the splash hands
-        // over to the first screen without a flash.
-        backgroundColor: '#FFFFFF',
-        image: './assets/images/splash-icon.png',
+        // The brand's scheme backgrounds (ELITEA: Paper light, Ink dark, the src/design/tokens.ts
+        // `background` tokens), so the splash hands over to the first screen without a flash.
+        backgroundColor: background.light,
+        image: brandAsset('splash/splash-icon.png'),
         imageWidth: 200,
         resizeMode: 'contain',
-        dark: { backgroundColor: '#0B0B18', image: './assets/images/splash-icon.png' },
+        dark: { backgroundColor: background.dark, image: brandAsset('splash/splash-icon.png') },
       },
     ],
     // iOS crashes on Face ID use without NSFaceIDUsageDescription.

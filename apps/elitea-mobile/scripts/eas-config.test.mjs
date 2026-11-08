@@ -262,3 +262,42 @@ describe('Expo config per brand (ADR-0052 decisions 2 and 3)', () => {
   });
 });
 
+describe('Icons, splash and Firebase from the brand folder (ADR-0052 decision 3)', () => {
+  const brandPath = (id, rel) => `../../brand/${id}/${rel}`;
+
+  for (const id of ['elitea', 'sample']) {
+    it(`brand/${id}: every image path points into its brand folder and exists`, () => {
+      const config = expoConfig({ ELITEA_BRAND: id === 'elitea' ? '' : id });
+      const splash = config.plugins.find((p) => Array.isArray(p) && p[0] === 'expo-splash-screen')[1];
+      const paths = {
+        icon: config.icon,
+        ios: config.ios.icon,
+        foreground: config.android.adaptiveIcon.foregroundImage,
+        background: config.android.adaptiveIcon.backgroundImage,
+        monochrome: config.android.adaptiveIcon.monochromeImage,
+        favicon: config.web.favicon,
+        splash: splash.image,
+        splashDark: splash.dark.image,
+      };
+      for (const [key, path] of Object.entries(paths)) {
+        assert.ok(path.startsWith(`../../brand/${id}/assets/`), `${key}: ${path} is not in brand/${id}`);
+        statSync(resolve(root, path));
+      }
+      assert.equal(paths.icon, brandPath(id, 'assets/ios/icon-1024.png'));
+      // No Firebase files in either repository brand, so no push files are wired.
+      assert.equal(config.ios.googleServicesFile, undefined);
+      assert.equal(config.android.googleServicesFile, undefined);
+    });
+  }
+
+  it('the Icon Composer document is used when the brand has one, the 1024 icon otherwise', () => {
+    assert.equal(expoConfig({}).ios.icon, '../../brand/elitea/assets/ios/app.icon');
+    assert.equal(expoConfig({ ELITEA_BRAND: 'sample' }).ios.icon, '../../brand/sample/assets/ios/icon-1024.png');
+  });
+
+  it('no path in the config is absolute (EAS evaluates it on another machine)', () => {
+    const text = JSON.stringify(expoConfig({}));
+    assert.ok(!text.includes(resolve(root, '../..')), 'config holds this checkout\'s absolute path');
+  });
+});
+

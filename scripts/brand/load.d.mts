@@ -36,7 +36,12 @@ export interface Brand {
   readonly id: string;
   readonly manifest: BrandManifest;
   readonly assetsDir: string;
+  /** The absolute path of a file in the brand folder. */
   path(rel: string): string;
+  /** Whether a file in the brand folder exists. */
+  has(rel: string): boolean;
+  /** A brand folder file as a `/`-separated path relative to the directory `from`. */
+  relativeTo(from: string, rel: string): string;
 }
 
 export declare const REPO_ROOT: string;
