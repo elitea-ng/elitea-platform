@@ -467,7 +467,7 @@ jobs:
           SAFETY_ALERTS_REQUIRE_PROMTOOL: "1"
         run: |
           tarball="${RUNNER_TEMP}/prometheus.tar.gz"
-          curl -fsSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$tarball" \
             "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
           echo "${PROMETHEUS_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" -C "${RUNNER_TEMP}"
