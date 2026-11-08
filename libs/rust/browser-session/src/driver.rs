@@ -1143,6 +1143,25 @@ impl CdpDriver {
                 Err(error) if frame == self.target => return Err(error),
                 Err(_) => continue,
             };
+            if crate::cdp::trace_on() {
+                let nodes = tree["nodes"].as_array().map_or(&[][..], Vec::as_slice);
+                let ignored = nodes.iter().filter(|n| n["ignored"] == true).count();
+                let mut roles: HashMap<String, usize> = HashMap::new();
+                for node in nodes.iter().filter(|n| n["ignored"] != true) {
+                    *roles
+                        .entry(node["role"]["value"].as_str().unwrap_or("?").to_owned())
+                        .or_default() += 1;
+                }
+                let mut roles: Vec<_> = roles.into_iter().collect();
+                roles.sort_by_key(|a| std::cmp::Reverse(a.1));
+                roles.truncate(12);
+                eprintln!(
+                    "cdp-trace axtree frame={frame} nodes={} ignored={ignored} elements={} controls={} roles={roles:?}",
+                    nodes.len(),
+                    session_elements.len(),
+                    session_elements.values().filter(|e| e.is_control()).count()
+                );
+            }
             let tree = FrameTree {
                 session,
                 nodes: tree["nodes"].as_array().cloned().unwrap_or_default(),

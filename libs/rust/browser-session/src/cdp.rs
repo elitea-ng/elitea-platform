@@ -190,7 +190,26 @@ impl Connection {
         method: &str,
         params: Value,
     ) -> Result<Value, CdpError> {
+        let traced = trace_on().then(|| params.to_string().chars().take(300).collect::<String>());
+        let started = std::time::Instant::now();
         let result = self.exchange(session, method, params).await;
+        if let Some(params) = traced {
+            let answer = match &result {
+                Ok(value) => {
+                    let text = value.to_string();
+                    format!(
+                        "ok {}B {}",
+                        text.len(),
+                        text.chars().take(300).collect::<String>()
+                    )
+                }
+                Err(error) => format!("ERR {error}"),
+            };
+            eprintln!(
+                "cdp-trace cmd {method} {}ms {params} -> {answer}",
+                started.elapsed().as_millis()
+            );
+        }
         // Outside a scope (background traffic) there is nothing to count.
         match &result {
             Err(CdpError::Protocol { code, message }) if is_unsupported(*code, message) => {
@@ -292,10 +311,29 @@ async fn read_loop<R: AsyncRead + Unpin>(mut reader: R, shared: Arc<Shared>) {
     shared.close();
 }
 
+/// Diagnostic CDP trace on stderr (`ELITEA_CDP_TRACE`), temporary (#1599).
+pub fn trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("ELITEA_CDP_TRACE").is_some())
+}
+
 fn dispatch(shared: &Shared, record: &[u8]) {
     let Ok(message) = serde_json::from_slice::<Value>(record) else {
+        if trace_on() {
+            eprintln!("cdp-trace unparsable record {}B", record.len());
+        }
         return;
     };
+    if trace_on() && message.get("id").is_none() {
+        let method = message["method"].as_str().unwrap_or_default();
+        if !matches!(method, "Page.screencastFrame" | "Network.dataReceived") {
+            let text = message["params"].to_string();
+            eprintln!(
+                "cdp-trace evt {method} {}",
+                text.chars().take(240).collect::<String>()
+            );
+        }
+    }
     let session_id = message["sessionId"].as_str().map(str::to_owned);
     if let Some(id) = message["id"].as_u64() {
         let reply = shared
@@ -374,14 +412,41 @@ where
     // Client to engine: every record becomes one text message.
     let (client_writes, from_client) = tokio::io::duplex(1 << 20);
     tokio::spawn(async move {
-        while let Some(Ok(message)) = stream.next().await {
+        loop {
+            let message = match stream.next().await {
+                Some(Ok(message)) => message,
+                Some(Err(error)) => {
+                    if trace_on() {
+                        eprintln!("cdp-trace bridge read error: {error}");
+                    }
+                    break;
+                }
+                None => {
+                    if trace_on() {
+                        eprintln!("cdp-trace bridge stream ended");
+                    }
+                    break;
+                }
+            };
             let bytes = match message {
                 Message::Text(text) => text.as_bytes().to_vec(),
                 Message::Binary(bytes) => bytes.to_vec(),
-                Message::Close(_) => break,
+                Message::Close(frame) => {
+                    if trace_on() {
+                        eprintln!("cdp-trace bridge close frame {frame:?}");
+                    }
+                    break;
+                }
                 _ => continue,
             };
             if bytes.contains(&0) || bytes.len() > MAX_MESSAGE_BYTES {
+                if trace_on() {
+                    eprintln!(
+                        "cdp-trace bridge refused message {}B nul={}",
+                        bytes.len(),
+                        bytes.contains(&0)
+                    );
+                }
                 break;
             }
             if to_client.write_all(&bytes).await.is_err()

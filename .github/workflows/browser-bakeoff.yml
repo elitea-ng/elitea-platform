@@ -34,6 +34,11 @@ on:
         description: "Only these task ids, comma-separated (empty: the whole corpus)"
         required: false
         default: ""
+      trace:
+        description: "Diagnostic CDP trace into the artifact's trace.log (targeted runs only)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -150,9 +155,12 @@ jobs:
         env:
           ENGINES: ${{ inputs.engines }}
           ONLY: ${{ inputs.only }}
+          TRACE: ${{ inputs.trace }}
         run: |
           set -euo pipefail
           out="${RUNNER_TEMP}/bakeoff"
+          trace=()
+          if [[ "${TRACE}" == "true" ]]; then trace=(-e ELITEA_CDP_TRACE=1); fi
           mkdir -p "$out"
           chmod 0777 "$out"
           docker run --rm --runtime=runsc --read-only \
@@ -168,8 +176,9 @@ jobs:
             -e ELITEA_BAKEOFF_OUT=/out/results.jsonl \
             -e ELITEA_BAKEOFF_ENGINES="${ENGINES}" \
             -e ELITEA_BAKEOFF_ONLY="${ONLY}" \
+            "${trace[@]}" \
             --entrypoint /usr/local/bin/bakeoff \
-            elitea-browser-session-lite:bakeoff the_bake_off --exact --nocapture
+            elitea-browser-session-lite:bakeoff the_bake_off --exact --nocapture 2> >(tee "$out/trace.log" >&2)
           test -s "$out/results.jsonl" || { echo "::error::the runner wrote no result"; exit 1; }
 
       - name: Apply the admission rule
