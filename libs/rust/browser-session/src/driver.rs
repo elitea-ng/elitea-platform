@@ -152,6 +152,45 @@ const HAS_TEXT: &str = r"function (needle) {
   return !!body && body.innerText.includes(needle);
 }";
 
+/// What the page shows, read from the DOM ([`CdpDriver::page_content`]):
+/// whether its body has readable text, and whether it has controls
+/// (links, buttons, fields), looking through open shadow roots too
+/// (web-component pages keep their links there). The walk stops at the
+/// first root with a control or after `limit` elements. Hidden controls
+/// count too: a false "yes" only sends `auto` to Chrome, the safe engine.
+const CONTENT: &str = r#"function (limit) {
+  const body = document.body;
+  const text = !!body && /[\p{L}\p{N}]/u.test(body.innerText.slice(0, 4000));
+  const controls = 'a[href],button,input:not([type=hidden]),select,textarea,summary,' +
+    '[role=button],[role=link],[role=textbox],[role=searchbox],[role=combobox],' +
+    '[role=checkbox],[role=tab],[role=menuitem],[contenteditable=""],[contenteditable=true]';
+  let found = 0;
+  let seen = 0;
+  const roots = [document];
+  while (roots.length && found === 0 && seen < limit) {
+    const root = roots.pop();
+    found += root.querySelectorAll(controls).length;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    for (let el = walker.nextNode(); el && seen < limit; el = walker.nextNode()) {
+      seen += 1;
+      if (el.shadowRoot) roots.push(el.shadowRoot);
+    }
+  }
+  return { text, controls: found };
+}"#;
+
+/// The most elements [`CONTENT`] walks.
+const CONTENT_WALK_LIMIT: u64 = 20_000;
+
+/// What [`CdpDriver::page_content`] found.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PageContent {
+    /// The body has a letter or a digit.
+    pub text: bool,
+    /// The page has a control.
+    pub controls: bool,
+}
+
 /// What a call's start recorded, for its end.
 #[derive(Clone, Copy)]
 struct Gate {
@@ -379,6 +418,21 @@ impl CdpDriver {
         {
             self.loaded(before, NAVIGATION_TIMEOUT).await;
         }
+    }
+
+    /// What the page shows, read from the DOM rather than the
+    /// accessibility tree. `auto` asks after a tree snapshot gave out no
+    /// ref: text or a control there is something the tree should have
+    /// shown. Outside the agent's gate, like [`Self::reopen`]; a script that
+    /// does not run finds nothing.
+    pub(crate) async fn page_content(&self) -> PageContent {
+        self.main_frame(CONTENT, vec![json!(CONTENT_WALK_LIMIT)])
+            .await
+            .map(|content| PageContent {
+                text: content["text"] == true,
+                controls: content["controls"].as_u64().is_some_and(|found| found > 0),
+            })
+            .unwrap_or_default()
     }
 
     /// The engine's product, `chrome-headless-shell/<version>` or

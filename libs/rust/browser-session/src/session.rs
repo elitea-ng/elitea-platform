@@ -6,10 +6,14 @@
 //!   gVisor: Moli has no process sandbox of its own, so its container is the
 //!   only boundary, and a shared kernel is refused (`isolation_refused`).
 //! * `auto`: Moli first. The session switches to chrome-headless-shell, once
-//!   and for good, when a command of the tool call itself is answered as
-//!   unsupported (background traffic never counts, [`scoped_unsupported`])
-//!   or a tree snapshot comes back empty where the page has text. The switch
-//!   reopens the current URL on Chrome, keeps the session's [`Control`] (a
+//!   and for good, when Moli fails a tool call in a way Chrome would not
+//!   ([`SwitchReason`]): a command of the call itself is answered as
+//!   unsupported, times out or meets an internal engine error (background
+//!   traffic never counts, [`scoped_faults`]), `browser_open` does not load
+//!   in time, the engine dies or drops the connection, or a tree snapshot
+//!   gives out no ref where the page's DOM shows controls (or no node at all
+//!   where it shows text). The switch reopens the current URL on Chrome
+//!   (an `open` is answered again with its own URL instead), keeps the session's [`Control`] (a
 //!   person's take-over carries over), moves every open view to the new
 //!   engine's screencast, and tells the agent and the viewer: the call's
 //!   result carries `engine_switched` with the reason, and the agent line
@@ -33,9 +37,9 @@ use elitea_browser_tools::{BrowserError, ErrorCode, ToolOutput, dispatch, spec};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, watch};
 
-use crate::cdp::scoped_unsupported;
+use crate::cdp::{CallFaults, scoped_faults};
 use crate::control::{Control, Driver};
-use crate::driver::CdpDriver;
+use crate::driver::{CdpDriver, PageContent};
 use crate::engine::{AUTO_MOLI_READY, EngineConfig, EngineKind};
 use crate::protocol::{Backend, FrameSource, Start, StartError, ViewFrame, log};
 use crate::screencast::Viewer;
@@ -44,6 +48,10 @@ use crate::screencast::Viewer;
 /// fails a call after 90 s (the agent line protocol's limit), so the
 /// question is answered `declined` before that.
 pub const REQUEST_USER_TIMEOUT: Duration = Duration::from_secs(80);
+
+/// How long `auto` waits before it reads a zero-ref snapshot again on Moli,
+/// so a page still rendering is not taken for one Moli cannot read.
+const EMPTY_SNAPSHOT_RETRY: Duration = Duration::from_millis(500);
 
 /// The notice the agent sends when `auto` moves from Moli to Chrome.
 pub const NOTICE_ENGINE_SWITCHED: &str = "engine_switched";
@@ -105,7 +113,15 @@ pub enum SwitchReason {
     StartFailed,
     /// Moli answered a command as unsupported.
     Unsupported,
-    /// A tree snapshot had no node where the page has text.
+    /// Moli exited or dropped the connection during the call.
+    EngineLost,
+    /// Moli did not answer a command in time, or `browser_open` did not
+    /// load in time.
+    Timeout,
+    /// Moli answered a command with JSON-RPC's internal error.
+    EngineError,
+    /// A tree snapshot gave out no ref where the page shows controls, or
+    /// had no node where it shows text, on a second read too.
     EmptySnapshot,
 }
 
@@ -115,6 +131,9 @@ impl SwitchReason {
         match self {
             Self::StartFailed => "start_failed",
             Self::Unsupported => "unsupported_protocol",
+            Self::EngineLost => "engine_lost",
+            Self::Timeout => "timeout",
+            Self::EngineError => "engine_error",
             Self::EmptySnapshot => "empty_snapshot",
         }
     }
@@ -251,9 +270,16 @@ impl Session {
         Ok((driver, version))
     }
 
-    /// Move an `auto` session to Chrome: start it, reopen `url`, and swap
-    /// the driver. `None` when it could not start (the Moli driver stays).
-    async fn switch(&self, url: &str, reason: SwitchReason) -> Option<Arc<CdpDriver>> {
+    /// Move an `auto` session to Chrome: start it, reopen `url` (unless
+    /// `reopen` is false: the call answered again opens a page itself), and
+    /// swap the driver. `None` when it could not start (the Moli driver
+    /// stays).
+    async fn switch(
+        &self,
+        url: &str,
+        reason: SwitchReason,
+        reopen: bool,
+    ) -> Option<Arc<CdpDriver>> {
         let (config, control) = {
             let started = self.started.lock().await;
             let started = started.as_ref()?;
@@ -270,7 +296,7 @@ impl Session {
             )
         };
         let (chrome, _) = self.launch(&config, control).await.ok()?;
-        if url.starts_with("http://") || url.starts_with("https://") {
+        if reopen && (url.starts_with("http://") || url.starts_with("https://")) {
             chrome.reopen(url).await;
         }
         // Views follow the watch to Chrome's screencast before Moli stops.
@@ -288,28 +314,52 @@ impl Session {
 }
 
 /// Whether an `auto` session must leave Moli after `name` answered
-/// `output`: a rise in unsupported-protocol answers during the call, or a
-/// tree snapshot with no node at all on a page with readable text.
+/// `output`, from the faults of the call's own commands and whether the
+/// engine is still alive. Only Moli's own failures count: a page that does
+/// not have what a `browser_wait` waits for, a stale ref or a refused
+/// scheme fails the same way on Chrome and never switches. The empty
+/// snapshot rule needs a look at the page and is [`empty_snapshot`].
 fn switch_reason(
     name: &str,
     output: &ToolOutput,
-    unsupported_rose: bool,
-    page_has_text: impl FnOnce() -> bool,
+    faults: CallFaults,
+    alive: bool,
 ) -> Option<SwitchReason> {
-    if unsupported_rose {
+    if faults.unsupported > 0 {
         return Some(SwitchReason::Unsupported);
     }
+    if !alive || faults.closed > 0 {
+        return Some(SwitchReason::EngineLost);
+    }
     let result = output.result();
-    if name == spec::BROWSER_SNAPSHOT
+    if faults.timeouts > 0 || (name == spec::BROWSER_OPEN && result["code"] == "timeout") {
+        return Some(SwitchReason::Timeout);
+    }
+    // The driver tolerates some failed commands (a child frame's tree that
+    // went away): an internal error counts only when it failed the call.
+    if faults.engine_errors > 0 && result["status"] == "error" {
+        return Some(SwitchReason::EngineError);
+    }
+    None
+}
+
+/// A tree snapshot that gave out no ref, the one kind of answer the empty
+/// snapshot rule looks at.
+fn zero_ref_tree(name: &str, output: &ToolOutput) -> bool {
+    let result = output.result();
+    name == spec::BROWSER_SNAPSHOT
         && result["status"] == "ok"
         && result.get("snapshot").is_some()
         && result["refs"].as_u64() == Some(0)
-        && empty_tree(result["content"].as_str().unwrap_or_default())
-        && page_has_text()
-    {
-        return Some(SwitchReason::EmptySnapshot);
-    }
-    None
+}
+
+/// Whether a zero-ref tree snapshot misses what the page's DOM shows: a
+/// control (a link, a button, a field) the tree gave no ref, or
+/// any text where the tree has no node at all. A page of text alone has no
+/// ref on any engine, so zero refs over text is not by itself Moli's fault.
+fn empty_snapshot(output: &ToolOutput, content: PageContent) -> bool {
+    content.controls
+        || (content.text && empty_tree(output.result()["content"].as_str().unwrap_or_default()))
 }
 
 /// A rendered snapshot with no node line (only `# ` header lines inside
@@ -453,28 +503,37 @@ impl Backend for Session {
         // Only the call's own commands count: screencast acks, the page
         // tracker and `Fetch.enable` on new targets run on tasks of their
         // own.
-        let (output, unsupported) = scoped_unsupported(dispatch(driver.as_ref(), name, args)).await;
+        let (mut output, faults) = scoped_faults(dispatch(driver.as_ref(), name, args)).await;
         if !watching_moli {
             return output;
         }
-        // The text check is one more engine round trip, only for a tree
-        // snapshot that gave out no ref.
-        let has_text = if name == spec::BROWSER_SNAPSHOT && output.result()["refs"] == 0 {
-            let text = dispatch(
-                driver.as_ref(),
-                spec::BROWSER_SNAPSHOT,
-                &json!({ "mode": "text", "max_chars": 200 }),
-            )
-            .await;
-            page_text_present(text.result()["content"].as_str().unwrap_or_default())
-        } else {
-            false
-        };
-        let Some(reason) = switch_reason(name, &output, unsupported > 0, || has_text) else {
+        let mut reason = switch_reason(name, &output, faults, driver.is_alive());
+        // The page check is one more engine round trip, only for a tree
+        // snapshot that gave out no ref. A page still rendering gets one
+        // more read on Moli before it counts.
+        if reason.is_none()
+            && zero_ref_tree(name, &output)
+            && empty_snapshot(&output, driver.page_content().await)
+        {
+            tokio::time::sleep(EMPTY_SNAPSHOT_RETRY).await;
+            let (again, faults) = scoped_faults(dispatch(driver.as_ref(), name, args)).await;
+            reason = switch_reason(name, &again, faults, driver.is_alive());
+            if reason.is_none()
+                && zero_ref_tree(name, &again)
+                && empty_snapshot(&again, driver.page_content().await)
+            {
+                reason = Some(SwitchReason::EmptySnapshot);
+            }
+            output = again;
+        }
+        let Some(reason) = reason else {
             return output;
         };
         let (url, _) = driver.location();
-        match self.switch(&url, reason).await {
+        // An open is answered again with its own URL: reopening the old
+        // one first would only spend the call's time.
+        let reopen = name != spec::BROWSER_OPEN;
+        match self.switch(&url, reason, reopen).await {
             // A read again, on Chrome: the page was reopened, so a ref call
             // starts from a fresh snapshot (`stale_ref` tells the agent).
             Some(chrome) if repeatable(name) => {
@@ -520,16 +579,6 @@ impl Backend for Session {
             driver.shutdown();
         }
     }
-}
-
-/// Whether a text-mode snapshot's content has page text past its `# url`
-/// and `# title` header.
-fn page_text_present(framed: &str) -> bool {
-    let inner = elitea_browser_tools::frame::unframe(framed).map_or(framed, |(inner, _)| inner);
-    inner
-        .lines()
-        .filter(|line| !line.starts_with("# "))
-        .any(|line| line.chars().any(char::is_alphanumeric))
 }
 
 /// A view's frames. It follows the session's driver: after an `auto`
@@ -666,39 +715,99 @@ mod tests {
     }
 
     #[test]
-    fn auto_switches_on_unsupported_or_an_empty_tree_over_text() {
+    fn auto_switches_on_moli_faults_only() {
+        let ok = ToolOutput::Json(json!({"status": "ok"}));
+        let none = CallFaults::default();
+        assert_eq!(switch_reason(spec::BROWSER_CLICK, &ok, none, true), None);
+        let unsupported = CallFaults {
+            unsupported: 1,
+            ..none
+        };
+        assert_eq!(
+            switch_reason(spec::BROWSER_CLICK, &ok, unsupported, true),
+            Some(SwitchReason::Unsupported)
+        );
+        // The engine gone, by its process or its connection.
+        assert_eq!(
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, none, false),
+            Some(SwitchReason::EngineLost)
+        );
+        let closed = CallFaults { closed: 1, ..none };
+        assert_eq!(
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, closed, true),
+            Some(SwitchReason::EngineLost)
+        );
+        let timeout = ToolOutput::Json(json!({"status": "error", "code": "timeout"}));
+        // An open that did not load in time is Moli's; a wait whose
+        // condition never held is the page's, on any engine.
+        assert_eq!(
+            switch_reason(spec::BROWSER_OPEN, &timeout, none, true),
+            Some(SwitchReason::Timeout)
+        );
+        assert_eq!(
+            switch_reason(spec::BROWSER_WAIT, &timeout, none, true),
+            None
+        );
+        let unanswered = CallFaults {
+            timeouts: 1,
+            ..none
+        };
+        assert_eq!(
+            switch_reason(spec::BROWSER_WAIT, &timeout, unanswered, true),
+            Some(SwitchReason::Timeout)
+        );
+        let internal = ToolOutput::Json(json!({"status": "error", "code": "internal"}));
+        let engine_error = CallFaults {
+            engine_errors: 1,
+            ..none
+        };
+        assert_eq!(
+            switch_reason(spec::BROWSER_SNAPSHOT, &internal, engine_error, true),
+            Some(SwitchReason::EngineError)
+        );
+        // An internal error the driver got past (a child frame's tree) did
+        // not fail the call.
+        assert_eq!(
+            switch_reason(spec::BROWSER_SNAPSHOT, &ok, engine_error, true),
+            None
+        );
+        // A page-side refusal is not Moli's.
+        let stale = ToolOutput::Json(json!({"status": "error", "code": "stale_ref"}));
+        assert_eq!(switch_reason(spec::BROWSER_CLICK, &stale, none, true), None);
+    }
+
+    #[test]
+    fn an_empty_snapshot_is_judged_by_the_dom() {
         let framed =
             |inner: &str| elitea_browser_tools::frame::frame_with_nonce(inner, &"a".repeat(32));
         let empty = ToolOutput::Json(json!({
             "status": "ok", "snapshot": "s1", "refs": 0, "truncated": false, "omitted": 0,
             "content": framed("# snapshot s1\n# url \"https://a.test/\"\n# title \"A\"\n"),
         }));
-        assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &empty, false, || true),
-            Some(SwitchReason::EmptySnapshot)
-        );
-        // An empty tree of an empty page is the page's, not Moli's.
-        assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &empty, false, || false),
-            None
-        );
-        let full = ToolOutput::Json(json!({
+        let text_only = ToolOutput::Json(json!({
             "status": "ok", "snapshot": "s1", "refs": 0,
             "content": framed("# snapshot s1\n- heading \"Hello\"\n"),
         }));
-        assert_eq!(
-            switch_reason(spec::BROWSER_SNAPSHOT, &full, false, || true),
-            None
-        );
-        let click = ToolOutput::Json(json!({"status": "error", "code": "internal"}));
-        assert_eq!(
-            switch_reason(spec::BROWSER_CLICK, &click, true, || false),
-            Some(SwitchReason::Unsupported)
-        );
-        assert_eq!(
-            switch_reason(spec::BROWSER_CLICK, &click, false, || true),
-            None
-        );
+        assert!(zero_ref_tree(spec::BROWSER_SNAPSHOT, &empty));
+        assert!(!zero_ref_tree(spec::BROWSER_SCREENSHOT, &empty));
+        let text = PageContent {
+            text: true,
+            controls: false,
+        };
+        let controls = PageContent {
+            text: true,
+            controls: true,
+        };
+        // No node at all over text: Moli lost the tree.
+        assert!(empty_snapshot(&empty, text));
+        // Nodes but no ref, on a page of text alone: that is the page.
+        assert!(!empty_snapshot(&text_only, text));
+        // Nodes but no ref where the DOM has links or fields: Moli missed
+        // them (the bake-off's salesforce-developer-docs and
+        // servicenow-docs, whose links live in shadow roots).
+        assert!(empty_snapshot(&text_only, controls));
+        // An empty page is empty on any engine.
+        assert!(!empty_snapshot(&empty, PageContent::default()));
     }
 
     #[test]
@@ -730,20 +839,31 @@ mod tests {
         ] {
             assert!(!repeatable(act), "{act}");
         }
-        assert!(page_text_present(
-            "# url \"https://a.test/\"\n# title \"A\"\nHello world"
-        ));
-        assert!(!page_text_present(
-            "# url \"https://a.test/\"\n# title \"A\"\n"
-        ));
     }
+
+    /// How a fake engine answers one method, set while a test runs.
+    #[derive(Clone)]
+    enum Behaviour {
+        /// This result.
+        Reply(Value),
+        /// JSON-RPC's internal error (-32603).
+        Internal,
+        /// No answer at all.
+        Silent,
+        /// The engine drops the connection, as one that died does.
+        HangUp,
+    }
+
+    type Script = Arc<std::sync::Mutex<std::collections::HashMap<String, Behaviour>>>;
 
     /// A fake engine over a duplex pipe. It answers what `CdpDriver::attach`
     /// and the calls under test need, refuses `unsupported` methods as Moli
-    /// does (-32601), records every method it was sent, and lets the test
-    /// push events (screencast frames).
+    /// does (-32601), answers a method as the test sets it ([`Behaviour`]),
+    /// records every method it was sent, and lets the test push events
+    /// (screencast frames).
     struct FakeEngine {
         methods: Arc<std::sync::Mutex<Vec<String>>>,
+        script: Script,
         push: mpsc::UnboundedSender<Value>,
     }
 
@@ -755,6 +875,23 @@ mod tests {
                 .iter()
                 .filter(|sent| *sent == method)
                 .count()
+        }
+
+        fn set(&self, method: &str, behaviour: Behaviour) {
+            self.script
+                .lock()
+                .unwrap()
+                .insert(method.to_owned(), behaviour);
+        }
+
+        /// The page moved to `url` within its document.
+        fn navigated(&self, url: &str) {
+            self.push
+                .send(json!({
+                    "method": "Page.navigatedWithinDocument", "sessionId": "S",
+                    "params": { "frameId": "T", "url": url },
+                }))
+                .unwrap();
         }
 
         fn frame(&self, id: i64, byte: u8) {
@@ -780,13 +917,18 @@ mod tests {
         let (client_write, engine_read) = tokio::io::duplex(1 << 20);
         let (mut engine_write, client_read) = tokio::io::duplex(1 << 20);
         let methods = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let script = Script::default();
         let (push, mut pushed) = mpsc::unbounded_channel::<Value>();
-        let (out, mut outgoing) = mpsc::unbounded_channel::<Value>();
+        // `None` hangs up: the writer ends, and the client reads the end.
+        let (out, mut outgoing) = mpsc::unbounded_channel::<Option<Value>>();
         tokio::spawn(async move {
             loop {
                 let message = tokio::select! {
                     Some(message) = pushed.recv() => message,
-                    Some(message) = outgoing.recv() => message,
+                    Some(message) = outgoing.recv() => match message {
+                        Some(message) => message,
+                        None => break,
+                    },
                     else => break,
                 };
                 let mut bytes = serde_json::to_vec(&message).unwrap();
@@ -797,6 +939,7 @@ mod tests {
             }
         });
         let seen = Arc::clone(&methods);
+        let scripted = Arc::clone(&script);
         tokio::spawn(async move {
             let mut reader = BufReader::new(engine_read);
             let mut record = Vec::new();
@@ -806,28 +949,47 @@ mod tests {
                 record.clear();
                 let method = command["method"].as_str().unwrap_or_default().to_owned();
                 seen.lock().unwrap().push(method.clone());
-                let reply = if unsupported.contains(&method.as_str()) {
-                    json!({"id": command["id"], "error": {"code": -32601, "message": format!("'{method}' wasn't found")}})
-                } else {
-                    let result = match method.as_str() {
-                        "Target.getTargets" => {
-                            json!({"targetInfos": [{"type": "page", "targetId": "T"}]})
-                        }
-                        "Target.attachToTarget" => json!({"sessionId": "S"}),
-                        "Browser.getVersion" => json!({"product": product}),
-                        "Page.createIsolatedWorld" => json!({"executionContextId": 1}),
-                        "Runtime.callFunctionOn" => json!({"result": {"value": {}}}),
-                        "Page.navigate" => json!({"frameId": "T", "loaderId": ""}),
-                        _ => json!({}),
-                    };
-                    json!({"id": command["id"], "result": result})
+                let behaviour = scripted.lock().unwrap().get(&method).cloned();
+                let reply = match behaviour {
+                    Some(Behaviour::Silent) => continue,
+                    Some(Behaviour::HangUp) => {
+                        let _ = out.send(None);
+                        break;
+                    }
+                    Some(Behaviour::Internal) => {
+                        json!({"id": command["id"], "error": {"code": -32603, "message": "Internal error"}})
+                    }
+                    Some(Behaviour::Reply(result)) => {
+                        json!({"id": command["id"], "result": result})
+                    }
+                    None if unsupported.contains(&method.as_str()) => {
+                        json!({"id": command["id"], "error": {"code": -32601, "message": format!("'{method}' wasn't found")}})
+                    }
+                    None => {
+                        let result = match method.as_str() {
+                            "Target.getTargets" => {
+                                json!({"targetInfos": [{"type": "page", "targetId": "T"}]})
+                            }
+                            "Target.attachToTarget" => json!({"sessionId": "S"}),
+                            "Browser.getVersion" => json!({"product": product}),
+                            "Page.createIsolatedWorld" => json!({"executionContextId": 1}),
+                            "Runtime.callFunctionOn" => json!({"result": {"value": {}}}),
+                            "Page.navigate" => json!({"frameId": "T", "loaderId": ""}),
+                            _ => json!({}),
+                        };
+                        json!({"id": command["id"], "result": result})
+                    }
                 };
-                let _ = out.send(reply);
+                let _ = out.send(Some(reply));
             }
         });
         (
             crate::cdp::Connection::new(client_read, client_write),
-            FakeEngine { methods, push },
+            FakeEngine {
+                methods,
+                script,
+                push,
+            },
         )
     }
 
@@ -979,6 +1141,213 @@ mod tests {
         );
         assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
         assert!(moli.sent("Page.screencastFrameAck") >= 1);
+    }
+
+    /// An `auto` session over fakes, started, with every notice it sends.
+    async fn started_auto() -> (
+        Session,
+        FakeEngine,
+        FakeEngine,
+        mpsc::UnboundedReceiver<&'static str>,
+    ) {
+        let (session, moli, chrome, _) = auto_over_fakes(&[]);
+        let (sender, noticed) = mpsc::unbounded_channel();
+        session.notices(sender);
+        session.start(&start("auto", true)).await.unwrap();
+        (session, moli, chrome, noticed)
+    }
+
+    /// A read that switched: answered again on Chrome with `reason`.
+    fn assert_read_switched(
+        session: &Session,
+        output: &ToolOutput,
+        reason: &str,
+        noticed: &mut mpsc::UnboundedReceiver<&'static str>,
+    ) {
+        let switched = &output.result()["engine_switched"];
+        assert_eq!(switched["reason"], reason, "{}", output.result());
+        assert_eq!(switched["repeated"], true, "{}", output.result());
+        assert_eq!(output.result()["status"], "ok", "{}", output.result());
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Chrome);
+        assert_eq!(noticed.try_recv(), Ok(NOTICE_ENGINE_SWITCHED));
+    }
+
+    /// Moli died mid-call (the bake-off's docs-rust-std: `snapshot:
+    /// "internal"`, the engine gone afterwards): the read goes to Chrome.
+    #[tokio::test]
+    async fn an_engine_that_died_switches() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        moli.set("Accessibility.getFullAXTree", Behaviour::HangUp);
+        let output = session
+            .call(spec::BROWSER_SNAPSHOT, &json!({ "max_nodes": 100 }))
+            .await;
+        assert_read_switched(&session, &output, "engine_lost", &mut noticed);
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
+    }
+
+    /// An open Moli does not load in time (the bake-off's two atlassian
+    /// `open: "timeout"` tasks) is answered again on Chrome, which opens the
+    /// URL itself: no reopen of the old page first.
+    #[tokio::test(start_paused = true)]
+    async fn an_open_that_timed_out_switches() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        // Moli is on a page already, one a switch would reopen.
+        moli.navigated("https://earlier.test/");
+        while session.driver().unwrap().location().0.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // A navigation that starts and never loads.
+        moli.set(
+            "Page.navigate",
+            Behaviour::Reply(json!({"frameId": "T", "loaderId": "L1"})),
+        );
+        let output = session
+            .call(spec::BROWSER_OPEN, &json!({ "url": "https://slow.test/" }))
+            .await;
+        assert_read_switched(&session, &output, "timeout", &mut noticed);
+        assert_eq!(
+            chrome.sent("Page.navigate"),
+            1,
+            "opened once, not reopened first"
+        );
+    }
+
+    /// A command Moli never answers fails the call as `timeout`: a read
+    /// goes to Chrome.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswered_command_switches() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        moli.set("Accessibility.getFullAXTree", Behaviour::Silent);
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert_read_switched(&session, &output, "timeout", &mut noticed);
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
+    }
+
+    /// A wait whose condition never holds is the page's, on any engine:
+    /// no switch.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_that_timed_out_does_not_switch() {
+        let (session, _moli, _chrome, _) = started_auto().await;
+        let output = session
+            .call(
+                spec::BROWSER_WAIT,
+                &json!({ "url": "*/never*", "timeout_ms": 1000 }),
+            )
+            .await;
+        assert_eq!(output.result()["code"], "timeout", "{}", output.result());
+        assert!(output.result().get("engine_switched").is_none());
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
+    }
+
+    /// Moli's internal error on the call's own command (`-32603`) is
+    /// Moli's fault: a read goes to Chrome, an act is not repeated.
+    #[tokio::test]
+    async fn an_internal_engine_error_switches_and_an_act_is_not_repeated() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        moli.set("Accessibility.getFullAXTree", Behaviour::Internal);
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert_read_switched(&session, &output, "engine_error", &mut noticed);
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
+
+        let (session, moli, chrome, _) = started_auto().await;
+        moli.set("Input.dispatchKeyEvent", Behaviour::Internal);
+        let output = session
+            .call(spec::BROWSER_PRESS, &json!({ "key": "Enter" }))
+            .await;
+        let switched = &output.result()["engine_switched"];
+        assert_eq!(switched["reason"], "engine_error", "{}", output.result());
+        assert_eq!(switched["repeated"], false);
+        assert_eq!(
+            chrome.sent("Input.dispatchKeyEvent"),
+            0,
+            "the act ran twice"
+        );
+        assert!(moli.sent("Input.dispatchKeyEvent") >= 1);
+    }
+
+    /// One frame's accessibility tree: a root and these children.
+    fn ax_tree(children: &[(&str, &str)]) -> Value {
+        let ids: Vec<String> = (0..children.len()).map(|at| format!("n{at}")).collect();
+        let mut nodes = vec![json!({
+            "nodeId": "root", "ignored": false,
+            "role": {"type": "role", "value": "RootWebArea"},
+            "name": {"type": "computedString", "value": "A"},
+            "childIds": ids,
+        })];
+        for (at, (role, name)) in children.iter().enumerate() {
+            nodes.push(json!({
+                "nodeId": format!("n{at}"), "parentId": "root", "ignored": false,
+                "role": {"type": "role", "value": role},
+                "name": {"type": "computedString", "value": name},
+                "childIds": [],
+            }));
+        }
+        json!({ "nodes": nodes })
+    }
+
+    /// The page probe's answer.
+    fn content(text: bool, controls: u64) -> Behaviour {
+        Behaviour::Reply(json!({"result": {"value": {"text": text, "controls": controls}}}))
+    }
+
+    /// Moli's tree has the page's heading but none of the links its DOM
+    /// holds (the bake-off's salesforce-developer-docs and servicenow-docs:
+    /// 0 refs on lite, refs on full). After a second read it goes to Chrome.
+    #[tokio::test]
+    async fn a_tree_without_the_doms_controls_switches() {
+        let (session, moli, chrome, mut noticed) = started_auto().await;
+        moli.set(
+            "Accessibility.getFullAXTree",
+            Behaviour::Reply(ax_tree(&[("heading", "Docs")])),
+        );
+        moli.set("Runtime.callFunctionOn", content(true, 12));
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert_read_switched(&session, &output, "empty_snapshot", &mut noticed);
+        assert_eq!(
+            moli.sent("Accessibility.getFullAXTree"),
+            2,
+            "Moli got a second read first"
+        );
+        assert_eq!(chrome.sent("Accessibility.getFullAXTree"), 1);
+    }
+
+    /// A page of text alone has no ref on any engine, and a page that
+    /// renders by the second read is Moli's to keep.
+    #[tokio::test]
+    async fn a_text_page_or_a_late_render_stays_on_moli() {
+        let (session, moli, _chrome, _) = started_auto().await;
+        moli.set(
+            "Accessibility.getFullAXTree",
+            Behaviour::Reply(ax_tree(&[("heading", "Plain")])),
+        );
+        moli.set("Runtime.callFunctionOn", content(true, 0));
+        let output = session.call(spec::BROWSER_SNAPSHOT, &json!({})).await;
+        assert!(output.result().get("engine_switched").is_none());
+        assert_eq!(output.result()["refs"], 0);
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
+
+        let (session, moli, _chrome, _) = started_auto().await;
+        moli.set(
+            "Accessibility.getFullAXTree",
+            Behaviour::Reply(ax_tree(&[])),
+        );
+        moli.set("Runtime.callFunctionOn", content(true, 3));
+        let late = async {
+            tokio::time::sleep(EMPTY_SNAPSHOT_RETRY / 2).await;
+            moli.set(
+                "Accessibility.getFullAXTree",
+                Behaviour::Reply(ax_tree(&[("link", "Docs")])),
+            );
+        };
+        let args = json!({});
+        let (output, ()) = tokio::join!(session.call(spec::BROWSER_SNAPSHOT, &args), late);
+        assert!(
+            output.result().get("engine_switched").is_none(),
+            "{}",
+            output.result()
+        );
+        assert_eq!(output.result()["refs"], 1, "{}", output.result());
+        assert_eq!(session.engine_state().unwrap().0, EngineKind::Moli);
     }
 
     #[test]

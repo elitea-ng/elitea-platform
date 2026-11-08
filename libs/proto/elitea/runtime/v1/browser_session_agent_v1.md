@@ -99,18 +99,27 @@ An `auto` session moves to chrome-headless-shell once, and never back, when:
 | --- | --- |
 | `start_failed` | Moli does not start. The session starts on Chrome. |
 | `unsupported_protocol` | A call made Moli answer a CDP method as unknown or unsupported (`-32601`, or a message that says so). |
-| `empty_snapshot` | A `browser_snapshot` found no actionable ref and an empty tree on a page that has text. |
+| `engine_lost` | Moli exited, or its CDP connection closed, during a call. |
+| `timeout` | Moli did not answer a command of a call in time, or a `browser_open` did not finish loading in time. A `browser_wait` whose condition does not hold is not one. |
+| `engine_error` | Moli answered a command of a call with JSON-RPC's internal error (`-32603`), and the call failed. |
+| `empty_snapshot` | A tree `browser_snapshot` gave out no ref where the page's DOM has links, buttons or fields, or had no node at all where the page has text, on a second read too. |
+
+Only the commands a call sent itself count; background traffic never
+causes a switch.
 
 On a switch the agent:
 
 1. starts chrome-headless-shell with the same `start` fields,
 2. opens the page's `http`/`https` URL again (form state and history are
-   lost),
+   lost); a switch on `browser_open` skips this, since the call is
+   answered again with its own URL,
 3. writes `notice` with `code` `engine_switched` (the viewer shows it, and
    the supervisor logs it), and
-4. answers the call on Chrome, with `engine_switched`
-   `{from: "lite", to: "full", reason}` added to its result so the agent
-   model knows the page was reloaded.
+4. answers a read (`browser_open`, `browser_snapshot`,
+   `browser_screenshot`, `browser_wait`) again on Chrome, and gives an act
+   Moli's own result without running it again, with `engine_switched`
+   `{from: "lite", to: "full", reason, repeated}` added to the result so
+   the agent model knows the page was reloaded.
 
 ### `input` events
 

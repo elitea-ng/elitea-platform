@@ -4,6 +4,27 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Cloud browser: more `auto` switch reasons, bake-off corpus revision 2 (#1599)
+
+No operator action. No migration, no contract change for Main or the
+supervisor.
+
+- `auto` is still closed to projects until the ADR-0049 bake-off admits
+  Moli. When it opens, an `auto` session now also moves to Chrome when
+  Moli dies or drops its connection during a call (`engine_lost`), does
+  not answer a command or finish a `browser_open` in time (`timeout`),
+  or fails a call with an internal engine error (`engine_error`). The
+  `empty_snapshot` rule now also applies to a snapshot with no ref on a
+  page whose DOM has links, buttons or fields, after a second read on
+  Moli.
+- The `engine_switched.reason` field of a tool result can carry the
+  three new values. The `engine_switched` notice to viewers is
+  unchanged.
+- The bake-off corpus (`libs/rust/browser-session/bakeoff/corpus.json`)
+  is at revision 2: 8 tasks whose sites had moved were fixed or replaced
+  in the same class and kind. Bake-off numbers from revision 1 do not
+  compare task for task with later runs.
+
 ## Idle compaction per agent (#1610, ADR-0050 decision 9b2)
 
 Migration `shared/0230_agent_idle_compactions.sql` (additive: one table,
