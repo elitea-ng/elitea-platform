@@ -10,7 +10,9 @@
 //!   `applicationframehost.exe`, and the shell, `explorer.exe`, owns the Run
 //!   box and the Control Panel as well as File Explorer. A frame is judged
 //!   by the app it hosts (refused when that cannot be read); of the shell's
-//!   windows only File Explorer folder windows on a file-system path pass.
+//!   windows only File Explorer folder windows on a file-system path pass,
+//!   and those are read and clicked but never typed into (its address bar
+//!   runs what is typed; [`crate::platform::text_entry_refusal`]).
 //! - **The screen** ([`screen`]): no session, another session on the
 //!   console, the lock or sign-in screen or a UAC/credential secure desktop
 //!   (the input desktop is not `Default`), or the screensaver is

@@ -472,6 +472,26 @@ pub fn windows_window_verdict(facts: &WindowsWindowFacts<'_>) -> WindowVerdict {
     }
 }
 
+/// Why the driver of `os` never puts text into the windows of the
+/// application `app_id`, or `None` when it may (#1586). File Explorer's
+/// address bar runs what is typed into it (`powershell -c ...` and Return
+/// starts a shell), and so does its search box's address mode; neither UI
+/// Automation nor the vendor tells the address band from the folder view
+/// reliably (the band's `Edit` sits inside `Address Band Root`, but the
+/// focus moves into it from the folder view on a keystroke). So every act
+/// that inserts text is refused in every `explorer.exe` window: typing
+/// (with or without a ref), setting a value, and a chord that inserts text
+/// ([`chord_inserts_text`], paste included). Clicks, navigation keys and
+/// reads still pass.
+#[must_use]
+pub fn text_entry_refusal(os: Os, app_id: &str) -> Option<String> {
+    (os == Os::Windows && app_id.trim().eq_ignore_ascii_case(WINDOWS_SHELL)).then(|| {
+        format!(
+            "{WINDOWS_SHELL}: File Explorer's address bar runs what is typed into it, so its windows are read and clicked but never typed into"
+        )
+    })
+}
+
 /// A `file:` URL with a path (`file:///C:/...`, `file://server/share`).
 fn is_file_location(location: &str) -> bool {
     let location = location.trim();
@@ -1129,6 +1149,42 @@ mod tests {
             windows_window_verdict(&no_class),
             WindowVerdict::Deny(_)
         ));
+    }
+
+    #[test]
+    fn explorer_windows_are_never_typed_into() {
+        for id in ["explorer.exe", "Explorer.EXE", " explorer.exe "] {
+            assert!(
+                text_entry_refusal(Os::Windows, id).is_some(),
+                "{id} must refuse text"
+            );
+        }
+        // Other apps, and the same name on the other OSs, take text.
+        for (os, id) in [
+            (Os::Windows, "notepad.exe"),
+            (Os::Windows, "explorer2.exe"),
+            (Os::Linux, "explorer.exe"),
+            (Os::MacOs, "explorer.exe"),
+        ] {
+            assert_eq!(text_entry_refusal(os, id), None, "{os:?} {id}");
+        }
+        // What the engine asks of a chord in an Explorer window: the
+        // inserting ones are refused, clicks' companions (navigation,
+        // Return to open the selection, F2 alone) pass.
+        for c in ["p", "shift+p", "ctrl+v", "shift+insert", "space", "alt+d"] {
+            assert!(chord_inserts_text(&chord(c)), "{c} inserts text");
+        }
+        for c in [
+            "return",
+            "up",
+            "down",
+            "backspace",
+            "f5",
+            "ctrl+c",
+            "delete",
+        ] {
+            assert!(!chord_inserts_text(&chord(c)), "{c} does not insert");
+        }
     }
 
     #[test]

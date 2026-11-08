@@ -33,7 +33,10 @@ person's device switch both allow it, as before.
   (`applicationframehost.exe`) by the app it hosts, so Windows Settings and
   Windows Security are denied; of `explorer.exe`'s windows only File
   Explorer folder windows pass (the Run box and the Control Panel are
-  refused). `rundll32.exe`, `control.exe` and `sechealthui.exe` join the
+  refused). File Explorer folder windows are read and clicked but never
+  typed into: its address bar runs what is typed, so typing, `set_value`
+  and an inserting chord there fail with `app_denied`.
+  `rundll32.exe`, `control.exe` and `sechealthui.exe` join the
   deny list. A policy allow entry for `explorer.exe` or
   `applicationframehost.exe` no longer opens those.
 - Linux denies GNOME Settings and KDE System Settings whole

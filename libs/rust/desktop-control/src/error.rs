@@ -40,6 +40,8 @@ pub enum DesktopError {
     /// The application is on this OS's platform deny list
     /// ([`crate::platform::is_denied_app`]; Windows and Linux): password
     /// managers, terminals, sign-in and privilege prompts (`app_denied`).
+    /// Also a text write into an application this OS never types into
+    /// ([`crate::platform::text_entry_refusal`]: File Explorer on Windows).
     /// On macOS the policy applies the list before the driver is called.
     #[error("application denied: {0}")]
     AppDenied(String),

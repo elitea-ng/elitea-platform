@@ -25,6 +25,11 @@
 //!   cannot be shown not to be a secure field) untargeted typing is
 //!   refused, and so is a chord that inserts text (a character, paste;
 //!   [`platform::chord_inserts_text`]); a navigation chord passes.
+//! - **No text into File Explorer** (Windows,
+//!   [`platform::text_entry_refusal`]): its address bar runs what is typed
+//!   into it, so typing, setting a value and an inserting chord are refused
+//!   in every `explorer.exe` window (`app_denied`); clicks, navigation keys
+//!   and reads pass.
 //! - **Secure input** is a macOS notion; the secure desktop (UAC, sign-in)
 //!   is part of the Windows screen check instead.
 
@@ -143,6 +148,15 @@ impl NativeDriver {
             return Err(DesktopError::AppDenied(id.to_owned()));
         }
         Ok(())
+    }
+
+    /// `app_denied` when this OS never puts text into `id`'s windows
+    /// ([`platform::text_entry_refusal`]: File Explorer on Windows).
+    fn refuse_text_entry(&self, id: &str) -> Result<(), DesktopError> {
+        match platform::text_entry_refusal(self.hooks.os, id) {
+            Some(why) => Err(DesktopError::AppDenied(why)),
+            None => Ok(()),
+        }
     }
 
     fn apps(&self, deadline: ad::Deadline) -> Result<Vec<ad::AppInfo>, DesktopError> {
@@ -396,6 +410,7 @@ impl NativeDriver {
             ));
         }
         if writes_text {
+            self.refuse_text_entry(id)?;
             if binding.secure {
                 return Err(DesktopError::SecureFieldRefused);
             }
@@ -635,6 +650,7 @@ impl DesktopDriver for NativeDriver {
         crate::validate_text_write(text)?;
         guard::before_act(self)?;
         self.refuse_id(bundle_id)?;
+        self.refuse_text_entry(bundle_id)?;
         if let Some(element_ref) = element_ref {
             let mut out = self.run_action(
                 bundle_id,
@@ -690,6 +706,11 @@ impl DesktopDriver for NativeDriver {
                 "a key chord names the application it is for".into(),
             ));
         };
+        // File Explorer's address bar runs what is typed: no inserting
+        // chord reaches an Explorer window, wherever its focus is.
+        if platform::chord_inserts_text(chord) {
+            self.refuse_text_entry(bundle_id)?;
+        }
         let window = self.resolve_window(target)?;
         let deadline = deadline(ACTION_TIMEOUT_MS)?;
         let front = self.require_frontmost(bundle_id, deadline)?;
