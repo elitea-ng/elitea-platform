@@ -81,6 +81,9 @@ jobs:
       # and our elitea-sandbox-runtime) are not committed: build them from
       # Chart.lock before anything lints, renders or packages the chart.
       - name: Build the chart dependencies
+        env:
+          # build-deps.sh's fallback fetches release assets through the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash deploy/helm/elitea/build-deps.sh
 
       # A bare loop takes the status of its LAST iteration, so a broken early
@@ -689,6 +692,9 @@ jobs:
       # and our elitea-sandbox-runtime) are not committed: build them from
       # Chart.lock before anything lints, renders or packages the chart.
       - name: Build the chart dependencies
+        env:
+          # build-deps.sh's fallback fetches release assets through the API.
+          GH_TOKEN: ${{ github.token }}
         run: bash deploy/helm/elitea/build-deps.sh
 
       - name: Install kubeconform
