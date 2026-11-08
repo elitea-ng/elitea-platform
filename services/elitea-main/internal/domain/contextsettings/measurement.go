@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"time"
 )
 
@@ -79,19 +80,12 @@ type RuntimeContext struct {
 // WithRuntimeContext overlays the latest response's measurement. A new response
 // without a measurement must not inherit an older response's occupancy.
 func WithRuntimeContext(status Status, raw []byte) Status {
-	var runtime RuntimeContext
-	if len(raw) == 0 || len(raw) > 4096 || json.Unmarshal(raw, &runtime) != nil ||
-		!runtime.Measurement.Valid() || runtime.ExecutionID == "" || runtime.Generation == 0 ||
-		runtime.ExecutionGeneration == "" || runtime.ResponseMessageID == "" || runtime.RecordedAt.IsZero() {
+	runtime, ok := decodeRuntimeContext(raw)
+	if !ok {
 		return status
 	}
 	status.RuntimeContext = &runtime
-	status.CurrentTokens = int(runtime.Measurement.EstimatedInputTokens)
-	status.MaxTokens = int(runtime.Measurement.UsableInputTokens)
-	if usage := runtime.Measurement.ProviderUsage; usage != nil {
-		status.CurrentTokens = int(uint64(*usage.InputTokens) + uint64(*usage.OutputTokens))
-		status.MaxTokens = int(runtime.Measurement.TotalTokens - runtime.Measurement.SafetyMarginTokens)
-	}
+	status.CurrentTokens, status.MaxTokens = runtime.occupancy()
 	status.Utilization = float64(status.CurrentTokens) / float64(status.MaxTokens)
 	status.ContextAnalyticsAvailable = true
 	status.UnavailableReason = "Message and summary counts are not reported by this runtime."
@@ -102,5 +96,79 @@ func WithRuntimeContext(status Status, raw []byte) Status {
 	} else {
 		status.BudgetMode = ""
 	}
+	return status
+}
+
+// decodeRuntimeContext reads one stored record; false for anything that is
+// not a complete, valid measurement bound to its execution.
+func decodeRuntimeContext(raw []byte) (RuntimeContext, bool) {
+	var runtime RuntimeContext
+	if len(raw) == 0 || len(raw) > 4096 || json.Unmarshal(raw, &runtime) != nil ||
+		!runtime.Measurement.Valid() || runtime.ExecutionID == "" || runtime.Generation == 0 ||
+		runtime.ExecutionGeneration == "" || runtime.ResponseMessageID == "" || runtime.RecordedAt.IsZero() {
+		return RuntimeContext{}, false
+	}
+	return runtime, true
+}
+
+// occupancy is the meter's current and maximum tokens: the estimate against
+// the usable input before the provider answered, the provider's counts
+// against the window less the safety margin after.
+func (r RuntimeContext) occupancy() (int, int) {
+	current, maximum := int(r.Measurement.EstimatedInputTokens), int(r.Measurement.UsableInputTokens)
+	if usage := r.Measurement.ProviderUsage; usage != nil {
+		current = int(uint64(*usage.InputTokens) + uint64(*usage.OutputTokens))
+		maximum = int(r.Measurement.TotalTokens - r.Measurement.SafetyMarginTokens)
+	}
+	return current, maximum
+}
+
+// AgentContextRecord is one agent participant's latest stored measurement in
+// a conversation (ADR-0050 decision 9b2, issue 1610): its latest answer's, or
+// its latest idle compaction's when that is newer.
+type AgentContextRecord struct {
+	ParticipantID  int64
+	RuntimeContext []byte
+	// Idle: the record is an idle compaction's, not an answer's.
+	Idle bool
+}
+
+// AgentContext is one agent's meter in the participant list. Each agent has
+// its own model and its own history, so each has its own occupancy; the
+// conversation's single meter shows the latest answer's.
+type AgentContext struct {
+	ParticipantID int64   `json:"participant_id"`
+	Phase         string  `json:"phase"`
+	CurrentTokens int     `json:"current_tokens"`
+	MaxTokens     int     `json:"max_tokens"`
+	Utilization   float64 `json:"utilization"`
+	// IdleCompacted: the agent's context was last compacted while idle, so
+	// its next turn starts from the summary.
+	IdleCompacted bool      `json:"idle_compacted"`
+	Active        bool      `json:"active"`
+	RecordedAt    time.Time `json:"recorded_at"`
+}
+
+// WithAgentContexts adds each agent's meter. A record that does not decode
+// is left out, never shown as zero.
+func WithAgentContexts(status Status, records []AgentContextRecord) Status {
+	agents := make([]AgentContext, 0, len(records))
+	for _, record := range records {
+		runtime, ok := decodeRuntimeContext(record.RuntimeContext)
+		if !ok || record.ParticipantID <= 0 {
+			continue
+		}
+		current, maximum := runtime.occupancy()
+		if maximum <= 0 {
+			continue
+		}
+		agents = append(agents, AgentContext{
+			ParticipantID: record.ParticipantID, Phase: runtime.Measurement.Phase,
+			CurrentTokens: current, MaxTokens: maximum,
+			Utilization:   math.Round(float64(current)/float64(maximum)*10000) / 10000,
+			IdleCompacted: record.Idle, Active: runtime.Active && !record.Idle, RecordedAt: runtime.RecordedAt,
+		})
+	}
+	status.AgentContexts = agents
 	return status
 }

@@ -32,12 +32,13 @@ import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
+import { useAgentContextSlot, type AgentContextRenderer } from '../lib/agentContextSlot';
 import { getChatParticipantUniqueId } from '../lib/helpers';
 import { ParticipantDetailsProvider } from '../lib/context/ParticipantDetailsContext';
 import { Participants } from './Participants';
 import type { ParticipantsProps } from './Participants.types';
 import { MIN_LARGE_WINDOW_WIDTH } from '@/shared/lib/layout';
-import { derivePaddingLeft, deriveWrapperStyleParams, useWrapperGridSizes, wrapperSx } from './ParticipantsWrapper.styles';
+import { useResponsiveSizes, wrapperSx } from './ParticipantsWrapper.styles';
 
 /**
  * Inlined local duplicate of `useCheckPermission` — mirrors the same
@@ -160,6 +161,7 @@ export interface ParticipantsWrapperProps {
    * See `ParticipantsProps.renderContextBudget` for the shape contract.
    */
   readonly renderContextBudget?: ParticipantsProps['renderContextBudget'];
+  readonly renderAgentContext?: AgentContextRenderer; // issue 1610
   /**
    * Optional slot to resolve toolkit/MCP icons.
    * @see ParticipantsProps.resolveToolkitIcon
@@ -232,7 +234,7 @@ export const ParticipantsWrapper = memo(
     onUpdateParticipant,
     onEditParticipant,
     onAddParticipants,
-    renderContextBudget,
+    renderContextBudget, renderAgentContext,
     resolveToolkitIcon,
     isMcpVisible,
     editingToolkit,
@@ -253,6 +255,8 @@ export const ParticipantsWrapper = memo(
       derived.conversationInstructions,
       derived.persona,
     );
+
+    const agentSlot = useAgentContextSlot(renderAgentContext, derived._conversationId);
 
     // Fixes adversarial review C5-wrapper #5: old-app `disabledAdd` gates on
     // BOTH playback state and `users.view` permission, not playback alone.
@@ -291,6 +295,7 @@ export const ParticipantsWrapper = memo(
             resolveToolkitIcon={resolveToolkitIcon}
             isMcpVisible={isMcpVisible}
             renderContextBudget={contextSlot}
+            {...agentSlot}
             {...(derived._conversationId !== undefined ? { conversationId: derived._conversationId } : {})}
             maxVisibleUsers={maxVisibleUsers}
             isSmallWindow={isSmallWindow}
@@ -367,13 +372,6 @@ function useParticipantsDerived(
       [activeConversation],
     ),
   };
-}
-
-function useResponsiveSizes(collapsed: boolean, isSmallWindow: boolean, panelWidth: number) {
-  const { xsSize, lgSize } = useWrapperGridSizes(collapsed);
-  const styleParams = deriveWrapperStyleParams(isSmallWindow, panelWidth, collapsed);
-  const paddingLeft = derivePaddingLeft(collapsed);
-  return { xsSize, lgSize, styleParams, paddingLeft };
 }
 
 function useContextBudgetSlot(

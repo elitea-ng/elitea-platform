@@ -93,6 +93,7 @@ export const Participants = memo(
     resolveToolkitIcon,
     isMcpVisible = false,
     renderContextBudget,
+    renderAgentContext,
     conversationId,
     maxVisibleUsers = 5,
     isSmallWindow = false,
@@ -271,6 +272,7 @@ export const Participants = memo(
           editingToolkit,
           resolveToolkitIcon,
           onAddParticipants,
+          renderAgentContext,
         }}
         renderContextBudget={renderContextBudget}
         conversationId={conversationId}

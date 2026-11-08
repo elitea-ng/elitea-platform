@@ -15,14 +15,14 @@
  * Split out of `index.tsx` (the page is at its §3.5 complexity ceiling).
  */
 import type { ComponentProps, ReactNode } from 'react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { ParticipantsWrapper } from '@/features/chat-participants';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { SidePanelTab, useSidePanelSlot } from '@/shared/ui/side-panel';
 import { t } from '@/shared/i18n';
 import type { ChatBoxProps } from '@/widgets/chat-box';
-import { ContextBudget } from '@/widgets/context-budget';
+import { AgentContextMeter, ContextBudget } from '@/widgets/context-budget';
 
 /**
  * Baseline `rightPanelWidth` (`NewChat.jsx:187`). `ParticipantsWrapper`'s own
@@ -49,6 +49,13 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   usePageCrumbs(conversationName === '' ? [] : [{ label: conversationName }]);
   // Baseline default: collapsed (`NewChat.jsx:166`). The inspector never collapses.
   const [collapsed, setCollapsed] = useState(true);
+  // Each agent's own meter in its row (issue 1610); one query with the panel.
+  const renderAgentContext = useCallback(
+    ({ conversationId, participantId }: { conversationId: string | number; participantId: number }) => (
+      <AgentContextMeter projectId={projectId} conversationId={conversationId} participantId={participantId} />
+    ),
+    [projectId],
+  );
 
   const panel = (
     <ParticipantsWrapper
@@ -72,6 +79,7 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
        * conversation being neither new nor playback); `features/` may not
        * import `widgets/`, which is why the slot is filled by the page.
        */
+      renderAgentContext={renderAgentContext}
       renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
         <ContextBudget
           conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}

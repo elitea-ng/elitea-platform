@@ -70,3 +70,11 @@ export const wrapperSx = (
   paddingRight: '1rem',
   paddingLeft,
 });
+
+/** The wrapper's grid sizes, style parameters and padding, together. */
+export function useResponsiveSizes(collapsed: boolean, isSmallWindow: boolean, panelWidth: number) {
+  const { xsSize, lgSize } = useWrapperGridSizes(collapsed);
+  const styleParams = deriveWrapperStyleParams(isSmallWindow, panelWidth, collapsed);
+  const paddingLeft = derivePaddingLeft(collapsed);
+  return { xsSize, lgSize, styleParams, paddingLeft };
+}

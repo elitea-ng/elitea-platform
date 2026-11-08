@@ -49,6 +49,8 @@ type ConversationState struct {
 	Analytics []byte
 	// MessageGroupsTotal is COUNT(*) over the conversation's message groups.
 	MessageGroupsTotal int
+	// AgentContexts are each agent participant's latest measurement.
+	AgentContexts []AgentContextRecord
 }
 
 // Status is the legacy ContextStatus plus two fields this service owes the
@@ -57,6 +59,9 @@ type ConversationState struct {
 // reading as a real zero.
 type Status struct {
 	RuntimeContext         *RuntimeContext `json:"runtime_context,omitempty"`
+	// AgentContexts is each agent participant's own meter (issue 1610);
+	// empty until an agent has answered.
+	AgentContexts []AgentContext `json:"agent_contexts"`
 	BudgetMode             BudgetMode      `json:"budget_mode,omitempty"`
 	CurrentTokens          int             `json:"current_tokens"`
 	MaxTokens              int             `json:"max_tokens"`
@@ -100,6 +105,7 @@ func BuildStatus(strategy Strategy, analytics []byte, messageGroupsTotal int) St
 		MaxTokens:          strategy.MaxContextTokens,
 		StrategyName:       strategy.Name,
 		MessageGroupsTotal: messageGroupsTotal,
+		AgentContexts:      []AgentContext{},
 	}
 
 	var decoded map[string]any

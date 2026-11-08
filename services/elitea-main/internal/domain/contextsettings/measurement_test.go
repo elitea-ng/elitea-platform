@@ -111,3 +111,41 @@ func TestMeasurementAcceptsCompactTargetAndLegacyReplay(t *testing.T) {
 		t.Fatal("accepted an unrecognized target")
 	}
 }
+
+func TestAgentContextsAreEachAgentsOwnMeter(t *testing.T) {
+	measurement, err := DecodeMeasurement([]byte(validMeasurement))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func(active bool) []byte {
+		raw, err := json.Marshal(RuntimeContext{
+			Measurement: measurement, ExecutionID: "execution", Generation: 1,
+			ExecutionGeneration: "client", ResponseMessageID: "response", RecordedAt: time.Now(), Active: active,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	status := WithAgentContexts(BuildStatus(DefaultStrategy(), nil, 3), []AgentContextRecord{
+		{ParticipantID: 7, RuntimeContext: record(true)},
+		{ParticipantID: 9, RuntimeContext: record(true), Idle: true},
+		{ParticipantID: 11, RuntimeContext: []byte(`{"measurement":{}}`)},
+		{ParticipantID: 0, RuntimeContext: record(false)},
+	})
+	if len(status.AgentContexts) != 2 {
+		t.Fatalf("want two meters, got %+v", status.AgentContexts)
+	}
+	answer, idle := status.AgentContexts[0], status.AgentContexts[1]
+	if answer.ParticipantID != 7 || answer.IdleCompacted || !answer.Active || answer.CurrentTokens != 190000 ||
+		answer.MaxTokens != 205280 || answer.Utilization <= 0 {
+		t.Fatalf("answer meter: %+v", answer)
+	}
+	// An idle compaction is never a running answer.
+	if idle.ParticipantID != 9 || !idle.IdleCompacted || idle.Active {
+		t.Fatalf("idle meter: %+v", idle)
+	}
+	if got := BuildStatus(DefaultStrategy(), nil, 0).AgentContexts; got == nil || len(got) != 0 {
+		t.Fatalf("an empty list, never null: %#v", got)
+	}
+}

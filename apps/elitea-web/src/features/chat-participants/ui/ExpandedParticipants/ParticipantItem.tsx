@@ -42,6 +42,8 @@ export interface ParticipantItemProps {
   mcpLoginSlot?: React.ReactNode;
   mcpLogoutSlot?: React.ReactNode;
   sharepointLoginSlot?: React.ReactNode;
+  /** The agent's own context meter (issue 1610), shown at the end of its name row. */
+  contextSlot?: React.ReactNode;
   resolveToolkitIcon?: Parameters<typeof useParticipantEntityIcon>[0]['resolveToolkitIcon'];
   // Status flags from ParticipantDetailsContext
   hasMisconfigurationErrors?: boolean;
@@ -129,6 +131,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
     spConfig,
     shouldDisableThisItem,
     resolveToolkitIcon,
+    contextSlot,
   } = props;
 
   const nameRef = useRef<HTMLSpanElement>(null);
@@ -260,7 +263,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
       isActive, collapsed, displayName, iconNode, entitySettings, versionName, isBeingEdited,
       s, onClickHandler, onMouseEnter, onMouseLeave, containerInfoRow,
       participant, onEdit, onDelete, disabledEdit, showEditButton, hasRemoteMcpLoggedIn,
-      isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef,
+      isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot,
     });
 
   if (disableTooltip) return content;

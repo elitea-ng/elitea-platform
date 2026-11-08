@@ -37,6 +37,8 @@ export interface NormalCardProps extends CardBaseProps {
   versionName: string;
   isAttachment?: boolean;
   nameRef: React.RefObject<HTMLSpanElement>;
+  /** The agent's own context meter (issue 1610); hidden while hovered, where the actions take its place. */
+  contextSlot?: React.ReactNode;
 }
 
 export interface AttentionCardProps extends CardBaseProps {
@@ -58,7 +60,7 @@ export function renderNormalCard({
   isActive, collapsed, displayName, iconNode, entitySettings, versionName, isBeingEdited,
   s, onClickHandler, onMouseEnter, onMouseLeave, containerInfoRow,
   participant, onEdit, onDelete, disabledEdit, showEditButton, hasRemoteMcpLoggedIn,
-  isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef,
+  isHovering, mcpLoginSlot, mcpLogoutSlot, isAttachment, nameRef, contextSlot,
 }: NormalCardProps): React.ReactElement | null {
   return (
     <Box sx={s.normalItemWrapper}>
@@ -91,6 +93,8 @@ export function renderNormalCard({
             </Typography>
           </Box>
         )}
+
+        {!collapsed && !isHovering && contextSlot}
 
         {!collapsed && !isBeingEdited && (
           <ParticipantActions
