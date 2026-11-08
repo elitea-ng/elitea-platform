@@ -175,7 +175,7 @@ func NewResolver(platform PlatformReader, project ProjectReader, usage UsageRead
 		logger = slog.Default()
 	}
 	return &Resolver{platform: platform, project: project, usage: usage, trigger: trigger, egress: egress, logger: logger, now: time.Now,
-		engines: platformconfig.BrowserEngines(platformconfig.BrowserLiteAdmitted)}
+		engines: platformconfig.BrowserEngines(platformconfig.AdmittedBrowserEngines)}
 }
 
 // WithEngines replaces the admitted engines, for tests.

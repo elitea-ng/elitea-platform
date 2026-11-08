@@ -16,9 +16,12 @@ name: Browser engine bake-off (ADR-0049)
 #      writes the report to the job summary and the `browser-bakeoff`
 #      artifact (results.jsonl, report.md, verdict.json).
 #
-# A passing verdict does NOT admit Moli by itself: the report is recorded as
-# the ADR-0049 appendix (elitea-docs), and that change sets
-# platformconfig.BrowserLiteAdmitted and publishes elitea-browser-session-lite.
+# A passing verdict does NOT admit an engine by itself: the report is
+# recorded as the ADR-0049 appendix (elitea-docs), and the change that
+# records it sets platformconfig.BrowserAutoAdmitted or BrowserLiteAdmitted.
+# Run 42513255705 admitted `auto` (2026-11-08); elitea-browser-session-lite
+# is published since. `lite` alone is not admitted: a re-run after an
+# upstream Moli fix decides it.
 #
 # No push arm (scripts/ci/check-no-push-triggers.mjs) and no schedule. It
 # writes no cache: it only reads (scripts/ci/check-workflow-cache-writes.mjs).

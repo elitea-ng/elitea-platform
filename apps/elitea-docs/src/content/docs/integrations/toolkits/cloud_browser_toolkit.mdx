@@ -17,19 +17,23 @@ An operator must first install the browser on the cluster. See [Cloud browser on
 
 The project's **Cloud browser** setting has an **Engine**:
 
-| Engine | What runs | Size |
-|---|---|---|
-| `full` (the default) | Chrome (chrome-headless-shell) | up to 2 CPUs and 2 GiB |
-| `lite` | Moli, a smaller browser engine, for pages that are mostly read | up to 1 CPU and 512 MiB |
-| `auto` | Moli first. If the page needs Chrome, the session moves to Chrome once and stays there | up to 2 CPUs and 2 GiB |
+| Engine | What runs | Size | Offered |
+|---|---|---|---|
+| `full` (the default) | Chrome (chrome-headless-shell) | up to 2 CPUs and 2 GiB | yes |
+| `auto` | Moli, a smaller browser engine, first. If the page needs Chrome, the session moves to Chrome once and stays there | up to 2 CPUs and 2 GiB | yes |
+| `lite` | Moli alone, for pages that are mostly read | up to 1 CPU and 512 MiB | no |
 
-Today only `full` is offered. `lite` and `auto` are not offered until Moli passes the engine bake-off (ADR-0049 decision 9). The bake-off runs about 40 tasks on real sites, from Atlassian, Microsoft 365, Salesforce, ServiceNow, GitHub, documentation sites, government forms and single-page apps. Moli is admitted only if:
+You can choose `full` or `auto`. `auto` starts each session on Moli, which uses far less memory on most pages (a median of about 180 MiB against about 1.6 GiB for Chrome in the bake-off), and moves to Chrome only when Moli cannot serve the page. It needs the operator to have set up the lite engine on the cluster ([Cloud browser on Kubernetes](/deployment/cloud-browser-kubernetes)); without it, an `auto` session answers `browser_engine_unavailable`.
+
+`lite` alone is not offered. A project setting that names it is refused with `engine_not_admitted`.
+
+Engines are offered only after the engine bake-off (ADR-0049 decision 9, Appendix A). The bake-off runs 40 tasks on real sites, from Atlassian, Microsoft 365, Salesforce, ServiceNow, GitHub, documentation sites, government forms and single-page apps. An engine is admitted only if:
 
 - it succeeds on at least 80% of the read and extract tasks,
 - it is no more than 10 points behind `full` overall, and
 - it never crashes or hangs.
 
-Until then, a project setting that names `lite` or `auto` is refused, and Main serves every session on `full`.
+`auto` passed every rule: 40 of 40 tasks, none crashed. `lite` succeeded on 37 of 40, but Moli crashed on 3 heavy pages (two Atlassian support pages and a large Rust documentation page). `auto` moved to Chrome on those 3 and finished them. `lite` will be tested again on a later Moli release.
 
 When an `auto` session moves to Chrome, the page opens again in Chrome, and anything typed into a form that was not sent is lost. The agent's tool result says `engine_switched`, with the reason. A click, typing or a wait that caused the switch is not done a second time on Chrome, so the agent looks at the page again before it carries on. If a person had taken over, they keep control. A person who is watching sees *The page needed the full browser, so it was reopened there.* A switch happens when Moli fails where Chrome would not:
 

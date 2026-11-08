@@ -72,3 +72,17 @@ elitea-workspace-runner
 #   its NEEDED libraries. No retirement issue is filed yet; file it and name
 #   it here.
 elitea-browser-session
+
+# findings — #1599: not measured yet; the first release scan records them
+#   here. The image is elitea-browser-session's runtime stage (the same
+#   debian:trixie-slim base and desktop libraries) plus libfontconfig1 and
+#   Moli, an unpacked release tarball trivy does not see as a package. So
+#   its base findings are the full image's, which no branch here clears:
+#   criterion 1. Moli moves with MOLI_VERSION in the Containerfile, proven by
+#   browser-bakeoff.yml. If the first scan reports zero HIGH or CRITICAL
+#   findings, the job fails as stale and this entry goes, with
+#   `blocking: true` in publish.yml.
+# retirement — the entry ends with elitea-browser-session's: when Debian
+#   publishes fixes for the base findings, or the session images move to a
+#   minimal base. No retirement issue is filed yet; file it and name it here.
+elitea-browser-session-lite
