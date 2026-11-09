@@ -49,6 +49,16 @@ class ManagedRestrictions : Module() {
     return out
   }
 
+  private fun unregister() {
+    val r = receiver ?: return
+    receiver = null
+    try {
+      context()?.unregisterReceiver(r)
+    } catch (_: IllegalArgumentException) {
+      // Already gone with the context.
+    }
+  }
+
   override fun definition() = ModuleDefinition {
     Name("ManagedRestrictions")
     Events("onChange")
@@ -73,14 +83,9 @@ class ManagedRestrictions : Module() {
       receiver = r
     }
 
-    OnStopObserving {
-      val r = receiver ?: return@OnStopObserving
-      receiver = null
-      try {
-        context()?.unregisterReceiver(r)
-      } catch (_: IllegalArgumentException) {
-        // Already gone with the context.
-      }
-    }
+    OnStopObserving { unregister() }
+
+    // A JS reload destroys the module without OnStopObserving: never leave the receiver behind.
+    OnDestroy { unregister() }
   }
 }

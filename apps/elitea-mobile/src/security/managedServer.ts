@@ -13,13 +13,18 @@ import { useManagedConfig, type ManagedConfig } from '@/security/managedConfig';
  */
 export function managedServerOrigin(managed: ManagedConfig, allowPrivateHttp: boolean = __DEV__): string | null {
   if (managed.serverUrl === null) return null;
+  // Every config change is a new object: parse (and warn) once per config and mode, not per caller.
+  const key = allowPrivateHttp ? 'private' : 'public';
+  const cached = parsedOrigins.get(managed);
+  if (cached?.has(key)) return cached.get(key) ?? null;
   const parsed = parseConnectLink(managed.serverUrl, { connectSchemes: identity.connectSchemes, allowPrivateHttp });
-  if (!parsed.ok) {
-    log.warn('managed server_url ignored: not a workspace address', { error: parsed.error });
-    return null;
-  }
-  return parsed.origin;
+  if (!parsed.ok) log.warn('managed server_url ignored: not a workspace address', { error: parsed.error });
+  const origin = parsed.ok ? parsed.origin : null;
+  parsedOrigins.set(managed, (cached ?? new Map()).set(key, origin));
+  return origin;
 }
+
+const parsedOrigins = new WeakMap<ManagedConfig, Map<'private' | 'public', string | null>>();
 
 /** `lock_server`: the origin the device keeps ONLY, or null when nothing is locked. */
 export function lockedOrigin(managed: ManagedConfig, allowPrivateHttp: boolean = __DEV__): string | null {

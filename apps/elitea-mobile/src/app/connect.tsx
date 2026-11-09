@@ -57,16 +57,20 @@ export default function ConnectScreen() {
   // The other workspaces connected on this device (switching to one wipes nothing).
   // MDM / EMM `server_url` (src/security/managedServer.ts): the address is the organization's,
   // read only, and no other server is offered (not by a link, a hint or the list below).
-  const managed = useManagedServer().origin;
+  // With `lock_server` only that workspace is listed (and Back goes only to it); with
+  // `server_url` alone the workspaces already connected stay listed and reachable.
+  const { origin: managed, locked } = useManagedServer();
   const allWorkspaces = useWorkspaceList();
-  const workspaces = managed === null ? allWorkspaces : allWorkspaces.filter((w) => w.origin === managed);
+  const workspaces = locked ? allWorkspaces.filter((w) => w.origin === managed) : allWorkspaces;
   const returnTo = useSession((s) => s.returnWorkspaceId);
   const returnHost = workspaces.find((w) => w.id === returnTo);
   const [typed, setAddress] = useState(incoming || lastOriginHint || '');
   const address = managed ?? typed;
   const [error, setError] = useState<string | null>(null);
   // Discovery result awaiting the user's confirmation; nothing is stored yet.
-  const [check, setCheck] = useState<ConnectCheck | null>(null);
+  const [pendingCheck, setCheck] = useState<ConnectCheck | null>(null);
+  // A check for another server, still on screen when the MDM assigned one, is not offered.
+  const check = managed !== null && pendingCheck !== null && pendingCheck.origin !== managed ? null : pendingCheck;
 
   // A new deep link while this screen is mounted replaces the field contents
   // (adjust-state-during-render pattern rather than an effect).

@@ -168,16 +168,26 @@ describe('a managed server (MDM / EMM server_url, ADR-0052 W1b.3)', () => {
     expect(screen.getByLabelText('Workspace address').props.value).toBe('https://ai.corp.example.com');
   });
 
-  it('offers no other server: not the last address, nor a connect link, nor another listed workspace', async () => {
+  it('offers no other server: not the last address, nor a connect link', async () => {
     refreshManagedConfig(() => ({ server_url: 'ai.corp.example.com' }));
-    listModule.__setList([A, { ...B, origin: 'https://ai.corp.example.com' }]);
     setSession({ lastOriginHint: 'https://last.example.com', pendingConnectOrigin: 'https://other.example.com' });
     await render(<ConnectScreen />);
     expect(screen.getByLabelText('Workspace address').props.value).toBe('https://ai.corp.example.com');
-    expect(screen.queryByTestId(`workspace-${A.id}`)).toBeNull();
-    expect(screen.getByTestId(`workspace-${B.id}`)).toBeTruthy();
     await act(async () => {});
     expect(screen.queryByTestId('connect-confirm-screen')).toBeNull();
+  });
+
+  it('server_url alone keeps the connected workspaces listed (and reachable); lock_server lists only the managed one', async () => {
+    const corp = { ...B, origin: 'https://ai.corp.example.com' };
+    listModule.__setList([A, corp]);
+    refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com' }));
+    const { unmount } = await render(<ConnectScreen />);
+    expect(screen.getByTestId(`workspace-${A.id}`)).toBeTruthy();
+    await unmount();
+    refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com', lock_server: true }));
+    await render(<ConnectScreen />);
+    expect(screen.queryByTestId(`workspace-${A.id}`)).toBeNull();
+    expect(screen.getByTestId(`workspace-${corp.id}`)).toBeTruthy();
   });
 
   it('ignores a server_url that is not a workspace address (the field stays the user\'s)', async () => {

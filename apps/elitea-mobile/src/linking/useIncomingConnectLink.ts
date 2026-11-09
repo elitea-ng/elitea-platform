@@ -32,8 +32,9 @@ export function useIncomingConnectLink(enabled: boolean): void {
   // At launch the list is read after hydration, without blocking it: until
   // it has loaded, a link for a connected workspace would read as a new one.
   const listLoaded = useWorkspaceListLoaded();
-  // MDM / EMM `server_url`: a link to another server is not offered (src/security/managedServer.ts).
-  const managed = useManagedServer().origin;
+  // MDM / EMM `server_url`: a link never adds another server; with `lock_server` it does not
+  // switch to one either (src/security/managedServer.ts).
+  const { origin: managed, locked } = useManagedServer();
 
   useEffect(() => {
     if (!enabled || !url || handled.has(url)) return;
@@ -51,7 +52,7 @@ export function useIncomingConnectLink(enabled: boolean): void {
     // workspace?" (or "Switch workspace?") for a link already answered (#46).
     handled.add(url);
     if (action.kind !== 'switch' && action.kind !== 'add') return;
-    if (managed !== null && action.origin !== managed) {
+    if (managed !== null && action.origin !== managed && (action.kind === 'add' || locked)) {
       log.info('connect link ignored: the device is managed for another workspace');
       return;
     }
@@ -79,5 +80,5 @@ export function useIncomingConnectLink(enabled: boolean): void {
         { text: 'Add workspace', onPress: () => void beginAddWorkspace(action.origin) },
       ],
     );
-  }, [enabled, url, serverOrigin, known, listLoaded, managed]);
+  }, [enabled, url, serverOrigin, known, listLoaded, managed, locked]);
 }

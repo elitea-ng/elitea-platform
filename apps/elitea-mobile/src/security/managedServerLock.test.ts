@@ -9,7 +9,7 @@ import {
   startManagedServerLock,
 } from '@/security/managedServerLock';
 import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
-import { __resetRegistryForTests } from '@/security/workspaceRegistry';
+import { __resetRegistryForTests, readRegistry } from '@/security/workspaceRegistry';
 import { __resetSessionForTests, getSession, setCredential, setSession } from '@/state/session';
 import { __resetWorkspaceTransitionsForTests, keepOnlyWorkspace } from '@/state/workspace';
 import { __resetWorkspaceListForTests } from '@/state/workspaceList';
@@ -47,6 +47,14 @@ const itemsOf = (id: string) => Object.fromEntries([...fake.values].filter(([k])
 const registry = () => JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!);
 
 let stop: () => void = () => {};
+
+/** Until no run is under way (a run may chain the next one). */
+async function settled() {
+  for (let i = 0; i < 10; i++) {
+    await managedServerLockSettled();
+    await Promise.resolve();
+  }
+}
 
 beforeEach(() => {
   __resetSessionForTests();
@@ -136,17 +144,17 @@ describe('startManagedServerLock', () => {
     stop = startManagedServerLock({ allowPrivateHttp: false });
 
     refreshManagedConfig(() => ({ server_url: ORIGIN_A, lock_server: true }));
-    await managedServerLockSettled();
+    await settled();
     // Not before hydration: the resumed wipes and the registry come first.
     expect(registry().ids).toEqual([A, B, C]);
 
     setSession({ hydrated: true });
-    await managedServerLockSettled();
+    await settled();
     expect(registry().ids).toEqual([A]);
 
     // The MDM removes lock_server: the wiped workspaces do not come back.
     refreshManagedConfig(() => ({ server_url: ORIGIN_A }));
-    await managedServerLockSettled();
+    await settled();
     expect(registry().ids).toEqual([A]);
     expect(itemsOf(B)).toEqual({});
   });
@@ -155,20 +163,43 @@ describe('startManagedServerLock', () => {
     threeWorkspaces();
     stop = startManagedServerLock({ allowPrivateHttp: false });
     refreshManagedConfig(() => ({ server_url: ORIGIN_A }));
-    await managedServerLockSettled();
+    await settled();
     expect(registry().ids).toEqual([A, B, C]);
   });
 
-  it('re-applies when the managed server changes', async () => {
+  it('runs again when the registry changes, so a workspace added on another server meanwhile goes too', async () => {
+    threeWorkspaces();
+    stop = startManagedServerLock({ allowPrivateHttp: false });
+    refreshManagedConfig(() => ({ server_url: ORIGIN_A, lock_server: true }));
+    await settled();
+    expect(registry().ids).toEqual([A]);
+    // A slot that appeared afterwards (written by a flow that slipped past the screens).
+    slot(B, ORIGIN_B, 'token-b');
+    fake.values.set(DEVICE_KEYS.workspaces, registryValue([B, A], A));
+    await readRegistry(); // publishes the new snapshot
+    await settled();
+    expect(registry().ids).toEqual([A]);
+    expect(itemsOf(B)).toEqual({});
+  });
+
+  it('connectWorkspace refuses another server under the lock', async () => {
+    refreshManagedConfig(() => ({ server_url: ORIGIN_A, lock_server: true }));
+    const { connectWorkspace } = jest.requireActual<typeof import('@/state/workspace')>('@/state/workspace');
+    await expect(connectWorkspace(ORIGIN_B)).resolves.toBe(false);
+    expect(fake.values.get(DEVICE_KEYS.workspaces)).toBeUndefined();
+  });
+
+  it('re-checks on every managed change, keeping the current managed server', async () => {
     const keepOnly = jest.fn(async () => []);
     setSession({ hydrated: true });
     stop = startManagedServerLock({ keepOnly, allowPrivateHttp: false });
     refreshManagedConfig(() => ({ server_url: ORIGIN_A, lock_server: true }));
-    await managedServerLockSettled();
+    await settled();
     refreshManagedConfig(() => ({ server_url: ORIGIN_A, lock_server: true, idle_lock_seconds: 30 }));
-    await managedServerLockSettled();
+    await settled();
     refreshManagedConfig(() => ({ server_url: ORIGIN_B, lock_server: true }));
-    await managedServerLockSettled();
-    expect(keepOnly.mock.calls).toEqual([[ORIGIN_A], [ORIGIN_B]]);
+    await settled();
+    // Every change re-checks (a workspace may have been added meanwhile); the last one keeps B.
+    expect(keepOnly.mock.calls).toEqual([[ORIGIN_A], [ORIGIN_A], [ORIGIN_B]]);
   });
 });

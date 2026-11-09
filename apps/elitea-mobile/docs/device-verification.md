@@ -349,7 +349,8 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
 - [ ] **Managed configuration (Android).** Google's Test DPC as device or profile owner,
       "Manage application restrictions" › the app: the five keys are listed with their types.
       Set the same values as on iOS: the same results, applied while the app runs (no relaunch).
-      Set `require_device_lock` to the string `true` (wrong type): no lock is required.
+      Wrong-typed values cannot be set from Test DPC (it edits each key with its declared
+      type); the unit tests cover them.
 - [ ] **lock_server (both).** Connect two workspaces, then push `server_url` for one of them
       and `lock_server: true`: the other is signed out and its data removed (as at "Log out &
       wipe"), the Workspaces sheet has no "Add workspace", and a connect link to another server

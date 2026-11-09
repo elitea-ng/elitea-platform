@@ -35,7 +35,7 @@ export function ConnectConfirm({
 }) {
   const { colors, accessibilityLayout } = useDesign();
   const allowed = canConnect(check, devSignIn);
-  const notice = noticeFor(check, devSignIn);
+  const notice = noticeFor(check, devSignIn, onUseCanonical !== undefined);
   const host = displayHost(check.origin);
   const secure = check.origin.startsWith('https://');
   const logo = check.kind === 'confirm' && check.brand ? (check.brand.logoMark ?? check.brand.logoFull) : null;
@@ -111,6 +111,8 @@ export function ConnectConfirm({
 export function noticeFor(
   check: ConnectCheck,
   devSignIn: boolean,
+  /** False: the canonical address is not offered (a managed server); point to the administrator. */
+  canonicalOffered: boolean = true,
 ): { tone: 'error' | 'info'; text: string } | null {
   const app = identity.displayName;
   if (check.kind === 'failed') {
@@ -131,7 +133,7 @@ export function noticeFor(
       case 'origin_mismatch':
         return {
           tone: 'error',
-          text: check.canonicalOrigin
+          text: check.canonicalOrigin && canonicalOffered
             ? `This workspace is published at ${displayHost(check.canonicalOrigin)}. Connect to that address instead.`
             : 'This workspace points to a different server. Ask your administrator for the right address.',
         };

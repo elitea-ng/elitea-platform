@@ -121,7 +121,7 @@ export function ConnectWelcome({
           <TextField
             label="Workspace address"
             value={address}
-            onChangeText={managed ? undefined : onAddressChange}
+            onChangeText={onAddressChange}
             editable={!managed}
             accessibilityState={{ disabled: managed }}
             onSubmitEditing={onContinue}

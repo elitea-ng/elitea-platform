@@ -4,6 +4,8 @@ import { revokeStoredSession } from '@/auth/nativeSession';
 import { log } from '@/lib/log';
 import { parseConnectLink, type ParseConnectLinkOptions } from '@/linking/parseConnectLink';
 import { endSession, suspendActiveWorkspace, wipeStoredWorkspace } from '@/security/endSession';
+import { getManagedConfig } from '@/security/managedConfig';
+import { lockedOrigin } from '@/security/managedServer';
 import { SECURE_KEYS, bindWorkspace, boundWorkspace, getSecureItemIn } from '@/security/secureStorage';
 import {
   activateInRegistry,
@@ -191,6 +193,12 @@ export function beginAddWorkspace(origin: string | null = null): Promise<void> {
  */
 export function connectWorkspace(origin: string): Promise<boolean> {
   return serial(async () => {
+    // MDM `lock_server`: no slot for another server, whatever screen asked.
+    const locked = lockedOrigin(getManagedConfig());
+    if (locked !== null && origin !== locked) {
+      log.warn('connect refused: the device is locked to its managed workspace');
+      return false;
+    }
     let existing: string | null;
     try {
       existing = await findWorkspaceByOrigin(origin);
