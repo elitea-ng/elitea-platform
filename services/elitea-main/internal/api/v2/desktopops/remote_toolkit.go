@@ -357,6 +357,14 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		writeLiveTurnError(request.Context(), writer, err)
 		return
 	}
+	if turn.Cloud {
+		// A cloud agent's turn is relayed, not run, by the desktop
+		// (ADR-0050 decision 7f): its tools run in the cloud child.
+		call.outcome = "refused"
+		desktopwire.WriteError(writer, http.StatusForbidden, "tool_not_in_agent",
+			"This turn answers for a cloud agent; its tools run in the cloud, not from the desktop.")
+		return
+	}
 	grant, err := h.authorizer.AuthorizeRemoteTool(request.Context(), storage.RemoteToolAuthorization{
 		ProjectID: projectID, ActorID: actor,
 		TurnApplicationID: turn.ApplicationID, TurnVersionID: turn.VersionID,

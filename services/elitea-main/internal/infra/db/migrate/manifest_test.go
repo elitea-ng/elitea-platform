@@ -1073,7 +1073,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// permissions models.teams.{list,create,update,delete}: list to the
 	// default-mode admin, editor and viewer, the other three to admin and
 	// editor, and the same on saved project matrices.
-	require.EqualValues(t, 233, Head(shared))
+	//
+	// 234: shared/0234_local_turn_floor.sql, several agents in a desktop
+	// thread (ADR-0050 decision 7f, issue 1806): local_turn_executions
+	// floor_question_id, floor_position, floor_targets and executor. No
+	// backfill, no permission.
+	require.EqualValues(t, 234, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

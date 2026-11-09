@@ -11,6 +11,7 @@ package repos
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -116,23 +117,47 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 		return localturn.StartedTurn{}, err
 	}
 	actor := strconv.FormatInt(record.ActorUserID, 10)
+	// Where the agent runs, pinned like its version (ADR-0050 decision 7f).
+	executor, err := localTurnExecutor(ctx, tx, schema, target.conversationID, target.targetID)
+	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
+	if executor == localturn.ExecutorCloud && applicationID == nil {
+		// A cloud agent runs as a child turn of this project's agent; one
+		// of another project has no version the child route can admit.
+		return localturn.StartedTurn{}, localturn.ErrParticipant
+	}
+	floor, err := admitLocalTurnFloor(ctx, tx, record, actor, target.targetID)
+	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
 	turn := localturn.StartedTurn{Created: true}
+	var storedTargets []int32
+	var storedQuestion *string
 	err = tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.local_turn_executions (
     execution_id, project_id, actor_id, token_id, native_client_id, conversation_uuid,
     question_id, response_message_id, target_participant_id, memories_used, expires_at,
-    application_id, version_id
+    application_id, version_id, executor, floor_question_id, floor_position, floor_targets
 ) VALUES ($1, $2, $3, $4, $5, $6::uuid, $7::uuid, $8::uuid, $9, $10,
-          clock_timestamp() + make_interval(secs => $11), $12, $13)
+          clock_timestamp() + make_interval(secs => $11), $12, $13, $14, $15::uuid, $16, $17)
 ON CONFLICT (project_id, actor_id, question_id) DO NOTHING
-RETURNING execution_id, response_message_id::text, target_participant_id, expires_at`,
+RETURNING execution_id, response_message_id::text, target_participant_id, expires_at,
+          executor, floor_question_id::text, floor_targets`,
 		record.ExecutionID, record.ProjectID, actor, record.TokenID, record.NativeClientID,
 		record.ConversationUUID, record.QuestionID, record.ResponseMessageID, target.targetID,
 		record.MemoriesUsed, record.TTL.Seconds(), applicationID, versionID,
-	).Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt)
+		executor, floor.questionID, floor.position, floor.targets,
+	).Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt,
+		&turn.Executor, &storedQuestion, &storedTargets)
 	created := err == nil
 	if errors.Is(err, pgx.ErrNoRows) {
 		turn, err = replayLocalTurnStart(ctx, tx, record, actor, target.targetID)
+	} else if err == nil {
+		turn.FloorTargets = widenIDs(storedTargets)
+		if storedQuestion != nil {
+			turn.FloorQuestionID = *storedQuestion
+		}
 	}
 	if err != nil {
 		return localturn.StartedTurn{}, err
@@ -203,17 +228,26 @@ func replayLocalTurnStart(
 		tokenID        string
 		nativeClientID string
 	)
+	var (
+		storedTargets  []int32
+		storedQuestion *string
+	)
 	err := tx.QueryRow(ctx, `
 SELECT execution_id, response_message_id::text, target_participant_id, expires_at,
        conversation_uuid::text, committed_at IS NOT NULL, expires_at <= clock_timestamp(),
-       token_id, native_client_id
+       token_id, native_client_id, executor, floor_question_id::text, floor_targets
 FROM elitea_runtime.local_turn_executions
 WHERE project_id = $1 AND actor_id = $2 AND question_id = $3::uuid
 FOR UPDATE`, record.ProjectID, actor, record.QuestionID).
 		Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt,
-			&conversation, &committed, &expired, &tokenID, &nativeClientID)
+			&conversation, &committed, &expired, &tokenID, &nativeClientID,
+			&turn.Executor, &storedQuestion, &storedTargets)
 	if err != nil {
 		return localturn.StartedTurn{}, fmt.Errorf("local turn: read replayed start: %w", err)
+	}
+	turn.FloorTargets = widenIDs(storedTargets)
+	if storedQuestion != nil {
+		turn.FloorQuestionID = *storedQuestion
 	}
 	switch {
 	// Another device or token of the same user retrying this question is a
@@ -269,17 +303,23 @@ func (r *LocalTurnsRepo) CommitLocalTurn(ctx context.Context, record localturn.C
 		storedDigest []byte
 		expired      bool
 		credential   localturn.Credential
+		executor     string
+		floorOf      *string
+		floorAt      int
+		floorTargets []int32
 	)
 	err = tx.QueryRow(ctx, `
 SELECT conversation_uuid::text, question_id::text, response_message_id::text,
        target_participant_id, memories_used, committed_at, commit_digest,
-       expires_at <= clock_timestamp(), token_id, native_client_id
+       expires_at <= clock_timestamp(), token_id, native_client_id,
+       executor, floor_question_id::text, floor_position, floor_targets
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3
 FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.ActorUserID, 10)).
 		Scan(&turn.ConversationUUID, &questionID, &turn.ResponseMessageID, &participant,
 			&turn.MemoriesUsed, &committedAt, &storedDigest, &expired,
-			&credential.TokenID, &credential.NativeClientID)
+			&credential.TokenID, &credential.NativeClientID,
+			&executor, &floorOf, &floorAt, &floorTargets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.CommittedTurn{}, localturn.ErrNotFound
 	}
@@ -292,6 +332,12 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 		return localturn.CommittedTurn{}, localturn.ErrNotFound
 	}
 	turn.QuestionMessageID = questionID
+	// A later agent of a routed message answers the person's own question
+	// (ADR-0050 decision 7c): no question of its own is written.
+	laterFloorTurn := floorOf != nil && floorAt > 0
+	if laterFloorTurn {
+		turn.QuestionMessageID = *floorOf
+	}
 	if committedAt != nil {
 		if !bytes.Equal(storedDigest, record.Digest[:]) {
 			return localturn.CommittedTurn{}, localturn.ErrAlreadyCommitted
@@ -328,21 +374,50 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 		questionGroup int64
 		questionAt    time.Time
 	)
-	err = tx.QueryRow(ctx, fmt.Sprintf(`
+	if laterFloorTurn {
+		// The person's question, written by the message's first turn. The
+		// answer is dated after every message already in the conversation
+		// (the earlier agents' answers), not after the question.
+		err = tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT question.id, GREATEST(
+    clock_timestamp() AT TIME ZONE 'UTC',
+    (SELECT max(created_at) FROM %[1]s.chat_message_group WHERE conversation_id = $2))
+FROM %[1]s.chat_message_group AS question
+WHERE question.uuid = $1::uuid AND question.conversation_id = $2
+  AND question.author_participant_id = $3`, schema),
+			*floorOf, target.conversationID, target.userParticipantID,
+		).Scan(&questionGroup, &questionAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The message was removed (a rewind) after the first turn.
+			return localturn.CommittedTurn{}, localturn.ErrFloorSuperseded
+		}
+		if err != nil {
+			return localturn.CommittedTurn{}, fmt.Errorf("local turn: read the routed question: %w", err)
+		}
+	} else {
+		// The person's message is addressed to every routed agent; the
+		// trigger derives {target} when it is not routed.
+		addressed := floorTargets
+		if addressed == nil {
+			addressed = []int32{}
+		}
+		err = tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %[1]s.chat_message_group
-    (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at)
+    (uuid, author_participant_id, conversation_id, sent_to_id, meta, is_streaming, created_at, addressed_to)
 VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, GREATEST(
     clock_timestamp() AT TIME ZONE 'UTC',
     (SELECT max(created_at) + interval '1 millisecond'
-     FROM %[1]s.chat_message_group WHERE conversation_id = $3)))
+     FROM %[1]s.chat_message_group WHERE conversation_id = $3)), $6)
 RETURNING id, created_at`, schema),
-		questionID, target.userParticipantID, target.conversationID, target.targetID, string(record.QuestionMeta),
-	).Scan(&questionGroup, &questionAt)
-	if err != nil {
-		return localturn.CommittedTurn{}, localTurnWriteError("insert question", err)
-	}
-	if err := insertLocalTurnText(ctx, tx, schema, questionGroup, record.UserMessage); err != nil {
-		return localturn.CommittedTurn{}, err
+			questionID, target.userParticipantID, target.conversationID, target.targetID, string(record.QuestionMeta),
+			addressed,
+		).Scan(&questionGroup, &questionAt)
+		if err != nil {
+			return localturn.CommittedTurn{}, localTurnWriteError("insert question", err)
+		}
+		if err := insertLocalTurnText(ctx, tx, schema, questionGroup, record.UserMessage); err != nil {
+			return localturn.CommittedTurn{}, err
+		}
 	}
 	// The steering messages the turn took, in order, as a cloud turn's
 	// injected ones are stored: user messages at the question's created_at
@@ -354,6 +429,15 @@ RETURNING id, created_at`, schema),
 		}
 	}
 
+	// A cloud agent's answer says so (ADR-0050 decision 7f): the desktop
+	// relayed it; it never ran with the workspace.
+	responseMeta := string(record.ResponseMeta)
+	if executor == localturn.ExecutorCloud {
+		responseMeta, err = withExecutedBy(record.ResponseMeta, localturn.ExecutedByCloud)
+		if err != nil {
+			return localturn.CommittedTurn{}, localturn.ErrInvalid
+		}
+	}
 	var responseGroup int64
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 INSERT INTO %s.chat_message_group
@@ -361,7 +445,7 @@ INSERT INTO %s.chat_message_group
 VALUES ($1::uuid, $2, $3, $4, $5::jsonb, FALSE, $7::timestamp + interval '1 millisecond', $6)
 RETURNING id`, schema),
 		turn.ResponseMessageID, target.targetID, target.conversationID, questionGroup,
-		string(record.ResponseMeta), record.ExecutionID, questionAt,
+		responseMeta, record.ExecutionID, questionAt,
 	).Scan(&responseGroup)
 	if err != nil {
 		return localturn.CommittedTurn{}, localTurnWriteError("insert answer", err)
@@ -415,6 +499,17 @@ RETURNING committed_at`, record.ExecutionID, record.Digest[:]).Scan(&turn.Commit
 	}
 	turn.Created = true
 	return turn, nil
+}
+
+// withExecutedBy answers meta with `executed_by` set to executedBy.
+func withExecutedBy(meta []byte, executedBy string) (string, error) {
+	decoded := map[string]any{}
+	if err := json.Unmarshal(meta, &decoded); err != nil {
+		return "", err
+	}
+	decoded["executed_by"] = executedBy
+	encoded, err := json.Marshal(decoded)
+	return string(encoded), err
 }
 
 func insertLocalTurnText(ctx context.Context, tx pgx.Tx, schema string, groupID int64, content string) error {
@@ -531,12 +626,12 @@ func (r *LocalTurnsRepo) ReadLocalTurnBinding(
 	)
 	err := r.pool.QueryRow(ctx, `
 SELECT application_id, version_id, committed_at IS NOT NULL, expires_at <= clock_timestamp(),
-       token_id, native_client_id
+       token_id, native_client_id, executor
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
 		executionID, projectID, strconv.FormatInt(actorUserID, 10)).
 		Scan(&applicationID, &versionID, &binding.Committed, &binding.Expired,
-			&binding.Credential.TokenID, &binding.Credential.NativeClientID)
+			&binding.Credential.TokenID, &binding.Credential.NativeClientID, &binding.Executor)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.StoredBinding{}, localturn.ErrNotFound
 	}
