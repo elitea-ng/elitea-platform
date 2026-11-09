@@ -906,7 +906,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 478 -> 483 (issue 1615, ADR-0050 decisions 5a and 1): listAgentProposals,
 // getAgentProposal, dismissAgentProposal, markAgentProposalCreated and
 // copyAgentMemory, the agent proposals inbox and Copy to project.
-const GENERATED_OPERATION_COUNT = 483;
+// 483 -> 496 (issue 1616, ADR-0050 decisions 5b and 5g-5m): getAgentWorkforce,
+// listAgentScorecards, getAgentWorkforceImpact, reinstateAgent,
+// listAgentWorkforceProposals, proposeAgentWorkforceStage,
+// getAgentWorkforceProposal, approve/reject/askOwner/comment/appeal
+// AgentWorkforceProposal and decideAgentWorkforceAppeal, the agent workforce.
+const GENERATED_OPERATION_COUNT = 496;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

@@ -4401,6 +4401,9 @@
                           "properties": {
                             "can_propose_agents": {
                               "type": "boolean"
+                            },
+                            "can_review_agents": {
+                              "type": "boolean"
                             }
                           },
                           "open": true
@@ -4823,6 +4826,9 @@
                             "nullable": true,
                             "properties": {
                               "can_propose_agents": {
+                                "type": "boolean"
+                              },
+                              "can_review_agents": {
                                 "type": "boolean"
                               }
                             },
@@ -9416,6 +9422,9 @@
                             "nullable": true,
                             "properties": {
                               "can_propose_agents": {
+                                "type": "boolean"
+                              },
+                              "can_review_agents": {
                                 "type": "boolean"
                               }
                             },
