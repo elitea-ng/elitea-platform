@@ -2,9 +2,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Alert, RefreshControl } from 'react-native';
 
-import { speaksContract } from '@/api/discovery';
 import {
-  AGENT_MEMORY_CONTRACT,
   AGENT_MEMORY_COPY,
   AgentMemoryError,
   agentMemoryErrorText,
@@ -17,6 +15,7 @@ import {
 } from '@/api/queries/agentMemory';
 import { useDesign } from '@/design/DesignProvider';
 import { AgentMemoryView } from '@/features/agentMemory/AgentMemoryView';
+import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
 import { useShareOut } from '@/security/policy';
 import { useSelfUserId } from '@/state/selfIdentity';
 import { getSession, useSession } from '@/state/session';
@@ -40,10 +39,15 @@ export default function AgentMemoryScreen() {
   const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
   const applicationId = typeof id === 'string' && /^[1-9]\d{0,14}$/.test(id) ? Number(id) : null;
   const agentName = nameParam(name);
-  const projectId = useSession((s) => s.projectId);
+  // The agent id is only meaningful in the project (and workspace) it was opened from: pin both at
+  // mount. A switch while the screen is open shows "moved" instead of another project's agent
+  // under this one's name.
+  const [opened] = useState(() => ({ workspaceId: getSession().workspaceId, projectId: getSession().projectId }));
+  const projectId = opened.projectId;
+  const moved = useSession((s) => s.workspaceId !== opened.workspaceId || s.projectId !== opened.projectId);
   const workspace = useWorkspaceInfo();
-  const supported = speaksContract(workspace?.discovery, AGENT_MEMORY_CONTRACT.major, AGENT_MEMORY_CONTRACT.minor);
-  const memory = useAgentMemory(projectId, applicationId, supported);
+  const supported = useAgentMemoryAvailable();
+  const memory = useAgentMemory(projectId, applicationId, supported && !moved);
   const cache = useAgentMemoryCache(projectId, applicationId);
   const selfUserId = useSelfUserId();
   const selectable = useShareOut();
@@ -52,7 +56,16 @@ export default function AgentMemoryScreen() {
   const [optOutBusy, setOptOutBusy] = useState(false);
 
   const pages = memory.data?.pages ?? [];
-  const rows = pages.flatMap((page) => page.rows);
+  // Offset paging over a newest-first list: a note saved between two page reads pushes a row
+  // already shown into the next page. Keep the first copy of each id.
+  const seen = new Set<number>();
+  const rows = pages
+    .flatMap((page) => page.rows)
+    .filter((entry) => {
+      if (seen.has(entry.id)) return false;
+      seen.add(entry.id);
+      return true;
+    });
   const first = pages[0];
   const last = pages.at(-1);
   const people = Object.assign({}, ...pages.map((page) => page.people)) as Record<number, string>;
@@ -62,26 +75,33 @@ export default function AgentMemoryScreen() {
 
   // The native Alert outlives the screen: a workspace or project switch can complete while it is
   // open. A stale confirmation must delete nothing rather than an id over there.
-  const stillHere = (offered: { workspaceId: string | null; projectId: number | null }) => {
+  const stillHere = () => {
     const now = getSession();
-    return now.workspaceId === offered.workspaceId && now.projectId === offered.projectId;
+    return now.workspaceId === opened.workspaceId && now.projectId === opened.projectId;
   };
 
   const onDelete = (entry: AgentMemoryEntry) => {
     if (projectId === null || applicationId === null || deleting !== null) return;
-    const offered = { workspaceId: getSession().workspaceId, projectId };
     Alert.alert('Delete this note?', `${agentName} forgets it for everyone in this project. This cannot be undone.`, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          if (!stillHere(offered)) return;
+          if (!stillHere()) return;
           setDeleting(entry.id);
           deleteAgentMemoryEntry(projectId, applicationId, entry.id)
             .then(() => cache.forget(entry.id))
             .then(() => setNote(null))
-            .catch((error: unknown) => setNote(agentMemoryErrorText(error, AGENT_MEMORY_COPY.delete)))
+            .catch(async (error: unknown) => {
+              // Already gone (deleted elsewhere): what the user asked for is true. Drop the row.
+              if (error instanceof AgentMemoryError && error.status === 404 && error.code === 'not_found') {
+                await cache.forget(entry.id);
+                setNote(null);
+                return;
+              }
+              setNote(agentMemoryErrorText(error, AGENT_MEMORY_COPY.delete));
+            })
             .finally(() => setDeleting(null));
         },
       },
@@ -108,29 +128,36 @@ export default function AgentMemoryScreen() {
       applyOptOut(false);
       return;
     }
-    const offered = { workspaceId: getSession().workspaceId, projectId };
     Alert.alert(
       `Stop ${agentName} remembering you?`,
       `${agentName} deletes what it remembers about you in this project and saves no more. You can turn this back on.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Turn off', style: 'destructive', onPress: () => stillHere(offered) && applyOptOut(true) },
+        { text: 'Turn off', style: 'destructive', onPress: () => stillHere() && applyOptOut(true) },
       ],
     );
   };
 
   const header = <Stack.Screen options={{ title: agentName === 'This agent' ? 'Agent memory' : `${agentName}'s memory` }} />;
 
-  if (applicationId === null || projectId === null || !supported) {
+  // A pull to refresh or a retry is a fresh look: a failed write's banner no longer applies.
+  const refetch = () => {
+    setNote(null);
+    void memory.refetch();
+  };
+
+  if (applicationId === null || projectId === null || !supported || moved) {
     // No discovery document yet (an offline launch) means "unknown", not "not offered".
     const message =
       applicationId === null
         ? 'This agent could not be found.'
         : projectId === null
           ? 'Choose a project first.'
-          : workspace === null
-            ? AGENT_MEMORY_COPY.offline
-            : AGENT_MEMORY_COPY.notAvailable;
+          : moved
+            ? 'You switched project or workspace. Go back and open this agent again.'
+            : workspace === null
+              ? AGENT_MEMORY_COPY.offline
+              : AGENT_MEMORY_COPY.notAvailable;
     return (
       <>
         {header}
@@ -185,10 +212,11 @@ export default function AgentMemoryScreen() {
         onDelete={onDelete}
         onOptOut={onOptOut}
         onEndReached={() => {
-          if (memory.hasNextPage && !memory.isFetchingNextPage) void memory.fetchNextPage();
+          // After a failed page read, wait for a pull to refresh instead of retrying on every scroll tick.
+          if (memory.hasNextPage && !memory.isFetchingNextPage && !memory.isFetchNextPageError) void memory.fetchNextPage();
         }}
-        onRetry={() => void memory.refetch()}
-        refreshControl={<RefreshControl refreshing={memory.isRefetching && !memory.isFetchingNextPage} onRefresh={() => void memory.refetch()} tintColor={colors.accent} />}
+        onRetry={refetch}
+        refreshControl={<RefreshControl refreshing={memory.isRefetching && !memory.isFetchingNextPage} onRefresh={refetch} tintColor={colors.accent} />}
       />
     </>
   );

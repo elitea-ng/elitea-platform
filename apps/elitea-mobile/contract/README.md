@@ -152,5 +152,7 @@ foreground or pull to refresh.
 | Agent memory (ADR-0050 1b) | `listAgentMemory` (`GET /elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}`, paged with `limit` 50 and `offset`; the server hides notes about other people from a non-manager), `deleteAgentMemoryEntry` (`DELETE .../{entry_id}`; offered on a note about the caller, or any note when the list says `can_delete`) and `setAgentMemoryOptOut` (`PUT /elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}` with `{opted_out}`). A refusal is `{error, code}` and the app shows `error` as written (`src/api/queries/agentMemory.ts`). The screen (`src/app/(app)/agent-memory/[id].tsx`) opens from the participant sheet's "What it remembers" on an agent and from a Discover agent, in the active project. Clear, read-one, edit, approve and the history stay web and desktop only and are not kept in the generated client. |
 
 The app opens the screen only when discovery says `client_contract` >= 1.44 (`AGENT_MEMORY_CONTRACT`); on
-an older server the entry points are hidden. A 404 on the list without a refusal body reads as a server
-without the routes.
+an older server the entry points are hidden. A 404 on the list without a `code` (the router's
+`{error: "not found"}`) reads as a server without the routes; the memory handler's own 404 carries `code`.
+A delete answered 404 `not_found` drops the note: it is already gone. The screen pins the project it was
+opened in; a project or workspace switch while it is open shows "moved" and reads nothing more.

@@ -12,6 +12,7 @@ import { StatusScreen } from '@/components/StatusScreen';
 import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
 import { GlassSurface, headerActionOptions, Icon, IconButton, Text, type HeaderAction } from '@/ui';
+import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
 import { PaneHeader } from '@/features/chat/PaneHeader';
 import { ForkedFromLink, forkedFromOf } from '@/features/chat/ForkedFromLink';
 import { forkableKeys } from '@/features/chat/forkPoints';
@@ -22,7 +23,6 @@ import { MessageBubble } from '@/features/chat/MessageBubble';
 import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
 import { useAutoConversationName } from '@/features/chat/useAutoConversationName';
 import { speaksContract } from '@/api/discovery';
-import { AGENT_MEMORY_CONTRACT } from '@/api/queries/agentMemory';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
@@ -174,7 +174,7 @@ export function ThreadView({
   // Client contract 1.27: a message sent while the answer runs steers it.
   const contract127 = speaksContract(workspace?.discovery, 1, 27);
   // Client contract 1.44: what an agent participant remembers (ADR-0050 1b).
-  const agentMemoryAvailable = speaksContract(workspace?.discovery, AGENT_MEMORY_CONTRACT.major, AGENT_MEMORY_CONTRACT.minor);
+  const agentMemoryAvailable = useAgentMemoryAvailable();
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.

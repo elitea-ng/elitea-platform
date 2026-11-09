@@ -222,3 +222,55 @@ it('no discovery document yet reads as offline', async () => {
   await render(withQueries(<AgentMemoryScreen />));
   expect(screen.getByText('Agent memory needs a connection to your workspace.')).toBeTruthy();
 });
+
+it('a delete answered 404 not_found (already gone) drops the note without a banner', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: list([MINE, PROJECT]) });
+  server.on('DELETE', `${LIST}/1`, { status: 404, body: { error: 'The memory entry does not exist.', code: 'not_found' } });
+  await render(withQueries(<AgentMemoryScreen />));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Delete note: Prefers short answers' }));
+  await act(async () => alert.mock.calls[0][2]!.find((b) => b.text === 'Delete')!.onPress!());
+  await settle();
+  await waitFor(() => expect(screen.queryByText('Prefers short answers')).toBeNull());
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('a pull to refresh clears a failed write banner', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: list([MINE]) });
+  server.on('DELETE', `${LIST}/1`, { status: 403, body: { error: 'You may not delete this note.', code: 'memory_change_forbidden' } });
+  await render(withQueries(<AgentMemoryScreen />));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Delete note: Prefers short answers' }));
+  await act(async () => alert.mock.calls[0][2]!.find((b) => b.text === 'Delete')!.onPress!());
+  await settle();
+  expect(await screen.findByRole('alert')).toBeTruthy();
+  await act(async () => screen.getByTestId('agent-memory-list').props.refreshControl.props.onRefresh());
+  await settle();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('a project switch while open shows "moved" and reads nothing from the new project', async () => {
+  const server = install();
+  server.on('GET', LIST, { status: 200, body: list([MINE]) });
+  await render(withQueries(<AgentMemoryScreen />));
+  await screen.findByText('Prefers short answers');
+  await act(async () => setSession({ projectId: 12 }));
+  expect(screen.getByText('You switched project or workspace. Go back and open this agent again.')).toBeTruthy();
+  expect(server.requests.every((r) => r.url.pathname.includes(`/prompt_lib/${P}/`))).toBe(true);
+});
+
+it('shows a note once when a page boundary shifted between reads', async () => {
+  const server = install();
+  const first = Array.from({ length: 50 }, (_, i) => entry(i + 1));
+  server.on('GET', LIST, { status: 200, body: list(first, { total: 52 }) });
+  server.on('GET', `${LIST}?offset=50`, { status: 200, body: list([entry(50), entry(51, { content: 'The last note' })], { total: 52 }) });
+  await render(withQueries(<AgentMemoryScreen />));
+  await screen.findByText('Note 1');
+  await fireEvent.scroll(screen.getByTestId('agent-memory-list'), {
+    nativeEvent: { contentOffset: { y: 2000 }, contentSize: { height: 2400 }, layoutMeasurement: { height: 800 } },
+  });
+  expect(await screen.findByText('The last note')).toBeTruthy();
+  expect(screen.getAllByText('Note 50')).toHaveLength(1);
+});

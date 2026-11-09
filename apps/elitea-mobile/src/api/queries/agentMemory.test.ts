@@ -122,10 +122,17 @@ describe('the routes', () => {
     expect(url.searchParams.get('offset')).toBe('50');
   });
 
-  it('reads a 404 without a refusal as a server without the routes', async () => {
+  it("reads the router's 404 (`{error: 'not found'}`, no code) as a server without the routes", async () => {
     const server = fakeServer();
-    server.on('GET', ROUTE, { status: 404, body: { error: '' } });
+    // What elitea-main's router answers for an unknown route (router.go r.NotFound, apierr.WriteStatus).
+    server.on('GET', ROUTE, { status: 404, body: { error: 'not found' } });
     await expect(fetchAgentMemoryPage(7, 41, 0, server.client)).rejects.toMatchObject({ reason: 'not_available' });
+  });
+
+  it("keeps the memory handler's own 404 (with a code) as a refusal", async () => {
+    const server = fakeServer();
+    server.on('GET', ROUTE, { status: 404, body: { error: 'The agent does not exist.', code: 'not_found' } });
+    await expect(fetchAgentMemoryPage(7, 41, 0, server.client)).rejects.toMatchObject({ reason: 'refused', code: 'not_found' });
   });
 
   it("shows a refusal in the server's own words", async () => {

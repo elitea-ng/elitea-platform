@@ -197,8 +197,9 @@ export async function fetchAgentMemoryPage(
       signal,
     });
     if (!response.ok) {
-      // A server without the route answers a 404 with no refusal body.
-      if (response.status === 404 && refusalOf(error) === null) {
+      // A server without the route answers the router's 404 (`{error: 'not found'}`, no code, or
+      // no body at all); the memory handler's own 404 always carries `code`.
+      if (response.status === 404 && refusalOf(error)?.code === undefined) {
         throw new AgentMemoryError('not_available', AGENT_MEMORY_COPY.notAvailable, undefined, 404);
       }
       throw httpFailure(response, error, AGENT_MEMORY_COPY.load);
