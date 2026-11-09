@@ -32,6 +32,7 @@ import (
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
 	v2agentmedia "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
 	v2agentmemory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmemory"
+	v2agentproposals "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentproposals"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2agentteams "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentteams"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
@@ -4741,6 +4742,43 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readMemory).Patch(v2agentmemory.EntryPath, memory.Update)
 					r.With(readMemory).Delete(v2agentmemory.EntryPath, memory.Delete)
 					r.With(readMemory).Put(v2agentmemory.OptOutPath, memory.SetOptOut)
+				}
+				// Agent proposals and Copy to project (ADR-0050 decisions 5a
+				// and 1, #1615). Reading takes applications.list; Create
+				// records and memory copies take applications.create in the
+				// path's project; Dismiss takes create or ownership of the
+				// proposing agent (decided in the handler).
+				{
+					var proposalStore *dbrepos.AgentProposals
+					var ownerStore *dbrepos.AgentMemory
+					var personal *apimw.DBPersonalProjectResolver
+					if cfg.Pool != nil {
+						proposalStore, _ = dbrepos.ComposeAgentProposals(cfg.Pool)
+						ownerStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
+						personal = apimw.NewDBPersonalProjectResolver(cfg.Pool)
+						if personalProjects != nil {
+							personal = personal.WithPersonalProjectEnsurer(personalProjects)
+						}
+					}
+					var owners v2agentproposals.Owners
+					if ownerStore != nil {
+						owners = ownerStore
+					}
+					var personalProjects v2agentproposals.PersonalProjects
+					if personal != nil {
+						personalProjects = personal
+					}
+					proposals := v2agentproposals.NewHandler(proposalStore, owners,
+						func(r *http.Request, projectID, permission string) (bool, error) {
+							return apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, permission)(r, projectID)
+						}, personalProjects)
+					readProposals := projectPermission(v2agentproposals.ListPermission)
+					createAgents := projectPermission(v2agentproposals.CreatePermission)
+					r.With(readProposals).Get(v2agentproposals.ProposalsPath, proposals.List)
+					r.With(readProposals).Get(v2agentproposals.ProposalPath, proposals.Get)
+					r.With(readProposals).Post(v2agentproposals.DismissPath, proposals.Dismiss)
+					r.With(createAgents).Post(v2agentproposals.CreatedPath, proposals.MarkCreated)
+					r.With(createAgents).Post(v2agentproposals.CopyMemoryPath, proposals.CopyMemory)
 				}
 				// Run step records (ADR-0042 decisions 1 and 2): every read,
 				// the content's included, takes runs.evidence.read; a content

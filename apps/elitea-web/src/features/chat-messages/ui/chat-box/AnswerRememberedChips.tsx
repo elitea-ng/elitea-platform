@@ -1,11 +1,18 @@
 /**
- * The "remembered" chips under an agent's answer (ADR-0050 decision 1b,
- * issue 1608): the agent-memory slice renders them; the chat lends it the
- * trace-step body loader so that slice does not import this one.
+ * What an agent's answer did to agents and memory, under the answer:
+ *
+ * - the "remembered" chips (ADR-0050 decision 1b, issue 1608), rendered by
+ *   the agent-memory slice;
+ * - the proposal cards (ADR-0050 decision 5a, issue 1615), rendered by the
+ *   agent-proposals slice.
+ *
+ * The chat lends both the trace-step body loader so neither slice imports
+ * this one.
  */
 import type { ReactNode } from 'react';
 
 import { RememberedChips, type RememberToolAction } from '@/features/agent-memory';
+import { ProposalCards } from '@/features/agent-proposals';
 
 import { useTraceStepDetail } from '../../model/traceStepDetail';
 
@@ -17,5 +24,10 @@ export interface AnswerRememberedChipsProps {
 }
 
 export function AnswerRememberedChips({ toolActions, projectId, applicationId, agentName }: AnswerRememberedChipsProps): ReactNode {
-  return <RememberedChips toolActions={toolActions} projectId={projectId} applicationId={applicationId} agentName={agentName} useStepBody={useTraceStepDetail} />;
+  return (
+    <>
+      <RememberedChips toolActions={toolActions} projectId={projectId} applicationId={applicationId} agentName={agentName} useStepBody={useTraceStepDetail} />
+      <ProposalCards toolActions={toolActions} projectId={projectId} agentName={agentName} useStepBody={useTraceStepDetail} />
+    </>
+  );
 }

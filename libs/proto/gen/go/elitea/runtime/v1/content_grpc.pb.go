@@ -31,6 +31,7 @@ const (
 	RuntimeContentService_RecallAgentMemory_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/RecallAgentMemory"
 	RuntimeContentService_ForgetAgentMemory_FullMethodName             = "/elitea.runtime.v1.RuntimeContentService/ForgetAgentMemory"
 	RuntimeContentService_HandFloor_FullMethodName                     = "/elitea.runtime.v1.RuntimeContentService/HandFloor"
+	RuntimeContentService_ProposeAgent_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ProposeAgent"
 	RuntimeContentService_ListArtifacts_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/ListArtifacts"
 	RuntimeContentService_ReadArtifact_FullMethodName                  = "/elitea.runtime.v1.RuntimeContentService/ReadArtifact"
 	RuntimeContentService_WriteArtifact_FullMethodName                 = "/elitea.runtime.v1.RuntimeContentService/WriteArtifact"
@@ -135,6 +136,13 @@ type RuntimeContentServiceClient interface {
 	// participant ids and the message. Main starts their turns after this run
 	// settles.
 	HandFloor(ctx context.Context, in *HandFloorRequestV1, opts ...grpc.CallOption) (*HandFloorResponseV1, error)
+	// Propose a temporary sub-agent as a saved agent (ADR-0050 decision 5a,
+	// #1615): the propose_agent tool. The project, the proposing agent, the
+	// person and the conversation come from the claim; the request carries
+	// only the sub-agent's profile, the rationale and suggested memory seeds.
+	// Main checks the agent's can_propose_agents capability and the person's
+	// create permission, and stores a proposal; nothing is saved as an agent.
+	ProposeAgent(ctx context.Context, in *ProposeAgentRequestV1, opts ...grpc.CallOption) (*ProposeAgentResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(ctx context.Context, in *ListArtifactsRequestV1, opts ...grpc.CallOption) (*ListArtifactsResponseV1, error)
 	ReadArtifact(ctx context.Context, in *ReadArtifactRequestV1, opts ...grpc.CallOption) (*ReadArtifactResponseV1, error)
@@ -313,6 +321,16 @@ func (c *runtimeContentServiceClient) HandFloor(ctx context.Context, in *HandFlo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HandFloorResponseV1)
 	err := c.cc.Invoke(ctx, RuntimeContentService_HandFloor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeContentServiceClient) ProposeAgent(ctx context.Context, in *ProposeAgentRequestV1, opts ...grpc.CallOption) (*ProposeAgentResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProposeAgentResponseV1)
+	err := c.cc.Invoke(ctx, RuntimeContentService_ProposeAgent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -697,6 +715,13 @@ type RuntimeContentServiceServer interface {
 	// participant ids and the message. Main starts their turns after this run
 	// settles.
 	HandFloor(context.Context, *HandFloorRequestV1) (*HandFloorResponseV1, error)
+	// Propose a temporary sub-agent as a saved agent (ADR-0050 decision 5a,
+	// #1615): the propose_agent tool. The project, the proposing agent, the
+	// person and the conversation come from the claim; the request carries
+	// only the sub-agent's profile, the rationale and suggested memory seeds.
+	// Main checks the agent's can_propose_agents capability and the person's
+	// create permission, and stores a proposal; nothing is saved as an agent.
+	ProposeAgent(context.Context, *ProposeAgentRequestV1) (*ProposeAgentResponseV1, error)
 	// The `artifact` toolkit family (#906).
 	ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error)
 	ReadArtifact(context.Context, *ReadArtifactRequestV1) (*ReadArtifactResponseV1, error)
@@ -787,6 +812,9 @@ func (UnimplementedRuntimeContentServiceServer) ForgetAgentMemory(context.Contex
 }
 func (UnimplementedRuntimeContentServiceServer) HandFloor(context.Context, *HandFloorRequestV1) (*HandFloorResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HandFloor not implemented")
+}
+func (UnimplementedRuntimeContentServiceServer) ProposeAgent(context.Context, *ProposeAgentRequestV1) (*ProposeAgentResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProposeAgent not implemented")
 }
 func (UnimplementedRuntimeContentServiceServer) ListArtifacts(context.Context, *ListArtifactsRequestV1) (*ListArtifactsResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListArtifacts not implemented")
@@ -1098,6 +1126,24 @@ func _RuntimeContentService_HandFloor_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeContentServiceServer).HandFloor(ctx, req.(*HandFloorRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeContentService_ProposeAgent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProposeAgentRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeContentServiceServer).ProposeAgent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeContentService_ProposeAgent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeContentServiceServer).ProposeAgent(ctx, req.(*ProposeAgentRequestV1))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1620,6 +1666,10 @@ var RuntimeContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HandFloor",
 			Handler:    _RuntimeContentService_HandFloor_Handler,
+		},
+		{
+			MethodName: "ProposeAgent",
+			Handler:    _RuntimeContentService_ProposeAgent_Handler,
 		},
 		{
 			MethodName: "ListArtifacts",

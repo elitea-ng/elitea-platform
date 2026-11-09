@@ -74,6 +74,9 @@ import type {
   AgentMemoryList,
   AgentMemoryRefusal,
   AgentMemoryUpdate,
+  AgentProposal,
+  AgentProposalList,
+  AgentProposalRefusal,
   AgentRegistryRecord,
   AgentRegistryUpdate,
   AgentSchemaResponse,
@@ -101,6 +104,8 @@ import type {
   ClearAgentMemory200,
   ClientUpgradeRequiredResponse,
   ConversationRunList,
+  CopyAgentMemory200,
+  CopyAgentMemoryBody,
   CredentialReviewRefusal,
   DefaultIcon,
   DeleteApplicationVersionParams,
@@ -144,6 +149,7 @@ import type {
   InvalidQueryParameterError,
   ListAgentAttestationsParams,
   ListAgentMemoryParams,
+  ListAgentProposalsParams,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -153,6 +159,8 @@ import type {
   ListPublicApplicationsParams,
   ListRunStepsParams,
   MandateRefusal,
+  MarkAgentProposalCreated200,
+  MarkAgentProposalCreatedBody,
   N400Response,
   N401Response,
   N403Response,
@@ -6665,6 +6673,1287 @@ export function useSetAgentMemoryOptOut<
     projectId,
     applicationId,
     setAgentMemoryOptOutBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentProposalsResponse200 = {
+  data: AgentProposalList;
+  status: 200;
+};
+
+export type listAgentProposalsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAgentProposalsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentProposalsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentProposalsResponseSuccess =
+  listAgentProposalsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentProposalsResponseError = (
+  | listAgentProposalsResponse400
+  | listAgentProposalsResponse401
+  | listAgentProposalsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentProposalsResponse =
+  listAgentProposalsResponseSuccess | listAgentProposalsResponseError;
+
+export const getListAgentProposalsUrl = (
+  projectId: string,
+  params?: ListAgentProposalsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_proposals/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/agent_proposals/prompt_lib/${projectId}`;
+};
+
+/**
+ * The project's proposals to save a temporary sub-agent as an agent (ADR-0050 decision 5a), newest first: open ones unless status names another state. conversation_uuid narrows them to one chat. Requires `models.applications.applications.list`.
+ * @summary List agent proposals
+ */
+export const listAgentProposals = async (
+  projectId: string,
+  params?: ListAgentProposalsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentProposalsResponse> => {
+  return eliteaFetch<listAgentProposalsResponse>(
+    getListAgentProposalsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentProposalsQueryKey = (
+  projectId: string,
+  params?: ListAgentProposalsParams,
+) => {
+  return [
+    `/elitea_core/agent_proposals/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentProposalsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAgentProposalsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentProposals>>
+  > = ({ signal }) =>
+    listAgentProposals(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentProposals>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentProposalsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentProposals>>
+>;
+export type ListAgentProposalsQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListAgentProposals<
+  TData = Awaited<ReturnType<typeof listAgentProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListAgentProposalsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentProposals>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentProposals>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentProposals>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentProposals<
+  TData = Awaited<ReturnType<typeof listAgentProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentProposals>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentProposals>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentProposals>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentProposals<
+  TData = Awaited<ReturnType<typeof listAgentProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List agent proposals
+ */
+
+export function useListAgentProposals<
+  TData = Awaited<ReturnType<typeof listAgentProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentProposalsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentProposalResponse200 = {
+  data: AgentProposal;
+  status: 200;
+};
+
+export type getAgentProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentProposalResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentProposalResponse404 = {
+  data: AgentProposalRefusal;
+  status: 404;
+};
+
+export type getAgentProposalResponseSuccess = getAgentProposalResponse200 & {
+  headers: Headers;
+};
+export type getAgentProposalResponseError = (
+  | getAgentProposalResponse401
+  | getAgentProposalResponse403
+  | getAgentProposalResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentProposalResponse =
+  getAgentProposalResponseSuccess | getAgentProposalResponseError;
+
+export const getGetAgentProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}`;
+};
+
+/**
+ * The draft, the suggested memory seeds, the tool categories and the evidence. Requires `models.applications.applications.list`.
+ * @summary Read one agent proposal
+ */
+export const getAgentProposal = async (
+  projectId: string,
+  proposalId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentProposalResponse> => {
+  return eliteaFetch<getAgentProposalResponse>(
+    getGetAgentProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return [
+    `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}`,
+  ] as const;
+};
+
+export const getGetAgentProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentProposal>>,
+  TError = N401Response | N403Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentProposalQueryKey(projectId, proposalId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentProposal>>
+  > = ({ signal }) =>
+    getAgentProposal(projectId, proposalId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentProposal>>
+>;
+export type GetAgentProposalQueryError =
+  N401Response | N403Response | AgentProposalRefusal;
+
+export function useGetAgentProposal<
+  TData = Awaited<ReturnType<typeof getAgentProposal>>,
+  TError = N401Response | N403Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentProposal>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentProposal<
+  TData = Awaited<ReturnType<typeof getAgentProposal>>,
+  TError = N401Response | N403Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentProposal>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentProposal<
+  TData = Awaited<ReturnType<typeof getAgentProposal>>,
+  TError = N401Response | N403Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one agent proposal
+ */
+
+export function useGetAgentProposal<
+  TData = Awaited<ReturnType<typeof getAgentProposal>>,
+  TError = N401Response | N403Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentProposalQueryOptions(
+    projectId,
+    proposalId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type dismissAgentProposalResponse200 = {
+  data: AgentProposal;
+  status: 200;
+};
+
+export type dismissAgentProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type dismissAgentProposalResponse403 = {
+  data: AgentProposalRefusal;
+  status: 403;
+};
+
+export type dismissAgentProposalResponse404 = {
+  data: AgentProposalRefusal;
+  status: 404;
+};
+
+export type dismissAgentProposalResponse409 = {
+  data: AgentProposalRefusal;
+  status: 409;
+};
+
+export type dismissAgentProposalResponseSuccess =
+  dismissAgentProposalResponse200 & {
+    headers: Headers;
+  };
+export type dismissAgentProposalResponseError = (
+  | dismissAgentProposalResponse401
+  | dismissAgentProposalResponse403
+  | dismissAgentProposalResponse404
+  | dismissAgentProposalResponse409
+) & {
+  headers: Headers;
+};
+
+export type dismissAgentProposalResponse =
+  dismissAgentProposalResponseSuccess | dismissAgentProposalResponseError;
+
+export const getDismissAgentProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}/dismiss`;
+};
+
+/**
+ * The same sub-agent spec (its profile digest) cannot be proposed again by the same agent in this project for 30 days. Requires `models.applications.applications.list`, and `models.applications.applications.create` or ownership of the proposing agent.
+ * @summary Dismiss an open agent proposal
+ */
+export const dismissAgentProposal = async (
+  projectId: string,
+  proposalId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<dismissAgentProposalResponse> => {
+  return eliteaFetch<dismissAgentProposalResponse>(
+    getDismissAgentProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getDismissAgentProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}/dismiss`,
+  ] as const;
+};
+
+export const getDismissAgentProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof dismissAgentProposal>>,
+  TError = N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof dismissAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDismissAgentProposalQueryKey(projectId, proposalId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof dismissAgentProposal>>
+  > = ({ signal }) =>
+    dismissAgentProposal(projectId, proposalId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof dismissAgentProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DismissAgentProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof dismissAgentProposal>>
+>;
+export type DismissAgentProposalQueryError =
+  N401Response | AgentProposalRefusal;
+
+export function useDismissAgentProposal<
+  TData = Awaited<ReturnType<typeof dismissAgentProposal>>,
+  TError = N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof dismissAgentProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof dismissAgentProposal>>,
+          TError,
+          Awaited<ReturnType<typeof dismissAgentProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDismissAgentProposal<
+  TData = Awaited<ReturnType<typeof dismissAgentProposal>>,
+  TError = N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof dismissAgentProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof dismissAgentProposal>>,
+          TError,
+          Awaited<ReturnType<typeof dismissAgentProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDismissAgentProposal<
+  TData = Awaited<ReturnType<typeof dismissAgentProposal>>,
+  TError = N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof dismissAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Dismiss an open agent proposal
+ */
+
+export function useDismissAgentProposal<
+  TData = Awaited<ReturnType<typeof dismissAgentProposal>>,
+  TError = N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof dismissAgentProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDismissAgentProposalQueryOptions(
+    projectId,
+    proposalId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type markAgentProposalCreatedResponse200 = {
+  data: MarkAgentProposalCreated200;
+  status: 200;
+};
+
+export type markAgentProposalCreatedResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type markAgentProposalCreatedResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type markAgentProposalCreatedResponse403 = {
+  data: AgentProposalRefusal;
+  status: 403;
+};
+
+export type markAgentProposalCreatedResponse404 = {
+  data: AgentProposalRefusal;
+  status: 404;
+};
+
+export type markAgentProposalCreatedResponse409 = {
+  data: AgentProposalRefusal;
+  status: 409;
+};
+
+export type markAgentProposalCreatedResponseSuccess =
+  markAgentProposalCreatedResponse200 & {
+    headers: Headers;
+  };
+export type markAgentProposalCreatedResponseError = (
+  | markAgentProposalCreatedResponse400
+  | markAgentProposalCreatedResponse401
+  | markAgentProposalCreatedResponse403
+  | markAgentProposalCreatedResponse404
+  | markAgentProposalCreatedResponse409
+) & {
+  headers: Headers;
+};
+
+export type markAgentProposalCreatedResponse =
+  | markAgentProposalCreatedResponseSuccess
+  | markAgentProposalCreatedResponseError;
+
+export const getMarkAgentProposalCreatedUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}/created`;
+};
+
+/**
+ * The review form first creates the agent through the ordinary create route (a new agent starts at tier low); this links it to the proposal and writes the memory seeds the person kept, by index, into the new agent's own memory. Requires `models.applications.applications.create`.
+ * @summary Record the agent created from an open proposal
+ */
+export const markAgentProposalCreated = async (
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<markAgentProposalCreatedResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<markAgentProposalCreatedResponse>(
+    getMarkAgentProposalCreatedUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(markAgentProposalCreatedBody),
+    },
+  );
+};
+
+export const getMarkAgentProposalCreatedQueryKey = (
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody?: MarkAgentProposalCreatedBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_proposals/prompt_lib/${projectId}/${proposalId}/created`,
+    markAgentProposalCreatedBody,
+  ] as const;
+};
+
+export const getMarkAgentProposalCreatedQueryOptions = <
+  TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markAgentProposalCreated>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getMarkAgentProposalCreatedQueryKey(
+      projectId,
+      proposalId,
+      markAgentProposalCreatedBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof markAgentProposalCreated>>
+  > = ({ signal }) =>
+    markAgentProposalCreated(
+      projectId,
+      proposalId,
+      markAgentProposalCreatedBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof markAgentProposalCreated>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MarkAgentProposalCreatedQueryResult = NonNullable<
+  Awaited<ReturnType<typeof markAgentProposalCreated>>
+>;
+export type MarkAgentProposalCreatedQueryError =
+  N400Response | N401Response | AgentProposalRefusal;
+
+export function useMarkAgentProposalCreated<
+  TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markAgentProposalCreated>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markAgentProposalCreated>>,
+          TError,
+          Awaited<ReturnType<typeof markAgentProposalCreated>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkAgentProposalCreated<
+  TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markAgentProposalCreated>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markAgentProposalCreated>>,
+          TError,
+          Awaited<ReturnType<typeof markAgentProposalCreated>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkAgentProposalCreated<
+  TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markAgentProposalCreated>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record the agent created from an open proposal
+ */
+
+export function useMarkAgentProposalCreated<
+  TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  markAgentProposalCreatedBody: MarkAgentProposalCreatedBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markAgentProposalCreated>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMarkAgentProposalCreatedQueryOptions(
+    projectId,
+    proposalId,
+    markAgentProposalCreatedBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type copyAgentMemoryResponse200 = {
+  data: CopyAgentMemory200;
+  status: 200;
+};
+
+export type copyAgentMemoryResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type copyAgentMemoryResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type copyAgentMemoryResponse403 = {
+  data: AgentProposalRefusal;
+  status: 403;
+};
+
+export type copyAgentMemoryResponse404 = {
+  data: AgentProposalRefusal;
+  status: 404;
+};
+
+export type copyAgentMemoryResponseSuccess = copyAgentMemoryResponse200 & {
+  headers: Headers;
+};
+export type copyAgentMemoryResponseError = (
+  | copyAgentMemoryResponse400
+  | copyAgentMemoryResponse401
+  | copyAgentMemoryResponse403
+  | copyAgentMemoryResponse404
+) & {
+  headers: Headers;
+};
+
+export type copyAgentMemoryResponse =
+  copyAgentMemoryResponseSuccess | copyAgentMemoryResponseError;
+
+export const getCopyAgentMemoryUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_copy_memory/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * Copy to project (ADR-0050 decision 1). After the fork route copied a personal agent into this project as an agent of its own, this copies the entries the person picked from the source agent's memory into the copy's, as new rows written by the person. Entries about a person and cursors are never copied. The source must be in the caller's personal project, and the caller owns the source agent or holds `models.applications.memory.list` there. Requires `models.applications.applications.create` in this project.
+ * @summary Copy picked memory entries of a personal agent into its copy
+ */
+export const copyAgentMemory = async (
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<copyAgentMemoryResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<copyAgentMemoryResponse>(
+    getCopyAgentMemoryUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(copyAgentMemoryBody),
+    },
+  );
+};
+
+export const getCopyAgentMemoryQueryKey = (
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody?: CopyAgentMemoryBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_copy_memory/prompt_lib/${projectId}/${applicationId}`,
+    copyAgentMemoryBody,
+  ] as const;
+};
+
+export const getCopyAgentMemoryQueryOptions = <
+  TData = Awaited<ReturnType<typeof copyAgentMemory>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof copyAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCopyAgentMemoryQueryKey(projectId, applicationId, copyAgentMemoryBody);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof copyAgentMemory>>> = ({
+    signal,
+  }) =>
+    copyAgentMemory(projectId, applicationId, copyAgentMemoryBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof copyAgentMemory>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CopyAgentMemoryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof copyAgentMemory>>
+>;
+export type CopyAgentMemoryQueryError =
+  N400Response | N401Response | AgentProposalRefusal;
+
+export function useCopyAgentMemory<
+  TData = Awaited<ReturnType<typeof copyAgentMemory>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof copyAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof copyAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof copyAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCopyAgentMemory<
+  TData = Awaited<ReturnType<typeof copyAgentMemory>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof copyAgentMemory>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof copyAgentMemory>>,
+          TError,
+          Awaited<ReturnType<typeof copyAgentMemory>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCopyAgentMemory<
+  TData = Awaited<ReturnType<typeof copyAgentMemory>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof copyAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Copy picked memory entries of a personal agent into its copy
+ */
+
+export function useCopyAgentMemory<
+  TData = Awaited<ReturnType<typeof copyAgentMemory>>,
+  TError = N400Response | N401Response | AgentProposalRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  copyAgentMemoryBody: CopyAgentMemoryBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof copyAgentMemory>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCopyAgentMemoryQueryOptions(
+    projectId,
+    applicationId,
+    copyAgentMemoryBody,
     options,
   );
 

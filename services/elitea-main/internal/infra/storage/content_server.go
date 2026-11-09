@@ -19,6 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspaceruntime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentproposal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/grpcauth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -120,6 +121,7 @@ type ContentServer struct {
 	runtimeBuilders     *RuntimeEntityBuilderService
 	runtimeAgentMemory  *RuntimeAgentMemoryService
 	runtimeHandFloor    *RuntimeHandFloorService
+	runtimeProposeAgent *RuntimeProposeAgentService
 	runtimeArtifacts    *RuntimeArtifactObjectService
 	sandboxBundles      *SandboxBundleContentService
 	compiledSnapshots   *CompiledSnapshotContentService
@@ -357,6 +359,17 @@ func (s *ContentServer) WithRuntimeHandFloor(floor *RuntimeHandFloorService) *Co
 		return nil
 	}
 	s.runtimeHandFloor = floor
+	return s
+}
+
+// WithRuntimeProposeAgent enables the propose_agent route (ADR-0050
+// decision 5a, #1615). Nil leaves it answering Unimplemented, which the
+// worker turns into "proposing agents is not available here".
+func (s *ContentServer) WithRuntimeProposeAgent(propose *RuntimeProposeAgentService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeProposeAgent = propose
 	return s
 }
 
@@ -827,6 +840,30 @@ func (s *ContentServer) HandFloor(ctx context.Context, request *runtimev1.HandFl
 		return nil, err
 	}
 	return &runtimev1.HandFloorResponseV1{ResponseJson: encoded}, nil
+}
+
+// ProposeAgent is the propose_agent tool (runtime_propose_agent.go). A twin
+// of HandFloor.
+func (s *ContentServer) ProposeAgent(ctx context.Context, request *runtimev1.ProposeAgentRequestV1) (*runtimev1.ProposeAgentResponseV1, error) {
+	if s.runtimeProposeAgent == nil {
+		return nil, contentStatus(codes.Unimplemented)
+	}
+	var document agentproposal.Request
+	claim, release, err := s.claimedDocument(ctx, request.GetScope(), request.GetRequestJson(), &document,
+		maxRuntimeProposeAgentRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeProposeAgent.Propose(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "propose agent unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeProposeAgentResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.ProposeAgentResponseV1{ResponseJson: encoded}, nil
 }
 
 func (s *ContentServer) agentMemoryRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {

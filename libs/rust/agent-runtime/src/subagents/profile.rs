@@ -216,6 +216,11 @@ pub fn check_facts_only(brief: &Brief) -> Result<CheckedBrief, &'static str> {
 /// What one spawn's record keeps (`ephemeral_agents`, #1614), on the child's
 /// [`super::ChildIdentity`]: the profile's name and avatar, the two digests
 /// and the ids the brief named. Never the soul, a quote or a fact.
+///
+/// `profile` is the whole profile, for the host only: a host that lets the
+/// parent propose the child as a saved agent (`propose_agent`, ADR-0050
+/// decision 5a) reports it, soul and tools included, so Main can draft the
+/// agent and recompute [`Profile::digest`]. It is never part of the record.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SpawnRecord {
     pub display_name: Option<String>,
@@ -226,6 +231,8 @@ pub struct SpawnRecord {
     pub brief_digest: Option<String>,
     /// [`Brief::references`]; `Null` for an empty brief.
     pub brief_refs: Value,
+    /// The profile the spawn named.
+    pub profile: Profile,
 }
 
 impl SpawnRecord {
@@ -242,6 +249,7 @@ impl SpawnRecord {
             profile_digest: profile.digest(),
             brief_digest,
             brief_refs,
+            profile: profile.clone(),
         }
     }
 }

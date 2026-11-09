@@ -912,7 +912,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // agent editor's Avatar tab calls the first two (see MANIFEST_ENTRY_COUNT);
 // getAgentMedia is an <img>/<video> source, never a fetch, so it is not in
 // the manifest.
-const GENERATED_OPERATION_COUNT = 488;
+// 488 -> 493 (issue 1615, ADR-0050 decisions 5a and 1): listAgentProposals,
+// getAgentProposal, dismissAgentProposal, markAgentProposalCreated and
+// copyAgentMemory, the agent proposals inbox and Copy to project.
+const GENERATED_OPERATION_COUNT = 493;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1190,8 +1193,12 @@ const GENERATED_OPERATION_COUNT = 488;
  * 330 -> 332 (issue 1619, ADR-0050 decision 6):
  * applications.uploadAgentMedia and applications.generateAgentMedia, the
  * agent editor's Avatar tab (pages/agents/lib/agentMediaApi.ts). Generated.
+ *
+ * 332 -> 337 (issue 1615, ADR-0050 decisions 5a and 1): agentProposals.list,
+ * get, dismiss, markCreated and copyMemory, the proposals inbox, the chat's
+ * proposal card and Copy to project (features/agent-proposals). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 332;
+const MANIFEST_ENTRY_COUNT = 337;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

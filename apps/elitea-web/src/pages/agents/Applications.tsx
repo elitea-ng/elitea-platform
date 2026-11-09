@@ -1,10 +1,11 @@
-import { useEffect, useMemo, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useMemo, type ComponentProps, type ReactNode, type SyntheticEvent } from 'react';
 
 import Box from '@mui/material/Box';
 
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
+import { ProposalsInboxButton } from '@/features/agent-proposals';
 import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
@@ -113,13 +114,17 @@ export function Applications(): ReactNode {
   const createAction = canCreate && agentControls
     ? { label: t('pages.agents.applications.create', 'New agent'), testId: 'agents-create', onClick: () => void navigate({ to: '/agents/create' }) }
     : undefined;
-  const importButton = isPublicProject || !agentControls ? undefined : (
-    <EntityImportButton
-      testIdPrefix="agents"
+  const secondaryActions = isPublicProject || !agentControls ? undefined : (
+    <AgentListActions
+      projectId={projectId}
+      canCreate={canCreate}
       isImporting={entityImport.run.isPending}
       onImport={async (document) => {
         await entityImport.run.mutateAsync(document);
       }}
+      onProposalCreated={(applicationId) =>
+        void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'latest', agentId: String(applicationId) } })
+      }
     />
   );
 
@@ -141,7 +146,7 @@ export function Applications(): ReactNode {
          * Import (validation-matrix gap 12) and create. Hidden for the PUBLIC
          * project's lists, which are read-only catalogues.
          */
-        secondaryActions={importButton}
+        secondaryActions={secondaryActions}
         primaryAction={createAction}
       />
       <Box
@@ -167,6 +172,24 @@ function useTeamsTab(projectId: string | undefined, enabled: boolean): ReactNode
       ? <TeamsPanel projectId={projectId} onStarted={(conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } })} />
       : undefined),
     [enabled, projectId, navigate],
+  );
+}
+
+interface AgentListActionsProps {
+  readonly projectId: string | undefined;
+  readonly canCreate: boolean;
+  readonly isImporting: boolean;
+  readonly onImport: ComponentProps<typeof EntityImportButton>['onImport'];
+  readonly onProposalCreated: (applicationId: number) => void;
+}
+
+/** The agent lists' secondary actions: the proposals inbox (ADR-0050 decision 5a, for a person who may create agents) and Import. */
+function AgentListActions({ projectId, canCreate, isImporting, onImport, onProposalCreated }: AgentListActionsProps): ReactNode {
+  return (
+    <>
+      {canCreate && <ProposalsInboxButton projectId={projectId} onCreated={(created) => onProposalCreated(created.applicationId)} />}
+      <EntityImportButton testIdPrefix="agents" isImporting={isImporting} onImport={onImport} />
+    </>
   );
 }
 

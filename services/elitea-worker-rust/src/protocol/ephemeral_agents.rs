@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use elitea_agent_runtime::subagents::{ChildIdentity, ChildReport, ChildStatus};
+use elitea_agent_runtime::subagents::{ChildIdentity, ChildReport, ChildStatus, Profile};
 
 use super::elitea::runtime::v1::{EphemeralAgentV1, ExecutionIdentityV1};
 
@@ -35,6 +35,9 @@ const CANCELLED_WITH_RUN: &str = "subagent_cancelled";
 #[derive(Default)]
 pub(crate) struct EphemeralAgentLedger {
     agents: Mutex<BTreeMap<(usize, String), EphemeralAgentV1>>,
+    /// Each spawn's whole profile by agent id, for `propose_agent` (ADR-0050
+    /// decision 5a): never reported, dropped with the ledger.
+    profiles: Mutex<HashMap<String, (String, Profile)>>,
 }
 
 impl EphemeralAgentLedger {
@@ -70,6 +73,22 @@ impl EphemeralAgentLedger {
         if let Ok(mut agents) = self.agents.lock() {
             agents.insert((child.ordinal, child.agent_id.clone()), row);
         }
+        if let Ok(mut profiles) = self.profiles.lock() {
+            profiles.insert(
+                child.agent_id.clone(),
+                (
+                    child.label.clone().unwrap_or_default(),
+                    record.profile.clone(),
+                ),
+            );
+        }
+    }
+
+    /// The label and profile of the spawn `agent_id` of this execution, if
+    /// it started one.
+    #[must_use]
+    pub(crate) fn profile(&self, agent_id: &str) -> Option<(String, Profile)> {
+        self.profiles.lock().ok()?.get(agent_id).cloned()
     }
 
     /// The settled child runs again (`send_input`): running, with no end,
@@ -269,6 +288,22 @@ mod tests {
             generation,
             ..ExecutionIdentityV1::default()
         }
+    }
+
+    #[test]
+    fn a_started_spawn_keeps_its_whole_profile_for_a_proposal() {
+        let ledger = EphemeralAgentLedger::default();
+        assert!(ledger.profile("a_00000001").is_none());
+        let mut spawned = child(1, &Brief::default());
+        spawned.record.profile.soul = Some("Careful.".to_owned());
+        ledger.started(&spawned, 10);
+        let (label, profile) = ledger.profile("a_00000001").expect("kept");
+        assert_eq!(label, "Owl");
+        assert_eq!(profile.soul.as_deref(), Some("Careful."));
+        assert_eq!(profile.display_name.as_deref(), Some("Owl"));
+        let reported = ledger.snapshot(20);
+        assert_eq!(reported.len(), 1, "the profile is never a reported row");
+        assert!(ledger.profile("a_00000002").is_none());
     }
 
     #[test]

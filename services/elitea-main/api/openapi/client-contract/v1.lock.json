@@ -4627,6 +4627,16 @@
                             }
                           }
                         },
+                        "capabilities": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "can_propose_agents": {
+                              "type": "boolean"
+                            }
+                          },
+                          "open": true
+                        },
                         "category": {
                           "type": "string"
                         },
@@ -5039,6 +5049,16 @@
                                 "type": "string"
                               }
                             }
+                          },
+                          "capabilities": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "can_propose_agents": {
+                                "type": "boolean"
+                              }
+                            },
+                            "open": true
                           },
                           "category": {
                             "type": "string"
@@ -9622,6 +9642,16 @@
                                 "type": "string"
                               }
                             }
+                          },
+                          "capabilities": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "can_propose_agents": {
+                                "type": "boolean"
+                              }
+                            },
+                            "open": true
                           },
                           "category": {
                             "type": "string"
