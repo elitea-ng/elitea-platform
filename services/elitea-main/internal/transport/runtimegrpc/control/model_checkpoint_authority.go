@@ -12,7 +12,8 @@ func (s *Server) AuthorizeAgentModelCheckpoint(ctx context.Context, request *run
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return modelCheckpointRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return modelCheckpointRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {

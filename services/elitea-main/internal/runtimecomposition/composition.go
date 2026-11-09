@@ -1482,6 +1482,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	controlPeerAuthorizer.WithLogger(dependencies.Logger, "runtime control")
 	capabilityVersions := configuredWorkerCapabilityVersions(config, toolkitRoute)
 	verifier, err := control.NewProductionCommandVerifier(control.ProductionVerifierConfig{
 		EnvelopeSchemaRevision: envelopeSchemaRevision,
@@ -1738,6 +1739,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	outputPeerAuthorizer.WithLogger(dependencies.Logger, "runtime output")
 	outputClaimsRepository, err := repos.NewClaimsRepository(dependencies.OutputPool)
 	if err != nil {
 		return nil, fmt.Errorf("construct output claims: %w", err)

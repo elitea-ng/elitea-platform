@@ -9,6 +9,8 @@ package runtimecomposition
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log/slog"
@@ -22,12 +24,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/health"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 )
 
 // cuttableProxy forwards TCP to target until Cut, and again after Restore,
@@ -411,6 +416,87 @@ func TestRuntimeRunnersWaitOutADatabaseInRecoveryMode(t *testing.T) {
 	for _, entry := range records.entries(t) {
 		if entry["level"] == "WARN" && entry["cause"] != "the database system is in recovery mode (SQLSTATE 57P03)" {
 			t.Fatalf("restart cause = %v, want the server's recovery-mode answer", entry["cause"])
+		}
+	}
+}
+
+// FU-275 condition 2, against the real session registry: with the database
+// up, an unknown, expired, revoked or foreign session is refused and not
+// retryable; with the database cut off, even the valid session is refused,
+// and only then is the refusal marked retryable. Nothing authorizes while the
+// database is unreachable.
+func TestWorkloadSessionRefusalsAgainstARealDatabaseAndACutOne(t *testing.T) {
+	direct := newArtifactRetentionPostgresPool(t)
+	applyArtifactRetentionSharedMigrations(t, direct)
+	ctx := context.Background()
+	if _, err := direct.Exec(ctx, `
+INSERT INTO elitea_runtime.workload_sessions (workload_session_id, workload_identity, producer_id, issued_at, expires_at, revoked_at) VALUES
+ ('live', 'dns:worker.runtime.example', 'producer-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 hour', NULL),
+ ('expired', 'dns:worker.runtime.example', 'producer-1', clock_timestamp() - interval '2 hours', clock_timestamp() - interval '1 hour', NULL),
+ ('revoked', 'dns:worker.runtime.example', 'producer-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 hour', clock_timestamp()),
+ ('foreign', 'dns:other.runtime.example', 'producer-1', clock_timestamp() - interval '1 minute', clock_timestamp() + interval '1 hour', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	target := net.JoinHostPort(direct.Config().ConnConfig.Host, strconv.Itoa(int(direct.Config().ConnConfig.Port)))
+	proxy := startCuttableProxy(t, target)
+	config := direct.Config().Copy()
+	config.ConnConfig.Host = "127.0.0.1"
+	config.ConnConfig.Port = proxy.port(t)
+	config.ConnConfig.ConnectTimeout = time.Second
+	config.ConnConfig.Fallbacks = nil
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	sessions, err := repos.NewWorkloadSessionsRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizer, err := workloadauth.NewPeerAuthorizer(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := &logRecords{}
+	authorizer.WithLogger(slog.New(slog.NewJSONHandler(records, nil)), "runtime control")
+	peerCtx := peer.NewContext(ctx, &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+		VerifiedChains: [][]*x509.Certificate{{{DNSNames: []string{"worker.runtime.example"}}}},
+	}}})
+
+	if identity, err := authorizer.AuthorizeWorkload(peerCtx, "live", "producer-1"); err != nil || identity == "" {
+		t.Fatalf("the live session was refused with the database up: %v", err)
+	}
+	for _, session := range []string{"unknown", "expired", "revoked", "foreign"} {
+		identity, err := authorizer.AuthorizeWorkload(peerCtx, session, "producer-1")
+		if identity != "" || !errors.Is(err, workloadauth.ErrWorkloadUnauthorized) || workloadauth.SessionStoreUnavailable(err) {
+			t.Fatalf("%s session with the database up = (%q, %v), want a plain, non-retryable refusal", session, identity, err)
+		}
+	}
+
+	proxy.Cut()
+	for range 5 {
+		identity, err := authorizer.AuthorizeWorkload(peerCtx, "live", "producer-1")
+		if identity != "" || !errors.Is(err, workloadauth.ErrWorkloadUnauthorized) || !workloadauth.SessionStoreUnavailable(err) {
+			t.Fatalf("live session with the database cut off = (%q, %v), want a refusal marked retryable", identity, err)
+		}
+	}
+	proxy.Restore()
+	eventually(t, "the live session to be accepted again", func() bool {
+		identity, err := authorizer.AuthorizeWorkload(peerCtx, "live", "producer-1")
+		return err == nil && identity != ""
+	})
+	if n := countLines(t, records, "WARN", "The runtime control server cannot read workload sessions;"); n != 1 {
+		t.Fatalf("outage WARN lines = %d, want 1 for five refused requests", n)
+	}
+	if n := countLines(t, records, "INFO", "The runtime control server reads workload sessions again after "); n != 1 {
+		t.Fatalf("recovery INFO lines = %d, want 1", n)
+	}
+	records.mu.Lock()
+	captured := records.buf.String()
+	records.mu.Unlock()
+	for _, leak := range []string{"live", "producer-1", config.ConnConfig.Database, proxy.addr} {
+		if strings.Contains(captured, leak) {
+			t.Fatalf("the outage log carries %q", leak)
 		}
 	}
 }

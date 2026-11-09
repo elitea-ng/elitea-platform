@@ -21,6 +21,7 @@ import (
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/workloadauth"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -205,7 +206,14 @@ func (s *Server) Publish(stream grpc.BidiStreamingServer[runtimev1.ExecutionOutp
 		}
 		workloadIdentity, err := s.authorizer.AuthorizeOutput(stream.Context(), wireFence.GetWorkloadSessionId(), wireFence.GetProducerId())
 		if err != nil || workloadIdentity == "" {
-			if err := stream.Send(rejectionAck(message, runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The output workload session is not accepted.", false)); err != nil {
+			// Refused either way, before any ingest. Only an unreadable session
+			// registry (a database restart or recovery) is retryable, so the
+			// Worker resends this exact frame within its lease (FU-275).
+			code, safeMessage, retryable := runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The output workload session is not accepted.", false
+			if workloadauth.SessionStoreUnavailable(err) {
+				code, safeMessage, retryable = runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The output workload session store is temporarily unavailable.", true
+			}
+			if err := stream.Send(rejectionAck(message, code, safeMessage, retryable)); err != nil {
 				return err
 			}
 			return nil

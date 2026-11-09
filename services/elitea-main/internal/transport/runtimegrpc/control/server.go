@@ -222,7 +222,8 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetWorkloadSessionId(), request.GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return claimRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	command, err := s.verifier.Verify(ctx, request.GetSignedCommand())
 	if err != nil {
@@ -415,7 +416,8 @@ func (s *Server) BeginExecution(ctx context.Context, request *runtimev1.BeginExe
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return beginExecutionRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return beginExecutionRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {
@@ -439,7 +441,8 @@ func (s *Server) AuthorizeInvocation(ctx context.Context, request *runtimev1.Aut
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return authorizeInvocationRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return authorizeInvocationRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {
@@ -466,7 +469,8 @@ func (s *Server) RenewLease(ctx context.Context, request *runtimev1.RenewLeaseRe
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return renewRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return renewRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {
@@ -503,7 +507,8 @@ func (s *Server) ObserveDesiredState(ctx context.Context, request *runtimev1.Obs
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return observeRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return observeRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {
@@ -537,7 +542,8 @@ func (s *Server) PrepareSettlement(ctx context.Context, request *runtimev1.Prepa
 	}
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || workloadIdentity == "" {
-		return settlementRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false), nil
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return settlementRejection(refusalCode, refusalMessage, refusalRetryable), nil
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), workloadIdentity)
 	if err != nil {
