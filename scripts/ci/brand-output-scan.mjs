@@ -46,9 +46,45 @@ export const ALLOWED = Object.freeze([
     why: 'Publish categories (the contract enum `PublishRequest.categories`, v2.yaml): stored values Main validates, shown as category names; renaming them is a data migration.',
   },
   {
+    lane: 'web',
+    text: 'elitea.ai/schemas/brand-pack/1.json',
+    why: "The brand pack's `$schema` id (v2.yaml BrandPack, Main's product_default.pack.json): a contract identifier the client validates, never shown or fetched.",
+  },
+  {
     lane: 'desktop',
     text: 'Elitea-',
-    why: 'Git commit trailers the handoff and checkpoint code writes and parses (Elitea-Handoff, Elitea-Base, Elitea-Skipped): a wire format, not text.',
+    why: 'Git commit trailers and the remote-agent header the handoff, checkpoint and assertion code write and parse (Elitea-Handoff, Elitea-Base, Elitea-Skipped, Elitea-Agent-Assertion): a wire format Main reads too, not text.',
+  },
+  {
+    lane: 'desktop',
+    text: 'elitea.invalid',
+    why: "The author address of the local git commits checkpoints and handoffs make (RFC 2606 `.invalid`, never delivered); 'Elitea merge', 'Elitea checkpoints', 'Elitea handoff' and 'Elitea cloud executor' are the matching author names. Renaming them would split one repository's history in two.",
+  },
+  {
+    lane: 'desktop',
+    text: 'Elitea handoff',
+    why: 'The handoff commit identity and subject (local-tools handoff/snapshot.rs IDENTITY): the handoff code finds its own commits by it.',
+  },
+  {
+    lane: 'desktop',
+    text: 'Elitea cloud turn',
+    why: 'The subject of a replayed cloud commit with no message of its own (handoff/apply.rs), in the same commit identity family as above.',
+  },
+  {
+    lane: 'desktop',
+    text: 'mcp_elitea_internal_',
+    why: "Main's internal toolkit names (services/elitea-main/internal/mcpregistry/internal_builders.go: Elitea Applications, Elitea Chat, ...), mirrored by agent-runtime snapshot.rs: server data, renamed on the server.",
+  },
+  {
+    lane: 'desktop',
+    // The list is one string table: the id sits before the next entry.
+    text: 'ai.elitea.desktopcom.apple.keychainaccess',
+    why: "ELITEA's bundle id on the computer-use platform deny list (local-tools policy.rs PLATFORM_APP_DENY, ADR-0047 decision 5). Every brand keeps it: a white-label build must not drive an installed ELITEA app, another agent host. The build's own id is refused through brand::own_apps().",
+  },
+  {
+    lane: 'desktop',
+    text: 'Generated with Elitea AI',
+    why: "The disclosure marker's default text (libs/proto/contracts/tool-disclosure-v1.json default_marker_text): a cross-language contract the administrator overrides per platform.",
   },
 ]);
 

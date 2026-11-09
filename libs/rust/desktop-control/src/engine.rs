@@ -261,7 +261,7 @@ impl NativeDriver {
                     })?
             }
         };
-        self.refuse_pid(window.pid, deadline, "an Elitea window")?;
+        self.refuse_pid(window.pid, deadline, "a window of this app")?;
         (self.hooks.check_window)(&window)?;
         if let Some(id) = target.bundle_id()
             && !bundle_matches(self.id_of(window.pid, deadline).as_deref(), id)
@@ -296,7 +296,7 @@ impl NativeDriver {
             self.own.refuse(
                 window.pid.get(),
                 app_id.as_deref(),
-                "Elitea is the frontmost application",
+                "this app is the frontmost application",
             )?;
             (self.hooks.check_window)(window)?;
         }
@@ -322,7 +322,7 @@ impl NativeDriver {
             (binding.clone(), window.clone(), app.clone())
         };
         let pid = window.pid;
-        self.refuse_pid(pid, deadline, "an Elitea window")?;
+        self.refuse_pid(pid, deadline, "a window of this app")?;
         (self.hooks.check_window)(&window)?;
         if !bundle_matches(taken_of.as_deref(), id)
             || !bundle_matches(self.id_of(pid, deadline).as_deref(), id)
@@ -780,7 +780,7 @@ impl DesktopDriver for NativeDriver {
                 if refused.iter().any(|p| p.get() == top.pid) || self.own.is_own(top.pid, None) =>
             {
                 return Err(DesktopError::OwnWindowRefused(
-                    "an Elitea or denied window covers the point".into(),
+                    "a window of this app or a denied app covers the point".into(),
                 ));
             }
             _ => {
@@ -835,7 +835,7 @@ impl DesktopDriver for NativeDriver {
             .launch_app(bundle_id, &options, &lease)
             .map_err(map_err)?;
         // The id resolved to Elitea or a denied app after all.
-        self.refuse_pid(launched.pid, deadline, "Elitea")?;
+        self.refuse_pid(launched.pid, deadline, "this app")?;
         let window = launched
             .window
             .as_ref()

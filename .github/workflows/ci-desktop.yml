@@ -25,6 +25,7 @@ on:
       # assets, and the loader the overlay generator reads them with.
       - "brand/**"
       - "scripts/brand/**"
+      - "scripts/ci/brand-output-scan.mjs"
       # The host links the shared runtime, the local tools and the /llm
       # contract (ADR-0029 D0), and their path dependencies.
       - "libs/rust/agent-runtime/**"
@@ -219,6 +220,22 @@ jobs:
           cargo fmt -p elitea-local-index -- --check
           cargo clippy --locked -p elitea-local-index --all-targets -- -D warnings
           cargo test --locked -p elitea-local-index --all-targets
+
+      # ADR-0052 W4: built for brand/sample, the host binary (read through its
+      # strings, a debug build: the cache above is warm for it) and its overlay
+      # show no ELITEA word or identifier (scripts/ci/brand-output-scan.mjs).
+      # Last, because it rebuilds the web bundle and the overlay for the sample
+      # brand. No sidecar: only tauri.sidecar.conf.json (the release) names it.
+      - name: Sample-brand output scan (host binary + overlay)
+        env:
+          ELITEA_BRAND: sample
+        run: |
+          set -euo pipefail
+          npm --prefix apps/elitea-web run build:desktop
+          (cd apps/elitea-desktop && node scripts/tauri-brand.mjs)
+          cd apps/elitea-desktop/src-tauri
+          TAURI_CONFIG="$(cat tauri.brand.json)" cargo build --locked -p elitea-desktop --bin elitea-desktop
+          node "${GITHUB_WORKSPACE}/scripts/ci/brand-output-scan.mjs" --lane desktop target/debug/elitea-desktop tauri.brand.json
 
   # The browser pane's Windows and Linux drivers (ADR-0048 decision 6,
   # #1593). The macOS job above is the one that builds and tests the whole

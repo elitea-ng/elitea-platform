@@ -41,7 +41,7 @@ export interface LocalCodingAgent {
 }
 
 /** The create-application body for `model` (the project's default chat model). */
-function localCodingAgentBody(model: Pick<ConfigModel, 'name' | 'project_id'>): ApplicationCreateRequest {
+export function localCodingAgentBody(model: Pick<ConfigModel, 'name' | 'project_id'>): ApplicationCreateRequest {
   const modelProject = Number(model.project_id);
   return {
     name: LOCAL_CODING_AGENT_NAME,
@@ -50,7 +50,8 @@ function localCodingAgentBody(model: Pick<ConfigModel, 'name' | 'project_id'>): 
     versions: [
       {
         agent_type: 'openai',
-        instructions,
+        // The shipped prompt names the product as {{product}} (ADR-0052 W4).
+        instructions: instructions.replaceAll('{{product}}', productName()),
         llm_settings: { model_name: model.name, ...(Number.isInteger(modelProject) ? { model_project_id: modelProject } : {}) },
         meta: { step_limit: LOCAL_CODING_AGENT_STEPS },
       },

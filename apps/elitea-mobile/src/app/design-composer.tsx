@@ -45,7 +45,7 @@ function ComposerPreview() {
     <KeyboardAvoidingView style={[styles.flex, { backgroundColor: design.colors.background }]} behavior="padding" automaticOffset>
       <Stack.Screen
         options={{
-          title: 'Elitea launch planning',
+          title: 'Northwind launch planning',
           headerShown: true,
           ...headerActionOptions(
             [
@@ -63,7 +63,7 @@ function ComposerPreview() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <MessageBubble role={item.role} author={item.role === 'assistant' ? 'Elitea Helper' : null}>
+          <MessageBubble role={item.role} author={item.role === 'assistant' ? 'Northwind Helper' : null}>
             {item.text}
           </MessageBubble>
         )}
