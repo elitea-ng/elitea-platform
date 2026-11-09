@@ -176,6 +176,32 @@ ELITEA_BRAND=sample npm run build      # every entry, as the sample brand
 
 The web and elitea-main images take the brand as a build argument: `podman build --build-arg ELITEA_BRAND=sample -f apps/elitea-web/Containerfile .`.
 
+## The sample-brand output scan
+
+CI builds every client for `brand/sample` and fails when the output still shows ELITEA (ADR-0052 decision 11). The scan is `scripts/ci/brand-output-scan.mjs`, and each lane runs it:
+
+| Lane | Workflow step | What it scans |
+|---|---|---|
+| Web | CI — Web › Build › Sample-brand output scan | the app and the desktop bundle (`vite build`, and `--mode desktop`) |
+| Mobile | CI — Mobile app › Sample-brand output scan | the `expo export` bundle (Hermes bytecode, read through its strings) and the resolved `expo config` |
+| Desktop | CI — Desktop › Host › Sample-brand output scan | the host binary (a debug build, read through its strings) and `tauri.brand.json` |
+
+A finding is a product word a person reads (`Elitea`, `ELITEA`, `EPAM`, `Epam`), `epam` in any form, or an ELITEA identifier from `brand/elitea/brand.json` (bundle ids, app group, schemes, domains, support address). Names in code are not findings: `EliteaAssistant`, `X-Elitea-*` header names, lower-case API paths and CSS classes. NOTICE and licence files are skipped.
+
+When a step fails, read the name from the brand instead:
+
+- **Web:** `productName()` or `productFullName()` (`@/shared/brand`), or `{{product}}` in a catalogue string.
+- **Mobile:** `identity` (`@/config/identity`).
+- **Desktop host:** `brand::product()` and `brand::identifier()`. In a shared crate, write "this app".
+
+A string that must stay is a contract or a wire value: a stored category, a header, a commit trailer, a server-side name. Add it to `ALLOWED` in the script, with its lane and the reason. Keep the list short: each entry is a place where white labelling still shows ELITEA.
+
+Run it locally on a build:
+
+```bash
+ELITEA_BRAND=sample node scripts/ci/brand-output-scan.mjs --lane web apps/elitea-web/dist/app
+```
+
 ## Add a field
 
 1. Add the field and its rule to `validateManifest` in `scripts/brand/schema.mjs`, and a test in `scripts/brand/schema.test.mjs`. The `allowed` list rejects any field the validator does not know.

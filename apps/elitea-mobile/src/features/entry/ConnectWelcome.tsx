@@ -7,6 +7,13 @@ import { useDesign } from '@/design/DesignProvider';
 import { EntryScreen } from '@/features/entry/EntryScreen';
 import { Button, Icon, Text, TextField } from '@/ui';
 
+/**
+ * The address the field shows as an example: a workspace under the brand's own domain,
+ * never another brand's (ADR-0052 W4); a brand with no link domain gets the reserved
+ * example domain.
+ */
+const workspaceAddressExample = `acme.${identity.linkDomain ?? 'example.com'}`;
+
 export interface ConnectWelcomeProps {
   /** Other workspaces are connected on this device: "Add a workspace" instead of the welcome. */
   adding: boolean;
@@ -125,7 +132,7 @@ export function ConnectWelcome({
             editable={!managed}
             accessibilityState={{ disabled: managed }}
             onSubmitEditing={onContinue}
-            placeholder="acme.elitea.ai"
+            placeholder={workspaceAddressExample}
             autoCapitalize="none"
             autoCorrect={false}
             autoComplete="url"

@@ -123,7 +123,7 @@ impl MacDriver {
         }
         let deadline = deadline(SNAPSHOT_TIMEOUT_MS)?;
         let window = self.resolve_window_unchecked(target, deadline)?;
-        self.refuse_own_pid(window.pid, deadline, "an Elitea window")?;
+        self.refuse_own_pid(window.pid, deadline, "a window of this app")?;
         // The window must be the named app's: a window id of another app,
         // or of an app whose bundle id cannot be read, is not found.
         if let Some(bundle_id) = target.bundle_id()
@@ -249,7 +249,7 @@ impl MacDriver {
             self.own.refuse(
                 app.pid.get(),
                 app.bundle_id.as_deref(),
-                "Elitea is the frontmost application",
+                "this app is the frontmost application",
             )?;
         }
         let frontmost = match &app {
@@ -287,7 +287,7 @@ impl MacDriver {
         };
         // A snapshot of an Elitea window is never taken; this holds even if
         // a pid was reused or the set of own apps grew since.
-        self.refuse_own_pid(pid, deadline, "an Elitea window")?;
+        self.refuse_own_pid(pid, deadline, "a window of this app")?;
         // The ref belongs to the named app, as the snapshot recorded it and
         // as the process says now: an unknown bundle id is not the named one.
         if !bundle_matches(taken_of.as_deref(), bundle_id)
@@ -763,7 +763,7 @@ impl DesktopDriver for MacDriver {
                 if own.iter().any(|p| p.get() == top.pid) || self.own.is_own(top.pid, None) =>
             {
                 return Err(DesktopError::OwnWindowRefused(
-                    "an Elitea window covers the point".into(),
+                    "a window of this app covers the point".into(),
                 ));
             }
             _ => {
@@ -828,7 +828,7 @@ impl DesktopDriver for MacDriver {
             .launch_app(bundle_id, &options, &lease)
             .map_err(map_err)?;
         // A pid reused, or a bundle that resolves to Elitea after all.
-        self.refuse_own_pid(launched.pid, deadline, "Elitea")?;
+        self.refuse_own_pid(launched.pid, deadline, "this app")?;
         let window = launched
             .window
             .as_ref()
