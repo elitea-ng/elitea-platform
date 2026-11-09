@@ -63,7 +63,13 @@ export interface MessageParticipantWire {
   /** Client contract 1.38: `human`, `agent`, `ephemeral_agent` or `system`; absent for an attachment. */
   readonly kind?: string;
   /** Client contract 1.38: the persona of the agent version the conversation runs (ADR-0050). */
-  readonly persona?: { readonly display_name?: string; readonly pronouns?: string; readonly role?: string };
+  readonly persona?: {
+    readonly display_name?: string;
+    readonly pronouns?: string;
+    readonly role?: string;
+    /** ADR-0050 decision 6: the version's avatar pack, when the server sends it; read through `avatarPackOf`. */
+    readonly avatar_pack?: unknown;
+  };
 }
 
 /** `foundParticipant.meta.tools[]` (line 205). */

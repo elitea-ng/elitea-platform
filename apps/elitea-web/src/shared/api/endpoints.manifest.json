@@ -361,7 +361,9 @@
       "source": "generated",
       "responseSchema": "ApplicationDetail",
       "fixture": null,
-      "usedBy": []
+      "usedBy": [
+        "features/agent-teams"
+      ]
     },
     {
       "id": "applications.getApplicationDefaultIcons",
@@ -3754,6 +3756,115 @@
       "fixture": null,
       "usedBy": [
         "features/agent-memory"
+      ]
+    },
+    {
+      "id": "applications.uploadAgentMedia",
+      "method": "POST",
+      "path": "/elitea_core/agent_media/prompt_lib/{project_id}",
+      "operationId": "uploadAgentMedia",
+      "source": "generated",
+      "responseSchema": "AgentMediaObject",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
+      "id": "applications.generateAgentMedia",
+      "method": "POST",
+      "path": "/elitea_core/agent_media_generate/prompt_lib/{project_id}",
+      "operationId": "generateAgentMedia",
+      "source": "generated",
+      "responseSchema": "AgentMediaGenerateResponse",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
+      "$comment": "Saved teams: the Agents page Teams tab and the chat participants panel Save as team (ADR-0050 decision 8, issue 1620).",
+      "id": "agentTeams.list",
+      "method": "GET",
+      "path": "/elitea_core/agent_teams/prompt_lib/{projectId}",
+      "operationId": "listAgentTeams",
+      "source": "generated",
+      "responseSchema": "AgentTeamList",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.create",
+      "method": "POST",
+      "path": "/elitea_core/agent_teams/prompt_lib/{projectId}",
+      "operationId": "createAgentTeam",
+      "source": "generated",
+      "responseSchema": "AgentTeam",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.get",
+      "method": "GET",
+      "path": "/elitea_core/agent_team/prompt_lib/{projectId}/{teamId}",
+      "operationId": "getAgentTeam",
+      "source": "generated",
+      "responseSchema": "AgentTeam",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.update",
+      "method": "PUT",
+      "path": "/elitea_core/agent_team/prompt_lib/{projectId}/{teamId}",
+      "operationId": "updateAgentTeam",
+      "source": "generated",
+      "responseSchema": "AgentTeam",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.delete",
+      "method": "DELETE",
+      "path": "/elitea_core/agent_team/prompt_lib/{projectId}/{teamId}",
+      "operationId": "deleteAgentTeam",
+      "source": "generated",
+      "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.fromConversation",
+      "method": "POST",
+      "path": "/elitea_core/agent_team_from_conversation/prompt_lib/{projectId}/{conversationId}",
+      "operationId": "createAgentTeamFromConversation",
+      "source": "generated",
+      "responseSchema": "AgentTeam",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
+      "id": "agentTeams.start",
+      "method": "POST",
+      "path": "/elitea_core/agent_team_conversation/prompt_lib/{projectId}/{teamId}",
+      "operationId": "startAgentTeamConversation",
+      "source": "generated",
+      "responseSchema": "CreatedConversation",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
       ]
     }
   ]

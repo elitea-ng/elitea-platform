@@ -6,3 +6,5 @@ export { AccountMenu, type AccountMenuItem, type AccountMenuProps } from './ui/A
 export { AccountMenuFrame, type AccountIdentity, type AccountMenuFrameProps } from './ui/AccountMenuFrame';
 export { versionLine } from './lib/versionLine';
 export { useServerVersion } from './model/useServerVersion';
+export { hostSupportContact, useHostInfo, type HostInfo } from './model/useHostInfo';
+export { webSupportHref } from './lib/accountLinks';

@@ -167,6 +167,10 @@ export const getExchangeNativeTokenResponseMock = (
             undefined,
           ]),
         },
+        support_contact: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 200 } }),
+          undefined,
+        ]),
       },
     },
     undefined,

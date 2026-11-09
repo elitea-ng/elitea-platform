@@ -26,6 +26,33 @@ describe('AgentAvatar', () => {
     expect(screen.getByTestId('agent-avatar-motion')).toBeInTheDocument();
   });
 
+  it('plays a pack slot as its own motion, and the still with the default motion for an empty slot', () => {
+    const media = (ext: string) => `/api/v2/agent_media/1/${'ab'.repeat(32)}.${ext}`;
+    const pack = {
+      schema: 'elitea.avatar_pack/v1',
+      slots: { still: { url: media('png') }, speaking: { url: media('webm'), poster_url: media('png') }, thinking: { url: media('webp') } },
+    };
+    const { container, rerender } = renderWithTheme(<AgentAvatar iconUrl="/icons/1/old.png" pack={pack} motion="speaking" />);
+    const video = screen.getByTestId('agent-avatar-video') as HTMLVideoElement;
+    expect(video.getAttribute('src')).toBe(media('webm'));
+    expect(video.getAttribute('poster')).toBe(media('png'));
+    expect(video.muted).toBe(true);
+    expect(video.loop).toBe(true);
+    expect(screen.queryByTestId('agent-avatar-motion')).toBeNull();
+
+    rerender(<AgentAvatar iconUrl="/icons/1/old.png" pack={pack} motion="thinking" />);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(media('webp'));
+    expect(screen.queryByTestId('agent-avatar-motion')).toBeNull();
+
+    rerender(<AgentAvatar iconUrl="/icons/1/old.png" pack={pack} motion="working" />);
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(media('png'));
+    expect(screen.getByTestId('agent-avatar-motion')).toBeInTheDocument();
+
+    rerender(<AgentAvatar iconUrl="/icons/1/old.png" pack={pack} motion="still" />);
+    expect(screen.queryByTestId('agent-avatar-video')).toBeNull();
+    expect(container.querySelector('img')?.getAttribute('src')).toBe(media('png'));
+  });
+
   it('idle has no layer over the still', () => {
     renderWithTheme(<AgentAvatar motion="idle" />);
     expect(screen.queryByTestId('agent-avatar-motion')).toBeNull();

@@ -75,6 +75,19 @@ The model reads the persona after the platform's own text and your organization'
 
 In the desktop app, a `SOUL.md` file at the root of a Local work folder, next to `AGENTS.md`, gives that folder's agent a persona. It has the same fields: YAML front matter for every field but the body, then the body as markdown.
 
+## Avatar
+
+The **Avatar** tab holds the version's avatar pack: the pictures the chat shows for the agent. It has one card for the **Still** and one for each state (idle, thinking, speaking, working, waiting, success, error and waking). Each card shows the slot as the chat shows it, so you see every state before you save.
+
+- **Still**: a PNG, JPEG, WebP or SVG image. The chat shows it when nothing moves, and it is the agent's icon everywhere else. Add it first.
+- **A state**: an image, an animated WebP, or a muted MP4 (H.264) or WebM (VP9 or AV1) loop. A video uses the still as its poster. A state with no file shows the still with the [default motion](/menus/chat#agent-avatars).
+
+Select **Upload** on a card to fill it, or **Remove** to clear it. Removing the still removes the whole pack. Every file is at most 2 MiB and 512 px, and a loop is at most 4 seconds and plays forever. The server reads the file type from the file itself, not from its name. It refuses a file that breaks a rule and says why, for example a video with sound or an SVG with a script. Lottie and Rive files are not accepted.
+
+When the project has an image generation model, **Generate** makes the pictures for you. **Generate stills** makes four candidates from the persona's display name, role and voice; select one to use it as the still. **Generate loop** makes a looping animated WebP of the still for the state you choose. The project's budget pays for each call. There is no video generation.
+
+The pack is saved with the version by **Save**, like the other fields. Save also makes the still the version's icon, so an older app shows it. Publishing and a new version keep the pack. Export, import and fork do not carry it yet: the copy keeps the still as its icon, and you upload the state files again.
+
 ## Test the agent
 
 The embedded chat panel on the right lets you send messages, pick a model and its settings (Reasoning for reasoning models, Creativity for standard ones, Max Completion Tokens), and iterate without leaving the page. When context management is on for the project, a Context Budget widget appears above the panel after the first message.

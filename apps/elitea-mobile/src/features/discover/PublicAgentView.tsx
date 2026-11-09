@@ -18,6 +18,11 @@ export interface PublicAgentViewProps {
   error: string | null;
   onStart: () => void;
   onStarter: (index: number, text: string) => void;
+  /**
+   * Opens what the agent remembers in the active project (client contract 1.44); the row is
+   * left out when not given.
+   */
+  onMemory?: () => void;
 }
 
 /** "Agent · version v1" / "Pipeline". */
@@ -31,7 +36,7 @@ export function agentMetaLine(agent: Pick<PublicAgent, 'agentType' | 'versionNam
  * description and welcome message, ONE filled "Start chat" and the conversation starters as list
  * rows. The route and the `__DEV__` preview both render this (D2).
  */
-export function PublicAgentView({ agent, projectId, projectLabel, welcome, starters, busy, error, onStart, onStarter }: PublicAgentViewProps) {
+export function PublicAgentView({ agent, projectId, projectLabel, welcome, starters, busy, error, onStart, onStarter, onMemory }: PublicAgentViewProps) {
   const { colors, space, radius } = useDesign();
   return (
     <ScrollView
@@ -104,6 +109,11 @@ export function PublicAgentView({ agent, projectId, projectLabel, welcome, start
               onPress={() => onStarter(index, starter)}
             />
           ))}
+        </ListSection>
+      ) : null}
+      {onMemory ? (
+        <ListSection footer={`What ${agent.name} keeps across conversations in ${projectLabel}.`}>
+          <ListRow testID="public-agent-memory" icon="memory" title="What it remembers" disabled={busy !== null} onPress={onMemory} />
         </ListSection>
       ) : null}
     </ScrollView>

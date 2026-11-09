@@ -75,6 +75,12 @@ type Conversation struct {
 	Source       string         `json:"source,omitempty"`
 	Instructions string         `json:"instructions,omitempty"`
 	Participants []Participant  `json:"participants,omitempty"`
+	// LeadParticipant makes Participants[LeadParticipant-1] the lead of the
+	// created conversation: Create writes meta.floor {policy: lead,
+	// lead_participant_id} with that participant's new id, in the create
+	// transaction (a saved team's lead, ADR-0050 decision 8). Server-only:
+	// never read from a request body; 0 leaves the floor alone.
+	LeadParticipant int `json:"-"`
 }
 
 type Message struct {
@@ -806,12 +812,6 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		delete(meta, ForkedFromMetaKey)
 		conv.Meta = meta
 	}
-	actorID, err := chatauthority.Actor(r.Context())
-	if err != nil {
-		apierr.Write(w, err)
-		return
-	}
-	conv.CreatedBy = strconv.FormatInt(actorID, 10)
 	if raw, present := body["is_private"]; present {
 		value, ok := raw.(bool)
 		if !ok {
@@ -849,6 +849,26 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	created, err := h.CreateConversation(r, projectID, conv)
+	if err != nil {
+		writeRepoError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// CreateConversation creates conv for the caller as the create route does:
+// the caller's personalization and the project's chat defaults applied, the
+// participants added through the participant path (its project-access and
+// composition checks), and conversation.created emitted. conv.CreatedBy is
+// the caller. Starting a saved team (internal/api/v2/agentteams) uses it, so
+// a team's conversation is made exactly like a hand-made one.
+func (h *Handler) CreateConversation(r *http.Request, projectID string, conv Conversation) (Conversation, error) {
+	actorID, err := chatauthority.Actor(r.Context())
+	if err != nil {
+		return Conversation{}, err
+	}
+	conv.CreatedBy = strconv.FormatInt(actorID, 10)
 	if defaults, ok := h.userDefaults.(interface {
 		Personalization(context.Context, int64) (map[string]any, error)
 	}); ok {
@@ -858,13 +878,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.applyCreateContextDefaults(r, projectID, &conv); err != nil {
-		apierr.Write(w, apierr.Internal("read chat creation defaults"))
-		return
+		return Conversation{}, apierr.Internal("read chat creation defaults")
 	}
 	created, err := h.repo.Create(r.Context(), projectID, conv)
 	if err != nil {
-		writeRepoError(w, err)
-		return
+		return Conversation{}, err
 	}
 	if h.events != nil {
 		payload := map[string]any{"conversation_id": created.ID, "name": created.Name, "created_by": created.CreatedBy}
@@ -877,8 +895,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 		h.events.Emit(r.Context(), projectID, "conversation.created", payload)
 	}
-	writeJSON(w, http.StatusCreated, created)
+	return created, nil
 }
+
+// WriteError answers a CreateConversation error as the create route does
+// (a composition refusal with its own status and code).
+func WriteError(w http.ResponseWriter, err error) { writeRepoError(w, err) }
 
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	if !h.authorizeConversation(w, r) {

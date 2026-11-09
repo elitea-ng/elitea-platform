@@ -240,3 +240,37 @@ describe('client contract 1.3 (still served)', () => {
     assert.match(step.finish_reason.description, /awaiting_approval/);
   });
 });
+
+describe('client contract 1.44', () => {
+  it("keeps an agent's memory routes (list, delete one, opt out), every one tagged client with its version gate", () => {
+    const { doc } = buildContract();
+    const entries = doc.paths['/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}'];
+    const entry = doc.paths['/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}/{entry_id}'];
+    const optOut = doc.paths['/elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}'];
+    assert.equal(entries.get.operationId, 'listAgentMemory');
+    assert.equal(entry.delete.operationId, 'deleteAgentMemoryEntry');
+    assert.equal(optOut.put.operationId, 'setAgentMemoryOptOut');
+    for (const op of [entries.get, entry.delete, optOut.put]) {
+      assert.ok(op.tags.includes('client'), op.operationId);
+      assert.ok(op.responses['426'], `${op.operationId} 426`);
+    }
+    // Clear, read-one and edit stay web-only: the app neither keeps nor needs them.
+    assert.equal(entries.delete, undefined);
+    assert.equal(entry.get, undefined);
+    assert.equal(entry.patch, undefined);
+    const list = doc.components.schemas.AgentMemoryList;
+    for (const key of ['rows', 'total', 'people', 'can_delete', 'opted_out']) assert.ok(list.required.includes(key), key);
+    assert.deepEqual(doc.components.schemas.AgentMemoryRefusal.required, ['error', 'code']);
+  });
+});
+
+describe('client contract 1.45', () => {
+  it('keeps the IT support line in both policy schemas, one bounded line', () => {
+    const { doc } = buildContract();
+    for (const schema of ['NativeClientPolicy', 'ClientPublicPolicy']) {
+      const prop = doc.components.schemas[schema].properties.support_contact;
+      assert.equal(prop?.type, 'string', `${schema}.support_contact`);
+      assert.equal(prop.maxLength, 200, `${schema}.support_contact maxLength`);
+    }
+  });
+});

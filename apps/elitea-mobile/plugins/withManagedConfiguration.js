@@ -1,7 +1,7 @@
 // @ts-check
 const fs = require('node:fs');
 const path = require('node:path');
-const { AndroidConfig, withAndroidManifest, withDangerousMod } = require('expo/config-plugins');
+const { AndroidConfig, withAndroidManifest, withAppBuildGradle, withDangerousMod } = require('expo/config-plugins');
 
 /**
  * Android managed configuration (ADR-0052 decision 7, W1b): the keys an EMM (Intune,
@@ -55,7 +55,29 @@ const RESTRICTIONS = Object.freeze([
     title: 'Allow screenshots',
     description: 'Off blocks screenshots and screen recording of the app.',
   },
+  {
+    key: 'support_contact',
+    type: 'string',
+    title: 'IT support contact',
+    description: 'One line shown in About and Settings, for example "IT Service Desk, +1 555 0100". Replaces the workspace value.',
+  },
 ]);
+
+/**
+ * MDM feedback (W6.1): keyed app states, androidx.enterprise. Pinned: the inline module
+ * (native-modules/ManagedRestrictions.kt) compiles in the app project, so the app's
+ * build.gradle carries it. Bump deliberately (1.1.0 is the latest stable).
+ */
+const ENTERPRISE_FEEDBACK = 'androidx.enterprise:enterprise-feedback:1.1.0';
+
+/** build.gradle with the feedback dependency in `dependencies { … }` (idempotent). */
+function addFeedbackDependency(gradle) {
+  if (gradle.includes(ENTERPRISE_FEEDBACK)) return gradle;
+  const at = gradle.search(/^dependencies\s*\{/m);
+  if (at === -1) throw new Error('withManagedConfiguration: no dependencies { } block in app/build.gradle');
+  const open = gradle.indexOf('{', at) + 1;
+  return `${gradle.slice(0, open)}\n    // @generated ${TAG}: MDM feedback (keyed app states)\n    implementation("${ENTERPRISE_FEEDBACK}")${gradle.slice(open)}`;
+}
 
 function escapeXml(text) {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -90,6 +112,11 @@ const withManagedConfiguration = (config) => {
     mod.modResults = addRestrictionsMetaData(mod.modResults);
     return mod;
   });
+  config = withAppBuildGradle(config, (mod) => {
+    if (mod.modResults.language !== 'groovy') throw new Error('withManagedConfiguration: app/build.gradle is not Groovy');
+    mod.modResults.contents = addFeedbackDependency(mod.modResults.contents);
+    return mod;
+  });
   return withDangerousMod(config, [
     'android',
     async (mod) => {
@@ -106,3 +133,5 @@ module.exports.RESTRICTIONS = RESTRICTIONS;
 module.exports.restrictionsXml = restrictionsXml;
 module.exports.addRestrictionsMetaData = addRestrictionsMetaData;
 module.exports.META_NAME = META_NAME;
+module.exports.ENTERPRISE_FEEDBACK = ENTERPRISE_FEEDBACK;
+module.exports.addFeedbackDependency = addFeedbackDependency;

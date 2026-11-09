@@ -1374,7 +1374,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, q relationQuerier
 		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, llm_settings, instructions,
-				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, created_at)
+				 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack, created_at)
 			SELECT $1, name, 'embedded', author_id, llm_settings, instructions,
 				   conversation_starters, welcome_message, agent_type,
 				   COALESCE(meta, '{}'::jsonb) || jsonb_build_object(
@@ -1384,7 +1384,7 @@ func (h *Handler) embedSubAgentsRecursive(ctx context.Context, q relationQuerier
 					   'parent_published_app_id', $6::text,
 					   'parent_published_version_id', $7::text
 				   ),
-				   pipeline_settings, soul,
+				   pipeline_settings, soul, avatar_pack,
 				   now() AT TIME ZONE 'UTC'
 			FROM %s.application_versions WHERE id = $2
 			RETURNING id`, schema, schema),

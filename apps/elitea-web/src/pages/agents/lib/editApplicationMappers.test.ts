@@ -4,6 +4,7 @@ import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSum
 import { VersionWriteRequest } from '@/shared/api/generated/model/versionWriteRequest.zod';
 
 import { EMPTY_SOUL_DRAFT, soulToDraft } from './agentSoulDraft';
+import { avatarPackDraftOf, withAvatarSlot } from './avatarPackDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 import {
   applicationDetailDisplayName,
@@ -195,6 +196,7 @@ describe('toVersionWriteBody', () => {
       notes: '',
       outputContract: null,
       soul: EMPTY_SOUL_DRAFT,
+      avatarPack: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -226,6 +228,7 @@ describe('toVersionWriteBody', () => {
       notes: '',
       outputContract: null,
       soul: EMPTY_SOUL_DRAFT,
+      avatarPack: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({
@@ -255,6 +258,7 @@ describe('toVersionWriteBody', () => {
       notes: '',
       outputContract: null,
       soul: EMPTY_SOUL_DRAFT,
+      avatarPack: null,
     };
 
     expect(toVersionWriteBody(version, [], edits).llm_settings).toEqual({ model_name: 'gpt' });
@@ -298,6 +302,7 @@ describe('toVersionSaveBody', () => {
       notes: 'Ask the design team before changing the tone.',
       outputContract: null,
       soul: EMPTY_SOUL_DRAFT,
+      avatarPack: null,
     };
 
     const body = toVersionSaveBody(version, [], edits);
@@ -338,6 +343,7 @@ describe('toVersionSaveBody', () => {
       notes: '',
       outputContract: null,
       soul: EMPTY_SOUL_DRAFT,
+      avatarPack: null,
     });
 
     expect(body.tags).toEqual([]);
@@ -357,6 +363,7 @@ describe('output contract on save (#1500)', () => {
     notes: '',
     outputContract: null,
     soul: EMPTY_SOUL_DRAFT,
+    avatarPack: null,
   };
 
   it('sends the edited contract inside meta and keeps the other stored keys', () => {
@@ -564,6 +571,7 @@ describe('soul on save (ADR-0050)', () => {
     notes: '',
     outputContract: null,
     soul: EMPTY_SOUL_DRAFT,
+    avatarPack: null,
   };
   const stored = { schema: 'elitea.soul/v1' as const, display_name: 'Ada', voice: ['  dry  '] };
 
@@ -601,5 +609,46 @@ describe('soul on save (ADR-0050)', () => {
 
     expect(Object.hasOwn(body, 'soul')).toBe(true);
     expect(body.soul).toBeNull();
+  });
+});
+
+describe('avatar_pack on save (ADR-0050 decision 6)', () => {
+  const media = (ext: string) => `/api/v2/agent_media/9/${'ab'.repeat(32)}.${ext}`;
+  const stored = { schema: 'elitea.avatar_pack/v1' as const, slots: { still: { url: media('png'), media_type: 'image/png' } } };
+  const edits: EditApplicationVersionFields = {
+    instructions: '',
+    welcomeMessage: '',
+    variables: [],
+    stepLimit: undefined,
+    internalTools: [],
+    llmSettings: undefined,
+    tags: [],
+    notes: '',
+    outputContract: null,
+    soul: EMPTY_SOUL_DRAFT,
+    avatarPack: null,
+  };
+
+  it('forwards an untouched stored pack, so Save As Version keeps it', () => {
+    const version = { name: 'base', meta: {}, avatar_pack: stored } as unknown as ApplicationVersionDetail;
+    const body = toVersionSaveBody(version, [], { ...edits, avatarPack: avatarPackDraftOf(stored) });
+    expect(body.avatar_pack).toEqual({ schema: 'elitea.avatar_pack/v1', slots: { still: { url: media('png') } } });
+  });
+
+  it('sends null when the pack was removed, and omits the key when there was none', () => {
+    const withPack = { name: 'base', meta: {}, avatar_pack: stored } as unknown as ApplicationVersionDetail;
+    expect(toVersionSaveBody(withPack, [], edits).avatar_pack).toBeNull();
+    const without = { name: 'base', meta: {}, avatar_pack: null } as unknown as ApplicationVersionDetail;
+    expect(Object.hasOwn(toVersionSaveBody(without, [], edits), 'avatar_pack')).toBe(false);
+  });
+
+  it('sends an edited pack that passes the generated schema', () => {
+    const version = { name: 'base', meta: {} } as unknown as ApplicationVersionDetail;
+    const pack = withAvatarSlot(withAvatarSlot(null, 'still', { url: media('png') }), 'speaking', {
+      url: media('webm'),
+      poster_url: media('png'),
+    });
+    const parsed = VersionWriteRequest.parse(toVersionSaveBody(version, [], { ...edits, avatarPack: pack }));
+    expect(parsed.avatar_pack?.slots.speaking).toEqual({ url: media('webm'), poster_url: media('png') });
   });
 });
