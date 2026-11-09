@@ -214,8 +214,8 @@ jobs:
         run: |
           set -euo pipefail
           bin="${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
-          lipo -verify_arch arm64 x86_64 "$bin"
-          lipo -verify_arch arm64 x86_64 "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar"
+          lipo "$bin" -verify_arch arm64 x86_64
+          lipo "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar" -verify_arch arm64 x86_64
           lipo -info "$bin"
 
       # A component package that installs into /Applications with no UI: Jamf, Intune
