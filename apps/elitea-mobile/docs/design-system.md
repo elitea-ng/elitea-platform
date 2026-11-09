@@ -447,14 +447,14 @@ The derived soft and bubble values pass too.
 
 ### 3.5 Workspace identity is always visible
 
-- The **workspace host** (e.g. `acme.elitea.ai`) and the logo mark (or a monogram tile
+- The **workspace host** (e.g. `acme.example.com`) and the logo mark (or a monogram tile
   when there is no logo) are visible on:
   - the connect confirmation (existing rule, system font)
   - sign-in
   - the Home header's workspace pill
   - the Settings → Workspace row
   - the lock screen
-  - every approval card ("Running on acme.elitea.ai").
+  - every approval card ("Running on acme.example.com").
 - The logo is never placed over or behind the Elitea mark, and the Elitea mark is never placed over
   the logo (§5).
 - The workspace name is never shown as the app name. The app name stays "Elitea AI" on

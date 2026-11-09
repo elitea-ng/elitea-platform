@@ -117,6 +117,13 @@ Before you merge it:
 2. Compare the release's `NOTICE` with yours.
 3. Merge, then run **Build the brand** by hand to ship.
 
+## Store paperwork
+
+The App Store and Google Play ask for a listing, privacy labels, a privacy policy, a support page, export-compliance answers and review notes. Take them from the release you pin, in your `elitea/` checkout, not from `main`: ELITEA's answers are in `elitea/apps/elitea-mobile/docs/store/`, and yours start from `elitea/apps/elitea-mobile/docs/store/template/`. Names in braces are your `brand.json` values; bracketed values are yours to decide.
+
+- The privacy labels, the Data safety form and the export-compliance answer are the same for every brand, because every brand builds the same code. Use ELITEA's, with your product name.
+- Reviewers need a demo workspace you operate, with your native client enabled, and a reviewer account with no MFA. The review notes say that device management and Local Push stay dormant without an MDM or a workspace policy.
+
 ## Let your apps sign in
 
 Each brand's apps are their own native client of a deployment: the brand's bundle id and its redirect. A deployment that serves your apps registers your client next to ELITEA's. See [Allow a brand's apps on your deployment](/admin/brand-apps).
