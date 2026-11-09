@@ -439,6 +439,16 @@ fixed names:
 | `APPLE_API_ISSUER` | the **Issuer ID** (UUID) shown above that key list | same page |
 | `APPLE_API_PRIVATE_KEY` | base64 of the downloaded `AuthKey_<KEYID>.p8` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` (it can be downloaded once) |
 
+Windows (the job is off until #1828; the repository variable
+`DESKTOP_WINDOWS_PACKAGE=true` switches it on). Set **one** of the two sets.
+`WINDOWS_PUBLISHER` is the certificate's subject (`CN=…, O=…, C=…`), and the
+MSIX `Publisher` must equal it.
+
+| Signer | Secrets |
+| --- | --- |
+| Azure Artifact Signing (Trusted Signing) | `WINDOWS_PUBLISHER`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` |
+| Code-signing certificate | `WINDOWS_PUBLISHER`, `WINDOWS_CERTIFICATE` (base64 `.pfx`), `WINDOWS_CERTIFICATE_PASSWORD` |
+
 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` sign updater
 artifacts; the updater is not enabled, so the job does not read them.
 

@@ -74,10 +74,10 @@ test('the CLI prints the plan and never a secret value', () => {
   assert.doesNotMatch(half.stdout, /TOPSECRET/);
 });
 
-test('the workflows pass every macOS secret by its fixed name', () => {
+test('the workflows pass every signing secret by its fixed name', () => {
   const wf = readFileSync(join(REPO, '.github/workflows/desktop-package.yml'), 'utf8');
   const publish = readFileSync(join(REPO, '.github/workflows/publish.yml'), 'utf8');
-  for (const name of SECRETS.macos) {
+  for (const name of new Set([...SECRETS.macos, ...SECRETS.windowsTrusted, ...SECRETS.windowsPfx])) {
     assert.match(publish, new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`), `publish.yml ${name}`);
     assert.match(wf, new RegExp(`${name}: \\{ required: false \\}`), `workflow_call ${name}`);
     assert.match(wf, new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`), name);
