@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
@@ -2993,6 +2994,25 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose the Entra credential re-consent: %w", err)
 	}
 
+	readinessNATS := []func() nats.Status{}
+	if eventsNATS != nil {
+		readinessNATS = append(readinessNATS, eventsNATS.Status)
+	}
+	var readinessRunners degradedRunnerSource
+	if runtimeRoot != nil {
+		readinessNATS = append(readinessNATS, runtimeRoot.RuntimeNATSStatus)
+		readinessRunners = runtimeRoot
+	}
+	readinessMonitor, monitorErr := health.NewMonitor(mainReadinessChecks([]*pgxpool.Pool{pool}, readinessNATS, readinessRunners), logger, readinessMonitorInterval)
+	if monitorErr != nil {
+		return monitorErr
+	}
+	// Logs each dependency's loss and recovery once per outage, also when
+	// nothing probes Main. It ends with run, before the deferred pool closes,
+	// so it never reads a pool Main closed on its way out as an outage.
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	go readinessMonitor.Run(monitorCtx)
 	r := api.NewRouter(api.RouterConfig{
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
@@ -3048,11 +3068,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitRegistry:               toolkitArgumentSchemas,
 		DelegatedAuthToolkitSettings:  delegatedAuthToolkitSettings,
 		WorkerImplementation:          workerImplementation,
-		// Readiness is the database alone. The Form graph's sign-in state is
-		// in this same database (shared migration 0153), so it adds no
-		// dependency of its own; the auth Redis it once pinged is gone.
+		// Readiness is the database (every pool), NATS and the runtime
+		// runners (FU-275); see mainReadinessChecks. The Form graph's sign-in
+		// state is in this same database (shared migration 0153), so it adds
+		// no dependency of its own; the auth Redis it once pinged is gone.
 		HealthDeps: health.Deps{
-			DB: &poolChecker{pool: pool},
+			Checks:  readinessMonitor.Checks(),
+			Monitor: readinessMonitor,
 		},
 		AuthValidator:      apiGroupAuth.Validator,
 		PrincipalValidator: apiGroupAuth.PrincipalValidator,
@@ -3621,14 +3643,6 @@ func configureObjectStoreRetentionLifecycle(ctx context.Context, store storage.O
 		return nil
 	}
 	return configurer.ConfigureRetentionLifecycle(ctx)
-}
-
-type poolChecker struct {
-	pool *pgxpool.Pool
-}
-
-func (p *poolChecker) Ping(ctx context.Context) error {
-	return p.pool.Ping(ctx)
 }
 
 // backfillProjectSecretsHeaderValues gives every existing project an `X-SECRET`

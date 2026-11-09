@@ -176,6 +176,7 @@ services:
     # `standalone-stack.sh up` runs `pg-collation-repair` before the rest of
     # the stack starts (see deploy/README.md, "Upgrade notes").
     image: postgres:18
+    restart: unless-stopped
     shm_size: '2g'
     # Raise the server-side budget for the enlarged #965 pooler pool
     # (deploy/runtime/pgbouncer.ini now runs default_pool_size 128). The image
@@ -229,6 +230,7 @@ services:
     # No host port: the pooler is an internal hop, and pgbouncer's own console
     # (SHOW POOLS / SHOW SERVERS) is reached through podman exec when needed.
     image: edoburu/pgbouncer:v1.25.2-p0
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -255,6 +257,7 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
+    restart: unless-stopped
     command: ["-c", "/etc/nats-config/nats.conf"]
     volumes:
       - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
@@ -268,6 +271,7 @@ services:
   # wget). SIGINT stops it at once: Python handles SIGINT, not SIGTERM, as PID 1.
   nats-health:
     image: docker.io/library/python:3.12.14-slim-trixie
+    restart: unless-stopped
     command: ["python3", "-c", "import time; time.sleep(1 << 30)"]
     stop_signal: SIGINT
     healthcheck:
@@ -287,6 +291,7 @@ services:
   # posture is the opt-in overlay docker-compose.nats-secure.yml.
   nats-bootstrap:
     image: docker.io/natsio/nats-box:0.19.7
+    restart: "no"
     command: ["sh", "/bootstrap/bootstrap.sh"]
     environment:
       NATS_URL: "nats://nats:4222"
@@ -395,6 +400,7 @@ services:
 
   rustfs:
     image: docker.io/rustfs/rustfs:1.0.0
+    restart: unless-stopped
     environment:
       RUSTFS_ACCESS_KEY: elitea
       RUSTFS_SECRET_KEY: elitea-dev-secret
@@ -451,6 +457,7 @@ services:
   # is not reachable inside the compose network.
   oidc-mock:
     image: ghcr.io/geigerzaehler/oidc-provider-mock:latest
+    restart: unless-stopped
     networks:
       default:
         aliases:
@@ -854,6 +861,7 @@ services:
   # the debug/file-exporter scope-boundary rationale.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.114.0
+    restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
@@ -863,6 +871,7 @@ services:
 
   elitea-main:
     image: ghcr.io/elitea-ng/elitea-main:standalone
+    restart: unless-stopped
     # `build:` present so compose builds the tag from this commit instead of
     # reaching for a registry tag that was never published (cf. issue #154).
     # Context is `..` because build contexts resolve relative to THIS file's
@@ -1873,6 +1882,7 @@ services:
 
   elitea-web:
     image: ghcr.io/elitea-ng/elitea-web:standalone
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: apps/elitea-web/Containerfile

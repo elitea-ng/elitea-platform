@@ -10,6 +10,7 @@ name: elitea-storage-test
 services:
   rustfs:
     image: docker.io/rustfs/rustfs:latest
+    restart: unless-stopped
     ports:
       - "19000:9000"
     environment:
@@ -30,6 +31,7 @@ services:
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
+    restart: unless-stopped
     # --skipApiVersionCheck: confirmed necessary as of 2026-08 — this image
     # rejects every request from the pinned azblob SDK version with
     # "400 InvalidHeaderValue: API version ... not supported" otherwise.
@@ -46,6 +48,7 @@ services:
 
   fake-gcs-server:
     image: docker.io/fsouza/fake-gcs-server:latest
+    restart: unless-stopped
     # -scheme http: this server listens with HTTPS by default; without this
     # flag the connection fails regardless of the endpoint path passed to
     # GCS_ENDPOINT.
