@@ -386,6 +386,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // No plaintext URL cache: responses (tokens, transcripts) are never written to
     // Library/Caches/<bundle id>/Cache.db (DEF-R2). Our own plugin, see plugins/.
     './plugins/withNoHttpCache',
+    // Android managed configuration (EMM app restrictions, ADR-0052 W1b): declares the keys in
+    // res/xml/app_restrictions.xml so Intune / Workspace ONE show them; iOS AppConfig needs no file.
+    './plugins/withManagedConfiguration',
     // The widget extension's own PrivacyInfo.xcprivacy (Apple scans the .appex too): it links
     // React Native, expo-modules-core, expo-widgets and @expo/ui statically, which read the App
     // Group UserDefaults suite, file timestamps and boot time. Listed BEFORE expo-widgets, which
@@ -433,7 +436,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     reactCompiler: true,
     // The App Intents Swift (app-intents/) is compiled into the app target (Apple's metadata
     // extraction does not see intents inside a static pod). native-modules/: the document
-    // scanner (VisionKit camera, PDF, on-device text recognition) for attachments.
+    // scanner (VisionKit camera, PDF, on-device text recognition) for attachments, and
+    // ManagedRestrictions.kt (Android managed configuration, read by src/security/managedConfig.ts).
     inlineModules: { watchedDirectories: ['app-intents', 'native-modules'] },
   },
   // Binaries and OTA updates match by fingerprint; eas.json's build profiles set the channel.

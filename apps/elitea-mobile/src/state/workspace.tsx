@@ -4,6 +4,8 @@ import { revokeStoredSession } from '@/auth/nativeSession';
 import { log } from '@/lib/log';
 import { parseConnectLink, type ParseConnectLinkOptions } from '@/linking/parseConnectLink';
 import { endSession, suspendActiveWorkspace, wipeStoredWorkspace } from '@/security/endSession';
+import { getManagedConfig } from '@/security/managedConfig';
+import { lockedOrigin } from '@/security/managedServer';
 import { SECURE_KEYS, bindWorkspace, boundWorkspace, getSecureItemIn } from '@/security/secureStorage';
 import {
   activateInRegistry,
@@ -191,6 +193,12 @@ export function beginAddWorkspace(origin: string | null = null): Promise<void> {
  */
 export function connectWorkspace(origin: string): Promise<boolean> {
   return serial(async () => {
+    // MDM `lock_server`: no slot for another server, whatever screen asked.
+    const locked = lockedOrigin(getManagedConfig());
+    if (locked !== null && origin !== locked) {
+      log.warn('connect refused: the device is locked to its managed workspace');
+      return false;
+    }
     let existing: string | null;
     try {
       existing = await findWorkspaceByOrigin(origin);
@@ -267,6 +275,47 @@ export function wipeRevokedWorkspace(id: string, reason: 'device_revoked' | 'cre
     const { wiped } = await wipeStoredWorkspace(id, { reason });
     void refreshWorkspaceList();
     return wiped;
+  }, { replacesActive: false });
+}
+
+/**
+ * MDM `lock_server` (ADR-0052 W1b): the device keeps only the workspace at
+ * `origin`. Every other workspace is signed out and wiped like a logout: the
+ * active one through `endSession` (the app lands on the connect screen), any
+ * other through `wipeStoredWorkspace` with a best-effort revoke. A slot whose
+ * origin cannot be read is left for the next run (it is never guessed).
+ * Nothing is restored when the MDM removes the key: wiped is wiped.
+ * Resolves with the ids that are gone. Never throws.
+ */
+export function keepOnlyWorkspace(origin: string): Promise<string[]> {
+  return serial(async () => {
+    const registry = await readRegistry().catch(() => null);
+    if (registry === null) return [];
+    const removed: string[] = [];
+    for (const id of registry.ids) {
+      let stored: string | null;
+      try {
+        stored = await getSecureItemIn(id, SECURE_KEYS.serverOrigin);
+      } catch (error) {
+        log.warn('managed server lock: a workspace origin could not be read', { error });
+        continue;
+      }
+      if (stored === origin) continue;
+      const wiped =
+        boundWorkspace() === id
+          ? (await endSession({ reason: 'managed_server' })).storageWiped
+          : (await wipeStoredWorkspace(id, { reason: 'managed_server', revoke: (signal) => revokeStoredSession(id, signal) }))
+              .wiped;
+      if (wiped) removed.push(id);
+    }
+    if (getSession().returnWorkspaceId !== null && removed.includes(getSession().returnWorkspaceId!)) {
+      setSession({ returnWorkspaceId: null });
+    }
+    if (removed.length > 0) {
+      log.info('managed server lock removed other workspaces', { count: removed.length });
+      void refreshWorkspaceList();
+    }
+    return removed;
   }, { replacesActive: false });
 }
 

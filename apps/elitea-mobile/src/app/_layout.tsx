@@ -17,6 +17,7 @@ import { startOutbox } from '@/sync/appOutbox';
 import { startSync } from '@/sync/appSync';
 import { LockGate } from '@/security/lock/LockGate';
 import { startManagedConfig } from '@/security/managedConfig';
+import { startManagedServerLock } from '@/security/managedServerLock';
 import { PrivacyCover } from '@/security/privacy/PrivacyCover';
 import { usePrivacyProtection } from '@/security/privacy/usePrivacyProtection';
 import { useLockController } from '@/security/lock/useLockController';
@@ -39,6 +40,8 @@ import { startTurnActivities } from '@/features/surfaces/turnActivities';
 
 // MDM AppConfig first: its lock floor must be in place before the launch lock decision.
 startManagedConfig();
+// MDM lock_server: only the managed workspace stays (applied once hydrated, and on every change).
+startManagedServerLock();
 wireFocusManager();
 wireUpgradeRecovery();
 // The encrypted offline store follows the session, the policy and the device lock.

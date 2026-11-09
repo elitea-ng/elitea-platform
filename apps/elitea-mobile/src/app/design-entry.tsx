@@ -66,8 +66,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
             address={address}
             onAddressChange={setAddress}
             error={null}
-            managedHint={false}
-            busy={false}
+                        busy={false}
             onContinue={noop}
             onPrivacy={noop}
             onHelp={noop}

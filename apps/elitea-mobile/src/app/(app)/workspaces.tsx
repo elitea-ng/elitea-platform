@@ -6,6 +6,7 @@ import { identity } from '@/config/identity';
 import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspacesSheet } from '@/features/workspaces/WorkspacesSheet';
 import { log } from '@/lib/log';
+import { useManagedServer } from '@/security/managedServer';
 import { useSession } from '@/state/session';
 import { beginAddWorkspace, removeWorkspace, switchToWorkspace } from '@/state/workspace';
 import { refreshWorkspaceList, useWorkspaceList, type WorkspaceSummary } from '@/state/workspaceList';
@@ -19,6 +20,7 @@ import { refreshWorkspaceList, useWorkspaceList, type WorkspaceSummary } from '@
 export default function WorkspacesScreen() {
   const activeId = useSession((s) => s.workspaceId);
   const workspaces = useWorkspaceList();
+  const { locked } = useManagedServer();
 
   useEffect(() => {
     void refreshWorkspaceList();
@@ -62,6 +64,7 @@ export default function WorkspacesScreen() {
       activeId={activeId}
       onOpen={onOpen}
       onRemove={onRemove}
+      addLocked={locked}
       onAdd={() => {
         if (router.canGoBack()) router.back();
         void beginAddWorkspace();
