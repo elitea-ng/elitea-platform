@@ -1324,7 +1324,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// project: agent_memory_entries, agent_memory_entry_versions and
 	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
 	// data, no permission.
-	require.EqualValues(t, 163, Head(tenant))
+	//
+	// 164: tenant/0164_legacy_built_tenant_shape.sql, the columns and tables a
+	// schema the legacy runtime built lacks and Main reads: elitea_tools
+	// owner_id (backfilled with the schema's project), env_vars and uuid,
+	// index_meta and social_likes, each as create_tenant_schema declares it.
+	// No permission.
+	require.EqualValues(t, 164, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
