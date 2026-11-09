@@ -133,46 +133,52 @@ export function matchers(identifiers) {
 const printableByte = (b) => (b >= 0x20 && b < 0x7f) || b === 0x09;
 
 /**
- * Printable runs of four or more characters: single-byte ASCII, as
- * `strings -n 4`, and UTF-16LE, as `strings -el` (Hermes stores a string with
- * any non-ASCII character as UTF-16, so `Elitea’s` is `E\0l\0i\0...`).
+ * The printable runs of four or more characters in `buffer`: single-byte
+ * ASCII, as `strings -n 4`, then UTF-16LE at both byte alignments, as
+ * `strings -el` (Hermes stores a string with any non-ASCII character as
+ * UTF-16, so `Elitea’s` is `E\0l\0i\0...`; the non-ASCII unit ends the run).
  */
-export function printableStrings(buffer) {
-  const runs = [];
+export function* printableRuns(buffer) {
   let start = -1;
   for (let i = 0; i <= buffer.length; i++) {
     const printable = i < buffer.length && printableByte(buffer[i]);
     if (printable && start < 0) start = i;
     if (!printable && start >= 0) {
-      if (i - start >= 4) runs.push(buffer.toString('latin1', start, i));
+      if (i - start >= 4) yield buffer.toString('latin1', start, i);
       start = -1;
     }
   }
-  // UTF-16LE at both byte alignments: printable ASCII units are kept, other
-  // non-ASCII text units read as a space, anything else ends the run.
   for (const offset of [0, 1]) {
-    let run = '';
-    let ascii = 0;
-    const flush = () => {
-      if (ascii >= 4) runs.push(run);
-      run = '';
-      ascii = 0;
-    };
-    for (let i = offset; i + 1 < buffer.length; i += 2) {
-      const unit = buffer[i] | (buffer[i + 1] << 8);
-      if (buffer[i + 1] === 0 && printableByte(buffer[i])) {
-        run += String.fromCharCode(unit);
-        ascii++;
-      } else if (unit >= 0xa0 && unit < 0xd800) {
-        run += ' ';
-      } else {
-        flush();
+    let begin = -1;
+    for (let i = offset; i + 1 <= buffer.length; i += 2) {
+      const printable = i + 1 < buffer.length && buffer[i + 1] === 0 && printableByte(buffer[i]);
+      if (printable && begin < 0) begin = i;
+      if (!printable && begin >= 0) {
+        if (i - begin >= 8) yield buffer.toString('utf16le', begin, i);
+        begin = -1;
       }
     }
-    flush();
   }
-  return runs.join('\n');
 }
+
+/** The runs joined, one per line, in pieces of about `size` characters (a debug host is 250 MB). */
+export function* printableChunks(buffer, size = 4 << 20) {
+  let parts = [];
+  let length = 0;
+  for (const run of printableRuns(buffer)) {
+    parts.push(run);
+    length += run.length + 1;
+    if (length >= size) {
+      yield parts.join('\n');
+      parts = [];
+      length = 0;
+    }
+  }
+  if (parts.length) yield parts.join('\n');
+}
+
+/** All the runs as one text, as `strings` prints them. */
+export const printableStrings = (buffer) => [...printableChunks(buffer, Infinity)].join('\n');
 
 /** Whether `buffer` is binary: a NUL byte in its first 8 KiB, as git decides. */
 export const isBinary = (buffer) => buffer.subarray(0, 8192).includes(0);
@@ -212,9 +218,9 @@ export function scan(paths, { lane, identifiers, allowed = ALLOWED, cwd = proces
       const shown = relative(cwd, file) || basename(file);
       if (SKIPPED_FILES.some((re) => re.test(shown))) continue;
       const buffer = readFileSync(file);
-      const text = isBinary(buffer) ? printableStrings(buffer) : buffer.toString('utf8');
+      const texts = isBinary(buffer) ? printableChunks(buffer) : [buffer.toString('utf8')];
       scanned++;
-      findings.push(...scanText(text, { file: shown, lane, identifiers, allowed, compiled }));
+      for (const text of texts) findings.push(...scanText(text, { file: shown, lane, identifiers, allowed, compiled }));
     }
   }
   return { findings, scanned };

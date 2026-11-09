@@ -11,7 +11,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { ALLOWED, eliteaIdentifiers, isBinary, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
+import { ALLOWED, eliteaIdentifiers, isBinary, printableChunks, printableStrings, report, scan, scanText } from './brand-output-scan.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SCRIPT = path.join(REPO, 'scripts/ci/brand-output-scan.mjs');
@@ -92,11 +92,21 @@ test('a binary is read through its printable strings', () => {
   assert.deepEqual(report(findings), ['Sample.app/Contents/MacOS/sample: "Elitea" in …About Elitea…']);
 });
 
+test('a large binary is scanned in pieces, each a whole number of runs', () => {
+  const run = Buffer.from('ok ok ok ok\0');
+  const bytes = Buffer.concat([Buffer.alloc(1, 0xc6), ...Array.from({ length: 2000 }, () => run), Buffer.from('About Elitea\0')]);
+  const chunks = [...printableChunks(bytes, 1000)];
+  assert.ok(chunks.length > 10);
+  assert.ok(chunks.every((c) => c.split('\n').every((r) => r === 'ok ok ok ok' || r === 'About Elitea')));
+  const root = tree({ host: bytes });
+  assert.deepEqual(scan([root], { lane: 'desktop', identifiers: IDS, cwd: root }).findings.map((f) => f.match), ['Elitea']);
+});
+
 test('a UTF-16 string (Hermes, for text with a non-ASCII character) is read too', () => {
   const utf16 = Buffer.from('Back to Elitea\u2019s home', 'utf16le');
   for (const pad of [0, 1]) {
     const bytes = Buffer.concat([Buffer.alloc(pad), Buffer.from([0xc6, 0x1f, 0, 0]), utf16, Buffer.from([0, 0, 0, 0])]);
-    assert.match(printableStrings(bytes), /Back to Elitea s home/);
+    assert.match(printableStrings(bytes), /Back to Elitea\n|Back to Elitea$/);
     assert.deepEqual(scanText(printableStrings(bytes), { file: 'b', lane: 'mobile', identifiers: IDS }).map((f) => f.match), ['Elitea']);
   }
 });
