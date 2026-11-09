@@ -132,12 +132,12 @@ func mirrorPublishedVersion(
 	err = tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul,
+			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack,
 			 shared_owner_id, shared_id, created_at)
 		SELECT $2, $3, 'published', author_id, llm_settings, instructions,
 			   conversation_starters, welcome_message, agent_type,
 			   COALESCE(meta, '{}'::jsonb) || $4::jsonb,
-			   pipeline_settings, soul, $5, id, now() AT TIME ZONE 'UTC'
+			   pipeline_settings, soul, avatar_pack, $5, id, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions WHERE id = $1
 		RETURNING id`, publicSchema, sourceSchema),
 		publishedVersionID, twinAppID, versionName, metaOverlay, sourceProjectNumeric,

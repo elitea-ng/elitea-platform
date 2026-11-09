@@ -1336,7 +1336,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// owner_id (backfilled with the schema's project), env_vars and uuid,
 	// index_meta and social_likes, each as create_tenant_schema declares it.
 	// No permission.
-	require.EqualValues(t, 164, Head(tenant))
+	//
+	// 165: tenant/0165_application_version_avatar_pack.sql, the nullable
+	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
+	// issue 1619). No data, no permission.
+	require.EqualValues(t, 165, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

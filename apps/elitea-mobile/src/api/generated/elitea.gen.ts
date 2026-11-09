@@ -2114,6 +2114,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description ADR-0050 decision 6: an agent version's avatar pack. Each slot names one uploaded media file for one state; only `still` is required, and a client animates a state with no slot from the still with the default motion pack. Lottie and Rive are not accepted. */
+        AgentAvatarPackV1: {
+            /** @description The document version. Always `elitea.avatar_pack/v1`. */
+            schema: string;
+            slots: {
+                error?: components["schemas"]["AgentAvatarSlot"];
+                idle?: components["schemas"]["AgentAvatarSlot"];
+                speaking?: components["schemas"]["AgentAvatarSlot"];
+                still: components["schemas"]["AgentAvatarSlot"];
+                success?: components["schemas"]["AgentAvatarSlot"];
+                thinking?: components["schemas"]["AgentAvatarSlot"];
+                waiting?: components["schemas"]["AgentAvatarSlot"];
+                waking?: components["schemas"]["AgentAvatarSlot"];
+                working?: components["schemas"]["AgentAvatarSlot"];
+            };
+        };
+        /** @description One avatar pack slot. `still` takes PNG, JPEG, WebP or SVG; the other slots take a still, an animated WebP, or a muted MP4 (H.264) or WebM (VP9 or AV1). Every animation is at most 4 s, 512 px and 2 MiB, and an animated WebP loops forever. */
+        AgentAvatarSlot: {
+            /** @description The model that generated the file, when it was generated. */
+            generated_by?: string;
+            /** @description Derived from the url's extension on every write (image/png, image/jpeg, image/webp, image/svg+xml, video/mp4, video/webm); a value the client sends is ignored. */
+            media_type?: string;
+            /** @description The still a video shows before it plays and under reduced motion. Required for MP4 and WebM; dropped for any other file. */
+            poster_url?: string;
+            /** @description `/api/v2/agent_media/{project_id}/{sha256}.{ext}`, the url the upload or the generation answered. */
+            url: string;
+        };
         /** @description NOTE(W2): internal/domain/contextview/contextview.go, Parse. */
         AgentContextSettings: {
             /** @description Stored and validated; the notes come with turn taking (issue 1611). */
@@ -2432,6 +2459,8 @@ export interface components {
             application_id: string;
             author?: components["schemas"]["Author"];
             author_id?: string;
+            /** @description ADR-0050 decision 6: the version's avatar pack, or null when it has none (the client then reads `meta.icon_meta`). Served by the version-detail read and both write echoes. */
+            avatar_pack?: components["schemas"]["AgentAvatarPackV1"] | null;
             conversation_starters?: components["schemas"]["ConversationStarters"];
             /** Format: date-time */
             created_at?: string;
@@ -4682,6 +4711,8 @@ export interface components {
         VersionWriteRequest: {
             /** @description Defaults to "openai" when empty on the CREATE paths (handler.go:398-400, 731-733). On the PUT, omit the key to leave the stored value alone; an explicit empty string is REFUSED with a 400, for the same reason as `name` (issue 824). */
             agent_type?: string;
+            /** @description ADR-0050 decision 6. Omit the key to leave the stored pack alone; null clears it; an object replaces it whole and also writes its still into `meta.icon_meta`, so a client that reads only the old field shows it. Every url must be media uploaded to this project (`/api/v2/agent_media/{this project}/...`). A pack that breaks a rule is REFUSED with a 400 `avatar_pack_invalid` before anything is written. */
+            avatar_pack?: components["schemas"]["AgentAvatarPackV1"] | null;
             conversation_starters?: components["schemas"]["ConversationStarters"];
             /** @description Omit the key to leave the stored text alone. An explicit empty string CLEARS the column — it is the clearing value, since the property is not nullable and a client must be able to erase the text it wrote (issue 824). */
             instructions?: string;

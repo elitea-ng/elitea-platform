@@ -3759,6 +3759,30 @@
       ]
     },
     {
+      "id": "applications.uploadAgentMedia",
+      "method": "POST",
+      "path": "/elitea_core/agent_media/prompt_lib/{project_id}",
+      "operationId": "uploadAgentMedia",
+      "source": "generated",
+      "responseSchema": "AgentMediaObject",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
+      "id": "applications.generateAgentMedia",
+      "method": "POST",
+      "path": "/elitea_core/agent_media_generate/prompt_lib/{project_id}",
+      "operationId": "generateAgentMedia",
+      "source": "generated",
+      "responseSchema": "AgentMediaGenerateResponse",
+      "fixture": null,
+      "usedBy": [
+        "pages/agents"
+      ]
+    },
+    {
       "$comment": "Saved teams: the Agents page Teams tab and the chat participants panel Save as team (ADR-0050 decision 8, issue 1620).",
       "id": "agentTeams.list",
       "method": "GET",

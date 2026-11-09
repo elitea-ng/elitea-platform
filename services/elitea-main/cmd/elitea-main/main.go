@@ -2669,6 +2669,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// `completer == nil` check is false and it calls a method on a nil
 	// receiver instead of reporting "not configured".
 	var predictCompleter predictapi.Completer
+	// The avatar generation routes (ADR-0050 decision 6) take the gateway as
+	// an interface: a nil *GatewayClient must stay a nil interface.
+	var imageGateway llmproxy.Gateway
+	if llmGateway != nil {
+		imageGateway = llmGateway
+	}
 	if llmGateway != nil {
 		completer := predictapi.NewGatewayCompleter(llmGateway)
 		predictCompleter = completer
@@ -3125,6 +3131,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		RunTokens:                      runTokens.Validator,
 		ConfigConnectionChecker:        configConnectionChecker,
 		PredictCompleter:               predictCompleter,
+		ImageGateway:                   imageGateway,
 		GatewayStatus:                  gatewayStatus,
 		ConfigProviderAdmission:        configProviderAdmission,
 		ConfigStoredResolver:           configStoredResolver,

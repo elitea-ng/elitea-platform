@@ -432,6 +432,10 @@ BEGIN
             -- Declared here and, for a schema this function already built,
             -- by migrations/tenant/0160.
             soul JSONB,
+            -- The avatar pack (ADR-0050 decision 6), NULL for none.
+            -- Declared here and, for a schema this function already built,
+            -- by migrations/tenant/0165.
+            avatar_pack JSONB,
             CONSTRAINT application_version_shared_origin UNIQUE (shared_owner_id, shared_id),
             CONSTRAINT _application_version_name_uc UNIQUE (application_id, name)
         )', schema_name, schema_name);

@@ -675,7 +675,7 @@ func (h *Handler) DeleteBucket(w http.ResponseWriter, r *http.Request) {
 // such a name would take the attachment path over (RequireAttachmentBucket
 // would land attachments in it) or shadow the platform's own results.
 func (h *Handler) reservedBucketName(ctx context.Context, projectID int64, name string) (bool, error) {
-	if name == storage.DefaultAttachmentBucket || name == indexArtifactBucketName {
+	if name == storage.DefaultAttachmentBucket || name == indexArtifactBucketName || name == agentMediaBucketName {
 		return true, nil
 	}
 	policy, err := h.repo.GetProjectStoragePolicy(ctx, projectID)
@@ -688,3 +688,9 @@ func (h *Handler) reservedBucketName(ctx context.Context, projectID int64, name 
 // indexArtifactBucketName is the system bucket index runs write their results
 // to (repos.indexArtifactBucketName).
 const indexArtifactBucketName = "index-artifacts"
+
+// agentMediaBucketName is the bucket avatar pack media live in
+// (agentmediaapi.Bucket, ADR-0050 decision 6). A person-made bucket of that
+// name would mix unchecked files with media every one of which passed the
+// avatar validator.
+const agentMediaBucketName = "agent-media"

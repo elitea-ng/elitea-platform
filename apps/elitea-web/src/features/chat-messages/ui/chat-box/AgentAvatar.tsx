@@ -8,19 +8,34 @@
  * The motion's colours are theme tokens (ADR-0024), so a brand pack and the
  * dark scheme re-theme it. `motion="still"` draws the image alone; the list
  * decides it (one animated avatar per list, reduced motion).
+ *
+ * With an avatar pack (issue 1619), a state that has its own slot plays that
+ * media (an image, or a muted looping <video> with its poster) and the
+ * default motion is not drawn; a state with no slot shows the pack's still
+ * with the default motion. `avatarSource` decides it.
  */
 import type { ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 
-import { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type AvatarMotion, type MotionSpec, type MotionTone } from '@elitea/client-core/conversation';
+import {
+  MOTION_KIND,
+  MOTION_SPEC,
+  MOTION_TONE,
+  avatarSource,
+  type AvatarMotion,
+  type MotionSpec,
+  type MotionTone,
+} from '@elitea/client-core/conversation';
 
 import { BrandLogoMark } from '@/shared/ui/brand-logo';
 
 export interface AgentAvatarProps {
   /** The agent's icon URL; absent shows the brand mark. */
   readonly iconUrl?: string | undefined;
+  /** The version's `avatar_pack` as the wire sends it; its slots win over `iconUrl`. */
+  readonly pack?: unknown;
   readonly motion?: AvatarMotion | undefined;
   /** A temporary sub-agent: a dashed ring (decision 7e). */
   readonly ephemeral?: boolean | undefined;
@@ -112,8 +127,9 @@ function MotionLayer({ spec }: { readonly spec: MotionSpec }): ReactNode {
 }
 
 /** The still with the motion of its state. */
-export function AgentAvatar({ iconUrl, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
-  const spec = motion === 'still' ? undefined : MOTION_SPEC[motion];
+export function AgentAvatar({ iconUrl, pack, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
+  const source = avatarSource(pack, iconUrl, motion);
+  const spec = motion === 'still' || source?.ownMotion === true ? undefined : MOTION_SPEC[motion];
   const breathe = spec !== undefined && spec.peakScale > 1;
   return (
     <Box
@@ -133,10 +149,24 @@ export function AgentAvatar({ iconUrl, motion = 'still', ephemeral = false, size
             : {}),
         })}
       >
-        {iconUrl === undefined ? (
+        {source === undefined ? (
           <BrandLogoMark style={{ width: size, height: size }} />
+        ) : source.kind === 'video' ? (
+          // Never sound: muted, no controls; the poster shows before it plays.
+          <Box
+            component="video"
+            data-testid="agent-avatar-video"
+            src={source.src}
+            poster={source.poster}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="metadata"
+            sx={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
         ) : (
-          <Box component="img" src={iconUrl} alt="" loading="lazy" sx={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          <Box component="img" src={source.src} alt="" loading="lazy" sx={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         )}
       </Box>
       {spec !== undefined && (
