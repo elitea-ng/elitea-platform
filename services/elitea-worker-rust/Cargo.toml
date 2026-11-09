@@ -22,7 +22,7 @@ adk-anthropic = "=2.3.0"
 adk-sandbox = { version = "=2.3.0", optional = true, default-features = false, features = ["workspace-docker"] }
 adk-runner = { version = "=2.3.0", default-features = false, features = ["context-compaction"] }
 adk-rust = { version = "=2.3.0", default-features = false, features = ["agents", "runner", "sessions", "models", "anthropic", "graph", "tools", "mcp-http"] }
-async-nats = { version = "=0.51.0", default-features = false, features = ["jetstream", "kv", "ring", "server_2_10", "server_2_11", "server_2_12"] }
+async-nats = { version = "=0.52.0", default-features = false, features = ["jetstream", "kv", "ring", "server_2_10", "server_2_11", "server_2_12"] }
 async-stream = "=0.3.6"
 async-trait = "=0.1.92"
 base64 = "=0.23.1"
@@ -95,7 +95,7 @@ gix-odb = { version = "=0.87.0", features = ["sha1"] }
 # and features as the store crate's, already in the lock.
 gix-pack = { version = "=0.77.0", default-features = false, features = ["streaming-input", "sha1"] }
 gix-features = { version = "=0.50.0", default-features = false, features = ["progress"] }
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 # The end-of-turn scan for harvested env values in files (already locked).
 memchr = "=2.8.3"
 # ADR-0034 workspace runs on Docker (src/sandbox/workspace_run_docker.rs);
@@ -118,7 +118,7 @@ prost = "=0.14.4"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
-rmcp = { version = "=3.8.0", default-features = false, features = ["auth"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.6", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -142,7 +142,7 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 uuid = { version = "=1.29.0", default-features = false, features = ["v4", "v5"] }
 x509-parser = { version = "=0.18.1", optional = true, default-features = false }
 zeroize = "=1.9.1"
-toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "=1.2.1", default-features = false, features = ["parse", "serde", "std"] }
 
 [build-dependencies]
 protoc-bin-vendored = "=3.3.0"
