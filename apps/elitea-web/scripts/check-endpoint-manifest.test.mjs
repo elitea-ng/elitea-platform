@@ -1184,8 +1184,14 @@ const GENERATED_OPERATION_COUNT = 496;
  * 323 -> 328 (issue 1615, ADR-0050 decisions 5a and 1): agentProposals.list,
  * get, dismiss, markCreated and copyMemory, the proposals inbox, the chat's
  * proposal card and Copy to project (features/agent-proposals). Generated.
+ *
+ * 328 -> 340 (issue 1616, ADR-0050 decisions 5b and 5g-5m): agentWorkforce
+ * .agent, scorecards, impact, reinstate, list, propose, approve, reject,
+ * askOwner, comment, appeal and decideAppeal, the agent editor's Workforce
+ * tab (features/agent-workforce). Generated. The single-proposal read
+ * (getAgentWorkforceProposal) is generated but not called.
  */
-const MANIFEST_ENTRY_COUNT = 328;
+const MANIFEST_ENTRY_COUNT = 340;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

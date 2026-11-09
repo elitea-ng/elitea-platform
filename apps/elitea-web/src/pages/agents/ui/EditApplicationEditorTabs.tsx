@@ -48,6 +48,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { EvaluationPanel } from '@/features/agent-evaluation';
 import { MemoryPanel } from '@/features/agent-memory';
+import { WorkforcePanel } from '@/features/agent-workforce';
 import { RunHistoryPanel } from '@/entities/run-history';
 import { t } from '@/shared/i18n';
 import { BaseTab } from '@/shared/ui/BaseTab';
@@ -58,6 +59,7 @@ const EDITOR_TABS = {
   persona: 'persona',
   evaluation: 'evaluation',
   memory: 'memory',
+  workforce: 'workforce',
   history: 'history',
 } as const;
 type EditorTab = (typeof EDITOR_TABS)[keyof typeof EDITOR_TABS];
@@ -128,6 +130,11 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
           data-testid="edit-application-tab-memory"
         />
         <BaseTab
+          value={EDITOR_TABS.workforce}
+          label={t('pages.agents.editApplication.tabs.workforce', 'Workforce')}
+          data-testid="edit-application-tab-workforce"
+        />
+        <BaseTab
           value={EDITOR_TABS.history}
           label={t('pages.agents.editApplication.tabs.history', 'History')}
           data-testid="edit-application-tab-history"
@@ -157,6 +164,9 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
       </Box>
       <Box hidden={tab !== EDITOR_TABS.memory}>
         {tab === EDITOR_TABS.memory && <MemoryPanel projectId={projectId} applicationId={applicationId} />}
+      </Box>
+      <Box hidden={tab !== EDITOR_TABS.workforce}>
+        {tab === EDITOR_TABS.workforce && <WorkforcePanel projectId={projectId} applicationId={applicationId} />}
       </Box>
       <Box hidden={tab !== EDITOR_TABS.history} sx={historyPanelSx}>
         {tab === EDITOR_TABS.history && (
