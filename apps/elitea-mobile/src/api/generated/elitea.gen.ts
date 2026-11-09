@@ -4608,6 +4608,13 @@ export interface components {
             attachment_storage?: {
                 toolkit_id?: string;
             };
+            /** @description What the agent may do beyond its tools. Absent is none. A save whose block is not an object of booleans is refused with 422 capabilities_block_invalid. */
+            capabilities?: ({
+                /** @description The agent may propose, with the propose_agent tool, that a temporary sub-agent it started become a saved agent (ADR-0050 decision 5a). The person it works for must also hold models.applications.applications.create. */
+                can_propose_agents?: boolean;
+            } & {
+                [key: string]: boolean;
+            }) | null;
             category?: string;
             /**
              * @description Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.

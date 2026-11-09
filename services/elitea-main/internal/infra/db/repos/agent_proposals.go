@@ -142,8 +142,8 @@ func frozenVersionMeta(encoded []byte) (map[string]any, error) {
 // lockProposer serialises the proposals of one agent: the limit counts rows
 // the other writers add.
 func lockProposer(ctx context.Context, tx pgx.Tx, projectID, applicationID int64) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea_agent_proposals:' || $1::text || ':' || $2::text, 0))`,
-		projectID, applicationID)
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+		fmt.Sprintf("elitea_agent_proposals:%d:%d", projectID, applicationID))
 	return err
 }
 

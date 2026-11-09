@@ -4722,6 +4722,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						proposalStore, _ = dbrepos.ComposeAgentProposals(cfg.Pool)
 						ownerStore, _ = dbrepos.ComposeAgentMemory(cfg.Pool)
 						personal = apimw.NewDBPersonalProjectResolver(cfg.Pool)
+						if personalProjects != nil {
+							personal = personal.WithPersonalProjectEnsurer(personalProjects)
+						}
 					}
 					var owners v2agentproposals.Owners
 					if ownerStore != nil {

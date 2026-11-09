@@ -59,6 +59,8 @@ import type {
   AgentChangeRequestList,
   AgentMemoryEntry,
   AgentMemoryList,
+  AgentProposal,
+  AgentProposalList,
   AgentRegistryRecord,
   AgentSchemaResponse,
   ApplicationCreatedResponse,
@@ -77,6 +79,7 @@ import type {
   AuthorDetail,
   ClearAgentMemory200,
   ConversationRunList,
+  CopyAgentMemory200,
   DefaultIcon,
   DocumentLoadersResponse,
   EvalDataset,
@@ -93,6 +96,7 @@ import type {
   IconMeta,
   IconUploadResponse,
   ImportWizardResponse,
+  MarkAgentProposalCreated200,
   OkResponse,
   PermissionTrimmingRemoveResult,
   PermissionTrimmingReport,
@@ -1475,6 +1479,319 @@ export const getSetAgentMemoryOptOutResponseMock = (
   opted_out: faker.datatype.boolean(),
   ...overrideResponse,
 });
+
+export const getListAgentProposalsResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposalList, object>> = {},
+): AgentProposalList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    proposer_application_id: faker.number.int(),
+    proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_for_user_id: faker.number.int(),
+    execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    draft: {},
+    memory_seeds: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.helpers.arrayElement([
+        "fact",
+        "preference",
+        "episode",
+      ] as const),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    tool_categories: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    status: faker.helpers.arrayElement([
+      "proposed",
+      "created",
+      "dismissed",
+    ] as const),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_application_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    evidence: faker.helpers.arrayElement([
+      {
+        status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        steps: faker.number.int(),
+        input_tokens: faker.number.int(),
+        output_tokens: faker.number.int(),
+        error_code: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        finished_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+      },
+      null,
+    ]),
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getGetAgentProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposal, object>> = {},
+): AgentProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  proposer_application_id: faker.number.int(),
+  proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_for_user_id: faker.number.int(),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  draft: {},
+  memory_seeds: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.helpers.arrayElement([
+      "fact",
+      "preference",
+      "episode",
+    ] as const),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  tool_categories: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  status: faker.helpers.arrayElement([
+    "proposed",
+    "created",
+    "dismissed",
+  ] as const),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  evidence: faker.helpers.arrayElement([
+    {
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      steps: faker.number.int(),
+      input_tokens: faker.number.int(),
+      output_tokens: faker.number.int(),
+      error_code: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      finished_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getDismissAgentProposalResponseMock = (
+  overrideResponse: Partial<Extract<AgentProposal, object>> = {},
+): AgentProposal => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  proposer_application_id: faker.number.int(),
+  proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  proposed_for_user_id: faker.number.int(),
+  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  conversation_uuid: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    null,
+  ]),
+  ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  draft: {},
+  memory_seeds: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    kind: faker.helpers.arrayElement([
+      "fact",
+      "preference",
+      "episode",
+    ] as const),
+    content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  tool_categories: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    toolkit_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  })),
+  status: faker.helpers.arrayElement([
+    "proposed",
+    "created",
+    "dismissed",
+  ] as const),
+  decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+  decided_at: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 19) + "Z",
+    null,
+  ]),
+  created_application_id: faker.helpers.arrayElement([
+    faker.number.int(),
+    null,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  evidence: faker.helpers.arrayElement([
+    {
+      status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      steps: faker.number.int(),
+      input_tokens: faker.number.int(),
+      output_tokens: faker.number.int(),
+      error_code: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        null,
+      ]),
+      started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+      finished_at: faker.helpers.arrayElement([
+        faker.date.past().toISOString().slice(0, 19) + "Z",
+        null,
+      ]),
+    },
+    null,
+  ]),
+  ...overrideResponse,
+});
+
+export const getMarkAgentProposalCreatedResponseMock = (
+  overrideResponse: Partial<Extract<MarkAgentProposalCreated200, object>> = {},
+): MarkAgentProposalCreated200 => ({
+  proposal: {
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    proposer_application_id: faker.number.int(),
+    proposer_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    proposed_for_user_id: faker.number.int(),
+    execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    conversation_uuid: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    ephemeral_agent_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    spec_digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    rationale: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    draft: {},
+    memory_seeds: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.helpers.arrayElement([
+        "fact",
+        "preference",
+        "episode",
+      ] as const),
+      content: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    tool_categories: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      toolkit_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      category: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    })),
+    status: faker.helpers.arrayElement([
+      "proposed",
+      "created",
+      "dismissed",
+    ] as const),
+    decided_by_user_id: faker.helpers.arrayElement([faker.number.int(), null]),
+    decided_at: faker.helpers.arrayElement([
+      faker.date.past().toISOString().slice(0, 19) + "Z",
+      null,
+    ]),
+    created_application_id: faker.helpers.arrayElement([
+      faker.number.int(),
+      null,
+    ]),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    evidence: faker.helpers.arrayElement([
+      {
+        status: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        steps: faker.number.int(),
+        input_tokens: faker.number.int(),
+        output_tokens: faker.number.int(),
+        error_code: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        started_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        finished_at: faker.helpers.arrayElement([
+          faker.date.past().toISOString().slice(0, 19) + "Z",
+          null,
+        ]),
+      },
+      null,
+    ]),
+  },
+  memory_seeded: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCopyAgentMemoryResponseMock = (
+  overrideResponse: Partial<Extract<CopyAgentMemory200, object>> = {},
+): CopyAgentMemory200 => ({ copied: faker.number.int(), ...overrideResponse });
 
 export const getListProjectPermissionTrimmingResponseMock = (
   overrideResponse: Partial<Extract<PermissionTrimmingReport, object>> = {},
@@ -3095,6 +3412,18 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3512,6 +3841,18 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -3864,6 +4205,18 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -4128,6 +4481,18 @@ export const getGetApplicationResponseMock = (
                   ).map(() =>
                     faker.string.alpha({ length: { min: 10, max: 20 } }),
                   ),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          capabilities: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                can_propose_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -4448,6 +4813,18 @@ export const getGetApplicationResponseMock = (
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -4881,6 +5258,18 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
           },
           null,
         ]),
@@ -5293,6 +5682,18 @@ export const getGetPublicApplicationResponseMock = (
                   ).map(() =>
                     faker.string.alpha({ length: { min: 10, max: 20 } }),
                   ),
+                  undefined,
+                ]),
+              },
+              null,
+            ]),
+            undefined,
+          ]),
+          capabilities: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                can_propose_agents: faker.helpers.arrayElement([
+                  faker.datatype.boolean(),
                   undefined,
                 ]),
               },
@@ -5936,6 +6337,18 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
       },
       null,
     ]),
@@ -6335,6 +6748,18 @@ export const getUpdateApplicationVersionResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -6744,6 +7169,18 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
                     ).map(() =>
                       faker.string.alpha({ length: { min: 10, max: 20 } }),
                     ),
+                    undefined,
+                  ]),
+                },
+                null,
+              ]),
+              undefined,
+            ]),
+            capabilities: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  can_propose_agents: faker.helpers.arrayElement([
+                    faker.datatype.boolean(),
                     undefined,
                   ]),
                 },
@@ -7175,6 +7612,18 @@ export const getSaveApplicationNewVersionResponseMock = (
                 ).map(() =>
                   faker.string.alpha({ length: { min: 10, max: 20 } }),
                 ),
+                undefined,
+              ]),
+            },
+            null,
+          ]),
+          undefined,
+        ]),
+        capabilities: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              can_propose_agents: faker.helpers.arrayElement([
+                faker.datatype.boolean(),
                 undefined,
               ]),
             },
@@ -7734,6 +8183,18 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    capabilities: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          can_propose_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                   },
                   null,
                 ]),
@@ -8238,6 +8699,18 @@ export const getImportWizardResponseMock = (
                                 length: { min: 10, max: 20 },
                               }),
                             ),
+                            undefined,
+                          ]),
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    capabilities: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          can_propose_agents: faker.helpers.arrayElement([
+                            faker.datatype.boolean(),
                             undefined,
                           ]),
                         },
@@ -8904,6 +9377,18 @@ export const getForkAgentResponseMock = (
                         ).map(() =>
                           faker.string.alpha({ length: { min: 10, max: 20 } }),
                         ),
+                        undefined,
+                      ]),
+                    },
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                capabilities: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      can_propose_agents: faker.helpers.arrayElement([
+                        faker.datatype.boolean(),
                         undefined,
                       ]),
                     },
@@ -10240,6 +10725,136 @@ export const getSetAgentMemoryOptOutMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getSetAgentMemoryOptOutResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentProposalsMockHandler = (
+  overrideResponse?:
+    | AgentProposalList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentProposalList> | AgentProposalList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentProposalsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentProposalMockHandler = (
+  overrideResponse?:
+    | AgentProposal
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentProposal> | AgentProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDismissAgentProposalMockHandler = (
+  overrideResponse?:
+    | AgentProposal
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentProposal> | AgentProposal),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId/dismiss",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDismissAgentProposalResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkAgentProposalCreatedMockHandler = (
+  overrideResponse?:
+    | MarkAgentProposalCreated200
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarkAgentProposalCreated200> | MarkAgentProposalCreated200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_proposals/prompt_lib/:projectId/:proposalId/created",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkAgentProposalCreatedResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCopyAgentMemoryMockHandler = (
+  overrideResponse?:
+    | CopyAgentMemory200
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CopyAgentMemory200> | CopyAgentMemory200),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_copy_memory/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCopyAgentMemoryResponseMock(),
         { status: 200 },
       );
     },
@@ -12591,6 +13206,11 @@ export const getApplicationsMock = () => [
   getUpdateAgentMemoryEntryMockHandler(),
   getDeleteAgentMemoryEntryMockHandler(),
   getSetAgentMemoryOptOutMockHandler(),
+  getListAgentProposalsMockHandler(),
+  getGetAgentProposalMockHandler(),
+  getDismissAgentProposalMockHandler(),
+  getMarkAgentProposalCreatedMockHandler(),
+  getCopyAgentMemoryMockHandler(),
   getListProjectPermissionTrimmingMockHandler(),
   getRemoveProjectPermissionTrimmingItemMockHandler(),
   getMarkAgentDueMockHandler(),

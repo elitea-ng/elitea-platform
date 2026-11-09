@@ -656,6 +656,10 @@ impl OrdinaryNativeAgentAssembler {
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
         recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
+        // propose_agent binds beside the sub-agents (the same rule as their
+        // binding in the runner), when the version grants the capability.
+        let proposals_bound = profile.can_propose_agents()
+            && (profile.internal_tools().subagents_enabled() || context.workspace().is_some());
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
             .iter()
@@ -870,6 +874,7 @@ impl OrdinaryNativeAgentAssembler {
             "elitea_nested_applications".to_owned(),
             elitea_agent_runtime::subagents::TOOLSET_NAME.to_owned(),
             super::hand_floor_tool::TOOLSET_NAME.to_owned(),
+            super::propose_agent_tool::TOOLSET_NAME.to_owned(),
         ]);
         let mut frozen = freeze_toolsets(toolsets, "elitea_ordinary_tool_binding")
             .await
@@ -920,6 +925,28 @@ impl OrdinaryNativeAgentAssembler {
         }) {
             frozen.extend(
                 freeze_toolsets(vec![turn_taking], "elitea_ordinary_tool_binding")
+                    .await
+                    .map_err(tool_binding_error)?,
+            );
+        }
+        // propose_agent (ADR-0050 decision 5a, #1615): only beside the
+        // sub-agents (the same toggle that binds them), only when the version
+        // grants the capability; it reads the spawns from the execution's
+        // ledger, the one the sub-agent host writes. Bound after the filter:
+        // proposing writes nothing but a proposal a person decides.
+        if let Some(proposals) = super::propose_agent_tool::toolset(
+            proposals_bound,
+            {
+                let binding = runtime_context.redemption_binding();
+                crate::protocol::ephemeral_agents::EphemeralAgentRegistry::global()
+                    .ledger(binding.execution_id, binding.generation)
+            },
+            toolkit_kinds.clone(),
+            Arc::clone(&self.platform),
+            Arc::clone(runtime_context),
+        ) {
+            frozen.extend(
+                freeze_toolsets(vec![proposals], "elitea_ordinary_tool_binding")
                     .await
                     .map_err(tool_binding_error)?,
             );

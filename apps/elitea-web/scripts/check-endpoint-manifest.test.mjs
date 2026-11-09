@@ -903,7 +903,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // deleteAgentMemoryEntry and setAgentMemoryOptOut, an agent's Memory routes.
 // The Memory tab is a later story (issue 1608), so they are not in the
 // manifest yet.
-const GENERATED_OPERATION_COUNT = 478;
+// 478 -> 483 (issue 1615, ADR-0050 decisions 5a and 1): listAgentProposals,
+// getAgentProposal, dismissAgentProposal, markAgentProposalCreated and
+// copyAgentMemory, the agent proposals inbox and Copy to project.
+const GENERATED_OPERATION_COUNT = 483;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

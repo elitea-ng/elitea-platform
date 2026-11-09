@@ -156,3 +156,21 @@ fn the_rendered_brief_is_one_untrusted_envelope() {
     assert!(rendered.contains("- Memory 7: likes tea"));
     assert!(rendered.contains("- Attachment att-1: report.pdf"));
 }
+
+/// Main recomputes the digest from the profile `propose_agent` reports
+/// (services/elitea-main internal/domain/agentproposal `SpecDigest`,
+/// `TestSpecDigestMatchesTheRuntime`); both sides pin the same vectors.
+#[test]
+fn a_profile_digest_matches_mains_vectors() {
+    let sample = parse_profile(&json!({"profile": {
+        "display_name": "Ada",
+        "soul": "Precise and brief.",
+        "tools": ["GitHub/Read_File", "search/*", "github/read_file"],
+    }}))
+    .unwrap();
+    assert_eq!(Profile::default().digest(), EMPTY_VECTOR);
+    assert_eq!(sample.digest(), SAMPLE_VECTOR);
+}
+
+const EMPTY_VECTOR: &str = "8e93047b83c690ec8ada61c3103afaece889147e8adf85467c1e173e51b72083";
+const SAMPLE_VECTOR: &str = "e2b787c2bbc4e4526a87f569a06e3ab0cf846cae3febc48157c4ecd4b2fc09dc";
