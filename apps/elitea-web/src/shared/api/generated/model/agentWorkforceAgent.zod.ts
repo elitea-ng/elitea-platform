@@ -52,7 +52,7 @@ export const AgentWorkforceAgent = zod.object({
   technical_owner_id: zod.int(),
   under_review: zod.boolean().describe("The watch flag."),
   under_review_since: zod.iso.datetime({ offset: true }).nullable(),
-  lifecycle_state: zod.string().describe("Empty (active), retired or deleted."),
+  lifecycle_state: zod.string().describe("active, retired or deleted."),
   retired_at: zod.iso.datetime({ offset: true }).nullable(),
   retired_by: zod.int().nullable(),
   reinstate_until: zod.iso.datetime({ offset: true }).nullable(),

@@ -29,7 +29,7 @@ function mock(agent = workforceAgent({ scorecard: scorecard() }), proposals = [w
         published_versions: 2,
         suspension: null,
         legal_hold: false,
-        lifecycle_state: '',
+        lifecycle_state: 'active',
       }),
     ),
     http.get(`${ROOT}/proposals`, () => HttpResponse.json({ rows: proposals, total: proposals.length })),

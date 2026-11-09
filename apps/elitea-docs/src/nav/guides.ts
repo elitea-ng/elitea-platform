@@ -54,6 +54,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-tool-envelope', title: "Limit an agent's tools" },
         { kind: 'page', slug: 'how-tos/agents-pipelines/sub-agent-profiles', title: 'Sub-agent profiles and briefs' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-proposals', title: 'Agent proposals and Copy to project' },
+        { kind: 'page', slug: 'how-tos/agents-pipelines/agent-workforce', title: 'Agent workforce and the dismissal ladder' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/publishing', title: 'Publish agents and skills' },
       ],
     },

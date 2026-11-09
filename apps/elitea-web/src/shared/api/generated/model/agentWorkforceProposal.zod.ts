@@ -48,7 +48,7 @@ export const AgentWorkforceProposal = zod.object({
   project_id: zod.int(),
   application_id: zod.int(),
   application_name: zod.string(),
-  kind: zod.string().describe("dismissal or demotion."),
+  kind: zod.string().describe("dismiss or demote."),
   stage: zod.string().describe("watch, demote, suspend, retire or delete."),
   source: zod.string().describe("person or hr_agent."),
   proposed_by_user_id: zod.int().nullable(),

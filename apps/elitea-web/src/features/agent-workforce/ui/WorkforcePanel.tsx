@@ -71,7 +71,7 @@ function ScorecardSummary({ card }: { readonly card: AgentScorecard }): ReactNod
 function StateHeader({ projectId, state, onPropose }: { readonly projectId: string; readonly state: AgentWorkforceAgent; readonly onPropose: () => void }): ReactNode {
   const actions = useWorkforceActions(projectId, state.application_id);
   const [error, setError] = useState<string | undefined>(undefined);
-  const mayPropose = (state.can_manage === true || state.is_owner === true) && state.lifecycle_state === '';
+  const mayPropose = (state.can_manage === true || state.is_owner === true) && state.lifecycle_state === 'active';
   const mayReinstate = state.can_manage === true && canReinstate(state, new Date());
   const reinstateNow = (): void => {
     setError(undefined);

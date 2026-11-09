@@ -8832,7 +8832,7 @@ components:
         project_id: { type: integer, format: int64 }
         application_id: { type: integer, format: int64 }
         application_name: { type: string }
-        kind: { type: string, description: dismissal or demotion. }
+        kind: { type: string, description: dismiss or demote. }
         stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
         source: { type: string, description: person or hr_agent. }
         proposed_by_user_id: { type: integer, format: int64, nullable: true }
@@ -8908,7 +8908,7 @@ components:
         technical_owner_id: { type: integer, format: int64 }
         under_review: { type: boolean, description: The watch flag. }
         under_review_since: { type: string, format: date-time, nullable: true }
-        lifecycle_state: { type: string, description: 'Empty (active), retired or deleted.' }
+        lifecycle_state: { type: string, description: 'active, retired or deleted.' }
         retired_at: { type: string, format: date-time, nullable: true }
         retired_by: { type: integer, format: int64, nullable: true }
         reinstate_until: { type: string, format: date-time, nullable: true }
