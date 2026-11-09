@@ -106,3 +106,29 @@ A newer package upgrades the app in place; it keeps the person's settings and th
   ```
 
 The installer fetches the WebView2 runtime silently when the PC does not have it; on a PC without internet access, deploy WebView2 first.
+
+## Certificates and per-app VPN
+
+Both are features of the operating system, not of the app: the device management delivers them, and the app needs no setting of its own. Each is scoped by **app identifier**, so use the identifiers of the build you deploy. A brand built from this code sets its own in its brand manifest: `mobile.bundleId` (the iOS bundle id and the Android package name), `mobile.widgetBundleId` and `desktop.identifier`. ELITEA's are:
+
+| App | Identifier |
+|---|---|
+| iPhone and iPad | `ai.elitea.app` (its widget extension: `ai.elitea.app.widgets`) |
+| Android | `ai.elitea.app` (the package name) |
+| macOS | `ai.elitea.desktop` |
+
+**Trusted root certificates.** A workspace behind a private certificate authority needs that CA trusted by the app.
+
+- **iOS:** deploy the CA in a Certificate payload. A profile installed by the MDM is trusted at once; one a person installs must also be turned on in Settings › General › About › Certificate Trust Settings.
+- **Android:** the app trusts only the CAs that ship with Android. A CA the MDM pushes (in Intune: a Trusted certificate profile) lands in the user store, which the browser trusts but the app does not, so sign-in loads and the app's own requests then fail. Serve the workspace with a certificate from a public CA, or terminate TLS with one at the edge the devices reach.
+- **macOS:** deploy the CA in a Certificate payload to the System keychain. The desktop app trusts the macOS trust settings together with a built-in set of public roots, so a private CA works once macOS trusts it; distrusting a public root in macOS does not remove it from the app.
+
+**Client certificates (mutual TLS).** The apps do not present a client certificate themselves. Where the workspace sits behind a gateway that asks for one, let the per-app VPN do it, or let only the identity provider ask: sign-in runs in the system browser (the sign-in sheet on iOS, a Custom Tab on Android, the default browser on macOS), which can use a certificate the MDM installed for it. The app's own requests after sign-in carry no certificate.
+
+**Per-app VPN.** Assign the app to the VPN by its identifier:
+
+- **iOS:** a per-app VPN payload with the app (`ai.elitea.app`) in its app list. In Intune: the VPN profile's Automatic VPN › Per-app VPN, then the app's assignment with that VPN. The widget extension makes no network requests (it shows what the app saved), so it needs no VPN.
+- **Android:** an always-on VPN for the work profile, or the VPN app's own per-app list with the package `ai.elitea.app`.
+- **macOS:** a per-app VPN payload whose app rule names the identifier `ai.elitea.desktop` and the app's full designated requirement, as `codesign -dr - "/Applications/<app>.app"` prints it.
+
+**Sign-in and the VPN.** Sign-in opens the system browser, which a per-app VPN for the app does not cover. Where the identity provider is reachable only over the VPN, add its domains to the VPN as well: on iOS, the payload's Safari domains (`SafariDomains`); on Android, put the browser in the VPN app's list or use an always-on VPN; on macOS, add the default browser's app rule or the identity provider's domains to the VPN.
