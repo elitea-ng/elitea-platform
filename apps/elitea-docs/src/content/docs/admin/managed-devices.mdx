@@ -24,11 +24,11 @@ While a managed configuration is set, the app reports its state to the MDM, so y
 | Key | Fine | Needs a look |
 |---|---|---|
 | `managed_config` | `applied` | `ignored_keys`, with the names of keys whose value had the wrong type |
-| `connection` | `managed_server`, `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `other_server` (connected somewhere other than `server_url`) |
+| `connection` | `managed_server`, `unmanaged_server` (no `server_url` set), `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `not_managed_server` (connected somewhere other than `server_url`) |
 | `sign_in` | `signed_in`, `signed_out` | `signed_out_device_revoked`, `signed_out_credential_rejected`, `signed_out_policy`, `signed_out_managed_server` |
 | `policy` | `ok` | `update_required`, with the minimum version the workspace asks for |
 
-The app never reports user content: no server address, account, project, name, email, message or error text. Without a managed configuration it reports nothing.
+The app never reports user content: no server address, account, project, name, email, message or error text. Without a managed configuration it reports nothing. When you remove the configuration, Android devices report `not_managed` on every key once.
 
 ### Microsoft Intune
 

@@ -49,7 +49,7 @@ misconfigured or signed-out app in the console:
 | Key | Info codes | Error codes | Data |
 |---|---|---|---|
 | `managed_config` | `applied` | `ignored_keys`: a key of ours with a value the app refused | the ignored key names, comma-separated |
-| `connection` | `managed_server`, `other_server` (no managed address), `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `other_server` (connected to another server than the managed one) | none |
+| `connection` | `managed_server`, `unmanaged_server` (no managed address), `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `not_managed_server` (connected to another server than the managed one) | none |
 | `sign_in` | `signed_in`, `signed_out` | `signed_out_device_revoked`, `signed_out_credential_rejected`, `signed_out_policy`, `signed_out_managed_server` | none |
 | `policy` | `ok` | `update_required`: the workspace asks for a newer app | the minimum version |
 
@@ -58,8 +58,11 @@ project, name, email, message or error text; only the fixed keys and codes
 above, managed key names and a version number. The test
 (src/security/managedFeedback.test.ts) holds every state to these lists.
 
-Dormant without an MDM: with no managed configuration nothing is written, and
-when the MDM removes the configuration the iOS dictionary is removed.
+Dormant without an MDM: with no managed configuration nothing is written.
+Nothing is reported before the session is restored at launch (it would read
+as signed out). When the MDM removes the configuration the iOS dictionary is
+removed; Android keeps keyed states, so the app replaces every key once with
+`not_managed` (info).
 
 ## Microsoft Intune
 

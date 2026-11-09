@@ -38,6 +38,10 @@ beforeEach(() => {
   jest.clearAllMocks();
 });
 
+afterEach(() => {
+  jest.restoreAllMocks();
+});
+
 test('dormant: no managed configuration, no state', () => {
   expect(feedbackStates(signedIn, parseManagedConfig(null), NO_MANAGED_DELIVERY)).toEqual([]);
   // An empty dictionary is no configuration either.
@@ -63,7 +67,9 @@ test('errors an administrator should see', () => {
   expect(states.connection).toEqual({ key: 'connection', severity: 'error', message: 'managed_server_invalid' });
 
   const other = managed({ server_url: 'https://assigned.example.com' });
-  expect(byKey(feedbackStates(signedIn, other.config, other.delivery, false)).connection).toEqual({ key: 'connection', severity: 'error', message: 'other_server' });
+  expect(byKey(feedbackStates(signedIn, other.config, other.delivery, false)).connection).toEqual({ key: 'connection', severity: 'error', message: 'not_managed_server' });
+  const none = managed({ require_device_lock: true });
+  expect(byKey(feedbackStates(signedIn, none.config, none.delivery, false)).connection).toEqual({ key: 'connection', severity: 'info', message: 'unmanaged_server' });
 
   const ok = managed({ server_url: ORIGIN });
   const revoked = byKey(feedbackStates({ ...signedOut, endReason: 'device_revoked' }, ok.config, ok.delivery, false));
@@ -145,9 +151,29 @@ test('Android: keyed app states through the inline module', () => {
     { key: 'sign_in', severity: 'info', message: 'signed_in', data: null },
     { key: 'policy', severity: 'info', message: 'ok', data: null },
   ]);
+  // The MDM removes the configuration: Android keeps keyed states, so they are replaced once.
+  reportFeedback([]);
+  expect(native.reportStates).toHaveBeenLastCalledWith(FEEDBACK_KEYS.map((key) => ({ key, severity: 'info', message: 'not_managed', data: null })));
+  native.reportStates.mockClear();
+  reportFeedback([]);
+  expect(native.reportStates).not.toHaveBeenCalled();
   // Missing module (Expo Go) and a throwing one are both survivable.
   setKeyedAppStatesLoader(() => null);
   expect(() => reportFeedback([{ key: 'policy', severity: 'info', message: 'ok' }])).not.toThrow();
   setKeyedAppStatesLoader(() => ({ reportStates: () => { throw new Error('binder'); } }));
   expect(() => reportFeedback([{ key: 'policy', severity: 'error', message: 'update_required' }])).not.toThrow();
+});
+
+test('nothing is reported before the session is restored', () => {
+  jest.replaceProperty(Platform, 'OS', 'ios');
+  const session = require('@/state/session') as typeof import('@/state/session');
+  const config = require('@/security/managedConfig') as typeof import('@/security/managedConfig');
+  config.refreshManagedConfig(() => ({ server_url: ORIGIN }));
+  session.setSession({ hydrated: false });
+  const { startManagedFeedback } = require('@/security/managedFeedback') as typeof import('@/security/managedFeedback');
+  startManagedFeedback();
+  expect(Settings.set).not.toHaveBeenCalled();
+  session.setSession({ hydrated: true });
+  expect(Settings.set).toHaveBeenCalledTimes(1);
+  config.refreshManagedConfig(() => null);
 });

@@ -51,10 +51,10 @@ export const FEEDBACK_KEYS = ['managed_config', 'connection', 'sign_in', 'policy
 
 /** Every message code a state may carry. */
 export const FEEDBACK_CODES = Object.freeze({
-  managed_config: ['applied', 'ignored_keys'],
-  connection: ['managed_server', 'other_server', 'managed_server_invalid', 'not_connected'],
-  sign_in: ['signed_in', 'signed_out', 'signed_out_device_revoked', 'signed_out_credential_rejected', 'signed_out_policy', 'signed_out_managed_server'],
-  policy: ['ok', 'update_required'],
+  managed_config: ['applied', 'ignored_keys', 'not_managed'],
+  connection: ['not_managed', 'managed_server', 'unmanaged_server', 'not_managed_server', 'managed_server_invalid', 'not_connected'],
+  sign_in: ['not_managed', 'signed_in', 'signed_out', 'signed_out_device_revoked', 'signed_out_credential_rejected', 'signed_out_policy', 'signed_out_managed_server'],
+  policy: ['not_managed', 'ok', 'update_required'],
 } as const satisfies Record<(typeof FEEDBACK_KEYS)[number], readonly string[]>);
 
 const SIGNED_OUT_BY: Partial<Record<EndReason, string>> = {
@@ -65,6 +65,14 @@ const SIGNED_OUT_BY: Partial<Record<EndReason, string>> = {
 };
 
 const VERSION = /^\d+\.\d+\.\d+$/;
+
+/**
+ * Android keeps keyed states until they are replaced, so when the MDM removes the
+ * configuration the app sends this one last time: every key, info, `not_managed`.
+ */
+export const REMOVED_STATES: readonly FeedbackState[] = Object.freeze(
+  FEEDBACK_KEYS.map((key) => Object.freeze({ key, severity: 'info' as const, message: 'not_managed' })),
+);
 
 /** The states to report now; empty when the device has no managed configuration (dormant). */
 export function feedbackStates(
@@ -89,9 +97,10 @@ export function feedbackStates(
     states.push({ key: 'connection', severity: 'info', message: 'not_connected' });
   } else if (assigned !== null && session.serverOrigin !== assigned) {
     // Connected elsewhere while the MDM assigned a workspace: worth an administrator's look.
-    states.push({ key: 'connection', severity: 'error', message: 'other_server' });
+    states.push({ key: 'connection', severity: 'error', message: 'not_managed_server' });
   } else {
-    states.push({ key: 'connection', severity: 'info', message: assigned !== null ? 'managed_server' : 'other_server' });
+    // No managed address: any workspace the user chose is fine.
+    states.push({ key: 'connection', severity: 'info', message: assigned !== null ? 'managed_server' : 'unmanaged_server' });
   }
 
   if (session.credential !== null) {
@@ -143,8 +152,9 @@ export function reportFeedback(states: readonly FeedbackState[]): void {
       else if (wasReporting) Settings.set({ [FEEDBACK_KEY]: null });
       return;
     }
-    if (Platform.OS === 'android' && states.length > 0) {
-      loadNative('ManagedRestrictions')?.reportStates(states.map((s) => ({ key: s.key, severity: s.severity, message: s.message, data: s.data ?? null })));
+    if (Platform.OS === 'android') {
+      const send = states.length > 0 ? states : wasReporting ? REMOVED_STATES : null;
+      if (send) loadNative('ManagedRestrictions')?.reportStates(send.map((s) => ({ key: s.key, severity: s.severity, message: s.message, data: s.data ?? null })));
     }
   } catch (error) {
     log.info('managed feedback not reported', { error });
@@ -152,6 +162,8 @@ export function reportFeedback(states: readonly FeedbackState[]): void {
 }
 
 function report(): void {
+  // Before the session is restored it reads as signed out: report nothing until it is.
+  if (!getSession().hydrated) return;
   reportFeedback(feedbackStates(getSession(), getManagedConfig(), getManagedDelivery()));
 }
 

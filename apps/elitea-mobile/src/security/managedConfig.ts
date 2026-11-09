@@ -158,7 +158,8 @@ function readNative(): unknown {
 
 let current: ManagedConfig = NO_MANAGED_CONFIG;
 let delivery: ManagedDelivery = NO_MANAGED_DELIVERY;
-let currentKey = JSON.stringify([current, delivery]);
+let configKey = JSON.stringify(current);
+let deliveryKey = JSON.stringify(delivery);
 const listeners = new Set<() => void>();
 
 export function getManagedConfig(): ManagedConfig {
@@ -174,12 +175,14 @@ export function refreshManagedConfig(read: () => unknown = readNative): ManagedC
   const raw = read();
   const next = parseManagedConfig(raw);
   const nextDelivery = managedDelivery(raw, next);
-  const key = JSON.stringify([next, nextDelivery]);
-  if (key !== currentKey) {
+  const nextConfigKey = JSON.stringify(next);
+  const nextDeliveryKey = JSON.stringify(nextDelivery);
+  if (nextConfigKey !== configKey || nextDeliveryKey !== deliveryKey) {
     // The config object changes only when the config does (useManagedConfig, managedServerOrigin's cache).
-    if (JSON.stringify(next) !== JSON.stringify(current)) current = next;
+    if (nextConfigKey !== configKey) current = next;
     delivery = nextDelivery;
-    currentKey = key;
+    configKey = nextConfigKey;
+    deliveryKey = nextDeliveryKey;
     for (const listener of [...listeners]) listener();
   }
   return current;
