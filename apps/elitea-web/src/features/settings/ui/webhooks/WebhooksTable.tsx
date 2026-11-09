@@ -124,7 +124,7 @@ export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit,
     return (
       <Paper elevation={0} sx={emptyMessageSx} data-testid="webhooks-empty">
         <Typography variant="bodyMedium">
-          {t('entities.webhook.table.empty', 'No webhooks yet. Register one to have Elitea call your service when project events happen.')}
+          {t('entities.webhook.table.empty', 'No webhooks yet. Register one to have {{product}} call your service when project events happen.')}
         </Typography>
       </Paper>
     );

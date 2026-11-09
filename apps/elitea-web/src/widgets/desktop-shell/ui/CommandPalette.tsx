@@ -45,7 +45,7 @@ function paletteEntries(workspaces: readonly Workspace[], eliteaItems: readonly 
   const actions = t('desktop.palette.actions', 'Actions');
   const folders = t('desktop.palette.localWork', 'Local work');
   const threads = t('desktop.palette.threads', 'Threads');
-  const elitea = t('desktop.palette.elitea', 'Elitea');
+  const elitea = t('desktop.palette.elitea', '{{product}}');
   const entries: PaletteEntry[] = [
     { id: 'new_thread', group: actions, label: t('desktop.palette.newThread', 'New thread'), hint: `${mod}N`, action: { type: 'new_thread' } },
     { id: 'open_folder', group: actions, label: t('desktop.palette.openFolder', 'Open folder…'), hint: `${mod}O`, action: { type: 'open_folder' } },

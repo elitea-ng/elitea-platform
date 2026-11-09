@@ -5,6 +5,7 @@
 import type { TourStep } from '../types';
 
 import { SIDEBAR_TOUR_TARGETS } from './sidebarTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export const SIDEBAR_TOUR_ID = 'sidebar';
 
@@ -19,8 +20,8 @@ export const sidebarTourSteps: TourStep[] = [
     id: 'sidebar-logo',
     target: SIDEBAR_TOUR_TARGETS.logo,
     placement: 'right',
-    title: 'ELITEA Logo',
-    content: `The **ELITEA Logo** in the sidebar shows the server status.
+    title: `${productName()} Logo`,
+    content: `The **${productName()} Logo** in the sidebar shows the server status.
 
 Green mark points that server is working.
 Red mark points that server is updating.`,
@@ -41,7 +42,7 @@ Click the bell to open a quick panel showing your most recent notifications. Use
     target: SIDEBAR_TOUR_TARGETS.projectSwitcher,
     placement: 'right',
     title: 'Project Switcher',
-    content: `The **Project Switcher** is a dropdown in the sidebar that controls which project is currently active. All content in ELITEA — agents, pipelines, toolkits, credentials, artifacts, and chats — is scoped to the selected project. Switching projects immediately updates everything you see in the platform.
+    content: `The **Project Switcher** is a dropdown in the sidebar that controls which project is currently active. All content in ${productName()} — agents, pipelines, toolkits, credentials, artifacts, and chats — is scoped to the selected project. Switching projects immediately updates everything you see in the platform.
 
 **Project Types**
 
@@ -74,16 +75,16 @@ Each list page also has its own **New** button. A **+** is left out where you do
     target: SIDEBAR_TOUR_TARGETS.navChat,
     placement: 'right',
     title: 'Chats',
-    content: `**ELITEA Chats** is the central hub where all platform capabilities come together. It provides a conversational interface where you can interact with AI models, agents, pipelines, toolkits, and MCP servers — all in one place, using natural language.
+    content: `**${productName()} Chats** is the central hub where all platform capabilities come together. It provides a conversational interface where you can interact with AI models, agents, pipelines, toolkits, and MCP servers — all in one place, using natural language.
 
-Each chat is an independent dialogue session. Context is not shared between separate chats. All chats are stored on the ELITEA server and accessible from any device.`,
+Each chat is an independent dialogue session. Context is not shared between separate chats. All chats are stored on the ${productName()} server and accessible from any device.`,
   },
   {
     id: 'agents',
     target: SIDEBAR_TOUR_TARGETS.navAgents,
     placement: 'right',
     title: 'Agents',
-    content: `**ELITEA Agents** are customizable AI-powered virtual assistants that automate tasks and streamline workflows. Each agent is built around three core components:
+    content: `**${productName()} Agents** are customizable AI-powered virtual assistants that automate tasks and streamline workflows. Each agent is built around three core components:
 
 - **Instructions** — define what the agent does and how it behaves
 - **Toolkits** — connect external services (GitHub, Jira, Confluence, SQL, and more) and internal tools
@@ -96,7 +97,7 @@ Once configured, an agent can autonomously execute complex, multi-step tasks suc
     target: SIDEBAR_TOUR_TARGETS.navPipelines,
     placement: 'right',
     title: 'Pipelines',
-    content: `**ELITEA Pipelines** are visual workflow automation tools that let you design and execute complex, multi-step processes by connecting a series of nodes. Each pipeline can combine LLM calls, toolkit actions, agent interactions, conditional logic, and custom code into a single automated flow.
+    content: `**${productName()} Pipelines** are visual workflow automation tools that let you design and execute complex, multi-step processes by connecting a series of nodes. Each pipeline can combine LLM calls, toolkit actions, agent interactions, conditional logic, and custom code into a single automated flow.
 
 Unlike a simple agent that responds turn-by-turn, a pipeline follows a defined execution graph — branching, looping, and passing data between steps — so it can handle sophisticated orchestration scenarios end-to-end.`,
   },
@@ -105,7 +106,7 @@ Unlike a simple agent that responds turn-by-turn, a pipeline follows a defined e
     target: SIDEBAR_TOUR_TARGETS.navSkills,
     placement: 'right',
     title: 'Skills',
-    content: `**ELITEA Skills** are reusable prompt templates that encapsulate specific expertise or tasks. Each skill defines a focused instruction set that can be attached to agents or used directly in chat to guide the AI's behaviour for a particular purpose — such as code review, summarization, translation, or data extraction.
+    content: `**${productName()} Skills** are reusable prompt templates that encapsulate specific expertise or tasks. Each skill defines a focused instruction set that can be attached to agents or used directly in chat to guide the AI's behaviour for a particular purpose — such as code review, summarization, translation, or data extraction.
 
 Skills let you standardize and share prompt engineering across your team without duplicating effort.`,
   },
@@ -114,7 +115,7 @@ Skills let you standardize and share prompt engineering across your team without
     target: SIDEBAR_TOUR_TARGETS.navToolkits,
     placement: 'right',
     title: 'Toolkits',
-    content: `**ELITEA Toolkits** are modular integrations that connect AI agents, pipelines, and chats to external platforms and services. Each toolkit packages the connection configuration and a set of tools — specific actions the AI can perform on that service, such as creating issues, querying databases, or searching documents.
+    content: `**${productName()} Toolkits** are modular integrations that connect AI agents, pipelines, and chats to external platforms and services. Each toolkit packages the connection configuration and a set of tools — specific actions the AI can perform on that service, such as creating issues, querying databases, or searching documents.
 
 Once configured, a toolkit can be attached to any agent or pipeline and used directly in Chat, enabling the AI to automate tasks across different systems without manual intervention.`,
   },
@@ -123,7 +124,7 @@ Once configured, a toolkit can be attached to any agent or pipeline and used dir
     target: SIDEBAR_TOUR_TARGETS.navMcps,
     placement: 'right',
     title: 'MCPs',
-    content: `**ELITEA MCPs** (Model Context Protocol servers) are external tool providers that follow the MCP specification to expose specialized capabilities to your agents, pipelines, and chats. Unlike native toolkits, MCPs connect to independently hosted servers — local or remote — that supply their own set of tools.
+    content: `**${productName()} MCPs** (Model Context Protocol servers) are external tool providers that follow the MCP specification to expose specialized capabilities to your agents, pipelines, and chats. Unlike native toolkits, MCPs connect to independently hosted servers — local or remote — that supply their own set of tools.
 
 Once configured, MCP tools are available everywhere toolkits are used: in agents, pipelines, and Chat, enabling automation that spans browser control, repository operations, API integrations, and other domain-specific tasks.`,
   },
@@ -132,7 +133,7 @@ Once configured, MCP tools are available everywhere toolkits are used: in agents
     target: SIDEBAR_TOUR_TARGETS.navCredentials,
     placement: 'right',
     title: 'Credentials',
-    content: `**ELITEA Credentials** are saved authentication configurations that let agents, pipelines, and toolkits securely connect to external services. Instead of entering API keys or passwords each time you configure a toolkit, you store them once as a credential and reference that credential by name wherever it is needed.
+    content: `**${productName()} Credentials** are saved authentication configurations that let agents, pipelines, and toolkits securely connect to external services. Instead of entering API keys or passwords each time you configure a toolkit, you store them once as a credential and reference that credential by name wherever it is needed.
 
 Credentials are reusable across multiple toolkits and projects, and they can be kept private or shared with team members.`,
   },
@@ -141,14 +142,14 @@ Credentials are reusable across multiple toolkits and projects, and they can be 
     target: SIDEBAR_TOUR_TARGETS.navApplications,
     placement: 'right',
     title: 'Applications',
-    content: `**ELITEA Applications** are purpose-built AI applications that extend ELITEA beyond agents and pipelines. Each application provides a dedicated interface and a ready-to-use set of tools that can also be referenced in agents and pipelines.`,
+    content: `**${productName()} Applications** are purpose-built AI applications that extend ${productName()} beyond agents and pipelines. Each application provides a dedicated interface and a ready-to-use set of tools that can also be referenced in agents and pipelines.`,
   },
   {
     id: 'artifacts',
     target: SIDEBAR_TOUR_TARGETS.navArtifacts,
     placement: 'right',
     title: 'Artifacts',
-    content: `**ELITEA Artifacts** is a file storage system built into the platform. Files are organized into **buckets** — named containers with configurable retention policies. Buckets can hold any file type and support nested folder structures up to 10 levels deep.
+    content: `**${productName()} Artifacts** is a file storage system built into the platform. Files are organized into **buckets** — named containers with configurable retention policies. Buckets can hold any file type and support nested folder structures up to 10 levels deep.
 
 Artifacts are used to store outputs generated by agents and pipelines, share files across team workflows, and keep reference data accessible within the platform.`,
   },
@@ -177,13 +178,13 @@ Each agent in HUB is a fully configured AI assistant built for a specific purpos
     title: 'Help Center',
     content: `The **Help Center** page is a central hub for learning and reference material. It provides quick access to documentation, release notes, video walkthroughs, tutorials, and interactive tours — all in one place, without leaving the platform.
 
-The page also displays the current ELITEA version and any installed plugin versions in the header area.`,
+The page also displays the current ${productName()} version and any installed plugin versions in the header area.`,
   },
   {
     id: 'support-assistant',
     target: SIDEBAR_TOUR_TARGETS.supportAssistant,
     placement: 'right',
     title: 'Support Assistant',
-    content: `The Support Assistant is a context-aware AI chatbot embedded directly in the ELITEA platform. It provides instant help, answers questions about features, and guides you through workflows — without leaving your current page.`,
+    content: `The Support Assistant is a context-aware AI chatbot embedded directly in the ${productName()} platform. It provides instant help, answers questions about features, and guides you through workflows — without leaving your current page.`,
   },
 ];

@@ -9,6 +9,7 @@ import { BrandLogoFull } from '@/shared/ui/brand-logo';
 import { DoctorPanel, useActivityFeed } from '@/widgets/desktop-shell';
 
 import { launchApp } from './launchApp';
+import { productName } from '@/shared/brand';
 
 const HEADING = { fontWeight: 600, fontSize: '1.0625rem', textAlign: 'center' } as const;
 
@@ -46,7 +47,7 @@ function AppHost({ bridge, state, launch }: { bridge: HostBridge; state: HostSta
       state,
       container,
       onSignedOut: reboot,
-      onUpgradeRequired: () => setProblem('This version of Elitea is older than your deployment allows. Update the app to continue.'),
+      onUpgradeRequired: () => setProblem(`This version of ${productName()} is older than your deployment allows. Update the app to continue.`),
     });
     launched.catch((error: unknown) => setProblem(describe(error)));
     return () => {
@@ -220,7 +221,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
   }, [bridge]);
 
   if (bridge === undefined || phase.kind === 'no-host') {
-    return <Centered><Alert severity="info">Open Elitea from the desktop app. This page needs the app's host.</Alert></Centered>;
+    return <Centered><Alert severity="info">Open {productName()} from the desktop app. This page needs the app's host.</Alert></Centered>;
   }
   if (phase.kind === 'loading') {
     return <Centered><CircularProgress aria-label="Starting" /></Centered>;
@@ -261,7 +262,7 @@ function ShellScreens({ bridge, onDiagnose, onAppShown, launch }: ShellScreensPr
           sx={{ width: '100%' }}
         >
           <Stack spacing={2}>
-            <Typography component="h1" sx={HEADING}>Connect to your Elitea</Typography>
+            <Typography component="h1" sx={HEADING}>Connect to your {productName()}</Typography>
             <TextField
               label="Deployment address"
               placeholder="https://elitea.example.com"

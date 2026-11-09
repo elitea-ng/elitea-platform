@@ -17,6 +17,7 @@ import { Box, IconButton, Typography } from '@mui/material';
 import { onboardingTips } from '@/features/onboarding/lib/constants/onboardingTips.constants';
 import { Markdown } from '@/shared/ui/Markdown';
 import type { Theme } from '@mui/material/styles';
+import { productName } from '@/shared/brand';
 
 /** Props for {@link TourContent}. */
 interface TourContentProps {
@@ -39,7 +40,7 @@ const TourContent = memo<TourContentProps>(({ currentStep, onNext, onPrevious })
         <Box
           component="img"
           src={tip.image}
-          alt={`Elitea tip ${currentStep}`}
+          alt={`${productName()} tip ${currentStep}`}
           sx={styles.image}
         />
       </Box>

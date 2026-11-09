@@ -16,7 +16,7 @@ export function describeIndexError(error: unknown): string {
     case 'index_refused':
       return t('workspace.index.error.refused', 'The index’s storage on this computer cannot be trusted. Run Troubleshoot to move it aside.');
     case 'index_newer_schema':
-      return t('workspace.index.error.newerSchema', 'This index was written by a newer version of Elitea. Update the app to use it.');
+      return t('workspace.index.error.newerSchema', 'This index was written by a newer version of {{product}}. Update the app to use it.');
     case 'index_storage':
       return t('workspace.index.error.storage', 'The index could not be read or written on this computer. Run Troubleshoot.');
     default:

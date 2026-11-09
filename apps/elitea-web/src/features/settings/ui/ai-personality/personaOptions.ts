@@ -70,7 +70,7 @@ export function buildPersonaOptions(): SingleSelectOption[] {
       label: t('settings.aiPersonality.persona.bare.label', 'Bare'),
       description: t(
         'settings.aiPersonality.persona.bare.description',
-        'No Elitea identity — only your instructions plus tool-required guidance',
+        'No {{product}} identity — only your instructions plus tool-required guidance',
       ),
     },
   ];

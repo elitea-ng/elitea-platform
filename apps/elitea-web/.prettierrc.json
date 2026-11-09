@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/prettierrc",
+  "singleQuote": true,
+  "printWidth": 120,
+  "overrides": [
+    {
+      "files": ["src/shared/api/generated/**", ".orval-check/**"],
+      "options": { "singleQuote": false, "printWidth": 80 }
+    }
+  ]
+}

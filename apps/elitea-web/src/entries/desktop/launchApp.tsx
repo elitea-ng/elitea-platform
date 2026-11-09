@@ -25,6 +25,7 @@ import { installExternalLinks } from '@/shared/desktop/externalLinks';
 import { createHostFetch, type RawInvoke } from '@/shared/desktop/hostFetch';
 import { createHostTransport } from '@/shared/desktop/hostTransport';
 import { tauriViewSocketHost } from '@/shared/desktop/hostViewSocket';
+import { applyProductName } from '@/shared/i18n';
 
 export interface LaunchOptions {
   bridge: HostBridge;
@@ -71,6 +72,8 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
     // Branding never blocks the launch: a failure leaves the compiled default.
     loadDesktopBrand({ fetch: noRedirectFetch, origin: state.origin }).catch(() => undefined),
   ]);
+  // Messages name the deployment's product (`{{product}}`), not the build's.
+  applyProductName();
   hostLog('debug', `launch: public project "${publicProjectId}"`, 'boot');
   const config = desktopRuntimeConfig(state.origin, publicProjectId);
   (globalThis as { elitea_ui_config?: unknown }).elitea_ui_config = config;

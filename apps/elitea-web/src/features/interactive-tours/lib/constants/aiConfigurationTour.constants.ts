@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { AI_CONFIG_TOUR_TARGETS } from './aiConfigurationTourTargets.constants';
 import { AI_CONFIG_TOUR_ID, PERSONAL_TOKENS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { AI_CONFIG_TOUR_ID };
 
@@ -24,7 +25,7 @@ export const aiConfigurationTourSteps: TourStep[] = [
     target: AI_CONFIG_TOUR_TARGETS.page,
     placement: 'center',
     title: 'What is AI Configuration?',
-    content: `AI Configuration is the project-level settings area where you connect ELITEA to the AI services it needs to function — language models, embedding models, and image generation. All agents, pipelines, and chat conversations in the project draw from these configured integrations.
+    content: `AI Configuration is the project-level settings area where you connect ${productName()} to the AI services it needs to function — language models, embedding models, and image generation. All agents, pipelines, and chat conversations in the project draw from these configured integrations.
 
 Settings in this section are project-specific. Use the project selector to view or modify configurations for a particular project.`,
   },
@@ -33,7 +34,7 @@ Settings in this section are project-specific. Use the project selector to view 
     target: AI_CONFIG_TOUR_TARGETS.serverConfig,
     placement: 'bottom',
     title: 'Server Configuration',
-    content: `The AI Configuration page displays key connection details for your project — including the OpenAI-compatible base URL, project identifier, server URL, and project ID. Click any field to copy its value, or use the copy-all button to copy everything at once. These values are used when connecting external tools, SDKs, or IDE integrations to ELITEA's API.`,
+    content: `The AI Configuration page displays key connection details for your project — including the OpenAI-compatible base URL, project identifier, server URL, and project ID. Click any field to copy its value, or use the copy-all button to copy everything at once. These values are used when connecting external tools, SDKs, or IDE integrations to ${productName()}'s API.`,
   },
   {
     id: 'integration-types',
@@ -88,6 +89,6 @@ Designate which model serves as the default for each role. Changes take effect i
     target: AI_CONFIG_TOUR_TARGETS.openaiTemplateTab,
     placement: 'bottom',
     title: 'OpenAI Template',
-    content: `The **OpenAI Template** tab generates ready-to-use code snippets for calling ELITEA's API in OpenAI-compatible format. Select a configured model and a target language — cURL, Node.js, or Python — to get a pre-filled example with your server URL and project ID already inserted. Copy or download the snippet directly from the page to use in your own integrations.`,
+    content: `The **OpenAI Template** tab generates ready-to-use code snippets for calling ${productName()}'s API in OpenAI-compatible format. Select a configured model and a target language — cURL, Node.js, or Python — to get a pre-filled example with your server URL and project ID already inserted. Copy or download the snippet directly from the page to use in your own integrations.`,
   },
 ];

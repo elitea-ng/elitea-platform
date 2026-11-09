@@ -11,6 +11,7 @@ import { Box, Typography } from '@mui/material';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 
 import ChatWelcomeImage from '@/assets/onboarding/welcome/chat-welcome.png';
+import { productName } from '@/shared/brand';
 
 /** Props for {@link WorkspaceIsReady}. */
 interface WorkspaceIsReadyProps {
@@ -62,7 +63,7 @@ const WorkspaceIsReady = memo<WorkspaceIsReadyProps>(({ onJumpIn }) => {
             <Box
               component="img"
               src={ChatWelcomeImage}
-              alt="Elitea"
+              alt={productName()}
               sx={styles.image}
             />
             <Typography
@@ -70,7 +71,7 @@ const WorkspaceIsReady = memo<WorkspaceIsReadyProps>(({ onJumpIn }) => {
               variant="bodyMedium"
               sx={styles.title}
             >
-              Your Elitea workspace is ready!
+              Your {productName()} workspace is ready!
             </Typography>
           </Box>
           <BaseBtn

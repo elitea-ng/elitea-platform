@@ -105,7 +105,7 @@ export function WebhookFormDialog({ open, isSaving, initialValues, serverError, 
           <Typography variant="bodyMedium" sx={descriptionSx}>
             {t(
               'entities.webhook.form.description',
-              'Elitea POSTs a signed request to this URL whenever one of the listed events happens.',
+              '{{product}} POSTs a signed request to this URL whenever one of the listed events happens.',
             )}
           </Typography>
           <InputBase

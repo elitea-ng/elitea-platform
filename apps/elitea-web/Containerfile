@@ -19,6 +19,16 @@ RUN npm ci
 COPY libs/ts/client-core/ /build/libs/ts/client-core/
 COPY apps/elitea-web/index.html apps/elitea-web/tsconfig.json apps/elitea-web/vite.config.ts ./
 COPY apps/elitea-web/src/ ./src/
+# The build's brand (ADR-0052): vite.config.ts loads it through
+# scripts/brand/load.mjs and apps/elitea-web/scripts/brand-web.mjs. ELITEA_BRAND
+# picks the folder (unset = brand/elitea); a brand repository copies its own
+# folder in and passes its path.
+COPY scripts/brand/ /build/scripts/brand/
+COPY brand/elitea/ /build/brand/elitea/
+COPY brand/sample/ /build/brand/sample/
+COPY apps/elitea-web/scripts/brand-web.mjs ./scripts/
+ARG ELITEA_BRAND=""
+ENV ELITEA_BRAND=${ELITEA_BRAND}
 # Vite's default publicDir — copied verbatim into dist/app. Holds the brand
 # assets the brand pack's `assets.*` paths point at (`/app/brand/*.svg`).
 # Without this the SPA's history fallback answered those URLs with index.html

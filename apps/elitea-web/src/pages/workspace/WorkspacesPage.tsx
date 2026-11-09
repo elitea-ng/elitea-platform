@@ -70,7 +70,7 @@ export default function WorkspacesPage(): React.JSX.Element {
   if (ipc === undefined) {
     return (
       <Box sx={{ p: '1.5rem' }}>
-        <Alert severity="info">{t('workspace.noHost', 'Workspaces need the Elitea desktop app.')}</Alert>
+        <Alert severity="info">{t('workspace.noHost', 'Workspaces need the {{product}} desktop app.')}</Alert>
       </Box>
     );
   }

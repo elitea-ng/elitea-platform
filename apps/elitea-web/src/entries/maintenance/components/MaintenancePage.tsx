@@ -15,8 +15,8 @@ import {
   type PublishedMaintenanceCopy,
 } from '../lib/publishedCopy';
 
-const maintenanceHeadline = t('entries.maintenance.page.headline', 'Elitea is under maintenance!');
-const maintenanceLogoAlt = t('entries.maintenance.page.logoAlt', 'EliteA');
+const maintenanceHeadline = t('entries.maintenance.page.headline', '{{product}} is under maintenance!');
+const maintenanceLogoAlt = t('entries.maintenance.page.logoAlt', '{{product}}');
 
 /**
  * The operator's copy, when the platform is up enough to publish it.

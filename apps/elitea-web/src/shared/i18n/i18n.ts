@@ -19,6 +19,8 @@
 import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
+import { productName } from '@/shared/brand/productName';
+
 import en from './en.json';
 
 export const DEFAULT_LOCALE = 'en';
@@ -70,12 +72,28 @@ i18next
       // React already escapes interpolated values when it renders text
       // nodes; double-escaping here would turn "AT&T" into "AT&amp;T".
       escapeValue: false,
+      // ADR-0052 W3.2: the catalogues name the product as `{{product}}`, never
+      // a literal, so a brand (build-time default pack) or a served pack
+      // (channel C) renames it everywhere. Read once: the served pack is
+      // loaded before the bundle (index.html) and does not change while the
+      // page runs. A call that passes its own `product` wins. The desktop app
+      // publishes its deployment's pack later and calls `applyProductName()`.
+      defaultVariables: { product: productName() },
     },
     returnEmptyString: false,
     saveMissing: true,
     missingKeyHandler: warnOnMissingKey,
   })
   .catch(logInitFailure);
+
+/**
+ * Re-reads the product name `{{product}}` stands for from the resolved pack.
+ * The desktop app calls it after it publishes the deployment's pack
+ * (`launchApp.tsx`); i18next reads `defaultVariables` on every `t()`.
+ */
+export function applyProductName(): void {
+  i18next.options.interpolation = { ...i18next.options.interpolation, defaultVariables: { product: productName() } };
+}
 
 /** The live, configured instance — `./I18nProvider.tsx` binds React's context to this. */
 export const i18n = i18next;

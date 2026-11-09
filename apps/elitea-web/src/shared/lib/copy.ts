@@ -10,6 +10,7 @@
  * string constants permanently; flagged once here rather than repeated
  * per-export.
  */
+import { productName } from '@/shared/brand';
 
 export const SAVE = 'Save';
 export const CREATE_VERSION = 'Create version';
@@ -17,7 +18,8 @@ export const CREATE_VERSION = 'Create version';
 export const PUBLIC_PROJECT_NAME = 'Public';
 export const PRIVATE_PROJECT_NAME = 'Private';
 
-export const DEFAULT_PARTICIPANT_NAME = 'Elitea';
+/** The assistant's name when no sender name is configured: the product's (ADR-0052 W3.3). */
+export const DEFAULT_PARTICIPANT_NAME = productName();
 
 export const DefaultConversationName = 'New Chat';
 export const DefaultFolderName = 'New folder';

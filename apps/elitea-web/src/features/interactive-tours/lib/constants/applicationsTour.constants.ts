@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { APPLICATIONS_TOUR_TARGETS } from './applicationsTourTargets.constants';
 import { APPLICATIONS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { APPLICATIONS_TOUR_ID };
 
@@ -19,7 +20,7 @@ export const applicationsTourSteps: TourStep[] = [
     target: APPLICATIONS_TOUR_TARGETS.page,
     placement: 'center',
     title: 'What is Applications?',
-    content: `The Applications menu is where you discover, request, and manage purpose-built AI applications that extend ELITEA beyond agents and pipelines. Each application provides a dedicated interface and a ready-to-use set of tools that can also be referenced in agents and pipelines.`,
+    content: `The Applications menu is where you discover, request, and manage purpose-built AI applications that extend ${productName()} beyond agents and pipelines. Each application provides a dedicated interface and a ready-to-use set of tools that can also be referenced in agents and pipelines.`,
   },
   {
     id: 'applications-tab',

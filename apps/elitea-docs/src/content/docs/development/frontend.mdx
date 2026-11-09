@@ -23,7 +23,10 @@ npm run test:unit        # vitest, node project
 npm run test:storybook   # component stories, through the Storybook Vitest addon
 npm run typecheck        # tsc --noEmit
 npm run lint             # oxlint -c .oxlintrc.json
+npm run format -- <file> # prettier --write, with .prettierrc.json
 ```
+
+`.prettierrc.json` is the app's code style: single quotes, lines up to 120 characters, and the generated API client (`src/shared/api/generated/`) in orval's own double-quote, 80-column style. Editors and `npx prettier` pick it up, so a formatted file keeps the house style. Format the files you change; older files are not all formatted yet, and CI does not check formatting.
 
 There is no separate `npm run storybook` dev-server script in this repository yet — stories run through `test:storybook`'s Vitest project rather than a standalone Storybook UI.
 

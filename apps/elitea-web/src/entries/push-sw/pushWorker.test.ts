@@ -41,7 +41,7 @@ function worker(clients: FakeClient[] = []) {
       pushManager: { subscribe: vi.fn() },
     },
   };
-  installPushWorker(fake as unknown as PushWorkerScope);
+  installPushWorker(fake as unknown as PushWorkerScope, 'Machina');
   const fire = async (type: string, event: Record<string, unknown>): Promise<void> => {
     let work: Promise<unknown> = Promise.resolve();
     listeners.get(type)?.({ ...event, waitUntil: (promise: Promise<unknown>) => (work = promise) });
@@ -100,7 +100,7 @@ describe('push worker: push', () => {
     await fire('push', { data: null });
     expect(fake.registration.showNotification).toHaveBeenCalledTimes(3);
     for (const call of vi.mocked(fake.registration.showNotification).mock.calls) {
-      expect(call[0]).toBe('Elitea');
+      expect(call[0]).toBe('Machina');
       expect(call[1]).toEqual(expect.objectContaining({ body: 'There is new activity.', data: { url: SCOPE } }));
     }
     expect(fake.fetch).not.toHaveBeenCalled();

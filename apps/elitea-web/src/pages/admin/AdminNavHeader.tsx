@@ -1,6 +1,6 @@
 /**
  * The admin nav's header: the logo (which doubles as the collapse toggle, as it
- * does in the reference), the "Elitea Admin" title, and the theme toggle.
+ * does in the reference), the "{{product}} Admin" title, and the theme toggle.
  *
  * The reference's socket-connected dot is deliberately absent — `AdminNav.tsx`'s
  * header has the full reason.
@@ -35,7 +35,7 @@ export function AdminNavHeader({ collapsed, onToggle }: AdminNavHeaderProps): Re
         // No `space-between` any more: the theme toggle that used to sit on
         // the right moved to the footer (see `AdminNavFooter`). It is ~7rem
         // wide in a 13.75rem rail, which left the product name about 2rem and
-        // rendered "Elitea Admin" as "El…".
+        // rendered "{{product}} Admin" as "El…".
         justifyContent: collapsed ? 'center' : 'flex-start',
         gap: '0.5rem',
       })}
@@ -100,7 +100,7 @@ export function AdminNavHeader({ collapsed, onToggle }: AdminNavHeaderProps): Re
               textOverflow: 'ellipsis',
             })}
           >
-            {t('pages.admin.nav.title', 'Elitea Admin')}
+            {t('pages.admin.nav.title', '{{product}} Admin')}
           </Typography>
         )}
       </Box>

@@ -1,5 +1,5 @@
 /**
- * Elitea web push service worker (ADR-0045 decision 6, U3 contract §4).
+ * The web push service worker (ADR-0045 decision 6, U3 contract §4).
  *
  * `push-sw.ts` installs this on the worker's `self`; the `elitea-push-worker`
  * Vite plugin (vite.config.ts) bundles that entry into one classic script,
@@ -13,7 +13,9 @@
  * cannot read the app's catalogue.
  *
  * Self-contained on purpose: it imports nothing at runtime, so the bundle is
- * this file and nothing of the app. `PushWorkerScope` is the part of
+ * this file and nothing of the app. The product name for a notice that names
+ * no run comes in from `push-sw.ts`, which reads it from the build's default
+ * pack (ADR-0052 W3.4): the worker cannot read the served pack. `PushWorkerScope` is the part of
  * `ServiceWorkerGlobalScope` it uses, so the tests drive it with a fake.
  */
 
@@ -95,7 +97,8 @@ const TEXT = {
 // Shown for a payload this worker cannot read or does not know (a newer
 // server's type): the subscription is userVisibleOnly, and a push that shows
 // nothing makes the browser show its own notice and can cost the subscription.
-const FALLBACK: NoticeText = { title: 'Elitea', body: 'There is new activity.' };
+// Titled with the product's name.
+const FALLBACK_BODY = 'There is new activity.';
 
 function readPayload(event: PushEventLike): PushPayload {
   try {
@@ -106,10 +109,10 @@ function readPayload(event: PushEventLike): PushPayload {
   }
 }
 
-function noticeText(payload: PushPayload): NoticeText {
+function noticeText(payload: PushPayload, product: string): NoticeText {
   if (payload.type === 'agent_approval_required') return TEXT.waiting;
   if (payload.type === 'run_finished') return TEXT[payload.outcome as keyof typeof TEXT] ?? TEXT.completed;
-  return FALLBACK;
+  return { title: product, body: FALLBACK_BODY };
 }
 
 function present(value: string | number | undefined): value is string | number {
@@ -137,11 +140,15 @@ function subscriptionBody(subscription: SubscriptionLike): { endpoint: string; k
   return { endpoint: subscription.endpoint, keys: { p256dh: keys['p256dh'] ?? '', auth: keys['auth'] ?? '' } };
 }
 
-export function installPushWorker(sw: PushWorkerScope): void {
+/**
+ * @param product the product's name (the default pack's `product.shortName`),
+ *   the title of a notice that names no run.
+ */
+export function installPushWorker(sw: PushWorkerScope, product: string): void {
   const windowClients = (): Promise<readonly WindowClientLike[]> => sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
 
   async function onPush(payload: PushPayload): Promise<void> {
-    const text = noticeText(payload);
+    const text = noticeText(payload, product);
     const clients = await windowClients();
     if (clients.some((client) => client.focused && showsConversation(client.url, payload.conversation_uuid))) return;
     const id = present(payload.notification_id) ? payload.notification_id : present(payload.type) ? payload.type : 'activity';

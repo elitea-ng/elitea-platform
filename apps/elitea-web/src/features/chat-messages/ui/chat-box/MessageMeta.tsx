@@ -46,7 +46,7 @@ export function MessageMeta({ createdAt, memoriesUsed }: MessageMetaProps): Reac
     >
       {hasMemories && (
         <Tooltip
-          title={t('features.chatMessages.memoriesUsedTooltip', 'Elitea used {{count}} of your saved memories for this answer', { count: memoriesUsed })}
+          title={t('features.chatMessages.memoriesUsedTooltip', '{{product}} used {{count}} of your saved memories for this answer', { count: memoriesUsed })}
         >
           <Chip
             icon={<PsychologyOutlinedIcon fontSize="small" />}

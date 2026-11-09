@@ -5,6 +5,7 @@
 import type { TourStep } from '../types';
 
 import { RESOURCES_TOUR_TARGETS } from './resourcesTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export const RESOURCES_TOUR_ID = 'resources';
 
@@ -17,17 +18,17 @@ export const resourcesTourSteps: TourStep[] = [
     id: 'what-is-resources',
     target: RESOURCES_TOUR_TARGETS.page,
     placement: 'center',
-    title: 'What is ELITEA Help Center?',
+    title: `What is ${productName()} Help Center?`,
     content: `The Help Center page is a central hub for learning and reference material. It provides quick access to documentation, release notes, video walkthroughs, tutorials, and interactive tours — all in one place, without leaving the platform.
 
-The page also displays the current ELITEA version and any installed plugin versions in the header area.`,
+The page also displays the current ${productName()} version and any installed plugin versions in the header area.`,
   },
   {
     id: 'documentation',
     target: RESOURCES_TOUR_TARGETS.documentationCard,
     placement: 'right',
     title: 'Documentation',
-    content: `The Documentation card links to API references, feature guides, and platform concept documentation. Use it to look up specific capabilities, understand how features work, or integrate ELITEA with external tools and SDKs.
+    content: `The Documentation card links to API references, feature guides, and platform concept documentation. Use it to look up specific capabilities, understand how features work, or integrate ${productName()} with external tools and SDKs.
 
 Each link opens in a new tab. Links are configured by your platform administrator.`,
   },

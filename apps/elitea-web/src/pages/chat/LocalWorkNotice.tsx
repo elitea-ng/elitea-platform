@@ -40,7 +40,7 @@ export function LocalWorkNotice({ conversationId, folderName }: LocalWorkNoticeP
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
         <Typography variant="bodyMedium">{where}</Typography>
         <Typography variant="bodySmall">
-          {t('pages.chat.localWork.continue', 'To continue it, open the thread in the Elitea desktop app on that computer. Here you can read it, export it, rename it or delete it.')}
+          {t('pages.chat.localWork.continue', 'To continue it, open the thread in the {{product}} desktop app on that computer. Here you can read it, export it, rename it or delete it.')}
         </Typography>
       </Box>
     </Alert>

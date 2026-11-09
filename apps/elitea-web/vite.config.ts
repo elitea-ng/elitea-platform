@@ -1,4 +1,5 @@
-import { cpSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import babel from '@rolldown/plugin-babel';
@@ -11,7 +12,11 @@ import { build, defineConfig, searchForWorkspaceRoot, type Plugin, type PluginOp
 // forward-compat notice would break `tsc --noEmit`. Vite resolves the
 // extensionless form today regardless of that loader setting.
 import { nestCatalogue } from './src/shared/i18n/nestCatalogue';
+import { BrandPack } from './src/shared/brand/schema';
 import { viteSingleFile } from 'vite-plugin-singlefile';
+
+import { loadBrand } from '../../scripts/brand/load.mjs';
+import { BRAND_CACHE_DIR, brandDefaultPack, brandLogoFiles, brandTitle, isDefaultBrand } from './scripts/brand-web.mjs';
 import svgr from 'vite-plugin-svgr';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
@@ -41,7 +46,10 @@ const compactI18nCatalogue = (): PluginOption => ({
   enforce: 'pre',
   transform(code, id) {
     if (!id.endsWith('/src/shared/i18n/en.json')) return null;
-    return { code: JSON.stringify(nestCatalogue(JSON.parse(code) as Record<string, string>)), map: null };
+    return {
+      code: JSON.stringify(nestCatalogue(JSON.parse(code) as Record<string, string>)),
+      map: null,
+    };
   },
 });
 
@@ -140,12 +148,21 @@ function pushWorker(): Plugin {
       logLevel: 'silent',
       root: resolvePath('.'),
       publicDir: false,
+      // The worker names a notice that names no run with the build's product
+      // (the default pack's shortName), inlined as one string: importing the
+      // pack would bundle all of it into the worker.
+      define: { 'import.meta.env.VITE_PRODUCT_NAME': JSON.stringify(brandProductName()) },
       build: {
         write: false,
         minify,
         sourcemap: false,
         emptyOutDir: false,
-        lib: { entry, formats: ['iife'], name: 'eliteaPushWorker', fileName: () => PUSH_WORKER_FILE },
+        lib: {
+          entry,
+          formats: ['iife'],
+          name: 'eliteaPushWorker',
+          fileName: () => PUSH_WORKER_FILE,
+        },
       },
     });
     const outputs = Array.isArray(result) ? result : [result];
@@ -160,7 +177,11 @@ function pushWorker(): Plugin {
   return {
     name: 'elitea-push-worker',
     async generateBundle() {
-      this.emitFile({ type: 'asset', fileName: PUSH_WORKER_FILE, source: await compile(true) });
+      this.emitFile({
+        type: 'asset',
+        fileName: PUSH_WORKER_FILE,
+        source: await compile(true),
+      });
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -178,6 +199,144 @@ function pushWorker(): Plugin {
           (error: unknown) => next(error),
         );
       });
+    },
+  };
+}
+
+/**
+ * The build's brand (ADR-0052 decision 5): `ELITEA_BRAND` selects a brand folder
+ * (scripts/brand/load.mjs; unset is brand/elitea). ELITEA builds the committed
+ * files unchanged. Any other brand gets, at build time:
+ *  - its default pack (channel A) in place of `tokens/default.pack.json`: the
+ *    folder's `pack.json`, or one derived from `brand.json` (scripts/brand-web.mjs);
+ *  - its logos in place of the compiled logo components' SVGs and of
+ *    `public/brand/*.svg` (the default pack's `assets.*` paths, the favicon);
+ *  - its product name in every entry's `<title>`.
+ * The served pack (bootstrap.js) still layers over the build default as before.
+ */
+const BRAND = loadBrand();
+const BRAND_DEFAULT_PACK_FILE = resolvePath('./src/shared/brand/tokens/default.pack.json');
+const BRAND_ICON_DIR = resolvePath('./src/shared/ui/icons/svg');
+const BRAND_PUBLIC_FILES = ['logo-mark.svg', 'logo-full.svg', 'favicon.svg'] as const;
+
+interface BrandBuild {
+  readonly dir: string;
+  readonly pack: string;
+  readonly publicFiles: Readonly<Record<string, string>>;
+  readonly icons: Readonly<Record<string, string>>;
+}
+
+/** Writes a non-default brand's generated files under `.brand/<id>/`. */
+function prepareBrand(): BrandBuild | undefined {
+  if (isDefaultBrand(BRAND)) return undefined;
+  const reference = JSON.parse(readFileSync(BRAND_DEFAULT_PACK_FILE, 'utf8'));
+  const dir = resolvePath(`./${BRAND_CACHE_DIR}/${BRAND.id}`);
+  mkdirSync(join(dir, 'brand'), { recursive: true });
+  const pack = join(dir, 'default.pack.json');
+  // The app parses its default pack at load (`tokens/index.ts`): an invalid
+  // one fails the build here rather than blanking every page of the app.
+  const parsed = BrandPack.safeParse(brandDefaultPack(BRAND, reference));
+  if (!parsed.success) {
+    const problems = parsed.error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`).join('\n');
+    throw new Error(
+      `brand ${BRAND.id}: its default pack (pack.json or brand.json) is not a valid brand pack\n${problems}`,
+    );
+  }
+  writeFileSync(pack, `${JSON.stringify(brandDefaultPack(BRAND, reference), null, 2)}\n`);
+  const logos = brandLogoFiles(BRAND);
+  const icons: Record<string, string> = {};
+  for (const [name, content] of Object.entries(logos.icons)) {
+    icons[name] = join(dir, name);
+    writeFileSync(icons[name], content);
+  }
+  for (const [name, content] of Object.entries(logos.public)) writeFileSync(join(dir, 'brand', name), content);
+  return { dir, pack, publicFiles: logos.public, icons };
+}
+
+/** Redirects the default pack and the logo SVGs (keeping `?react`) to a brand's generated files. */
+function brandResolveId(built: BrandBuild): NonNullable<Plugin['resolveId']> {
+  return async function (source, importer, options) {
+    // Only the pack and the logo SVGs are redirected: skip every other import
+    // without resolving it a second time.
+    if (!source.includes('default.pack') && !source.includes('logo')) return null;
+    const [path = '', query] = source.split('?');
+    const resolved = await this.resolve(path, importer, { ...options, skipSelf: true });
+    if (resolved === null) return null;
+    const target =
+      resolved.id === BRAND_DEFAULT_PACK_FILE
+        ? built.pack
+        : resolved.id.startsWith(`${BRAND_ICON_DIR}/`)
+          ? built.icons[resolved.id.slice(BRAND_ICON_DIR.length + 1)]
+          : undefined;
+    if (target === undefined) return null;
+    return query === undefined ? target : `${target}?${query}`;
+  };
+}
+
+/** The build's product short name: the generated default pack's for a non-default brand. */
+function brandProductName(): string {
+  const reference = JSON.parse(readFileSync(BRAND_DEFAULT_PACK_FILE, 'utf8'));
+  return isDefaultBrand(BRAND) ? reference.product.shortName : brandDefaultPack(BRAND, reference).product.shortName;
+}
+
+export function brandPlugin(): Plugin {
+  const reference = JSON.parse(readFileSync(BRAND_DEFAULT_PACK_FILE, 'utf8'));
+  const built = prepareBrand();
+  let outDir = '';
+  return {
+    name: 'elitea-brand',
+    enforce: 'pre',
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    // Only a non-default brand registers the hook: even a no-op async
+    // resolveId reorders Rolldown's chunk graph, and ELITEA's build must stay
+    // byte-identical to the committed files'.
+    ...(built === undefined ? {} : { resolveId: brandResolveId(built) }),
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html, context) {
+        let out = brandTitle(html, BRAND, reference);
+        // maintenance.html links the favicon from the source tree (singlefile inlines it).
+        if (built !== undefined && /public\/brand\/favicon\.svg/.test(out)) {
+          const from = context.filename.slice(0, context.filename.lastIndexOf('/'));
+          out = out.replace(
+            /(href=")[^"]*public\/brand\/favicon\.svg/,
+            `$1${relative(from, join(built.dir, 'brand', 'favicon.svg'))
+              .split(sep)
+              .join('/')}`,
+          );
+        }
+        return out;
+      },
+    },
+    configureServer(server) {
+      if (built === undefined) return;
+      server.middlewares.use((req, res, next) => {
+        const name = /\/brand\/([a-z-]+\.svg)$/.exec((req.url ?? '').split('?')[0] ?? '')?.[1];
+        const content = name === undefined ? undefined : built.publicFiles[name];
+        if (content === undefined) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.end(content);
+      });
+    },
+    // The public copies (public/brand/, the admin console's assets/favicon.svg) are
+    // ELITEA's; a brand build overwrites them in the output.
+    closeBundle() {
+      if (built === undefined || outDir === '') return;
+      for (const name of BRAND_PUBLIC_FILES) {
+        const content = built.publicFiles[name];
+        if (content === undefined) continue;
+        for (const target of [
+          join(outDir, 'brand', name),
+          ...(name === 'favicon.svg' ? [join(outDir, 'assets', name)] : []),
+        ]) {
+          if (existsSync(target)) writeFileSync(target, content);
+        }
+      }
     },
   };
 }
@@ -271,6 +430,7 @@ export function withClientCoreAccess<T extends UserConfig>(config: T): T {
 
 function configFor(mode: string): UserConfig {
   const basePlugins: PluginOption[] = [
+    brandPlugin(),
     compactI18nCatalogue(),
     react(),
     // React Compiler (spec §2.1): plugin-react 6 removed its `babel` option, so

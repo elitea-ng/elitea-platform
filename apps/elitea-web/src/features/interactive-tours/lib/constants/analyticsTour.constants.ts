@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { ANALYTICS_TOUR_TARGETS } from './analyticsTourTargets.constants';
 import { ANALYTICS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { ANALYTICS_TOUR_ID };
 
@@ -18,7 +19,7 @@ export const analyticsTourSteps: TourStep[] = [
     id: 'what-is-analytics',
     target: ANALYTICS_TOUR_TARGETS.page,
     placement: 'center',
-    title: 'What is ELITEA Analytics?',
+    title: `What is ${productName()} Analytics?`,
     content: `Analytics provides real-time visibility into how your team uses the platform — from AI model invocations and tool executions to agent runs and user activity. All data is scoped to the currently selected project and is available to all project members.`,
   },
   {

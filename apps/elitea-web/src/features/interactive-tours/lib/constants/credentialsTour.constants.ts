@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { CREDENTIALS_TOUR_TARGETS } from './credentialsTourTargets.constants';
 import { CREDENTIALS_TOUR_ID, SECRETS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { CREDENTIALS_TOUR_ID };
 
@@ -24,8 +25,8 @@ export const credentialsTourSteps: TourStep[] = [
     id: 'what-is-credentials',
     target: CREDENTIALS_TOUR_TARGETS.page,
     placement: 'center',
-    title: 'What are ELITEA Credentials?',
-    content: `ELITEA Credentials are saved authentication configurations that let agents, pipelines, and toolkits securely connect to external services. Instead of entering API keys or passwords each time you configure a toolkit, you store them once as a credential and reference that credential by name wherever it is needed.
+    title: `What are ${productName()} Credentials?`,
+    content: `${productName()} Credentials are saved authentication configurations that let agents, pipelines, and toolkits securely connect to external services. Instead of entering API keys or passwords each time you configure a toolkit, you store them once as a credential and reference that credential by name wherever it is needed.
 
 Credentials are reusable across multiple toolkits and projects, and they can be kept private or shared with team members.`,
   },
