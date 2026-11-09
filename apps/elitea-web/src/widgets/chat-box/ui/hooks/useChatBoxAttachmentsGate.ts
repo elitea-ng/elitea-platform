@@ -66,7 +66,13 @@ export interface UseChatBoxAttachmentsGateParams {
   readonly isAgentsPage: boolean | undefined;
 }
 
-export function useChatBoxAttachmentsGate({ target: resolved, isAgentsPage }: UseChatBoxAttachmentsGateParams): boolean {
+export interface ChatBoxAttachmentsGate {
+  readonly gated: boolean;
+  /** The target's `version_details`, or `undefined` when it has none (not an agent, or not fetched yet). */
+  readonly versionDetails: unknown;
+}
+
+export function useChatBoxAttachmentsGate({ target: resolved, isAgentsPage }: UseChatBoxAttachmentsGateParams): ChatBoxAttachmentsGate {
   const target = isAgentsPage ? undefined : resolved;
   const gated = isVersionedEntity(target);
   // `null` when the target is not a versioned entity: the details hook throws
@@ -77,5 +83,7 @@ export function useChatBoxAttachmentsGate({ target: resolved, isAgentsPage }: Us
   });
   const internalTools = useMemo(() => readInternalTools(activeParticipantDetails), [activeParticipantDetails]);
 
-  return shouldDisableParticipantAttachments(toParticipant(target), internalTools);
+  const gate = shouldDisableParticipantAttachments(toParticipant(target), internalTools);
+  const versionDetails = gated ? activeParticipantDetails['version_details'] : undefined;
+  return useMemo(() => ({ gated: gate, versionDetails }), [gate, versionDetails]);
 }

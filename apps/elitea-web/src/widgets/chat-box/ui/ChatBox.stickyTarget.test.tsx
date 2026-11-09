@@ -56,16 +56,20 @@ const HISTORY = [
 ];
 const CONVERSATION = { id: 1625, uuid: UUID, name: 'Two agents', participants: [USER, AGENT_A, AGENT_B], message_groups: HISTORY };
 
-/** B's version allows attachments, A's does not; until details arrive the gate reads OFF, so ENABLED says it read B's. */
-function application(id: number, versionId: string, internalTools: readonly string[]) {
+/**
+ * B's version allows attachments, A's does not; until details arrive the gate reads OFF, so ENABLED says it read B's.
+ * Each version has its own toolkit tool, so the tools "Run to completion" offers say whose version they came from.
+ */
+function application(id: number, versionId: string, internalTools: readonly string[], toolkit: string) {
   return { id, name: `Agent ${String(id)}`, versions: [{ id: versionId, name: 'base' }],
-    version_details: { id: versionId, meta: { internal_tools: internalTools } } };
+    version_details: { id: versionId, meta: { internal_tools: internalTools }, tools: [{ toolkit_name: toolkit, selected_tools: ['merge'] }] } };
 }
 
 let registry: TestEventSourceRegistry;
 let applicationReads: string[];
 let startBodies: Record<string, unknown>[];
 let history: readonly ChatMessage[];
+let scrollIntoView: PropertyDescriptor | undefined;
 
 beforeEach(() => {
   registry = installTestEventSource();
@@ -73,13 +77,14 @@ beforeEach(() => {
   startBodies = [];
   history = [];
   vi.stubGlobal('elitea_ui_config', { vite_server_url: '/api/v2', vite_base_uri: '/', vite_public_project_id: 'public' });
+  scrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: vi.fn() });
   resetConfigForTests();
   configureGeneratedClient({ baseUrl: '/api/v2' });
   server.use(
     http.get('*/elitea_core/application/prompt_lib/2/:id', ({ params }) => {
       applicationReads.push(String(params['id']));
-      return HttpResponse.json(params['id'] === '143' ? application(143, '164', []) : application(144, '165', ['attachments']));
+      return HttpResponse.json(params['id'] === '143' ? application(143, '164', [], 'toolkit_a') : application(144, '165', ['attachments'], 'toolkit_b'));
     }),
     http.post(`*/elitea_core/messages/prompt_lib/2/${UUID}`, async ({ request }) => {
       startBodies.push(await request.json() as Record<string, unknown>);
@@ -93,6 +98,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (scrollIntoView === undefined) Reflect.deleteProperty(Element.prototype, 'scrollIntoView');
+  else Object.defineProperty(Element.prototype, 'scrollIntoView', scrollIntoView);
   registry.restore();
   vi.unstubAllGlobals();
   resetConfigForTests();
@@ -137,6 +144,12 @@ it('sends to, attributes the answer to, and gates attachments on the agent the h
   expect(applicationReads).not.toContain('143');
   await user.keyboard('{Escape}');
 
+  // "Run to completion" offers B's tools: the grant names tools of the agent the send goes to.
+  await user.click(await screen.findByTestId('chat-run-to-completion-open'));
+  expect(await screen.findByTestId('unattended-sensitive-tools')).toHaveTextContent('toolkit_b/merge');
+  expect(screen.getByTestId('unattended-sensitive-tools')).not.toHaveTextContent('toolkit_a');
+  await user.keyboard('{Escape}');
+
   // The start request carries B's participant id.
   const input = await screen.findByTestId('chat-message-input');
   await user.click(input);
@@ -153,4 +166,6 @@ it('sends to, attributes the answer to, and gates attachments on the agent the h
       execution_generation: GENERATION, response_metadata: {}, created_at: '2026-11-09T10:10:00Z' }), '1');
   });
   await waitFor(() => expect(history.find((message) => message.id === RESPONSE_ID)?.participantId).toBe('902'));
+  // Nothing in the turn (the optimistic question, the streamed answer) moved the gate to A.
+  expect(applicationReads).not.toContain('143');
 }, INTEGRATION_TIMEOUT_MS);

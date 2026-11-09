@@ -1,7 +1,7 @@
 import { useEditorTestTransport } from './useEditorTestTransport';
 import type { ChatBoxProps } from '../ChatBox.types';
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useChatStreamTransport, type ChatMessage, type ReattachableTurn } from "@/features/chat-messages";
 import { conversationApi, contextManagementApi } from "@/entities/conversation";
@@ -109,6 +109,8 @@ export interface UseChatBoxSendResult {
     readonly questionId: string;
     readonly question: string;
     readonly updatedItems?: readonly unknown[] | undefined;
+    /** The participant the question went to (its `participantId`): Main lets only that agent regenerate the answer. */
+    readonly participantId?: string | undefined;
   }) => Promise<StreamStartOutcome>;
   readonly isStreaming: boolean;
   /**
@@ -152,6 +154,9 @@ export function useChatBoxSend(
   // The composer's target and the roster an address picks from (one dependency for the start callback's budget).
   const { target } = params;
   const routing = useMemo(() => ({ target, participants: params.participants }), [target, params.participants]);
+  // The participant the last turn went to: its answer keeps that identity, even when the message addressed another agent or the history moves the target mid-turn.
+  const [turn, setTurn] = useState<{ readonly conversationUuid: string; readonly target: unknown }>();
+  const answerer = turn !== undefined && turn.conversationUuid === params.conversationUuid ? turn.target : target;
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
     onContextChanged,
@@ -159,7 +164,7 @@ export function useChatBoxSend(
     ...(params.conversationUuid !== undefined
       ? { conversationUuid: params.conversationUuid }
       : {}),
-    context: buildChatStreamContext(params),
+    context: buildChatStreamContext({ ...params, target: answerer }),
     onAgentEvent: params.onAgentEvent, onSteerEvent: params.onSteerEvent,
   });
   const { startDetailed, resumeDetailed, regenerateDetailed } = transport;
@@ -212,6 +217,7 @@ export function useChatBoxSend(
       // participant). The socket fallback takes it rather than a POST that is
       // certain to be refused.
       if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      setTurn({ conversationUuid, target: sendTarget });
       const start = (startBody: Record<string, unknown>) =>
         startDetailed({ projectId, conversationUuid, contract: resolveStartContract(sendTarget), body: startBody });
       const outcome = await start(body);
@@ -262,14 +268,17 @@ export function useChatBoxSend(
       readonly questionId: string;
       readonly question: string;
       readonly updatedItems?: readonly unknown[] | undefined;
+      readonly participantId?: string | undefined;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined || params.conversationUuid === undefined)
         return requireTestTransport(NO_STREAM_TRANSPORT);
       await settleCanvasSaves();
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
+      // The agent the question went to answers again, not the composer's target now (Main refuses another).
+      const answeredBy = targetForAddressed(routing.target, routing.participants, addressedIdsOf([input.participantId]));
       const isApplicationTurn =
-        resolveStartContract(target) === conversationApi.contracts.application;
+        resolveStartContract(answeredBy) === conversationApi.contracts.application;
       const body = buildRegenerateBody({
         mcpTokens: await getExecutionTokens(projectIdString),
         conversationUuid: params.conversationUuid,
@@ -280,13 +289,14 @@ export function useChatBoxSend(
         ...modelRequest,
         isApplicationTurn,
         participantId: positiveParticipantId(
-          (target as { readonly id?: unknown } | null | undefined)?.id,
+          (answeredBy as { readonly id?: unknown } | null | undefined)?.id,
         ),
         ...(input.updatedItems !== undefined
           ? { updatedItems: input.updatedItems }
           : {}),
       });
       if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      setTurn({ conversationUuid: params.conversationUuid, target: answeredBy });
       // Verbatim, not collapsed to a boolean — see `regenerateStreamedWithRetry`
       // (`useChatBoxHandlers.regenerate.ts`) for the one refusal it carries.
       return requireTestTransport(await regenerateDetailed({
@@ -302,7 +312,7 @@ export function useChatBoxSend(
       projectId,
       projectIdString,
       params.conversationUuid,
-      target,
+      routing,
       modelRequest,
       getInternalToolsForSend,
     ],

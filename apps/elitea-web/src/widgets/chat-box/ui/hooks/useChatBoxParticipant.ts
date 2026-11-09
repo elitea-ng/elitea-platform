@@ -52,7 +52,7 @@ export interface UseChatBoxParticipantResult {
    * paperclip, and the drop/paste bridge.
    */
   readonly areAttachmentsGated: boolean;
-  /** The tools of the active agent's version that an unattended grant can name (ADR-0045); undefined without an agent. */
+  /** The tools of the target agent's version (the active one in the editor) that an unattended grant can name (ADR-0045); undefined without an agent. */
   readonly grantableTools: readonly SensitiveToolRef[] | undefined;
 }
 
@@ -83,8 +83,10 @@ export function useChatBoxParticipant({
     return { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}), ...(versions !== undefined ? { versions } : {}) };
   }, [rawParticipantDetails]);
 
-  const areAttachmentsGated = useChatBoxAttachmentsGate({ target, isAgentsPage });
-  const versionDetails = participantForEditor === undefined ? undefined : rawParticipantDetails['version_details'];
+  const gate = useChatBoxAttachmentsGate({ target, isAgentsPage });
+  const areAttachmentsGated = gate.gated;
+  // The tools the grant names are the TARGET's (the agent the send goes to); the editor surface keeps its own participant's.
+  const versionDetails = isAgentsPage ? (participantForEditor === undefined ? undefined : rawParticipantDetails['version_details']) : gate.versionDetails;
   const tools = useMemo(() => (versionDetails === undefined ? undefined : grantableTools(versionDetails)), [versionDetails]);
 
   return {

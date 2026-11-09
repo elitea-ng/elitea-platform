@@ -18,8 +18,10 @@ export function useResolvedTarget(
   participants: readonly unknown[] | undefined,
   messages: readonly { readonly participantId?: string | undefined }[] | undefined,
 ): unknown {
-  // With several agents and none picked, the agent the history last addressed.
-  const stickyParticipantId = useMemo(() => stickyAgentParticipantId(messages, participants), [messages, participants]);
+  // With several agents and none picked, the agent the history last addressed. A pick wins, so the
+  // history (a new array on every streamed frame) is not scanned then.
+  const picked = activeParticipant !== undefined && activeParticipant !== null;
+  const stickyParticipantId = useMemo(() => (picked ? undefined : stickyAgentParticipantId(messages, participants)), [picked, messages, participants]);
   return useMemo(
     () => resolveTargetParticipant(activeParticipant, participants, stickyParticipantId),
     [activeParticipant, participants, stickyParticipantId],
