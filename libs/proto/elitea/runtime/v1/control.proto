@@ -468,6 +468,61 @@ message ReportBrowserSessionResponseV1 {
   reserved 2 to 10;
 }
 
+// ReportEphemeralAgents records the sub-agents one claimed execution started
+// with spawn_agent (ADR-0050 decisions 4 and 9d, #1614): one row per spawn
+// in elitea_runtime.ephemeral_agents. It is sent under the live claim,
+// before PrepareSettlement, like ReportEgressSummary. A report is a
+// CUMULATIVE snapshot of this command's spawns, so a retried report
+// upserts the same rows (keyed by execution and agent id). Main takes the
+// project and the conversation from the execution kernel, never from the
+// worker. Best effort: a failed report never fails the run.
+message ReportEphemeralAgentsRequestV1 {
+  ExecutionIdentityV1 identity = 1;
+  ExecutionFenceV1 fence = 2;
+  // At most 12 spawns (the runtime's per-turn cap), in spawn order.
+  repeated EphemeralAgentV1 agents = 3;
+  reserved 4 to 15;
+}
+
+// One spawn. It names the profile and brief by digest and by the ids the
+// brief referenced; never the soul, a quote, a fact or the task.
+message EphemeralAgentV1 {
+  // The child's id: "a_" and 8 lowercase hex digits.
+  string agent_id = 1;
+  // The parent's spawn_agent call id, at most 256 bytes.
+  string parent_call_id = 2;
+  // 1 for the run's first child, then in spawn order.
+  uint32 ordinal = 3;
+  // At most 60 characters each; empty when not set.
+  string label = 4;
+  string display_name = 5;
+  // An avatar key, stored only; at most 128 bytes.
+  string avatar = 6;
+  // Lowercase hex SHA-256 of the profile (always set).
+  string profile_digest = 7;
+  // Lowercase hex SHA-256 of the brief; empty for no brief.
+  string brief_digest = 8;
+  // The brief's references as a JSON object (message_ids, attachments,
+  // memory_entries, facts count); empty for no brief. At most 8 KiB.
+  string brief_refs_json = 9;
+  // running, completed, failed, budget_exhausted or cancelled.
+  string status = 10;
+  uint32 steps = 11;
+  uint64 input_tokens = 12;
+  uint64 output_tokens = 13;
+  // A stable lowercase code when it failed or was stopped; else empty.
+  string error_code = 14;
+  int64 started_at_unix_millis = 15;
+  // 0 while it runs.
+  int64 finished_at_unix_millis = 16;
+  reserved 17 to 31;
+}
+
+message ReportEphemeralAgentsResponseV1 {
+  RuntimeErrorV1 rejection = 1;
+  reserved 2 to 10;
+}
+
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
   rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
@@ -484,4 +539,5 @@ service RuntimeControlService {
   rpc ReportRunSteps(ReportRunStepsRequestV1) returns (ReportRunStepsResponseV1);
   rpc MintDelegationAssertion(MintDelegationAssertionRequestV1) returns (MintDelegationAssertionResponseV1);
   rpc ReportBrowserSession(ReportBrowserSessionRequestV1) returns (ReportBrowserSessionResponseV1);
+  rpc ReportEphemeralAgents(ReportEphemeralAgentsRequestV1) returns (ReportEphemeralAgentsResponseV1);
 }

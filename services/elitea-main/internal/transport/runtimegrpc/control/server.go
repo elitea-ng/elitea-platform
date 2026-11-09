@@ -130,6 +130,10 @@ type Server struct {
 	// runSteps stores the worker's step records (ADR-0042, #1499); nil
 	// answers ReportRunSteps UNSUPPORTED_CAPABILITY.
 	runSteps RunSteps
+	// ephemeralAgents keeps the sub-agents a run started (ADR-0050
+	// decisions 4 and 9d, #1614); nil answers ReportEphemeralAgents
+	// UNSUPPORTED_CAPABILITY.
+	ephemeralAgents EphemeralAgents
 	// delegationAssertions mints the delegation assertions of a run's calls
 	// to remote agents (ADR-0044 decision 4); nil answers
 	// MintDelegationAssertion UNSUPPORTED_CAPABILITY.
