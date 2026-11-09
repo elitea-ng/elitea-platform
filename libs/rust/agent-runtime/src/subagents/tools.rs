@@ -10,6 +10,11 @@ use ring::rand::{SecureRandom as _, SystemRandom};
 use serde_json::{Value, json};
 
 use super::child::{self, Child, InputRefused};
+use super::profile::{
+    self, BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
+    Brief, MAX_AVATAR_BYTES, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS,
+    MAX_PROFILE_TOOLS, MAX_SOUL_BYTES, Profile, SpawnRecord,
+};
 use super::{
     CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
     MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Registry,
@@ -17,9 +22,6 @@ use super::{
 };
 use crate::delegation::DelegationEvidence;
 use crate::tool_envelope::{RequestedTool, SUBAGENT_TOOL_NOT_GRANTED};
-
-/// The most keys of `spawn_agent`'s `profile.tools`.
-const MAX_PROFILE_TOOLS: usize = 64;
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {
@@ -91,45 +93,39 @@ fn max_steps(args: &Value, default: u32) -> Result<u32, Value> {
     }
 }
 
-/// `spawn_agent`'s `profile.tools` (ADR-0050 decision 4): the tool keys the
-/// child is offered, each `<toolkit>/<tool>`. Absent is every tool the
-/// child may be given. Only `tools` is a profile key yet (#1614 adds the
-/// rest).
-fn requested_tools(args: &Value) -> Result<Option<Vec<RequestedTool>>, Value> {
-    let Some(profile) = args.get("profile").filter(|value| !value.is_null()) else {
-        return Ok(None);
+/// `spawn_agent`'s task, label, `profile` and `context`, or the refusal.
+/// Without a label, the profile's display name is the label.
+fn spawn_arguments(args: &Value) -> Result<(String, Option<String>, Profile, Brief), Value> {
+    let task = bounded_text(args, "task")?;
+    let profile =
+        profile::parse_profile(args).map_err(|message| refused("invalid_arguments", message))?;
+    let brief =
+        profile::parse_brief(args).map_err(|message| refused("invalid_arguments", message))?;
+    let label = args
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .or(profile.display_name.as_deref())
+        .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
+    Ok((task, label, profile, brief))
+}
+
+/// A brief the host refused, by its code.
+fn brief_refused(code: &str) -> Value {
+    let message = match code {
+        BRIEF_EXCERPT_NOT_VISIBLE => {
+            "An excerpt in `context.excerpts` is not an exact quote of a message you can see here. Quote only messages of this conversation, by their message id."
+        }
+        BRIEF_ATTACHMENT_NOT_READABLE => {
+            "An attachment in `context.attachments` is not one you can read in this turn. Name only this turn's attachment ids."
+        }
+        BRIEF_MEMORY_NOT_RECALLED => {
+            "A memory entry in `context.memory_entries` is not one `recall` gave you in this turn. Recall it first, or pass it as a fact."
+        }
+        _ => "The brief could not be checked.",
     };
-    let invalid = |message: &str| refused("invalid_arguments", message);
-    let Some(profile) = profile.as_object() else {
-        return Err(invalid("`profile` must be an object."));
-    };
-    if let Some(key) = profile.keys().find(|key| key.as_str() != "tools") {
-        return Err(invalid(&format!(
-            "`profile.{key}` is not supported here; only `profile.tools` is."
-        )));
-    }
-    let Some(tools) = profile.get("tools").filter(|value| !value.is_null()) else {
-        return Ok(None);
-    };
-    let Some(items) = tools
-        .as_array()
-        .filter(|items| items.len() <= MAX_PROFILE_TOOLS)
-    else {
-        return Err(invalid(&format!(
-            "`profile.tools` must be a list of at most {MAX_PROFILE_TOOLS} tool keys."
-        )));
-    };
-    items
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .and_then(|key| RequestedTool::parse(key).ok())
-                .ok_or_else(|| {
-                    invalid("each `profile.tools` entry must be \"<toolkit>/<tool>\" or \"<toolkit>/*\".")
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
+    refused(code, message)
 }
 
 /// `spawn_agent`'s arguments (without `isolation`).
@@ -155,14 +151,75 @@ fn spawn_schema() -> Value {
             },
             "profile": {
                 "type": "object",
+                "description": "Who the sub-agent is",
                 "properties": {
+                    "display_name": {
+                        "type": "string",
+                        "maxLength": MAX_DISPLAY_NAME_CHARS,
+                        "description": "The name shown for it"
+                    },
+                    "soul": {
+                        "type": "string",
+                        "maxLength": MAX_SOUL_BYTES,
+                        "description": "A short role and style, in place of the default role text; it never widens what the sub-agent may do"
+                    },
                     "tools": {
                         "type": "array",
                         "maxItems": MAX_PROFILE_TOOLS,
                         "items": {"type": "string"},
                         "description": "Only these of your tools, as \"toolkit/tool\" or \"toolkit/*\"; each must be one a sub-agent may get"
+                    },
+                    "model": {
+                        "type": "string",
+                        "enum": [profile::INHERIT_MODEL],
+                        "description": "Only \"inherit\": it uses your model"
+                    },
+                    "avatar": {
+                        "type": "string",
+                        "maxLength": MAX_AVATAR_BYTES,
+                        "description": "An avatar key, such as \"default:owl\""
                     }
-                }
+                },
+                "additionalProperties": false
+            },
+            "context": {
+                "type": "object",
+                "description": "A brief passed before the task: only what you yourself can see",
+                "properties": {
+                    "excerpts": {
+                        "type": "array",
+                        "maxItems": MAX_BRIEF_ITEMS,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "message_id": {"type": "string"},
+                                "quote": {"type": "string", "maxLength": MAX_BRIEF_TEXT_CHARS}
+                            },
+                            "required": ["message_id", "quote"],
+                            "additionalProperties": false
+                        },
+                        "description": "Exact quotes of messages in this conversation, by message id"
+                    },
+                    "attachments": {
+                        "type": "array",
+                        "maxItems": MAX_BRIEF_ITEMS,
+                        "items": {"type": "string"},
+                        "description": "Ids of this turn's attachments (\"att-...\")"
+                    },
+                    "facts": {
+                        "type": "array",
+                        "maxItems": MAX_BRIEF_ITEMS,
+                        "items": {"type": "string", "maxLength": MAX_BRIEF_TEXT_CHARS},
+                        "description": "Short facts in your own words"
+                    },
+                    "memory_entries": {
+                        "type": "array",
+                        "maxItems": MAX_BRIEF_ITEMS,
+                        "items": {"type": "string"},
+                        "description": "Entry ids that recall gave you in this turn"
+                    }
+                },
+                "additionalProperties": false
             }
         },
         "required": ["task"]
@@ -219,16 +276,15 @@ impl SubAgentTool {
     }
 
     /// `isolation` and `profile.tools`, which do not combine.
-    fn child_tools(&self, args: &Value) -> Result<(bool, Option<Vec<RequestedTool>>), Value> {
+    fn child_tools(&self, args: &Value, profile: &Profile) -> Result<bool, Value> {
         let isolated = self.isolation(args)?;
-        let requested = requested_tools(args)?;
-        if isolated && requested.is_some() {
+        if isolated && profile.tools.is_some() {
             return Err(refused(
                 "invalid_arguments",
                 "`profile.tools` cannot be combined with `isolation: \"worktree\"`.",
             ));
         }
-        Ok((isolated, requested))
+        Ok(isolated)
     }
 
     /// ADR-0044 decision 3: a child is one delegation deeper. Its tools are
@@ -286,6 +342,7 @@ impl SubAgentTool {
         &self,
         ctx: &dyn ToolContext,
         label: Option<String>,
+        record: SpawnRecord,
     ) -> Result<ChildIdentity, Value> {
         let limits = self.registry.limits;
         let children = self.children();
@@ -327,25 +384,20 @@ impl SubAgentTool {
             parent_call_id: ctx.function_call_id().to_owned(),
             label,
             ordinal: children.len() + 1,
+            record,
         })
     }
 
     async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
-        let task = match bounded_text(args, "task") {
-            Ok(task) => task,
+        let (task, label, profile, brief) = match spawn_arguments(args) {
+            Ok(arguments) => arguments,
             Err(refusal) => return refusal,
         };
-        let label = args
-            .get("label")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|label| !label.is_empty())
-            .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
-        let (isolated, requested) = match self.child_tools(args) {
-            Ok(tools) => tools,
+        let isolated = match self.child_tools(args, &profile) {
+            Ok(isolated) => isolated,
             Err(refusal) => return refusal,
         };
-        let delegation = match self.delegate(isolated, requested.as_deref()) {
+        let delegation = match self.delegate(isolated, profile.tools.as_deref()) {
             Ok(evidence) => evidence,
             Err(refusal) => return refusal,
         };
@@ -354,9 +406,22 @@ impl SubAgentTool {
             Ok(steps) => steps,
             Err(refusal) => return refusal,
         };
-        let identity = match self.identity(ctx, label) {
+        let identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
             Ok(identity) => identity,
             Err(refusal) => return refusal,
+        };
+        // ADR-0050 decision 9d: the brief names only what this agent itself
+        // sees; the host checks each reference before anything starts.
+        let task = if brief.is_empty() {
+            task
+        } else {
+            match self.registry.host.check_brief(&identity, &brief) {
+                Ok(checked) => match profile::render(&brief, &checked) {
+                    Some(rendered) => format!("{rendered}\n\n{task}"),
+                    None => task,
+                },
+                Err(code) => return brief_refused(code),
+            }
         };
         let agent_id = identity.agent_id.clone();
         let started = child::start(child::Start {
@@ -364,16 +429,14 @@ impl SubAgentTool {
             task,
             steps,
             budget: limits.input_token_budget,
-            instruction: if isolated {
-                self.registry.isolated_instruction.clone()
-            } else {
-                self.registry.instruction.clone()
-            },
+            instruction: self
+                .registry
+                .instruction_for(isolated, profile.soul.as_deref()),
             excluded: Arc::new(self.registry.excluded.clone()),
             host: Arc::clone(&self.registry.host),
             isolated,
             grant: self.registry.grant.clone(),
-            requested: requested.map(Arc::new),
+            requested: profile.tools.map(Arc::new),
         })
         .await;
         match started {
@@ -531,9 +594,9 @@ impl Tool for SubAgentTool {
         match self.action {
             Action::Spawn => {
                 if self.registry.host.supports_worktree_isolation() {
-                    "Start a sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task) and runs alongside other sub-agents. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it works in a git checkout of its own and may change files there, never yours. Then wait_agent for the results."
+                    "Start a sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task) and runs alongside other sub-agents. By default it can read and search but never change anything: use it for independent investigations that would fill your context. With isolation \"worktree\" it works in a git checkout of its own and may change files there, never yours. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
                 } else {
-                    "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context; then wait_agent for the results."
+                    "Start a read-only sub-agent on a self-contained task and return at once with its agent_id. It has its own fresh context (it sees nothing of this conversation but the task), can read and search but never change anything, and runs alongside other sub-agents. Use it for independent investigations that would fill your context. A `profile` names it and gives it a role; a `context` brief passes it quotes, attachments, facts and memory entries that you can see. Then wait_agent for the results."
                 }
             }
             Action::Send => {

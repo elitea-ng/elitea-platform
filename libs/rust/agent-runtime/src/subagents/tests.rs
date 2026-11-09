@@ -28,6 +28,8 @@ use super::*;
 #[derive(Default)]
 struct ChildModel {
     offered: Mutex<Vec<Vec<String>>>,
+    /// The first user text of each request: the task as the child got it.
+    tasks: Mutex<Vec<String>>,
     calls: AtomicUsize,
     /// Set when a `hang` call is dropped (its child was stopped).
     dropped: Arc<AtomicBool>,
@@ -116,6 +118,7 @@ impl Llm for ChildModel {
         self.offered.lock().unwrap().push(offered);
         let texts = user_texts(&request);
         let task = texts.first().cloned().unwrap_or_default();
+        self.tasks.lock().unwrap().push(task.clone());
         let latest = texts.last().cloned().unwrap_or_default();
         let mut words = latest.split_whitespace();
         Ok(match words.next() {
@@ -200,6 +203,9 @@ struct TestHost {
     isolating: bool,
     /// How many checkouts it made.
     checkouts: AtomicUsize,
+    /// Accept every brief (a host that checks references); otherwise the
+    /// trait's default.
+    accepts_briefs: AtomicBool,
 }
 
 impl TestHost {
@@ -217,6 +223,7 @@ impl TestHost {
             instructions: Mutex::new(Vec::new()),
             isolating,
             checkouts: AtomicUsize::new(0),
+            accepts_briefs: AtomicBool::new(false),
         })
     }
 }
@@ -258,6 +265,28 @@ impl SubAgentHost for TestHost {
 
     fn started(&self, child: &ChildIdentity) {
         self.started.lock().unwrap().push(child.clone());
+    }
+
+    fn check_brief(
+        &self,
+        _child: &ChildIdentity,
+        brief: &Brief,
+    ) -> Result<CheckedBrief, &'static str> {
+        if !self.accepts_briefs.load(Ordering::SeqCst) {
+            return profile::check_facts_only(brief);
+        }
+        Ok(CheckedBrief {
+            attachments: brief
+                .attachments
+                .iter()
+                .map(|id| (id.clone(), format!("file {id}")))
+                .collect(),
+            memory_entries: brief
+                .memory_entries
+                .iter()
+                .map(|id| (id.clone(), format!("note {id}")))
+                .collect(),
+        })
     }
 
     fn finished(&self, _child: &ChildIdentity, report: &ChildReport) {
@@ -650,24 +679,142 @@ async fn profile_tools_outside_the_grant_are_not_granted() {
     }
 }
 
+fn spawn_once(args: Value) -> Box<Script> {
+    Box::new(move |n, request| match n {
+        0 => vec![call("spawn-0", SPAWN_AGENT, args.clone())],
+        1 if !agent_ids(request).is_empty() => vec![call(
+            "wait-1",
+            WAIT_AGENT,
+            json!({"agent_ids": agent_ids(request)}),
+        )],
+        _ => vec![text("done")],
+    })
+}
+
+fn spawn_response(responses: &[(String, Value)]) -> Value {
+    responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .map(|(_, value)| value.clone())
+        .unwrap()
+}
+
 #[tokio::test]
-async fn profile_keys_other_than_tools_are_refused() {
+async fn an_invalid_profile_or_brief_is_refused() {
+    for args in [
+        json!({"task": "x", "profile": {"colour": "red"}}),
+        json!({"task": "x", "profile": {"model": "other"}}),
+        json!({"task": "x", "context": {"facts": [""]}}),
+    ] {
+        let host = TestHost::new();
+        let children = subagents(&host);
+        let responses = run_parent("parent", &children, spawn_once(args.clone())).await;
+        assert_eq!(
+            spawn_response(&responses)["code"],
+            "invalid_arguments",
+            "{args}"
+        );
+        assert!(host.started.lock().unwrap().is_empty());
+    }
+}
+
+/// ADR-0050 decision 4: the soul replaces the role text, never the safety
+/// sentence; the display name is the label; the record keeps the digests.
+#[tokio::test]
+async fn a_profile_names_the_child_and_gives_it_a_soul() {
     let host = TestHost::new();
     let children = subagents(&host);
     let responses = run_parent(
         "parent",
         &children,
-        Box::new(|n, _| match n {
-            0 => vec![call(
-                "spawn-0",
-                SPAWN_AGENT,
-                json!({"task": "x", "profile": {"soul": "terse"}}),
-            )],
-            _ => vec![text("done")],
-        }),
+        spawn_once(json!({
+            "task": "answer 1 fine",
+            "profile": {"display_name": "Owl", "soul": "You are a careful reviewer.", "model": "inherit", "avatar": "default:owl"}
+        })),
     )
     .await;
-    assert_eq!(responses[0].1["code"], "invalid_arguments");
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    let instruction = host.instructions.lock().unwrap()[0].clone();
+    assert!(instruction.starts_with("You are a careful reviewer.\n\n"));
+    assert!(instruction.contains(SUBAGENT_SAFETY));
+    assert!(!instruction.contains("read-only sub-agent working for another agent"));
+    assert!(instruction.ends_with("A fixture."));
+    let started = host.started.lock().unwrap()[0].clone();
+    assert_eq!(started.label.as_deref(), Some("Owl"));
+    assert_eq!(started.record.display_name.as_deref(), Some("Owl"));
+    assert_eq!(started.record.avatar.as_deref(), Some("default:owl"));
+    assert_eq!(started.record.profile_digest.len(), 64);
+    assert_eq!(started.record.brief_digest, None);
+    // Every preamble ends with the safety sentence.
+    assert!(CHILD_PREAMBLE.ends_with(SUBAGENT_SAFETY));
+    assert!(ISOLATED_CHILD_PREAMBLE.ends_with(SUBAGENT_SAFETY));
+}
+
+/// ADR-0050 decision 9d: the default host passes facts and refuses any
+/// reference it cannot check; nothing starts on a refusal.
+#[tokio::test]
+async fn the_default_host_refuses_a_reference_in_the_brief() {
+    for (context, code) in [
+        (
+            json!({"excerpts": [{"message_id": "m-1", "quote": "forged"}]}),
+            profile::BRIEF_EXCERPT_NOT_VISIBLE,
+        ),
+        (
+            json!({"attachments": ["att-00000000"]}),
+            profile::BRIEF_ATTACHMENT_NOT_READABLE,
+        ),
+        (
+            json!({"memory_entries": ["12"]}),
+            profile::BRIEF_MEMORY_NOT_RECALLED,
+        ),
+    ] {
+        let host = TestHost::new();
+        let children = subagents(&host);
+        let responses = run_parent(
+            "parent",
+            &children,
+            spawn_once(json!({"task": "x", "context": context})),
+        )
+        .await;
+        assert_eq!(spawn_response(&responses)["code"], code);
+        assert!(host.started.lock().unwrap().is_empty());
+    }
+}
+
+/// A checked brief reaches the child before its task, and the record names
+/// its references.
+#[tokio::test]
+async fn a_checked_brief_reaches_the_child_before_its_task() {
+    let host = TestHost::new();
+    host.accepts_briefs.store(true, Ordering::SeqCst);
+    let children = subagents(&host);
+    let responses = run_parent(
+        "parent",
+        &children,
+        spawn_once(json!({
+            "task": "the task",
+            "context": {
+                "excerpts": [{"message_id": "m-1", "quote": "the plan"}],
+                "attachments": ["att-0011aabb"],
+                "facts": ["a fact"],
+                "memory_entries": ["12"]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    let task = host.model.tasks.lock().unwrap()[0].clone();
+    assert!(task.contains("- From message m-1: \"the plan\""), "{task}");
+    assert!(task.contains("- Attachment att-0011aabb: file att-0011aabb"));
+    assert!(task.contains("- Memory 12: note 12"));
+    assert!(task.ends_with("</untrusted>\n\nthe task"), "{task}");
+    let started = host.started.lock().unwrap()[0].clone();
+    assert!(started.record.brief_digest.is_some());
+    assert_eq!(started.record.brief_refs["message_ids"], json!(["m-1"]));
+    assert_eq!(
+        started.record.brief_refs["attachments"],
+        json!(["att-0011aabb"])
+    );
 }
 
 #[tokio::test]
