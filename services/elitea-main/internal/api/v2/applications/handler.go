@@ -597,7 +597,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			if !applySoul(w, vBody, req.InitialVersion) {
 				return
 			}
-			if !applyAvatarPack(w, vBody, projectID, req.InitialVersion) {
+			if !applyAvatarPack(w, vBody, projectID, req.InitialVersion, storedAvatarPacks{}) {
 				return
 			}
 			initialVariables, _ = vBody["variables"].([]any)
@@ -1253,7 +1253,7 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	if !applySoul(w, body, input) {
 		return
 	}
-	if !applyAvatarPack(w, body, projectID, input) {
+	if !applyAvatarPack(w, body, projectID, input, h.avatarPacksForCreate(r.Context(), projectID, applicationID)) {
 		return
 	}
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
@@ -1487,7 +1487,7 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// ADR-0050 decision 6: after the meta branches, because the pack's still
 	// joins the meta patch as icon_meta.
-	if !applyAvatarPack(w, body, projectID, &v) {
+	if !applyAvatarPack(w, body, projectID, &v, h.avatarPacksForUpdate(r.Context(), projectID, applicationID, versionID)) {
 		return
 	}
 

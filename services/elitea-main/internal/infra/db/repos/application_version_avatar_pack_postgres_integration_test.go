@@ -71,19 +71,38 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entit
 SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC' FROM participant`, conversationID); err != nil {
 		t.Fatal(err)
 	}
+	// A participant of another project bound to the same version id is a
+	// different agent: it must not get this version's pack.
+	if _, err := pool.Exec(ctx, `
+WITH participant AS (
+    INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta)
+    VALUES (gen_random_uuid(), 'application', '{"id": 61, "project_id": 2}'::jsonb)
+    RETURNING id
+)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC' FROM participant`, conversationID); err != nil {
+		t.Fatal(err)
+	}
 
 	participants, err := NewConversationsRepo(pool).ListParticipants(ctx, "1", itoa(int64(conversationID)))
 	if err != nil {
 		t.Fatalf("list participants: %v", err)
 	}
-	if len(participants) != 1 {
+	if len(participants) != 2 {
 		t.Fatalf("participants = %d", len(participants))
 	}
-	got, _ := participants[0].Persona["avatar_pack"].(map[string]any)
+	local, foreign := participants[0], participants[1]
+	if project, _ := positiveInteger(local.EntityMeta["project_id"]); project != 1 {
+		local, foreign = foreign, local
+	}
+	if _, ok := foreign.Persona["avatar_pack"]; ok {
+		t.Fatalf("another project's participant got this project's pack: %v", foreign.Persona)
+	}
+	got, _ := local.Persona["avatar_pack"].(map[string]any)
 	slots, _ := got["slots"].(map[string]any)
 	stillSlot, _ := slots["still"].(map[string]any)
 	if stillSlot["url"] != still {
-		t.Fatalf("persona.avatar_pack = %v", participants[0].Persona)
+		t.Fatalf("persona.avatar_pack = %v", local.Persona)
 	}
 
 	// Cleared: the next read carries no pack.
@@ -94,7 +113,9 @@ SELECT $1, participant.id, '{"version_id": 71}'::jsonb, now() AT TIME ZONE 'UTC'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := participants[0].Persona["avatar_pack"]; ok {
-		t.Fatalf("a cleared pack still reached the persona: %v", participants[0].Persona)
+	for _, participant := range participants {
+		if _, ok := participant.Persona["avatar_pack"]; ok {
+			t.Fatalf("a cleared pack still reached the persona: %v", participant.Persona)
+		}
 	}
 }

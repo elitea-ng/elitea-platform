@@ -172,6 +172,24 @@ describe('EditApplication — the Avatar tab', () => {
     expect(screen.getByTestId('avatar-slot-waking')).toHaveAttribute('data-filled', 'false');
   }, 20_000);
 
+  it('refuses a video for a state when the still is an SVG, which the server takes as no poster', async () => {
+    const svgStill = media('ab', 'svg');
+    server.use(
+      getGetApplicationMockHandler(
+        detail({ schema: 'elitea.avatar_pack/v1', slots: { still: { url: svgStill, media_type: 'image/svg+xml' } } }),
+      ),
+    );
+    server.use(http.post('*/elitea_core/agent_media/prompt_lib/:projectId', () => HttpResponse.json(mediaObject(SPEAKING), { status: 201 })));
+    const user = await openAvatarTab();
+    await waitFor(() => expect(screen.getByTestId('avatar-slot-still').querySelector('img')).not.toBeNull());
+
+    await user.click(screen.getByTestId('avatar-slot-speaking-upload'));
+    await user.upload(screen.getByTestId('avatar-file-input'), new File(['x'], 'talk.webm', { type: 'video/webm' }));
+
+    expect(await screen.findByTestId('avatar-problem')).toHaveTextContent('PNG, JPEG or WebP still');
+    expect(screen.getByTestId('avatar-slot-speaking')).toHaveAttribute('data-filled', 'false');
+  }, 20_000);
+
   it('asks for a still before a state, when the version has no pack', async () => {
     server.use(getGetApplicationMockHandler(detail(null)));
     const user = await openAvatarTab();

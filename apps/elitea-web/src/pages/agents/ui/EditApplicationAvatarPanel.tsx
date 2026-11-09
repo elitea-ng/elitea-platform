@@ -94,10 +94,20 @@ export function EditApplicationAvatarPanel({ projectId, versionFields, disabled 
   const place = useCallback(
     (name: AvatarSlotName, media: AgentMediaObject) => {
       // A video slot takes the still as its poster: the server needs one,
-      // and the still is what the state shows before the video plays.
+      // and the still is what the state shows before the video plays. The
+      // server takes a PNG, JPEG or WebP poster, never an SVG.
       const poster = isVideoUrl(media.url) ? still?.url : undefined;
       if (isVideoUrl(media.url) && poster === undefined) {
         setProblem(t('pages.agents.editApplication.avatar.needsStill', 'Add a still first. A video uses it as its poster.'));
+        return;
+      }
+      if (poster !== undefined && poster.toLowerCase().endsWith('.svg')) {
+        setProblem(
+          t(
+            'pages.agents.editApplication.avatar.svgPoster',
+            'A video needs a PNG, JPEG or WebP still as its poster. Use one of those for the still, or an animated WebP for this state.',
+          ),
+        );
         return;
       }
       setProblem(undefined);

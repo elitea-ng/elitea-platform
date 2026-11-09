@@ -69,8 +69,17 @@ func inspectAnimatedWebP(chunks []riffChunk) (Media, error) {
 			if frames > maxFrames {
 				return Media{}, refuse("the animation has more than %d frames", maxFrames)
 			}
+			// The ANMF header names the frame's offset (in units of two
+			// pixels) and size; the frame must fit inside the canvas.
+			frameX := 2 * leUint24(chunk.payload[0:3])
+			frameY := 2 * leUint24(chunk.payload[3:6])
+			frameW := leUint24(chunk.payload[6:9]) + 1
+			frameH := leUint24(chunk.payload[9:12]) + 1
+			if frameX+frameW > width || frameY+frameH > height {
+				return Media{}, refuse("a WebP animation frame does not fit inside the canvas")
+			}
 			durationMS += leUint24(chunk.payload[12:15])
-			if err := decodeFrame(chunk.payload[16:]); err != nil {
+			if err := decodeFrame(chunk.payload[16:], frameW, frameH); err != nil {
 				return Media{}, err
 			}
 		}
@@ -91,8 +100,12 @@ func inspectAnimatedWebP(chunks []riffChunk) (Media, error) {
 }
 
 // decodeFrame wraps one frame's image chunks (ALPH, VP8 or VP8L) as a
-// still WebP and decodes it with the standard decoder.
-func decodeFrame(frameData []byte) error {
+// still WebP and decodes it with the standard decoder. The bitstream's own
+// size is read first and must equal the ANMF frame size (already inside the
+// canvas, so at most MaxEdge): the decoder sizes its pixel buffer from the
+// bitstream header, so a header that claims a huge image would otherwise
+// allocate before the decode fails.
+func decodeFrame(frameData []byte, frameW, frameH int) error {
 	var body bytes.Buffer
 	body.WriteString("WEBP")
 	var bitstream []byte
@@ -122,6 +135,16 @@ func decodeFrame(frameData []byte) error {
 	size := uint32(body.Len())
 	file.Write([]byte{byte(size), byte(size >> 8), byte(size >> 16), byte(size >> 24)})
 	file.Write(body.Bytes())
+	cfg, err := webp.DecodeConfig(bytes.NewReader(file.Bytes()))
+	if err != nil {
+		return refuse("a WebP animation frame is not a valid image")
+	}
+	if cfg.Width != frameW || cfg.Height != frameH {
+		return refuse("a WebP animation frame's image is not the size its frame header names")
+	}
+	if err := checkEdge(cfg.Width, cfg.Height); err != nil {
+		return err
+	}
 	if _, err := webp.Decode(bytes.NewReader(file.Bytes())); err != nil {
 		return refuse("a WebP animation frame is not a valid image")
 	}

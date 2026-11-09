@@ -483,24 +483,37 @@ func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
 	s string,
 	items []conversations.Participant,
 ) {
-	byVersion := map[int32][]int{}
+	// Version ids are per-schema serials, so only a participant of THIS
+	// project is looked up here, and its version must belong to its own
+	// application: a catalogue agent's version 42 is not this project's
+	// version 42 (the same guard as enrichParticipantNesting).
+	type versionKey struct {
+		application int64
+		version     int32
+	}
+	byVersion := map[versionKey][]int{}
 	for i := range items {
 		if items[i].EntityName != participantEntityApplication {
 			continue
 		}
-		if versionID, ok := participantVersionID(items[i].EntitySettings); ok {
-			byVersion[versionID] = append(byVersion[versionID], i)
+		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
+		project, okProject := positiveInteger(items[i].EntityMeta["project_id"])
+		versionID, okVersion := participantVersionID(items[i].EntitySettings)
+		if !okApplication || !okProject || !okVersion || schema(strconv.FormatInt(project, 10)) != s {
+			continue
 		}
+		key := versionKey{application: applicationID, version: versionID}
+		byVersion[key] = append(byVersion[key], i)
 	}
 	if len(byVersion) == 0 {
 		return
 	}
 	versionIDs := make([]int32, 0, len(byVersion))
-	for versionID := range byVersion {
-		versionIDs = append(versionIDs, versionID)
+	for key := range byVersion {
+		versionIDs = append(versionIDs, key.version)
 	}
 	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
-		SELECT av.id, av.avatar_pack::text
+		SELECT av.application_id, av.id, av.avatar_pack::text
 		FROM %s.application_versions av
 		WHERE av.id = ANY($1::int[]) AND jsonb_typeof(av.avatar_pack) = 'object'`, s), versionIDs)
 	if err != nil {
@@ -508,16 +521,17 @@ func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var applicationID int64
 		var versionID int32
 		var raw string
-		if err := rows.Scan(&versionID, &raw); err != nil {
+		if err := rows.Scan(&applicationID, &versionID, &raw); err != nil {
 			continue
 		}
 		var pack map[string]any
 		if json.Unmarshal([]byte(raw), &pack) != nil {
 			continue
 		}
-		for _, i := range byVersion[versionID] {
+		for _, i := range byVersion[versionKey{application: applicationID, version: versionID}] {
 			if items[i].Persona == nil {
 				items[i].Persona = map[string]any{}
 			}

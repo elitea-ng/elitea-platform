@@ -5887,6 +5887,7 @@
   "pages.agents.editApplication.avatar.slot.error": "Error",
   "pages.agents.editApplication.avatar.slot.waking": "Waking",
   "pages.agents.editApplication.avatar.needsStill": "Add a still first. A video uses it as its poster.",
+  "pages.agents.editApplication.avatar.svgPoster": "A video needs a PNG, JPEG or WebP still as its poster. Use one of those for the still, or an animated WebP for this state.",
   "pages.agents.editApplication.avatar.uploadFailed": "The file could not be uploaded.",
   "pages.agents.editApplication.avatar.intro": "The avatar shows in chat. Each state can have its own image, animated WebP, or muted MP4 or WebM loop, at most 4 seconds, 512 px and 2 MiB. A state with no file shows the still with the default motion.",
   "pages.agents.editApplication.avatar.own": "Own file",

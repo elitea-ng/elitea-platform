@@ -246,6 +246,14 @@ func Download(store storage.ObjectStore) http.HandlerFunc {
 			rng = parseRange(header)
 		}
 		body, info, err := store.Get(r.Context(), ref, rng)
+		if err != nil && rng != nil && !errors.Is(err, storage.ErrNotFound) {
+			// A backend may fail a range past the end with its own error;
+			// the object's existence decides between 416 and 404.
+			if head, statErr := store.Stat(r.Context(), ref); statErr == nil {
+				writeUnsatisfiable(w, head.Size)
+				return
+			}
+		}
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -259,9 +267,20 @@ func Download(store storage.ObjectStore) http.HandlerFunc {
 		w.Header().Set("ETag", `"`+strings.TrimSuffix(name, "."+extension)+`"`)
 		w.Header().Set("Accept-Ranges", "bytes")
 		status := http.StatusOK
-		if rng != nil && info.TotalSize > 0 {
-			end := rng.Start + info.Size - 1
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rng.Start, end, info.TotalSize))
+		if rng != nil {
+			// A ranged read always answers 206 with Content-Range (RFC 7233):
+			// a 200 carrying only the range would read as the whole file. A
+			// backend may leave TotalSize at 0; the range's own end is then
+			// the best known length, as the artifacts download does.
+			total := info.TotalSize
+			if total <= 0 {
+				total = rng.Start + info.Size
+			}
+			if info.Size <= 0 || rng.Start >= total {
+				writeUnsatisfiable(w, total)
+				return
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", rng.Start, rng.Start+info.Size-1, total))
 			status = http.StatusPartialContent
 		}
 		if info.Size > 0 {
@@ -273,6 +292,13 @@ func Download(store storage.ObjectStore) http.HandlerFunc {
 		}
 		_, _ = io.Copy(w, body)
 	}
+}
+
+// writeUnsatisfiable answers 416 with the current length.
+func writeUnsatisfiable(w http.ResponseWriter, total int64) {
+	w.Header().Del("Content-Length")
+	w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(total, 10))
+	w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 }
 
 // parseRange reads one `bytes=start-[end]` range; nil for anything else.

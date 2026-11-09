@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -32,6 +34,19 @@ type memoryStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	types   map[string]string
+	// noTotal leaves TotalSize at 0 on a ranged Get, as the storage
+	// contract allows a backend to.
+	noTotal bool
+}
+
+func (m *memoryStore) Stat(_ context.Context, ref storage.ObjectRef) (storage.ObjectInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, ok := m.objects[ref.StorageKey("")]
+	if !ok {
+		return storage.ObjectInfo{}, storage.ErrNotFound
+	}
+	return storage.ObjectInfo{Key: ref.Key(), Size: int64(len(data))}, nil
 }
 
 func newMemoryStore() *memoryStore {
@@ -63,7 +78,12 @@ func (m *memoryStore) Get(_ context.Context, ref storage.ObjectRef, rng *storage
 		if end < 0 || end >= int64(len(data)) {
 			end = int64(len(data)) - 1
 		}
-		info.TotalSize = int64(len(data))
+		if rng.Start >= int64(len(data)) {
+			return nil, storage.ObjectInfo{}, errors.New("range start past the end")
+		}
+		if !m.noTotal {
+			info.TotalSize = int64(len(data))
+		}
 		data = data[rng.Start : end+1]
 		info.Size = int64(len(data))
 	}
@@ -234,6 +254,31 @@ func TestUploadDetectsTypeFromBytesAndServesHardened(t *testing.T) {
 	handler.ServeHTTP(partial, ranged)
 	if partial.Code != http.StatusPartialContent || partial.Body.Len() != 8 {
 		t.Fatalf("range: %d %d", partial.Code, partial.Body.Len())
+	}
+	if got := partial.Header().Get("Content-Range"); got != fmt.Sprintf("bytes 0-7/%d", len(still)) {
+		t.Fatalf("Content-Range = %q", got)
+	}
+
+	// A range past the end is 416 with the length, not 404.
+	past := httptest.NewRequest(http.MethodGet, object.URL, nil)
+	past.Header.Set("Range", fmt.Sprintf("bytes=%d-", len(still)+10))
+	unsatisfiable := httptest.NewRecorder()
+	handler.ServeHTTP(unsatisfiable, past)
+	if unsatisfiable.Code != http.StatusRequestedRangeNotSatisfiable ||
+		unsatisfiable.Header().Get("Content-Range") != fmt.Sprintf("bytes */%d", len(still)) {
+		t.Fatalf("range past the end: %d %q", unsatisfiable.Code, unsatisfiable.Header().Get("Content-Range"))
+	}
+
+	// A backend that leaves TotalSize at 0 still gets a 206 with a
+	// Content-Range, never a 200 carrying only the range.
+	store.noTotal = true
+	tail := httptest.NewRequest(http.MethodGet, object.URL, nil)
+	tail.Header.Set("Range", "bytes=8-")
+	tailRec := httptest.NewRecorder()
+	handler.ServeHTTP(tailRec, tail)
+	store.noTotal = false
+	if tailRec.Code != http.StatusPartialContent || tailRec.Header().Get("Content-Range") != fmt.Sprintf("bytes 8-%d/%d", len(still)-1, len(still)) {
+		t.Fatalf("range without a total: %d %q", tailRec.Code, tailRec.Header().Get("Content-Range"))
 	}
 
 	// Another project's id in the path does not reach this project's object.
