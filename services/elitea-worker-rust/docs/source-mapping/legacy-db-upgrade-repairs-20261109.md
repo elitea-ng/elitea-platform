@@ -65,13 +65,15 @@ SQL. The diff then shows no missing column, and no missing table other than the 
 ## Changed paths
 
 - `services/elitea-main/internal/infra/db/migrate/bootstrap.go`:
-  - `Bootstrap` adopts a legacy-built database (`:76-77`);
-  - `legacyAdoptionColumns` is the fixed list (`:125`);
-  - `adoptLegacyBuiltTables` (`:141`): catalog probe (`:157`), `ALTER` (`:161`), INFO log per column (`:166`).
+  - `Bootstrap` adopts a legacy-built database (`:80-81`);
+  - `legacyAdoptionColumns` is the fixed list (`:129`);
+  - `adoptLegacyBuiltTables` (`:151`): one catalog query for all five columns (`:158`), the lock-wait bound (`:142`, `:180`),
+    `ALTER` (`:186`), a readable lock-timeout error (`:190`), and an INFO log per column (`:196`).
 - `services/elitea-main/migrations/tenant/0164_legacy_built_tenant_shape.sql`:
-  - `owner_id`: add, backfill and NOT NULL (`:52-55`);
-  - `env_vars` (`:64`) and `uuid` (`:73`);
-  - `index_meta` (`:76`) and `social_likes` (`:87`).
+  - `owner_id` (`:53-66`): added NOT NULL with the project as a constant default (catalog only, no rewrite); the default
+    is then dropped to match `create_tenant_schema`, and 0128's PROJECT comment is written;
+  - `env_vars` (`:70`) and `uuid` (`:79`, probed in `pg_attribute`);
+  - `index_meta` (`:82`) and `social_likes` (`:93`).
 - `services/elitea-main/internal/infra/db/dbtest/legacyshape/legacyshape.go`: the legacy-built fixture, measured
   from the dump's DDL. Test support only.
 - Tests (below) and `internal/infra/db/migrate/manifest_test.go`, with the tenant head at 164.
@@ -134,6 +136,12 @@ upgraded by the production sequence: `Bootstrap`, `ApplyShared`, `ApplyTenant(1)
    - Two concurrent `Bootstrap` calls on a legacy-built database both succeed.
    - The INFO log shows each of the five columns adopted exactly once.
    - The shared history then completes.
+4. **`TestAdoptionFailsReadablyWhenTheAuditTableStaysBusy`**
+   - Another session holds ROW EXCLUSIVE on the legacy-built audit table.
+   - `Bootstrap` fails after about 10 s with 55P03 and a message naming the table, instead of waiting without end.
+   - Nothing is half-applied: a retry once the table is idle adopts all five columns.
+
+Test 1 also checks that `owner_id` keeps no default and carries 0128's PROJECT comment.
 
 Proof that tests 1 and 3 fail without the fix: with the adoption call disabled, test 1 fails with the 0206 42P01
 error and test 3 adopts nothing.
@@ -159,6 +167,7 @@ real legacy database it lives in `public`, owned by the auth service.
 - **Adoption itself.** Five `ADD COLUMN` statements on nullable columns with no default. These are catalog-only and
   do not rewrite the table: 237,050 rows on the dump.
 - **Tenant 0164.** It runs once per project, through the ledger.
+  - `owner_id` is added with a constant default, so no row is rewritten. The default is then dropped.
   - The `uuid ADD COLUMN … DEFAULT gen_random_uuid()` rewrites `elitea_tools`. On the dump that is p_1 with 0 rows
     and p_2 with 57 rows. The native p_118 and p_119 already have the column, so nothing is rewritten there (N1).
   - The full migrate of the dump, shared 173→232 plus four tenants, took about 0.55 s.
@@ -179,7 +188,8 @@ real legacy database it lives in `public`, owned by the auth service.
   fails.
 - **Visible.** Every added column is logged at INFO with its table, column and type. No payload is logged.
 - **Bounded.** The list is fixed (five entries) and is never computed from a diff, so the step cannot grow by
-  accident.
+  accident. The ALTER waits at most 10 s for the table lock (`SET LOCAL lock_timeout`). Past that it fails with a
+  readable 55P03 error, so the Job is retried, rather than queueing every audit insert behind it (test 4).
 
 ## Security
 
@@ -187,7 +197,7 @@ real legacy database it lives in `public`, owned by the auth service.
 - **SQL construction.** The identifiers come from a compile-time list and are quoted with `pgx.Identifier.Sanitize`.
   The probe is parameterised. 0164 builds no SQL from input.
 - **The `owner_id` backfill widens no visibility (C4).**
-  - The backfill is this schema's project, taken from the schema name (`0164:47`, as `0131:165`), never from input.
+  - The backfill is this schema's project, taken from the schema name (`0164:53`, as `0131:165`), never from input.
   - The column means PROJECT, not user (`migrations/tenant/0128_owner_id_column_meanings.sql:54-60, 164-165`).
   - A legacy toolkit had no owner. It was visible to everyone in its project because toolkit reads are scoped by the
     project's schema, and no read filters on `elitea_tools.owner_id`. The column is written only on insert
@@ -202,7 +212,7 @@ real legacy database it lives in `public`, owned by the auth service.
 
 | Component × phase | Class | Enforced by | Proven by |
 |---|---|---|---|
-| Main migrate Job × admission (schema upgrade) | **I**, idempotent retry | `bootstrap.go:141-166` (probe, then add once); `0164` guarded per column and table; ledger plus advisory lock | tests 2 and 3; rerun on the dump adds nothing (0 adoption logs) |
+| Main migrate Job × admission (schema upgrade) | **I**, idempotent retry | `bootstrap.go:151-199` (probe, then add once); `0164` guarded per column and table; ledger plus advisory lock | tests 2 and 3; rerun on the dump adds nothing (0 adoption logs) |
 
 No other component or phase is touched.
 
@@ -218,7 +228,33 @@ No other component or phase is touched.
 | p_2 toolkits | 57 rows, 57 distinct uuids, `owner_id = 2` on all, `env_vars = {}` |
 | `audit.VerifyChain` after one new row | checked 1, unchained 237,050, no break (C2) |
 
-Browser evidence: see below.
+Browser evidence: see "Browser" below.
+
+## Browser
+
+Pending: a disposable production-profile stack restored from the real-model dump.
+
+## Code review (`/code-review high`, ten findings)
+
+**Fixed:**
+
+| Finding | Fix |
+|---|---|
+| `owner_id` row rewrite | catalog-only constant default, then dropped |
+| ALTER with no lock bound | `lock_timeout`, readable 55P03 error, test 4 |
+| `owner_id` comment missing | 0128's comment written |
+| Five sequential probes | one catalog query, cost comment corrected |
+| `information_schema` probe | `pg_attribute` |
+| Redundant `IF NOT EXISTS` and probes | removed |
+| Three copies of the upgraded-database helper | `dbtest/legacyupgraded`; migrate keeps an inline copy because the helper imports migrate |
+
+**Not changed:**
+
+- **"A legacy runtime still writing would fail on `owner_id NOT NULL`."** The legacy runtime no longer writes these
+  databases (#1405). `create_tenant_schema` declares the column NOT NULL with no default, so the upgraded schema
+  matches it.
+- **"An empty `index_meta` is a loss."** This is the stated gap C5 that the orchestrator accepted. The legacy index
+  metadata was never in a table, and nothing in the database is deleted.
 
 ## Follow-ups
 

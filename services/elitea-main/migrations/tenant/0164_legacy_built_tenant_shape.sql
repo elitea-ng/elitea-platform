@@ -31,18 +31,24 @@
 -- project and widens nothing.
 --
 -- A schema that already has a column or table (every schema Main built)
--- records this migration and changes nothing: each column is added only when
--- it is absent, and each table with IF NOT EXISTS.
+-- records this migration and changes nothing. Columns are probed in
+-- pg_attribute, not information_schema, which hides columns the migrating role
+-- has no privilege on (as 0128 and 0154 do).
+--
+-- owner_id is added NOT NULL with the project as a constant default, which is
+-- a catalog-only change (no row rewrite), and the default is then dropped so
+-- the column matches create_tenant_schema's, which has none. Its meaning is
+-- recorded with the same comment 0128 writes, which 0128 skipped here because
+-- the column did not exist yet.
 DO $$
 DECLARE
     v_project_id integer;
 BEGIN
     IF to_regclass('elitea_tools') IS NOT NULL THEN
         IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = current_schema()
-               AND table_name = 'elitea_tools'
-               AND column_name = 'owner_id'
+            SELECT 1 FROM pg_attribute
+             WHERE attrelid = to_regclass('elitea_tools')
+               AND attname = 'owner_id' AND attnum > 0 AND NOT attisdropped
         ) THEN
             v_project_id := NULLIF(substring(current_schema() FROM '^p_([0-9]+)$'), '')::integer;
             IF v_project_id IS NULL THEN
@@ -50,25 +56,25 @@ BEGIN
                     '0164: the effective schema % is not a tenant schema, so the project of this schema is unknown',
                     current_schema();
             END IF;
-            ALTER TABLE elitea_tools ADD COLUMN owner_id INTEGER;
-            UPDATE elitea_tools SET owner_id = v_project_id;
-            ALTER TABLE elitea_tools ALTER COLUMN owner_id SET NOT NULL;
+            EXECUTE format('ALTER TABLE elitea_tools ADD COLUMN owner_id INTEGER NOT NULL DEFAULT %s', v_project_id);
+            ALTER TABLE elitea_tools ALTER COLUMN owner_id DROP DEFAULT;
+            BEGIN
+                COMMENT ON COLUMN elitea_tools.owner_id IS
+                    'PROJECT id, not user id. Pull request #522 settled it; author_id holds the user. A schema built by the legacy runtime has no such column.';
+            EXCEPTION
+                WHEN insufficient_privilege THEN
+                    RAISE NOTICE '0164: elitea_tools belongs to another role, owner_id comment skipped; 0128 stays the record';
+            END;
         END IF;
 
-        IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = current_schema()
-               AND table_name = 'elitea_tools'
-               AND column_name = 'env_vars'
-        ) THEN
-            ALTER TABLE elitea_tools ADD COLUMN env_vars JSONB DEFAULT '{}'::jsonb;
-        END IF;
+        ALTER TABLE elitea_tools ADD COLUMN IF NOT EXISTS env_vars JSONB DEFAULT '{}'::jsonb;
 
+        -- Probed, not IF NOT EXISTS: an existing uuid column must not gain a
+        -- second UNIQUE constraint.
         IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = current_schema()
-               AND table_name = 'elitea_tools'
-               AND column_name = 'uuid'
+            SELECT 1 FROM pg_attribute
+             WHERE attrelid = to_regclass('elitea_tools')
+               AND attname = 'uuid' AND attnum > 0 AND NOT attisdropped
         ) THEN
             ALTER TABLE elitea_tools ADD COLUMN uuid UUID UNIQUE DEFAULT gen_random_uuid();
         END IF;

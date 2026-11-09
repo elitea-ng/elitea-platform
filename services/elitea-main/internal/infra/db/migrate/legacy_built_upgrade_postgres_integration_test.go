@@ -205,6 +205,19 @@ func TestALegacyBuiltDatabaseUpgradesToHeadAndItsAuditChainVerifies(t *testing.T
 		t.Fatalf("toolkits = %d rows, %d owned by project 1, %d distinct uuids, %d empty env_vars, owner_id nullable %s; want 2, 2, 2, 2, NO",
 			rows, owned, distinctUUIDs, emptyEnv, ownerNullable)
 	}
+	// No default stays behind (create_tenant_schema declares none), and the
+	// column carries the meaning 0128 records on every other schema.
+	var ownerDefault, ownerComment *string
+	if err := pool.QueryRow(ctx, `
+		SELECT pg_get_expr(d.adbin, d.adrelid), col_description(a.attrelid, a.attnum)
+		  FROM pg_attribute a
+		  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		 WHERE a.attrelid = 'p_1.elitea_tools'::regclass AND a.attname = 'owner_id'`).Scan(&ownerDefault, &ownerComment); err != nil {
+		t.Fatalf("read owner_id's default and comment: %v", err)
+	}
+	if ownerDefault != nil || ownerComment == nil || !strings.HasPrefix(*ownerComment, "PROJECT id, not user id.") {
+		t.Fatalf("owner_id default %v, comment %v; want no default and 0128's PROJECT comment", ownerDefault, ownerComment)
+	}
 	var settings string
 	if err := pool.QueryRow(ctx, `SELECT settings::text FROM p_1.elitea_tools WHERE name = 'legacy toolkit one'`).Scan(&settings); err != nil || settings != `{"a": 1}` {
 		t.Fatalf("legacy toolkit settings = %q, %v; want the legacy value", settings, err)
@@ -271,6 +284,44 @@ func TestBootstrapTakesNoLockOnAnAlreadyMigratedAuditTable(t *testing.T) {
 	}
 	if ledgerAfter != ledgerBefore {
 		t.Fatalf("ledger rows %d -> %d; Bootstrap must not touch the ledger", ledgerBefore, ledgerAfter)
+	}
+}
+
+func TestAdoptionFailsReadablyWhenTheAuditTableStaysBusy(t *testing.T) {
+	pool := newLegacyBuiltDatabase(t)
+	ctx := context.Background()
+
+	// A long transaction on the legacy-built audit table. The adoption ALTER
+	// needs ACCESS EXCLUSIVE, so it waits at most legacyAdoptionLockTimeout
+	// and fails with a readable error instead of holding every audit insert
+	// queued behind it.
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `LOCK TABLE centry.audit_events IN ROW EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = Bootstrap(ctx, pool, bootstrapschema.Initial)
+	waited := time.Since(started)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" || !strings.Contains(err.Error(), "held the table") {
+		t.Fatalf("Bootstrap behind a busy audit table = %v; want a 55P03 lock timeout naming the table", err)
+	}
+	if waited < legacyAdoptionLockTimeout || waited > legacyAdoptionLockTimeout+20*time.Second {
+		t.Fatalf("Bootstrap waited %s; want about %s", waited, legacyAdoptionLockTimeout)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing was half-applied: the retry adopts all five columns.
+	if _, err := Bootstrap(ctx, pool, bootstrapschema.Initial); err != nil {
+		t.Fatalf("Bootstrap retry: %v", err)
+	}
+	if got := columnType(t, pool, "centry", "audit_events", "cost_source"); got != "character varying(64)" {
+		t.Fatalf("cost_source after the retry = %q", got)
 	}
 }
 

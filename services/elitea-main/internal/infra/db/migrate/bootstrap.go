@@ -2,10 +2,13 @@ package migrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -44,7 +47,8 @@ const bootstrapScope Scope = "bootstrap"
 // IDEMPOTENT, and cheap when there is nothing to do: the presence of
 // centry.project is a question, not an error path — to_regclass returns NULL
 // for a missing relation rather than raising — so an already-bootstrapped
-// database costs one query and returns false.
+// database costs two queries (this probe and adoptLegacyBuiltTables' catalog
+// probe) and returns false.
 //
 // The whole thing runs in ONE transaction under an advisory lock, so two
 // migration Jobs racing on a fresh install cannot both apply it: the loser
@@ -130,37 +134,63 @@ var legacyAdoptionColumns = []legacyAdoptionColumn{
 	{"centry", "audit_events", "cost_source", "VARCHAR(64)"},
 }
 
+// legacyAdoptionLockTimeout bounds how long an adoption ALTER waits for the
+// table lock. On a live database a long transaction on the audit table would
+// otherwise hold the ALTER, and every audit insert queued behind it, without
+// end; past the bound the migrate Job fails with a readable error and is
+// retried.
+const legacyAdoptionLockTimeout = 10 * time.Second
+
 // adoptLegacyBuiltTables adds each column of legacyAdoptionColumns that is
 // missing from a table that exists, inside Bootstrap's transaction and lock.
 //
-// It reads the catalog first and alters only when a column is absent, so a
-// database that already has the columns (every native one, and every one past
-// shared 0206) takes no ACCESS EXCLUSIVE lock on the audit table. A table that
-// does not exist is left alone; the numbered histories decide what happens to
-// it.
+// One catalog query finds the missing columns, and only those are altered, so
+// a database that already has them (every native one, and every one past
+// shared 0206) takes no lock on the audit table. A table that does not exist is
+// left alone; the numbered histories decide what happens to it.
 func adoptLegacyBuiltTables(ctx context.Context, tx pgx.Tx) error {
-	for _, c := range legacyAdoptionColumns {
-		table := pgx.Identifier{c.schema, c.table}.Sanitize()
-		var tableExists, columnExists bool
-		if err := tx.QueryRow(ctx, `
-			SELECT to_regclass($1) IS NOT NULL,
-			       EXISTS (
-			           SELECT 1 FROM pg_attribute
-			            WHERE attrelid = to_regclass($1)
-			              AND attname = $2
-			              AND attnum > 0
-			              AND NOT attisdropped)`,
-			table, c.column,
-		).Scan(&tableExists, &columnExists); err != nil {
-			return fmt.Errorf("migrate: probe %s.%s.%s on a legacy-built database: %w", c.schema, c.table, c.column, err)
-		}
-		if !tableExists || columnExists {
-			continue
-		}
+	tables := make([]string, len(legacyAdoptionColumns))
+	columns := make([]string, len(legacyAdoptionColumns))
+	for i, c := range legacyAdoptionColumns {
+		tables[i] = pgx.Identifier{c.schema, c.table}.Sanitize()
+		columns[i] = c.column
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT c.ord - 1
+		  FROM unnest($1::text[], $2::text[]) WITH ORDINALITY AS c(tbl, col, ord)
+		 WHERE to_regclass(c.tbl) IS NOT NULL
+		   AND NOT EXISTS (
+		       SELECT 1 FROM pg_attribute a
+		        WHERE a.attrelid = to_regclass(c.tbl)
+		          AND a.attname = c.col
+		          AND a.attnum > 0
+		          AND NOT a.attisdropped)
+		 ORDER BY c.ord`, tables, columns)
+	if err != nil {
+		return fmt.Errorf("migrate: probe a legacy-built database for missing columns: %w", err)
+	}
+	missing, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+	if err != nil {
+		return fmt.Errorf("migrate: probe a legacy-built database for missing columns: %w", err)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", legacyAdoptionLockTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("migrate: bound the adoption lock wait: %w", err)
+	}
+	for _, i := range missing {
+		c := legacyAdoptionColumns[i]
 		if _, err := tx.Exec(ctx, fmt.Sprintf(
-			"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s",
-			table, pgx.Identifier{c.column}.Sanitize(), c.sqlType,
+			"ALTER TABLE %s ADD COLUMN %s %s",
+			tables[i], pgx.Identifier{c.column}.Sanitize(), c.sqlType,
 		)); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+				return fmt.Errorf("migrate: add %s.%s.%s on a legacy-built database: another session held the table for more than %s; retry the migration when it is idle: %w",
+					c.schema, c.table, c.column, legacyAdoptionLockTimeout, err)
+			}
 			return fmt.Errorf("migrate: add %s.%s.%s on a legacy-built database: %w", c.schema, c.table, c.column, err)
 		}
 		slog.InfoContext(ctx, "migrate: added a column the legacy-era schema declares to a legacy-built table",
