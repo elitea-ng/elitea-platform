@@ -184,6 +184,6 @@ The web and elitea-main images take the brand as a build argument: `podman build
 4. If the field is an identifier a store or the OS fixes for good, add it to `PERMANENT_FIELDS`. If another brand must not reuse ELITEA's value, add it to `DISTINCT_FIELDS` in `scripts/brand-check.mjs`.
 5. Add a row to the table on this page.
 
-A field changes `formatVersion` only when an existing field changes meaning. Adding a required field is a breaking change for brand repositories: say so in `docs/UPGRADING.md`.
+A field changes `formatVersion` only when an existing field changes meaning. Adding a required field is a breaking change for brand repositories: say so in an upgrade note, `docs/upgrading/<date>-<issue>-<slug>.md`.
 
 An asset works the same way: add a row to `ASSETS` in `schema.mjs`, a case to `placeholder-assets.mjs`, the file to both brands, and a row to the asset table above.

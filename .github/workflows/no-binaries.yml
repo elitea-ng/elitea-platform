@@ -41,6 +41,10 @@ jobs:
           fetch-depth: 1
       - name: Scan for binary / oversize tracked files
         run: bash scripts/no-binaries-check.sh
+      # Upgrade notes are one file per change, so open pull requests never
+      # conflict over a shared list (docs/upgrading/README.md).
+      - name: Upgrade notes are one file per change
+        run: node scripts/ci/check-upgrading-notes.mjs
       # One Rust version everywhere (PR #1297): every rust-toolchain.toml, every
       # `FROM rust:` image (same digest in every stage) and every crate's
       # rust-version, held to the repository-root pin. This workflow has no
@@ -77,7 +81,9 @@ jobs:
           # of dependency-scanning.yml; its scenarios need only node.
           # browser-bakeoff-report.mjs applies the ADR-0049 admission rule
           # in browser-bakeoff.yml; its rule is tested here on every PR.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report; do
+          # check-upgrading-notes.mjs keeps upgrade notes one file per change
+          # (docs/upgrading/) and docs/UPGRADING.md closed; it runs below.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
