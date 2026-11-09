@@ -232,7 +232,46 @@ Browser evidence: see "Browser" below.
 
 ## Browser
 
-Pending: a disposable production-profile stack restored from the real-model dump.
+All requests ran in Chrome on a disposable stack. No response was mocked.
+
+**Stack.**
+- Built with `production-profile.pre-defaults-20261019/stack.sh up --name fu279`. This is the tool for current main,
+  which predates the defaults PR.
+- Address: `fu279.localhost:48600`.
+- Restored from `product-real-models-main-d5e966074.dump`, with no hand SQL.
+- `verify-profile`: 50 passed, 0 failed, including "shared migrations at the worktree head" and "every tenant at the
+  worktree head".
+
+**Images.**
+- `elitea-main:fu279-31f503ab0`, id `bac53a92d08d`. A `binary-check` on `/elitea-migrate` found three markers:
+  `legacy-built table`, `held the table for more than` and `0164_legacy_built_tenant_shape`.
+- `elitea-web:fu279-31f503ab0`. Its source is unchanged by this branch.
+- `elitea-worker-rust:fu287-a65a68671`, which is older than main. None of the checks below runs the Worker.
+- The other services use the runbook's `main-d5e966074-verify` images.
+
+**Migrate Job log.** Five lines reading "added a column the legacy-era schema declares to a legacy-built table", one
+for each audit column, then `migrations applied … tenant_count 4`.
+
+**Project 2 (legacy-built), signed in as `admin@centry.user` through the local mock identity provider:**
+
+| Check | Result |
+|---|---|
+| Toolkit create (UI, type Custom, "fu279 legacy upgrade check") | Saved as toolkit 104. Database: `owner_id = 2`, `env_vars = {}`, uuid set. |
+| Export (`export_toolkit` API, which the export button calls, through fetch so no file was downloaded) | Legacy toolkit 3 ("aha") and toolkit 104 both returned 200 with `env_vars` `{}`. Before this change it was 404. |
+| Index list for legacy toolkit 3 | 200, empty (C5). |
+| Tool list for legacy toolkit 3 | 200, with its tools. |
+| Attach an agent as a tool (UI, agent 119 "Input section diagnostic fixture", Agent → "Cedar bounded parent") | `PATCH application_relation` returned 201. The tool row 105 has `owner_id = 2`. The runbook had recorded HTTP 500 for this on legacy projects. |
+| Liked filter | Like on agent 119 returned 200. The list with `my_liked=true` returned only 119; sorting by likes put 119 first. |
+| Reload | Agent 119 still lists "Cedar bounded parent" under Tools. The toolkit list total is 59 (57 legacy + 2), and a search for "fu279" returns 104. |
+
+**Seen, not caused by this change.**
+- The new, empty Custom toolkit's tool list answers 503 ("toolkit settings could not be resolved").
+- The same row inserted by SQL into the native project 118 fails too, with a different error (500 "failed to run the
+  toolkit tool"). That row was a database fixture; I say so here.
+- So the failure depends on an empty Custom toolkit and the older Worker, not on the legacy shape. Main logged nothing
+  for either response, which is the FU-299 gap.
+
+**Teardown.** The stack was torn down after this evidence was recorded.
 
 ## Code review (`/code-review high`, ten findings)
 
