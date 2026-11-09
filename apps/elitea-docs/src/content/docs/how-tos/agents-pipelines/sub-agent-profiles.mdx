@@ -1,0 +1,72 @@
+---
+title: "Sub-agent profiles and briefs"
+description: "Give a sub-agent a name and a role with spawn_agent's profile, pass it what you can see with a context brief, and find each spawn in the run's record."
+---
+
+An agent with the `subagents` internal tool starts a sub-agent with `spawn_agent`. A sub-agent has its own fresh context: it sees only its task. Two optional arguments shape it:
+
+- `profile` names the sub-agent and gives it a role.
+- `context` is a **brief**: parts of the conversation, files and notes that the agent passes to it.
+
+```json
+{
+  "task": "Review the migration plan and list the risks.",
+  "profile": {
+    "display_name": "Risk reviewer",
+    "soul": "You are a careful reviewer. Write short, direct findings.",
+    "tools": ["github/get_issue"],
+    "model": "inherit",
+    "avatar": "default:owl"
+  },
+  "context": {
+    "excerpts": [{"message_id": "6f1d1c2e-…", "quote": "We ship on Friday after the review."}],
+    "attachments": ["att-0011aabb"],
+    "facts": ["The staging cluster runs Kubernetes 1.33."],
+    "memory_entries": ["42"]
+  }
+}
+```
+
+## The profile
+
+| Key | What it does |
+| --- | --- |
+| `display_name` | The name shown for the sub-agent, at most 60 characters. It is the label when `label` is not set. |
+| `soul` | A short role and style, at most 2 KiB. It replaces the default role text. The safety sentence stays: a soul never widens what the sub-agent may do. |
+| `tools` | Only these of the agent's tools, as `toolkit/tool` or `toolkit/*`. See [Sub-agent tools](/how-tos/agents-pipelines/agent-tool-envelope#sub-agent-tools). A tool that writes still needs the agent's `subagent_tools`. |
+| `model` | Only `inherit`: the sub-agent uses the agent's model. |
+| `avatar` | An avatar key, at most 128 bytes. The platform stores it. |
+
+An unknown key or a value out of its bounds refuses the call with `invalid_arguments`.
+
+## The brief
+
+A brief may contain at most 20 entries of each kind. The agent can pass only what it can see itself. The platform checks each reference before the sub-agent starts:
+
+| Entry | The check | Refusal |
+| --- | --- | --- |
+| `excerpts` | `quote` is an exact part of the message `message_id` in the agent's own view of the conversation. | `BRIEF_EXCERPT_NOT_VISIBLE` |
+| `attachments` | The id is one of this turn's attachments. | `BRIEF_ATTACHMENT_NOT_READABLE` |
+| `memory_entries` | `recall` gave the agent this entry earlier in the same turn. | `BRIEF_MEMORY_NOT_RECALLED` |
+| `facts` | None: each fact is the agent's own words, at most 500 characters. | |
+
+A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
+
+The desktop app accepts facts only for now. It refuses an excerpt, an attachment or a memory entry.
+
+## The record
+
+Each spawn of a cloud run writes one row to `elitea_runtime.ephemeral_agents`. The row keeps:
+
+- the run, its project, its conversation and the agent that started the sub-agent;
+- the sub-agent's id, label, display name and avatar key;
+- a digest of the profile, and a digest of the brief with the ids it named (message ids, attachment ids, memory entry ids and the number of facts);
+- the status, steps, tokens and error code, and when it started and ended.
+
+The row never keeps the soul, a quote, a fact or the task. The run's step records keep the `spawn_agent` call itself.
+
+## Related
+
+- [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope/)
+- [Agent memory](/how-tos/agents-pipelines/agent-memory/)
+- [What an agent sees of a conversation](/how-tos/agents-pipelines/agent-context-view/)

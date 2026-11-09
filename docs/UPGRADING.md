@@ -4,6 +4,22 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Sub-agent profiles, briefs and records (#1614, ADR-0050 decisions 4 and 9d)
+
+**No order is required.** A worker of this release sends
+`RuntimeControlService.ReportEphemeralAgents` before each settlement of a run
+that started sub-agents. A Main of an earlier release answers `Unimplemented`;
+the worker logs `worker_ephemeral_agents_failed` and settles the run.
+
+- Migration `shared/0232_ephemeral_agents.sql` adds
+  `elitea_runtime.ephemeral_agents`, one row per spawn. No data, no
+  permission.
+- `spawn_agent` accepts `profile.display_name`, `profile.soul`,
+  `profile.model` (`inherit` only) and `profile.avatar`, and a `context`
+  brief. A call that used one of these keys was refused before, so no
+  existing call changes.
+- Main's control codec admits 256 KiB for `ReportEphemeralAgentsRequestV1`.
+
 ## Per-agent tool envelope (#1613, ADR-0050 decision 3)
 
 **Upgrade every worker before Main.** Main now freezes an agent's
