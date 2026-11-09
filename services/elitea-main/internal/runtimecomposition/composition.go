@@ -2567,6 +2567,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		contentServer = contentServer.WithRuntimeHandFloor(handFloor)
 	}
+	// propose_agent (#1615): the same claim and pool; the person's create
+	// permission is resolved at the call. Absent where hand_floor is.
+	if agentFloors != nil && dependencies.PermissionResolver != nil {
+		proposals, proposalsErr := repos.ComposeAgentProposals(dependencies.AdmissionPool)
+		if proposalsErr != nil {
+			return nil, fmt.Errorf("construct agent proposals store: %w", proposalsErr)
+		}
+		proposeAgent, proposeErr := storage.NewRuntimeProposeAgentService(contentRepository, proposals, dependencies.PermissionResolver)
+		if proposeErr != nil {
+			return nil, fmt.Errorf("construct propose agent tool: %w", proposeErr)
+		}
+		contentServer = contentServer.WithRuntimeProposeAgent(proposeAgent)
+	}
 	// The `artifact` toolkit family's four routes (#906), registered the same
 	// way and nil for the same reasons: no agent dispatch, or no Go object
 	// store, leaves them ABSENT rather than present-and-failing. A mixed

@@ -1067,7 +1067,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// started with spawn_agent (ADR-0050 decisions 4 and 9d, issue 1614):
 	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
 	// data, no permission.
-	require.EqualValues(t, 232, Head(shared))
+	//
+	// 235: shared/0235_agent_proposals.sql, an agent's proposals to promote
+	// a temporary sub-agent to a saved agent (ADR-0050 decision 5a, issue
+	// 1615): elitea_lifecycle.agent_proposals, written by the propose_agent
+	// tool, decided in the registry inbox. No data, no permission. 0233 and
+	// 0234 are claimed by open branches.
+	require.EqualValues(t, 235, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

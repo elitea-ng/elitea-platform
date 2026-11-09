@@ -8704,6 +8704,92 @@ components:
         code: { type: string, enum: [not_found, memory_change_forbidden, memory_entry_invalid] }
       description: >
         NOTE(W2): internal/api/v2/agentmemory/handler.go, writeError.
+    AgentProposalSeed:
+      type: object
+      required: [kind, content]
+      properties:
+        kind: { type: string, enum: [fact, preference, episode] }
+        content: { type: string }
+    AgentProposalToolCategory:
+      type: object
+      required: [key, category]
+      properties:
+        key: { type: string, description: 'The tool reference, toolkit/tool or toolkit/* (a wildcard).' }
+        toolkit_type: { type: string }
+        category:
+          type: string
+          description: The tool's ADR-0041 category (read, write, external_send, money, destructive); an undeclared tool or a wildcard is write.
+    AgentProposalEvidence:
+      type: object
+      required: [status, steps, input_tokens, output_tokens, error_code, started_at, finished_at]
+      properties:
+        status: { type: string }
+        steps: { type: integer, format: int64 }
+        input_tokens: { type: integer, format: int64 }
+        output_tokens: { type: integer, format: int64 }
+        error_code: { type: string, nullable: true }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+      description: >
+        The promoted sub-agent's spawn record (elitea_runtime.ephemeral_agents)
+        with the same profile digest: how it ended and what it spent.
+    AgentProposal:
+      type: object
+      required: [id, project_id, proposer_application_id, proposer_name, proposed_for_user_id, execution_id,
+        conversation_uuid, ephemeral_agent_id, spec_digest, rationale, draft, memory_seeds, tool_categories,
+        status, decided_by_user_id, decided_at, created_application_id, created_at, evidence]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        proposer_application_id: { type: integer, format: int64 }
+        proposer_name: { type: string }
+        proposed_for_user_id: { type: integer, format: int64 }
+        execution_id: { type: string }
+        conversation_uuid: { type: string, nullable: true }
+        ephemeral_agent_id: { type: string }
+        spec_digest: { type: string }
+        rationale: { type: string }
+        draft:
+          type: object
+          additionalProperties: true
+          description: >
+            The agent draft the review form opens with: name, description,
+            instructions, welcome_message, conversation_starters, risk_tier
+            (always low), soul, tools and avatar.
+          x-elitea-passthrough: >-
+            NOTE(W2): built by agentproposal.Draft
+            (internal/domain/agentproposal/agentproposal.go:293) and stored
+            as jsonb; the review form maps it onto the create body.
+        memory_seeds:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalSeed' }
+        tool_categories:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposalToolCategory' }
+        status: { type: string, enum: [proposed, created, dismissed] }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        created_application_id: { type: integer, format: int64, nullable: true }
+        created_at: { type: string, format: date-time }
+        evidence:
+          allOf: [{ $ref: '#/components/schemas/AgentProposalEvidence' }]
+          nullable: true
+    AgentProposalList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentProposal' }
+        total: { type: integer }
+    AgentProposalRefusal:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden] }
+      description: >
+        NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -11508,6 +11594,22 @@ components:
             ceilings, into each run; nested agents follow the root agent's.
             A save with an invalid block is refused with 422
             tool_envelope_invalid.
+        capabilities:
+          type: object
+          nullable: true
+          properties:
+            can_propose_agents:
+              type: boolean
+              description: >
+                The agent may propose, with the propose_agent tool, that a
+                temporary sub-agent it started become a saved agent
+                (ADR-0050 decision 5a). The person it works for must also
+                hold models.applications.applications.create.
+          additionalProperties: { type: boolean }
+          description: >
+            What the agent may do beyond its tools. Absent is none. A save
+            whose block is not an object of booleans is refused with 422
+            capabilities_block_invalid.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips
@@ -28410,6 +28512,212 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentProposals
+      summary: List agent proposals
+      description: >
+        The project's proposals to save a temporary sub-agent as an agent
+        (ADR-0050 decision 5a), newest first: open ones unless status names
+        another state. conversation_uuid narrows them to one chat. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, schema: { type: string, enum: [proposed, created, dismissed, all] } }
+        - { name: conversation_uuid, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The proposals
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalList' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentProposal
+      summary: Read one agent proposal
+      description: The draft, the suggested memory seeds, the tool categories and the evidence. Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/dismiss:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: dismissAgentProposal
+      summary: Dismiss an open agent proposal
+      description: >
+        The same sub-agent spec (its profile digest) cannot be proposed again
+        by the same agent in this project for 30 days. Requires
+        `models.applications.applications.list`, and
+        `models.applications.applications.create` or ownership of the
+        proposing agent.
+      tags: [applications]
+      responses:
+        '200':
+          description: The dismissed proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code proposal_decision_forbidden) Neither create nor ownership of the proposing agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_proposals/prompt_lib/{project_id}/{proposal_id}/created:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: markAgentProposalCreated
+      summary: Record the agent created from an open proposal
+      description: >
+        The review form first creates the agent through the ordinary create
+        route (a new agent starts at tier low); this links it to the proposal
+        and writes the memory seeds the person kept, by index, into the new
+        agent's own memory. Requires `models.applications.applications.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id]
+              properties:
+                application_id: { type: integer, format: int64, minimum: 1 }
+                memory_seeds:
+                  type: array
+                  maxItems: 20
+                  items: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: The created proposal and how many seeds were written
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [proposal, memory_seeded]
+                properties:
+                  proposal: { $ref: '#/components/schemas/AgentProposal' }
+                  memory_seeded: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such proposal, or no such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '409':
+          description: (code proposal_decided) The proposal was already created or dismissed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_copy_memory/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: copyAgentMemory
+      summary: Copy picked memory entries of a personal agent into its copy
+      description: >
+        Copy to project (ADR-0050 decision 1). After the fork route copied a
+        personal agent into this project as an agent of its own, this copies
+        the entries the person picked from the source agent's memory into the
+        copy's, as new rows written by the person. Entries about a person and
+        cursors are never copied. The source must be in the caller's personal
+        project, and the caller owns the source agent or holds
+        `models.applications.memory.list` there. Requires
+        `models.applications.applications.create` in this project.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source_project_id, source_application_id]
+              properties:
+                source_project_id: { type: integer, format: int64, minimum: 1 }
+                source_application_id: { type: integer, format: int64, minimum: 1 }
+                entry_ids:
+                  type: array
+                  maxItems: 200
+                  items: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: How many entries were copied
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [copied]
+                properties:
+                  copied: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code copy_forbidden) The source is not a personal agent of the caller, or its memory is not readable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+        '404':
+          description: (code not_found) No such agent in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
 
   /elitea_core/permission_trimming/prompt_lib/{project_id}:
     parameters:
