@@ -18,6 +18,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/citations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -385,6 +386,11 @@ func parseInternalVersionUpdate(
 	}
 	if metaChanged {
 		if err := citations.Check(meta); err != nil {
+			problem, _ := internalApplicationBadRequest(err.Error())
+			return internalVersionUpdate{}, &problem
+		}
+		// ADR-0050 decision 3 (#1613): the tool envelope.
+		if err := toolenvelope.Check(meta); err != nil {
 			problem, _ := internalApplicationBadRequest(err.Error())
 			return internalVersionUpdate{}, &problem
 		}

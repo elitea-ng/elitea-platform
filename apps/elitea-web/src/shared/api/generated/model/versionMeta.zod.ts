@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { AgentContextSettings } from "./agentContextSettings.zod";
 import { AgentMemorySettings } from "./agentMemorySettings.zod";
+import { AgentToolEnvelope } from "./agentToolEnvelope.zod";
 import { OutputContract } from "./outputContract.zod";
 import { VersionRunCaps } from "./versionRunCaps.zod";
 import { VersionVariable } from "./versionVariable.zod";
@@ -110,6 +111,12 @@ export const VersionMeta = zod.object({
     .nullish()
     .describe(
       "Whether the agent must cite its sources (ADR-0043 decision 5). With `required`, the worker numbers the tool results the model sees, asks the model to cite them as [n], and stores a grounding indicator on the answer (`meta.grounding` of the message). Null, absent or `off` is no citation rule. A save with another value is refused with 400. Pipelines and nested agents ignore it.\n",
+    ),
+  tool_envelope: zod
+    .union([AgentToolEnvelope, zod.null()])
+    .optional()
+    .describe(
+      "The agent's tool envelope (ADR-0050 decision 3): per-tool call limits, the tools it may use unattended, and the tools its sub-agents may get. Main freezes it, with the platform's agents ceilings, into each run; nested agents follow the root agent's. A save with an invalid block is refused with 422 tool_envelope_invalid.\n",
     ),
 });
 

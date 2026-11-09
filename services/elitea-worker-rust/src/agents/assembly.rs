@@ -90,6 +90,10 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// The turn-taking floor (ADR-0050 decision 11, #1611). Only the root
     /// agent of a turn holds it; a nested agent or a pipeline has none.
     floor: Option<super::request::AgentFloor>,
+    /// The tool envelope (ADR-0050 decision 3, #1613). Only the root agent
+    /// of a turn has it: a nested agent or a pipeline keeps its tools as
+    /// before.
+    tool_envelope: Option<elitea_agent_runtime::tool_envelope::ToolEnvelope>,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -295,6 +299,7 @@ impl OrdinaryNoToolProfile {
             agent_memory: None,
             unattended: None,
             floor: None,
+            tool_envelope: None,
         })
     }
 
@@ -351,6 +356,7 @@ impl OrdinaryNoToolProfile {
             agent_memory: application_agent_memory(request),
             unattended: None,
             floor: request.payload.floor.clone(),
+            tool_envelope: request.payload.tool_envelope.clone(),
         })
     }
 
@@ -464,6 +470,7 @@ impl OrdinaryNoToolProfile {
             agent_memory: None,
             unattended: None,
             floor: None,
+            tool_envelope: None,
         })
     }
 
@@ -510,6 +517,14 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) const fn floor(&self) -> Option<&super::request::AgentFloor> {
         self.floor.as_ref()
+    }
+
+    /// The root agent's tool envelope (ADR-0050 decision 3).
+    #[must_use]
+    pub(crate) const fn tool_envelope(
+        &self,
+    ) -> Option<&elitea_agent_runtime::tool_envelope::ToolEnvelope> {
+        self.tool_envelope.as_ref()
     }
 
     /// The agent memory tools the version binds (`meta.memory`).

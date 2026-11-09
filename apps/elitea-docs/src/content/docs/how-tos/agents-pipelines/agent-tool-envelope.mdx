@@ -1,0 +1,59 @@
+---
+title: "Limit an agent's tools"
+description: "Limit how often an agent may call a tool, which tools it may use with nobody present, and which tools its sub-agents may get."
+---
+
+An agent's **tool envelope** narrows the tools the agent already has. Set it in the version's meta with a `tool_envelope` block:
+
+```yaml
+tool_envelope:
+  tool_limits:
+    github/create_issue: 3     # at most 3 calls in a turn
+    jira/*: 20                 # every tool of the jira toolkit
+  unattended_tools:            # the tools it may use with nobody present
+    - github/get_issue
+    - github/create_comment
+  subagent_tools:              # the tools its sub-agents may get
+    - github/create_issue
+```
+
+Every control only narrows. None of them adds a tool, and a tool the envelope keeps still asks for every approval it asked for before. Guardrails, the toolkit policy and blocked tools apply first.
+
+## Tool keys
+
+A key is `toolkit/tool`. The toolkit part is the toolkit's name in the agent, or its type (`github`, `jira`, …). `toolkit/*` names every tool of the toolkit. Case and surrounding spaces are ignored. Any other `*` is refused.
+
+## Per-tool limits
+
+`tool_limits` maps a key to the most calls of the tool in one turn, from 1 to 10000. When several keys match a tool, the lowest limit applies. The platform's **Maximum Calls of One Tool** applies too, to every toolkit tool, even one the agent does not name; the platform's own tools (the planner, sub-agents, attachments) are not capped by it. The call past the limit does not run. The model gets the error `tool_limit_reached` and can go on without the tool.
+
+The limit counts the calls of one turn. A run cap ([Run caps](/admin/enterprise-controls/runtime-safety#run-caps)) still bounds the whole run.
+
+## Tools with nobody present
+
+When another agent hands an agent the floor, nobody waits on its turn (see [Several agents in a chat](/menus/chat)). Such a turn binds:
+
+- without `unattended_tools`: the agent's read-only tools;
+- with it: the tools it names. A tool that writes stays out unless the platform's **Tools That Write, Allowed Unattended** names it too. That list names a toolkit by its type, never by the name you gave it.
+
+An empty list binds no tool.
+
+## Sub-agent tools
+
+A sub-agent that the agent starts with `spawn_agent` calls a limited tool through the agent's own counter, so a limit holds across the agent and its sub-agents. It gets:
+
+- without `subagent_tools`: the agent's read-only tools;
+- with it: the tools it names, writes included.
+
+`spawn_agent` can narrow this further with `profile.tools`, a list of keys. A key that names none of the tools a sub-agent may get refuses the call with `SUBAGENT_TOOL_NOT_GRANTED`, and no sub-agent starts. A sub-agent with its own checkout (`isolation: "worktree"`) takes no `profile.tools`.
+
+## Saving and running
+
+A save with an invalid block (an unknown key, a malformed tool key, a limit out of range) is refused with `422 tool_envelope_invalid`. Import and the internal MCP version tools check it the same way.
+
+Each run freezes the root agent's envelope and the platform's ceilings when it starts. A change made later applies from the next message. A nested agent follows the root agent's envelope, not its own.
+
+## Related
+
+- [Agent tools (admin)](/admin/enterprise-controls/runtime-safety#agent-tools)
+- [What an agent sees of a conversation](/how-tos/agents-pipelines/agent-context-view/)

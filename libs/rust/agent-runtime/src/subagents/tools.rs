@@ -16,6 +16,10 @@ use super::{
     SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
 };
 use crate::delegation::DelegationEvidence;
+use crate::tool_envelope::{RequestedTool, SUBAGENT_TOOL_NOT_GRANTED};
+
+/// The most keys of `spawn_agent`'s `profile.tools`.
+const MAX_PROFILE_TOOLS: usize = 64;
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {
@@ -87,6 +91,47 @@ fn max_steps(args: &Value, default: u32) -> Result<u32, Value> {
     }
 }
 
+/// `spawn_agent`'s `profile.tools` (ADR-0050 decision 4): the tool keys the
+/// child is offered, each `<toolkit>/<tool>`. Absent is every tool the
+/// child may be given. Only `tools` is a profile key yet (#1614 adds the
+/// rest).
+fn requested_tools(args: &Value) -> Result<Option<Vec<RequestedTool>>, Value> {
+    let Some(profile) = args.get("profile").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let invalid = |message: &str| refused("invalid_arguments", message);
+    let Some(profile) = profile.as_object() else {
+        return Err(invalid("`profile` must be an object."));
+    };
+    if let Some(key) = profile.keys().find(|key| key.as_str() != "tools") {
+        return Err(invalid(&format!(
+            "`profile.{key}` is not supported here; only `profile.tools` is."
+        )));
+    }
+    let Some(tools) = profile.get("tools").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let Some(items) = tools
+        .as_array()
+        .filter(|items| items.len() <= MAX_PROFILE_TOOLS)
+    else {
+        return Err(invalid(&format!(
+            "`profile.tools` must be a list of at most {MAX_PROFILE_TOOLS} tool keys."
+        )));
+    };
+    items
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .and_then(|key| RequestedTool::parse(key).ok())
+                .ok_or_else(|| {
+                    invalid("each `profile.tools` entry must be \"<toolkit>/<tool>\" or \"<toolkit>/*\".")
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 /// `spawn_agent`'s arguments (without `isolation`).
 fn spawn_schema() -> Value {
     json!({
@@ -107,6 +152,17 @@ fn spawn_schema() -> Value {
                 "minimum": 1,
                 "maximum": MAX_CHILD_STEPS,
                 "description": "The most model steps it may take"
+            },
+            "profile": {
+                "type": "object",
+                "properties": {
+                    "tools": {
+                        "type": "array",
+                        "maxItems": MAX_PROFILE_TOOLS,
+                        "items": {"type": "string"},
+                        "description": "Only these of your tools, as \"toolkit/tool\" or \"toolkit/*\"; each must be one a sub-agent may get"
+                    }
+                }
             }
         },
         "required": ["task"]
@@ -162,24 +218,116 @@ impl SubAgentTool {
         }
     }
 
+    /// `isolation` and `profile.tools`, which do not combine.
+    fn child_tools(&self, args: &Value) -> Result<(bool, Option<Vec<RequestedTool>>), Value> {
+        let isolated = self.isolation(args)?;
+        let requested = requested_tools(args)?;
+        if isolated && requested.is_some() {
+            return Err(refused(
+                "invalid_arguments",
+                "`profile.tools` cannot be combined with `isolation: \"worktree\"`.",
+            ));
+        }
+        Ok((isolated, requested))
+    }
+
     /// ADR-0044 decision 3: a child is one delegation deeper. Its tools are
     /// a subset of this agent's by construction (the read-only or isolated
     /// filter), so only the depth can refuse it.
-    fn delegate(&self, isolated: bool) -> Result<Option<DelegationEvidence>, Value> {
+    fn delegate(
+        &self,
+        isolated: bool,
+        requested: Option<&[RequestedTool]>,
+    ) -> Result<Option<DelegationEvidence>, Value> {
         let Some(scope) = self.registry.delegation.as_ref() else {
             return Ok(None);
         };
+        // The filter names what the child may be given, so the effective
+        // grant digest changes with the grant and the requested tools.
+        let filter = if isolated {
+            "isolated".to_owned()
+        } else {
+            let grant = self
+                .registry
+                .grant
+                .as_ref()
+                .filter(|grant| grant.grants_writes());
+            match (grant, requested) {
+                (None, None) => "read_only".to_owned(),
+                (grant, requested) => {
+                    let granted = grant.map(|grant| grant.granted_keys().join(","));
+                    let mut asked: Vec<String> = requested
+                        .unwrap_or_default()
+                        .iter()
+                        .map(RequestedTool::canonical)
+                        .collect();
+                    asked.sort();
+                    format!(
+                        "subagent_tools:{};requested:{}",
+                        granted.unwrap_or_else(|| "read_only".to_owned()),
+                        asked.join(",")
+                    )
+                }
+            }
+        };
         scope
-            .delegate_subagent(
-                if isolated { "isolated" } else { "read_only" },
-                &self.registry.excluded,
-            )
+            .delegate_subagent(&filter, &self.registry.excluded)
             .map(Some)
             .map_err(|refusal| {
                 let mut value = refused(refusal.code(), refusal.message());
                 value["delegation"] = refusal.to_value();
                 value
             })
+    }
+
+    /// The next child's identity, or the refusal when this turn may start
+    /// no more sub-agents.
+    fn identity(
+        &self,
+        ctx: &dyn ToolContext,
+        label: Option<String>,
+    ) -> Result<ChildIdentity, Value> {
+        let limits = self.registry.limits;
+        let children = self.children();
+        if children.len() >= limits.max_per_turn {
+            return Err(refused(
+                "subagent_limit",
+                format!(
+                    "This turn already started {} sub-agents, the most it may; use their results.",
+                    limits.max_per_turn
+                ),
+            ));
+        }
+        let running = children
+            .iter()
+            .filter(|child| !child.status().is_settled())
+            .count();
+        if running >= limits.max_concurrent {
+            return Err(refused(
+                "subagent_busy",
+                format!(
+                    "{running} sub-agents are already running, the most at once; wait for one (`{WAIT_AGENT}`) or close one (`{CLOSE_AGENT}`) first."
+                ),
+            ));
+        }
+        let Some(agent_id) = (0..4).find_map(|_| {
+            new_agent_id().filter(|id| {
+                children
+                    .iter()
+                    .all(|child| &child.identity().agent_id != id)
+            })
+        }) else {
+            return Err(refused(
+                "subagent_unavailable",
+                "No sub-agent id could be made.",
+            ));
+        };
+        Ok(ChildIdentity {
+            agent_id,
+            parent_call_id: ctx.function_call_id().to_owned(),
+            label,
+            ordinal: children.len() + 1,
+        })
     }
 
     async fn spawn(&self, ctx: &dyn ToolContext, args: &Value) -> Value {
@@ -193,11 +341,11 @@ impl SubAgentTool {
             .map(str::trim)
             .filter(|label| !label.is_empty())
             .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
-        let isolated = match self.isolation(args) {
-            Ok(isolated) => isolated,
+        let (isolated, requested) = match self.child_tools(args) {
+            Ok(tools) => tools,
             Err(refusal) => return refusal,
         };
-        let delegation = match self.delegate(isolated) {
+        let delegation = match self.delegate(isolated, requested.as_deref()) {
             Ok(evidence) => evidence,
             Err(refusal) => return refusal,
         };
@@ -206,43 +354,11 @@ impl SubAgentTool {
             Ok(steps) => steps,
             Err(refusal) => return refusal,
         };
-        let children = self.children();
-        if children.len() >= limits.max_per_turn {
-            return refused(
-                "subagent_limit",
-                format!(
-                    "This turn already started {} sub-agents, the most it may; use their results.",
-                    limits.max_per_turn
-                ),
-            );
-        }
-        let running = children
-            .iter()
-            .filter(|child| !child.status().is_settled())
-            .count();
-        if running >= limits.max_concurrent {
-            return refused(
-                "subagent_busy",
-                format!(
-                    "{running} sub-agents are already running, the most at once; wait for one (`{WAIT_AGENT}`) or close one (`{CLOSE_AGENT}`) first."
-                ),
-            );
-        }
-        let Some(agent_id) = (0..4).find_map(|_| {
-            new_agent_id().filter(|id| {
-                children
-                    .iter()
-                    .all(|child| &child.identity().agent_id != id)
-            })
-        }) else {
-            return refused("subagent_unavailable", "No sub-agent id could be made.");
+        let identity = match self.identity(ctx, label) {
+            Ok(identity) => identity,
+            Err(refusal) => return refusal,
         };
-        let identity = ChildIdentity {
-            agent_id: agent_id.clone(),
-            parent_call_id: ctx.function_call_id().to_owned(),
-            label,
-            ordinal: children.len() + 1,
-        };
+        let agent_id = identity.agent_id.clone();
         let started = child::start(child::Start {
             identity,
             task,
@@ -256,6 +372,8 @@ impl SubAgentTool {
             excluded: Arc::new(self.registry.excluded.clone()),
             host: Arc::clone(&self.registry.host),
             isolated,
+            grant: self.registry.grant.clone(),
+            requested: requested.map(Arc::new),
         })
         .await;
         match started {
@@ -278,6 +396,10 @@ impl SubAgentTool {
                 }
                 value
             }
+            Err(SUBAGENT_TOOL_NOT_GRANTED) => refused(
+                SUBAGENT_TOOL_NOT_GRANTED,
+                "A tool in `profile.tools` is not one of your tools a sub-agent may get. Name only your own tools that the agent's sub-agent tools allow (read-only tools when it sets none).",
+            ),
             Err(code) => refused(code, "The sub-agent could not be started."),
         }
     }

@@ -170,6 +170,45 @@ message AgentExecutionInputV1 {
   // tool bound as before. Workers are upgraded before Main, because a worker
   // from an earlier release refuses this tag.
   AgentFloorV1 floor = 73;
+  // ADR-0050 decision 3 (#1613): the root agent's tool envelope, frozen at
+  // admission from its version's meta.tool_envelope and the platform's
+  // `agents` section. Every control only narrows the tools the run already
+  // has. ABSENT: no per-tool limit, unattended turns and sub-agents get
+  // read-only tools. Workers are upgraded before Main, because a worker from
+  // an earlier release refuses this tag.
+  AgentToolEnvelopeV1 tool_envelope = 74;
+}
+
+// The per-agent tool envelope (ADR-0050 decision 3). A tool key is
+// "toolkit/tool": the toolkit by its name in the agent or by its type,
+// and "*" for every tool of the toolkit.
+message AgentToolEnvelopeV1 {
+  // The most calls of each matching tool in one turn, at most 256 entries,
+  // each from 1. A tool several entries match takes the lowest.
+  repeated AgentToolLimitV1 tool_limits = 1;
+  // The platform's per-tool ceiling (agents.max_tool_limit): the most calls
+  // of any one toolkit tool in a turn. 0 is none.
+  uint32 max_tool_limit = 2;
+  // The tools a turn nobody waits on may bind (an agent-to-agent turn).
+  // Used only when unattended_tools_set; otherwise the read-only tools.
+  repeated string unattended_tools = 3;
+  bool unattended_tools_set = 4;
+  // The platform's ceiling (agents.unattended_tools_allowlist): a tool that
+  // is not read-only is unattended only when this names it too, by its
+  // toolkit's type.
+  repeated string unattended_tools_allowlist = 5;
+  // The tools a sub-agent may be given, writes included. Used only when
+  // subagent_tools_set; otherwise the read-only tools.
+  repeated string subagent_tools = 6;
+  bool subagent_tools_set = 7;
+  reserved 8 to 15;
+}
+
+// One per-tool limit of an envelope.
+message AgentToolLimitV1 {
+  string tool = 1;
+  uint32 max_calls = 2;
+  reserved 3 to 7;
 }
 
 // What the turn-taking engine tells the reader about the floor
@@ -181,8 +220,8 @@ message AgentFloorV1 {
   // at most 16. Empty: no hand_floor tool.
   repeated AgentFloorPeerV1 peers = 2;
   // An agent-to-agent turn: nobody answers its approvals, so only the
-  // reader's unattended tools are bound. Until the per-agent envelope
-  // (#1613) names them, they are its read-only tools.
+  // reader's unattended tools are bound (tool_envelope.unattended_tools,
+  // else its read-only tools).
   bool unattended_tools_only = 3;
   reserved 4 to 15;
 }

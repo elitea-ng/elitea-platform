@@ -764,6 +764,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 	//	                    cached reader: every agent execution command's
 	//	                    preparation (workerdelegation.Resolver) puts it in
 	//	                    the signed command (ADR-0044 decision 3, #1501)
+	//	agents            → platformconfig.LoadAgentToolSettings through a
+	//	                    cached reader: every agent admission freezes it
+	//	                    into the turn's tool envelope (ADR-0050 decision 3)
 	//	entitlement_export → platformconfig.LoadEntitlementExportSettings, read
 	//	                    by the SCIM entitlement tree's client gate on every
 	//	                    request to /api/v2/scim/v2/entitlements (ADR-0044
@@ -805,6 +808,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0044 decision 3 (#1501): every agent execution command's
 		// preparation (workerdelegation.Resolver).
 		"delegation": true,
+		// ADR-0050 decision 3 (#1613): every agent admission freezes it
+		// into the turn's tool envelope (agentexecution.WithToolEnvelope).
+		"agents": true,
 		// ADR-0041 decision 5 (#1491): every schedule and trigger admission
 		// and the projection of an unattended pause.
 		"approvals": true,

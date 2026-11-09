@@ -21,6 +21,7 @@ use tokio::task::AbortHandle;
 
 use super::{ChildIdentity, ChildReport, ChildStatus, MAX_RESULT_BYTES, SubAgentHost, TOOL_NAMES};
 use crate::text::clip_bytes;
+use crate::tool_envelope::{RequestedTool, SUBAGENT_TOOL_NOT_GRANTED, SubAgentGrant};
 
 const APP_NAME: &str = "elitea_subagents";
 const USER_ID: &str = "parent";
@@ -30,19 +31,25 @@ const EXIT_PLAN_MODE: &str = "exit_plan_mode";
 /// The error a budgeted model ends a child's run with.
 const BUDGET_EXHAUSTED: &str = "subagent_budget_exhausted";
 
-/// Whether a child may be offered `tool`: read-only (unless the child has a
-/// checkout of its own, `writes`), not a sub-agent tool, not
-/// `exit_plan_mode`, not excluded by the host.
-fn admissible_for(tool: &dyn Tool, excluded: &BTreeSet<String>, writes: bool) -> bool {
+/// Whether a child may be offered `tool` of the toolset `toolset`: one the
+/// host's sub-agent grant admits (read-only without `subagent_tools`), or
+/// any when the child has a checkout of its own (`writes`); never a
+/// sub-agent tool, `exit_plan_mode` or a tool the host excluded.
+fn admissible_for(
+    toolset: &str,
+    tool: &dyn Tool,
+    excluded: &BTreeSet<String>,
+    writes: bool,
+    grant: Option<&SubAgentGrant>,
+) -> bool {
     let name = tool.name();
-    (writes || tool.is_read_only())
-        && !TOOL_NAMES.contains(&name)
-        && name != EXIT_PLAN_MODE
-        && !excluded.contains(name)
+    let granted =
+        writes || grant.map_or_else(|| tool.is_read_only(), |grant| grant.admits(toolset, tool));
+    granted && !TOOL_NAMES.contains(&name) && name != EXIT_PLAN_MODE && !excluded.contains(name)
 }
 
 fn admissible(tool: &dyn Tool, excluded: &BTreeSet<String>) -> bool {
-    admissible_for(tool, excluded, false)
+    admissible_for("", tool, excluded, false, None)
 }
 
 /// A tool a child cannot be given: it may change something.
@@ -101,6 +108,10 @@ pub struct ChildToolset {
     excluded: Arc<BTreeSet<String>>,
     /// The child has a checkout of its own: writing tools are kept.
     writes: bool,
+    /// The run's sub-agent grant (ADR-0050 decision 3): `subagent_tools`.
+    grant: Option<Arc<SubAgentGrant>>,
+    /// The tools `spawn_agent` asked for: only those are offered.
+    requested: Option<Arc<Vec<RequestedTool>>>,
 }
 
 impl ChildToolset {
@@ -110,6 +121,8 @@ impl ChildToolset {
             inner,
             excluded,
             writes: false,
+            grant: None,
+            requested: None,
         }
     }
 
@@ -121,8 +134,53 @@ impl ChildToolset {
             inner,
             excluded,
             writes: true,
+            grant: None,
+            requested: None,
         }
     }
+
+    /// Filter by the run's sub-agent grant instead of the read-only rule.
+    #[must_use]
+    pub fn with_grant(mut self, grant: Option<Arc<SubAgentGrant>>) -> Self {
+        self.grant = grant;
+        self
+    }
+
+    /// Offer only the tools these keys name.
+    #[must_use]
+    pub fn with_requested(mut self, requested: Option<Arc<Vec<RequestedTool>>>) -> Self {
+        self.requested = requested;
+        self
+    }
+
+    fn offers(&self, tool: &dyn Tool) -> bool {
+        let toolset = self.inner.name();
+        admissible_for(
+            toolset,
+            tool,
+            &self.excluded,
+            self.writes,
+            self.grant.as_deref(),
+        ) && self.requested.as_ref().is_none_or(|requested| {
+            requested
+                .iter()
+                .any(|key| requested_names(self.grant.as_deref(), key, toolset, tool))
+        })
+    }
+}
+
+/// Whether `key` names `tool`: through the grant's toolkit kinds, else by
+/// the toolset name alone.
+fn requested_names(
+    grant: Option<&SubAgentGrant>,
+    key: &RequestedTool,
+    toolset: &str,
+    tool: &dyn Tool,
+) -> bool {
+    grant.map_or_else(
+        || SubAgentGrant::default().names(key, toolset, tool),
+        |grant| grant.names(key, toolset, tool),
+    )
 }
 
 #[async_trait]
@@ -137,7 +195,7 @@ impl Toolset for ChildToolset {
             .tools(ctx)
             .await?
             .into_iter()
-            .filter(|tool| admissible_for(tool.as_ref(), &self.excluded, self.writes))
+            .filter(|tool| self.offers(tool.as_ref()))
             .collect())
     }
 }
@@ -397,6 +455,11 @@ pub(super) struct Start {
     pub host: Arc<dyn SubAgentHost>,
     /// `isolation: "worktree"`: the host's isolated toolsets, writes kept.
     pub isolated: bool,
+    /// The run's sub-agent grant (`subagent_tools`), if the host lends one.
+    pub grant: Option<Arc<SubAgentGrant>>,
+    /// `spawn_agent`'s `profile.tools`: each must name a tool the child may
+    /// be given, and the child is offered only those.
+    pub requested: Option<Arc<Vec<RequestedTool>>>,
 }
 
 /// The tools the host gives the child: those of a checkout of its own when
@@ -417,6 +480,70 @@ async fn child_toolsets(
     }
 }
 
+/// The host's toolsets as the child sees them: the isolated filter, or the
+/// grant's (read-only without one), narrowed to `requested` once every key
+/// of it is checked.
+async fn filtered_toolsets(
+    toolsets: Vec<Arc<dyn Toolset>>,
+    excluded: &Arc<BTreeSet<String>>,
+    isolated: bool,
+    grant: Option<Arc<SubAgentGrant>>,
+    requested: Option<Arc<Vec<RequestedTool>>>,
+) -> Result<Vec<ChildToolset>, &'static str> {
+    let filtered: Vec<ChildToolset> = toolsets
+        .into_iter()
+        .map(|toolset| {
+            if isolated {
+                ChildToolset::isolated(toolset, Arc::clone(excluded))
+            } else {
+                ChildToolset::new(toolset, Arc::clone(excluded)).with_grant(grant.clone())
+            }
+        })
+        .collect();
+    if let Some(requested) = &requested {
+        check_requested(&filtered, requested, grant.as_deref()).await?;
+    }
+    Ok(filtered
+        .into_iter()
+        .map(|toolset| toolset.with_requested(requested.clone()))
+        .collect())
+}
+
+/// ADR-0050 decision 4: every tool `spawn_agent` asks for must be one the
+/// child may be given (within the parent's tools and its sub-agent grant),
+/// or the spawn is refused with [`SUBAGENT_TOOL_NOT_GRANTED`]. A key that
+/// names no tool the child may be given is refused the same way.
+async fn check_requested(
+    toolsets: &[ChildToolset],
+    requested: &[RequestedTool],
+    grant: Option<&SubAgentGrant>,
+) -> Result<(), &'static str> {
+    let ctx: Arc<dyn ReadonlyContext> =
+        Arc::new(adk_tool::SimpleToolContext::new("subagent_tool_grant"));
+    let mut offered = Vec::new();
+    for toolset in toolsets {
+        let tools = toolset
+            .tools(Arc::clone(&ctx))
+            .await
+            .map_err(|_| "subagent_tools_unavailable")?;
+        offered.extend(
+            tools
+                .into_iter()
+                .map(|tool| (toolset.inner.name().to_owned(), tool)),
+        );
+    }
+    let every_key_granted = requested.iter().all(|key| {
+        offered
+            .iter()
+            .any(|(toolset, tool)| requested_names(grant, key, toolset, tool.as_ref()))
+    });
+    if every_key_granted {
+        Ok(())
+    } else {
+        Err(SUBAGENT_TOOL_NOT_GRANTED)
+    }
+}
+
 /// Build the child and start its first run on a task of its own.
 ///
 /// # Errors
@@ -433,6 +560,8 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
         excluded,
         host,
         isolated,
+        grant,
+        requested,
     } = start;
     let counters = Arc::new(Counters::default());
     let model = host
@@ -459,13 +588,8 @@ pub(super) async fn start(start: Start) -> Result<Child, &'static str> {
     if let Some(config) = host.generation_config() {
         builder = builder.generate_content_config(config);
     }
-    for toolset in toolsets {
-        let filtered = if isolated {
-            ChildToolset::isolated(toolset, Arc::clone(&excluded))
-        } else {
-            ChildToolset::new(toolset, Arc::clone(&excluded))
-        };
-        builder = builder.toolset(Arc::new(filtered));
+    for toolset in filtered_toolsets(toolsets, &excluded, isolated, grant, requested).await? {
+        builder = builder.toolset(Arc::new(toolset));
     }
     let agent = builder.build().map_err(|_| "subagent_invalid")?;
     let sessions = Arc::new(InMemorySessionService::new());

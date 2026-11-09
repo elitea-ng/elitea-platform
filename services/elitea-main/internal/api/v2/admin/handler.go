@@ -44,6 +44,9 @@ type Handler struct {
 	// ai_disclosure, platform_preamble or approval_policy drops
 	// (content_controls.go).
 	contentControls SectionInvalidator
+	// agentTools is the cached agents section (ADR-0050 decision 3) a save
+	// of it drops (agent_tools.go).
+	agentTools SectionInvalidator
 	// cloudExecutorEncryption is the startup answer for the cloud executor's
 	// storage encryption at rest ("confirmed", "attested", "refused"; empty
 	// when the handoff is not composed). See WithCloudExecutorEncryption.

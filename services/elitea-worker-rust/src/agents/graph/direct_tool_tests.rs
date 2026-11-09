@@ -1186,6 +1186,7 @@ fn tool_resume_payload(
         model_reasoning: None,
         chat_history_refs: Vec::new(),
         floor: None,
+        tool_envelope: None,
     }
 }
 

@@ -63,7 +63,7 @@ An agent that was handed the floor:
 
 - runs with its own permissions, on behalf of the person whose message started the exchange;
 - reads the other agent's message as information from another agent, not as instructions from you;
-- uses only its read-only tools, because nobody is there to approve anything else.
+- uses only its read-only tools, because nobody is there to approve anything else. The agent's `unattended_tools` can narrow this, or add a tool that writes and that an administrator allowed unattended: see [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope/).
 
 A loop guard bounds every exchange. For one message from you, agents hand the floor at most **6** times, one agent answers at most **2** times, and the same two agents hand it to each other at most **3** times. When a hand-off would pass a limit, nothing more is handed: the chat shows a line such as "Loop guard stopped the exchange after 6 hops." When you let the agents run to completion, the turns of one message count against that run's limits too, and a loop guard ends the run.
 
