@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { normalizeSupportContact } from '@elitea/client-core/support';
+
 import { getClientVersion } from '@/api/clientVersion';
 import { setUpgradeRecheck } from '@/api/middleware';
 import { minimumVersionFor, type DiscoveryDocument } from '@/api/discovery';
@@ -66,6 +68,8 @@ export function policyFrom(raw: Record<string, unknown>): Partial<ClientPolicy> 
   if (retention !== undefined) out.offline_retention_days = retention;
   const maxMb = int(raw.offline_max_mb, 102_400);
   if (maxMb !== undefined) out.offline_max_mb = maxMb;
+  const support = normalizeSupportContact(raw.support_contact);
+  if (support !== null) out.support_contact = support;
   return { ...out, ...dataControlsFrom(raw) };
 }
 

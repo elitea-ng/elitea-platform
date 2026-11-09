@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.44"
+  x-elitea-client-contract: "1.45"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -17778,6 +17778,15 @@ components:
             Client contract 1.5 (ADR-0029 decision 6). The token policy's
             `local_work.allowed`: a desktop app may offer local work. The rest
             of the `local_work` group travels only with a token. Default false.
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings, one line of text (an email
+            address, a phone number or an https address among it is a link);
+            empty means none. A device's managed `support_contact` wins over
+            it. A server before 1.45 sends none.
     NativeOAuthError:
       type: object
       description: >-
@@ -17920,6 +17929,14 @@ components:
             False means counts only. Default false.
         local_work:
           $ref: '#/components/schemas/LocalWorkPolicy'
+        support_contact:
+          type: string
+          maxLength: 200
+          description: >-
+            Client contract 1.45 (ADR-0052 decision 7). The IT support line
+            the apps show in About and Settings; empty means none. The same
+            value as the discovery document's `client_policy.support_contact`.
+            A device's managed `support_contact` wins over it.
     LocalWorkPolicy:
       type: object
       description: >-

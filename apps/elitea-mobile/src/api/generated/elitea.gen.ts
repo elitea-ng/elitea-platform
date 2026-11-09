@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.44
+ * client contract:    1.45
  * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
  */
 export interface paths {
@@ -2928,6 +2928,8 @@ export interface components {
             offline_enabled: boolean;
             /** @description The client must refuse to run without a device passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings, one line of text (an email address, a phone number or an https address among it is a link); empty means none. A device's managed `support_contact` wins over it. A server before 1.45 sends none. */
+            support_contact?: string;
         };
         /** @description The 426 answer to a native client whose `X-Client-Version` is below the minimum (ADR-0025 decision 5). Only callers authenticated by a native access token, and the native token endpoint, are judged. NOTE(W2): internal/api/middleware/client_version.go:176 (`WriteClientUpgradeRequired`). */
         ClientUpgradeRequiredError: {
@@ -3952,6 +3954,8 @@ export interface components {
             offline_retention_days: number;
             /** @description Refuse to run on a device without a passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings; empty means none. The same value as the discovery document's `client_policy.support_contact`. A device's managed `support_contact` wins over it. */
+            support_contact?: string;
         };
         /** @description One native device session (refresh-token family). NOTE(W2): internal/api/nativeauth/devices.go:36 (`UserDevice`). */
         NativeDevice: {

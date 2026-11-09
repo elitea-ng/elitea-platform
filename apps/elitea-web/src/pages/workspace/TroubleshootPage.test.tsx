@@ -30,4 +30,22 @@ describe('Settings › Troubleshoot', () => {
     expect(doctor.calls.fixes).toEqual(['dir.tighten.data']);
     expect(await screen.findByText('private')).toBeInTheDocument();
   });
+
+  it('shows the IT support line: https as a link, an email address as text to copy', async () => {
+    const doctor = createFakeDoctorIpc([], {});
+    const { unmount } = renderWithTheme(<TroubleshootPage ipc={doctor} supportContact="IT desk https://help.example.com" />);
+    const line = await screen.findByTestId('troubleshoot-it-support');
+    expect(within(line).getByRole('link', { name: 'IT desk https://help.example.com' })).toHaveAttribute('href', 'https://help.example.com/');
+    unmount();
+    renderWithTheme(<TroubleshootPage ipc={doctor} supportContact="IT desk, help@example.com" />);
+    const text = await screen.findByTestId('troubleshoot-it-support');
+    expect(text).toHaveTextContent('IT support: IT desk, help@example.com');
+    expect(within(text).queryByRole('link')).toBeNull();
+  });
+
+  it('no line, nothing', async () => {
+    renderWithTheme(<TroubleshootPage ipc={createFakeDoctorIpc([], {})} />);
+    expect(await screen.findByRole('heading', { name: 'Troubleshoot' })).toBeInTheDocument();
+    expect(screen.queryByTestId('troubleshoot-it-support')).toBeNull();
+  });
 });

@@ -39,6 +39,11 @@ const (
 	KeyNativeAllowNotificationActions = "allow_notification_actions"
 	KeyNativeAllowSystemSurfaces      = "allow_system_surfaces"
 
+	// KeyNativeSupportContact is the IT support line the apps show in About
+	// and Settings (ADR-0052 decision 7, client contract 1.45). A device's
+	// managed `support_contact` wins over it.
+	KeyNativeSupportContact = "support_contact"
+
 	// Local work on the desktop (ADR-0029 decision 6, client contract 1.5).
 	// The section stores flat keys, because the admin form and the save
 	// validator are flat; the policy delivers them as one `local_work` group.
@@ -476,6 +481,25 @@ const (
 	MaxOfflineMB            = 102400
 )
 
+// MaxSupportContactRunes bounds KeyNativeSupportContact, in characters.
+const MaxSupportContactRunes = 200
+
+// ValidSupportContact reports whether a trimmed support line may be stored:
+// empty (none), or at most MaxSupportContactRunes characters of valid UTF-8
+// without control characters. It is shown as text, so a newline is never
+// intended.
+func ValidSupportContact(value string) bool {
+	if value != strings.TrimSpace(value) || !utf8.ValidString(value) || utf8.RuneCountInString(value) > MaxSupportContactRunes {
+		return false
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // NativeClientPolicy is the full policy. Field order is the JSON key order of
 // the `client_policy` object in a token response; adding a field is additive,
 // renaming or removing one is a client_contract major bump.
@@ -510,6 +534,11 @@ type NativeClientPolicy struct {
 
 	// LocalWork is the desktop's local work group (client contract 1.5).
 	LocalWork LocalWorkPolicy `json:"local_work"`
+
+	// SupportContact is the IT support line (client contract 1.45): free
+	// text, an email address, a phone number or an https address; empty
+	// means none. The apps show it in About and Settings.
+	SupportContact string `json:"support_contact"`
 }
 
 // DefaultNativeClientPolicy is the policy of a deployment that never saved the
@@ -532,7 +561,8 @@ func DefaultNativeClientPolicy() NativeClientPolicy {
 		AllowNotificationActions: true,
 		AllowSystemSurfaces:      false,
 
-		LocalWork: DefaultLocalWorkPolicy(),
+		LocalWork:      DefaultLocalWorkPolicy(),
+		SupportContact: "",
 	}
 }
 
@@ -590,5 +620,8 @@ func NativeClientPolicyFromValues(values Values) NativeClientPolicy {
 		policy.NotificationPreview = preview
 	}
 	policy.LocalWork = localWorkPolicyFromValues(values)
+	if contact := values.trimmed(KeyNativeSupportContact); ValidSupportContact(contact) {
+		policy.SupportContact = contact
+	}
 	return policy
 }

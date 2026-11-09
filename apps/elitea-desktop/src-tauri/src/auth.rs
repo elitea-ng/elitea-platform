@@ -57,6 +57,9 @@ pub struct HostState {
     pub client_version: String,
     pub client_id: String,
     pub policy: Option<Value>,
+    /// The IT support line the device management set (`support_contact`,
+    /// src/managed.rs); it beats the policy's.
+    pub managed_support_contact: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -200,6 +203,7 @@ impl AuthService {
             } else {
                 None
             },
+            managed_support_contact: crate::managed::support_contact(),
         })
     }
 

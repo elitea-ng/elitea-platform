@@ -53,6 +53,8 @@ const PublicPolicySchema = z.looseObject({
   notification_preview: z.string().max(32).optional().catch(undefined),
   allow_notification_actions: optionalFlag,
   allow_system_surfaces: optionalFlag,
+  // Client contract 1.45: the IT support line. Shown only after normalizeSupportContact.
+  support_contact: z.string().max(1024).optional().catch(undefined),
 });
 
 const BYTES = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -106,7 +108,9 @@ type DataControlKey =
   | 'allow_system_surfaces'
   // Client contract 1.5: the desktop's local-work switch. The mobile app neither reads nor
   // validates it (it runs no local work), so the runtime schema leaves it out.
-  | 'local_work_allowed';
+  | 'local_work_allowed'
+  // Client contract 1.45: optional here, an older server sends none.
+  | 'support_contact';
 const contractCheck: Assignable<
   DiscoveryDocument,
   Omit<WireDiscovery, 'attachments' | 'client_policy'> & {

@@ -73,7 +73,7 @@ func TestNativeClientPolicyJSONKeyOrder(t *testing.T) {
 		`"index_local_embeddings":true,"index_remote_embeddings":false,"index_model_mirror_url":"","web":false,"host_intel":false,` +
 		`"computer_use":false,"computer_use_apps_allow":[],"computer_use_apps_deny":[],` +
 		`"browser":true,"browser_agent":true,"browser_allow_domains":[],"browser_deny_domains":[],` +
-		`"browser_http":false,"browser_private_network":false}}`
+		`"browser_http":false,"browser_private_network":false},"support_contact":""}`
 	if string(body) != want {
 		t.Fatalf("client_policy JSON = %s\nwant %s", body, want)
 	}
@@ -118,5 +118,33 @@ func TestNativeClientPolicyDataControlOverlay(t *testing.T) {
 		if got := NativeClientPolicyFromValues(values); got.NotificationPreview != NotificationPreviewNone {
 			t.Errorf("%s: notification_preview = %q, want the default none", junk, got.NotificationPreview)
 		}
+	}
+}
+
+func TestNativeClientPolicySupportContact(t *testing.T) {
+	if got := DefaultNativeClientPolicy().SupportContact; got != "" {
+		t.Fatalf("support_contact default = %q, want none", got)
+	}
+	for raw, want := range map[string]string{
+		`{"support_contact": "  IT Service Desk, +1 555 0100 "}`: "IT Service Desk, +1 555 0100",
+		`{"support_contact": "help@example.com"}`:                "help@example.com",
+		`{"support_contact": "IT\nDesk"}`:                        "",
+		`{"support_contact": 5}`:                                 "",
+		`{"support_contact": "   "}`:                             "",
+	} {
+		var values Values
+		if err := json.Unmarshal([]byte(raw), &values); err != nil {
+			t.Fatal(err)
+		}
+		if got := NativeClientPolicyFromValues(values).SupportContact; got != want {
+			t.Errorf("%s: support_contact = %q, want %q", raw, got, want)
+		}
+	}
+	long := make([]rune, MaxSupportContactRunes+1)
+	for i := range long {
+		long[i] = 'é'
+	}
+	if ValidSupportContact(string(long)) || !ValidSupportContact(string(long[1:])) {
+		t.Error("the bound is in characters, not bytes")
 	}
 }

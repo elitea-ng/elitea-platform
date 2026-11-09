@@ -43,6 +43,8 @@
 import * as zod from "zod";
 import { LocalWorkPolicy } from "./localWorkPolicy.zod";
 
+export const nativeClientPolicySupportContactMax = 200;
+
 export const NativeClientPolicy = zod
   .object({
     require_device_lock: zod
@@ -107,6 +109,13 @@ export const NativeClientPolicy = zod
         "Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false.",
       ),
     local_work: LocalWorkPolicy,
+    support_contact: zod
+      .string()
+      .max(nativeClientPolicySupportContactMax)
+      .optional()
+      .describe(
+        "Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings; empty means none. The same value as the discovery document's `client_policy.support_contact`. A device's managed `support_contact` wins over it.",
+      ),
   })
   .describe(
     "The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:219 (`NativeClientPolicy`).",

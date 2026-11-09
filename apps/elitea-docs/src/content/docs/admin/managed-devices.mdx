@@ -14,6 +14,7 @@ An MDM or EMM can configure the mobile app on the devices it manages. On iOS the
 | `require_device_lock` | boolean | `true` asks for Face ID, Touch ID, a fingerprint or the passcode to open the app. |
 | `idle_lock_seconds` | integer (1–86400) | Relock after this many seconds in the background, when shorter than the workspace's setting. |
 | `allow_screenshots` | boolean | `false` blocks screenshots and screen recording of the app. |
+| `support_contact` | string | The IT support line the app shows in Settings and About, for example `IT Service Desk, +1 555 0100`. It replaces the workspace's [support contact](#it-support-contact). |
 
 The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
 
@@ -66,6 +67,18 @@ The desktop app reaches people only through the organization's device management
 | Windows 10 2004 or later, x64 | `.msi` and `.msix` | Azure Artifact Signing or the organization's code-signing certificate, timestamped |
 
 Windows packages are built once the desktop host runs on Windows; until then only the macOS package is available.
+
+### IT support contact
+
+The apps show an **IT support** line in About and Settings, so people know whom to ask. Set it for every device in **Admin › Configuration › Native client policy › IT Support Contact**, or per device through the device management with the key `support_contact`. The device's value wins. One line of at most 200 characters; an `https://` address, an email address or a phone number in it becomes a link. Without either, the apps show no line.
+
+| App | Where it shows | Device management key |
+|---|---|---|
+| iPhone, iPad, Android | Settings › About, and About | `support_contact` in the AppConfig or managed configuration (above) |
+| macOS | The account menu, Settings › Troubleshoot, and the About panel (from the next launch) | `support_contact` in a configuration profile with a Custom Settings (`com.apple.ManagedClient.preferences`) payload for the app's bundle identifier. Only a value the profile enforces counts, not one written with `defaults write`. |
+| Windows | Not yet | — |
+
+On the desktop app an `https://` line opens in the browser; an email address or a phone number opens Settings › Troubleshoot, where the line can be copied.
 
 ### macOS
 

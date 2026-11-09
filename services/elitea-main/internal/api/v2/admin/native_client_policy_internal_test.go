@@ -26,6 +26,11 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 		{"data controls valid", `{"allow_share_out":false,"allow_share_in":false,"allow_cloud_stt":true,
 			"notification_preview":"title","allow_notification_actions":false,"allow_system_surfaces":true}`, ""},
 		{"preview none", `{"notification_preview":"none"}`, ""},
+		{"support contact", `{"support_contact":"IT Service Desk, +1 555 0100"}`, ""},
+		{"support contact empty", `{"support_contact":""}`, ""},
+		{"support contact two lines", `{"support_contact":"IT\nDesk"}`, "support_contact"},
+		{"support contact too long", `{"support_contact":"` + strings.Repeat("é", 201) + `"}`, "support_contact"},
+		{"support contact not a string", `{"support_contact":5}`, "support_contact"},
 		{"preview body is not offered", `{"notification_preview":"body"}`, "notification_preview"},
 		{"preview not a string", `{"notification_preview":true}`, "notification_preview"},
 		{"local work valid", `{"local_work_allowed":true,"local_work_shell":false,
@@ -112,7 +117,7 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 	for _, key := range []string{"require_device_lock", "idle_lock_seconds", "allow_screenshots",
 		"offline_retention_days", "offline_max_mb", "offline_attachments", "min_client_version",
 		"allow_share_out", "allow_share_in", "allow_cloud_stt", "notification_preview",
-		"allow_notification_actions", "allow_system_surfaces",
+		"allow_notification_actions", "allow_system_surfaces", "support_contact",
 		"local_work_allowed", "local_work_shell", "local_work_max_sandbox_mode", "local_work_network",
 		"local_work_command_allow", "local_work_command_deny", "local_work_path_deny",
 		"local_work_local_mcp", "local_work_local_index", "local_work_cloud_sync", "local_work_memory_write",
@@ -125,9 +130,9 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 39 {
+	if len(keys) != 40 {
 		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1, "+
-			"contract 1.9's 3, #1238's 2, ADR-0047's 3 and ADR-0048's 6", len(keys))
+			"contract 1.9's 3, #1238's 2, ADR-0047's 3, ADR-0048's 6 and contract 1.45's 1", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {
