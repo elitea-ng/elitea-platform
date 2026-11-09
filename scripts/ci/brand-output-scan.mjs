@@ -28,6 +28,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import process from 'node:process';
 
+import { BRANDS_DIR, REPO_ROOT, resolveBrandDir } from '../brand/load.mjs';
 import { isEntrypoint } from './py-compat.mjs';
 
 /** Folders whose files are never scanned: third-party licence texts. */
@@ -35,9 +36,9 @@ export const SKIPPED_FILES = [/(^|\/)NOTICE(\.[a-z]+)?$/i, /(^|\/)(LICEN[CS]E|CO
 
 /**
  * The reviewed allow-list: brand text that may stay in sample output, each with
- * the reason. An entry is `{ lane, text, why }`: `text` is a substring of the
- * match's context (the 60 characters around it); `lane` limits it to one lane
- * or `*`. Keep it short: every entry is a place white labelling still leaks.
+ * the reason. An entry is `{ lane, text, why }` or `{ lane, re, why }`:
+ * `text` is a substring of the match's context (the 60 characters around it),
+ * `re` a pattern tested on it; `lane` limits it to one lane or `*`. Keep it short: every entry is a place white labelling still leaks.
  */
 export const ALLOWED = Object.freeze([
   {
@@ -52,7 +53,8 @@ export const ALLOWED = Object.freeze([
   },
   {
     lane: 'desktop',
-    text: 'Elitea-',
+    // Only the names the code writes: any other `Elitea-…` text still fails.
+    re: /Elitea-(?:Handoff|Base|Skipped|Included|Upstream|Agent-Assertion)\b/,
     why: 'Git commit trailers and the remote-agent header the handoff, checkpoint and assertion code write and parse (Elitea-Handoff, Elitea-Base, Elitea-Skipped, Elitea-Agent-Assertion): a wire format Main reads too, not text.',
   },
   {
@@ -77,8 +79,11 @@ export const ALLOWED = Object.freeze([
   },
   {
     lane: 'desktop',
-    // The list is one string table: the id sits before the next entry.
-    text: 'ai.elitea.desktopcom.apple.keychainaccess',
+    // The list is one string table: the id runs straight into the next
+    // reverse-DNS entry (`com.`, `org.`, ...) or ends its run (the context
+    // reads a run break as a space). A longer form (`ai.elitea.desktop.plist`)
+    // still fails.
+    re: /ai\.elitea\.desktop(?:(?:com|org|net|io|app|ai|dev)\.|\s|$)/,
     why: "ELITEA's bundle id on the computer-use platform deny list (local-tools policy.rs PLATFORM_APP_DENY, ADR-0047 decision 5). Every brand keeps it: a white-label build must not drive an installed ELITEA app, another agent host. The build's own id is refused through brand::own_apps().",
   },
   {
@@ -125,18 +130,46 @@ export function matchers(identifiers) {
   ];
 }
 
-/** Printable ASCII runs of four or more characters, as `strings -n 4`. */
+const printableByte = (b) => (b >= 0x20 && b < 0x7f) || b === 0x09;
+
+/**
+ * Printable runs of four or more characters: single-byte ASCII, as
+ * `strings -n 4`, and UTF-16LE, as `strings -el` (Hermes stores a string with
+ * any non-ASCII character as UTF-16, so `Elitea’s` is `E\0l\0i\0...`).
+ */
 export function printableStrings(buffer) {
   const runs = [];
   let start = -1;
   for (let i = 0; i <= buffer.length; i++) {
-    const b = i < buffer.length ? buffer[i] : 0;
-    const printable = (b >= 0x20 && b < 0x7f) || b === 0x09;
+    const printable = i < buffer.length && printableByte(buffer[i]);
     if (printable && start < 0) start = i;
     if (!printable && start >= 0) {
       if (i - start >= 4) runs.push(buffer.toString('latin1', start, i));
       start = -1;
     }
+  }
+  // UTF-16LE at both byte alignments: printable ASCII units are kept, other
+  // non-ASCII text units read as a space, anything else ends the run.
+  for (const offset of [0, 1]) {
+    let run = '';
+    let ascii = 0;
+    const flush = () => {
+      if (ascii >= 4) runs.push(run);
+      run = '';
+      ascii = 0;
+    };
+    for (let i = offset; i + 1 < buffer.length; i += 2) {
+      const unit = buffer[i] | (buffer[i + 1] << 8);
+      if (buffer[i + 1] === 0 && printableByte(buffer[i])) {
+        run += String.fromCharCode(unit);
+        ascii++;
+      } else if (unit >= 0xa0 && unit < 0xd800) {
+        run += ' ';
+      } else {
+        flush();
+      }
+    }
+    flush();
   }
   return runs.join('\n');
 }
@@ -145,13 +178,12 @@ export function printableStrings(buffer) {
 export const isBinary = (buffer) => buffer.subarray(0, 8192).includes(0);
 
 /** The findings in `text` (from `file`) for `lane`, after the allow-list. */
-export function scanText(text, { file, lane, identifiers, allowed = ALLOWED }) {
+export function scanText(text, { file, lane, identifiers, allowed = ALLOWED, compiled = matchers(identifiers) }) {
   const findings = [];
-  for (const { kind, re } of matchers(identifiers)) {
-    re.lastIndex = 0;
+  for (const { kind, re } of compiled) {
     for (const m of text.matchAll(re)) {
       const context = text.slice(Math.max(0, m.index - 30), m.index + m[0].length + 30).replace(/\s+/g, ' ');
-      const allow = allowed.find((a) => (a.lane === '*' || a.lane === lane) && context.includes(a.text));
+      const allow = allowed.find((a) => (a.lane === '*' || a.lane === lane) && (a.re ? a.re.test(context) : context.includes(a.text)));
       if (!allow) findings.push({ file, kind, match: m[0], context });
     }
   }
@@ -173,6 +205,7 @@ function* files(path) {
 /** Scan every file under `paths`. Returns `{ findings, scanned }`. */
 export function scan(paths, { lane, identifiers, allowed = ALLOWED, cwd = process.cwd() }) {
   const findings = [];
+  const compiled = matchers(identifiers);
   let scanned = 0;
   for (const root of paths) {
     for (const file of files(resolve(cwd, root))) {
@@ -181,7 +214,7 @@ export function scan(paths, { lane, identifiers, allowed = ALLOWED, cwd = proces
       const buffer = readFileSync(file);
       const text = isBinary(buffer) ? printableStrings(buffer) : buffer.toString('utf8');
       scanned++;
-      findings.push(...scanText(text, { file: shown, lane, identifiers, allowed }));
+      findings.push(...scanText(text, { file: shown, lane, identifiers, allowed, compiled }));
     }
   }
   return { findings, scanned };
@@ -209,12 +242,17 @@ if (isEntrypoint(import.meta.url)) {
     console.log('::error::usage: brand-output-scan.mjs --lane <web|mobile|desktop> <path>...');
     process.exit(2);
   }
-  if ((process.env.ELITEA_BRAND ?? '').replace(/^.*\//, '') !== 'sample') {
+  let brandDir;
+  try {
+    brandDir = resolveBrandDir(process.env.ELITEA_BRAND);
+  } catch {
+    brandDir = undefined;
+  }
+  if (brandDir !== join(BRANDS_DIR, 'sample')) {
     console.log('::error::build and scan with ELITEA_BRAND=sample: the scan proves a sample build shows no ELITEA');
     process.exit(2);
   }
-  const repo = resolve(new URL('../..', import.meta.url).pathname);
-  const manifest = JSON.parse(readFileSync(join(repo, 'brand/elitea/brand.json'), 'utf8'));
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'brand/elitea/brand.json'), 'utf8'));
   const { findings, scanned } = scan(paths, { lane, identifiers: eliteaIdentifiers(manifest) });
   // Nothing scanned is a broken build path, not a clean build.
   if (scanned === 0) {

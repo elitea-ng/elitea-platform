@@ -68,13 +68,19 @@ test('NOTICE and licence files are skipped; everything else is read', () => {
 
 test('the allow-list is reviewed: each entry has a reason and a lane, and lets only its text through', () => {
   for (const a of ALLOWED) {
-    assert.ok(a.why.length > 40, `ALLOWED "${a.text}" needs a reason`);
+    assert.ok(a.why.length > 40, `ALLOWED "${a.text ?? a.re}" needs a reason`);
+    assert.ok((typeof a.text === 'string') !== (a.re instanceof RegExp), 'an entry has a text or a re, not both');
     assert.ok(['*', 'web', 'mobile', 'desktop'].includes(a.lane));
   }
   assert.deepEqual(find('[`Project Management`,`Elitea`,`Epam`,`Other`]'), []);
   assert.deepEqual(find('`Elitea` alone'), ['Elitea']);
   assert.deepEqual(find('Elitea-Handoff: 1', 'desktop'), []);
   assert.deepEqual(find('Elitea-Handoff: 1', 'mobile'), ['Elitea']);
+  assert.deepEqual(find('Elitea-managed folder is read-only', 'desktop'), ['Elitea']);
+  assert.deepEqual(find('ai.elitea.desktopcom.apple.keychainaccess', 'desktop'), []);
+  assert.deepEqual(find('ai.elitea.desktoporg.keepassxc.keepassxc', 'desktop'), []);
+  assert.deepEqual(find('x\nai.elitea.desktop\ny', 'desktop'), []);
+  assert.deepEqual(find('Open ai.elitea.desktop.plist', 'desktop'), ['ai.elitea.desktop']);
 });
 
 test('a binary is read through its printable strings', () => {
@@ -84,6 +90,15 @@ test('a binary is read through its printable strings', () => {
   const root = tree({ 'Sample.app/Contents/MacOS/sample': bytes });
   const { findings } = scan([root], { lane: 'desktop', identifiers: IDS, cwd: root });
   assert.deepEqual(report(findings), ['Sample.app/Contents/MacOS/sample: "Elitea" in …About Elitea…']);
+});
+
+test('a UTF-16 string (Hermes, for text with a non-ASCII character) is read too', () => {
+  const utf16 = Buffer.from('Back to Elitea\u2019s home', 'utf16le');
+  for (const pad of [0, 1]) {
+    const bytes = Buffer.concat([Buffer.alloc(pad), Buffer.from([0xc6, 0x1f, 0, 0]), utf16, Buffer.from([0, 0, 0, 0])]);
+    assert.match(printableStrings(bytes), /Back to Elitea s home/);
+    assert.deepEqual(scanText(printableStrings(bytes), { file: 'b', lane: 'mobile', identifiers: IDS }).map((f) => f.match), ['Elitea']);
+  }
 });
 
 test('the CLI fails on a literal, fails on nothing scanned, refuses another brand, passes clean output', () => {
@@ -96,6 +111,8 @@ test('the CLI fails on a literal, fails on nothing scanned, refuses another bran
   assert.match(run(['--lane', 'web', empty]).stdout, /no file under/);
   assert.equal(run(['--lane', 'web', empty]).status, 1);
   assert.equal(run(['--lane', 'web', leak], 'elitea').status, 2);
+  assert.equal(run(['--lane', 'web', leak], '../acme/sample').status, 2);
+  assert.equal(run(['--lane', 'web', leak], path.join(REPO, 'brand/sample')).status, 1);
   assert.equal(run(['--lane', 'tv', leak]).status, 2);
   const clean = run(['--lane', 'web', tree({ 'app.js': 'title:`Sample Assistant` eliteaFetch' })]);
   assert.equal(clean.status, 0, clean.stdout);
