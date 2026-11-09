@@ -343,7 +343,7 @@ WHERE tenant_project_id = $1 AND application_version_id = ANY($2::bigint[]) AND 
 
 	// Leads first (they name a participant the roster removal deletes).
 	if err := collect(ctx, tx, fmt.Sprintf(`
-WITH leading AS (
+WITH led AS (
     SELECT conversation.id, conversation.meta -> 'floor' AS floor
     FROM %[1]s.chat_conversations AS conversation
     WHERE conversation.meta -> 'floor' ->> 'lead_participant_id' IN (
@@ -352,8 +352,8 @@ WITH leading AS (
 )
 UPDATE %[1]s.chat_conversations AS conversation
 SET meta = conversation.meta - 'floor'
-FROM leading WHERE leading.id = conversation.id
-RETURNING conversation.id, leading.floor::text`, schema), []any{app, project}, func(rows pgx.Rows) error {
+FROM led WHERE led.id = conversation.id
+RETURNING conversation.id, led.floor::text`, schema), []any{app, project}, func(rows pgx.Rows) error {
 		var lead snapshotLead
 		var floor string
 		if err := rows.Scan(&lead.ConversationID, &floor); err != nil {
@@ -624,8 +624,8 @@ DO UPDATE SET release_id = EXCLUDED.release_id, pointed_by = EXCLUDED.pointed_by
 			persona = string(roster.Persona)
 		}
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`
-INSERT INTO %[1]s.chat_participant_mapping (conversation_id, participant_id, entity_settings, persona)
-SELECT $1, $2, $3::jsonb, $4::jsonb
+INSERT INTO %[1]s.chat_participant_mapping (conversation_id, participant_id, entity_settings, persona, created_at)
+SELECT $1, $2, $3::jsonb, $4::jsonb, now() AT TIME ZONE 'UTC'
 WHERE EXISTS (SELECT 1 FROM %[1]s.chat_conversations WHERE id = $1)
   AND EXISTS (SELECT 1 FROM %[1]s.chat_participants WHERE id = $2)
 ON CONFLICT (participant_id, conversation_id) DO NOTHING`, schema),
@@ -685,7 +685,8 @@ WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.Ap
 	}
 	if err := s.append(ctx, tx, agent.ProjectID, "agent.workforce.reinstated", personRef(actorID),
 		strconv.FormatInt(agent.ApplicationID, 10), "", "via:"+via,
-		fmt.Sprintf("restored:versions=%d,rosters=%d,schedules=%d", len(snap.PublishedVersions), len(snap.Rosters), len(snap.Schedules))); err != nil {
+		fmt.Sprintf("restored_versions:%d", len(snap.PublishedVersions)), fmt.Sprintf("restored_rosters:%d", len(snap.Rosters)),
+		fmt.Sprintf("restored_schedules:%d", len(snap.Schedules))); err != nil {
 		return nil, err
 	}
 	return resumed, nil
