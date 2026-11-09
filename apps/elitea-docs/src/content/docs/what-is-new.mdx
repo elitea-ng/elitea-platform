@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Proactive agents
+
+An agent can now have a **heartbeat**: the platform wakes it on a timer, a small model reads its goals and the new messages, and the agent does nothing, sends you a message in its home thread with a notification, or starts a run under your mandate that waits for you at every approval. Add a `proactivity` block to the agent, publish it, and turn the heartbeat on in the agent editor's new **Heartbeat** tab, which also shows each wake. The agent must be at least medium risk with a reviewed release, except in your personal project. Daily limits on wakes, runs and spend, quiet hours, the kill switch and **Configuration › Proactive agents** keep it in bounds. Cloud agents only. See [Proactive agents](/how-tos/agents-pipelines/agent-heartbeat/).
+
 ## Sub-agent profiles and briefs
 
 `spawn_agent` now takes a `profile`: a display name, a short role (the soul), the tools, the model (`inherit`) and an avatar key. It also takes a `context` brief: quotes of messages, this turn's attachments, facts and recalled memory entries. The platform checks that the agent itself sees each reference, and refuses the call when it does not. Each spawn of a cloud run is recorded once, by digest, never by its text. See [Sub-agent profiles and briefs](/how-tos/agents-pipelines/sub-agent-profiles/).
