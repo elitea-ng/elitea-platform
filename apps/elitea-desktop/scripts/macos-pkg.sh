@@ -73,7 +73,12 @@ security import "$work/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD"
 rm -f "$work/cert.p12"
 security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_password" "$keychain" >/dev/null
 # productbuild looks the identity up in the search list.
-security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+existing=()
+while IFS= read -r line; do
+  line="${line#"${line%%[![:space:]]*}"}"; line="${line#\"}"; line="${line%\"}"
+  [ -n "$line" ] && existing+=("$line")
+done < <(security list-keychains -d user)
+security list-keychains -d user -s "$keychain" "${existing[@]}"
 if ! security find-identity -v "$keychain" | grep -qF "$INSTALLER_IDENTITY"; then
   echo "::error::the certificate holds no identity \"$INSTALLER_IDENTITY\" (a Developer ID Installer identity is needed)" >&2
   exit 1

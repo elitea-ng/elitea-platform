@@ -27,6 +27,7 @@ on:
       - "apps/elitea-desktop/scripts/desktop-package.mjs"
       - "apps/elitea-desktop/scripts/macos-pkg.sh"
       - "apps/elitea-desktop/scripts/windows-package.mjs"
+      - "apps/elitea-desktop/scripts/stamp-version.mjs"
       - "apps/elitea-desktop/src-tauri/tauri.conf.json"
       - "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json"
   workflow_call:
@@ -105,7 +106,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
           DRY_RUN: ${{ github.event_name == 'pull_request' }}
-          REQUIRE_SIGNED: ${{ inputs.require_signed == true }}
+          # A kept package goes to device management: it must be signed.
+          REQUIRE_SIGNED: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
         run: |
           flags=(--github-output)
           [ "$DRY_RUN" = true ] && flags+=(--dry-run)
@@ -117,26 +119,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           BUILD: ${{ github.run_number }}
-        working-directory: apps/elitea-desktop
-        run: |
-          set -euo pipefail
-          base="${VERSION%%-*}"
-          node -e '
-            const fs = require("fs");
-            const f = "src-tauri/tauri.conf.json";
-            const c = JSON.parse(fs.readFileSync(f, "utf8"));
-            c.version = process.argv[1];
-            c.bundle.macOS.bundleVersion = process.argv[2];
-            fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n");
-          ' "$base" "$BUILD"
-          # The [package] version is the first `version =` line of Cargo.toml.
-          sed -i '' -E "1,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
-          got_conf="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          got_cargo="$(sed -nE 's/^version = "(.*)"/\1/p' src-tauri/Cargo.toml | head -1)"
-          if [ "$got_conf" != "$base" ] || [ "$got_cargo" != "$VERSION" ]; then
-            echo "::error::stamped tauri.conf.json ${got_conf} (want ${base}) and Cargo.toml ${got_cargo} (want ${VERSION})"
-            exit 1
-          fi
+        run: node apps/elitea-desktop/scripts/stamp-version.mjs "$VERSION" "$BUILD"
 
       - uses: actions/setup-node@v7
         with:
@@ -256,7 +239,8 @@ jobs:
           spctl -a -vv --type execute "$app"
           xcrun stapler validate "$app"
           pkgutil --check-signature "$pkg"
-          if pkgutil --payload-files "$pkg" | grep -q '/\._'; then
+          pkgutil --payload-files "$pkg" > "$RUNNER_TEMP/payload.txt"
+          if grep -q '/\._' "$RUNNER_TEMP/payload.txt"; then
             echo "::error::the package payload carries AppleDouble ._ files"; exit 1
           fi
           spctl -a -vv --type install "$pkg"
@@ -267,9 +251,11 @@ jobs:
         run: |
           set -euo pipefail
           pkg="$(ls "$RUNNER_TEMP"/out/*.pkg)"
-          pkgutil --payload-files "$pkg" | grep -q "^./Applications/${DESKTOP_APP}/Contents/MacOS/elitea-desktop$"
+          # Listed once into a file: `pkgutil | grep -q` under pipefail fails on SIGPIPE.
+          pkgutil --payload-files "$pkg" > "$RUNNER_TEMP/payload.txt"
+          grep -qx "./Applications/${DESKTOP_APP}/Contents/MacOS/elitea-desktop" "$RUNNER_TEMP/payload.txt"
           # Extended attributes would install as AppleDouble `._` files next to the app.
-          if pkgutil --payload-files "$pkg" | grep -q '/\._'; then
+          if grep -q '/\._' "$RUNNER_TEMP/payload.txt"; then
             echo "::error::the package payload carries AppleDouble ._ files"; exit 1
           fi
           echo "::notice::unsigned dry run: $(basename "$pkg") built; signing and notarisation skipped"
@@ -323,7 +309,8 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           DRY_RUN: ${{ github.event_name == 'pull_request' }}
-          REQUIRE_SIGNED: ${{ inputs.require_signed == true }}
+          # A kept package goes to device management: it must be signed.
+          REQUIRE_SIGNED: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
         run: |
           flags=(--github-output)
           [ "$DRY_RUN" = true ] && flags+=(--dry-run)
@@ -334,18 +321,7 @@ jobs:
         if: inputs.version != ''
         env:
           VERSION: ${{ inputs.version }}
-        working-directory: apps/elitea-desktop
-        run: |
-          set -euo pipefail
-          base="${VERSION%%-*}"
-          node -e '
-            const fs = require("fs");
-            const f = "src-tauri/tauri.conf.json";
-            const c = JSON.parse(fs.readFileSync(f, "utf8"));
-            c.version = process.argv[1];
-            fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n");
-          ' "$base"
-          sed -i -E "1,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+        run: node apps/elitea-desktop/scripts/stamp-version.mjs "$VERSION"
 
       - uses: actions/setup-node@v7
         with:
@@ -392,13 +368,19 @@ jobs:
           $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
           $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          # A .pfx may carry its chain: the signing certificate is the one with the key.
+          $certs = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password)
           Remove-Item $pfx
-          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          $leaf = @($certs | Where-Object { $_.HasPrivateKey })
+          if ($leaf.Count -ne 1) { throw "WINDOWS_CERTIFICATE holds $($leaf.Count) certificates with a private key (want 1)" }
+          "thumbprint=$($leaf[0].Thumbprint)" >> $env:GITHUB_OUTPUT
 
       - name: Install the Artifact Signing client
         if: steps.plan.outputs.signer == 'trusted'
-        run: cargo install --locked artifact-signing-cli
+        env:
+          # Pinned: this job holds the Azure signing credentials. Bump deliberately.
+          ARTIFACT_SIGNING_CLI_VERSION: "0.12.0"
+        run: cargo install --locked artifact-signing-cli --version "=${ARTIFACT_SIGNING_CLI_VERSION}"
 
       - name: Build the MSI (${{ steps.plan.outputs.sign == 'true' && 'signed' || 'unsigned' }})
         working-directory: apps/elitea-desktop
