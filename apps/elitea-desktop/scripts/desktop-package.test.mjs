@@ -80,7 +80,25 @@ test('the workflows pass every signing secret by its fixed name', () => {
   for (const name of new Set([...SECRETS.macos, ...SECRETS.windowsTrusted, ...SECRETS.windowsPfx])) {
     assert.match(publish, new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`), `publish.yml ${name}`);
     assert.match(wf, new RegExp(`${name}: \\{ required: false \\}`), `workflow_call ${name}`);
-    assert.match(wf, new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`), name);
+    // The build is a composite action: each secret goes in as its kebab-case input.
+    const input = name.toLowerCase().replaceAll('_', '-');
+    assert.match(wf, new RegExp(`${input}: \\$\\{\\{ secrets\\.${name} \\}\\}`), name);
+  }
+});
+
+test('the composite actions take every secret of their platform as an input', () => {
+  const actions = {
+    macos: readFileSync(join(REPO, '.github/actions/desktop-macos-package/action.yml'), 'utf8'),
+    windows: readFileSync(join(REPO, '.github/actions/desktop-windows-package/action.yml'), 'utf8'),
+  };
+  const names = { macos: SECRETS.macos, windows: [...new Set([...SECRETS.windowsTrusted, ...SECRETS.windowsPfx])] };
+  for (const [platform, list] of Object.entries(names)) {
+    for (const name of list) {
+      const input = name.toLowerCase().replaceAll('_', '-');
+      assert.match(actions[platform], new RegExp(`^  ${input}: \\{ description: "Secret ${name}`, 'm'), `${platform} input ${input}`);
+      // ...and hands it to the planner under its fixed name.
+      assert.match(actions[platform], new RegExp(`${name}: \\$\\{\\{ inputs\\.${input} \\}\\}`), `${platform} ${name}`);
+    }
   }
 });
 

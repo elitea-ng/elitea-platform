@@ -12,6 +12,7 @@ import { StatusScreen } from '@/components/StatusScreen';
 import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
 import { GlassSurface, headerActionOptions, Icon, IconButton, Text, type HeaderAction } from '@/ui';
+import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
 import { PaneHeader } from '@/features/chat/PaneHeader';
 import { ForkedFromLink, forkedFromOf } from '@/features/chat/ForkedFromLink';
 import { forkableKeys } from '@/features/chat/forkPoints';
@@ -172,6 +173,8 @@ export function ThreadView({
   const contract112 = speaksContract(workspace?.discovery, 1, 12);
   // Client contract 1.27: a message sent while the answer runs steers it.
   const contract127 = speaksContract(workspace?.discovery, 1, 27);
+  // Client contract 1.44: what an agent participant remembers (ADR-0050 1b).
+  const agentMemoryAvailable = useAgentMemoryAvailable();
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -847,6 +850,14 @@ export function ThreadView({
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
           // The update replaces the whole meta: no lead control without the meta that was read.
           conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
+          onAgentMemory={
+            agentMemoryAvailable
+              ? (agentId, name) => {
+                  setPeopleOpen(false);
+                  router.push({ pathname: '/agent-memory/[id]', params: { id: String(agentId), name } });
+                }
+              : undefined
+          }
         />
       ) : null}
       <ThreadLayout

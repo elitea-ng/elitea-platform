@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.43"
+  x-elitea-client-contract: "1.44"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -28328,8 +28328,9 @@ paths:
         only for that person and the agent's managers (an owner or a holder
         of `models.applications.memory.update`). Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - { name: kind, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryKind' } }
         - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/AgentMemoryStatus' } }
         - { name: subject_user_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
@@ -28352,6 +28353,8 @@ paths:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
         - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: The entries the caller may see
           content:
@@ -28459,8 +28462,14 @@ paths:
         A manager with ownership or `models.applications.memory.delete`
         deletes any entry; anyone deletes an entry about themself. Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '204': { description: Deleted }
         '401': { $ref: '#/components/responses/401' }
         '403':
@@ -28488,7 +28497,9 @@ paths:
         opted_out true deletes what the agent holds about the caller and
         stops it writing more; false lets it remember again. Requires
         `models.applications.memory.list`.
-      tags: [applications]
+      tags: [applications, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       requestBody:
         required: true
         content:
@@ -28500,6 +28511,8 @@ paths:
               properties:
                 opted_out: { type: boolean }
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: The stored choice
           content:

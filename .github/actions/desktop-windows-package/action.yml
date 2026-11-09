@@ -1,0 +1,203 @@
+name: Desktop Windows package
+description: >-
+  The desktop app's MSI (Intune, SCCM, msiexec /qn) and MSIX (the Store, Intune),
+  the host, the sidecar and both packages signed with Azure Artifact Signing or a
+  code-signing certificate (PFX) and timestamped, or an unsigned dry run when no
+  signing secret is set (ADR-0052 W2b). Used by this repository's
+  desktop-package.yml and by brand repositories (ADR-0052 W5,
+  docs/brand-template/). Runs on windows-latest; the caller checks out the tree,
+  sets up Node and restores caches; ELITEA_BRAND selects the brand.
+
+inputs:
+  root:
+    description: The ELITEA source tree (`.` here; `elitea` in a brand repository).
+    default: "."
+  version:
+    description: The release version to stamp (X.Y.Z or X.Y.Z-pre); empty keeps the tree's.
+    default: ""
+  dry-run:
+    description: "`true`: never sign (a pull request)."
+    default: "false"
+  require-signed:
+    description: "`true`: fail unless one signer's secrets are all set."
+    default: "false"
+  windows-publisher: { description: "Secret WINDOWS_PUBLISHER (the certificate subject)", default: "" }
+  azure-client-id: { description: "Secret AZURE_CLIENT_ID", default: "" }
+  azure-client-secret: { description: "Secret AZURE_CLIENT_SECRET", default: "" }
+  azure-tenant-id: { description: "Secret AZURE_TENANT_ID", default: "" }
+  azure-signing-endpoint: { description: "Secret AZURE_SIGNING_ENDPOINT", default: "" }
+  azure-signing-account: { description: "Secret AZURE_SIGNING_ACCOUNT", default: "" }
+  azure-signing-profile: { description: "Secret AZURE_SIGNING_PROFILE", default: "" }
+  windows-certificate: { description: "Secret WINDOWS_CERTIFICATE (base64 .pfx)", default: "" }
+  windows-certificate-password: { description: "Secret WINDOWS_CERTIFICATE_PASSWORD", default: "" }
+
+outputs:
+  signed:
+    description: "`true` when every file is signed."
+    value: ${{ steps.plan.outputs.sign }}
+  package-dir:
+    description: The folder holding the .msi and the .msix.
+    value: ${{ steps.paths.outputs.out }}
+
+runs:
+  using: composite
+  steps:
+    - name: Paths
+      id: paths
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root }}
+      run: |
+        set -euo pipefail
+        root="$(cd "$ROOT" && pwd)"
+        echo "ELITEA_ROOT=$root" >> "$GITHUB_ENV"
+        echo "out=$RUNNER_TEMP/out" >> "$GITHUB_OUTPUT"
+
+    - name: Sign or dry run
+      id: plan
+      shell: bash
+      env:
+        WINDOWS_PUBLISHER: ${{ inputs.windows-publisher }}
+        AZURE_CLIENT_ID: ${{ inputs.azure-client-id }}
+        AZURE_CLIENT_SECRET: ${{ inputs.azure-client-secret }}
+        AZURE_TENANT_ID: ${{ inputs.azure-tenant-id }}
+        AZURE_SIGNING_ENDPOINT: ${{ inputs.azure-signing-endpoint }}
+        AZURE_SIGNING_ACCOUNT: ${{ inputs.azure-signing-account }}
+        AZURE_SIGNING_PROFILE: ${{ inputs.azure-signing-profile }}
+        WINDOWS_CERTIFICATE: ${{ inputs.windows-certificate }}
+        WINDOWS_CERTIFICATE_PASSWORD: ${{ inputs.windows-certificate-password }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        REQUIRE_SIGNED: ${{ inputs.require-signed }}
+      run: |
+        flags=(--github-output)
+        [ "$DRY_RUN" = true ] && flags+=(--dry-run)
+        [ "$REQUIRE_SIGNED" = true ] && flags+=(--require-signed)
+        node "$ELITEA_ROOT/apps/elitea-desktop/scripts/desktop-package.mjs" windows "${flags[@]}"
+
+    - name: Stamp the version
+      if: inputs.version != ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: node "$ELITEA_ROOT/apps/elitea-desktop/scripts/stamp-version.mjs" "$VERSION"
+
+    - name: Install web and desktop (locked)
+      shell: bash
+      run: |
+        npm ci --prefix "$ELITEA_ROOT/apps/elitea-web"
+        npm ci --prefix "$ELITEA_ROOT/apps/elitea-desktop"
+
+    - name: Assert the pinned toolchain
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop/src-tauri
+      run: bash "$ELITEA_ROOT/scripts/ci/assert-rust-toolchain.sh"
+
+    - name: Restore the cargo cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        save-if: false
+        workspaces: ${{ inputs.root }}/apps/elitea-desktop/src-tauri
+
+    - name: Build the document sidecar
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop/doc-extract-sidecar
+      run: |
+        set -euo pipefail
+        cargo build --release --locked --target x86_64-pc-windows-msvc
+        mkdir -p ../src-tauri/binaries
+        cp target/x86_64-pc-windows-msvc/release/elitea-doc-extract-sidecar.exe \
+          ../src-tauri/binaries/elitea-doc-extract-sidecar-x86_64-pc-windows-msvc.exe
+
+    - name: Import the code-signing certificate
+      id: pfx
+      if: steps.plan.outputs.signer == 'pfx'
+      shell: pwsh
+      env:
+        WINDOWS_CERTIFICATE: ${{ inputs.windows-certificate }}
+        WINDOWS_CERTIFICATE_PASSWORD: ${{ inputs.windows-certificate-password }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $pfx = Join-Path $env:RUNNER_TEMP 'cert.pfx'
+        [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+        $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+        $certs = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+        Remove-Item $pfx
+        $leaf = @($certs | Where-Object { $_.HasPrivateKey })
+        if ($leaf.Count -ne 1) { throw "WINDOWS_CERTIFICATE holds $($leaf.Count) certificates with a private key (want 1)" }
+        "thumbprint=$($leaf[0].Thumbprint)" >> $env:GITHUB_OUTPUT
+        # The cleanup step below reads it from the environment.
+        "ELITEA_PFX_THUMBPRINT=$($leaf[0].Thumbprint)" >> $env:GITHUB_ENV
+
+    - name: Install the Artifact Signing client
+      if: steps.plan.outputs.signer == 'trusted'
+      shell: bash
+      env:
+        ARTIFACT_SIGNING_CLI_VERSION: "0.12.0"
+      run: cargo install --locked artifact-signing-cli --version "=${ARTIFACT_SIGNING_CLI_VERSION}"
+
+    - name: Build the MSI
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop
+      env:
+        SIGNER: ${{ steps.plan.outputs.signer }}
+        WINDOWS_CERT_THUMBPRINT: ${{ steps.pfx.outputs.thumbprint }}
+        AZURE_CLIENT_ID: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-client-id || '' }}
+        AZURE_CLIENT_SECRET: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-client-secret || '' }}
+        AZURE_TENANT_ID: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-tenant-id || '' }}
+        AZURE_SIGNING_ENDPOINT: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-endpoint || '' }}
+        AZURE_SIGNING_ACCOUNT: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-account || '' }}
+        AZURE_SIGNING_PROFILE: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-profile || '' }}
+      run: |
+        set -euo pipefail
+        node scripts/tauri-brand.mjs
+        node scripts/windows-package.mjs overlay "$SIGNER"
+        npx tauri build --bundles msi \
+          --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json --config src-tauri/tauri.windows.json
+        echo "DESKTOP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+
+    - name: Build the MSIX
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop
+      env:
+        SIGNER: ${{ steps.plan.outputs.signer }}
+        WINDOWS_PUBLISHER: ${{ inputs.windows-publisher }}
+        WINDOWS_CERT_THUMBPRINT: ${{ steps.pfx.outputs.thumbprint }}
+        AZURE_CLIENT_ID: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-client-id || '' }}
+        AZURE_CLIENT_SECRET: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-client-secret || '' }}
+        AZURE_TENANT_ID: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-tenant-id || '' }}
+        AZURE_SIGNING_ENDPOINT: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-endpoint || '' }}
+        AZURE_SIGNING_ACCOUNT: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-account || '' }}
+        AZURE_SIGNING_PROFILE: ${{ steps.plan.outputs.signer == 'trusted' && inputs.azure-signing-profile || '' }}
+      run: |
+        set -euo pipefail
+        kits=("/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64); kit="${kits[-1]}"
+        release=src-tauri/target/release
+        layout="$RUNNER_TEMP/msix"
+        mkdir -p "$layout/Assets" "$RUNNER_TEMP/out"
+        cp "$release/elitea-desktop.exe" "$release/elitea-doc-extract-sidecar.exe" "$layout/"
+        icon="$(node -p 'require("./src-tauri/tauri.brand.json").bundle.icon[1]')"
+        for name in StoreLogo Square150x150Logo Square44x44Logo; do cp "src-tauri/$icon" "$layout/Assets/$name.png"; done
+        node scripts/windows-package.mjs manifest "$layout" "$DESKTOP_VERSION"
+        msix="$RUNNER_TEMP/out/elitea-desktop-${DESKTOP_VERSION}-x64.msix"
+        "$kit/makeappx.exe" pack -d "$layout" -p "$msix" -o
+        case "$SIGNER" in
+          pfx) "$kit/signtool.exe" sign -sha1 "$WINDOWS_CERT_THUMBPRINT" -fd sha256 -tr http://timestamp.acs.microsoft.com -td sha256 "$msix" ;;
+          trusted) artifact-signing-cli -e "$AZURE_SIGNING_ENDPOINT" -a "$AZURE_SIGNING_ACCOUNT" -c "$AZURE_SIGNING_PROFILE" "$msix" ;;
+          *) echo "::notice::unsigned dry run: $(basename "$msix") built; signing skipped" ;;
+        esac
+        cp src-tauri/target/release/bundle/msi/*.msi "$RUNNER_TEMP/out/"
+
+    - name: The host, the MSI and the MSIX are signed and timestamped
+      if: steps.plan.outputs.sign == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        kits=("/c/Program Files (x86)/Windows Kits/10/bin/"10.*/x64); kit="${kits[-1]}"
+        for f in "$ELITEA_ROOT/apps/elitea-desktop/src-tauri/target/release/elitea-desktop.exe" "$RUNNER_TEMP"/out/*.msi "$RUNNER_TEMP"/out/*.msix; do
+          "$kit/signtool.exe" verify -pa -v "$f"
+        done
+
+    - name: Remove the code-signing certificate
+      if: always() && env.ELITEA_PFX_THUMBPRINT != ''
+      shell: pwsh
+      run: Remove-Item -Path "Cert:\CurrentUser\My\$env:ELITEA_PFX_THUMBPRINT" -DeleteKey

@@ -151,6 +151,16 @@ export function participantUserId(participant: Participant | undefined): number 
   return id !== null && id > 0 ? id : null;
 }
 
+/**
+ * An agent participant's APPLICATION id (`entity_meta.id`), the id its memory is kept under
+ * (ADR-0050 1b); null for every other kind and for a pipeline.
+ */
+export function participantAgentId(participant: Participant | undefined): number | null {
+  if (participant?.entity_name !== 'application') return null;
+  const id = asId(asRecord(participant.entity_meta)?.id);
+  return id !== null && id > 0 ? id : null;
+}
+
 /** Who "me" is, for deciding which user messages are mine. */
 export interface SelfContext {
   /** The signed-in user's USER id ("who am I"), when known. */

@@ -32,6 +32,38 @@ a boolean). On iOS a plist boolean may arrive as `1` / `0`; both count. The
 configuration belongs to the device, not to a workspace: logging out of a
 workspace does not remove it.
 
+## Feedback to the MDM
+
+While the device has a managed configuration, the app reports its state back to
+the MDM (src/security/managedFeedback.ts), so an administrator sees a
+misconfigured or signed-out app in the console:
+
+- **iOS:** the managed feedback dictionary `com.apple.feedback.managed` in the
+  app's UserDefaults, read by the MDM's ManagedApplicationFeedback command
+  (Intune and Workspace ONE show it per device and app). Each value is a code,
+  or `code:data`.
+- **Android:** keyed app states (androidx.enterprise `KeyedAppStatesReporter`,
+  through native-modules/ManagedRestrictions.kt) sent to the device or profile
+  owner and Play, readable in the EMM console or the Android Management API.
+
+| Key | Info codes | Error codes | Data |
+|---|---|---|---|
+| `managed_config` | `applied` | `ignored_keys`: a key of ours with a value the app refused | the ignored key names, comma-separated |
+| `connection` | `managed_server`, `unmanaged_server` (no managed address), `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `not_managed_server` (connected to another server than the managed one) | none |
+| `sign_in` | `signed_in`, `signed_out` | `signed_out_device_revoked`, `signed_out_credential_rejected`, `signed_out_policy`, `signed_out_managed_server` | none |
+| `policy` | `ok` | `update_required`: the workspace asks for a newer app | the minimum version |
+
+**Never user content:** no server address (not even the managed one), account,
+project, name, email, message or error text; only the fixed keys and codes
+above, managed key names and a version number. The test
+(src/security/managedFeedback.test.ts) holds every state to these lists.
+
+Dormant without an MDM: with no managed configuration nothing is written.
+Nothing is reported before the session is restored at launch (it would read
+as signed out). When the MDM removes the configuration the iOS dictionary is
+removed; Android keeps keyed states, so the app replaces every key once with
+`not_managed` (info).
+
 ## Microsoft Intune
 
 **iOS:** Apps › App configuration policies › Add › Managed devices, choose
@@ -94,7 +126,10 @@ field per key; fill them in as above.
   path).
 - **Android:** install Google's Test DPC, make it the profile or device
   owner, then "Manage application restrictions" › the app: the keys above
-  appear with their types.
+  appear with their types. Test DPC's "Keyed app states" screen shows the
+  feedback the app reports.
+- **iOS feedback:** `xcrun simctl spawn booted defaults read <bundle id>
+  com.apple.feedback.managed` prints the dictionary the app wrote.
 
 Other brands: replace `ai.elitea.app` with the brand's Android application
 id (its brand manifest, `brand/<id>/brand.json`).

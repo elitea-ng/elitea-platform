@@ -151,9 +151,8 @@ Reviewers must reach a signed-in workspace, and the app has no account sign-up
 or demo mode. The owner must create, **before the first external TestFlight
 round and before each review**:
 
-1. **A demo workspace** reachable from the internet (for example
-   `https://demo.elitea.ai`, or the existing demo server), with native
-   clients enabled for `ai.elitea.app`, a public agent or two in Discover, a
+1. **A demo workspace** reachable from the internet (a server the publisher
+   operates for review), with native clients enabled for `ai.elitea.app`, a public agent or two in Discover, a
    project with a few sample conversations, and models that answer.
 2. **A reviewer test account** on that workspace's identity provider: a
    username and password sign-in that needs **no** MFA app, SMS, hardware key or
@@ -183,6 +182,14 @@ access and TestFlight's Test Information):
 > Notes: dictation uses on-device speech recognition only. The app collects no
 > analytics and has no ads. The workspace server is operated by
 > [legal entity name] for review purposes.
+>
+> Device management and notifications: the app reads managed app
+> configuration (server address, device lock, screenshots) only on a device
+> enrolled in an organization's MDM, and reports its connection and sign-in
+> state back to that MDM (managed app feedback); without one these settings
+> are absent, nothing is reported, and they change nothing. It never asks for a push token, and has no Local Push
+> connectivity extension: notifications are shown in the app, fetched from the
+> workspace. None of this needs testing for review.
 
 Sign-in fields in App Store Connect: user name `[reviewer username]`, password
 `[reviewer password]`. Contact: [name, phone, email].
