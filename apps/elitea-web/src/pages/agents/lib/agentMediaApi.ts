@@ -18,12 +18,12 @@ function bodyOf<T>(envelope: unknown): T {
 }
 
 /* manifest: applications.uploadAgentMedia */
-export async function uploadAgentMediaFile(projectId: string, file: File): Promise<AgentMediaObject> {
+async function uploadAgentMediaFile(projectId: string, file: File): Promise<AgentMediaObject> {
   return bodyOf<AgentMediaObject>(await uploadAgentMedia(projectId, { file }));
 }
 
 /* manifest: applications.generateAgentMedia */
-export async function generateAgentMediaFiles(projectId: string, request: AgentMediaGenerateRequest): Promise<readonly AgentMediaObject[]> {
+async function generateAgentMediaFiles(projectId: string, request: AgentMediaGenerateRequest): Promise<readonly AgentMediaObject[]> {
   return bodyOf<AgentMediaGenerateResponse>(await generateAgentMedia(projectId, request)).media;
 }
 
