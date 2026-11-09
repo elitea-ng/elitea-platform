@@ -1319,7 +1319,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// project: agent_memory_entries, agent_memory_entry_versions and
 	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
 	// data, no permission.
-	require.EqualValues(t, 163, Head(tenant))
+	//
+	// 234: tenant/0234_application_version_avatar_pack.sql, the nullable
+	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
+	// issue 1619). No data, no permission. It skips 164 to 233 on purpose:
+	// open branches had claimed the numbers next to the shared head, and
+	// Head() reads the last entry, so a gap costs nothing.
+	require.EqualValues(t, 234, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

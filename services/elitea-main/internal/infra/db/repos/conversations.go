@@ -298,6 +298,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
 	r.enrichAgentParticipantPublication(ctx, s, items)
+	r.enrichAgentParticipantAvatarPack(ctx, s, items)
 	r.enrichParticipantNesting(ctx, s, items)
 	return items, nil
 }
@@ -465,6 +466,62 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		for _, i := range indexes {
 			items[i].Meta["version_status"] = state.status
 			items[i].Meta["version_withdrawn"] = state.withdrawn
+		}
+	}
+}
+
+// enrichAgentParticipantAvatarPack adds the avatar pack of an agent
+// participant's version to its persona as `persona.avatar_pack` (ADR-0050
+// decision 6, the "later avatar_pack" of Participant.Persona). It is read
+// live, not snapshotted like the rest of the persona: a pack names
+// content-addressed media, so a new still shows from the next read. The
+// client falls back to `entity_settings.icon_meta` without one. An
+// enrichment only: a tenant without the column (tenant/0234 not yet run)
+// keeps its participants as read.
+func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
+	ctx context.Context,
+	s string,
+	items []conversations.Participant,
+) {
+	byVersion := map[int32][]int{}
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		if versionID, ok := participantVersionID(items[i].EntitySettings); ok {
+			byVersion[versionID] = append(byVersion[versionID], i)
+		}
+	}
+	if len(byVersion) == 0 {
+		return
+	}
+	versionIDs := make([]int32, 0, len(byVersion))
+	for versionID := range byVersion {
+		versionIDs = append(versionIDs, versionID)
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT av.id, av.avatar_pack::text
+		FROM %s.application_versions av
+		WHERE av.id = ANY($1::int[]) AND jsonb_typeof(av.avatar_pack) = 'object'`, s), versionIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var versionID int32
+		var raw string
+		if err := rows.Scan(&versionID, &raw); err != nil {
+			continue
+		}
+		var pack map[string]any
+		if json.Unmarshal([]byte(raw), &pack) != nil {
+			continue
+		}
+		for _, i := range byVersion[versionID] {
+			if items[i].Persona == nil {
+				items[i].Persona = map[string]any{}
+			}
+			items[i].Persona["avatar_pack"] = pack
 		}
 	}
 }

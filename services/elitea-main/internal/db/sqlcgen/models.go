@@ -43,6 +43,7 @@ type ApplicationVersion struct {
 	Meta                 []byte           `db:"meta" json:"meta"`
 	PipelineSettings     []byte           `db:"pipeline_settings" json:"pipeline_settings"`
 	Soul                 []byte           `db:"soul" json:"soul"`
+	AvatarPack           []byte           `db:"avatar_pack" json:"avatar_pack"`
 }
 
 type AuthCoreGroup struct {

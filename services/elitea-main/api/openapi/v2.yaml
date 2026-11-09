@@ -10744,6 +10744,130 @@ components:
         llm_settings:
           $ref: '#/components/schemas/DraftLlmSettings'
 
+    AgentAvatarPackV1:
+      type: object
+      additionalProperties: false
+      required: [schema, slots]
+      description: >
+        ADR-0050 decision 6: an agent version's avatar pack. Each slot names
+        one uploaded media file for one state; only `still` is required, and
+        a client animates a state with no slot from the still with the
+        default motion pack. Lottie and Rive are not accepted.
+      properties:
+        schema:
+          type: string
+          description: The document version. Always `elitea.avatar_pack/v1`.
+        slots:
+          type: object
+          additionalProperties: false
+          required: [still]
+          properties:
+            still: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            idle: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            thinking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            speaking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            working: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waiting: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            success: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            error: { $ref: '#/components/schemas/AgentAvatarSlot' }
+            waking: { $ref: '#/components/schemas/AgentAvatarSlot' }
+    AgentAvatarSlot:
+      type: object
+      additionalProperties: false
+      required: [url]
+      description: >
+        One avatar pack slot. `still` takes PNG, JPEG, WebP or SVG; the
+        other slots take a still, an animated WebP, or a muted MP4 (H.264)
+        or WebM (VP9 or AV1). Every animation is at most 4 s, 512 px and
+        2 MiB, and an animated WebP loops forever.
+      properties:
+        url:
+          type: string
+          maxLength: 160
+          description: >
+            `/api/v2/agent_media/{project_id}/{sha256}.{ext}`, the url the
+            upload or the generation answered.
+        media_type:
+          type: string
+          description: >
+            Derived from the url's extension on every write (image/png,
+            image/jpeg, image/webp, image/svg+xml, video/mp4, video/webm); a
+            value the client sends is ignored.
+        poster_url:
+          type: string
+          maxLength: 160
+          description: >
+            The still a video shows before it plays and under reduced motion.
+            Required for MP4 and WebM; dropped for any other file.
+        generated_by:
+          type: string
+          maxLength: 256
+          description: The model that generated the file, when it was generated.
+    AgentMediaObject:
+      type: object
+      required: [url, media_type, format, width, height, duration_ms, bytes]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, MediaObject. One
+        stored, validated media file.
+      properties:
+        url: { type: string }
+        media_type: { type: string }
+        format:
+          type: string
+          description: png, jpeg, webp, webp_animated, svg, mp4 or webm, read from the bytes.
+        width: { type: integer, description: "0 for an SVG." }
+        height: { type: integer, description: "0 for an SVG." }
+        duration_ms: { type: integer, description: "One loop's length; 0 for a still." }
+        bytes: { type: integer }
+        generated_by: { type: string }
+    AgentMediaRefusal:
+      type: object
+      required: [error, code]
+      description: >
+        NOTE(W2): internal/api/v2/agentmediaapi/handler.go, writeRefusal.
+        `avatar_media_invalid` is a file the validator refused (the reason
+        names the rule); the other codes name a missing dependency or a bad
+        request.
+      properties:
+        error: { type: string }
+        code: { type: string }
+    AgentMediaGenerateRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, model]
+      description: >
+        ADR-0050 decision 6, "Generation". `kind` `still` turns the soul's
+        display name, role and voice into a prompt for
+        `/llm/v1/images/generations` and answers `count` candidates. `kind`
+        `loop` asks `/llm/v1/images/edits` for `frames` poses of `still_url`
+        in `state` and assembles them into an animated WebP. There is no
+        video kind.
+      properties:
+        kind: { type: string, description: "still or loop." }
+        model:
+          type: string
+          maxLength: 256
+          description: An image_generation_model of the project's catalogue.
+        display_name: { type: string, maxLength: 1000 }
+        role: { type: string, maxLength: 1000 }
+        voice:
+          type: array
+          maxItems: 16
+          items: { type: string, maxLength: 1000 }
+        prompt: { type: string, maxLength: 1000, description: "An optional extra direction." }
+        count: { type: integer, minimum: 1, maximum: 4, description: "Still candidates; default 4." }
+        state:
+          type: string
+          description: The slot a loop is for, one of idle, thinking, speaking, working, waiting, success, error, waking.
+        still_url: { type: string, maxLength: 160, description: "A PNG, JPEG or WebP still of this project." }
+        frames: { type: integer, minimum: 4, maximum: 8, description: "Loop frames; default 6." }
+    AgentMediaGenerateResponse:
+      type: object
+      required: [media]
+      properties:
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/AgentMediaObject' }
     AgentSoulV1:
       type: object
       additionalProperties: false
@@ -11815,6 +11939,13 @@ components:
           description: >
             ADR-0050 decision 1a: the version's soul document, or null when it
             has none. Served by the version-detail read and both write echoes.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6: the version's avatar pack, or null when it
+            has none (the client then reads `meta.icon_meta`). Served by the
+            version-detail read and both write echoes.
         notes:
           type: string
           description: >
@@ -12073,6 +12204,17 @@ components:
             `soul_capability_key` names a key that would read as a grant
             (tools, credentials, permissions and the like), `soul_too_large`
             a document over 16384 bytes of text, `soul_invalid` anything else.
+        avatar_pack:
+          allOf: [{ $ref: '#/components/schemas/AgentAvatarPackV1' }]
+          nullable: true
+          description: >
+            ADR-0050 decision 6. Omit the key to leave the stored pack alone;
+            null clears it; an object replaces it whole and also writes its
+            still into `meta.icon_meta`, so a client that reads only the old
+            field shows it. Every url must be media uploaded to this project
+            (`/api/v2/agent_media/{this project}/...`). A pack that breaks a
+            rule is REFUSED with a 400 `avatar_pack_invalid` before anything
+            is written.
         llm_settings: { $ref: '#/components/schemas/LlmSettings' }
         conversation_starters: { $ref: '#/components/schemas/ConversationStarters' }
         variables:
@@ -28410,6 +28552,148 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_media/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: uploadAgentMedia
+      summary: Upload one avatar pack media file
+      description: >
+        ADR-0050 decision 6. Stores one file in the project's `agent-media`
+        bucket under its SHA-256 and answers its url. The type is read from
+        the bytes, never from the file name or the part's Content-Type. A
+        still is PNG, JPEG, WebP or SVG (an SVG with a script, an event
+        handler, an external reference or a DOCTYPE is refused); an
+        animation is an animated WebP that loops forever, or a muted MP4
+        (H.264) or WebM (VP9 or AV1); every file is at most 2 MiB and 512 px,
+        and an animation at most 4 s. A refused file answers 400
+        `avatar_media_invalid` and is not stored. Requires
+        `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaObject' }
+        '400':
+          description: (code avatar_media_invalid) The validator refused the file
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '413':
+          description: (code avatar_media_invalid) The request is larger than the 2 MiB file cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code storage_unavailable) No object store is configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /elitea_core/agent_media_generate/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: generateAgentMedia
+      summary: Generate avatar still candidates or one state loop
+      description: >
+        ADR-0050 decision 6, "Generation". Calls the LLM gateway under the
+        caller's identity, so the project budget pays and the request log
+        records it. Every result passes the upload validator and is stored as
+        a draft in `agent-media`; nothing joins a pack until the version is
+        saved with it. A gateway refusal passes through as 400, 402, 403 or
+        429 (code generation_refused); any other provider failure is 502.
+        Requires `models.applications.upload_icon.post`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentMediaGenerateRequest' }
+      responses:
+        '201':
+          description: The stored drafts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaGenerateResponse' }
+        '400':
+          description: (code invalid_request or generation_refused) The request is not valid, or the image model refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '401': { $ref: '#/components/responses/401' }
+        '402':
+          description: (code generation_refused) The project budget refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '403': { $ref: '#/components/responses/403' }
+        '429':
+          description: (code generation_refused) The gateway rate limit refused the call
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '502':
+          description: (code generation_failed or avatar_media_invalid) The provider failed, or its image failed validation
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+        '503':
+          description: (code gateway_unavailable or storage_unavailable) The gateway or the object store is not configured
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentMediaRefusal' }
+
+  /agent_media/{project_id}/{file}:
+    # Served OUTSIDE the auth group like /icons: an <img> or <video> request
+    # carries no credential. The path is a content address and the route
+    # admits no other shape; every response carries nosniff, a sandboxing CSP
+    # and an attachment disposition (internal/api/v2/agentmediaapi/handler.go).
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: file
+        in: path
+        required: true
+        description: "<sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm"
+        schema: { type: string }
+    get:
+      operationId: getAgentMedia
+      summary: Download one avatar pack media file
+      description: >
+        Immutable for a year. A `Range` request answers 206, as a <video>
+        element asks.
+      tags: [applications]
+      security: []
+      responses:
+        '200':
+          description: The file bytes
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '206':
+          description: The requested byte range
+          content:
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        '404': { $ref: '#/components/responses/404' }
 
   /elitea_core/permission_trimming/prompt_lib/{project_id}:
     parameters:

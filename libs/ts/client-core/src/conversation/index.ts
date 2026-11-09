@@ -30,6 +30,19 @@ export {
   type MotionPreferences,
   type ParticipantAvatarState,
 } from './avatarState';
+export {
+  AVATAR_PACK_SCHEMA,
+  AVATAR_SLOTS,
+  avatarPackOf,
+  avatarSource,
+  avatarStillUrl,
+  isAgentMediaUrl,
+  isVideoUrl,
+  type AvatarPack,
+  type AvatarPackSlot,
+  type AvatarSlotName,
+  type AvatarSource,
+} from './avatarPack';
 export { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';
 export {
   DEFAULT_FLOOR,

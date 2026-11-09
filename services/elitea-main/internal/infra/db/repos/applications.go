@@ -50,7 +50,8 @@ const versionColumns = `v.id, v.application_id, v.name, v.status, v.created_at,
 	v.author_id, COALESCE(v.agent_type, ''), COALESCE(v.instructions, ''),
 	COALESCE(v.welcome_message, ''), COALESCE(v.llm_settings::text, '{}'),
 	COALESCE(v.conversation_starters::text, '[]'), COALESCE(v.meta::text, '{}'),
-	COALESCE(a.meta->>'` + defaultVersionMetaKey + `', ''), v.soul::text`
+	COALESCE(a.meta->>'` + defaultVersionMetaKey + `', ''), v.soul::text,
+	v.avatar_pack::text`
 
 // rowScanner is satisfied by both pgx.Row and pgx.Rows, so the single-row and
 // multi-row read paths share one scan projection.
@@ -66,16 +67,20 @@ func scanVersion(row rowScanner) (applications.Version, error) {
 		metaJSON         string
 		defaultVersionID string
 		soulJSON         *string
+		avatarPackJSON   *string
 	)
 	if err := row.Scan(
 		&ver.ID, &ver.ApplicationID, &ver.Name, &ver.Status, &ver.CreatedAt,
 		&ver.AuthorID, &ver.AgentType, &ver.Instructions, &ver.WelcomeMessage,
-		&llmJSON, &startersJSON, &metaJSON, &defaultVersionID, &soulJSON,
+		&llmJSON, &startersJSON, &metaJSON, &defaultVersionID, &soulJSON, &avatarPackJSON,
 	); err != nil {
 		return applications.Version{}, err
 	}
 	if soulJSON != nil && *soulJSON != "null" {
 		ver.Soul = json.RawMessage(*soulJSON)
+	}
+	if avatarPackJSON != nil && *avatarPackJSON != "null" {
+		ver.AvatarPack = json.RawMessage(*avatarPackJSON)
 	}
 	ver.LLMSettings = decodeJSONObject(llmJSON)
 	ver.ConversationStarters = decodeJSONArray(startersJSON)
@@ -780,8 +785,8 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 		WITH v AS (
 			INSERT INTO %s.application_versions
 				(application_id, name, status, author_id, agent_type, instructions,
-				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings, soul, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, now() AT TIME ZONE 'UTC')
+				 welcome_message, llm_settings, conversation_starters, meta, pipeline_settings, soul, avatar_pack, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, now() AT TIME ZONE 'UTC')
 			RETURNING *
 		), touched AS (
 			UPDATE %s.applications SET updated_at = (now() AT TIME ZONE 'UTC')
@@ -792,6 +797,7 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 	ver, err := scanVersion(q.QueryRow(ctx, query,
 		applicationID, name, status, v.AuthorID, agentType, v.Instructions,
 		v.WelcomeMessage, llmJSON, startersJSON, metaJSON, pipelineSettingsJSON, soulParameter(v.Soul),
+		soulParameter(v.AvatarPack),
 	))
 	if err != nil {
 		return applications.Version{}, fmt.Errorf("applications: create version: %w", err)
@@ -904,6 +910,12 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, 
 	// HTTP layer has checked it against AgentSoulV1.
 	if v.Present.Soul || v.Soul != nil {
 		appendSet("soul = $%d::jsonb", soulParameter(v.Soul))
+	}
+	// ADR-0050 decision 6: the avatar pack replaces whole; null clears it.
+	// The HTTP layer has checked it (agentmedia.NormalizePack) and put its
+	// still into meta.icon_meta, which the meta merge below writes.
+	if v.Present.AvatarPack || v.AvatarPack != nil {
+		appendSet("avatar_pack = $%d::jsonb", soulParameter(v.AvatarPack))
 	}
 	if v.LLMSettings != nil {
 		encoded, err := encodeJSONObject(v.LLMSettings)
@@ -1276,7 +1288,8 @@ func applicationListSort(schema, sortBy string) string {
 	}
 }
 
-// soulParameter is the soul column's parameter: SQL NULL for no soul.
+// soulParameter is a nullable jsonb column's parameter (the soul, the
+// avatar pack): SQL NULL for none.
 func soulParameter(soul json.RawMessage) any {
 	if len(soul) == 0 {
 		return nil

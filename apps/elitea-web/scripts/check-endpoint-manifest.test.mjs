@@ -903,7 +903,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // deleteAgentMemoryEntry and setAgentMemoryOptOut, an agent's Memory routes.
 // The Memory tab is a later story (issue 1608), so they are not in the
 // manifest yet.
-const GENERATED_OPERATION_COUNT = 478;
+// 478 -> 481 (issue 1619, ADR-0050 decision 6): uploadAgentMedia,
+// generateAgentMedia and getAgentMedia, an agent's avatar pack media. The
+// agent editor's Avatar tab calls the first two (see MANIFEST_ENTRY_COUNT);
+// getAgentMedia is an <img>/<video> source, never a fetch, so it is not in
+// the manifest.
+const GENERATED_OPERATION_COUNT = 481;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1172,8 +1177,12 @@ const GENERATED_OPERATION_COUNT = 478;
  * 317 -> 323 (issue 1608, ADR-0050 decision 1b): agentMemory.list, get,
  * update, delete, clear and optOut, the agent editor's Memory tab and the
  * chat's "remembered" chip (features/agent-memory). Generated.
+ *
+ * 323 -> 325 (issue 1619, ADR-0050 decision 6):
+ * applications.uploadAgentMedia and applications.generateAgentMedia, the
+ * agent editor's Avatar tab (pages/agents/lib/agentMediaApi.ts). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 323;
+const MANIFEST_ENTRY_COUNT = 325;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

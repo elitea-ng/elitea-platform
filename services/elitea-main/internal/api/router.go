@@ -30,6 +30,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
+	v2agentmedia "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmediaapi"
 	v2agentmemory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmemory"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
@@ -120,6 +121,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -765,6 +767,11 @@ type RouterConfig struct {
 	// lesson of #126 — a capability gated on a dependency the composition root
 	// never assigns is a 404 nobody can tell from a typo.
 	PredictCompleter v2predict.Completer
+	// ImageGateway generates avatar stills and loops (ADR-0050 decision 6,
+	// issue 1619) through /llm/v1/images/generations and /images/edits. The
+	// routes are registered unconditionally; nil answers 503 naming
+	// LLM_GATEWAY_URL, for the reason PredictCompleter states.
+	ImageGateway llmproxy.Gateway
 	// AgentIdentityAdmin serves the agent identity binding and mandate admin
 	// API (ADR-0039, issue 1112). The composition root sets it only with
 	// the credential governance flag on; nil mounts none of
@@ -1786,6 +1793,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// reason as the two routes above: a browser <img src="..."> carries no
 	// Authorization header.
 	r.Get("/icons/{projectID}/{filename}", v2core.DownloadIcon(cfg.ObjectStore))
+	// Agent avatar pack media (ADR-0050 decision 6): public for the same
+	// reason as /icons. Content-addressed under the project's agent-media
+	// bucket; every object passed agentmedia.Inspect before it was stored.
+	// Under /api/ so every edge already forwards it, like brand assets.
+	r.Get(v2agentmedia.DownloadPath, v2agentmedia.Download(cfg.ObjectStore))
+	r.Head(v2agentmedia.DownloadPath, v2agentmedia.Download(cfg.ObjectStore))
 	// Social avatar: serves what CurrentSocialAvatar's upload handler writes,
 	// public/unauthenticated for the same reason as /icons above.
 	r.Get(v2social.CurrentAvatarDownloadPath, v2social.DownloadAvatar(cfg.ObjectStore))
@@ -4919,6 +4932,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/upload_icon/prompt_lib/{projectID}/{versionId}", coreHandler.UpdateIcon)
 				r.With(projectPermission("models.applications.upload_icon.delete")).
 					Delete("/upload_icon/prompt_lib/{projectID}/{name}", coreHandler.DeleteIcon)
+
+				// Avatar pack media (ADR-0050 decision 6, issue 1619): upload and
+				// generation take the icon upload permission, because a pack's
+				// still is the agent's icon.
+				{
+					media := v2agentmedia.NewHandler(cfg.ObjectStore, cfg.ImageGateway)
+					requireMedia := projectPermission(v2agentmedia.Permission)
+					r.With(requireMedia).Post(v2agentmedia.UploadPath, media.Upload)
+					r.With(requireMedia).Post(v2agentmedia.GeneratePath, media.Generate)
+				}
 
 				// Skill icons. upload_skill_icon.py declares the same four verbs
 				// as upload_icon.py under its own permission family

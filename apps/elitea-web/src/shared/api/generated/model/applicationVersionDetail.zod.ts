@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentAvatarPackV1 } from "./agentAvatarPackV1.zod";
 import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { Author } from "./author.zod";
 import { ConversationStarters } from "./conversationStarters.zod";
@@ -66,6 +67,12 @@ export const ApplicationVersionDetail = zod
       .optional()
       .describe(
         "ADR-0050 decision 1a: the version's soul document, or null when it has none. Served by the version-detail read and both write echoes.\n",
+      ),
+    avatar_pack: zod
+      .union([AgentAvatarPackV1, zod.null()])
+      .optional()
+      .describe(
+        "ADR-0050 decision 6: the version's avatar pack, or null when it has none (the client then reads `meta.icon_meta`). Served by the version-detail read and both write echoes.\n",
       ),
     notes: zod
       .string()
