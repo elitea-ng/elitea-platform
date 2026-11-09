@@ -16,6 +16,7 @@ import starlightSidebarTopics from 'starlight-sidebar-topics';
 
 import { nav, type NavGroup, type NavTab } from './src/nav';
 import { rehypeBaseLinks } from './src/plugins/rehype-base-links';
+import { rehypeUpgradeLinks } from './src/plugins/rehype-upgrade-links';
 import { remarkDocsComponents } from './src/plugins/remark-docs-components';
 import { remarkMermaid } from './src/plugins/remark-mermaid';
 
@@ -69,7 +70,9 @@ export default defineConfig({
   image: { service: passthroughImageService() },
   markdown: {
     remarkPlugins: [remarkDocsComponents, remarkMermaid],
-    rehypePlugins: [[rehypeBaseLinks, { base }]],
+    // rehypeUpgradeLinks first: it turns the upgrade notes' file links into
+    // root-relative page links, which rehypeBaseLinks then prefixes.
+    rehypePlugins: [rehypeUpgradeLinks, [rehypeBaseLinks, { base }]],
   },
   integrations: [
     starlight({
@@ -88,6 +91,11 @@ export default defineConfig({
       components: {
         MarkdownContent: './src/components/overrides/MarkdownContent.astro',
       },
+      // The upgrade notes (docs/upgrading/, outside the docs collection) get
+      // Starlight's Markdown treatment too: heading anchor links, asides.
+      markdown: { processedDirs: ['../../docs/upgrading/'] },
+      // The Upgrading page's table of contents lists its entries.
+      routeMiddleware: './src/route-middleware.ts',
       plugins: [starlightSidebarTopics(nav.map(topic))],
     }),
   ],

@@ -5,7 +5,7 @@ description: "A complete Kubernetes install on an empty cluster: decisions to ma
 
 This page takes an empty Kubernetes cluster to a working Elitea deployment with single sign-on, chat, agents, indexing and shared models. Follow it top to bottom, once. It covers the same install as [Install with Helm](/deployment/helm-install), but in full: what to decide first, the secrets and certificate authorities the chart expects, and the edge in front of the platform. When you are done, [GitOps with ArgoCD](/deployment/argocd) shows how to keep the same install in git.
 
-It targets the **one-chart** layout: a release whose [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) has the entry "One chart: NATS bundled". NATS JetStream and its stream bootstrap are part of the `elitea` chart; earlier releases installed them from two separate charts, `nats` and `nats-bootstrap`, which are no longer published. A values file or a guide that still mentions those charts, `runtimeRedis`, `worker.implementation: python` or Redis passwords is out of date, and the chart refuses most of it.
+It targets the **one-chart** layout: a release whose [Upgrading](/deployment/upgrading) page has the entry [One chart: NATS bundled](/deployment/upgrading#1390-one-chart-nats-bundled-breaking-for-kubernetes-installs). NATS JetStream and its stream bootstrap are part of the `elitea` chart; earlier releases installed them from two separate charts, `nats` and `nats-bootstrap`, which are no longer published. A values file or a guide that still mentions those charts, `runtimeRedis`, `worker.implementation: python` or Redis passwords is out of date, and the chart refuses most of it.
 
 Installing on Google Cloud? Read [Deploy on Google Cloud (GKE)](/deployment/gcp) alongside this page. It covers Cloud SQL, a GCS bucket without keys, the edge on GKE, and platform models authenticated by a service account. [Deploy on GKE with Argo CD](/deployment/gke-argocd) is the same install as one Argo CD Application, with secrets from Google Secret Manager.
 
@@ -58,7 +58,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 |---|---|---|---|
 | Public hostname | `elitea.example.com` | `DEPLOYMENT_URL`, OIDC redirect URI, gateway self-origins, the edge route | edit values, re-register the redirect URI |
 | Namespace | `elitea` | everything; NATS and its bootstrap are in the same release | reinstall |
-| Chart version | the latest release | `--version` on the one chart | upgrade (read [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first) |
+| Chart version | the latest release | `--version` on the one chart | upgrade (read [Upgrading](/deployment/upgrading) first) |
 | PostgreSQL server and its `max_connections` | `pg.internal:5432`, `200` | the database DSN Secrets, `postgresql.maxConnections` | edit values; the chart re-checks the connection budget |
 | Bucket and region | `elitea-artifacts`, `eu-west-1` | `STORAGE_*` / `S3_*` env | data does not move by itself |
 | Identity provider and client | issuer URL, client id, client secret | `OIDC_*` env and a Secret | edit values |
@@ -968,7 +968,7 @@ The test that matters. If it hangs or fails, use the table below.
 
 ## Keeping it running
 
-- **Upgrades.** Bump the one chart. Read the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between your version and the new one first. The chart refuses values that a release made obsolete, so render with `helm template` before you upgrade. Migrations run as a hook on every upgrade.
+- **Upgrades.** Bump the one chart. Read the entries in [Upgrading](/deployment/upgrading) between your version and the new one first. The chart refuses values that a release made obsolete, so render with `helm template` before you upgrade. Migrations run as a hook on every upgrade.
 - **Verify what you install.** Charts and images are signed with cosign:
   ```bash
   cosign verify "ghcr.io/elitea-ng/charts/elitea:$VERSION" \
@@ -985,4 +985,4 @@ The test that matters. If it hangs or fails, use the table below.
 
 Continue with [Post-install configuration](/deployment/configuration) and [Day-2 operations](/deployment/operations).
 
-{/* source: deploy/helm/elitea/templates/_globals.tpl (global.*, certManager.issuers); deploy/helm/elitea/templates/dbInit/job.yaml (DSN-derived names); deploy/scripts/mint-secrets.sh; deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/helm/elitea/templates/main/ingress.yaml (one `/` rule); deploy/gateway-api/httproute.yaml; deploy/helm/elitea/values-nats-ha.yaml; deploy/helm/elitea/NATS.md; deploy/scripts/gen-runtime-certs.sh; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); docs/UPGRADING.md (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off, one chart with NATS bundled, one edge route, Helm 4). The values file on this page renders with `helm template` against the in-repo chart. */}
+{/* source: deploy/helm/elitea/templates/_globals.tpl (global.*, certManager.issuers); deploy/helm/elitea/templates/dbInit/job.yaml (DSN-derived names); deploy/scripts/mint-secrets.sh; deploy/helm/elitea/values.yaml (postgresql, dbInit, objectInit, agentStateMigrations, networkPolicies, main.env, main.runtime, llmGateway, worker, vector); deploy/helm/elitea/templates/guards.yaml; deploy/helm/elitea/values-standalone.yaml; deploy/helm/elitea/values-auth-minimal.yaml (public_origin); deploy/helm/elitea/templates/main/ingress.yaml (one `/` rule); deploy/gateway-api/httproute.yaml; deploy/helm/elitea/values-nats-ha.yaml; deploy/helm/elitea/NATS.md; deploy/scripts/gen-runtime-certs.sh; services/elitea-main/pkg/ssewriter/keepalive.go (25-second keepalive); docs/upgrading/ (runtime-redis removed, NATS mTLS, auth document v2, Form sign-in off, one chart with NATS bundled, one edge route, Helm 4). The values file on this page renders with `helm template` against the in-repo chart. */}

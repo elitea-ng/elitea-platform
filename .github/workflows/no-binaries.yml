@@ -274,16 +274,58 @@ jobs:
   # pipeline it used to start is the most expensive one in the repository.
   # This workflow has no path filter, so the table is checked on every change.
   # It reads only node's standard library (the runner's node).
+  #
+  # The upgrade notes (#1833) share the job: same shape, prose checked by a
+  # node script with no dependency. docs/upgrading/ holds one file per change
+  # so that two pull requests never edit one shared file; the check refuses an
+  # entry added to docs/UPGRADING.md, bad front matter, and a pull request
+  # that changes or deletes a note it did not add.
   client-feature-parity:
-    name: Client feature-parity table is well formed
+    name: Client feature-parity table and upgrade notes are well formed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # On a pull request HEAD is the merge commit and HEAD^1 the base
+          # branch head, so HEAD^1..HEAD is exactly the pull request. Depth 2
+          # is enough for that; the script refuses a base it cannot read.
+          fetch-depth: 2
+          persist-credentials: false
       - name: Every feature has a status for web, desktop and mobile
         run: |
           set -euo pipefail
           node --test scripts/ci/check-client-feature-parity.test.mjs
           node scripts/ci/check-client-feature-parity.mjs
+      # Read the COUNT of scenarios, not the exit status alone: a suite that
+      # collects nothing exits 0 (#534).
+      - name: Upgrade notes are one new file per change
+        env:
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
+          # The pull request's label allows a correction of a merged note
+          # (docs/upgrading/README.md). Labels are read when the run starts.
+          UPGRADE_NOTE_EDIT_ALLOWED: ${{ contains(github.event.pull_request.labels.*.name, 'upgrade-note-edit') }}
+        run: |
+          set -euo pipefail
+          suite=scripts/ci/check-upgrading-fragments.test.mjs
+          expected="$(grep -c '^test(' "${suite}")"
+          [ "${expected}" -ge 20 ] || { echo "::error::${suite}: found ${expected} scenario(s), expected at least 20"; exit 1; }
+          status=0
+          output="$(node --test --test-reporter=tap "${suite}" 2>&1)" || status=$?
+          printf '%s\n' "${output}"
+          ran="$(printf '%s\n' "${output}" | sed -n 's/^# pass \([0-9][0-9]*\)$/\1/p')"
+          if [ -z "${ran}" ] || [ "${ran}" -ne "${expected}" ]; then
+            echo "::error::${suite} holds ${expected} scenario(s) and node --test passed ${ran:-none}"
+            exit 1
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::node --test ${suite} exited ${status}"
+            exit "${status}"
+          fi
+          if [ "${IS_PULL_REQUEST}" = "true" ]; then
+            node scripts/ci/check-upgrading-fragments.mjs --base HEAD^1
+          else
+            node scripts/ci/check-upgrading-fragments.mjs
+          fi
 
   # The brand guide (brand/, published to GitHub Pages at /brand/ by
   # docs-pages.yml). Its build reads client-core's tokens.json, the logo SVGs

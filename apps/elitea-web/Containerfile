@@ -45,13 +45,16 @@ RUN VITE_APP_VERSION="${VERSION}" npm run build
 
 # ── Stage 1b: build the docs site (apps/elitea-docs, Astro Starlight) ────────
 # Its own stage and lockfile, so a docs edit never invalidates the SPA build
-# above and vice versa. Served at /docs/ (DOCS_BASE). The one file it reads
-# from outside its app is the brand palette its diagrams are drawn in.
+# above and vice versa. Served at /docs/ (DOCS_BASE). What it reads from
+# outside its app: the brand palette its diagrams are drawn in, and the
+# upgrade notes (docs/upgrading/, one file per change) that its Upgrading
+# page assembles.
 FROM node:26-alpine AS docs-builder
 WORKDIR /build/apps/elitea-docs
 COPY apps/elitea-docs/package.json apps/elitea-docs/package-lock.json ./
 RUN npm ci
 COPY libs/ts/client-core/src/brand/tokens.json /build/libs/ts/client-core/src/brand/tokens.json
+COPY docs/upgrading/ /build/docs/upgrading/
 COPY apps/elitea-docs/ ./
 ENV ASTRO_TELEMETRY_DISABLED=1 DOCS_BASE=/docs/
 RUN npm run build

@@ -31,6 +31,7 @@ prototype shortcuts into new code merely to preserve current behavior.
 | `libs/proto/` | Versioned cross-language contracts and generated-code inputs |
 | `deploy/` | Local compose and Kubernetes packaging |
 | `docs/` | Prototype-local implementation notes; architecture decisions belong in `elitea-docs` |
+| `docs/upgrading/` | Upgrade notes, one file per change (see "Upgrade notes" under Delivery). `docs/UPGRADING.md` is a fixed pointer to them |
 
 ## Architecture boundaries
 
@@ -226,3 +227,17 @@ Use Conventional Commits. Keep architecture-document changes in `elitea-docs`
 and implementation changes here linked by the relevant ADR/specification. Pull
 requests must state the compatibility surface changed, security assumptions,
 failure modes exercised, and checks that were run or intentionally skipped.
+
+### Upgrade notes
+
+When a change needs an operator to act on upgrade (a new required value, a
+refused key, an upgrade order, a migration, a removed component), add ONE NEW
+FILE `docs/upgrading/<issue>-<slug>.md` (at least four digits, lowercase
+hyphenated slug) with front matter `title` (double-quoted), `issue` (the
+file's number), `date` (`YYYY-MM-DD`, today) and optional `adr`
+(`ADR-NNNN`); the body is the note without its title. The template is in
+`docs/upgrading/README.md`. Never edit `docs/UPGRADING.md` (a fixed pointer)
+and never edit or delete a note another pull request added; to correct a
+merged note, label the pull request `upgrade-note-edit`.
+`scripts/ci/check-upgrading-fragments.mjs` enforces this; the docs site shows
+the notes newest first on `/deployment/upgrading`.

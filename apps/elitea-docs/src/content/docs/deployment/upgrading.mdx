@@ -1,0 +1,12 @@
+---
+title: "Upgrading"
+description: "What changed in each release that needs an operator to act, newest first: what changed, who is affected, and what to do."
+---
+
+Changes that need an operator to act when a deployment moves to a newer release. Each entry says what changed, who is affected, and what to do. The newest entry is first. Read the entries between your version and the new one before you upgrade, then follow [Day-2 operations](/deployment/operations#upgrades).
+
+A chart error or a code comment that says "see docs/UPGRADING.md" and gives a title names one of the entries below: search this page for the title. Each entry links to its issue, and its anchor is its file name in [`docs/upgrading/`](https://github.com/elitea-ng/elitea-platform/tree/main/docs/upgrading) without `.md`.
+
+<UpgradeNotes />
+
+{/* source: docs/upgrading/*.md (one file per change; docs/upgrading/README.md has the rules), assembled by src/components/UpgradeNotes.astro in the order src/upgrading.ts gives; scripts/ci/check-upgrading-fragments.mjs */}

@@ -45,7 +45,7 @@ flowchart LR
 cert-manager is a prerequisite: the NATS CA and every NATS identity are cert-manager `Certificate`s, issued from the chart's own namespaced `elitea-nats-ca` Issuer. That Issuer is why NATS lives in the platform's namespace. To use a NATS you run yourself, set `nats.enabled: false` and point `natsClient.*` at it; the bootstrap Job still runs against it unless `natsBootstrap.enabled: false`.
 
 <Note title="Coming from three Applications?">
-Installs that ran `elitea-nats`, `elitea-nats-bootstrap` and `elitea` as separate Applications move to the one chart with the steps in "One chart: NATS bundled" in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md). Do not just delete the two NATS manifests: the root prunes them, and their finalizers would delete every NATS resource. The steps detach them first and keep the JetStream volume.
+Installs that ran `elitea-nats`, `elitea-nats-bootstrap` and `elitea` as separate Applications move to the one chart with the steps in [One chart: NATS bundled](/deployment/upgrading#1390-one-chart-nats-bundled-breaking-for-kubernetes-installs). Do not just delete the two NATS manifests: the root prunes them, and their finalizers would delete every NATS resource. The steps detach them first and keep the JetStream volume.
 </Note>
 
 ## Where each value comes from
@@ -156,7 +156,7 @@ argocd app set elitea --revision <new-version>   # an OCI chart source
   # or, for a git source, edit spec.source.targetRevision to the release tag
 ```
 
-The published chart's own `image.tag` already defaults to the chart's version — only override `image.tag` to pin an environment behind the chart's own release, or to test a release candidate. Read the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between the two versions first.
+The published chart's own `image.tag` already defaults to the chart's version — only override `image.tag` to pin an environment behind the chart's own release, or to test a release candidate. Read the entries in [Upgrading](/deployment/upgrading) between the two versions first.
 
 ## Rollback
 
@@ -176,4 +176,4 @@ The `deploy/argocd/` and `deploy/helm/` in this repository are the **template**.
 `syncPolicy.automated` with `prune: true` and `selfHeal: true` is set on every Application here, including the root. Removing a file from `applications/` is a production deletion of that Application and everything it manages — review those diffs as such.
 </Note>
 
-{/* source: deploy/helm/elitea/templates/certManager/issuers.yaml (wave -15); deploy/helm/elitea/templates/_globals.tpl (publicUrl, placeholders); deploy/helm/elitea/files/nats-bootstrap.sh (NATS_CONNECT_WAIT); deploy/argocd/app-of-apps.yaml; deploy/argocd/applications/elitea.yaml; deploy/argocd/examples/gke/; deploy/helm/elitea/Chart.yaml (dependencies); deploy/helm/elitea/templates/nats/, templates/natsBootstrap/job.yaml (wave -10, Sync hook); templates/natsBootstrap/cleanup.yaml (wave -11, Sync hook, #1370); deploy/helm/elitea/templates/externalSecrets/externalsecrets.yaml (PreSync, wave -30); deploy/helm/tests/render-nats-security.sh (argocd wave checks); docs/UPGRADING.md ("One chart: NATS bundled"); deploy/README.md (composition decision, publish.yml stamping) */}
+{/* source: deploy/helm/elitea/templates/certManager/issuers.yaml (wave -15); deploy/helm/elitea/templates/_globals.tpl (publicUrl, placeholders); deploy/helm/elitea/files/nats-bootstrap.sh (NATS_CONNECT_WAIT); deploy/argocd/app-of-apps.yaml; deploy/argocd/applications/elitea.yaml; deploy/argocd/examples/gke/; deploy/helm/elitea/Chart.yaml (dependencies); deploy/helm/elitea/templates/nats/, templates/natsBootstrap/job.yaml (wave -10, Sync hook); templates/natsBootstrap/cleanup.yaml (wave -11, Sync hook, #1370); deploy/helm/elitea/templates/externalSecrets/externalsecrets.yaml (PreSync, wave -30); deploy/helm/tests/render-nats-security.sh (argocd wave checks); docs/upgrading/1390-one-chart-nats-bundled-breaking-for-kubernetes-installs.md; deploy/README.md (composition decision, publish.yml stamping) */}

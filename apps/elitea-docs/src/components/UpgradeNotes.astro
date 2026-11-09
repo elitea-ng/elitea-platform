@@ -1,0 +1,55 @@
+---
+/**
+ * Every upgrade note (the `upgrading` collection: the repository's
+ * docs/upgrading/*.md, one file per change), in the order src/upgrading.ts
+ * gives. Each entry is an h2 whose id is its file name without `.md`, so a
+ * link to one entry is `/deployment/upgrading#<number>-<slug>`.
+ */
+import { Icon } from '@astrojs/starlight/components';
+import { render } from 'astro:content';
+
+import { plainTitle, upgradeNotes } from '../upgrading';
+
+const notes = await upgradeNotes();
+const rendered = await Promise.all(notes.map(async (note) => ({ note, Content: (await render(note)).Content })));
+
+function escapeHtml(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+}
+
+/** A title is plain text with `code` spans. */
+function titleHtml(title: string): string {
+  return title
+    .split(/(`[^`]+`)/)
+    .map((part) => (part.length > 2 && part.startsWith('`') && part.endsWith('`') ? `<code>${escapeHtml(part.slice(1, -1))}</code>` : escapeHtml(part)))
+    .join('');
+}
+
+const day = (date: Date) => date.toISOString().slice(0, 10);
+---
+
+{
+  rendered.map(({ note, Content }) => (
+    <section class="docs-upgrade-note">
+      <div class="sl-heading-wrapper level-h2">
+        <h2 id={note.id} set:html={titleHtml(note.data.title)} />
+        <a class="sl-anchor-link" href={`#${note.id}`}>
+          <Icon name="link-alt" class="sl-anchor-icon" />
+          <span class="sr-only" data-pagefind-ignore>{`Section titled “${plainTitle(note.data.title)}”`}</span>
+        </a>
+      </div>
+      <p class="docs-upgrade-note__meta">
+        {day(note.data.date)} · <a href={`https://github.com/elitea-ng/elitea-platform/issues/${note.data.issue}`}>#{note.data.issue}</a>
+        {note.data.adr !== undefined && ` · ${note.data.adr}`}
+      </p>
+      <Content />
+    </section>
+  ))
+}
+
+<style>
+  .docs-upgrade-note__meta {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+  }
+</style>

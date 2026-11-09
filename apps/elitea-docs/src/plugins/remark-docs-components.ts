@@ -27,6 +27,8 @@ const IMPORTS: Record<string, string> = {
   Tab: 'Tab.astro',
   Tabs: 'Tabs.astro',
   Tip: 'callouts/Tip.astro',
+  // The upgrade notes from docs/upgrading/ (deployment/upgrading.mdx only).
+  UpgradeNotes: 'UpgradeNotes.astro',
   Warning: 'callouts/Warning.astro',
 };
 

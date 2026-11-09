@@ -16,6 +16,9 @@ on:
       - "libs/proto/contracts/tool-categories-v1.json"
       # The palette the diagrams are drawn in.
       - "libs/ts/client-core/src/brand/tokens.json"
+      # The upgrade notes the Upgrading page assembles (one file per change),
+      # so a pull request that only adds a note still builds the page.
+      - "docs/upgrading/**"
       # The nginx locations that serve the built site, and its CSP.
       - "apps/elitea-web/nginx/spa.conf"
       - "apps/elitea-web/nginx/docs-security-headers.conf"

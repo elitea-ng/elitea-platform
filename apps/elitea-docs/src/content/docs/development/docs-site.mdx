@@ -35,13 +35,24 @@ Link with root-relative paths such as `/development/frontend`. The build adds th
 
 ## Components
 
-Every `.mdx` page can use these components without importing them: `Note`, `Tip`, `Info`, `Warning`, `Check`, `Steps`/`Step`, `Tabs`/`Tab`, `Accordion`/`AccordionGroup`, `Card`/`CardGroup`, `Badge`, `Frame`, `Icon` and `Screenshot`. The list lives in `src/plugins/remark-docs-components.ts`, and the content check fails a page that uses anything else. `Icon` and `Card` take [Lucide](https://lucide.dev) icon names.
+Every `.mdx` page can use these components without importing them: `Note`, `Tip`, `Info`, `Warning`, `Check`, `Steps`/`Step`, `Tabs`/`Tab`, `Accordion`/`AccordionGroup`, `Card`/`CardGroup`, `Badge`, `Frame`, `Icon` and `Screenshot` (and `UpgradeNotes`, which only the Upgrading page uses). The list lives in `src/plugins/remark-docs-components.ts`, and the content check fails a page that uses anything else. `Icon` and `Card` take [Lucide](https://lucide.dev) icon names.
 
 A ` ```mermaid ` fence renders as a diagram in the site's colours, and redraws when the reader changes the theme.
 
 ## Screenshots
 
 A `Screenshot` with an `id` shows `src/screenshots/<id>.webp`. Each id must be in `shots.manifest.ts`, which tells the capture script which route and persona to shoot (see [Documentation screenshots](/development/e2e-stack#documentation-screenshots)). Every image must be referenced by a page and be at most 250 KB.
+
+## Upgrade notes
+
+A change that needs an operator to act when a deployment upgrades gets an upgrade note: **one new file per change** in `docs/upgrading/` at the repository root, named `<issue>-<slug>.md` (at least four digits, for example `1833-upgrade-notes-are-one-file-per-change.md`). Its front matter has `title` (in double quotes), `issue` (the same number as the file name), `date` (`YYYY-MM-DD`, the day you write it) and an optional `adr` (`ADR-NNNN`). The body is the note without its title; use `###` for a sub-heading. `docs/upgrading/README.md` has the template.
+
+The [Upgrading](/deployment/upgrading) page assembles every note at build time, newest first, with the file name (without `.md`) as each note's anchor. Link a docs page from a note with the relative path of its `.mdx` file (`../../apps/elitea-docs/src/content/docs/deployment/scaling.mdx`); the build turns it into a link to the page.
+
+- Do not edit `docs/UPGRADING.md`. It is a fixed pointer to the page.
+- Do not edit or delete a note that another pull request added; add a new note. A pull request may change the notes it adds. To correct a merged note, add the `upgrade-note-edit` label to the pull request and push again.
+
+`scripts/ci/check-upgrading-fragments.mjs` enforces this in the **No Binaries** workflow, so a note-only pull request is checked there and builds this site in **CI — Docs**. Run it locally with `node scripts/ci/check-upgrading-fragments.mjs --base origin/main`.
 
 ## Checks
 
@@ -57,3 +68,4 @@ The docs CSP is `apps/elitea-web/nginx/docs-security-headers.conf`, which the we
 {/* source: apps/elitea-docs/astro.config.ts (base, Pagefind, plugins) */}
 {/* source: apps/elitea-docs/scripts/content.test.mjs, apps/elitea-docs/scripts/check-dist.mjs */}
 {/* source: .github/workflows/ci-docs.yml */}
+{/* source: docs/upgrading/README.md; apps/elitea-docs/src/content.config.ts (upgrading collection), src/upgrading.ts, src/components/UpgradeNotes.astro, src/plugins/rehype-upgrade-links.ts; scripts/ci/check-upgrading-fragments.mjs; .github/workflows/no-binaries.yml (client-feature-parity job) */}
