@@ -19,6 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runcaps"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/nodeevent"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -1435,6 +1436,12 @@ func safeOutputError(err error) (runtimev1.RuntimeErrorCodeV1, string, bool) {
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED, "The output operation was cancelled.", false
 	case errors.Is(err, context.DeadlineExceeded):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The output deadline was exceeded.", true
+	case depfailure.Transient(err, nil):
+		// A database restart, recovery or PgBouncer login retry heals on its
+		// own: the Worker keeps the exact frame and sends it again within its
+		// lease, so the turn continues instead of re-running from a
+		// checkpoint (FU-275).
+		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The output store is temporarily unavailable.", true
 	default:
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The output could not be durably accepted.", false
 	}

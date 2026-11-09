@@ -13,6 +13,7 @@ import (
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -869,6 +870,10 @@ func safeRuntimeError(err error) (runtimev1.RuntimeErrorCodeV1, string, bool) {
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_CANCELLED, "The runtime operation was cancelled.", false
 	case errors.Is(err, context.DeadlineExceeded):
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The runtime control deadline was exceeded.", true
+	case depfailure.Transient(err, nil):
+		// A database restart or recovery heals on its own: the Worker retries
+		// the claim, renewal or settlement within its lease (FU-275).
+		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, "The durable runtime state is temporarily unavailable.", true
 	default:
 		return runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The runtime control operation failed.", false
 	}
