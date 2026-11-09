@@ -1073,7 +1073,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 1615): elitea_lifecycle.agent_proposals, written by the propose_agent
 	// tool, decided in the registry inbox. No data, no permission. 0233 and
 	// 0234 are claimed by open branches.
-	require.EqualValues(t, 235, Head(shared))
+	//
+	// 245: shared/0245_agent_workforce.sql, the agent workforce (ADR-0050
+	// decisions 5b, 5g-5j and 5l, issue 1616): the registry's under_review
+	// and lifecycle_state (active, retired, deleted) with the retire
+	// snapshot, elitea_lifecycle.agent_scorecards and
+	// agent_workforce_proposals, suspension source dismissal, and the
+	// agents.workforce.manage grant to the project admin. 0236 to 0244 are
+	// claimed by open branches.
+	require.EqualValues(t, 245, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

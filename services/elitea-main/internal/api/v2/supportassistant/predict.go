@@ -39,6 +39,7 @@ import (
 	"github.com/google/uuid"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -276,6 +277,9 @@ func (h *Handler) Predict(w http.ResponseWriter, r *http.Request) {
 		status, body, refused := safety.HTTPRefusal(err)
 		if !refused {
 			status, body, refused = agentrelease.HTTPRefusal(err)
+		}
+		if !refused {
+			status, body, refused = agentworkforce.HTTPRefusal(err)
 		}
 		if refused {
 			w.Header().Set("Content-Type", "application/json")
