@@ -25,6 +25,7 @@ already registered keep theirs).
   placeholder; the app fills in the brand's name.
 - **Contributors:** `apps/elitea-web/.prettierrc.json` sets the app's code
   style (`npm run format -- <file>`).
+
 ## Cloud browser: `auto` admitted, `elitea-browser-session-lite` published (#1599, ADR-0049 decisions 2 and 9)
 
 The engine bake-off (run 42513255705, ADR-0049 Appendix A) admitted `auto`:
