@@ -227,8 +227,8 @@ function GalleryBody({
 
       {show('lists rows settings') ? (
         <Section title="Lists" bare>
-          <ListSection title="Workspace" footer="Set by acme.elitea.ai">
-            <ListRow title="acme.elitea.ai" subtitle="Acme Corp AI" leading={<IconTile icon="workspace" size={32} tone="secondary" />} onPress={() => {}} />
+          <ListSection title="Workspace" footer="Set by acme.example.com">
+            <ListRow title="acme.example.com" subtitle="Acme Corp AI" leading={<IconTile icon="workspace" size={32} tone="secondary" />} onPress={() => {}} />
             <ListRow icon="project" title="Project" value="Marketing" onPress={() => {}} />
             <ListRow icon="lock" title="Face ID lock" trailing={<Switch value={toggle} onValueChange={setToggle} trackColor={{ true: colors.accent }} />} />
             <ListRow title="Personal" selected onPress={() => {}} />
@@ -266,9 +266,9 @@ function GalleryBody({
       ) : null}
 
       {show('avatars mark') ? (
-        <Section title="Avatars and Elitea mark">
+        <Section title="Avatars and the brand mark">
           <View style={styles.row}>
-            {['Alex Smith', 'Bob Elitea', 'Chen Li', 'Dana Ortiz', 'Eve Moss', 'Femi Ade'].map((n) => (
+            {['Alex Smith', 'Bob Weller', 'Chen Li', 'Dana Ortiz', 'Eve Moss', 'Femi Ade'].map((n) => (
               <Avatar key={n} name={n} size={36} />
             ))}
           </View>

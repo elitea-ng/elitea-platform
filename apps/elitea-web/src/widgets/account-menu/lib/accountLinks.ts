@@ -8,6 +8,10 @@
  * person's identity. The person reviews the issue in their browser before it
  * is filed.
  */
+import { supportContactLink } from '@elitea/client-core/support';
+
+import { productName } from '@/shared/brand';
+
 const REPOSITORY = 'https://github.com/elitea-ng/elitea-platform';
 
 export interface BugReportContext {
@@ -31,7 +35,7 @@ export function bugReportUrl({ version, userAgent, locale }: BugReportContext): 
     '',
     '### Environment',
     '',
-    `- Elitea desktop: ${version ?? 'unknown'}`,
+    `- ${productName()} desktop: ${version ?? 'unknown'}`,
     `- Platform: ${userAgent}`,
     `- Language: ${locale}`,
     '',
@@ -53,4 +57,13 @@ export function whatsNewUrl(version: string | undefined): string {
   const match = version === undefined ? null : /^[1-9]\d*\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.exec(version);
   if (match === null) return `${REPOSITORY}/releases`;
   return match[1] === undefined ? `${REPOSITORY}/releases/tag/v${version}` : `${REPOSITORY}/releases#release-v${version}`;
+}
+
+/**
+ * The https address of an IT support line, or null: the desktop host opens only https in the
+ * system browser (the opener scope), so an email address or a phone number is text to copy.
+ */
+export function webSupportHref(contact: string): string | null {
+  const { href } = supportContactLink(contact);
+  return href !== null && new URL(href).protocol === 'https:' ? href : null;
 }

@@ -1,6 +1,6 @@
 package repos
 
-// ADR-0050 decision 6 (issue 1619): tenant/0234's avatar_pack column round
+// ADR-0050 decision 6 (issue 1619): tenant/0165's avatar_pack column round
 // trips through the version reads and writes, and an agent participant's
 // persona carries its version's pack on the participants read. Against real
 // PostgreSQL, because each path is a hand-written query a fake cannot check.
@@ -16,10 +16,17 @@ import (
 
 func TestAvatarPackRoundTripsAndReachesTheParticipantPersona(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	seedAgentReleaseFixture(t, pool)
 	ctx := context.Background()
 	still := "/api/v2/agent_media/1/" + strings.Repeat("ab", 32) + ".png"
 	pack := `{"schema":"elitea.avatar_pack/v1","slots":{"still":{"url":"` + still + `","media_type":"image/png"}}}`
 
+	// The shared seed writes fixed ids; move the sequences past them.
+	for _, table := range []string{"chat_conversations", "chat_participants", "chat_participant_mapping"} {
+		if _, err := pool.Exec(ctx, `SELECT setval(pg_get_serial_sequence('p_1.`+table+`', 'id'), (SELECT max(id) FROM p_1.`+table+`))`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.applications (id, name, description, owner_id) VALUES (61, 'Avatar Agent', 'fixture', 11);
 INSERT INTO p_1.application_versions (

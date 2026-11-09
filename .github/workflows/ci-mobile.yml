@@ -24,6 +24,7 @@ on:
       - "brand/elitea/**"
       - "brand/sample/**"
       - "scripts/brand/**"
+      - "scripts/ci/brand-output-scan.mjs"
       - ".github/workflows/ci-mobile.yml"
       - ".github/actions/npm-cache/**"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
@@ -93,6 +94,19 @@ jobs:
         run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/expo-export"
         env:
           CI: "1"
+
+      # ADR-0052 W4: built for brand/sample, the JS bundle (Hermes bytecode, read
+      # through its strings) and the resolved config show no ELITEA word or
+      # identifier (scripts/ci/brand-output-scan.mjs).
+      - name: Sample-brand output scan (bundle + expo config)
+        env:
+          CI: "1"
+          ELITEA_BRAND: sample
+        run: |
+          set -euo pipefail
+          npx expo export --platform ios --output-dir "$RUNNER_TEMP/sample-export"
+          npx expo config --json --type public > "$RUNNER_TEMP/sample-expo-config.json"
+          node ../../scripts/ci/brand-output-scan.mjs --lane mobile "$RUNNER_TEMP/sample-export" "$RUNNER_TEMP/sample-expo-config.json"
 
       - name: Release config has no developer sign-in switch
         run: npm run check:release-config

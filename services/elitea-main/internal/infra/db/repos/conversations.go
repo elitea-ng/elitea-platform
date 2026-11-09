@@ -476,7 +476,7 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 // live, not snapshotted like the rest of the persona: a pack names
 // content-addressed media, so a new still shows from the next read. The
 // client falls back to `entity_settings.icon_meta` without one. An
-// enrichment only: a tenant without the column (tenant/0234 not yet run)
+// enrichment only: a tenant without the column (tenant/0165 not yet run)
 // keeps its participants as read.
 func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
 	ctx context.Context,
@@ -747,7 +747,11 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		conversations.Participant{EntityName: "user", EntityMeta: map[string]any{"id": access.ActorID}},
 		conversations.Participant{EntityName: "dummy", EntityMeta: map[string]any{}},
 	)
-	for _, participant := range participants {
+	if conv.LeadParticipant < 0 || conv.LeadParticipant > len(conv.Participants) {
+		return conversations.Conversation{}, apierr.BadRequest("invalid lead participant")
+	}
+	leadID := 0
+	for index, participant := range participants {
 		switch participant.EntityName {
 		case "user", "dummy", "llm", "application", "toolkit", "prompt":
 		default:
@@ -757,8 +761,24 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 			return conversations.Conversation{}, apierr.BadRequest("invalid participant metadata")
 		}
 		body := map[string]any{"entity_name": participant.EntityName, "entity_meta": participant.EntityMeta, "entity_settings": participant.EntitySettings}
-		if _, err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
+		participantID, err := addConversationParticipant(ctx, tx, s, id, body)
+		if err != nil {
 			return conversations.Conversation{}, err
+		}
+		if index+1 == conv.LeadParticipant {
+			leadID = participantID
+		}
+	}
+	// A saved team's lead (ADR-0050 decision 8): the floor names the lead by
+	// its participant id, which exists only now.
+	if leadID > 0 {
+		floor, err := json.Marshal(map[string]any{"policy": "lead", "lead_participant_id": leadID})
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations
+			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('floor', $1::jsonb) WHERE id = $2`, s), floor, id); err != nil {
+			return conversations.Conversation{}, fmt.Errorf("conversations: write the lead: %w", err)
 		}
 	}
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta FROM %s.chat_conversations WHERE id=$1`, s), id).Scan(&metaBytes); err != nil {

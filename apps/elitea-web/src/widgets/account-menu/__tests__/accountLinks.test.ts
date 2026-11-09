@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { productName } from '@/shared/brand';
+
 import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
 
 describe('bugReportUrl', () => {
@@ -9,7 +11,8 @@ describe('bugReportUrl', () => {
     expect(url.searchParams.get('labels')).toBe('bug');
     expect(url.searchParams.get('title')).toBe('[desktop] ');
     const body = url.searchParams.get('body') ?? '';
-    expect(body).toContain('- Elitea desktop: 7.3.0-nightly.20261027.509');
+    // The product name comes from the brand, never a literal (ADR-0052 W4).
+    expect(body).toContain(`- ${productName()} desktop: 7.3.0-nightly.20261027.509`);
     expect(body).toContain('- Platform: Mozilla/5.0 (Macintosh)');
     expect(body).toContain('- Language: fr-CA');
     expect(body).toContain('This repository is public');
@@ -17,7 +20,7 @@ describe('bugReportUrl', () => {
 
   it('says "unknown" outside the desktop app', () => {
     const body = new URL(bugReportUrl({ version: undefined, userAgent: 'x', locale: 'en' })).searchParams.get('body');
-    expect(body).toContain('- Elitea desktop: unknown');
+    expect(body).toContain(`- ${productName()} desktop: unknown`);
   });
 });
 

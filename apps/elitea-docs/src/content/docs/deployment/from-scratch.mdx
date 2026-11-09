@@ -58,7 +58,7 @@ Write the answers down. Every one ends up in a value or a Secret, and several ar
 |---|---|---|---|
 | Public hostname | `elitea.example.com` | `DEPLOYMENT_URL`, OIDC redirect URI, gateway self-origins, the edge route | edit values, re-register the redirect URI |
 | Namespace | `elitea` | everything; NATS and its bootstrap are in the same release | reinstall |
-| Chart version | the latest release | `--version` on the one chart | upgrade (read [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first) |
+| Chart version | the latest release | `--version` on the one chart | upgrade (read [`docs/upgrading/`](https://github.com/elitea-ng/elitea-platform/tree/main/docs/upgrading) and [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) first) |
 | PostgreSQL server and its `max_connections` | `pg.internal:5432`, `200` | the database DSN Secrets, `postgresql.maxConnections` | edit values; the chart re-checks the connection budget |
 | Bucket and region | `elitea-artifacts`, `eu-west-1` | `STORAGE_*` / `S3_*` env | data does not move by itself |
 | Identity provider and client | issuer URL, client id, client secret | `OIDC_*` env and a Secret | edit values |
@@ -968,7 +968,7 @@ The test that matters. If it hangs or fails, use the table below.
 
 ## Keeping it running
 
-- **Upgrades.** Bump the one chart. Read the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between your version and the new one first. The chart refuses values that a release made obsolete, so render with `helm template` before you upgrade. Migrations run as a hook on every upgrade.
+- **Upgrades.** Bump the one chart. Read the notes in [`docs/upgrading/`](https://github.com/elitea-ng/elitea-platform/tree/main/docs/upgrading) dated after your version, and the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between your version and the new one, first. The chart refuses values that a release made obsolete, so render with `helm template` before you upgrade. Migrations run as a hook on every upgrade.
 - **Verify what you install.** Charts and images are signed with cosign:
   ```bash
   cosign verify "ghcr.io/elitea-ng/charts/elitea:$VERSION" \

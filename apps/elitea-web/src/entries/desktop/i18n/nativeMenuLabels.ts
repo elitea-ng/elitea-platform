@@ -2,7 +2,7 @@
  * The host's own menus — the menu bar, the menu-bar (tray) item and its
  * activity lines — in the app's language. The keys are the host's
  * (`src-tauri/src/labels.rs`, `KEYS`), which checks them and keeps English
- * for any it does not get. `{tool}` and `{product}` stay in place: the host
+ * for any it does not get. `{tool}`, `{product}` and `{contact}` stay in place: the host
  * puts the tool's name and the build's product name there (ADR-0052), so one
  * catalogue serves every brand.
  */
@@ -11,6 +11,7 @@ import { t } from '@/shared/i18n';
 export function nativeMenuLabels(): Record<string, string> {
   return {
     about: t('desktop.nativeMenu.about', 'About {product}'),
+    about_support: t('desktop.nativeMenu.aboutSupport', 'IT support: {contact}'),
     services: t('desktop.nativeMenu.services', 'Services'),
     hide: t('desktop.nativeMenu.hide', 'Hide {product}'),
     hide_others: t('desktop.nativeMenu.hideOthers', 'Hide Others'),

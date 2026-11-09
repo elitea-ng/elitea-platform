@@ -57,8 +57,8 @@ use super::elitea::runtime::v1::{
     ObserveDesiredStateResponseV1, PausedWriterV1, PrepareSettlementRequestV1,
     PrepareSettlementResponseV1, RemoveIndexDispositionV1, RemoveIndexRequestV1,
     RemoveIndexResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1, ReportEgressSummaryRequestV1,
-    ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1, ScopedContentReferenceV1,
-    SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
+    ReportEphemeralAgentsRequestV1, ReportRunStepsRequestV1, RuntimeErrorCodeV1, RuntimeErrorV1,
+    ScopedContentReferenceV1, SettlementProposalV1, SettlementRecoveryV1, worker_command_v1,
 };
 use super::output::{
     AgentTerminalOutput, RuntimeFailureKind, ToolkitExecuteReadTerminalOutput,
@@ -2441,6 +2441,9 @@ pub struct AgentControlClient<R> {
     /// Where each execution's step records wait to be reported (ADR-0042,
     /// #1499); the process's registry outside tests.
     steps: Arc<super::run_steps::RunStepRegistry>,
+    /// Where each execution's sub-agents wait to be reported (#1614); the
+    /// process's registry outside tests.
+    ephemeral_agents: Arc<super::ephemeral_agents::EphemeralAgentRegistry>,
 }
 
 impl AgentControlClient<TonicControlRpc> {
@@ -2474,7 +2477,19 @@ impl<R> AgentControlClient<R> {
             governed_security_context: false,
             egress: super::egress::EgressRegistry::global(),
             steps: super::run_steps::RunStepRegistry::global(),
+            ephemeral_agents: super::ephemeral_agents::EphemeralAgentRegistry::global(),
         })
+    }
+
+    /// Test-only: read execution sub-agent ledgers from `registry`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_ephemeral_agent_registry(
+        mut self,
+        registry: Arc<super::ephemeral_agents::EphemeralAgentRegistry>,
+    ) -> Self {
+        self.ephemeral_agents = registry;
+        self
     }
 
     /// Test-only: read execution egress ledgers from `registry`.
@@ -2853,6 +2868,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         }
         self.report_run_steps(&identity, &fence, true).await;
         self.report_egress_summary(&identity, &fence).await;
+        self.report_ephemeral_agents(&identity, &fence).await;
         let settled_identity = identity.clone();
         let proposal_bytes = proposal.encode_to_vec();
         let proposal_digest = digest::digest(&digest::SHA256, &proposal_bytes);
@@ -2870,6 +2886,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
         let receipt = parse_prepare_settlement_response(response, expected_outcome, retirement)?;
         self.egress.forget(&settled_identity);
         self.steps.forget(&settled_identity);
+        self.ephemeral_agents.forget(&settled_identity);
         Ok(receipt)
     }
 
@@ -3043,6 +3060,41 @@ impl<R: ControlRpc> AgentControlClient<R> {
         }
     }
 
+    /// Report the sub-agents the execution started (#1614) under the live
+    /// claim, before `PrepareSettlement`. Best effort: nothing is sent when
+    /// it started none, and a failure is logged, never returned.
+    async fn report_ephemeral_agents(
+        &self,
+        identity: &ExecutionIdentityV1,
+        fence: &ExecutionFenceV1,
+    ) {
+        let agents = self
+            .ephemeral_agents
+            .snapshot_for_settlement(identity, super::run_steps::now_unix_ms());
+        if agents.is_empty() {
+            return;
+        }
+        let request = ReportEphemeralAgentsRequestV1 {
+            identity: Some(identity.clone()),
+            fence: Some(fence.clone()),
+            agents,
+        };
+        match self.control.report_ephemeral_agents(request).await {
+            Ok(response) if response.rejection.is_none() => {}
+            Ok(_) => tracing::warn!(
+                event = "worker_ephemeral_agents_rejected",
+                execution_id = %identity.execution_id,
+                "Main rejected the execution's sub-agent report; settlement continues"
+            ),
+            Err(error) => tracing::warn!(
+                event = "worker_ephemeral_agents_failed",
+                execution_id = %identity.execution_id,
+                error = ?error,
+                "the execution's sub-agent report could not be reported; settlement continues"
+            ),
+        }
+    }
+
     /// Replay the exact state-owner proposal after a terminal ACK crash.
     ///
     /// The recovery value is consumed, so decoded protobufs or replayed parser
@@ -3068,6 +3120,8 @@ impl<R: ControlRpc> AgentControlClient<R> {
             .await;
         self.report_egress_summary(&recovery.identity, &recovery.fence)
             .await;
+        self.report_ephemeral_agents(&recovery.identity, &recovery.fence)
+            .await;
         let settled_identity = recovery.identity.clone();
         let request = PrepareSettlementRequestV1 {
             identity: Some(recovery.identity),
@@ -3081,6 +3135,7 @@ impl<R: ControlRpc> AgentControlClient<R> {
             parse_prepare_settlement_response(response, expected_outcome, recovery.retirement)?;
         self.egress.forget(&settled_identity);
         self.steps.forget(&settled_identity);
+        self.ephemeral_agents.forget(&settled_identity);
         Ok(receipt)
     }
 }

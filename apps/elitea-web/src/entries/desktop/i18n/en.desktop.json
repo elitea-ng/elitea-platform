@@ -1146,5 +1146,7 @@
   "desktop.nativeMenu.computerResume": "Resume",
   "desktop.nativeMenu.computerStop": "Stop",
   "desktop.nativeMenu.computerUsing": "Using {app}",
-  "desktop.nativeMenu.computerPausedButton": "Paused"
+  "desktop.nativeMenu.computerPausedButton": "Paused",
+  "desktop.doctor.itSupport": "IT support:",
+  "desktop.nativeMenu.aboutSupport": "IT support: {contact}"
 }

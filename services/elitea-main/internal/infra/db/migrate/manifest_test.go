@@ -1062,7 +1062,18 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0050 decisions 7c and 7d, issue 1611): agent_floor_exchanges and
 	// agent_floor_turns, the chain link kind agent_turn and the three loop
 	// guard end limits. No backfill, no permission.
-	require.EqualValues(t, 231, Head(shared))
+	//
+	// 232: shared/0232_ephemeral_agents.sql, one row per sub-agent a run
+	// started with spawn_agent (ADR-0050 decisions 4 and 9d, issue 1614):
+	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
+	// data, no permission.
+	//
+	// 233: shared/0233_agent_teams.sql, saved teams (ADR-0050 decision 8,
+	// issue 1620): elitea_chat.agent_teams and agent_team_members, and the
+	// permissions models.teams.{list,create,update,delete}: list to the
+	// default-mode admin, editor and viewer, the other three to admin and
+	// editor, and the same on saved project matrices.
+	require.EqualValues(t, 233, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1320,12 +1331,16 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
 	// data, no permission.
 	//
-	// 234: tenant/0234_application_version_avatar_pack.sql, the nullable
+	// 164: tenant/0164_legacy_built_tenant_shape.sql, the columns and tables a
+	// schema the legacy runtime built lacks and Main reads: elitea_tools
+	// owner_id (backfilled with the schema's project), env_vars and uuid,
+	// index_meta and social_likes, each as create_tenant_schema declares it.
+	// No permission.
+	//
+	// 165: tenant/0165_application_version_avatar_pack.sql, the nullable
 	// application_versions.avatar_pack jsonb column (ADR-0050 decision 6,
-	// issue 1619). No data, no permission. It skips 164 to 233 on purpose:
-	// open branches had claimed the numbers next to the shared head, and
-	// Head() reads the last entry, so a gap costs nothing.
-	require.EqualValues(t, 234, Head(tenant))
+	// issue 1619). No data, no permission.
+	require.EqualValues(t, 165, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

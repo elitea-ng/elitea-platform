@@ -17,6 +17,7 @@ import { startOutbox } from '@/sync/appOutbox';
 import { startSync } from '@/sync/appSync';
 import { LockGate } from '@/security/lock/LockGate';
 import { startManagedConfig } from '@/security/managedConfig';
+import { startManagedFeedback } from '@/security/managedFeedback';
 import { startManagedServerLock } from '@/security/managedServerLock';
 import { PrivacyCover } from '@/security/privacy/PrivacyCover';
 import { usePrivacyProtection } from '@/security/privacy/usePrivacyProtection';
@@ -42,6 +43,8 @@ import { startTurnActivities } from '@/features/surfaces/turnActivities';
 startManagedConfig();
 // MDM lock_server: only the managed workspace stays (applied once hydrated, and on every change).
 startManagedServerLock();
+// MDM feedback: connection, sign-in and policy state to the device management (dormant without it).
+startManagedFeedback();
 wireFocusManager();
 wireUpgradeRecovery();
 // The encrypted offline store follows the session, the policy and the device lock.

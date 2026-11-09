@@ -1,7 +1,7 @@
 package agentmedia
 
 // The avatar pack (ADR-0050 decision 6): typed slots on the agent version,
-// stored in application_versions.avatar_pack (tenant migration 0234). It
+// stored in application_versions.avatar_pack (tenant migration 0165). It
 // replaces meta.icon_meta as the source of an agent's look; the version
 // write keeps meta.icon_meta equal to the pack's still, so a client that
 // reads only the old field still shows the right image.

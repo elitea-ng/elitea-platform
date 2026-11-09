@@ -140,7 +140,7 @@ function Preview({ screen }: { screen: Screen }) {
           <DevicesView
             status={{ kind: 'ready' }}
             devices={sampleDevices(now)}
-            host="acme.elitea.ai"
+            host="acme.example.com"
             age={(iso) => formatAge(iso, now)}
             banner={null}
             onRevoke={async () => false}

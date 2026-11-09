@@ -30,6 +30,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
+import SupportAgentOutlinedIcon from '@mui/icons-material/SupportAgentOutlined';
 import IconButton from '@mui/material/IconButton';
 import { useColorScheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
@@ -41,7 +42,7 @@ import { LOCALES, currentLocale, saveLocale, t, type Locale } from '@/shared/i18
 import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
 import { MenuDivider, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
 
-import { bugReportUrl, whatsNewUrl } from '../lib/accountLinks';
+import { bugReportUrl, webSupportHref, whatsNewUrl } from '../lib/accountLinks';
 import { adminPortalUrl } from '../lib/adminPortal';
 import { versionLine } from '../lib/versionLine';
 import { useAdminAccess } from '../model/useAdminAccess';
@@ -98,6 +99,49 @@ function ChoiceSubmenu<T extends string>({ icon, label, value, choices, onChoose
         ))
       }
     </NativeSubmenu>
+  );
+}
+
+/** The desktop's own help rows: the IT support line when there is one, and Troubleshoot. */
+function desktopHelpRows(supportContact: string | undefined, close: () => void, goTo: (to: string) => void): ReactNode[] {
+  return [
+    ...(supportContact === undefined ? [] : [<SupportRow key="it-support" contact={supportContact} close={close} goTo={goTo} />]),
+    <MenuRow key="troubleshoot" onClick={() => goTo('/settings/troubleshoot')}>
+      <MenuRowIcon>
+        <MedicalServicesOutlinedIcon />
+      </MenuRowIcon>
+      <MenuRowText>{t('desktop.account.troubleshoot', 'Troubleshoot')}</MenuRowText>
+    </MenuRow>,
+  ];
+}
+
+/**
+ * The IT support line (ADR-0052 W6.2). The host hands only https to the system browser, so an
+ * https line opens there; an email address or phone number opens Troubleshoot, where it can be copied.
+ */
+function SupportRow({ contact, close, goTo }: { readonly contact: string; readonly close: () => void; readonly goTo: (to: string) => void }): React.JSX.Element {
+  const href = webSupportHref(contact);
+  return (
+    <MenuRow
+      data-testid="shell-account-it-support"
+      onClick={() => {
+        if (href === null) {
+          goTo('/settings/troubleshoot');
+          return;
+        }
+        close();
+        openExternally(href);
+      }}
+    >
+      <MenuRowIcon>
+        <SupportAgentOutlinedIcon />
+      </MenuRowIcon>
+      <MenuRowText>{t('desktop.account.itSupport', 'IT support')}</MenuRowText>
+      {/* The line itself, clipped to the row; the whole line is the tooltip and on Troubleshoot. */}
+      <MenuRowHint>
+        <span title={contact}>{contact.length > 32 ? `${contact.slice(0, 31)}…` : contact}</span>
+      </MenuRowHint>
+    </MenuRow>
   );
 }
 
@@ -302,16 +346,7 @@ export function AccountMenu({ items, go, platform, collapsed = false, selected =
             <MenuRowText>{t('desktop.account.whatsNew', 'What’s new')}</MenuRowText>
           </MenuRow>,
         );
-        if (desktop) {
-          rows.push(
-            <MenuRow key="troubleshoot" onClick={() => goTo('/settings/troubleshoot')}>
-              <MenuRowIcon>
-                <MedicalServicesOutlinedIcon />
-              </MenuRowIcon>
-              <MenuRowText>{t('desktop.account.troubleshoot', 'Troubleshoot')}</MenuRowText>
-            </MenuRow>,
-          );
-        }
+        if (desktop) rows.push(...desktopHelpRows(host.supportContact, close, goTo));
         return rows;
       }}
     </AccountMenuFrame>

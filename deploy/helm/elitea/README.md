@@ -70,7 +70,7 @@ gh attestation verify oci://ghcr.io/elitea-ng/charts/elitea:<version> \
 - [Deploy on GKE with Argo CD](https://elitea-ng.github.io/elitea-platform/deployment/gke-argocd)
 - [Release-wide settings](https://elitea-ng.github.io/elitea-platform/deployment/configuration#release-wide-settings): `global.*`, `certManager.issuers`, the OpenTelemetry defaults
 - [Verify release artifacts](https://elitea-ng.github.io/elitea-platform/deployment/verify-artifacts)
-- [Upgrading](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md): read the entries between your version and the new one before an upgrade
+- [Upgrade notes](https://github.com/elitea-ng/elitea-platform/tree/main/docs/upgrading): read the notes dated after your version before an upgrade (one file per change; the history up to 2026-11-09 is in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md))
 
 ## License
 

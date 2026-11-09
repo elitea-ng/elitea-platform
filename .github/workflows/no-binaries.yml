@@ -41,6 +41,10 @@ jobs:
           fetch-depth: 1
       - name: Scan for binary / oversize tracked files
         run: bash scripts/no-binaries-check.sh
+      # Upgrade notes are one file per change, so open pull requests never
+      # conflict over a shared list (docs/upgrading/README.md).
+      - name: Upgrade notes are one file per change
+        run: node scripts/ci/check-upgrading-notes.mjs
       # One Rust version everywhere (PR #1297): every rust-toolchain.toml, every
       # `FROM rust:` image (same digest in every stage) and every crate's
       # rust-version, held to the repository-root pin. This workflow has no
@@ -77,7 +81,14 @@ jobs:
           # of dependency-scanning.yml; its scenarios need only node.
           # browser-bakeoff-report.mjs applies the ADR-0049 admission rule
           # in browser-bakeoff.yml; its rule is tested here on every PR.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report; do
+          # brand-output-scan.mjs is the sample-brand output gate of ci-web,
+          # ci-mobile and ci-desktop (ADR-0052 W4); its rules are tested here.
+          # check-upgrading-notes.mjs keeps upgrade notes one file per change
+          # (docs/upgrading/) and docs/UPGRADING.md closed; it runs below.
+          # brand-template tests the brand repository template (ADR-0052 W5,
+          # docs/brand-template/) against this tree: its brand passes
+          # brand-check, its secrets match the packaging actions.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes brand-output-scan brand-template; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
@@ -665,3 +676,10 @@ jobs:
           fi
           "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}"
           echo "actionlint: ${count} workflow file(s) clean"
+          # The brand repository template's workflows (docs/brand-template/):
+          # linted as the repository they become, so its own paths resolve.
+          template="${RUNNER_TEMP}/brand-template"
+          rm -rf "${template}" && cp -R docs/brand-template "${template}"
+          git -C "${template}" init -q
+          (cd "${template}" && "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}")
+          echo "actionlint: the brand template's workflows are clean"

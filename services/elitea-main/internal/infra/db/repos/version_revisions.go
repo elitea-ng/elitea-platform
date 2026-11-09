@@ -45,7 +45,7 @@ const versionRevisionStateColumns = `(jsonb_build_object(
 	WHEN jsonb_typeof(v.soul) = 'object' THEN jsonb_build_object('soul', v.soul)
 	ELSE '{}'::jsonb
 END || CASE
-	-- ADR-0050 decision 6: the avatar pack joins the same way (tenant 0234).
+	-- ADR-0050 decision 6: the avatar pack joins the same way (tenant 0165).
 	WHEN jsonb_typeof(v.avatar_pack) = 'object' THEN jsonb_build_object('avatar_pack', v.avatar_pack)
 	ELSE '{}'::jsonb
 END)::text`

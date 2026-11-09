@@ -1,7 +1,7 @@
 [package]
 name = "elitea-desktop"
 version = "0.1.0"
-description = "Elitea desktop client: a Tauri host around the elitea-web desktop build (ADR-0029)"
+description = "The desktop client: a Tauri host around the elitea-web desktop build (ADR-0029)"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"

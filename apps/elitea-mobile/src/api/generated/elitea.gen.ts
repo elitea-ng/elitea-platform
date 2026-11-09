@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.43
- * operations sha256:  4131ed493bddee7047f4460fe33337842dfc94ddfa1e03fa6eaf5c9f44105609
+ * client contract:    1.45
+ * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -322,6 +322,79 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn "remember things about me" off or on for an agent
+         * @description opted_out true deletes what the agent holds about the caller and stops it writing more; false lets it remember again. Requires `models.applications.memory.list`.
+         */
+        put: operations["setAgentMemoryOptOut"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List an agent's memory entries
+         * @description The agent's own memory in this project (ADR-0050 decision 1b), pinned first, then newest. An entry about another person is listed only for that person and the agent's managers (an owner or a holder of `models.applications.memory.update`). Requires `models.applications.memory.list`.
+         */
+        get: operations["listAgentMemory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                entry_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete one memory entry
+         * @description A manager with ownership or `models.applications.memory.delete` deletes any entry; anyone deletes an entry about themself. Requires `models.applications.memory.list`.
+         */
+        delete: operations["deleteAgentMemoryEntry"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2127,6 +2200,77 @@ export interface components {
             }[];
             welcome_message?: string;
         };
+        /** @description NOTE(W2): internal/infra/db/repos/agent_memory.go, AgentMemoryEntry. */
+        AgentMemoryEntry: {
+            /** Format: int64 */
+            application_id: number;
+            content: string;
+            conversation_uuid: string | null;
+            /** Format: date-time */
+            created_at: string;
+            execution_id: string | null;
+            /** @description Every version, newest first. Only on the single-entry read. */
+            history?: components["schemas"]["AgentMemoryEntryVersion"][];
+            /** Format: int64 */
+            id: number;
+            kind: components["schemas"]["AgentMemoryKind"];
+            message_id: string | null;
+            pinned: boolean;
+            status: components["schemas"]["AgentMemoryStatus"];
+            /**
+             * Format: int64
+             * @description The person the entry is about. Visible only to that person and the agent's managers.
+             */
+            subject_user_id: number | null;
+            /** Format: date-time */
+            updated_at: string;
+            version: number;
+            /** @enum {string} */
+            written_by_kind: "agent" | "person";
+            /** Format: int64 */
+            written_by_user_id: number | null;
+        };
+        /** @description NOTE(W2): internal/infra/db/repos/agent_memory.go, AgentMemoryVersion. */
+        AgentMemoryEntryVersion: {
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            kind: components["schemas"]["AgentMemoryKind"];
+            pinned: boolean;
+            status: components["schemas"]["AgentMemoryStatus"];
+            version: number;
+            /** @enum {string} */
+            written_by_kind: "agent" | "person";
+            /** Format: int64 */
+            written_by_user_id: number | null;
+        };
+        /** @enum {string} */
+        AgentMemoryKind: "fact" | "preference" | "episode" | "cursor";
+        /** @description NOTE(W2): internal/api/v2/agentmemory/handler.go, List. */
+        AgentMemoryList: {
+            /** @description The caller may approve or reject pending entries. */
+            can_approve: boolean;
+            /** @description The caller may delete any entry and clear the memory. */
+            can_delete: boolean;
+            /** @description The caller may edit, pin and archive any entry. */
+            can_manage: boolean;
+            /** @description The caller turned off "remember things about me" for this agent. */
+            opted_out: boolean;
+            /** @description The names of the people the rows are about or were written by, by user id. A user without a name is left out. */
+            people: {
+                /** Format: int64 */
+                id: number;
+                name: string;
+            }[];
+            rows: components["schemas"]["AgentMemoryEntry"][];
+            total: number;
+        };
+        /** @description NOTE(W2): internal/api/v2/agentmemory/handler.go, writeError. */
+        AgentMemoryRefusal: {
+            /** @enum {string} */
+            code: "not_found" | "memory_change_forbidden" | "memory_entry_invalid";
+            error: string;
+        };
         /** @description NOTE(W2): internal/domain/agentmemory/agentmemory.go, Parse. */
         AgentMemorySettings: {
             enabled?: boolean;
@@ -2140,6 +2284,8 @@ export interface components {
              */
             write?: "auto_attended" | "auto" | "review" | "off";
         };
+        /** @enum {string} */
+        AgentMemoryStatus: "pending" | "active" | "archived";
         /**
          * @description ADR-0050 decision 1a: an agent version's soul document, the JSON form of a `SOUL.md` file (YAML front matter holding every key but `body`, then `body` as the markdown after the closing `---`). It shapes how the agent speaks and behaves and GRANTS NOTHING: no key names a tool, a toolkit, a credential, a secret, a permission or a scope, and Main refuses an unknown key outright (400 `soul_capability_key` for a capability-shaped one, `soul_invalid` for any other), so a soul can never be read as a grant. At most 16384 bytes of text: the UTF-8 bytes of every string value (keys not counted) are summed, which reads the same in every client and in SOUL.md (400 `soul_too_large`). Prompt order: platform system text, organization guardrails, the soul, the instructions, recalled memory. `proactive_goals` is not put into the prompt; the heartbeat reads it. Self-contained (no $ref, no `nullable`) so it is valid JSON Schema as written.
          * @example {
@@ -2811,6 +2957,8 @@ export interface components {
             offline_enabled: boolean;
             /** @description The client must refuse to run without a device passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings, one line of text (an email address, a phone number or an https address among it is a link); empty means none. A device's managed `support_contact` wins over it. A server before 1.45 sends none. */
+            support_contact?: string;
         };
         /** @description The 426 answer to a native client whose `X-Client-Version` is below the minimum (ADR-0025 decision 5). Only callers authenticated by a native access token, and the native token endpoint, are judged. NOTE(W2): internal/api/middleware/client_version.go:176 (`WriteClientUpgradeRequired`). */
         ClientUpgradeRequiredError: {
@@ -3835,6 +3983,8 @@ export interface components {
             offline_retention_days: number;
             /** @description Refuse to run on a device without a passcode or biometric lock. */
             require_device_lock: boolean;
+            /** @description Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings; empty means none. The same value as the discovery document's `client_policy.support_contact`. A device's managed `support_contact` wins over it. */
+            support_contact?: string;
         };
         /** @description One native device session (refresh-token family). NOTE(W2): internal/api/nativeauth/devices.go:36 (`UserDevice`). */
         NativeDevice: {
@@ -5236,6 +5386,136 @@ export interface operations {
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    setAgentMemoryOptOut: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    opted_out: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The stored choice */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        opted_out: boolean;
+                    };
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    listAgentMemory: {
+        parameters: {
+            query?: {
+                /** @description Only entries created at or after this time. */
+                created_after?: string;
+                /** @description Only entries created before this time. */
+                created_before?: string;
+                kind?: components["schemas"]["AgentMemoryKind"];
+                limit?: number;
+                offset?: number;
+                query?: string;
+                /** @description Who wrote the entry's current version: agent or person (another value is 400). */
+                source?: string;
+                status?: components["schemas"]["AgentMemoryStatus"];
+                subject_user_id?: number;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                application_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entries the caller may see */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentMemoryList"];
+                };
+            };
+            400: components["responses"]["400"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    deleteAgentMemoryEntry: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                application_id: number;
+                entry_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            /** @description (code memory_change_forbidden) The caller may not delete this entry */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentMemoryRefusal"];
+                };
+            };
+            /** @description (code not_found) No such entry, or not visible to the caller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentMemoryRefusal"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     listApplicationSkills: {

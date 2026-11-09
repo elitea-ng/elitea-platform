@@ -32,7 +32,7 @@ CREATE TABLE application_versions (
     pipeline_settings jsonb NOT NULL,
     -- tenant migration 0160 (ADR-0050 decision 1a): AgentSoulV1, NULL for none.
     soul jsonb,
-    -- tenant migration 0234 (ADR-0050 decision 6): AgentAvatarPackV1, NULL for none.
+    -- tenant migration 0165 (ADR-0050 decision 6): AgentAvatarPackV1, NULL for none.
     avatar_pack jsonb,
     UNIQUE (application_id, name),
     UNIQUE (shared_owner_id, shared_id)
