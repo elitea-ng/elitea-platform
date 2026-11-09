@@ -1067,7 +1067,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// started with spawn_agent (ADR-0050 decisions 4 and 9d, issue 1614):
 	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
 	// data, no permission.
-	require.EqualValues(t, 232, Head(shared))
+	//
+	// 240: shared/0240_agent_heartbeats.sql, one row per heartbeat wake of a
+	// proactive agent (ADR-0050 decision 2, issue 1618):
+	// elitea_runtime.agent_heartbeats, the daily envelope's ledger. No data,
+	// no permission. 0233 to 0239 are claimed by open branches.
+	require.EqualValues(t, 240, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -1324,7 +1329,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// project: agent_memory_entries, agent_memory_entry_versions and
 	// agent_memory_subject_optouts (ADR-0050 decision 1b, issue 1607). No
 	// data, no permission.
-	require.EqualValues(t, 163, Head(tenant))
+	//
+	// 240: tenant/0240_agent_heartbeat_settings.sql, the heartbeat state of
+	// each proactive agent and the project switch proactive_agents_enabled
+	// (ADR-0050 decision 2, issue 1618). No data, no permission.
+	require.EqualValues(t, 240, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
