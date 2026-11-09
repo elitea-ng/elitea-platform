@@ -1,0 +1,278 @@
+name: Desktop — package for device management
+
+# The desktop app's MDM packages (ADR-0052 decisions 4, 6 and 8; W2b): a universal
+# (Apple silicon + Intel) macOS app signed with the brand owner's Developer ID,
+# notarised and stapled, in a signed `.pkg` that installs silently; and (once the
+# host builds on Windows, #1828) an MSI for Intune and an MSIX for the Store.
+#
+# NOTHING IS ATTACHED TO A RELEASE (owner decision 10). ELITEA's desktop app reaches
+# clients only through their device management. The packages stay WORKFLOW
+# ARTIFACTS, and only on a run the brand owner starts by hand (workflow_dispatch)
+# with `keep_artifacts`: a public repository's artifacts are downloadable, so the
+# release check (publish.yml) never keeps them.
+#
+# SECRETS BY FIXED NAME (scripts/desktop-package.mjs `SECRETS`, the list W5
+# publishes). All of a platform's secrets: sign and verify. None: an unsigned dry
+# run with a notice, so forks and pull requests stay green. Some: a failure. A
+# pull request is ALWAYS a dry run: its code must not run with the certificates.
+#
+# WHEN.
+#   pull_request        the packaging files changed: the unsigned dry run.
+#   workflow_call       publish.yml's release check, signed (`require_signed`).
+#   workflow_dispatch   by hand: a signed package to hand to device management.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-package.yml"
+      - "apps/elitea-desktop/scripts/desktop-package.mjs"
+      - "apps/elitea-desktop/scripts/macos-pkg.sh"
+      - "apps/elitea-desktop/src-tauri/tauri.conf.json"
+      - "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json"
+  workflow_call:
+    inputs:
+      ref:
+        description: The git ref to build (the release tag).
+        type: string
+        required: true
+      version:
+        description: The full release version to stamp (X.Y.Z or X.Y.Z-pre).
+        type: string
+        required: true
+      require_signed:
+        description: Fail unless every package is signed (the release check).
+        type: boolean
+        default: true
+    secrets:
+      APPLE_CERTIFICATE: { required: false }
+      APPLE_CERTIFICATE_PASSWORD: { required: false }
+      APPLE_SIGNING_IDENTITY: { required: false }
+      APPLE_INSTALLER_SIGNING_IDENTITY: { required: false }
+      APPLE_API_KEY: { required: false }
+      APPLE_API_ISSUER: { required: false }
+      APPLE_API_PRIVATE_KEY: { required: false }
+  workflow_dispatch:
+    inputs:
+      keep_artifacts:
+        description: Keep the packages as workflow artifacts (7 days) for device management.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS universal (.app, .pkg)
+    runs-on: macos-latest
+    # A universal build compiles the host twice (arm64 and x86_64).
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Sign or dry run
+        id: plan
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_SIGNING_IDENTITY: ${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
+          REQUIRE_SIGNED: ${{ inputs.require_signed == true }}
+        run: |
+          flags=(--github-output)
+          [ "$DRY_RUN" = true ] && flags+=(--dry-run)
+          [ "$REQUIRE_SIGNED" = true ] && flags+=(--require-signed)
+          node apps/elitea-desktop/scripts/desktop-package.mjs macos "${flags[@]}"
+
+      - name: Stamp the version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ github.run_number }}
+        working-directory: apps/elitea-desktop
+        run: |
+          set -euo pipefail
+          base="${VERSION%%-*}"
+          node -e '
+            const fs = require("fs");
+            const f = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(f, "utf8"));
+            c.version = process.argv[1];
+            c.bundle.macOS.bundleVersion = process.argv[2];
+            fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n");
+          ' "$base" "$BUILD"
+          # The [package] version is the first `version =` line of Cargo.toml.
+          sed -i '' -E "1,/^version = /s/^version = \".*\"/version = \"${VERSION}\"/" src-tauri/Cargo.toml
+          got_conf="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          got_cargo="$(sed -nE 's/^version = "(.*)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          if [ "$got_conf" != "$base" ] || [ "$got_cargo" != "$VERSION" ]; then
+            echo "::error::stamped tauri.conf.json ${got_conf} (want ${base}) and Cargo.toml ${got_cargo} (want ${VERSION})"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # `tauri build` runs the web desktop build first (beforeBuildCommand).
+      - name: Install web and desktop (locked)
+        run: |
+          npm ci --prefix apps/elitea-web
+          npm ci --prefix apps/elitea-desktop
+
+      - name: Assert the pinned toolchain, with both macOS targets
+        working-directory: apps/elitea-desktop/src-tauri
+        run: |
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      # Restore only: ci-desktop.yml's nightly run writes the host cache.
+      - name: Restore the cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          workspaces: apps/elitea-desktop/src-tauri
+
+      # The document extractor (ADR-0029 decision 4) is the app's externalBin. A
+      # universal app needs a universal sidecar named for the universal triple.
+      - name: Build the document sidecar (universal)
+        run: |
+          set -euo pipefail
+          cd apps/elitea-desktop/doc-extract-sidecar
+          bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$t"
+          done
+          mkdir -p ../src-tauri/binaries
+          lipo -create -output ../src-tauri/binaries/elitea-doc-extract-sidecar-universal-apple-darwin \
+            target/aarch64-apple-darwin/release/elitea-doc-extract-sidecar \
+            target/x86_64-apple-darwin/release/elitea-doc-extract-sidecar
+
+      - name: Prepare the notarisation key
+        if: steps.plan.outputs.sign == 'true'
+        env:
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" | base64 --decode > "$key"
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      # Signed: the Tauri CLI imports the certificate into a temporary keychain, signs
+      # with the hardened runtime, notarises and staples. Unsigned: the same build with
+      # no APPLE_* in its environment (Tauri then signs nothing).
+      - name: Build the universal app (${{ steps.plan.outputs.sign == 'true' && 'signed, notarised' || 'unsigned' }})
+        working-directory: apps/elitea-desktop
+        env:
+          APPLE_CERTIFICATE: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_KEY: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_API_ISSUER || '' }}
+        run: |
+          set -euo pipefail
+          # Tauri reads an empty APPLE_SIGNING_IDENTITY as an identity: unset the empty ones.
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER; do
+            [ -n "${!name}" ] || unset "$name"
+          done
+          node scripts/tauri-brand.mjs
+          npx tauri build --target universal-apple-darwin --bundles app \
+            --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
+          {
+            echo "DESKTOP_APP=$(node -p 'require("./src-tauri/tauri.brand.json").productName').app"
+            echo "DESKTOP_ID=$(node -p 'require("./src-tauri/tauri.brand.json").identifier')"
+            echo "DESKTOP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          } >> "$GITHUB_ENV"
+
+      - name: Both architectures are in the app
+        working-directory: apps/elitea-desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos
+        run: |
+          set -euo pipefail
+          bin="${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
+          lipo -verify_arch arm64 x86_64 "$bin"
+          lipo -verify_arch arm64 x86_64 "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar"
+          lipo -info "$bin"
+
+      # A component package that installs into /Applications with no UI: Jamf, Intune
+      # for macOS, Kandji and `sudo installer -pkg … -target /` install it silently.
+      - name: Build the installer package (${{ steps.plan.outputs.sign == 'true' && 'signed' || 'unsigned' }})
+        working-directory: apps/elitea-desktop
+        env:
+          INSTALLER_IDENTITY: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_INSTALLER_SIGNING_IDENTITY || '' }}
+          APPLE_CERTIFICATE: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ steps.plan.outputs.sign == 'true' && secrets.APPLE_API_ISSUER || '' }}
+        run: |
+          bash scripts/macos-pkg.sh \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos/${DESKTOP_APP}" \
+            "$DESKTOP_ID" "$DESKTOP_VERSION" "$RUNNER_TEMP/out"
+
+      # Proven, not assumed: Gatekeeper accepts the app and the package, and both
+      # carry a stapled ticket.
+      - name: The app and the package are signed, notarised and stapled
+        if: steps.plan.outputs.sign == 'true'
+        run: |
+          set -euo pipefail
+          app="apps/elitea-desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/${DESKTOP_APP}"
+          pkg="$(ls "$RUNNER_TEMP"/out/*.pkg)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl -a -vv --type execute "$app"
+          xcrun stapler validate "$app"
+          pkgutil --check-signature "$pkg"
+          if pkgutil --payload-files "$pkg" | grep -q '/\._'; then
+            echo "::error::the package payload carries AppleDouble ._ files"; exit 1
+          fi
+          spctl -a -vv --type install "$pkg"
+          xcrun stapler validate "$pkg"
+
+      - name: The unsigned package is well formed
+        if: steps.plan.outputs.sign != 'true'
+        run: |
+          set -euo pipefail
+          pkg="$(ls "$RUNNER_TEMP"/out/*.pkg)"
+          pkgutil --payload-files "$pkg" | grep -q "^./Applications/${DESKTOP_APP}/Contents/MacOS/elitea-desktop$"
+          # Extended attributes would install as AppleDouble `._` files next to the app.
+          if pkgutil --payload-files "$pkg" | grep -q '/\._'; then
+            echo "::error::the package payload carries AppleDouble ._ files"; exit 1
+          fi
+          echo "::notice::unsigned dry run: $(basename "$pkg") built; signing and notarisation skipped"
+
+      - name: Keep the package (by hand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-pkg
+          path: ${{ runner.temp }}/out/*.pkg
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Remove the notarisation key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"

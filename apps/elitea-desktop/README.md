@@ -386,21 +386,39 @@ bundles it as an `externalBin` (`src-tauri/tauri.sidecar.conf.json`, passed with
 it is signed and notarised with the app. `src/documents.rs` finds it beside the
 executable; a build without it reads text files only.
 
-## Release signing and publishing
+## Release signing and packaging
 
-Every run of `.github/workflows/publish.yml` (a release, a nightly, a dev
-pre-release) builds the app for **Apple silicon only** in its `desktop` job,
-signs it with the Developer ID certificate and the hardened runtime, notarises
-and staples it, and checks the result with `codesign`, `spctl` and `stapler`.
-The job is a release check: **it publishes nothing**. No `.dmg` or `.app.zip`
-is attached to the GitHub release, and none is kept as a workflow artifact.
-ELITEA's desktop builds reach clients through their device management, signed
-by the brand owner's Developer ID (ADR-0052 decision 8); the certificate in
-these secrets is not that owner's. Older releases that still carry desktop
-files had them removed by hand. The version is stamped at build time (Cargo.toml: the
-full release version, which `X-Client-Version` sends; tauri.conf.json: the
-numeric `X.Y.Z`, CFBundleVersion = the run number), so neither file is bumped by
-hand. The job fails when any secret below is missing.
+`.github/workflows/desktop-package.yml` (ADR-0052 W2b) builds the app for device
+management:
+
+- **macOS:** a **universal** (Apple silicon + Intel) app, signed with the
+  brand owner's Developer ID and the hardened runtime, notarised and stapled.
+  It ships in a `.pkg` (`scripts/macos-pkg.sh`) that installs into
+  `/Applications` with no UI, signed with the Developer ID Installer identity,
+  notarised and stapled. The workflow verifies both with `codesign`,
+  `spctl -a -vv`, `pkgutil --check-signature` and `stapler validate`.
+- **Windows:** an MSI and an MSIX, once the host builds on Windows (#1828).
+
+`scripts/desktop-package.mjs` decides, for each platform, whether the workflow signs:
+
+- **Every secret of the platform is set:** it signs.
+- **None is set:** it builds unsigned, with a notice. This keeps forks and pull requests green.
+- **Only some are set:** the job fails.
+
+A pull request never signs. Every release (`publish.yml`'s `desktop` job) runs
+the workflow with `require_signed` as a release check.
+
+**Nothing is published** (owner decision 10). No package is attached to the
+GitHub release, and the release check keeps no artifact: in a public
+repository, artifacts are downloadable. To get a package for MDM, the brand
+owner runs **Desktop — package for device management** by hand
+(workflow_dispatch) with `keep_artifacts`. The package is then kept as a
+workflow artifact for 7 days.
+
+The version is stamped at build time, so neither file is bumped by hand:
+- Cargo.toml gets the full release version, which `X-Client-Version` sends;
+- tauri.conf.json gets the numeric `X.Y.Z`;
+- CFBundleVersion is the run number.
 
 **Keep the bundle id and the team stable.** macOS keys the privacy grants
 computer use needs (Accessibility, Screen Recording, Input Monitoring;
@@ -408,13 +426,15 @@ ADR-0047) to the bundle id `ai.elitea.desktop` (`tauri.conf.json`
 `identifier`) and the signing team. Changing either resets them: every
 person must grant them again in Settings › Computer use.
 
-Repository secrets (Settings › Secrets and variables › Actions):
+Repository secrets (Settings › Secrets and variables › Actions), read by these
+fixed names:
 
 | Secret | What it holds | How to get it |
 | --- | --- | --- |
-| `APPLE_CERTIFICATE` | base64 of the **Developer ID Application** certificate + private key, exported as `.p12` | Keychain Access › export the identity as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE` | base64 of a `.p12` holding the **Developer ID Application** and **Developer ID Installer** identities and their private keys | Keychain Access › select both identities › export as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
 | `APPLE_CERTIFICATE_PASSWORD` | the password chosen for that `.p12` export | |
-| `APPLE_SIGNING_IDENTITY` | the identity's full name, `Developer ID Application: <Name> (<TEAMID>)` | `security find-identity -v -p codesigning` |
+| `APPLE_SIGNING_IDENTITY` | the app identity's full name, `Developer ID Application: <Name> (<TEAMID>)` | `security find-identity -v -p codesigning` |
+| `APPLE_INSTALLER_SIGNING_IDENTITY` | the package identity's full name, `Developer ID Installer: <Name> (<TEAMID>)` | `security find-identity -v` |
 | `APPLE_API_KEY` | the App Store Connect API **Key ID** (10 characters) | App Store Connect › Users and Access › Integrations › Team Keys (role Developer or higher) |
 | `APPLE_API_ISSUER` | the **Issuer ID** (UUID) shown above that key list | same page |
 | `APPLE_API_PRIVATE_KEY` | base64 of the downloaded `AuthKey_<KEYID>.p8` | `base64 -i AuthKey_<KEYID>.p8 \| pbcopy` (it can be downloaded once) |
