@@ -139,8 +139,11 @@ jobs:
           eas-version: 24.12.0
           packager: npm
           token: ${{ secrets.EXPO_TOKEN }}
-      # ELITEA_BRAND must also be an EAS environment variable of the brand's
-      # project (`eas env:create`): EAS runs app.config.ts again on its servers.
+      # EAS uploads the git tree app.config.ts lives in, `elitea/`, and runs
+      # app.config.ts again on its servers with only the EAS project's variables.
+      # So the brand goes INTO that tree as elitea/brand/<id>, and is selected by
+      # id: ELITEA_BRAND=<id> must also be an EAS environment variable of the
+      # brand's project (`eas env:create`).
       - name: Build on EAS (production profile)
         if: steps.plan.outputs.sign == 'true'
         working-directory: elitea/apps/elitea-mobile
@@ -148,6 +151,10 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
+          brand_id="$(basename "$BRAND_DIR")"
+          rm -rf "../../brand/$brand_id"
+          cp -R "$GITHUB_WORKSPACE/$BRAND_DIR" "../../brand/$brand_id"
+          export ELITEA_BRAND="$brand_id"
           node scripts/eas-preflight.mjs build
           eas build --profile production --platform "$PLATFORM" --non-interactive --no-wait
 

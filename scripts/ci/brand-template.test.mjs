@@ -68,6 +68,22 @@ test('the template passes every signing secret by its fixed name', () => {
   for (const name of used) assert.ok(known.has(name), `unknown secret ${name}`);
 });
 
+test('the Build your own brand guide lists exactly the secrets the template uses', () => {
+  const guide = fs.readFileSync(path.join(REPO, 'apps/elitea-docs/src/content/docs/development/build-your-own-brand.mdx'), 'utf8');
+  const listed = new Set([...guide.matchAll(/`([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)`/g)].map((m) => m[1]).filter((n) => !['ELITEA_BRAND', 'BRAND_DIR', 'DESKTOP_WINDOWS_PACKAGE'].includes(n)));
+  const used = new Set([...BUILD.matchAll(/secrets\.([A-Z_0-9]+)/g), ...read('.github/workflows/release-watch.yml').matchAll(/secrets\.([A-Z_0-9]+)/g)].map((m) => m[1]));
+  assert.deepEqual([...listed].sort(), [...used].sort());
+  assert.match(guide, /DESKTOP_WINDOWS_PACKAGE/);
+  assert.match(BUILD, /vars\.DESKTOP_WINDOWS_PACKAGE/);
+});
+
+test('a signed mobile build puts the brand inside the tree EAS uploads, selected by id', () => {
+  const step = BUILD.slice(BUILD.indexOf('- name: Build on EAS'), BUILD.indexOf('  desktop-macos:'));
+  assert.match(step, /cp -R "\$GITHUB_WORKSPACE\/\$BRAND_DIR" "\.\.\/\.\.\/brand\/\$brand_id"/);
+  assert.match(step, /export ELITEA_BRAND="\$brand_id"/);
+  assert.ok(step.indexOf('export ELITEA_BRAND') < step.indexOf('eas build'));
+});
+
 test('a pull request never signs, and nothing is kept except by hand', () => {
   for (const m of BUILD.matchAll(/dry-run: (.*)$/gm)) assert.equal(m[1], "${{ github.event_name == 'pull_request' }}");
   const uploads = BUILD.split('\n').flatMap((line, i, lines) => (line.includes('actions/upload-artifact@') ? [lines[i - 1]] : []));
