@@ -644,7 +644,7 @@ CROSS JOIN (VALUES
     -- suppress that fallback). The manage strings are admin-only, below.
     ('models.applications.memory.list'),
     -- ADR-0050 decision 8 (issue 1620): reading the project's saved teams
-    -- (shared 0232 grants it to all three roles centrally). The writes are
+    -- (shared 0233 grants it to all three roles centrally). The writes are
     -- admin and editor only, below.
     ('models.teams.list'),
     -- #6885: the MCP OAuth and DCR proxies (`mcp_oauth_proxy`,
@@ -838,7 +838,7 @@ WHERE r.project_id = 1 AND r.name = 'admin'
 ON CONFLICT DO NOTHING;
 
 -- ADR-0050 decision 8 (issue 1620): saving, editing and deleting a team,
--- which shared/0232 grants to the default-mode admin and editor.
+-- which shared/0233 grants to the default-mode admin and editor.
 INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
 SELECT 1, r.id, p.permission
 FROM auth_core__project_role r

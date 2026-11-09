@@ -47,7 +47,7 @@ function userRow(id: string, userName: string): Record<string, unknown> {
   return { id: Number(id) + 100, entity_name: 'user', entity_meta: { id }, meta: { user_name: userName } };
 }
 
-function renderRail(participants: readonly Record<string, unknown>[], inspector = false): void {
+function renderRail(participants: readonly Record<string, unknown>[], inspector = false, onAddParticipants?: () => void): void {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: '1', name: 'Reader' })));
 
@@ -55,7 +55,7 @@ function renderRail(participants: readonly Record<string, unknown>[], inspector 
   render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
-        <Participants participants={participants as never} inspector={inspector} />
+        <Participants participants={participants as never} inspector={inspector} {...(onAddParticipants ? { onAddParticipants } : {})} />
       </ThemeProvider>
     </QueryClientProvider>,
   );
@@ -101,5 +101,22 @@ describe('Participants — the users row', () => {
 
     expect(screen.queryByTestId('users-section')).toBeNull();
     expect(screen.getByTestId('participants-container')).toBeTruthy();
+  });
+});
+
+describe('Participants — the header', () => {
+  /**
+   * Issue 1620 once put a second person-plus icon ("Save as team") beside the
+   * add button and the owner read it as a double add button; the header
+   * carries exactly one add control. Save as team lives in the Chats list's
+   * row menu.
+   */
+  it('renders exactly one add button', async () => {
+    renderRail([userRow('3', 'Bob Builder')], false, () => {});
+
+    await waitFor(() => expect(screen.getByTestId('participants-add-button')).toBeTruthy());
+    const header = screen.getByTestId('participants-add-button').parentElement as HTMLElement;
+    expect(header.querySelectorAll('[data-testid="participants-add-button"]')).toHaveLength(1);
+    expect(header.querySelectorAll('svg[data-testid$="AddAltOutlinedIcon"], svg[data-testid^="GroupAdd"]')).toHaveLength(1);
   });
 });

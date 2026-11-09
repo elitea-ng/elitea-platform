@@ -1,6 +1,6 @@
 /**
  * Saved teams (ADR-0050 decision 8, issue 1620), over the generated fetchers
- * of the seven team routes.
+ * of the team routes the app calls (the single-team GET has no caller yet).
  *
  * The generated fetchers resolve the TRANSPORT envelope `{data, status,
  * headers}`, never the body: each call here unwraps it once (#132).
@@ -9,7 +9,6 @@ import {
   createAgentTeam,
   createAgentTeamFromConversation,
   deleteAgentTeam,
-  getAgentTeam,
   listAgentTeams,
   startAgentTeamConversation,
   updateAgentTeam,
@@ -33,11 +32,6 @@ function bodyOf<T>(envelope: unknown): T {
 /* manifest: agentTeams.list */
 export async function fetchAgentTeams(projectId: string, params: ListAgentTeamsParams): Promise<AgentTeamList> {
   return bodyOf<AgentTeamList>(await listAgentTeams(projectId, params));
-}
-
-/* manifest: agentTeams.get */
-export async function fetchAgentTeam(projectId: string, teamId: number): Promise<AgentTeam> {
-  return bodyOf<AgentTeam>(await getAgentTeam(projectId, teamId));
 }
 
 /* manifest: agentTeams.create */

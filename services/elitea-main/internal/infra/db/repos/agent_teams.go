@@ -62,7 +62,7 @@ func (s *AgentTeams) ListTeams(ctx context.Context, projectID int64, query strin
 	}
 	pattern := ""
 	if query = strings.TrimSpace(query); query != "" {
-		pattern = "%" + likeEscaper.Replace(query) + "%"
+		pattern = "%" + escapeLike(query) + "%"
 	}
 	var total int
 	if err := s.pool.QueryRow(ctx, `
@@ -88,9 +88,6 @@ LIMIT $3 OFFSET $4`, projectID, pattern, limit, offset)
 	}
 	return teams, total, nil
 }
-
-// likeEscaper escapes the ILIKE wildcards of a search text.
-var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // GetTeam answers one team of the project, or agentteams.ErrNotFound.
 func (s *AgentTeams) GetTeam(ctx context.Context, projectID, teamID int64) (agentteams.Stored, error) {
@@ -267,30 +264,53 @@ ORDER BY mapping.id`, schema, predicate), conversationID)
 	}
 	defer rows.Close()
 	var members []agentteams.Member
+	// position maps an agent to its 1-based place in members: two participant
+	// rows can name the same agent (one stored without entity_meta.project_id,
+	// one with it), and a team holds each agent once.
+	position := map[[2]int64]int{}
 	lead := 0
+	leadUnpinned := false
 	for rows.Next() {
 		var participantID int64
 		var applicationText, projectText, versionText, name string
 		if err := rows.Scan(&participantID, &applicationText, &projectText, &versionText, &name); err != nil {
 			return nil, 0, fmt.Errorf("agent teams: scan the roster: %w", err)
 		}
+		isLead := floor.Policy == turntaking.PolicyLead && participantID == floor.Lead
 		applicationID, okApplication := positiveInteger(applicationText)
 		versionID, okVersion := positiveInteger(versionText)
 		if !okApplication || !okVersion {
+			if isLead {
+				leadUnpinned = true
+			}
 			continue
 		}
 		memberProject, okProject := positiveInteger(projectText)
 		if !okProject {
 			memberProject = projectID
 		}
-		members = append(members, agentteams.Member{
-			ApplicationID: applicationID, ProjectID: memberProject, VersionID: versionID, Name: name,
-		})
-		if floor.Policy == turntaking.PolicyLead && participantID == floor.Lead {
-			lead = len(members)
+		key := [2]int64{memberProject, applicationID}
+		at, seen := position[key]
+		if !seen {
+			members = append(members, agentteams.Member{
+				ApplicationID: applicationID, ProjectID: memberProject, VersionID: versionID, Name: name,
+			})
+			at = len(members)
+			position[key] = at
+		}
+		if isLead {
+			lead = at
 		}
 	}
-	return members, lead, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("agent teams: read the roster: %w", err)
+	}
+	// A lead the team cannot hold is refused rather than dropped: saving the
+	// team without it would quietly turn a lead floor into an addressed one.
+	if leadUnpinned {
+		return nil, 0, fmt.Errorf("%w: the conversation's lead agent has no pinned version; pin one before saving the team", agentteams.ErrInvalid)
+	}
+	return members, lead, nil
 }
 
 // MissingMembers answers the position (1-based) of the first member of the
@@ -303,21 +323,33 @@ func (s *AgentTeams) MissingMembers(ctx context.Context, projectID int64, member
 	if err != nil {
 		return 0, err
 	}
+	var positions, versions, applications []int64
 	for index, member := range members {
 		if member.ProjectID != projectID {
 			continue
 		}
-		var exists bool
-		if err := s.pool.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (
+		positions = append(positions, int64(index+1))
+		versions = append(versions, member.VersionID)
+		applications = append(applications, member.ApplicationID)
+	}
+	if len(positions) == 0 {
+		return 0, nil
+	}
+	// One round trip for the whole roster: the lowest position whose agent or
+	// version is gone, NULL when every member exists.
+	var missing *int64
+	if err := s.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT min(wanted.position)
+FROM unnest($1::bigint[], $2::bigint[], $3::bigint[]) AS wanted(position, version_id, application_id)
+WHERE NOT EXISTS (
 	SELECT 1 FROM %[1]s.application_versions AS version
 	JOIN %[1]s.applications AS application ON application.id = version.application_id
-	WHERE version.id = $1 AND version.application_id = $2)`, schema),
-			member.VersionID, member.ApplicationID).Scan(&exists); err != nil {
-			return 0, fmt.Errorf("agent teams: read a member: %w", err)
-		}
-		if !exists {
-			return index + 1, nil
-		}
+	WHERE version.id = wanted.version_id AND version.application_id = wanted.application_id)`, schema),
+		positions, versions, applications).Scan(&missing); err != nil {
+		return 0, fmt.Errorf("agent teams: read the members: %w", err)
 	}
-	return 0, nil
+	if missing == nil {
+		return 0, nil
+	}
+	return int(*missing), nil
 }

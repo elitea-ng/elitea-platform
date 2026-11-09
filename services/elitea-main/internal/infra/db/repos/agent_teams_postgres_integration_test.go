@@ -166,4 +166,15 @@ func TestAConversationFromATeamRoundTrips(t *testing.T) {
 	if _, _, err := store.ConversationRoster(ctx, 1, "999999"); !errors.Is(err, agentteams.ErrNotFound) {
 		t.Fatalf("unknown conversation err = %v", err)
 	}
+
+	// A lead whose participant row has no stored version cannot be a member;
+	// dropping it would save the team with an addressed floor, so the roster
+	// refuses instead.
+	if _, err := pool.Exec(ctx, `UPDATE p_1.chat_participant_mapping SET entity_settings = entity_settings - 'version_id'
+		WHERE participant_id = $1`, floor.Lead); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ConversationRoster(ctx, 1, created.ID); !errors.Is(err, agentteams.ErrInvalid) {
+		t.Fatalf("unpinned lead err = %v, want ErrInvalid", err)
+	}
 }

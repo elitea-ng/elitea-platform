@@ -4431,7 +4431,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// takes the conversation create, whose participant path
 					// checks the caller may use every agent.
 					teams := v2agentteams.NewHandler(dbrepos.NewAgentTeams(cfg.Pool),
-						teamConversations{Repository: cfg.ConvsRepo, handler: convHandler})
+						newTeamConversations(cfg.ConvsRepo, convHandler))
 					readTeams := projectPermission(agentteamsdomain.ListPermission)
 					r.With(readTeams).Get(v2agentteams.TeamsPath, teams.List)
 					r.With(projectPermission(agentteamsdomain.CreatePermission)).Post(v2agentteams.TeamsPath, teams.Create)

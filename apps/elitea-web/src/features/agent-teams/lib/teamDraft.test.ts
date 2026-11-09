@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentTeam, AgentTeamMember } from '@/shared/api/generated/model';
 
-import { MAX_TEAM_MEMBERS, agentCount, defaultVersionOf, draftOf, draftProblem, withMember, withoutMember, writeOf, type TeamDraft } from './teamDraft';
+import { MAX_TEAM_MEMBERS, defaultVersionOf, draftOf, draftProblem, withMember, withoutMember, writeOf, type TeamDraft } from './teamDraft';
 
 const member = (id: number, project = 1): AgentTeamMember => ({ application_id: id, project_id: project, version_id: id * 10, name: `Agent ${id}` });
 
@@ -67,10 +67,5 @@ describe('teamDraft', () => {
     expect(defaultVersionOf([version('5', 'v5'), version('1', 'base')])).toBe(1);
     expect(defaultVersionOf([version('5', 'v5')])).toBe(5);
     expect(defaultVersionOf([])).toBeUndefined();
-  });
-
-  it('counts the agents of a conversation', () => {
-    expect(agentCount([{ entity_name: 'user' }, { entity_name: 'application' }, { entity_name: 'toolkit' }])).toBe(1);
-    expect(agentCount(undefined)).toBe(0);
   });
 });

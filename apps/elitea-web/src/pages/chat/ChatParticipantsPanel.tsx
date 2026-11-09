@@ -17,7 +17,6 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { useCallback, useState } from 'react';
 
-import { SaveAsTeamButton } from '@/features/agent-teams';
 import { ParticipantsWrapper } from '@/features/chat-participants';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { SidePanelTab, useSidePanelSlot } from '@/shared/ui/side-panel';
@@ -86,8 +85,6 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
        */
       renderAgentContext={renderAgentContext}
       {...leadSlot}
-      // ADR-0050 decision 8 (issue 1620): save this conversation's agents and lead as a team.
-      headerActions={<SaveAsTeamButton projectId={projectId} conversation={activeConversation} />}
       renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
         <ContextBudget
           conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}

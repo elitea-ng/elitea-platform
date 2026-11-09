@@ -1,7 +1,8 @@
 /**
  * A conversation row's actions, once, for both menus (the hover "⋯" and, on
  * the desktop, the native context menu): Open; Pin / Unpin, Rename, Move to
- * folder…, Duplicate, Fork, Export (Markdown or JSON), Playback; Make public
+ * folder…, Duplicate, Fork, Save as team… (with the teams create right,
+ * ADR-0050 decision 8), Export (Markdown or JSON), Playback; Make public
  * or Restrict access (not in the public project or the person's own), Share
  * by link…, Copy Link; Archive and Delete…. Rename and Delete are the
  * author's. A pinned chat is not moved.
@@ -47,6 +48,8 @@ export interface ConversationRowActions {
   /** The link Copy Link copies; `null` disables it. */
   readonly linkOf: (conversation: Conversation) => string | null;
   readonly copy: (text: string) => void;
+  /** Holds `models.teams.create` (issue 1620): Save as team…, which saves the chat's agents and lead as a team. */
+  readonly canSaveAsTeam: boolean;
 }
 
 /** What the row asks before it acts: each opens its own field or dialog. */
@@ -57,6 +60,7 @@ export interface RowAsks {
   readonly shareByLink: () => void;
   readonly archive: () => void;
   readonly remove: () => void;
+  readonly saveAsTeam: () => void;
 }
 
 function visibilityAction(conversation: Conversation, actions: ConversationRowActions, asks: RowAsks): ContextAction[] {
@@ -82,6 +86,7 @@ export function conversationActions(conversation: Conversation, actions: Convers
     },
     { id: 'duplicate', label: t('desktop.chats.duplicate', 'Duplicate'), run: () => actions.duplicate(conversation) },
     { id: 'fork', label: t('desktop.chats.fork', 'Fork'), run: () => actions.fork(conversation) },
+    ...(actions.canSaveAsTeam ? [{ id: 'save-as-team', label: t('features.agentTeams.saveAs.menu', 'Save as team…'), run: asks.saveAsTeam }] : []),
     {
       label: t('desktop.chats.export', 'Export'),
       submenu: [

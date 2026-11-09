@@ -7,7 +7,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 import { renderWithQueryAndTheme } from '@/test/renderWithQueryAndTheme';
 
-import { SaveAsTeamButton } from './SaveAsTeamButton';
+import { SaveAsTeamDialog } from './SaveAsTeamDialog';
 import { TeamsPanel } from './TeamsPanel';
 
 const BASE = '/api/v2';
@@ -107,9 +107,7 @@ describe('TeamsPanel', () => {
   });
 });
 
-describe('SaveAsTeamButton', () => {
-  const conversation = { id: 12, name: 'Release 1.62', participants: [{ entity_name: 'user' }, { entity_name: 'application' }] };
-
+describe('SaveAsTeamDialog', () => {
   it('saves the conversation as a team under the given name', async () => {
     grant('models.teams.create');
     let body: unknown;
@@ -121,8 +119,8 @@ describe('SaveAsTeamButton', () => {
         return HttpResponse.json(TEAM_ROW, { status: 201 });
       }),
     );
-    renderWithQueryAndTheme(<SaveAsTeamButton projectId="1" conversation={conversation} />);
-    await userEvent.click(await screen.findByTestId('participants-save-as-team'));
+    const onClose = vi.fn();
+    renderWithQueryAndTheme(<SaveAsTeamDialog projectId="1" conversationId="12" defaultName="Release 1.62" open onClose={onClose} />);
     const name = await screen.findByTestId('agent-team-save-as-name');
     expect(name).toHaveValue('Release 1.62');
     await userEvent.clear(name);
@@ -130,20 +128,11 @@ describe('SaveAsTeamButton', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(body).toEqual({ name: 'Crew', description: '' }));
     expect(from).toBe('12');
-    await waitFor(() => expect(screen.queryByTestId('agent-team-save-as-dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
-  it('is absent without the create permission, for a new conversation, and without agents', async () => {
-    grant('models.teams.list');
-    const { unmount } = renderWithQueryAndTheme(<SaveAsTeamButton projectId="1" conversation={conversation} />);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryByTestId('participants-save-as-team')).not.toBeInTheDocument();
-    unmount();
-
-    grant('models.teams.create');
-    renderWithQueryAndTheme(<SaveAsTeamButton projectId="1" conversation={{ ...conversation, isNew: true }} />);
-    renderWithQueryAndTheme(<SaveAsTeamButton projectId="1" conversation={{ ...conversation, participants: [{ entity_name: 'user' }] }} />);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryByTestId('participants-save-as-team')).not.toBeInTheDocument();
+  it('renders nothing while closed', () => {
+    renderWithQueryAndTheme(<SaveAsTeamDialog projectId="1" conversationId="12" defaultName="x" open={false} onClose={vi.fn()} />);
+    expect(screen.queryByTestId('agent-team-save-as-name')).not.toBeInTheDocument();
   });
 });

@@ -5904,6 +5904,7 @@
   "features.agentTeams.loadFailed": "The teams could not be loaded.",
   "features.agentTeams.saveAs.failed": "The team was not saved. Try again.",
   "features.agentTeams.saveAs.hint": "Saves this conversation's agents, the version each one runs and its lead.",
+  "features.agentTeams.saveAs.menu": "Save as team…",
   "features.agentTeams.saveAs.save": "Save",
   "features.agentTeams.saveAs.title": "Save as team",
   "features.agentTeams.start": "Start conversation",

@@ -11,7 +11,7 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 
 export const MAX_TEAM_MEMBERS = 16;
 export const MAX_TEAM_NAME = 128;
-export const MAX_TEAM_DESCRIPTION = 2000;
+const MAX_TEAM_DESCRIPTION = 2000;
 
 export interface TeamDraft {
   readonly name: string;
@@ -97,9 +97,4 @@ export function teamErrorMessage(error: unknown, fallback: string): string {
     }
   }
   return fallback;
-}
-
-/** The agents of a conversation's participant rows, for "Save as team". */
-export function agentCount(participants: readonly unknown[] | undefined): number {
-  return (participants ?? []).filter((row) => (row as { readonly entity_name?: unknown } | null)?.entity_name === 'application').length;
 }

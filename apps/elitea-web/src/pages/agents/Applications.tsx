@@ -10,7 +10,7 @@ import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
 import { ListViewToggle, PageToolbar, pageBodySx, pageSx, type PageToolbarProps } from '@/widgets/page-header';
-import { usePermissionSet } from '@/widgets/sidebar';
+import { usePermissionSet, usePermissionSetSettled } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
@@ -80,6 +80,7 @@ export function Applications(): ReactNode {
   const isPublicProject = isPublicAgentsProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
   const permissions = usePermissionSet(projectId);
+  const permissionsSettled = usePermissionSetSettled(projectId);
   const canCreate = permissions.has(PERMISSIONS.applications.create) && !isPublicProject;
   const { selectedTags } = useRailTagSelection();
   const totals = useApplicationsData(projectId, hasAdminPermission);
@@ -93,10 +94,13 @@ export function Applications(): ReactNode {
 
   useEffect(() => {
     if (selectedIndex !== -1) return;
+    // The Teams tab appears only once the permission list arrives: a direct
+    // load of /agents/teams waits for it instead of redirecting away.
+    if (params.tab === TEAMS_TAB && !permissionsSettled) return;
     const firstTab = visibleTabs[0];
     if (firstTab === undefined) return;
     void navigate({ to: '/agents/$tab', params: { tab: firstTab.value }, replace: true });
-  }, [selectedIndex, visibleTabs, navigate]);
+  }, [selectedIndex, visibleTabs, navigate, params.tab, permissionsSettled]);
 
   const handleChangeTab = (_event: SyntheticEvent, nextIndex: number): void => {
     const nextTab = visibleTabs[nextIndex];
