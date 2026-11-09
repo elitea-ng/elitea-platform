@@ -49,10 +49,18 @@ describe('parseManagedConfig', () => {
   it('reads the documented keys', () => {
     expect(parseManagedConfig(appConfig)).toEqual({
       serverUrl: 'https://ai.example.com',
+      lockServer: null,
       requireDeviceLock: true,
       idleLockSeconds: 60,
       allowScreenshots: false,
     });
+  });
+
+  it('reads lock_server as a boolean (plist 1/0 too), and ignores any other type', () => {
+    expect(parseManagedConfig({ server_url: 'https://ai.example.com', lock_server: true }).lockServer).toBe(true);
+    expect(parseManagedConfig({ lock_server: 1 }).lockServer).toBe(true);
+    expect(parseManagedConfig({ lock_server: 0 }).lockServer).toBe(false);
+    expect(parseManagedConfig({ lock_server: 'true' }).lockServer).toBeNull();
   });
 
   it('ignores a key of the wrong type, and anything that is not a dictionary', () => {
@@ -70,6 +78,7 @@ describe('parseManagedConfig', () => {
     // `defaults write … -dict require_device_lock -bool true`), so a 1/0 must count as the boolean.
     expect(parseManagedConfig({ require_device_lock: 1, idle_lock_seconds: 60, allow_screenshots: 0 })).toEqual({
       serverUrl: null,
+      lockServer: null,
       requireDeviceLock: true,
       idleLockSeconds: 60,
       allowScreenshots: false,

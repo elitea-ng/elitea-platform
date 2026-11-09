@@ -1,0 +1,42 @@
+---
+title: "Managed devices (MDM)"
+description: "Configure the mobile app on managed iPhones and Android devices from Intune, Workspace ONE or another MDM: the workspace, a single-workspace lock and a stricter app lock."
+---
+
+An MDM or EMM can configure the mobile app on the devices it manages. On iOS the values arrive as **AppConfig** (managed app configuration); on Android as **managed configuration** (app restrictions). The keys are the same on both platforms, and the app applies a change while it runs, without a relaunch.
+
+| Key | Type | Effect |
+|---|---|---|
+| `server_url` | string | The organization's workspace. The connect screen shows it read only, marked "Managed by your organization", and offers no other server. Must be an `https://` address. |
+| `lock_server` | boolean | With `server_url`: the device keeps only that workspace. Workspaces on other servers are signed out and their data removed, as at "Log out & wipe", and "Add workspace" is gone. Removing the key restores nothing. |
+| `require_device_lock` | boolean | `true` asks for Face ID, Touch ID, a fingerprint or the passcode to open the app. |
+| `idle_lock_seconds` | integer (1–86400) | Relock after this many seconds in the background, when shorter than the workspace's setting. |
+| `allow_screenshots` | boolean | `false` blocks screenshots and screen recording of the app. |
+
+The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
+
+## Microsoft Intune
+
+- **iOS:** Apps › App configuration policies › Add › Managed devices. Choose the app and enter the keys in the configuration designer, or as XML:
+
+  ```xml
+  <dict>
+    <key>server_url</key><string>https://ai.example.com</string>
+    <key>lock_server</key><true/>
+    <key>require_device_lock</key><true/>
+    <key>idle_lock_seconds</key><integer>60</integer>
+    <key>allow_screenshots</key><false/>
+  </dict>
+  ```
+
+- **Android Enterprise:** the same policy with platform Android Enterprise. Intune lists the app's keys with their types; fill them in.
+
+## Workspace ONE UEM
+
+On the app's assignment, turn on "Send Application Configuration" (iOS) or "Application Configuration" (Android) and add one row per key, with the value types above.
+
+## Other MDMs and testing
+
+Any MDM that supports AppConfig (Jamf, Kandji) or Android managed configurations works the same way. To test without an MDM, use an MDM test profile on iOS or Google's Test DPC on Android ("Manage application restrictions").
+
+The app's source documents every key, both platforms and the full Intune and Workspace ONE samples in `apps/elitea-mobile/docs/mdm-appconfig.md`.

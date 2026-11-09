@@ -4,6 +4,21 @@ Changes that need an operator to act when a deployment moves to a newer
 release. Each entry says what changed, who is affected, and what to do. The
 newest entry is first.
 
+## Mobile: Android managed configuration, `lock_server`, read-only managed server (#1688, ADR-0052 W1b)
+
+The mobile app now reads managed configuration on Android as well as iOS
+(same keys; see Admin › Managed devices in the docs, or
+`apps/elitea-mobile/docs/mdm-appconfig.md`).
+
+- **MDM admins:** `server_url` is no longer a suggestion. The connect screen
+  shows it read only and offers no other server. A device that should still
+  connect elsewhere must not get `server_url`.
+- **New key `lock_server`:** with `server_url`, every workspace on another
+  server is signed out and its data removed from the device when the key
+  arrives. Removing the key does not bring them back.
+- **Android:** the app declares its managed keys, so Intune, Workspace ONE
+  and Test DPC list them. Nothing to do for existing deployments.
+
 ## Per-agent tool envelope (#1613, ADR-0050 decision 3)
 
 **Upgrade every worker before Main.** Main now freezes an agent's
@@ -662,7 +677,6 @@ windows, input only into the named app while it is frontmost, 10 acts and
 2 screenshots a second) hold in every mode, bypass included. See the how-to page "Let the
 agent use your other apps (desktop)".
 
-
 ## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
 
 Nothing changes unless you turn it on. Upgrade the workers before Main:
@@ -749,7 +763,6 @@ There is nothing else to do. A session created before this release has no
 message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
-
 
 ## Cloud browser: the supervisor's `browser` profile (#1595, ADR-0049 decisions 1 and 10)
 
