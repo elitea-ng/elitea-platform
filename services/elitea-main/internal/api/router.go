@@ -32,6 +32,7 @@ import (
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
 	v2agentmemory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentmemory"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
+	v2agentteams "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentteams"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -109,6 +110,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/runtoken"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
+	agentteamsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentteams"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	entitlementsdomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/entitlements"
@@ -4421,6 +4423,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Get("/context_strategy/prompt_lib/{projectID}/{conversationID}", convHandler.GetContextStrategy)
 					r.With(requireConversationEdit).
 						Put("/context_strategy/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateContextStrategy)
+
+					// Saved teams (ADR-0050 decision 8, #1620; shared 0233).
+					// A team adds no capability: saving one from a
+					// conversation also takes the conversation read (and the
+					// handler applies its detail rule), and starting one also
+					// takes the conversation create, whose participant path
+					// checks the caller may use every agent.
+					teams := v2agentteams.NewHandler(dbrepos.NewAgentTeams(cfg.Pool),
+						newTeamConversations(cfg.ConvsRepo, convHandler))
+					readTeams := projectPermission(agentteamsdomain.ListPermission)
+					r.With(readTeams).Get(v2agentteams.TeamsPath, teams.List)
+					r.With(projectPermission(agentteamsdomain.CreatePermission)).Post(v2agentteams.TeamsPath, teams.Create)
+					r.With(readTeams).Get(v2agentteams.TeamPath, teams.Get)
+					r.With(projectPermission(agentteamsdomain.UpdatePermission)).Put(v2agentteams.TeamPath, teams.Update)
+					r.With(projectPermission(agentteamsdomain.DeletePermission)).Delete(v2agentteams.TeamPath, teams.Delete)
+					r.With(projectPermission(agentteamsdomain.CreatePermission), requireConversationRead).
+						Post(v2agentteams.FromConversationPath, teams.CreateFromConversation)
+					r.With(readTeams, projectPermission("models.chat.conversations.create")).
+						Post(v2agentteams.StartPath, teams.Start)
 				}
 
 				// Share a conversation by link — the OWNER-FACING half. The

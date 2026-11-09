@@ -11,7 +11,7 @@ export { ProjectAvatar } from './ui/ProjectAvatar';
 export { useSidebarCollapsedStore } from './model/sidebarCollapsed.store';
 export { NotificationBell } from './ui/NotificationButton';
 export { useCreateGate } from './model/useCreateGate';
-export { usePermissionSet } from './api/usePermissionSet';
+export { usePermissionSet, usePermissionSetSettled } from './api/usePermissionSet';
 export { useProjectOptions } from './api/useProjectOptions';
 export type { ProjectOptionsResult } from './api/useProjectOptions';
 export { orderedProjectOptions } from './lib/projectOptions';

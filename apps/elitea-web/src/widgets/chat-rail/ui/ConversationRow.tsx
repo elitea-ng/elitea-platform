@@ -22,6 +22,7 @@ import InputBase from '@mui/material/InputBase';
 import type { Theme } from '@mui/material/styles';
 
 import type { Conversation } from '@/entities/conversation';
+import { SaveAsTeamDialog } from '@/features/agent-teams';
 import { ShareLinkDialog } from '@/features/chat-conversation-list';
 import { t } from '@/shared/i18n';
 import { activityGlyph, activityTitleBold, useRowActivity } from '@/shared/lib/conversationActivity';
@@ -93,7 +94,7 @@ function useScrollIntoViewWhenSelected(selected: boolean) {
   return node;
 }
 
-type Ask = 'rename' | 'move' | 'visibility' | 'shareByLink' | 'archive' | 'remove';
+type Ask = 'rename' | 'move' | 'visibility' | 'shareByLink' | 'archive' | 'remove' | 'saveAsTeam';
 
 interface RowDialogsProps {
   readonly conversation: Conversation;
@@ -137,6 +138,9 @@ function RowDialogs({ conversation, label, ask, close, actions, projectId }: Row
         onConfirm={confirm(() => actions.archive(conversation))}
         actions={{ confirmText: t('desktop.chats.archive', 'Archive') }}
       />
+      {projectId !== undefined && (
+        <SaveAsTeamDialog projectId={projectId} conversationId={conversation.id} defaultName={conversation.name} open={ask === 'saveAsTeam'} onClose={close} />
+      )}
       <DeleteEntityModal
         open={ask === 'remove'}
         name={label}
@@ -160,6 +164,7 @@ export function ConversationRow({ conversation, selected, indent, actions, proje
     shareByLink: () => setAsk('shareByLink'),
     archive: () => setAsk('archive'),
     remove: () => setAsk('remove'),
+    saveAsTeam: () => setAsk('saveAsTeam'),
   };
   const items = conversationActions(conversation, actions, asks);
   // Client contract 1.12: the activity glyph and the bold title of an unread answer.

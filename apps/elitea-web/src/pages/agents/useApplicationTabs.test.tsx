@@ -68,4 +68,12 @@ describe('useApplicationTabs', () => {
     ]);
     expect(result.current[0]?.count).toBe(5);
   });
+
+  it('adds the Teams tab last on a private project when the page passes it (issue 1620)', () => {
+    const teams = <span>teams</span>;
+    const { result } = renderHook(() => useApplicationTabs(false, TOTALS, false, teams), { wrapper });
+    expect(result.current.map((tab) => tab.value).at(-1)).toBe('teams');
+    const onPublic = renderHook(() => useApplicationTabs(true, TOTALS, false, teams), { wrapper });
+    expect(onPublic.result.current.map((tab) => tab.value)).not.toContain('teams');
+  });
 });
