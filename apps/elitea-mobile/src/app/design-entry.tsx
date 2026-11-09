@@ -2,6 +2,7 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 
 import type { DiscoveryDocument } from '@/api/discovery';
+import { identity } from '@/config/identity';
 import { UpgradeView } from '@/components/UpgradeRequired';
 import type { BrandInput } from '@/design/brand';
 import { DesignProvider } from '@/design/DesignProvider';
@@ -62,7 +63,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
         <DesignProvider brand={null}>
           <ConnectWelcome
             adding={screen === 'add'}
-            backTo={screen === 'add' ? { host: 'mobile.elitea.ai', onPress: noop } : null}
+            backTo={screen === 'add' ? { host: 'mobile.example.com', onPress: noop } : null}
             address={address}
             onAddressChange={setAddress}
             error={null}
@@ -76,7 +77,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
                   <WorkspaceRow
                     workspace={{
                       id: 'aaaaaaaaaaaa',
-                      origin: 'https://mobile.elitea.ai',
+                      origin: 'https://mobile.example.com',
                       name: null,
                       logoMark: null,
                       brand: GALLERY_BRANDS.green,
@@ -144,7 +145,7 @@ function EntryPreview({ screen, brand }: { screen: Screen; brand: BrandInput | n
       return (
         <DesignProvider brand={brand}>
           <UpgradeView
-            body="This workspace needs a newer version of Elitea AI (0.2.0 or later). Update the app to continue."
+            body={`This workspace needs a newer version of ${identity.displayName} (0.2.0 or later). Update the app to continue.`}
             checking={false}
             stillRequired={false}
             others

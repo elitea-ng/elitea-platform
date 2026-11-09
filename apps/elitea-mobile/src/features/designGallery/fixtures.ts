@@ -15,7 +15,7 @@ export interface SampleChat {
 }
 
 export const SAMPLE_CHATS: readonly SampleChat[] = [
-  { id: 1, name: 'Elitea launch planning', minutesAgo: 12, pinned: true, messages: ['Launch checklist: store listing, privacy labels and the TestFlight group.'] },
+  { id: 1, name: 'Northwind launch planning', minutesAgo: 12, pinned: true, messages: ['Launch checklist: store listing, privacy labels and the TestFlight group.'] },
   { id: 2, name: 'Q3 planning', minutesAgo: 3 * 60, messages: ['Draft the Q3 goals: retention, the Android build and offline search.'] },
   { id: 3, name: 'Film club charter', minutesAgo: 26 * 60, messages: ['Draft the bylaws and pick a café near the station for the first meeting.'] },
   {
@@ -37,7 +37,7 @@ export function sampleChatRow(chat: SampleChat, now: number): { id: number; name
 /** The signed-in user of the previews. */
 export const SAMPLE_USER_NAME = 'Alex Morgan';
 
-export const SAMPLE_HOST = 'acme.elitea.ai';
+export const SAMPLE_HOST = 'acme.example.com';
 export const SAMPLE_ORIGIN = `https://${SAMPLE_HOST}`;
 export const SAMPLE_PROJECT_ID = 42;
-export const SAMPLE_PROJECT_NAME = 'Elitea Team';
+export const SAMPLE_PROJECT_NAME = 'Northwind Team';

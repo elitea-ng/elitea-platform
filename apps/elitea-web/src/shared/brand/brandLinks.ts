@@ -9,14 +9,14 @@
  *   1. the served pack (channel C, `resolveBrandPack()`), when it states it;
  *   2. the compiled default pack (channel A, the build's brand), when it
  *      states it;
- *   3. for the docs origin only, the literal the app shipped with before the
- *      pack carried the field. A support address has no literal (ADR-0052
+ *   3. for the docs origin only, the same-origin `/docs` the web image serves
+ *      (never another brand's docs site; ADR-0052 W4). A support address has no literal (ADR-0052
  *      W3.5): with neither pack stating one, the app shows no support link,
  *      never another brand's mailbox.
  *
- * The docs literal may appear only here: the theme gate
+ * No screen writes a docs origin itself: the theme gate
  * (`scripts/theme-gate.mjs` check 8) fails any sub-application screen that
- * writes `docs.elitea.ai` itself.
+ * writes `docs.elitea.ai`.
  *
  * Pure. Every helper takes the pack as an optional argument so a caller that
  * already holds one (the provider tree, a `useMemo`) does not pay for a
@@ -37,7 +37,7 @@ import { DEFAULT_BRAND_PACK } from './tokens';
  * a pack object with no `docsUrl` field, not by asserting the literal), so
  * an `export` here has no consumer to serve (knip's dead-code gate, #528).
  */
-const FALLBACK_DOCS_URL = 'https://docs.elitea.ai';
+const FALLBACK_DOCS_URL = '/docs';
 
 function trimSlashes(value: string, side: 'leading' | 'trailing'): string {
   return side === 'leading' ? value.replace(/^\/+/, '') : value.replace(/\/+$/, '');

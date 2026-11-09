@@ -50,6 +50,7 @@ on:
       - "brand/elitea/**"
       - "brand/sample/**"
       - "scripts/brand/**"
+      - "scripts/ci/brand-output-scan.mjs"
       - ".github/workflows/ci-web.yml"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests
@@ -783,3 +784,14 @@ jobs:
           name: elitea-web-dist
           path: apps/elitea-web/dist/
           retention-days: 7
+      # ADR-0052 W4: built for brand/sample, the app and the desktop bundle show
+      # no ELITEA word or identifier (scripts/ci/brand-output-scan.mjs). Into
+      # their own folders, after the upload: dist/ above stays the ELITEA build.
+      - name: Sample-brand output scan (app + desktop bundle)
+        env:
+          ELITEA_BRAND: sample
+        run: |
+          set -euo pipefail
+          npx vite build --outDir "$RUNNER_TEMP/sample-web"
+          npx vite build --mode desktop --outDir "$RUNNER_TEMP/sample-desktop"
+          node ../../scripts/ci/brand-output-scan.mjs --lane web "$RUNNER_TEMP/sample-web" "$RUNNER_TEMP/sample-desktop"

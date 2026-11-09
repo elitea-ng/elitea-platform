@@ -8,6 +8,8 @@
  * person's identity. The person reviews the issue in their browser before it
  * is filed.
  */
+import { productName } from '@/shared/brand';
+
 const REPOSITORY = 'https://github.com/elitea-ng/elitea-platform';
 
 export interface BugReportContext {
@@ -31,7 +33,7 @@ export function bugReportUrl({ version, userAgent, locale }: BugReportContext): 
     '',
     '### Environment',
     '',
-    `- Elitea desktop: ${version ?? 'unknown'}`,
+    `- ${productName()} desktop: ${version ?? 'unknown'}`,
     `- Platform: ${userAgent}`,
     `- Language: ${locale}`,
     '',

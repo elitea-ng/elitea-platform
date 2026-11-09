@@ -648,7 +648,7 @@ the isolation test). Drop this copy when an upstream release requires `zip` 9.
 **Upstream.** The `zip` 9 move, the name handling above and the test-directory
 fixes, on the current `zavora-ai/zavora-xlsx` default branch: https://github.com/zavora-ai/zavora-xlsx/pull/2.
 
-## `agent-desktop/` — agent-desktop 1.2.0 (`core`, `macos`, `windows`, `linux`) with four patches
+## `agent-desktop/` — agent-desktop 1.2.0 (`core`, `macos`, `windows`, `linux`) with six patches
 
 The macOS, Windows and Linux drivers behind `elitea-desktop-control`
 (ADR-0047, #1581; Windows and Linux: decision 10, #1586). That crate is its
@@ -663,7 +663,7 @@ synthetic events and a few small read-only accessors that upstream does not have
 | | |
 | --- | --- |
 | Source | `https://github.com/vercel-labs/agent-desktop`, commit `b43ac4f6e892ef608f8851428613c4009f0e84c7`, crates `crates/core`, `crates/macos`, `crates/windows` and `crates/linux` |
-| Tree digest | `fea3dadbe960c77f037208a72ec5f146468ed8e54e418759f3bfb6ad1aac826b` (1429 files, 9.1 MB, after the patches; command below) |
+| Tree digest | `65ea3eae722b0a61902c05b448e4c51d1421d4f067b10b7a1b8210c17c08f38c` (1429 files, 9.1 MB, after the patches; command below) |
 | Licence | `Apache-2.0`; the repository's `LICENSE` is at `agent-desktop/LICENSE`. Upstream has no `NOTICE` file. The root `NOTICE` names the copy. |
 | Copied | `LICENSE`, `core/src/**`, `macos/src/**` (Rust and the 8 Objective-C `.m` bridges), `macos/build.rs`, `windows/src/**`, `linux/src/**`; the upstream manifests as `<crate>/Cargo.toml.orig` |
 | Not copied | the unit tests (`*_tests.rs`, `tests.rs`), `src/bin` (the repository's `.gitignore` ignores `bin/`), examples, integration tests, `testdata/` and the `.py` helper scripts of the Windows and Linux crates, the CLI crate (`src/` at the root), `skills/`, `npm/`, `apps/`, benchmarks, probes |
@@ -718,6 +718,14 @@ synthetic events and a few small read-only accessors that upstream does not have
    Panel are `explorer.exe` windows. The manifest adds the `windows`
    features `Win32_System_Ole`, `Win32_System_Variant` and `Win32_UI_Shell`
    for it (the VARIANT comes from `uiautomation`, already a dependency).
+6. `macos/src/system/launch_bridge.m` wraps its one
+   `-[NSWorkspace fullPathForApplication:]` call (launch by app name) in
+   `#pragma clang diagnostic ignored "-Wdeprecated-declarations"`. The
+   bridges are compiled with `-Werror`, and the method is deprecated from
+   macOS 11. The default 10.15 deployment target never saw it, but the app's
+   release build sets `MACOSX_DEPLOYMENT_TARGET=12.0` (tauri.conf.json
+   `minimumSystemVersion`), and that build failed (#1697). The behaviour is
+   unchanged; upstream has no by-name replacement.
 
 The four `Cargo.toml` files are rewritten as standalone manifests:
 

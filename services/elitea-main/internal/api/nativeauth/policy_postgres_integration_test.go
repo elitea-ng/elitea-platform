@@ -204,17 +204,17 @@ func TestNativeClientMinimumIsValidatedAndStored(t *testing.T) {
 	if err != nil || !found || got.MinClientVersion != "3.0.0-beta.1" || got.Source != domain.SourceDB {
 		t.Fatalf("registry = %+v, %v, %v", got, found, err)
 	}
-	clients, err := domain.ParseClientsFile([]byte(`- client_id: ai.elitea.file
+	clients, err := domain.ParseClientsFile([]byte(`- client_id: com.example.file
   display_name: File
-  redirect_uris: ["ai.elitea.file:/cb"]
+  redirect_uris: ["com.example.file:/cb"]
   min_client_version: 1.0.0
 `))
 	if err != nil || len(clients) != 1 || clients[0].MinClientVersion != "1.0.0" {
 		t.Fatalf("file layer = %+v, %v", clients, err)
 	}
-	if _, err := domain.ParseClientsFile([]byte(`- client_id: ai.elitea.file
+	if _, err := domain.ParseClientsFile([]byte(`- client_id: com.example.file
   display_name: File
-  redirect_uris: ["ai.elitea.file:/cb"]
+  redirect_uris: ["com.example.file:/cb"]
   min_client_version: soon
 `)); err == nil {
 		t.Fatal("a file entry with a bad min_client_version must refuse boot")

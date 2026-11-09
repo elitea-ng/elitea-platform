@@ -6,3 +6,4 @@ src-tauri/binaries/
 doc-extract-sidecar/target/
 # The brand overlay, generated before every build (scripts/tauri-brand.mjs).
 src-tauri/tauri.brand.json
+src-tauri/tauri.windows.json

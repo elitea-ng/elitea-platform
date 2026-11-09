@@ -79,7 +79,7 @@ function ChatPreview({ state, autoScan }: { state: PreviewState; autoScan: ScanF
     <>
       <Stack.Screen
         options={{
-          title: 'Elitea launch planning',
+          title: 'Northwind launch planning',
           headerShown: true,
           ...headerActionOptions(
             [

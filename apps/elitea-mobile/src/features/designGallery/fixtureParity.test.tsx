@@ -71,10 +71,10 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
   it('the Settings list shows the project by name, the way the tab does, with no Face ID row', async () => {
     await render(
       <SettingsList
-        serverOrigin="https://acme.elitea.ai"
+        serverOrigin="https://acme.example.com"
         logoMark={null}
         projectId={42}
-        projectName="Elitea Team"
+        projectName="Northwind Team"
         onProject={() => {}}
         workspaceCount={1}
         developerSignIn={false}
@@ -90,9 +90,9 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
       />,
     );
     // The project by its NAME, never its internal id ("Project #90504").
-    expect(screen.getByText('Elitea Team')).toBeTruthy();
+    expect(screen.getByText('Northwind Team')).toBeTruthy();
     expect(screen.queryByText(/#42/)).toBeNull();
-    expect(screen.getByText('acme.elitea.ai')).toBeTruthy();
+    expect(screen.getByText('acme.example.com')).toBeTruthy();
     expect(screen.queryByText('Face ID')).toBeNull();
     expect(screen.queryByText('Memory')).toBeNull();
   });

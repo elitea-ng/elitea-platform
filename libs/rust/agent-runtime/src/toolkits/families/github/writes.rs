@@ -2217,10 +2217,7 @@ async fn open_pull_request_inner(
         Ok(branch) => branch,
         Err(sentence) => return refused(&sentence),
     };
-    let message = format!(
-        "{}\n\nOpened from an Elitea cloud executor turn.",
-        request.title
-    );
+    let message = format!("{}\n\nOpened from a cloud executor turn.", request.title);
     let applied = apply_patch(client, request.diff, &branch, &message, &Map::new()).await?;
     let list = |key: &str| -> Vec<String> {
         applied

@@ -1,8 +1,16 @@
 # Upgrading
 
 Changes that need an operator to act when a deployment moves to a newer
-release. Each entry says what changed, who is affected, and what to do. The
-newest entry is first.
+release. Each entry says what changed, who is affected, and what to do.
+
+**New entries are in [`docs/upgrading/`](upgrading/), one file per change**
+(the file name starts with the date, so they sort oldest first). Read those first, then the entries below.
+
+**This file is closed to new entries.** Every pull request used to add its
+entry at the top of this file, so any two open pull requests conflicted here.
+The entries below, newest first, are the history up to 2026-11-09. Chart
+guards and values comments name them by title, so they stay where they are.
+`scripts/ci/check-upgrading-notes.mjs` fails a pull request that adds one.
 
 ## Mobile: view and delete an agent's memory (#1663, ADR-0050 decision 1b)
 
