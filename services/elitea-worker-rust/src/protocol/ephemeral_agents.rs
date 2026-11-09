@@ -30,10 +30,11 @@ const MAX_BRIEF_REFS_BYTES: usize = 8 * 1024;
 /// The error code of a child the run's end stopped.
 const CANCELLED_WITH_RUN: &str = "subagent_cancelled";
 
-/// One execution's spawns, by agent id, in spawn order.
+/// One execution's spawns, keyed by ordinal and agent id (Main's key is
+/// the agent id), so they iterate in spawn order.
 #[derive(Default)]
 pub(crate) struct EphemeralAgentLedger {
-    agents: Mutex<BTreeMap<usize, EphemeralAgentV1>>,
+    agents: Mutex<BTreeMap<(usize, String), EphemeralAgentV1>>,
 }
 
 impl EphemeralAgentLedger {
@@ -67,7 +68,20 @@ impl EphemeralAgentLedger {
             ..EphemeralAgentV1::default()
         };
         if let Ok(mut agents) = self.agents.lock() {
-            agents.insert(child.ordinal, row);
+            agents.insert((child.ordinal, child.agent_id.clone()), row);
+        }
+    }
+
+    /// The settled child runs again (`send_input`): running, with no end,
+    /// until it settles again. Its steps and tokens stay until then.
+    pub(crate) fn resumed(&self, child: &ChildIdentity) {
+        let Ok(mut agents) = self.agents.lock() else {
+            return;
+        };
+        if let Some(row) = agents.get_mut(&(child.ordinal, child.agent_id.clone())) {
+            ChildStatus::Running.as_str().clone_into(&mut row.status);
+            row.error_code.clear();
+            row.finished_at_unix_millis = 0;
         }
     }
 
@@ -77,7 +91,7 @@ impl EphemeralAgentLedger {
         let Ok(mut agents) = self.agents.lock() else {
             return;
         };
-        let Some(row) = agents.get_mut(&child.ordinal) else {
+        let Some(row) = agents.get_mut(&(child.ordinal, child.agent_id.clone())) else {
             return;
         };
         report.status.as_str().clone_into(&mut row.status);
@@ -302,5 +316,21 @@ mod tests {
             registry.snapshot_for_settlement(&identity("e", 2), 0).len(),
             0
         );
+    }
+
+    #[test]
+    fn a_child_continued_after_it_settled_is_running_again() {
+        let ledger = EphemeralAgentLedger::default();
+        let first = child(1, &Brief::default());
+        ledger.started(&first, 1_000);
+        ledger.finished(&first, &report(&first, ChildStatus::Completed), 2_000);
+        ledger.resumed(&first);
+        // The run ended before the continued child settled again.
+        let rows = ledger.snapshot(3_000);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].status, "cancelled");
+        assert_eq!(rows[0].error_code, CANCELLED_WITH_RUN);
+        assert_eq!(rows[0].finished_at_unix_millis, 3_000);
+        assert_eq!(rows[0].steps, 3);
     }
 }

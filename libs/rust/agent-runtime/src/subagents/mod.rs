@@ -418,6 +418,10 @@ pub trait SubAgentHost: Send + Sync {
     /// The child was started.
     fn started(&self, _child: &ChildIdentity) {}
 
+    /// A settled child runs again: `send_input` continued it. It settles
+    /// again ([`SubAgentHost::finished`]), unless the run ends first.
+    fn resumed(&self, _child: &ChildIdentity) {}
+
     /// One of the child's adk events, in its stream's order.
     fn event(&self, _child: &ChildIdentity, _event: &Event) {}
 

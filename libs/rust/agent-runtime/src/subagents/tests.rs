@@ -705,6 +705,8 @@ async fn an_invalid_profile_or_brief_is_refused() {
         json!({"task": "x", "profile": {"colour": "red"}}),
         json!({"task": "x", "profile": {"model": "other"}}),
         json!({"task": "x", "context": {"facts": [""]}}),
+        json!({"task": "x", "label": "a\u{0}b"}),
+        json!({"task": "x", "profile": {"display_name": "O\nwl"}}),
     ] {
         let host = TestHost::new();
         let children = subagents(&host);

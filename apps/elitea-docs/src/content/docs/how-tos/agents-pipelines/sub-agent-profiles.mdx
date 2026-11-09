@@ -65,6 +65,8 @@ Each spawn of a cloud run writes one row to `elitea_runtime.ephemeral_agents`. T
 
 The row never keeps the soul, a quote, a fact or the task. The run's step records keep the `spawn_agent` call itself.
 
+The rows follow the retention of the run's step records: when the step record policy deletes a run, it deletes the run's sub-agent rows too. If `send_input` continues a sub-agent and the run ends before it answers again, its row shows `cancelled`.
+
 ## Related
 
 - [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope/)

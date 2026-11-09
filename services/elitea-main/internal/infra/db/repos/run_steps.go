@@ -920,7 +920,7 @@ UPDATE elitea_runtime.run_steps SET content_expired_at = clock_timestamp(), cont
 
 // DeleteRun implements runevidence.RetentionStore: under the head's row lock
 // it re-checks age, hold and that no content object is still stored, then
-// deletes the steps and the head.
+// deletes the steps, the run's sub-agent records and the head.
 func (s *RunSteps) DeleteRun(ctx context.Context, runID string, cutoff time.Time, exportSinks []string) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -943,6 +943,11 @@ SELECT h.updated_at < $2 AND NOT `+runHeldSQL+` AND `+exportPassedSQL("$3")+`
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_steps WHERE run_id = $1`, runID); err != nil {
 		return false, fmt.Errorf("run steps: delete steps: %w", err)
+	}
+	// A run's sub-agent records (0232) follow its step records: the run id
+	// is the execution id.
+	if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.ephemeral_agents WHERE execution_id = $1`, runID); err != nil {
+		return false, fmt.Errorf("run steps: delete sub-agents: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.run_step_heads WHERE run_id = $1`, runID); err != nil {
 		return false, fmt.Errorf("run steps: delete head: %w", err)

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"regexp"
+	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
@@ -129,14 +132,14 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 			return nil, false
 		}
 		seen[agent.GetAgentId()] = struct{}{}
-		if callID := agent.GetParentCallId(); callID == "" || len(callID) > maxEphemeralCallIDBytes || !utf8.ValidString(callID) {
+		if callID := agent.GetParentCallId(); callID == "" || len(callID) > maxEphemeralCallIDBytes || !plainText(callID) {
 			return nil, false
 		}
 		if agent.GetOrdinal() < 1 || agent.GetOrdinal() > maxEphemeralOrdinal {
 			return nil, false
 		}
 		if !boundedText(agent.GetLabel(), maxEphemeralLabelChars) || !boundedText(agent.GetDisplayName(), maxEphemeralLabelChars) ||
-			len(agent.GetAvatar()) > maxEphemeralAvatarBytes || !utf8.ValidString(agent.GetAvatar()) {
+			len(agent.GetAvatar()) > maxEphemeralAvatarBytes || !plainText(agent.GetAvatar()) {
 			return nil, false
 		}
 		if !ephemeralDigest.MatchString(agent.GetProfileDigest()) {
@@ -154,7 +157,7 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 		}
 		started, finished := agent.GetStartedAtUnixMillis(), agent.GetFinishedAtUnixMillis()
 		if started <= 0 || finished < 0 || (finished != 0 && finished < started) ||
-			agent.GetInputTokens() > 1<<62 || agent.GetOutputTokens() > 1<<62 {
+			agent.GetSteps() > math.MaxInt32 || agent.GetInputTokens() > 1<<62 || agent.GetOutputTokens() > 1<<62 {
 			return nil, false
 		}
 		var finishedAt time.Time
@@ -174,7 +177,13 @@ func ephemeralAgentsFromWire(wire []*runtimev1.EphemeralAgentV1) ([]EphemeralAge
 }
 
 func boundedText(text string, maxChars int) bool {
-	return utf8.ValidString(text) && utf8.RuneCountInString(text) <= maxChars
+	return plainText(text) && utf8.RuneCountInString(text) <= maxChars
+}
+
+// plainText answers whether text is valid UTF-8 without a control
+// character (a NUL is refused by PostgreSQL text, the others by the record).
+func plainText(text string) bool {
+	return utf8.ValidString(text) && !strings.ContainsFunc(text, unicode.IsControl)
 }
 
 // briefRefs answers the brief's references as a JSON object, or nil for a

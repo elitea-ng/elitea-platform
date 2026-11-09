@@ -216,6 +216,10 @@ impl SubAgentHost for WorkerSubAgents {
             .started(child, crate::protocol::run_steps::now_unix_ms());
     }
 
+    fn resumed(&self, child: &ChildIdentity) {
+        self.ledger.resumed(child);
+    }
+
     fn finished(&self, child: &ChildIdentity, report: &ChildReport) {
         self.ledger
             .finished(child, report, crate::protocol::run_steps::now_unix_ms());

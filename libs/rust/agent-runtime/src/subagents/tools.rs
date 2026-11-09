@@ -105,7 +105,14 @@ fn spawn_arguments(args: &Value) -> Result<(String, Option<String>, Profile, Bri
         .get("label")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|label| !label.is_empty())
+        .filter(|label| !label.is_empty());
+    if label.is_some_and(|label| label.chars().any(char::is_control)) {
+        return Err(refused(
+            "invalid_arguments",
+            "`label` must not contain control characters.",
+        ));
+    }
+    let label = label
         .or(profile.display_name.as_deref())
         .map(|label| label.chars().take(MAX_LABEL_CHARS).collect::<String>());
     Ok((task, label, profile, brief))
@@ -161,7 +168,7 @@ fn spawn_schema() -> Value {
                     "soul": {
                         "type": "string",
                         "maxLength": MAX_SOUL_BYTES,
-                        "description": "A short role and style, in place of the default role text; it never widens what the sub-agent may do"
+                        "description": "A short role and style (at most 2048 bytes of UTF-8), in place of the default role text; it never widens what the sub-agent may do"
                     },
                     "tools": {
                         "type": "array",
@@ -177,7 +184,7 @@ fn spawn_schema() -> Value {
                     "avatar": {
                         "type": "string",
                         "maxLength": MAX_AVATAR_BYTES,
-                        "description": "An avatar key, such as \"default:owl\""
+                        "description": "An avatar key of at most 128 bytes, such as \"default:owl\""
                     }
                 },
                 "additionalProperties": false
@@ -479,7 +486,10 @@ impl SubAgentTool {
             return Self::unknown(agent_id);
         };
         match child.send(message, self.running(), self.registry.limits.max_concurrent) {
-            Ok(()) => json!({"agent_id": agent_id, "status": "running"}),
+            Ok(()) => {
+                self.registry.host.resumed(child.identity());
+                json!({"agent_id": agent_id, "status": "running"})
+            }
             Err(InputRefused::Busy) => refused(
                 "subagent_busy",
                 format!(

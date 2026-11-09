@@ -262,9 +262,9 @@ pub fn parse_profile(args: &Value) -> Result<Profile, String> {
     unknown_key(profile, &PROFILE_KEYS, "profile")?;
     let display_name = optional_text(profile, "display_name")?
         .map(|name| {
-            if name.chars().count() > MAX_DISPLAY_NAME_CHARS {
+            if name.chars().count() > MAX_DISPLAY_NAME_CHARS || name.chars().any(char::is_control) {
                 Err(format!(
-                    "`profile.display_name` must be at most {MAX_DISPLAY_NAME_CHARS} characters."
+                    "`profile.display_name` must be at most {MAX_DISPLAY_NAME_CHARS} characters, none of them a control character."
                 ))
             } else {
                 Ok(name)
