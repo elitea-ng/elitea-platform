@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 async-trait = "0.1.92"
 # Screenshots and screencast frames arrive base64-encoded in CDP messages.
-base64 = "0.22.1"
+base64 = "0.23.1"
 elitea-browser-tools = { path = "../browser-tools" }
 # Moli (`lite`, ADR-0049 decision 2) serves CDP on a loopback WebSocket
 # only; the client half carries it into the same CDP connection as Chrome's

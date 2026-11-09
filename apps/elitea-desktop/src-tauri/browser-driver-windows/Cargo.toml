@@ -24,7 +24,7 @@ tokio = { version = "1", default-features = false, features = ["io-util", "sync"
 # Both already in the desktop's tree through tauri and wry (same versions).
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
-windows-core = "0.62"
+windows-core = "0.100"
 tauri = { version = "2.12", default-features = false, features = ["wry"] }
 
 [dev-dependencies]

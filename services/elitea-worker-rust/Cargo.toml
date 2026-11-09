@@ -118,7 +118,7 @@ prost = "=0.14.4"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
-rmcp = { version = "=3.8.0", default-features = false, features = ["auth"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std"] }
 rustix = { version = "=1.1.6", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -142,7 +142,7 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 uuid = { version = "=1.29.0", default-features = false, features = ["v4", "v5"] }
 x509-parser = { version = "=0.18.1", optional = true, default-features = false }
 zeroize = "=1.9.1"
-toml = { version = "=1.1.8", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "=1.2.0", default-features = false, features = ["parse", "serde", "std"] }
 
 [build-dependencies]
 protoc-bin-vendored = "=3.3.0"
