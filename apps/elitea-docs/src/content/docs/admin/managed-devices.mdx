@@ -106,3 +106,29 @@ A newer package upgrades the app in place; it keeps the person's settings and th
   ```
 
 The installer fetches the WebView2 runtime silently when the PC does not have it; on a PC without internet access, deploy WebView2 first.
+
+## Certificates and per-app VPN
+
+Both are features of the operating system, not of the app: the device management delivers them, and the app needs no setting of its own. Each is scoped by **app identifier**, so use the identifiers of the build you deploy. A brand built from this code has its own, set in its brand manifest (`mobile.bundleId`, also the Android package, `mobile.widgetBundleId` and `desktop.identifier`); ELITEA's are:
+
+| App | Identifier |
+|---|---|
+| iPhone and iPad | `ai.elitea.app` (its widget extension: `ai.elitea.app.widgets`) |
+| Android | `ai.elitea.app` (the package name) |
+| macOS | `ai.elitea.desktop` |
+
+**Trusted root certificates.** A workspace behind a private certificate authority needs that CA trusted on the device.
+
+- **iOS:** deploy the CA in a Certificate payload. A profile installed by the MDM is trusted at once; one a person installs must also be turned on in Settings › General › About › Certificate Trust Settings.
+- **Android:** the app trusts the system store only, not CAs a person added. On a work profile or a fully managed device, push the CA as a system-trusted certificate (in Intune: a Trusted certificate profile for Android Enterprise).
+- **macOS:** deploy the CA in a Certificate payload to the System keychain. The desktop app uses the macOS trust settings, and falls back to its built-in public roots only when the system store cannot be read.
+
+**Client certificates (mutual TLS).** The apps do not present a client certificate themselves. Where the workspace sits behind a gateway that asks for one, let the per-app VPN or the identity provider do it: sign-in runs in the system browser (the sign-in sheet on iOS, a Custom Tab on Android, the default browser on macOS), which can use a certificate the MDM installed for that browser.
+
+**Per-app VPN.** Assign the app to the VPN by its identifier:
+
+- **iOS:** a per-app VPN payload, with the app (`ai.elitea.app`) in its app list; add the widget extension (`ai.elitea.app.widgets`) when widgets should load data over the VPN too. In Intune: the VPN profile's Automatic VPN › Per-app VPN, then the app's assignment with that VPN.
+- **Android:** an always-on VPN for the work profile, or the VPN app's own per-app list with the package `ai.elitea.app`.
+- **macOS:** a per-app VPN payload with the app's identifier `ai.elitea.desktop` and its designated requirement (signing team).
+
+Sign-in opens the system browser. Include the browser in the VPN, or let it reach your identity provider directly, or sign-in will not load.

@@ -120,6 +120,17 @@ Configuration", one row per key:
 Configuration". Workspace ONE reads the app's restrictions and shows one
 field per key; fill them in as above.
 
+## Certificates and per-app VPN
+
+Both are OS features delivered by the MDM; the app has no key for them.
+Scope them by app identifier: `ai.elitea.app` (iOS bundle id and Android
+package), plus `ai.elitea.app.widgets` for the iOS widget extension. Android
+trusts the system store only (the app ships no network security config), so
+push a private CA as a system-trusted certificate. The app presents no
+client certificate; sign-in runs in the system browser, which must reach the
+identity provider through the VPN or directly. Admin guide: "Managed devices
+(MDM)" › "Certificates and per-app VPN".
+
 ## Testing without an MDM
 
 - **iOS simulator:** `xcrun simctl spawn booted defaults write <bundle id>
