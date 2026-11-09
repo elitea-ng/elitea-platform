@@ -1,7 +1,9 @@
 ---
 title: "Managed devices (MDM)"
-description: "Configure the mobile app on managed iPhones and Android devices from Intune, Workspace ONE or another MDM: the workspace, a single-workspace lock and a stricter app lock."
+description: "Configure the mobile app on managed iPhones and Android devices from Intune, Workspace ONE or another MDM, and deploy the desktop app to managed Macs and Windows PCs."
 ---
+
+## Mobile app
 
 An MDM or EMM can configure the mobile app on the devices it manages. On iOS the values arrive as **AppConfig** (managed app configuration); on Android as **managed configuration** (app restrictions). The keys are the same on both platforms, and the app applies a change while it runs, without a relaunch.
 
@@ -15,7 +17,7 @@ An MDM or EMM can configure the mobile app on the devices it manages. On iOS the
 
 The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
 
-## Microsoft Intune
+### Microsoft Intune
 
 - **iOS:** Apps › App configuration policies › Add › Managed devices. Choose the app and enter the keys in the configuration designer, or as XML:
 
@@ -31,12 +33,50 @@ The lock keys only ever tighten the workspace's [native client policy](/admin/fe
 
 - **Android Enterprise:** the same policy with platform Android Enterprise. Intune lists the app's keys with their types; fill them in.
 
-## Workspace ONE UEM
+### Workspace ONE UEM
 
 On the app's assignment, turn on "Send Application Configuration" (iOS) or "Application Configuration" (Android) and add one row per key, with the value types above.
 
-## Other MDMs and testing
+### Other MDMs and testing
 
 Any MDM that supports AppConfig (Jamf, Kandji) or Android managed configurations works the same way. To test without an MDM, use an MDM test profile on iOS or Google's Test DPC on Android ("Manage application restrictions").
 
 The app's source documents every key, both platforms and the full Intune and Workspace ONE samples in `apps/elitea-mobile/docs/mdm-appconfig.md`.
+
+## Desktop app
+
+The desktop app reaches people only through the organization's device management; it is not published for download. The brand owner builds the packages by hand: GitHub Actions › **Desktop — package for device management** › Run workflow, with **keep_artifacts** ticked. The run's artifacts (kept for 7 days) are the packages to upload to the MDM.
+
+| Platform | Package | Signed with |
+|---|---|---|
+| macOS 12 or later, Apple silicon and Intel | `<Name>-<version>-universal.pkg` | Developer ID Installer; the app inside with Developer ID Application. Both notarised and stapled. |
+| Windows 10 2004 or later, x64 | `.msi` and `.msix` | Azure Artifact Signing or the organization's code-signing certificate, timestamped |
+
+Windows packages are built once the desktop host runs on Windows; until then only the macOS package is available.
+
+### macOS
+
+The `.pkg` installs the app into `/Applications` with no interface and no reboot, for every user of the Mac.
+
+- **Jamf Pro:** Settings › Packages › New, upload the `.pkg`, then add it to a policy (Packages › Install) scoped to the target computers. Because the package is signed and notarised, no Gatekeeper exception is needed.
+- **Intune for macOS:** Apps › macOS › Add › macOS app (PKG), upload the `.pkg`. Intune reads the bundle id and version from it.
+- **Kandji, Mosyle and others:** add it as a custom app (installer package).
+- **By hand or from a script:**
+
+  ```bash
+  sudo installer -pkg Elitea-1.62.0-universal.pkg -target /
+  ```
+
+A newer package upgrades the app in place; it keeps the person's settings and the macOS privacy grants (Accessibility, Screen Recording), which stay valid while the bundle id and the signing team do not change. Allow these grants ahead of time with a Privacy Preferences Policy Control (PPPC) profile for the bundle id and team, where the MDM supports it (Screen Recording can only be allowed by the person).
+
+### Windows
+
+- **Intune:** Apps › Windows › Add › Line-of-business app, upload the `.msi`; Intune installs it silently. The `.msix` can be added the same way (Apps › Windows › Add › Line-of-business app accepts both).
+- **Configuration Manager (SCCM):** create an application from the `.msi` (Windows Installer deployment type); the detection rule is the MSI product code.
+- **By hand or from a script:**
+
+  ```powershell
+  msiexec /i Elitea_1.62.0_x64_en-US.msi /qn
+  ```
+
+The installer fetches the WebView2 runtime silently when the PC does not have it; on a PC without internet access, deploy WebView2 first.
