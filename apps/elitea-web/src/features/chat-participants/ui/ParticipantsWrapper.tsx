@@ -162,7 +162,7 @@ export interface ParticipantsWrapperProps {
    */
   readonly renderContextBudget?: ParticipantsProps['renderContextBudget'];
   readonly renderAgentContext?: AgentContextRenderer; // issue 1610
-  readonly renderAgentLead?: AgentContextRenderer; // issue 1612: an agent row's lead badge and menu
+  readonly renderAgentLead?: AgentContextRenderer; readonly headerActions?: ParticipantsProps['headerActions']; // 1612 lead badge; 1620 "Save as team"
   /**
    * Optional slot to resolve toolkit/MCP icons.
    * @see ParticipantsProps.resolveToolkitIcon
@@ -235,7 +235,7 @@ export const ParticipantsWrapper = memo(
     onUpdateParticipant,
     onEditParticipant,
     onAddParticipants,
-    renderContextBudget, renderAgentContext, renderAgentLead,
+    renderContextBudget, renderAgentContext, renderAgentLead, headerActions,
     resolveToolkitIcon,
     isMcpVisible,
     editingToolkit,
@@ -297,6 +297,7 @@ export const ParticipantsWrapper = memo(
             resolveToolkitIcon={resolveToolkitIcon}
             isMcpVisible={isMcpVisible}
             renderContextBudget={contextSlot}
+            headerActions={headerActions}
             {...agentSlot} {...(leadSlot ? { renderAgentLead: leadSlot } : {})}
             {...(derived._conversationId !== undefined ? { conversationId: derived._conversationId } : {})}
             maxVisibleUsers={maxVisibleUsers}

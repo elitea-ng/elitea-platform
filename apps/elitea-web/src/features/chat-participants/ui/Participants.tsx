@@ -95,6 +95,7 @@ export const Participants = memo(
     renderContextBudget,
     renderAgentContext,
     renderAgentLead,
+    headerActions,
     conversationId,
     maxVisibleUsers = 5,
     isSmallWindow = false,
@@ -255,7 +256,7 @@ export const Participants = memo(
 
     return (
       <ParticipantsLayout
-        header={{ showTitle, collapseIcon, collapsed, onCollapsed, showCollapsedParticipants, inspector }}
+        header={{ showTitle, collapseIcon, collapsed, onCollapsed, showCollapsedParticipants, inspector, actions: headerActions }}
         users={{ usersToDisplay, hasOverflow, visibleCount, maxVisibleUsers }}
         sections={{
           sections,

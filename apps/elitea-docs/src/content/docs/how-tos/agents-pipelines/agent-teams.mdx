@@ -1,0 +1,74 @@
+---
+title: "Saved teams of agents"
+description: "Save a set of agents with its lead as a team, and start a new conversation with all of them at once."
+---
+
+A **team** is a saved set of agents in a project: the agents, the version each one runs, the order they join a conversation in and, optionally, which one is the **lead**. Start a conversation from a team and every agent is added at once, with the same [floor](/menus/chat#who-answers-and-agents-talking-to-each-other) as when the team was saved.
+
+A team belongs to one project. It can hold up to 16 agents, from the project itself or published agents of the public catalogue.
+
+## A team grants nothing
+
+A team only names agents. Starting a conversation from a team adds each agent the same way you would add it by hand, under your own access:
+
+- You can only start a team whose agents you could add yourself. If an agent of another project is one you cannot use, the conversation is not started.
+- If an agent of the team's own project, or the version the team names, no longer exists, the conversation is not started and the message names that agent's position in the team (`team_member_unavailable`). Edit the team and pick the agent again.
+- Each agent keeps its own tools, credentials and limits. A team does not change them.
+
+## Save a conversation as a team
+
+1. Open a conversation that has at least one agent.
+2. In the participants panel, select **Save as team** (the icon next to **Add participants**).
+3. Name the team, optionally describe it, and select **Save**.
+
+The team gets the conversation's agents in the order they joined, each with the version it runs in that conversation. If the conversation has a lead, the team keeps it. Toolkits, models and people in the conversation are not part of a team.
+
+## Manage teams
+
+Open **Agents** and select the **Teams** tab. Each team shows its agents; the lead is marked **(lead)**.
+
+- **New team**: name the team, then add agents from **Add an agent**. A new agent runs its default version. Select the star next to an agent to make it the lead, and again to clear it.
+- **Edit**: change the name, description, agents or lead. Saving replaces the whole team.
+- **Delete**: removes the team. Conversations started from it are not touched.
+
+Team names are unique in a project, ignoring case.
+
+## Start a conversation from a team
+
+On the **Teams** tab, select **Start conversation** on a team. The new conversation has the team's name, holds its agents and opens in the chat. With a lead, messages with no address go to the lead; without one, you address agents as usual. You can change the lead in the conversation afterwards; the team is not changed.
+
+## Permissions
+
+| Permission | Lets you | Default roles |
+| --- | --- | --- |
+| `models.teams.list` | See teams and start a conversation from one (with `models.chat.conversations.create`) | admin, editor, viewer |
+| `models.teams.create` | Create a team, or save a conversation as one (with read access to the conversation) | admin, editor |
+| `models.teams.update` | Edit a team | admin, editor |
+| `models.teams.delete` | Delete a team | admin, editor |
+
+## API
+
+| Route | Does |
+| --- | --- |
+| `GET /api/v2/elitea_core/agent_teams/prompt_lib/{project_id}` | List the project's teams (`query`, `limit`, `offset`) |
+| `POST /api/v2/elitea_core/agent_teams/prompt_lib/{project_id}` | Create a team |
+| `GET`, `PUT`, `DELETE /api/v2/elitea_core/agent_team/prompt_lib/{project_id}/{team_id}` | Read, replace or delete a team |
+| `POST /api/v2/elitea_core/agent_team_from_conversation/prompt_lib/{project_id}/{conversation_id}` | Save a conversation as a team |
+| `POST /api/v2/elitea_core/agent_team_conversation/prompt_lib/{project_id}/{team_id}` | Start a conversation from a team |
+
+A team on the wire:
+
+```json
+{
+  "name": "Release crew",
+  "description": "Writes the release notes and checks CI.",
+  "floor_policy": "lead",
+  "lead_position": 1,
+  "members": [
+    { "application_id": 31, "project_id": 1, "version_id": 41, "name": "Mira" },
+    { "application_id": 32, "project_id": 1, "version_id": 42, "name": "CI Doctor" }
+  ]
+}
+```
+
+`floor_policy` is `addressed` (the default) or `lead`; `lead_position` is the 1-based position of the lead member and is required with `lead`. A refused write answers `409 team_name_taken` or `422 team_invalid` with the rule it broke.

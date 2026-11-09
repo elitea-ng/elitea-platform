@@ -240,7 +240,13 @@ var OwnerCapabilities = []Capability{EditAgentRegistry}
 // permission that is in neither this set nor Capabilities fails the
 // coverage test, so it cannot silently escape the export.
 var NotGovernanceRelevant = map[string]bool{
-	"models.applications.memory.list":                   true,
+	"models.applications.memory.list": true,
+	// Saved teams (ADR-0050 decision 8, shared 0232): a team names agents and
+	// grants nothing, so saving or starting one configures nothing.
+	"models.teams.list":                                 true,
+	"models.teams.create":                               true,
+	"models.teams.update":                               true,
+	"models.teams.delete":                               true,
 	"admin.moderation.create":                           true,
 	"admin.moderation.view":                             true,
 	"configuration.artifacts.artifacts.create":          true,

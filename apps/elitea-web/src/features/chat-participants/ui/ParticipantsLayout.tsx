@@ -58,6 +58,8 @@ interface HeaderState {
   showCollapsedParticipants: boolean;
   /** The desktop inspector hosts the panel: the title and section labels are native captions. */
   inspector?: boolean;
+  /** The page's own header controls (issue 1620: "Save as team"), before the add button. */
+  actions?: React.ReactNode;
 }
 
 /** The desktop sidebar's caption (`widgets/desktop-shell/ui/rows.tsx` `SectionCaption`): small, semibold, quiet. */
@@ -324,6 +326,7 @@ export function ParticipantsLayout({
             * when the consumer supplies the callback, so the rail's other
             * mount points do not grow a control that opens nothing.
             */}
+          {!header.collapsed && header.actions}
           {!header.collapsed && actions.onAddParticipants && (
             <IconButton
               sx={styles.collapseButton}

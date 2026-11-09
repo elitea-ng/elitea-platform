@@ -6881,6 +6881,119 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    AgentTeamMember:
+      type: object
+      description: >
+        One agent of a saved team (issue 1620). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:89 (`MemberJSON`).
+      required: [application_id, project_id, version_id, name]
+      properties:
+        application_id: { type: integer, format: int64, minimum: 1 }
+        project_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The project that owns the agent (the team's own, or the public catalogue).
+        version_id: { type: integer, format: int64, minimum: 1 }
+        name:
+          type: string
+          maxLength: 256
+          description: The agent's name when the team was saved.
+
+    AgentTeam:
+      type: object
+      description: >
+        A saved team: a project's roster of agents with its floor policy and
+        lead (ADR-0050 decision 8, issue 1620). `lead_position` is the
+        1-based position of the lead member, null under `addressed`.
+        NOTE(W2): internal/api/v2/agentteams/handler.go:97 (`TeamJSON`).
+      required: [id, project_id, name, description, floor_policy, lead_position, members, created_by, created_at, updated_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` or `lead`, as the conversation floor (meta.floor)."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+        members:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+        created_by: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AgentTeamList:
+      type: object
+      required: [rows, total]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/AgentTeam' }
+        total: { type: integer }
+
+    AgentTeamWrite:
+      type: object
+      description: >
+        The body of createAgentTeam and updateAgentTeam (a full-record
+        replace). Unknown fields are refused (400). NOTE(W2):
+        internal/api/v2/agentteams/handler.go:126 (`teamBody`).
+      required: [name, members]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` (the default) or `lead`."
+        lead_position:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 16
+          description: The lead member's 1-based position; required with `lead`, refused with `addressed`.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+
+    AgentTeamFromConversation:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+
+    AgentTeamStart:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: The conversation's name; the team's name when blank.
+        is_private: { type: boolean }
+
+    AgentTeamRefusal:
+      type: object
+      description: >
+        A team route's refusal. `code` is `not_found`, `team_name_taken`,
+        `team_invalid` or `team_member_unavailable`; `position` comes with
+        `team_member_unavailable`. NOTE(W2):
+        internal/api/v2/agentteams/handler.go:411 (`writeError`).
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        position: { type: integer, minimum: 1 }
+
     MemoryEntryList:
       type: object
       required: [items, total]
@@ -33754,6 +33867,318 @@ paths:
           description: Deleted (or already absent).
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_teams/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentTeams
+      summary: List the project's saved teams of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
+        issue 1620). A saved team is a project's roster of agents with its
+        floor policy and lead. Gated on `models.teams.list`. Most recently
+        updated first; `query` filters by a case-insensitive substring of the
+        name.
+      tags: [chat]
+      parameters:
+        - name: query
+          in: query
+          required: false
+          schema: { type: string, maxLength: 128 }
+          description: Case-insensitive substring of the team name.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the project's teams.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamList'
+        '400':
+          description: limit, offset or query is not valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+    post:
+      operationId: createAgentTeam
+      summary: Save a team of agents
+      description: |
+        internal/api/v2/agentteams/handler.go's Create (issue 1620). Gated on
+        `models.teams.create`. A team grants nothing: starting a conversation
+        from it adds its agents through the ordinary participant path, under
+        the caller's own access.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+            example:
+              name: Release crew
+              description: Writes the release notes and checks CI.
+              floor_policy: lead
+              lead_position: 1
+              members:
+                - { application_id: 31, project_id: 1, version_id: 41, name: Mira }
+                - { application_id: 32, project_id: 1, version_id: 42, name: CI Doctor }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route (an unknown field, a wrong type).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The project already has a team with this name (`team_name_taken`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`); the message says which.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentTeam
+      summary: Read one saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Get (issue 1620). Gated on
+        `models.teams.list`. A team of another project answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    put:
+      operationId: updateAgentTeam
+      summary: Replace a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Update (issue 1620). Gated on
+        `models.teams.update`. A full-record replace: the roster sent is the
+        roster kept.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamWrite'
+      responses:
+        '200':
+          description: The updated team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '409':
+          description: Another team of the project has this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The team breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+    delete:
+      operationId: deleteAgentTeam
+      summary: Delete a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Delete (issue 1620). Gated on
+        `models.teams.delete`. Conversations started from the team are not
+        touched.
+      tags: [chat]
+      responses:
+        '204':
+          description: Deleted.
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_from_conversation/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The conversation's numeric id or uuid.
+    post:
+      operationId: createAgentTeamFromConversation
+      summary: Save a conversation's agents as a team
+      description: |
+        internal/api/v2/agentteams/handler.go's CreateFromConversation
+        (issue 1620). Gated on `models.teams.create` and the conversation
+        read permission; the caller must be able to read the conversation.
+        The team's members are the conversation's agent participants in the
+        order they joined, with the version each one runs; its floor policy
+        and lead are the conversation's floor (`meta.floor`).
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamFromConversation'
+            example: { name: Release crew }
+      responses:
+        '201':
+          description: The saved team.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeam'
+        '400':
+          description: The body is not valid JSON for this route.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such conversation visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: The project already has a team with this name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '422':
+          description: The conversation has no agents, or the name breaks a rule (`team_invalid`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/agent_team_conversation/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: startAgentTeamConversation
+      summary: Start a conversation with a saved team
+      description: |
+        internal/api/v2/agentteams/handler.go's Start (issue 1620). Gated on
+        `models.teams.list` and `models.chat.conversations.create`. Creates
+        the conversation through the same path as `createConversation`, so
+        every agent is added with the participant checks a hand-made add
+        applies: a team adds no capability. An agent of the team's project
+        that no longer exists is refused as `team_member_unavailable` with
+        its position; an agent of another project the caller cannot use is
+        refused by the participant path. With floor policy `lead` the new
+        conversation's `meta.floor` names the lead's new participant.
+      tags: [chat]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentTeamStart'
+            example: { name: Release 1.62 }
+      responses:
+        '201':
+          description: The created conversation, as `createConversation` answers it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedConversation'
+        '400':
+          description: The body is not valid JSON for this route, or the participant path refused a participant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No such team in this project, or an agent the caller cannot use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: An agent of the team no longer exists (`team_member_unavailable`, with `position`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentTeamRefusal'
         '500': { $ref: '#/components/responses/500' }
 
   /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}:

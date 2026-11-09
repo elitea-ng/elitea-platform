@@ -5,17 +5,18 @@ import Box from '@mui/material/Box';
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
+import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
-import { ListViewToggle, PageToolbar, pageBodySx, pageSx } from '@/widgets/page-header';
+import { ListViewToggle, PageToolbar, pageBodySx, pageSx, type PageToolbarProps } from '@/widgets/page-header';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { isPublicAgentsProject } from './lib/isPublicAgentsProject';
 import { useHasAdminPermission } from './lib/useHasAdminPermission';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { useApplicationsData } from './useApplicationsData';
-import { useApplicationTabs } from './useApplicationTabs';
+import { TEAMS_TAB, useApplicationTabs } from './useApplicationTabs';
 
 /** The four public tabs (`latest`/`my-liked`/`trending`) plus `admin` are the ones the baseline pins to "Trending Authors" (`RightInfoPanel` picks per-project elsewhere; `PrivateAgentsList.jsx:141-151` hard-codes it for Admin). */
 const TRENDING_AUTHOR_TABS: readonly string[] = ['latest', 'my-liked', 'trending', 'admin'];
@@ -78,11 +79,13 @@ export function Applications(): ReactNode {
   const projectId = useSelectedProjectId();
   const isPublicProject = isPublicAgentsProject(projectId);
   const hasAdminPermission = useHasAdminPermission(isPublicProject ? projectId : undefined);
-  const canCreate = usePermissionSet(projectId).has(PERMISSIONS.applications.create) && !isPublicProject;
+  const permissions = usePermissionSet(projectId);
+  const canCreate = permissions.has(PERMISSIONS.applications.create) && !isPublicProject;
   const { selectedTags } = useRailTagSelection();
   const totals = useApplicationsData(projectId, hasAdminPermission);
   const entityImport = useEntityImport(projectId);
-  const tabs = useApplicationTabs(isPublicProject, totals, hasAdminPermission);
+  const teams = useTeamsTab(projectId, permissions.has(TEAM_PERMISSIONS.list) && !isPublicProject);
+  const tabs = useApplicationTabs(isPublicProject, totals, hasAdminPermission, teams);
   const title = t('pages.agents.applications.tabsAriaLabel', 'Agents');
 
   const visibleTabs = useMemo(() => tabs.filter((tab) => tab.hidden !== true), [tabs]);
@@ -101,9 +104,20 @@ export function Applications(): ReactNode {
     void navigate({ to: '/agents/$tab', params: { tab: nextTab.value } });
   };
 
-  const createAction = canCreate
+  // The Teams tab lists teams, not agents: no agent search, filters, view switch, import or agent create.
+  const agentControls = params.tab !== TEAMS_TAB;
+  const createAction = canCreate && agentControls
     ? { label: t('pages.agents.applications.create', 'New agent'), testId: 'agents-create', onClick: () => void navigate({ to: '/agents/create' }) }
     : undefined;
+  const importButton = isPublicProject || !agentControls ? undefined : (
+    <EntityImportButton
+      testIdPrefix="agents"
+      isImporting={entityImport.run.isPending}
+      onImport={async (document) => {
+        await entityImport.run.mutateAsync(document);
+      }}
+    />
+  );
 
   return (
     <Box sx={pageSx}>
@@ -118,29 +132,12 @@ export function Applications(): ReactNode {
           ariaLabel: title,
           testIdPrefix: 'agents-tab',
         }}
-        search={{ placeholder: t('pages.agents.applications.search', 'Search agents'), 'data-testid': 'agent-search-input' }}
-        filters={{ activeCount: selectedTags.length }}
-        viewToggle={
-          <ListViewToggle
-            pageKey="agents"
-            testIdPrefix="agent"
-          />
-        }
+        {...agentToolbar(agentControls, selectedTags.length)}
         /*
          * Import (validation-matrix gap 12) and create. Hidden for the PUBLIC
          * project's lists, which are read-only catalogues.
          */
-        secondaryActions={
-          isPublicProject ? undefined : (
-            <EntityImportButton
-              testIdPrefix="agents"
-              isImporting={entityImport.run.isPending}
-              onImport={async (document) => {
-                await entityImport.run.mutateAsync(document);
-              }}
-            />
-          )
-        }
+        secondaryActions={importButton}
         primaryAction={createAction}
       />
       <Box
@@ -156,4 +153,25 @@ export function Applications(): ReactNode {
       />
     </Box>
   );
+}
+
+/** ADR-0050 decision 8 (issue 1620): the Teams tab's content, for a caller who may list teams. */
+function useTeamsTab(projectId: string | undefined, enabled: boolean): ReactNode {
+  const navigate = useNavigate();
+  return useMemo(
+    () => (enabled
+      ? <TeamsPanel projectId={projectId} onStarted={(conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } })} />
+      : undefined),
+    [enabled, projectId, navigate],
+  );
+}
+
+/** The agent lists' search, Filters and view switch; none of them on the Teams tab. */
+function agentToolbar(agentControls: boolean, activeTags: number): Pick<PageToolbarProps, 'search' | 'filters' | 'viewToggle'> {
+  if (!agentControls) return {};
+  return {
+    search: { placeholder: t('pages.agents.applications.search', 'Search agents'), 'data-testid': 'agent-search-input' },
+    filters: { activeCount: activeTags },
+    viewToggle: <ListViewToggle pageKey="agents" testIdPrefix="agent" />,
+  };
 }
