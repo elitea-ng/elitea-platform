@@ -9,13 +9,15 @@ import { useWorkspaceInfo } from '@/state/workspaceInfo';
 
 /**
  * The IT support line (ADR-0052 decision 7, W6.2) shown in About and Settings:
- * the device's managed `support_contact` (MDM), else the workspace's
- * (`client_policy.support_contact` of the token response, else of the
- * discovery document), else none. Dormant: a workspace before client contract
+ * the device's managed `support_contact` (MDM), else the workspace's, else
+ * none. Of the workspace's two copies the discovery document's wins once it
+ * carries the field: it is re-read on every foreground, while the token
+ * response's changes only at the next refresh. The token copy covers a launch
+ * before discovery answers (it is persisted with the policy). Dormant: a workspace before client contract
  * 1.45 sends none, and without either the screens show no row.
  */
 export function supportContactFrom(managed: string | null, policy: string | null, discovery: unknown): SupportContact | null {
-  const text = effectiveSupportContact(managed, policy ?? discovery);
+  const text = effectiveSupportContact(managed, typeof discovery === 'string' ? discovery : policy);
   return text === null ? null : supportContactLink(text);
 }
 

@@ -136,7 +136,11 @@ function SupportRow({ contact, close, goTo }: { readonly contact: string; readon
       <MenuRowIcon>
         <SupportAgentOutlinedIcon />
       </MenuRowIcon>
-      <MenuRowText>{t('desktop.account.itSupport', 'IT support: {{contact}}', { contact })}</MenuRowText>
+      <MenuRowText>{t('desktop.account.itSupport', 'IT support')}</MenuRowText>
+      {/* The line itself, clipped to the row; the whole line is the tooltip and on Troubleshoot. */}
+      <MenuRowHint>
+        <span title={contact}>{contact.length > 32 ? `${contact.slice(0, 31)}…` : contact}</span>
+      </MenuRowHint>
     </MenuRow>
   );
 }

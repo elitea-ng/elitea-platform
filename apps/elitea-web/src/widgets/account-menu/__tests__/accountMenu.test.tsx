@@ -186,7 +186,8 @@ describe('AccountMenu', () => {
       mount('desktop');
       await user.click(screen.getByTestId('shell-account'));
       const row = await screen.findByTestId('shell-account-it-support');
-      expect(row).toHaveTextContent('IT support: Managed desk https://help.example.com/it');
+      expect(row).toHaveTextContent('IT support');
+      expect(within(row).getByTitle('Managed desk https://help.example.com/it')).toHaveTextContent('Managed desk https://help.examp…');
       await user.click(row);
       expect(open).toHaveBeenCalledWith('https://help.example.com/it', '_blank', 'noopener');
     });

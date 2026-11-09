@@ -5877,5 +5877,5 @@
   "widgets.chatBox.floorTarget.label": "To: {{name}}",
   "widgets.chatBox.floorTarget.lead": "To: {{name}} (lead)",
   "widgets.chatBox.floorTarget.pick": "pick an agent",
-  "desktop.account.itSupport": "IT support: {{contact}}"
+  "desktop.account.itSupport": "IT support"
 }

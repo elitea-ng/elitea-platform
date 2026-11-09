@@ -91,12 +91,13 @@ fn forwarded(app: &AppHandle, id: &str) -> tauri::Result<MenuItem<Wry>> {
     MenuItem::with_id(app, id, text(id), true, accelerator)
 }
 
-/// The About panel's support line: the managed one, else the stored policy's.
+/// The About panel's support line: the managed one, else the stored policy's
+/// (the policy file only: the menu is built on the main thread, so no
+/// keychain read; the file is removed at sign-out).
 fn support_line(app: &AppHandle) -> Option<String> {
     let policy = app
         .try_state::<crate::commands::AppState>()
-        .and_then(|state| state.auth.state().ok())
-        .and_then(|state| state.policy);
+        .and_then(|state| state.auth.stored_policy());
     crate::managed::effective_support_contact(
         crate::managed::support_contact().as_deref(),
         policy.as_ref(),

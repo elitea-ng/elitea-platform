@@ -229,11 +229,20 @@ const (
 // control characters (a pattern is shown to the user and matched by the
 // desktop; a newline or NUL in it is never intended).
 func ValidLocalWorkPattern(pattern string) bool {
-	if strings.TrimSpace(pattern) == "" || len(pattern) > MaxLocalWorkPatternBytes || !utf8.ValidString(pattern) {
+	return strings.TrimSpace(pattern) != "" && len(pattern) <= MaxLocalWorkPatternBytes && plainLine(pattern)
+}
+
+// plainLine reports whether text is valid UTF-8 with no control character
+// (C0, DEL, C1) and no bidirectional embedding, override or isolate
+// (U+202A..U+202E, U+2066..U+2069), which could make a shown line read
+// differently from what it is. The clients apply the same rule
+// (@elitea/client-core/support, apps/elitea-desktop src/managed.rs).
+func plainLine(text string) bool {
+	if !utf8.ValidString(text) {
 		return false
 	}
-	for _, r := range pattern {
-		if unicode.IsControl(r) {
+	for _, r := range text {
+		if unicode.IsControl(r) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
 			return false
 		}
 	}
@@ -485,19 +494,10 @@ const (
 const MaxSupportContactRunes = 200
 
 // ValidSupportContact reports whether a trimmed support line may be stored:
-// empty (none), or at most MaxSupportContactRunes characters of valid UTF-8
-// without control characters. It is shown as text, so a newline is never
-// intended.
+// empty (none), or at most MaxSupportContactRunes characters on one plain line
+// (plainLine). It is shown as text, so a newline is never intended.
 func ValidSupportContact(value string) bool {
-	if value != strings.TrimSpace(value) || !utf8.ValidString(value) || utf8.RuneCountInString(value) > MaxSupportContactRunes {
-		return false
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return false
-		}
-	}
-	return true
+	return value == strings.TrimSpace(value) && utf8.RuneCountInString(value) <= MaxSupportContactRunes && plainLine(value)
 }
 
 // NativeClientPolicy is the full policy. Field order is the JSON key order of

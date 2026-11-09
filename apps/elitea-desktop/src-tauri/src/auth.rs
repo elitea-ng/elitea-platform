@@ -185,6 +185,12 @@ impl AuthService {
 
     // ---- state ---------------------------------------------------------
 
+    /// The stored `client_policy`, without the session read [`Self::state`]
+    /// does (no keychain access): for the menu bar's About panel.
+    pub fn stored_policy(&self) -> Option<Value> {
+        self.files.policy().ok().flatten()
+    }
+
     pub fn state(&self) -> Result<HostState, HostError> {
         let settings = self.files.settings()?;
         let session = load_session(self.store.as_ref())?;

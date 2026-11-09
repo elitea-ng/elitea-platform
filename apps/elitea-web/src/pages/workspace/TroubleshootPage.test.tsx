@@ -35,7 +35,7 @@ describe('Settings › Troubleshoot', () => {
     const doctor = createFakeDoctorIpc([], {});
     const { unmount } = renderWithTheme(<TroubleshootPage ipc={doctor} supportContact="IT desk https://help.example.com" />);
     const line = await screen.findByTestId('troubleshoot-it-support');
-    expect(within(line).getByRole('link', { name: 'IT desk https://help.example.com' })).toHaveAttribute('href', 'https://help.example.com/');
+    expect(within(line).getByRole('link', { name: 'IT desk https://help.example.com' })).toHaveAttribute('href', 'https://help.example.com');
     unmount();
     renderWithTheme(<TroubleshootPage ipc={doctor} supportContact="IT desk, help@example.com" />);
     const text = await screen.findByTestId('troubleshoot-it-support');

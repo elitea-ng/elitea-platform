@@ -9,12 +9,16 @@ import { AboutView } from '@/features/settings/AboutView';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
-test('managed beats the token policy, which beats discovery', () => {
+test('managed beats the workspace; the fresher discovery copy beats the token policy', () => {
   expect(supportContactFrom('Managed desk, help@example.com', 'Workspace desk', 'Public desk')).toEqual({
     text: 'Managed desk, help@example.com',
     href: 'mailto:help@example.com',
   });
-  expect(supportContactFrom(null, 'Workspace desk', 'Public desk')?.text).toBe('Workspace desk');
+  expect(supportContactFrom(null, 'Old desk', 'New desk')?.text).toBe('New desk');
+  // An administrator cleared it: discovery says so before the next token refresh.
+  expect(supportContactFrom(null, 'Old desk', '')).toBeNull();
+  // Before discovery answers (or from a server before 1.45): the persisted token copy.
+  expect(supportContactFrom(null, 'Workspace desk', undefined)?.text).toBe('Workspace desk');
   expect(supportContactFrom(null, null, 'Public desk, +1 555 010 0100')).toEqual({ text: 'Public desk, +1 555 010 0100', href: 'tel:+15550100100' });
   // Dormant: a server before 1.45 and no MDM.
   expect(supportContactFrom(null, null, undefined)).toBeNull();

@@ -22,10 +22,11 @@ export interface SupportContact {
   readonly href: string | null;
 }
 
-// Control characters (C0, DEL, C1) and the bidirectional overrides and isolates, which could
-// make the line read differently from what it is.
+// Control characters (C0, DEL, C1) and the bidirectional embeddings, overrides and isolates
+// (U+202A..U+202E, U+2066..U+2069), which could make the line read differently from what it is.
+// The server applies the same rule (platformconfig plainLine).
 // eslint-disable-next-line no-control-regex
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/u;
+const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
 
 /** A configured value as the apps use it: trimmed, one line, bounded; anything else is none. */
 export function normalizeSupportContact(raw: unknown): string | null {
@@ -42,32 +43,37 @@ export function effectiveSupportContact(managed: unknown, workspace: unknown): s
 
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/;
 const HTTPS = /https:\/\/[^\s<>"'`]+/i;
-// A phone number: an optional +, then digits with spaces, dots, dashes or brackets, 7 to 15 digits.
-const PHONE = /\+?\(?\d[\d\s().-]{5,}\d/;
+// An https address with a host and no userinfo: `https://host[:port][/path][?query][#fragment]`.
+// Parsed here rather than with `URL`, whose React Native polyfill reads an `@` anywhere as userinfo.
+const PLAIN_HTTPS = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:[/?#][^\s]*)?$/i;
+// A phone number: written with its country code (`+1 555 0100`) or after a phone word
+// (`tel`, `phone`, `call`), so a date or opening hours (`08.00-17.00`) never becomes one.
+const PHONE = /(?:\+|\b(?:tel|phone|call)\b[.:]?\s*)(\(?\d[\d\s().-]{5,}\d)/i;
 
 /** The line and the one link made from it: the first https address, else email, else phone number. */
 export function supportContactLink(text: string): SupportContact {
-  const https = HTTPS.exec(text)?.[0]?.replace(/[.,;:!?)\]]+$/, '');
+  const https = HTTPS.exec(text)?.[0];
   if (https !== undefined) {
     // An https address that is not a plain one (credentials, no host) makes no link at all:
     // its userinfo must not turn into an email link either.
-    return { text, href: plainHttps(https) };
+    const href = trimTrailing(https);
+    return { text, href: PLAIN_HTTPS.test(href) ? href : null };
   }
   const email = EMAIL.exec(text)?.[0];
   if (email !== undefined) return { text, href: `mailto:${email}` };
-  const phone = PHONE.exec(text)?.[0];
-  if (phone !== undefined) {
-    const digits = phone.replace(/[^\d]/g, '');
-    if (digits.length >= 7 && digits.length <= 15) return { text, href: `tel:${phone.trim().startsWith('+') ? '+' : ''}${digits}` };
+  const phone = PHONE.exec(text);
+  if (phone !== null) {
+    const digits = (phone[1] ?? '').replace(/[^\d]/g, '');
+    if (digits.length >= 7 && digits.length <= 15) return { text, href: `tel:${phone[0].startsWith('+') ? '+' : ''}${digits}` };
   }
   return { text, href: null };
 }
 
-function plainHttps(raw: string): string | null {
-  try {
-    const url = new URL(raw);
-    return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hostname !== '' ? url.href : null;
-  } catch {
-    return null;
+/** Sentence punctuation after an address is not part of it; a `)` or `]` is, when the address opened one. */
+function trimTrailing(address: string): string {
+  let out = address.replace(/[.,;:!?'"]+$/, '');
+  for (const [open, close] of [['(', ')'], ['[', ']']] as const) {
+    while (out.endsWith(close) && out.split(close).length > out.split(open).length) out = out.slice(0, -1).replace(/[.,;:!?'"]+$/, '');
   }
+  return out;
 }
