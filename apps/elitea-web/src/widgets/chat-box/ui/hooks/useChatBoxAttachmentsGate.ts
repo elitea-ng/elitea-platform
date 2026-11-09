@@ -11,7 +11,7 @@
  * with no active participant at all (`useActiveParticipantSelection`'s own
  * doc comment), yet the turn still reaches the conversation's single
  * application participant — `useChatBoxSend.helpers`' `resolveTargetParticipant`
- * is what makes that true. Gating on the ACTIVE participant would therefore
+ * (through `useResolvedTarget`) is what makes that true. Gating on the ACTIVE participant would therefore
  * leave attachments enabled for exactly the case the issue describes:
  * attach an agent, open the conversation, open the "+" menu. The gate uses
  * the same resolution the SEND path uses, so the control reflects the agent
@@ -24,7 +24,6 @@ import type { Participant } from '@/entities/participant';
 import { useActiveParticipantDetails } from '@/features/chat-participants';
 
 import { toParticipant } from '../ChatBox.helpers';
-import { resolveTargetParticipant } from './useChatBoxSend.helpers';
 
 /** `version_details.meta.internal_tools` off a raw participant-details object, or `undefined` when it is absent/not a list of names. */
 function readInternalTools(raw: Record<string, unknown> | undefined): readonly string[] | undefined {
@@ -61,19 +60,14 @@ export function shouldDisableParticipantAttachments(
 }
 
 export interface UseChatBoxAttachmentsGateParams {
-  readonly activeParticipant: unknown;
-  readonly participants: readonly unknown[] | undefined;
-  /** The agent the history last addressed, so the gate follows the same target the send does. */
-  readonly stickyParticipantId?: string | undefined;
+  /** The participant the send goes to (`useResolvedTarget`), so the gate follows the same target the send does. */
+  readonly target: unknown;
   /** The agent/pipeline EDITOR surface computes this gate from its own (unsaved) form state — this hook stands down there. */
   readonly isAgentsPage: boolean | undefined;
 }
 
-export function useChatBoxAttachmentsGate({ activeParticipant, participants, stickyParticipantId, isAgentsPage }: UseChatBoxAttachmentsGateParams): boolean {
-  const target = useMemo(
-    () => (isAgentsPage ? undefined : resolveTargetParticipant(activeParticipant, participants, stickyParticipantId)),
-    [isAgentsPage, activeParticipant, participants, stickyParticipantId],
-  );
+export function useChatBoxAttachmentsGate({ target: resolved, isAgentsPage }: UseChatBoxAttachmentsGateParams): boolean {
+  const target = isAgentsPage ? undefined : resolved;
   const gated = isVersionedEntity(target);
   // `null` when the target is not a versioned entity: the details hook throws
   // `assertNever` for a toolkit/MCP/user row, and there is nothing to gate on

@@ -27,7 +27,6 @@ import {
   resolveSendLlmSettings,
   resolveSendModelName,
   resolveStartContract,
-  resolveTargetParticipant,
   sendAgainWithoutGrant,
   type SendDeps,
   type UploadAttachmentsOutcome,
@@ -71,10 +70,9 @@ export interface UseChatBoxSendParams {
   readonly isAgentsPage?: boolean | undefined;
   /** The signed-in user, for the ad-hoc turn's `user` participant. */
   readonly userId?: string | undefined;
-  readonly activeParticipant?: unknown;
+  /** The participant an unaddressed message goes to, resolved once by `useResolvedTarget` (ADR-0050 D7c). */
+  readonly target?: unknown;
   readonly participants?: readonly unknown[] | undefined;
-  /** The agent the history last addressed, the target when nothing is selected (ADR-0050 D7c). */
-  readonly stickyParticipantId?: string | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
   /** Graph frames, for a host that also renders a run timeline (the pipeline editor's canvas). Passed straight to `useChatStreamTransport`, which owns the WHICH-frames filter (`shouldForwardAgentEvent`); no second gate here, which would only be a copy that could drift. */
@@ -151,11 +149,8 @@ export function useChatBoxSend(
     }),
     [params.llmSettings, params.model, params.configuredModelProjectId],
   );
-  const target = useMemo(
-    () => resolveTargetParticipant(params.activeParticipant, params.participants, params.stickyParticipantId),
-    [params.activeParticipant, params.participants, params.stickyParticipantId],
-  );
   // The composer's target and the roster an address picks from (one dependency for the start callback's budget).
+  const { target } = params;
   const routing = useMemo(() => ({ target, participants: params.participants }), [target, params.participants]);
   const onContextChanged = contextManagementApi.useRefreshStatus();
   const transport = useChatStreamTransport({
