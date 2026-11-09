@@ -81,9 +81,11 @@ jobs:
           # of dependency-scanning.yml; its scenarios need only node.
           # browser-bakeoff-report.mjs applies the ADR-0049 admission rule
           # in browser-bakeoff.yml; its rule is tested here on every PR.
+          # brand-output-scan.mjs is the sample-brand output gate of ci-web,
+          # ci-mobile and ci-desktop (ADR-0052 W4); its rules are tested here.
           # check-upgrading-notes.mjs keeps upgrade notes one file per change
           # (docs/upgrading/) and docs/UPGRADING.md closed; it runs below.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes; do
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes brand-output-scan; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
