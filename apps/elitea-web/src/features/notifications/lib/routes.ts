@@ -161,6 +161,7 @@ const HREF_RESOLVERS: Record<NotificationEventType, HrefResolver> = {
   moderation_approved: noHref,
   // Rendered by `../ui/RunFinishedMessage.tsx`, which opens its own target (`./runFinished.ts`).
   run_finished: noHref,
+  agent_heartbeat: chatHref,
 };
 
 /**

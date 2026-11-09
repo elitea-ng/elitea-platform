@@ -491,6 +491,9 @@ RETURNING id, uuid::text`, schema), home.agentParticipant, home.id, home.ownerPa
 			"conversation_id": home.uuid, "message_id": messageUUID, "project_id": post.ProjectID,
 			"application_id": post.ApplicationID, "agent_name": post.AgentName,
 			"outcome": post.Outcome, "reason_code": post.ReasonCode, "text": clipNotificationText(post.Text),
+			// The web's `[text]()` link syntax: the client resolves the empty
+			// link to the conversation (`HREF_RESOLVERS.agent_heartbeat`).
+			"message": heartbeatNotificationMessage(post.AgentName, post.Text),
 		})
 		if err != nil {
 			return err
@@ -504,6 +507,19 @@ VALUES (gen_random_uuid(), FALSE, $1, $2, $3::jsonb, $4, now() AT TIME ZONE 'UTC
 		return nil
 	})
 	return conversationUUID, err
+}
+
+// heartbeatNotificationMessage is meta.message: the agent's name, the start
+// of its message and a link. Brackets in the agent's text would break the
+// link syntax, so they become parentheses.
+func heartbeatNotificationMessage(agentName, text string) string {
+	name := strings.TrimSpace(agentName)
+	if name == "" {
+		name = "Your agent"
+	}
+	brackets := strings.NewReplacer("[", "(", "]", ")")
+	clean := brackets.Replace(clipNotificationText(strings.Join(strings.Fields(text), " ")))
+	return brackets.Replace(name) + ": " + clean + " [Open the conversation]()"
 }
 
 func clipNotificationText(text string) string {

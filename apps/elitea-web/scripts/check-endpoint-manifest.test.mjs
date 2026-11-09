@@ -903,7 +903,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // deleteAgentMemoryEntry and setAgentMemoryOptOut, an agent's Memory routes.
 // The Memory tab is a later story (issue 1608), so they are not in the
 // manifest yet.
-const GENERATED_OPERATION_COUNT = 478;
+// 478 -> 483 (issue 1618, ADR-0050 decision 2): getAgentHeartbeat,
+// saveAgentHeartbeat, listAgentHeartbeats, getProjectProactivity and
+// setProjectProactivity, the heartbeat of a proactive agent. The agent
+// editor's Heartbeat panel calls the first three.
+const GENERATED_OPERATION_COUNT = 483;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1172,8 +1176,12 @@ const GENERATED_OPERATION_COUNT = 478;
  * 317 -> 323 (issue 1608, ADR-0050 decision 1b): agentMemory.list, get,
  * update, delete, clear and optOut, the agent editor's Memory tab and the
  * chat's "remembered" chip (features/agent-memory). Generated.
+ *
+ * 323 -> 326 (issue 1618, ADR-0050 decision 2): agentHeartbeat.get, save
+ * and history, the agent editor's Heartbeat tab
+ * (features/agent-heartbeat). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 323;
+const MANIFEST_ENTRY_COUNT = 326;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

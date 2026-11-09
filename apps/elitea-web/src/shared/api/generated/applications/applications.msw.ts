@@ -57,6 +57,8 @@ import type {
   AgentChangeApprovalOutcome,
   AgentChangeRequest,
   AgentChangeRequestList,
+  AgentHeartbeatList,
+  AgentHeartbeatSettings,
   AgentMemoryEntry,
   AgentMemoryList,
   AgentRegistryRecord,
@@ -103,6 +105,7 @@ import type {
   ProjectContext,
   ProjectInfo,
   ProjectInfoUpdateResponse,
+  ProjectProactivity,
   ProjectQuota,
   ProjectStatistics,
   ProjectWithGroups,
@@ -1474,6 +1477,104 @@ export const getSetAgentMemoryOptOutResponseMock = (
 ): SetAgentMemoryOptOut200 => ({
   opted_out: faker.datatype.boolean(),
   ...overrideResponse,
+});
+
+export const getGetAgentHeartbeatResponseMock = (): AgentHeartbeatSettings => ({
+  application_id: 31,
+  configured: true,
+  enabled: true,
+  owner_user_id: 11,
+  mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+  home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+  release_id: 5,
+  next_wake_at: "2026-11-09T15:00:00Z",
+  last_wake_at: "2026-11-09T14:00:00Z",
+  paused_until: null,
+  last_skip_reason: "",
+  updated_at: "2026-11-09T14:00:00Z",
+  governance: {
+    platform_enabled: true,
+    project_enabled: true,
+    tier: "medium",
+    personal: false,
+    can_enable: true,
+    wakes_per_day: 24,
+    acts_per_day: 4,
+    spend_per_day_usd: 2,
+  },
+  release: {
+    release_id: 5,
+    version_id: 42,
+    mode: "heartbeat",
+    interval: "1h0m0s",
+    quiet_hours: "22:00-07:00 Europe/Berlin",
+    act_target: "home_thread",
+    goal_count: 1,
+  },
+});
+
+export const getSaveAgentHeartbeatResponseMock =
+  (): AgentHeartbeatSettings => ({
+    application_id: 31,
+    configured: true,
+    enabled: true,
+    owner_user_id: 11,
+    mandate_id: "7d1f6a52-0c55-4d5e-9a3e-6f0b1c2d3e4f",
+    home_conversation_uuid: "10000000-0000-4000-8000-000000000031",
+    release_id: 5,
+    next_wake_at: "2026-11-09T15:00:00Z",
+    last_wake_at: "2026-11-09T14:00:00Z",
+    paused_until: null,
+    last_skip_reason: "",
+    updated_at: "2026-11-09T14:00:00Z",
+    governance: {
+      platform_enabled: true,
+      project_enabled: true,
+      tier: "medium",
+      personal: false,
+      can_enable: true,
+      wakes_per_day: 24,
+      acts_per_day: 4,
+      spend_per_day_usd: 2,
+    },
+    release: {
+      release_id: 5,
+      version_id: 42,
+      mode: "heartbeat",
+      interval: "1h0m0s",
+      quiet_hours: "22:00-07:00 Europe/Berlin",
+      act_target: "home_thread",
+      goal_count: 1,
+    },
+  });
+
+export const getListAgentHeartbeatsResponseMock = (): AgentHeartbeatList => ({
+  total: 1,
+  rows: [
+    {
+      id: 1,
+      wake_id: "3f2b8d4e-1a2c-4b5d-9e8f-7a6b5c4d3e2f",
+      woke_at: "2026-11-09T14:00:00Z",
+      outcome: "notify",
+      reason_code: "",
+      reason: "The nightly build failed.",
+      release_id: 5,
+      digest_sha256:
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      triage_spend_usd: 0.0004,
+      execution_id: null,
+      conversation_uuid: "10000000-0000-4000-8000-000000000031",
+      paused_until: null,
+    },
+  ],
+});
+
+export const getGetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
+});
+
+export const getSetProjectProactivityResponseMock = (): ProjectProactivity => ({
+  proactive_agents_enabled: true,
 });
 
 export const getListProjectPermissionTrimmingResponseMock = (
@@ -3060,6 +3161,24 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3477,6 +3596,24 @@ export const getCreateApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -3829,6 +3966,24 @@ export const getListPublicApplicationsResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -4096,6 +4251,24 @@ export const getGetApplicationResponseMock = (
           citations: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               faker.helpers.arrayElement(["off", "required"] as const),
+              null,
+            ]),
+            undefined,
+          ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
               null,
             ]),
             undefined,
@@ -4416,6 +4589,24 @@ export const getGetApplicationResponseMock = (
             citations: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
                 null,
               ]),
               undefined,
@@ -4846,6 +5037,24 @@ export const getEditApplicationResponseMock = (
               ]),
               undefined,
             ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
+                null,
+              ]),
+              undefined,
+            ]),
             tool_envelope: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 {
@@ -5261,6 +5470,24 @@ export const getGetPublicApplicationResponseMock = (
           citations: faker.helpers.arrayElement([
             faker.helpers.arrayElement([
               faker.helpers.arrayElement(["off", "required"] as const),
+              null,
+            ]),
+            undefined,
+          ]),
+          proactivity: faker.helpers.arrayElement([
+            faker.helpers.arrayElement([
+              {
+                mode: "heartbeat",
+                interval: "1h",
+                quiet_hours: "22:00-07:00 Europe/Berlin",
+                watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                act_target: "home_thread",
+                limits: {
+                  wakes_per_day: 24,
+                  acts_per_day: 4,
+                  spend_per_day_usd: 2,
+                },
+              },
               null,
             ]),
             undefined,
@@ -5901,6 +6128,24 @@ export const getGetApplicationVersionDetailResponseMock = (
           ]),
           undefined,
         ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
+            null,
+          ]),
+          undefined,
+        ]),
         tool_envelope: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             {
@@ -6303,6 +6548,24 @@ export const getUpdateApplicationVersionResponseMock = (
         citations: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
             null,
           ]),
           undefined,
@@ -6712,6 +6975,24 @@ export const getGetApplicationVersionDetailExpandedResponseMock =
             citations: faker.helpers.arrayElement([
               faker.helpers.arrayElement([
                 faker.helpers.arrayElement(["off", "required"] as const),
+                null,
+              ]),
+              undefined,
+            ]),
+            proactivity: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                {
+                  mode: "heartbeat",
+                  interval: "1h",
+                  quiet_hours: "22:00-07:00 Europe/Berlin",
+                  watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+                  act_target: "home_thread",
+                  limits: {
+                    wakes_per_day: 24,
+                    acts_per_day: 4,
+                    spend_per_day_usd: 2,
+                  },
+                },
                 null,
               ]),
               undefined,
@@ -7143,6 +7424,24 @@ export const getSaveApplicationNewVersionResponseMock = (
         citations: faker.helpers.arrayElement([
           faker.helpers.arrayElement([
             faker.helpers.arrayElement(["off", "required"] as const),
+            null,
+          ]),
+          undefined,
+        ]),
+        proactivity: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            {
+              mode: "heartbeat",
+              interval: "1h",
+              quiet_hours: "22:00-07:00 Europe/Berlin",
+              watch: [{ kind: "conversation" }, { kind: "schedule_note" }],
+              act_target: "home_thread",
+              limits: {
+                wakes_per_day: 24,
+                acts_per_day: 4,
+                spend_per_day_usd: 2,
+              },
+            },
             null,
           ]),
           undefined,
@@ -7691,6 +7990,27 @@ export const getImportWizardResponseMock = (
                       ]),
                       undefined,
                     ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
+                        null,
+                      ]),
+                      undefined,
+                    ]),
                     tool_envelope: faker.helpers.arrayElement([
                       faker.helpers.arrayElement([
                         {
@@ -8198,6 +8518,27 @@ export const getImportWizardResponseMock = (
                           "off",
                           "required",
                         ] as const),
+                        null,
+                      ]),
+                      undefined,
+                    ]),
+                    proactivity: faker.helpers.arrayElement([
+                      faker.helpers.arrayElement([
+                        {
+                          mode: "heartbeat",
+                          interval: "1h",
+                          quiet_hours: "22:00-07:00 Europe/Berlin",
+                          watch: [
+                            { kind: "conversation" },
+                            { kind: "schedule_note" },
+                          ],
+                          act_target: "home_thread",
+                          limits: {
+                            wakes_per_day: 24,
+                            acts_per_day: 4,
+                            spend_per_day_usd: 2,
+                          },
+                        },
                         null,
                       ]),
                       undefined,
@@ -8872,6 +9213,27 @@ export const getForkAgentResponseMock = (
                 citations: faker.helpers.arrayElement([
                   faker.helpers.arrayElement([
                     faker.helpers.arrayElement(["off", "required"] as const),
+                    null,
+                  ]),
+                  undefined,
+                ]),
+                proactivity: faker.helpers.arrayElement([
+                  faker.helpers.arrayElement([
+                    {
+                      mode: "heartbeat",
+                      interval: "1h",
+                      quiet_hours: "22:00-07:00 Europe/Berlin",
+                      watch: [
+                        { kind: "conversation" },
+                        { kind: "schedule_note" },
+                      ],
+                      act_target: "home_thread",
+                      limits: {
+                        wakes_per_day: 24,
+                        acts_per_day: 4,
+                        spend_per_day_usd: 2,
+                      },
+                    },
                     null,
                   ]),
                   undefined,
@@ -10240,6 +10602,136 @@ export const getSetAgentMemoryOptOutMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getSetAgentMemoryOptOutResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSaveAgentHeartbeatMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatSettings
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentHeartbeatSettings> | AgentHeartbeatSettings),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSaveAgentHeartbeatResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListAgentHeartbeatsMockHandler = (
+  overrideResponse?:
+    | AgentHeartbeatList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentHeartbeatList> | AgentHeartbeatList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeats/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentHeartbeatsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetProjectProactivityResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetProjectProactivityMockHandler = (
+  overrideResponse?:
+    | ProjectProactivity
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<ProjectProactivity> | ProjectProactivity),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_heartbeat_project/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetProjectProactivityResponseMock(),
         { status: 200 },
       );
     },
@@ -12591,6 +13083,11 @@ export const getApplicationsMock = () => [
   getUpdateAgentMemoryEntryMockHandler(),
   getDeleteAgentMemoryEntryMockHandler(),
   getSetAgentMemoryOptOutMockHandler(),
+  getGetAgentHeartbeatMockHandler(),
+  getSaveAgentHeartbeatMockHandler(),
+  getListAgentHeartbeatsMockHandler(),
+  getGetProjectProactivityMockHandler(),
+  getSetProjectProactivityMockHandler(),
   getListProjectPermissionTrimmingMockHandler(),
   getRemoveProjectPermissionTrimmingItemMockHandler(),
   getMarkAgentDueMockHandler(),

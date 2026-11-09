@@ -295,7 +295,7 @@ func TestAgentHeartbeat_NotifyPostsToTheHomeThread(t *testing.T) {
 	if err := h.pool.QueryRow(t.Context(), `SELECT meta::text FROM centry.notifications WHERE event_type = 'agent_heartbeat'`).Scan(&meta); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(meta, *row.conversation) || !strings.Contains(meta, `"application_id": 31`) {
+	if !strings.Contains(meta, *row.conversation) || !strings.Contains(meta, `"application_id": 31`) || !strings.Contains(meta, `Open the conversation]()`) {
 		t.Fatalf("notification meta = %s", meta)
 	}
 	// A second notify reuses the home thread.
