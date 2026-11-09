@@ -43,7 +43,7 @@ export function productLiterals(source, { jsx = false } = {}) {
   walk(ast.program, (node) => {
     let text;
     if (node.type === 'StringLiteral') text = node.value;
-    else if (node.type === 'TemplateElement') text = node.value.cooked ?? node.value.raw;
+    else if (node.type === 'TemplateElement') text = node.value.raw;
     else if (node.type === 'JSXText') text = node.value;
     if (text !== undefined && PRODUCT_LITERAL_RE.test(text))
       found.push({ line: node.loc.start.line, text: text.replace(/\s+/g, ' ').trim() });
