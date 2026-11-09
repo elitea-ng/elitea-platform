@@ -17,6 +17,7 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/budgets-and-governance', title: 'Budgets and LLM governance' },
         { kind: 'page', slug: 'admin/features-and-configuration', title: 'Features and configuration' },
         { kind: 'page', slug: 'admin/branding', title: 'Branding' },
+        { kind: 'page', slug: 'admin/managed-devices', title: 'Managed devices (MDM)' },
         { kind: 'page', slug: 'admin/secrets', title: 'Secrets' },
         { kind: 'page', slug: 'admin/schedules-and-tasks', title: 'Schedules and tasks' },
         { kind: 'page', slug: 'admin/app-requests-and-toolkit-types', title: 'App requests and toolkit types' },

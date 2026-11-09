@@ -7,6 +7,7 @@ import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
 import { endSession } from '@/security/endSession';
 import { getSession, useSession } from '@/state/session';
+import { useManagedServer } from '@/security/managedServer';
 import { beginAddWorkspace } from '@/state/workspace';
 import { useWorkspaceList } from '@/state/workspaceList';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
@@ -35,7 +36,10 @@ export async function checkVersionAgain(refresh: () => Promise<unknown> = refres
 export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: string; overlay?: boolean }) {
   const { colors } = useDesign();
   const workspaceId = useSession((s) => s.workspaceId);
-  const others = useWorkspaceList().filter((w) => w.id !== workspaceId).length;
+  // MDM `lock_server`: no other workspace to go to (src/security/managedServer.ts).
+  const locked = useManagedServer().locked;
+  const list = useWorkspaceList();
+  const others = locked ? 0 : list.filter((w) => w.id !== workspaceId).length;
   const [checking, setChecking] = useState(false);
   const [stillRequired, setStillRequired] = useState(false);
   const body =

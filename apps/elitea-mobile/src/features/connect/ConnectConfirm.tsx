@@ -30,7 +30,8 @@ export function ConnectConfirm({
   busy: boolean;
   onConfirm: () => void;
   onBack: () => void;
-  onUseCanonical: (origin: string) => void;
+  /** Absent: no other address is offered (a managed server, ADR-0052 W1b). */
+  onUseCanonical?: (origin: string) => void;
 }) {
   const { colors, accessibilityLayout } = useDesign();
   const allowed = canConnect(check, devSignIn);
@@ -47,7 +48,7 @@ export function ConnectConfirm({
       pinFooter={accessibilityLayout}
       footer={
         <>
-          {check.kind === 'failed' && check.canonicalOrigin ? (
+          {check.kind === 'failed' && check.canonicalOrigin && onUseCanonical ? (
             <Button
               variant={allowed ? 'tonal' : 'filled'}
               title={`Use ${displayHost(check.canonicalOrigin)}`}

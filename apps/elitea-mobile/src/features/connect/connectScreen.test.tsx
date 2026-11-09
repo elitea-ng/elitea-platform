@@ -152,23 +152,73 @@ describe('workspace switcher', () => {
   });
 });
 
-describe('MDM AppConfig', () => {
+describe('a managed server (MDM / EMM server_url, ADR-0052 W1b.3)', () => {
   const { refreshManagedConfig } = jest.requireActual<typeof import('@/security/managedConfig')>('@/security/managedConfig');
   afterEach(() => refreshManagedConfig(() => null));
 
-  it('pre-fills the address with the managed server_url and says where it came from', async () => {
+  it('shows the managed address read only, "Managed by your organization"', async () => {
     refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com' }));
     await render(<ConnectScreen />);
+    const field = screen.getByLabelText('Workspace address');
+    expect(field.props.value).toBe('https://ai.corp.example.com');
+    expect(field.props.editable).toBe(false);
+    expect(screen.getByTestId('connect-managed-hint')).toHaveTextContent('Managed by your organization.');
+    // Typing does not change it.
+    await fireEvent.changeText(field, 'https://other.example.com');
     expect(screen.getByLabelText('Workspace address').props.value).toBe('https://ai.corp.example.com');
-    expect(screen.getByTestId('connect-managed-hint')).toBeTruthy();
-    await fireEvent.changeText(screen.getByLabelText('Workspace address'), 'https://other.example.com');
+  });
+
+  it('offers no other server: not the last address, nor a connect link, nor another listed workspace', async () => {
+    refreshManagedConfig(() => ({ server_url: 'ai.corp.example.com' }));
+    listModule.__setList([A, { ...B, origin: 'https://ai.corp.example.com' }]);
+    setSession({ lastOriginHint: 'https://last.example.com', pendingConnectOrigin: 'https://other.example.com' });
+    await render(<ConnectScreen />);
+    expect(screen.getByLabelText('Workspace address').props.value).toBe('https://ai.corp.example.com');
+    expect(screen.queryByTestId(`workspace-${A.id}`)).toBeNull();
+    expect(screen.getByTestId(`workspace-${B.id}`)).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByTestId('connect-confirm-screen')).toBeNull();
+  });
+
+  it('ignores a server_url that is not a workspace address (the field stays the user\'s)', async () => {
+    refreshManagedConfig(() => ({ server_url: 'http://ai.corp.example.com' }));
+    await render(<ConnectScreen />);
+    expect(screen.queryByTestId('connect-managed-hint')).toBeNull();
+    expect(screen.getByTestId('connect-enter-address')).toBeTruthy();
+  });
+
+  it('without a managed server the address is the user\'s to type', async () => {
+    setSession({ lastOriginHint: 'https://last.example.com' });
+    await render(<ConnectScreen />);
+    const field = screen.getByLabelText('Workspace address');
+    expect(field.props.editable).toBe(true);
+    await fireEvent.changeText(field, 'https://other.example.com');
+    expect(screen.getByLabelText('Workspace address').props.value).toBe('https://other.example.com');
     expect(screen.queryByTestId('connect-managed-hint')).toBeNull();
   });
 
-  it('the address of a workspace that just signed out wins over the managed one', async () => {
-    refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com' }));
-    setSession({ lastOriginHint: 'https://last.example.com' });
+  it('with lock_server the switcher offers no "Add workspace"', async () => {
+    refreshManagedConfig(() => ({ server_url: 'https://a.example.com', lock_server: true }));
+    listModule.__setList([A]);
+    setSession({ workspaceId: A.id, serverOrigin: A.origin });
+    await render(<WorkspacesScreen />);
+    expect(screen.queryByTestId('add-workspace')).toBeNull();
+    expect(screen.getByTestId('add-workspace-managed')).toBeTruthy();
+  });
+
+  it('server_url alone keeps "Add workspace"', async () => {
+    refreshManagedConfig(() => ({ server_url: 'https://a.example.com' }));
+    listModule.__setList([A]);
+    setSession({ workspaceId: A.id, serverOrigin: A.origin });
+    await render(<WorkspacesScreen />);
+    expect(screen.getByTestId('add-workspace')).toBeTruthy();
+  });
+});
+
+describe('connect screen after the managed server lock', () => {
+  it('says the organization allows only its own workspace', async () => {
+    resetSession({ endReason: 'managed_server', lastOriginHint: null, endedOrigin: 'https://b.example.com' });
     await render(<ConnectScreen />);
-    expect(screen.getByLabelText('Workspace address').props.value).toBe('https://last.example.com');
+    expect(screen.getByRole('alert')).toHaveTextContent(/allows only its own workspace\. b\.example\.com was signed out/i);
   });
 });

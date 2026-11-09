@@ -85,8 +85,7 @@ describe('built for brand/sample', () => {
         address=""
         onAddressChange={() => {}}
         error={null}
-        managedHint={false}
-        busy={false}
+                busy={false}
         onContinue={() => {}}
         onPrivacy={() => {}}
         onHelp={() => {}}

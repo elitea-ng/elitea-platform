@@ -1,7 +1,6 @@
-import { identity } from '@/config/identity';
 import { log } from '@/lib/log';
-import { parseConnectLink } from '@/linking/parseConnectLink';
-import { getManagedConfig, subscribeManagedConfig, type ManagedConfig } from '@/security/managedConfig';
+import { getManagedConfig, subscribeManagedConfig } from '@/security/managedConfig';
+import { lockedOrigin } from '@/security/managedServer';
 import { getSession, subscribeSession } from '@/state/session';
 import { keepOnlyWorkspace } from '@/state/workspace';
 
@@ -16,17 +15,6 @@ import { keepOnlyWorkspace } from '@/state/workspace';
  * `lock_server` without a usable `server_url` locks nothing: there is no
  * server to keep, and wiping every workspace on a typo is not "tightening".
  */
-
-/** The managed origin to keep, or null when nothing is locked. */
-export function lockedOrigin(managed: ManagedConfig, allowPrivateHttp: boolean = __DEV__): string | null {
-  if (managed.lockServer !== true || managed.serverUrl === null) return null;
-  const parsed = parseConnectLink(managed.serverUrl, { connectSchemes: identity.connectSchemes, allowPrivateHttp });
-  if (!parsed.ok) {
-    log.warn('managed server lock ignored: server_url is not a workspace address', { error: parsed.error });
-    return null;
-  }
-  return parsed.origin;
-}
 
 export interface ManagedServerLockDeps {
   keepOnly?: (origin: string) => Promise<unknown>;

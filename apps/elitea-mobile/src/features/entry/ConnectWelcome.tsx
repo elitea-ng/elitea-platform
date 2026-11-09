@@ -17,8 +17,11 @@ export interface ConnectWelcomeProps {
   address: string;
   onAddressChange: (text: string) => void;
   error: string | null;
-  /** "Suggested by your organization." (MDM `server_url`). */
-  managedHint: boolean;
+  /**
+   * MDM / EMM `server_url` (ADR-0052 W1b): the address is the organization's, read only, and
+   * the screen offers no other server ("Managed by your organization").
+   */
+  managed?: boolean;
   busy: boolean;
   onContinue: () => void;
   onPrivacy: () => void;
@@ -43,7 +46,7 @@ export function ConnectWelcome({
   address,
   onAddressChange,
   error,
-  managedHint,
+  managed = false,
   busy,
   onContinue,
   onPrivacy,
@@ -52,7 +55,7 @@ export function ConnectWelcome({
 }: ConnectWelcomeProps) {
   const design = useDesign();
   const [entering, setEntering] = useState(address !== '' || error !== null);
-  const open = entering || address !== '' || error !== null;
+  const open = managed || entering || address !== '' || error !== null;
   // The hero shrinks to the bust at accessibility sizes and while typing, so the field and
   // its button stay above the keyboard.
   const compact = design.accessibilityLayout || open;
@@ -118,7 +121,9 @@ export function ConnectWelcome({
           <TextField
             label="Workspace address"
             value={address}
-            onChangeText={onAddressChange}
+            onChangeText={managed ? undefined : onAddressChange}
+            editable={!managed}
+            accessibilityState={{ disabled: managed }}
             onSubmitEditing={onContinue}
             placeholder="acme.elitea.ai"
             autoCapitalize="none"
@@ -127,9 +132,9 @@ export function ConnectWelcome({
             keyboardType="url"
             textContentType="URL"
             returnKeyType="go"
-            autoFocus={entering && address === ''}
+            autoFocus={!managed && entering && address === ''}
             error={error}
-            note={managedHint ? 'Suggested by your organization.' : null}
+            note={managed ? 'Managed by your organization.' : null}
             noteTestID="connect-managed-hint"
           />
           <Button testID="connect-continue" title="Continue" icon="arrowGo" loading={busy} disabled={address.trim() === ''} onPress={onContinue} />

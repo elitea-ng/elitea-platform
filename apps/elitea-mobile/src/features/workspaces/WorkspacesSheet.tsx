@@ -18,6 +18,7 @@ export function WorkspacesSheet({
   onOpen,
   onRemove,
   onAdd,
+  addLocked = false,
 }: {
   workspaces: readonly WorkspaceSummary[];
   activeId: string | null;
@@ -25,6 +26,8 @@ export function WorkspacesSheet({
   /** Asks, then removes; resolves true once the workspace is gone (false keeps the row). */
   onRemove: (workspace: WorkspaceSummary) => Promise<boolean>;
   onAdd: () => void;
+  /** MDM / EMM `lock_server`: the device keeps one workspace, so none can be added. */
+  addLocked?: boolean;
 }) {
   const { colors, space } = useDesign();
   const full = workspaces.length >= MAX_WORKSPACES;
@@ -43,8 +46,14 @@ export function WorkspacesSheet({
           </SwipeToDelete>
         ))}
       </ListSection>
-      <Button title="Add workspace" variant="tonal" icon="plus" testID="add-workspace" disabled={full} onPress={onAdd} />
-      {full ? (
+      {addLocked ? (
+        <Text testID="add-workspace-managed" variant="footnote" tone="secondary" style={styles.center}>
+          Managed by your organization: this device connects to its workspace only.
+        </Text>
+      ) : (
+        <Button title="Add workspace" variant="tonal" icon="plus" testID="add-workspace" disabled={full} onPress={onAdd} />
+      )}
+      {full && !addLocked ? (
         <Text variant="footnote" tone="secondary" style={styles.center}>
           At most {MAX_WORKSPACES} workspaces can be connected. Remove one to add another.
         </Text>

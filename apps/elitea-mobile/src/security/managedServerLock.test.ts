@@ -2,9 +2,9 @@
 import { __resetNativeSessionForTests } from '@/auth/nativeSession';
 import { abortAll } from '@/lib/abortRegistry';
 import { NO_MANAGED_CONFIG, parseManagedConfig, refreshManagedConfig } from '@/security/managedConfig';
+import { lockedOrigin } from '@/security/managedServer';
 import {
   __resetManagedServerLockForTests,
-  lockedOrigin,
   managedServerLockSettled,
   startManagedServerLock,
 } from '@/security/managedServerLock';

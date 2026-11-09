@@ -340,11 +340,21 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
       iOS only: Android never lists chats by name, because a pinned shortcut would keep
       its title after a wipe (#35).
       Log out: the quick actions are gone; switch workspace: they follow the active one.
-- [ ] **MDM AppConfig.** Push `server_url`, `require_device_lock: true`, `idle_lock_seconds: 60`
-      and `allow_screenshots: false` (Apple Configurator or an MDM, see docs/mdm-appconfig.md):
-      the connect screen starts with the address ("Suggested by your organization"), the app
-      locks after a minute in the background even when the workspace does not require a lock,
-      and Settings says the device management made the lock stricter.
+- [ ] **MDM AppConfig (iOS).** With an MDM test profile, push `server_url`,
+      `require_device_lock: true`, `idle_lock_seconds: 60` and `allow_screenshots: false`
+      (see docs/mdm-appconfig.md): the connect screen shows the address read only ("Managed by
+      your organization") with no other server offered, the app locks after a minute in the
+      background even when the workspace does not require a lock, and Settings says the device
+      management made the lock stricter.
+- [ ] **Managed configuration (Android).** Google's Test DPC as device or profile owner,
+      "Manage application restrictions" › the app: the five keys are listed with their types.
+      Set the same values as on iOS: the same results, applied while the app runs (no relaunch).
+      Set `require_device_lock` to the string `true` (wrong type): no lock is required.
+- [ ] **lock_server (both).** Connect two workspaces, then push `server_url` for one of them
+      and `lock_server: true`: the other is signed out and its data removed (as at "Log out &
+      wipe"), the Workspaces sheet has no "Add workspace", and a connect link to another server
+      does nothing. With the other one active, the app lands on the connect screen saying the
+      organization allows only its own workspace. Remove `lock_server`: nothing comes back.
 
 
 ## 11. Native surfaces (iOS: `src/features/surfaces/*`, `src/features/intents/*`, `app-intents/`)

@@ -10,7 +10,7 @@ import { checkWorkspace, confirmConnection, displayHost, type ConnectCheck } fro
 import { WorkspaceListGate } from '@/features/workspaces/WorkspaceListGate';
 import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
 import { parseConnectLink, type ConnectLinkErrorCode } from '@/linking/parseConnectLink';
-import { useManagedConfig } from '@/security/managedConfig';
+import { useManagedServer } from '@/security/managedServer';
 import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { setSession, useSession, type EndReason } from '@/state/session';
 import { returnToPreviousWorkspace, switchToWorkspace } from '@/state/workspace';
@@ -55,12 +55,15 @@ export default function ConnectScreen() {
   const endNotice =
     endReason === null ? undefined : END_REASON_TEXT[endReason]?.(endedOrigin ? displayHost(endedOrigin) : 'you were using');
   // The other workspaces connected on this device (switching to one wipes nothing).
-  const workspaces = useWorkspaceList();
+  // MDM / EMM `server_url` (src/security/managedServer.ts): the address is the organization's,
+  // read only, and no other server is offered (not by a link, a hint or the list below).
+  const managed = useManagedServer().origin;
+  const allWorkspaces = useWorkspaceList();
+  const workspaces = managed === null ? allWorkspaces : allWorkspaces.filter((w) => w.origin === managed);
   const returnTo = useSession((s) => s.returnWorkspaceId);
   const returnHost = workspaces.find((w) => w.id === returnTo);
-  // MDM AppConfig `server_url` (src/security/managedConfig.ts) pre-fills an empty field.
-  const managedServer = useManagedConfig().serverUrl;
-  const [address, setAddress] = useState(incoming || lastOriginHint || managedServer || '');
+  const [typed, setAddress] = useState(incoming || lastOriginHint || '');
+  const address = managed ?? typed;
   const [error, setError] = useState<string | null>(null);
   // Discovery result awaiting the user's confirmation; nothing is stored yet.
   const [check, setCheck] = useState<ConnectCheck | null>(null);
@@ -70,7 +73,7 @@ export default function ConnectScreen() {
   const [lastIncoming, setLastIncoming] = useState(incoming);
   if (incoming !== lastIncoming) {
     setLastIncoming(incoming);
-    if (incoming !== '') {
+    if (incoming !== '' && managed === null) {
       setAddress(incoming);
       setError(null);
       setCheck(null);
@@ -92,6 +95,11 @@ export default function ConnectScreen() {
   const pendingOrigin = useSession((s) => s.pendingConnectOrigin);
   useEffect(() => {
     if (pendingOrigin === null) return;
+    if (managed !== null && pendingOrigin !== managed) {
+      // Another server than the organization's: not offered.
+      setSession({ pendingConnectOrigin: null });
+      return;
+    }
     let cancelled = false;
     void checkWorkspace(pendingOrigin).then((result) => {
       if (cancelled) return;
@@ -104,7 +112,7 @@ export default function ConnectScreen() {
     return () => {
       cancelled = true;
     };
-  }, [pendingOrigin]);
+  }, [pendingOrigin, managed]);
 
   const onContinue = async () => {
     if (busy) return;
@@ -140,10 +148,14 @@ export default function ConnectScreen() {
         busy={busy}
         onConfirm={() => void onConfirm()}
         onBack={() => setCheck(null)}
-        onUseCanonical={(origin) => {
-          setAddress(origin);
-          void runCheck(origin);
-        }}
+        onUseCanonical={
+          managed === null
+            ? (origin) => {
+                setAddress(origin);
+                void runCheck(origin);
+              }
+            : undefined
+        }
       />
     );
   }
@@ -159,7 +171,7 @@ export default function ConnectScreen() {
         setError(null);
       }}
       error={error}
-      managedHint={managedServer !== null && address.trim() === managedServer && !error}
+      managed={managed !== null}
       busy={busy}
       onContinue={() => void onContinue()}
       onPrivacy={() => void WebBrowser.openBrowserAsync(identity.privacyUrl)}
