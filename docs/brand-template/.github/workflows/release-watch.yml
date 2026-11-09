@@ -1,0 +1,115 @@
+name: Watch for ELITEA releases
+
+# Once a day, compare upstream.json with ELITEA's releases. When a newer release
+# appears on the pinned channel, open (or update) one pull request that bumps
+# the pin. That pull request runs build.yml's dry run against the new release,
+# so a release this brand cannot build shows up as a red check, not as a
+# failed signed build later. Merging the pull request is the upgrade.
+#
+# The bump branch is always `release-watch/upstream`: a second new release
+# before the first is merged updates the same pull request.
+#
+# A pull request opened with the default GITHUB_TOKEN starts no workflow (GitHub's
+# rule against recursive runs). Set the repository secret RELEASE_WATCH_TOKEN
+# (a fine-grained token with contents and pull requests: write on this
+# repository) so the bump's checks run; without it, close and reopen the pull
+# request to start them.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Test only: bump to this tag instead of the latest release"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Compare upstream.json with the latest release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: The bump logic still holds
+        run: node --test scripts/upstream.test.mjs
+      - name: Open or update the bump pull request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          FORCED_TAG: ${{ inputs.tag }}
+        with:
+          github-token: ${{ secrets.RELEASE_WATCH_TOKEN || github.token }}
+          script: |
+            const { pathToFileURL } = require('node:url');
+            const path = require('node:path');
+            const fs = require('node:fs');
+            const { bumped, newestRelease, readUpstream } = await import(
+              pathToFileURL(path.join(process.env.GITHUB_WORKSPACE, 'scripts/upstream.mjs')).href
+            );
+            const upstream = readUpstream();
+            const [owner, repo] = upstream.repository.split('/');
+            let tag = process.env.FORCED_TAG.trim();
+            if (!tag) {
+              const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+              tag = newestRelease(releases, upstream.channel);
+            }
+            if (!tag) {
+              core.notice(`no ${upstream.channel} release of ${upstream.repository} found`);
+              return;
+            }
+            const file = path.join(process.env.GITHUB_WORKSPACE, 'upstream.json');
+            const text = bumped(fs.readFileSync(file, 'utf8'), tag);
+            if (text === null) {
+              core.notice(`upstream.json pins ${upstream.tag}; ${tag} is not newer`);
+              return;
+            }
+
+            const base = context.payload.repository.default_branch;
+            const branch = 'release-watch/upstream';
+            const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${base}` });
+            // The branch is ours alone: reset it to the default branch every time.
+            try {
+              await github.rest.git.updateRef({ ...context.repo, ref: `heads/${branch}`, sha: head.object.sha, force: true });
+            } catch (error) {
+              if (error.status !== 422 && error.status !== 404) throw error;
+              await github.rest.git.createRef({ ...context.repo, ref: `refs/heads/${branch}`, sha: head.object.sha });
+            }
+            const { data: current } = await github.rest.repos.getContent({ ...context.repo, path: 'upstream.json', ref: branch });
+            await github.rest.repos.createOrUpdateFileContents({
+              ...context.repo,
+              path: 'upstream.json',
+              branch,
+              sha: current.sha,
+              message: `Build ELITEA ${tag}`,
+              content: Buffer.from(text).toString('base64'),
+            });
+
+            const title = `Build ELITEA ${tag}`;
+            const body = [
+              `ELITEA released [${tag}](https://github.com/${upstream.repository}/releases/tag/${tag}); this brand builds ${upstream.tag}.`,
+              '',
+              'This pull request moves upstream.json to the new release. Its checks build every platform from that release with this brand, unsigned.',
+              'Read the release notes and the upgrade notes (`docs/upgrading/` in the release) for any new brand manifest field, then merge and run **Build the brand** by hand to ship.',
+            ].join('\n');
+            const { data: open } = await github.rest.pulls.list({ ...context.repo, state: 'open', head: `${context.repo.owner}:${branch}` });
+            if (open.length) {
+              await github.rest.pulls.update({ ...context.repo, pull_number: open[0].number, title, body });
+              core.notice(`updated #${open[0].number}: ${title}`);
+            } else {
+              const { data: pr } = await github.rest.pulls.create({ ...context.repo, head: branch, base, title, body });
+              core.notice(`opened #${pr.number}: ${title}`);
+            }

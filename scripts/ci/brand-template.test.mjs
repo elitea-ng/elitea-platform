@@ -91,3 +91,73 @@ test("the template's own tests pass", () => {
   const run = spawnSync(process.execPath, ['--test', path.join(TEMPLATE, 'scripts/upstream.test.mjs')], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stdout + run.stderr);
 });
+
+/** The release watch's github-script body, run against a fake GitHub (a fake release tag). */
+async function runWatch({ releases, forced = '', openPulls = [], branchExists = false }) {
+  const yml = read('.github/workflows/release-watch.yml');
+  const body = yml.slice(yml.indexOf('          script: |\n') + '          script: |\n'.length).split('\n').map((l) => l.slice(12)).join('\n');
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'release-watch-'));
+  fs.cpSync(path.join(TEMPLATE, 'scripts'), path.join(workspace, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(TEMPLATE, 'upstream.json'), path.join(workspace, 'upstream.json'));
+  const calls = [];
+  const rec = (name, result = {}) => async (args) => {
+    calls.push([name, args]);
+    if (name === 'updateRef' && !branchExists) throw Object.assign(new Error('not found'), { status: 422 });
+    return { data: result };
+  };
+  const github = {
+    paginate: async (fn, args) => (calls.push(['listReleases', args]), releases),
+    rest: {
+      repos: {
+        listReleases: () => {},
+        getContent: rec('getContent', { sha: 'blob-sha' }),
+        createOrUpdateFileContents: rec('createOrUpdateFileContents'),
+      },
+      git: { getRef: rec('getRef', { object: { sha: 'main-sha' } }), updateRef: rec('updateRef'), createRef: rec('createRef') },
+      pulls: { list: rec('list', openPulls), create: rec('create', { number: 7 }), update: rec('update') },
+    },
+  };
+  const notices = [];
+  const core = { notice: (m) => notices.push(m) };
+  const context = { repo: { owner: 'acme', repo: 'acme-brand' }, payload: { repository: { default_branch: 'main' } } };
+  const env = { ...process.env, GITHUB_WORKSPACE: workspace, FORCED_TAG: forced };
+  const saved = process.env;
+  process.env = env;
+  try {
+    const AsyncFunction = (async () => {}).constructor;
+    await new AsyncFunction('github', 'context', 'core', 'require', body)(github, context, core, (m) => process.getBuiltinModule(m));
+  } finally {
+    process.env = saved;
+  }
+  return { calls, notices, byName: (n) => calls.filter(([c]) => c === n).map(([, a]) => a) };
+}
+
+test('the release watch opens one pull request for a newer release (a fake tag)', async () => {
+  const pinned = JSON.parse(read('upstream.json')).tag;
+  const fake = 'v99.0.0';
+  const run = await runWatch({ releases: [{ tag_name: fake, prerelease: false, draft: false }, { tag_name: pinned, prerelease: false, draft: false }] });
+  const [write] = run.byName('createOrUpdateFileContents');
+  assert.equal(write.branch, 'release-watch/upstream');
+  assert.equal(write.path, 'upstream.json');
+  assert.equal(JSON.parse(Buffer.from(write.content, 'base64').toString()).tag, fake);
+  assert.equal(run.byName('createRef')[0].sha, 'main-sha', 'the branch starts from the default branch');
+  const [pr] = run.byName('create');
+  assert.equal(pr.title, `Build ELITEA ${fake}`);
+  assert.equal(pr.head, 'release-watch/upstream');
+  assert.equal(pr.base, 'main');
+  assert.match(pr.body, new RegExp(`builds ${pinned.replaceAll('.', '\\.')}`));
+});
+
+test('the release watch updates its open pull request, and does nothing when nothing is newer', async () => {
+  const again = await runWatch({ releases: [], forced: 'v99.1.0', openPulls: [{ number: 5 }], branchExists: true });
+  assert.equal(again.byName('listReleases').length, 0, 'a forced tag skips the release list');
+  assert.equal(again.byName('create').length, 0);
+  assert.equal(again.byName('update')[0].pull_number, 5);
+  assert.equal(again.byName('updateRef')[0].force, true);
+  const pinned = JSON.parse(read('upstream.json')).tag;
+  const same = await runWatch({ releases: [{ tag_name: pinned, prerelease: false, draft: false }, { tag_name: 'v99.0.0-nightly.1', prerelease: true, draft: false }] });
+  assert.equal(same.byName('createOrUpdateFileContents').length, 0);
+  assert.match(same.notices.join(), /is not newer/);
+  const none = await runWatch({ releases: [] });
+  assert.match(none.notices.join(), /no stable release/);
+});
