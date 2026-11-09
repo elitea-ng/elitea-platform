@@ -162,6 +162,12 @@ jobs:
             cargo build --release --locked --target "$t"
           done
           mkdir -p ../src-tauri/binaries
+          # tauri build compiles each architecture on its own, and each compile's
+          # build script wants the sidecar for ITS triple; the bundle takes the
+          # universal one.
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            cp "target/$t/release/elitea-doc-extract-sidecar" "../src-tauri/binaries/elitea-doc-extract-sidecar-$t"
+          done
           lipo -create -output ../src-tauri/binaries/elitea-doc-extract-sidecar-universal-apple-darwin \
             target/aarch64-apple-darwin/release/elitea-doc-extract-sidecar \
             target/x86_64-apple-darwin/release/elitea-doc-extract-sidecar
