@@ -83,3 +83,16 @@ test('the workflows pass every signing secret by its fixed name', () => {
     assert.match(wf, new RegExp(`${name}: \\$\\{\\{ secrets\\.${name} \\}\\}`), name);
   }
 });
+
+test('nothing reaches a release: only a run by hand keeps packages (owner decision 10)', () => {
+  const wf = readFileSync(join(REPO, '.github/workflows/desktop-package.yml'), 'utf8');
+  const publish = readFileSync(join(REPO, '.github/workflows/publish.yml'), 'utf8');
+  const uploads = wf.split('\n').flatMap((line, i, lines) => (line.includes('actions/upload-artifact@') ? [lines[i - 1]] : []));
+  assert.ok(uploads.length >= 2, 'the macOS and Windows keep steps');
+  for (const cond of uploads) assert.match(cond, /if: github\.event_name == 'workflow_dispatch' && inputs\.keep_artifacts$/);
+  assert.doesNotMatch(wf, /gh release upload|softprops\/action-gh-release|contents: write/);
+  const desktop = publish.slice(publish.indexOf('\n  desktop:'), publish.indexOf('\n  # ── Job 6'));
+  assert.match(desktop, /uses: \.\/\.github\/workflows\/desktop-package\.yml/);
+  assert.match(desktop, /contents: read/);
+  assert.match(desktop, /require_signed: true/);
+});
