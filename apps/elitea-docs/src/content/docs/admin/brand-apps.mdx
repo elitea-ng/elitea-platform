@@ -1,0 +1,49 @@
+---
+title: "Allow a brand's apps on your deployment"
+description: "Register the mobile and desktop apps of one or more brands as native clients, so they can sign people in to this deployment, and switch a brand off or hold an old version back."
+---
+
+The mobile and desktop apps sign people in through the browser and come back to the app with a code. The deployment hands that code only to an app it knows: a **native client**, named by the app's bundle id and the redirect URI it returns to. Until at least one client is registered, the native sign-in endpoints answer 404 and the apps cannot connect.
+
+Every brand built from the same source is its own client. ELITEA's apps and a white-label brand's apps can use one deployment side by side. Each signs in only with its own redirect URI, and each brand can be switched off or held to a minimum version without touching the other.
+
+## The values for a brand
+
+A brand's values come from its manifest, `brand/<id>/brand.json`, in the source the apps were built from:
+
+| Client field | Where it comes from | ELITEA's apps |
+|---|---|---|
+| `client_id` | `mobile.bundleId` | `ai.elitea.app` |
+| `redirect_uris` | `<mobile.oauthRedirectScheme>:/oauth/callback` | `ai.elitea.app:/oauth/callback` |
+| `display_name` | `productName`; shown on the consent page and in the device list | `Elitea AI` |
+
+A redirect URI must be either a private-use scheme in reverse-domain form (`com.example.acme:/oauth/callback`, with no query or fragment) or a loopback address with no port (`http://127.0.0.1/callback`). The server refuses anything else.
+
+## Register the clients
+
+Use either of the two layers below. A client saved in the admin console overrides a file entry with the same `client_id`.
+
+- **In the admin console:** Admin › Features and configuration › **Native clients**. Add a client, enter its id, name and redirect URIs, and save. You need the `configuration.native_clients` permission.
+- **In a file, at install time:** point `NATIVE_CLIENTS_PATH` at a JSON or YAML file. With Helm, set `main.env.NATIVE_CLIENTS_PATH` and mount the file into the `elitea-main` pod. Two brands look like this:
+
+  ```yaml
+  - client_id: ai.elitea.app
+    display_name: Elitea AI
+    redirect_uris: ["ai.elitea.app:/oauth/callback"]
+  - client_id: com.example.acme
+    display_name: Acme Assistant
+    redirect_uris: ["com.example.acme:/oauth/callback"]
+    min_client_version: 2.0.0
+  ```
+
+  A file that does not parse, or that has an unknown key, a duplicate `client_id` or an invalid redirect URI, stops `elitea-main` from starting. Once any client is registered, `DEPLOYMENT_URL` must be set, because it is the issuer every native sign-in carries.
+
+## Switch a brand off
+
+Set the client's `enabled` to `false`, either in the admin console or in the file. That brand's apps can no longer sign in; the sign-in page says the app is not registered with this server. Saving the change in the admin console also signs out every device of that client. Other brands are unaffected.
+
+## Hold an old version back
+
+`min_client_version` (`MAJOR.MINOR.PATCH`, optionally with a `-prerelease`) is the oldest version of that brand's app the deployment serves. An older app is refused with HTTP 426 and told to update; its sign-in code is not used up, so the updated app can finish signing in. A client's minimum can only raise the deployment-wide minimum in the [native client policy](/admin/features-and-configuration), never lower it.
+
+To deploy the apps to managed devices, see [Managed devices (MDM)](/admin/managed-devices).

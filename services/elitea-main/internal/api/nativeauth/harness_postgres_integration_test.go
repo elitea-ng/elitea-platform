@@ -216,6 +216,12 @@ func withAuthenticate(authenticate func(http.Handler) http.Handler) stackOption 
 	return func(cfg *nativeapi.Config, _ *domain.Config) { cfg.Authenticate = authenticate }
 }
 
+// withFileClients replaces the conformance client with these file-layer
+// clients (the NATIVE_CLIENTS_PATH layer a deployment boots with).
+func withFileClients(clients ...domain.Client) stackOption {
+	return func(cfg *nativeapi.Config, _ *domain.Config) { cfg.Registry = domain.NewRegistry(clients, nil) }
+}
+
 func withSessionMaxLifetime(lifetime time.Duration) stackOption {
 	return func(_ *nativeapi.Config, cfg *domain.Config) { cfg.SessionMaxLifetime = lifetime }
 }
@@ -247,7 +253,12 @@ func newStack(t *testing.T, options ...stackOption) *stack {
 	for _, option := range options {
 		option(&handlerConfig, &storeConfig)
 	}
-	s.registry = domain.NewRegistry([]domain.Client{fileClient()}, pool)
+	fileLayer := []domain.Client{fileClient()}
+	if handlerConfig.Registry != nil {
+		// withFileClients: keep its file layer, over this test's database.
+		fileLayer = handlerConfig.Registry.FileClients()
+	}
+	s.registry = domain.NewRegistry(fileLayer, pool)
 	s.store = domain.NewStore(pool, storeConfig)
 	s.store.SetClock(s.clock)
 	s.validator = domain.NewAccessValidator(pool)
@@ -390,7 +401,14 @@ var (
 // returns the code from the app redirect.
 func (s *stack) signIn(userID int64, email string) string {
 	s.t.Helper()
-	start := s.do(http.MethodGet, authorizeQuery(nil), nil)
+	return s.signInWith(userID, email, nil)
+}
+
+// signInWith is signIn with authorize parameters overridden (another
+// client_id and redirect_uri, a client_version).
+func (s *stack) signInWith(userID int64, email string, overrides map[string]string) string {
+	s.t.Helper()
+	start := s.do(http.MethodGet, authorizeQuery(overrides), nil)
 	if start.Code != http.StatusFound {
 		s.t.Fatalf("authorize = %d %s", start.Code, start.Body.String())
 	}
