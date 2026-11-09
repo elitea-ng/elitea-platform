@@ -746,7 +746,7 @@ func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, s
 		onProbation := agent.OnProbation()
 		facts := agentworkforce.FactsOf(*agent.card, unused, agent.AutoHiredAt != nil, onProbation && agentworkforce.ProbationFailed(*agent.card))
 		rule, ok := agentworkforce.FirstMatch(policy.Rules, facts)
-		if !ok || alreadyAt(agent.WorkforceAgent, rule.Then) {
+		if !ok || alreadyAt(agent.WorkforceAgent, rule.Stage) {
 			continue
 		}
 		suppressed, err := s.ruleSuppressed(ctx, policy.ProjectID, applicationID, rule.ID, now)
@@ -757,7 +757,7 @@ func (s *AgentWorkforce) rulePass(ctx context.Context, policy WorkforcePolicy, s
 			continue
 		}
 		evidence := map[string]any{"scorecard": agent.card, "facts": facts, "rule": rule}
-		if err := s.applyRule(ctx, policy, applicationID, rule.ID, rule.Then, evidence, summary); err != nil {
+		if err := s.applyRule(ctx, policy, applicationID, rule.ID, rule.Stage, evidence, summary); err != nil {
 			return err
 		}
 	}

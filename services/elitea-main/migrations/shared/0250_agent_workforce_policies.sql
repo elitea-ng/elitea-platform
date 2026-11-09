@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS elitea_lifecycle.agent_workforce_policies (
     min_successful_runs    integer NOT NULL DEFAULT 3 CHECK (min_successful_runs BETWEEN 1 AND 100),
     max_auto_hired         integer NOT NULL DEFAULT 5 CHECK (max_auto_hired BETWEEN 1 AND 50),
     auto_dismiss_enabled   boolean NOT NULL DEFAULT false,
-    -- [{id, when: {metric: "op value"}, then}], at most 20.
+    -- [{id, conditions: [{metric, op, value}], stage}], at most 20.
     auto_dismiss_rules     jsonb NOT NULL DEFAULT '[]'::jsonb
                            CHECK (jsonb_typeof(auto_dismiss_rules) = 'array'
                                   AND jsonb_array_length(auto_dismiss_rules) <= 20

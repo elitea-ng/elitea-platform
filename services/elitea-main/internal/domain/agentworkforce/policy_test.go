@@ -20,7 +20,7 @@ func TestDefaultPolicyIsOffAndItsRulesPassTheCheck(t *testing.T) {
 func TestCheckPolicyNeverAllowsDemoteOrDeleteOrAnUnknownStage(t *testing.T) {
 	for _, stage := range []Stage{StageDemote, StageDelete, "purge", ""} {
 		policy := DefaultPolicy()
-		policy.Rules = []Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 1}}, Then: stage}}
+		policy.Rules = []Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 1}}, Stage: stage}}
 		_, err := CheckPolicy(policy)
 		if refusal, ok := AsRefusal(err); !ok || refusal.Code != PolicyInvalidCode || refusal.Status() != 422 {
 			t.Fatalf("stage %q: %v", stage, err)
@@ -69,7 +69,7 @@ func TestRulesMatchAllConditionsAndTheStrongestStageWins(t *testing.T) {
 	card := Scorecard{Runs30d: 25, Failed30d: 20, FailureRate30d: 0.8, BreakerTrips7d: 3}
 	facts := FactsOf(card, 0, false, false)
 	rule, ok := FirstMatch(rules, facts)
-	if !ok || rule.ID != "breaker_trips" || rule.Then != StageSuspend {
+	if !ok || rule.ID != "breaker_trips" || rule.Stage != StageSuspend {
 		t.Fatalf("suspend beats watch: %+v %v", rule, ok)
 	}
 	facts = FactsOf(Scorecard{Runs30d: 10, Failed30d: 9, FailureRate30d: 0.9}, 0, false, false)
@@ -77,7 +77,7 @@ func TestRulesMatchAllConditionsAndTheStrongestStageWins(t *testing.T) {
 		t.Fatal("failure_rate needs 20 runs too")
 	}
 	facts = FactsOf(Scorecard{}, 90, false, false)
-	if rule, ok := FirstMatch(rules, facts); !ok || rule.Then != StageRetire {
+	if rule, ok := FirstMatch(rules, facts); !ok || rule.Stage != StageRetire {
 		t.Fatalf("unused 90 days: %+v %v", rule, ok)
 	}
 	failed := Scorecard{BreakerTrips7d: 1}
@@ -91,7 +91,7 @@ func TestRulesMatchAllConditionsAndTheStrongestStageWins(t *testing.T) {
 		t.Fatal("probation_failed needs auto_hired")
 	}
 	// A rule whose stage is not automatic never matches, even if stored.
-	if _, ok := FirstMatch([]Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 0}}, Then: StageDelete}}, facts); ok {
+	if _, ok := FirstMatch([]Rule{{ID: "x", Conditions: []Condition{{MetricRuns30d, ">=", 0}}, Stage: StageDelete}}, facts); ok {
 		t.Fatal("a delete rule matched")
 	}
 }

@@ -126,7 +126,7 @@ func TestWorkforcePolicyIsOffByDefaultAndOnlyAManagerSetsIt(t *testing.T) {
 		t.Fatalf("a non-manager set the policy: %v", err)
 	}
 	bad := agentworkforce.DefaultPolicy()
-	bad.Rules = []agentworkforce.Rule{{ID: "x", Conditions: []agentworkforce.Condition{{Metric: "runs_30d", Op: ">=", Value: 1}}, Then: agentworkforce.StageDelete}}
+	bad.Rules = []agentworkforce.Rule{{ID: "x", Conditions: []agentworkforce.Condition{{Metric: "runs_30d", Op: ">=", Value: 1}}, Stage: agentworkforce.StageDelete}}
 	if _, err := store.SetPolicy(ctx, wfProject, managerActor(wfManager), bad); refusalCode(err) != agentworkforce.PolicyInvalidCode {
 		t.Fatalf("a delete rule: %v", err)
 	}

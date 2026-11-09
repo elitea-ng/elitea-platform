@@ -128,7 +128,7 @@ type Condition struct {
 type Rule struct {
 	ID         string      `json:"id"`
 	Conditions []Condition `json:"conditions"`
-	Then       Stage       `json:"then"`
+	Stage      Stage       `json:"stage"`
 }
 
 // Policy is a project's workforce policy.
@@ -144,10 +144,10 @@ type Policy struct {
 // DefaultRules are the platform's starting rules (ADR-0050 decision 5k).
 func DefaultRules() []Rule {
 	return []Rule{
-		{ID: "breaker_trips", Conditions: []Condition{{MetricBreakerTrips7d, ">=", 3}}, Then: StageSuspend},
-		{ID: "failure_rate", Conditions: []Condition{{MetricFailureRate30d, ">", 0.5}, {MetricRuns30d, ">=", 20}}, Then: StageWatch},
-		{ID: "unused", Conditions: []Condition{{MetricUnusedDays, ">=", 90}}, Then: StageRetire},
-		{ID: "probation_failed", Conditions: []Condition{{MetricAutoHired, "=", 1}, {MetricProbationFailed, "=", 1}}, Then: StageRetire},
+		{ID: "breaker_trips", Conditions: []Condition{{MetricBreakerTrips7d, ">=", 3}}, Stage: StageSuspend},
+		{ID: "failure_rate", Conditions: []Condition{{MetricFailureRate30d, ">", 0.5}, {MetricRuns30d, ">=", 20}}, Stage: StageWatch},
+		{ID: "unused", Conditions: []Condition{{MetricUnusedDays, ">=", 90}}, Stage: StageRetire},
+		{ID: "probation_failed", Conditions: []Condition{{MetricAutoHired, "=", 1}, {MetricProbationFailed, "=", 1}}, Stage: StageRetire},
 	}
 }
 
@@ -196,7 +196,7 @@ func CheckPolicy(p Policy) (Policy, error) {
 			return Policy{}, invalid("The rule id %s is used twice.", rule.ID)
 		}
 		seen[rule.ID] = true
-		if !AutomaticStage(rule.Then) {
+		if !AutomaticStage(rule.Stage) {
 			return Policy{}, invalid("A rule's stage is watch, suspend or retire: demote and delete are never automatic.")
 		}
 		if len(rule.Conditions) == 0 || len(rule.Conditions) > MaxConditions {
@@ -293,10 +293,10 @@ func FirstMatch(rules []Rule, facts Facts) (Rule, bool) {
 		found bool
 	)
 	for _, rule := range rules {
-		if !AutomaticStage(rule.Then) || !rule.Matches(facts) {
+		if !AutomaticStage(rule.Stage) || !rule.Matches(facts) {
 			continue
 		}
-		if !found || stageRank(rule.Then) > stageRank(best.Then) {
+		if !found || stageRank(rule.Stage) > stageRank(best.Stage) {
 			best, found = rule, true
 		}
 	}
