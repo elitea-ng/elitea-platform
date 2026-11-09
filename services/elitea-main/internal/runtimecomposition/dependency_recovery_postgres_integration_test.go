@@ -349,7 +349,7 @@ func startRecoveringServer(t *testing.T) string {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				backend := pgproto3.NewBackend(conn, conn)
 				for {
 					message, err := backend.ReceiveStartupMessage()

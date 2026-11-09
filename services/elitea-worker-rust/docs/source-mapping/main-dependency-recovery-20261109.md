@@ -15,7 +15,7 @@ Review conditions C1–C6 and note N3 are covered below. So are the six conditio
 
 ## Business behaviour
 
-Nothing here comes from the current platform: Pylon has no runtime runner set. The behaviour is new and follows the
+Nothing here comes from the current platform, which has no runtime runner set. The behaviour is new and follows the
 delivery gate's resilience rule (bounded, typed, readable, never a silent hang).
 
 **What happened on main** (live reproduction on a disposable stack from `product-real-models-main-ce2756fad.dump`,

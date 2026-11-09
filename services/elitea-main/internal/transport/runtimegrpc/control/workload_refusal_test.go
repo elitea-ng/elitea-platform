@@ -19,8 +19,8 @@ import (
 )
 
 var (
-	sessionStoreDown   = fmt.Errorf("%w: %w", workloadauth.ErrWorkloadUnauthorized, workloadauth.ErrSessionStoreUnavailable)
-	sessionNotAccepted = workloadauth.ErrWorkloadUnauthorized
+	errSessionStoreDown   = fmt.Errorf("%w: %w", workloadauth.ErrWorkloadUnauthorized, workloadauth.ErrSessionStoreUnavailable)
+	errSessionNotAccepted = workloadauth.ErrWorkloadUnauthorized
 )
 
 type rejectionCarrier interface {
@@ -65,8 +65,8 @@ func TestControlRPCsAnswerAnUnreadableSessionStoreAsRetryable(t *testing.T) {
 			wantCode      runtimev1.RuntimeErrorCodeV1
 			wantRetryable bool
 		}{
-			{sessionStoreDown, runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, true},
-			{sessionNotAccepted, runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, false},
+			{errSessionStoreDown, runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_DEPENDENCY_UNAVAILABLE, true},
+			{errSessionNotAccepted, runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, false},
 		} {
 			t.Run(fmt.Sprintf("%s/%v", name, tc.wantCode), func(t *testing.T) {
 				calls := []string{}
@@ -103,10 +103,10 @@ func TestControlRPCsAnswerAnUnreadableSessionStoreAsRetryable(t *testing.T) {
 }
 
 func TestStatusRPCsAnswerAnUnreadableSessionStoreAsUnavailable(t *testing.T) {
-	if got := status.Code(workloadRefusalStatus(sessionStoreDown)); got != codes.Unavailable {
+	if got := status.Code(workloadRefusalStatus(errSessionStoreDown)); got != codes.Unavailable {
 		t.Fatalf("store down = %v, want Unavailable", got)
 	}
-	for _, refusal := range []error{sessionNotAccepted, nil} {
+	for _, refusal := range []error{errSessionNotAccepted, nil} {
 		if got := status.Code(workloadRefusalStatus(refusal)); got != codes.Unauthenticated {
 			t.Fatalf("refusal %v = %v, want Unauthenticated", refusal, got)
 		}
