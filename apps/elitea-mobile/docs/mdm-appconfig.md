@@ -124,9 +124,10 @@ field per key; fill them in as above.
 
 Both are OS features delivered by the MDM; the app has no key for them.
 Scope them by app identifier: `ai.elitea.app` (iOS bundle id and Android
-package), plus `ai.elitea.app.widgets` for the iOS widget extension. Android
-trusts the system store only (the app ships no network security config), so
-push a private CA as a system-trusted certificate. The app presents no
+package). The widget extension makes no network requests. Android trusts
+only the CAs that ship with Android (the app ships no network security
+config), so an MDM-pushed CA, which lands in the user store, is not trusted
+by the app: serve the workspace with a public certificate. The app presents no
 client certificate; sign-in runs in the system browser, which must reach the
 identity provider through the VPN or directly. Admin guide: "Managed devices
 (MDM)" › "Certificates and per-app VPN".
