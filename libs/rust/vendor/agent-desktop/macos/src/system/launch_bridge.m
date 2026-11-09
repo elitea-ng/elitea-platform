@@ -142,7 +142,12 @@ bool agent_desktop_open_application(
         if ([request[@"bundle_id"] boolValue]) {
             url = [workspace URLForApplicationWithBundleIdentifier:identifier];
         } else {
+            // ELITEA patch 6: deprecated in macOS 11 with no by-name replacement; the app's
+            // 12.0 deployment target makes -Werror refuse it.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
             NSString *path = [workspace fullPathForApplication:identifier];
+#pragma clang diagnostic pop
             if (path != nil) {
                 url = [NSURL fileURLWithPath:path];
             }
