@@ -21,13 +21,9 @@ func TestAnUpgradedLegacyBuiltProjectListsApplicationsLikedByTheActor(t *testing
 	pool := legacyupgraded.NewPool(t)
 	repo := NewApplicationsRepo(pool)
 	ctx := testContext(t)
-	// The Auth service owns the user table, so the legacy-built fixture has
-	// none; the list joins it for author names. A minimal one stands in.
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.auth_core__user (id integer PRIMARY KEY, email text, name text);
-		INSERT INTO public.auth_core__user VALUES (1, 'first@example.com', 'First')`); err != nil {
-		t.Fatalf("create the Auth user table stand-in: %v", err)
-	}
+	// The list joins the user table for author names; seed the author as the
+	// other repository tests do.
+	seedUser(t, pool, 1, "first@example.com")
 	liked := createTestApplication(t, repo, "Liked", 1, &applications.Version{Name: "base", AgentType: "openai"})
 	createTestApplication(t, repo, "Not liked", 1, &applications.Version{Name: "base", AgentType: "openai"})
 	if _, err := pool.Exec(ctx, `

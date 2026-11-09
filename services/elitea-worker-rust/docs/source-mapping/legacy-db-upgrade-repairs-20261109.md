@@ -156,8 +156,8 @@ Behaviour through Main's real handlers and repository on an upgraded legacy-buil
 | same file, `…CreatesAndForksToolkitsOwnedByTheProject` | `Create` succeeds with `owner_id = 1`; `ForkToolkit` returns 200, and the copy has `owner_id = 1` and `env_vars` `{}` | 500, `column "owner_id" … does not exist` (42703) |
 | `internal/infra/db/repos/legacy_built_tenant_likes_postgres_integration_test.go` `TestAnUpgradedLegacyBuiltProjectListsApplicationsLikedByTheActor` | `ApplicationsRepo.List` with `MyLiked` returns only the liked agent, and sorting by likes puts it first | `relation "p_1.social_likes" does not exist` (42P01) |
 
-The likes test adds a minimal `public.auth_core__user` stand-in. The list joins that table for author names, and on a
-real legacy database it lives in `public`, owned by the auth service.
+The likes test seeds its author with the repository tests' `seedUser`. `001_initial` creates `auth_core__*`
+unqualified, so they land in `public` when the migrating role (as in CI, `postgres`) has no schema of its own.
 
 ## Performance
 
