@@ -643,6 +643,10 @@ CROSS JOIN (VALUES
     -- grants it to all three roles centrally; project 1's per-project rows
     -- suppress that fallback). The manage strings are admin-only, below.
     ('models.applications.memory.list'),
+    -- ADR-0050 decision 8 (issue 1620): reading the project's saved teams
+    -- (shared 0233 grants it to all three roles centrally). The writes are
+    -- admin and editor only, below.
+    ('models.teams.list'),
     -- #6885: the MCP OAuth and DCR proxies (`mcp_oauth_proxy`,
     -- `mcp_dcr_proxy`) are gated on the agent RUN permission, which shared
     -- 0105 grants to all three roles centrally. Project 1 carries per-project
@@ -831,6 +835,19 @@ CROSS JOIN (VALUES
     ('models.applications.memory.approve')
 ) AS p(permission)
 WHERE r.project_id = 1 AND r.name = 'admin'
+ON CONFLICT DO NOTHING;
+
+-- ADR-0050 decision 8 (issue 1620): saving, editing and deleting a team,
+-- which shared/0233 grants to the default-mode admin and editor.
+INSERT INTO auth_core__project_role_permission (project_id, role_id, permission)
+SELECT 1, r.id, p.permission
+FROM auth_core__project_role r
+CROSS JOIN (VALUES
+    ('models.teams.create'),
+    ('models.teams.update'),
+    ('models.teams.delete')
+) AS p(permission)
+WHERE r.project_id = 1 AND r.name IN ('admin', 'editor')
 ON CONFLICT DO NOTHING;
 
 -- #6789: the project settings writes (name, icon) are gated on

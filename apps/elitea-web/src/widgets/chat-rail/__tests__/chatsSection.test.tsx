@@ -246,6 +246,40 @@ describe('ChatsSection', () => {
     expect(forked).toEqual([{ id: '77', body: {} }]);
   });
 
+  const quickOverview = (): HTMLElement => screen.getAllByTestId('shell-conversation').find((node) => node.textContent?.includes('quick overview')) as HTMLElement;
+
+  it('offers no Save as team… without the teams create right (issue 1620)', async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText('quick overview');
+    await user.click(within(quickOverview()).getByTestId('shell-conversation-more'));
+    await screen.findByRole('menuitem', { name: 'Fork' });
+    expect(screen.queryByRole('menuitem', { name: 'Save as team…' })).not.toBeInTheDocument();
+  });
+
+  it('saves a chat as a team from the ⋯ menu with the teams create right (issue 1620)', async () => {
+    const user = userEvent.setup();
+    let saved: { readonly id: string; readonly body: unknown } | undefined;
+    server.use(
+      http.get('*/auth/permissions/prompt_lib/:projectId', () =>
+        HttpResponse.json([{ name: 'models.chat.folders.get', enabled: true }, { name: 'models.teams.create', enabled: true }])),
+      http.post('*/elitea_core/agent_team_from_conversation/prompt_lib/:projectId/:conversationId', async ({ params, request }) => {
+        saved = { id: String(params['conversationId']), body: await request.json() };
+        return HttpResponse.json({ id: 3, project_id: 42, name: 'Crew', description: '', floor_policy: 'addressed', lead_position: 0, members: [] }, { status: 201 });
+      }),
+    );
+    mount();
+    await screen.findByText('quick overview');
+    await user.click(within(quickOverview()).getByTestId('shell-conversation-more'));
+    await user.click(await screen.findByRole('menuitem', { name: 'Save as team…' }));
+    const name = await screen.findByTestId('agent-team-save-as-name');
+    expect(name).toHaveValue('quick overview');
+    await user.clear(name);
+    await user.type(name, 'Crew');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ id: '72', body: { name: 'Crew', description: '' } }));
+  });
+
   it('opens the archived chats page from the trailing Archived row, and marks it there', async () => {
     const user = userEvent.setup();
     const router = mount('/chat');

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { delay, http, HttpResponse } from 'msw';
 
 import {
   getListApplicationsMockHandler,
@@ -93,6 +94,28 @@ describe('Applications', () => {
     await user.click(await screen.findByTestId('agents-tab-admin'));
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/agents/admin'));
+  });
+
+  it('keeps a direct load of /agents/teams on the Teams tab while the permission list loads (issue 1620)', async () => {
+    setConfig('1');
+    server.use(
+      http.get('*/auth/permissions/prompt_lib/:projectId', async () => {
+        await delay(50);
+        return HttpResponse.json([{ name: 'models.teams.list', enabled: true }]);
+      }),
+      http.get('*/elitea_core/agent_teams/prompt_lib/:projectId', () => HttpResponse.json({ rows: [], total: 0 })),
+    );
+    const { router } = renderAgentsRoute(<Applications />, '/agents/teams', { projectId: '9' });
+
+    expect(await screen.findByTestId('agents-tab-teams')).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/agents/teams');
+  });
+
+  it('sends a direct load of /agents/teams to the first tab once the list says no teams right', async () => {
+    setConfig('1');
+    const { router } = renderAgentsRoute(<Applications />, '/agents/teams', { projectId: '9' });
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/agents/all'));
   });
 
   it('sends an old link to a hidden placeholder tab to the first tab', async () => {
