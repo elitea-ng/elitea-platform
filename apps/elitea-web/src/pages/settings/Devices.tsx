@@ -72,7 +72,7 @@ function EmptyState({ nativeEnabled }: { readonly nativeEnabled: boolean }) {
         {nativeEnabled
           ? t(
               'pages.settings.devices.empty.body',
-              'To add one, open the Elitea app on your phone or computer and sign in with your workspace login. You approve the new device in a signed-in browser, and it then appears here.',
+              'To add one, open the {{product}} app on your phone or computer and sign in with your workspace login. You approve the new device in a signed-in browser, and it then appears here.',
             )
           : t(
               'pages.settings.devices.empty.unavailable',

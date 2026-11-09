@@ -23,7 +23,7 @@ export function SystemNoticesToggle(): React.JSX.Element {
             {t('notifications.systemNotices.label', 'Show system notifications')}
           </Typography>
           <Typography id="system-notices-hint" variant="bodySmall" component="span" color="text.metrics">
-            {t('notifications.systemNotices.hint', 'While Elitea is in the background, a new notification also shows as a system notification.')}
+            {t('notifications.systemNotices.hint', 'While {{product}} is in the background, a new notification also shows as a system notification.')}
           </Typography>
         </>
       }

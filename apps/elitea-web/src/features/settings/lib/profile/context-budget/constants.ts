@@ -41,5 +41,5 @@ export const CONTEXT_MESSAGES = {
   SUMMARY_GUIDANCE_PLACEHOLDER:
     'Optional: emphasize decision reasons, deliverables, and unresolved risks.',
   SUMMARY_CONTRACT_DESCRIPTION:
-    'Elitea always preserves the task, constraints, key facts, decisions, completed work, open issues, next steps, and verified references in a structured summary. Your guidance only adds emphasis.',
+    '{{product}} always preserves the task, constraints, key facts, decisions, completed work, open issues, next steps, and verified references in a structured summary. Your guidance only adds emphasis.',
 };

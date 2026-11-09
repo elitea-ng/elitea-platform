@@ -217,7 +217,7 @@ function ComputerUseSettings({ ipc }: { readonly ipc: ComputerIpc }): React.JSX.
         <Alert severity="warning" data-testid="computer-read-only" data-reason={settings.read_only_reason}>
           {t(
             'desktop.computerUse.readOnly',
-            'On this session the agent can see your apps but not use them: Elitea cannot watch your keyboard and pointer here, so it could not pause when you use the computer. Sign in to an X11 session to let it act.',
+            'On this session the agent can see your apps but not use them: {{product}} cannot watch your keyboard and pointer here, so it could not pause when you use the computer. Sign in to an X11 session to let it act.',
           )}
         </Alert>
       ) : null}

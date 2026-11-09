@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { SHARED_TOUR_TARGETS } from './interactiveTour.constants';
 import { MCP_TOUR_TARGETS } from './mcpTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 /**
  * RouteDefinitions.CreateMCP — the old source checked whether the current
@@ -31,8 +32,8 @@ export const mcpTourSteps: TourStep[] = [
     id: 'what-are-mcps',
     target: SHARED_TOUR_TARGETS.workspace,
     placement: 'center',
-    title: 'What are ELITEA MCPs?',
-    content: `ELITEA MCPs (Model Context Protocol servers) are external tool providers that follow the MCP specification to expose specialized capabilities to your agents, pipelines, and conversations. Unlike native toolkits, MCPs connect to independently hosted servers — local or remote — that supply their own set of tools.
+    title: `What are ${productName()} MCPs?`,
+    content: `${productName()} MCPs (Model Context Protocol servers) are external tool providers that follow the MCP specification to expose specialized capabilities to your agents, pipelines, and conversations. Unlike native toolkits, MCPs connect to independently hosted servers — local or remote — that supply their own set of tools.
 
 Once configured, MCP tools are available everywhere toolkits are used: in agents, pipelines, and Chat, enabling automation that spans browser control, repository operations, API integrations, and other domain-specific tasks.`,
   },
@@ -61,9 +62,9 @@ Once configured, MCP tools are available everywhere toolkits are used: in agents
     content: `Each MCP card displays its current connection status so you can quickly identify and resolve connectivity issues:
 
 - **Connected** — the MCP server is reachable and its tools are available for use
-- **Disconnected** — ELITEA cannot reach the server; tools are unavailable until the connection is restored
+- **Disconnected** — ${productName()} cannot reach the server; tools are unavailable until the connection is restored
 
-For Local MCPs, the connection depends on the Elitea MCP Client running on your machine. For Remote MCPs, it depends on the server URL and authentication credentials being valid.`,
+For Local MCPs, the connection depends on the ${productName()} MCP Client running on your machine. For Remote MCPs, it depends on the server URL and authentication credentials being valid.`,
   },
   {
     id: 'test-settings',

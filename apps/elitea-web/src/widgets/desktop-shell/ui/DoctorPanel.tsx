@@ -59,7 +59,7 @@ export function DoctorPanel({ ipc }: DoctorPanelProps): React.JSX.Element {
     <Stack spacing={2}>
       <Stack direction="row" spacing={2} sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography color="text.secondary">
-          {t('desktop.doctor.intro', 'What Elitea keeps on this computer and needs from your deployment. A repair runs only when you click Fix.')}
+          {t('desktop.doctor.intro', 'What {{product}} keeps on this computer and needs from your deployment. A repair runs only when you click Fix.')}
         </Typography>
         <Button onClick={() => void runChecks()} disabled={checks === null || busy !== null}>
           {t('desktop.doctor.runAgain', 'Run again')}

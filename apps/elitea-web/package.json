@@ -21,6 +21,8 @@
     "build:desktop": "vite build --mode desktop",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint -c .oxlintrc.json",
+    "format": "prettier --write",
+    "format:check": "prettier --check",
     "test:unit": "vitest run --config vitest.config.ts --project node",
     "test:storybook": "vitest run --config vitest.config.ts --project storybook",
     "theme-gate": "node scripts/theme-gate.mjs",

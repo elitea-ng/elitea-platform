@@ -20,6 +20,7 @@ import { useIsMcpVisible } from '../api/useIsMcpVisible';
 import { useToolkitTypeSchemas } from '../api/useToolkitTypeSchemas';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
+import { productName } from '@/shared/brand';
 
 /**
  * Ported from `apps/elitea-ui/src/[fsd]/shared/lib/constants/
@@ -98,10 +99,10 @@ export const INTERNAL_TOOLS_LIST: readonly InternalToolDescriptor[] = [
   },
   {
     name: 'internal_mcp',
-    title: 'Elitea MCP Tools',
+    title: `${productName()} MCP Tools`,
     icon: 'McpIcon',
     infoTooltip: {
-      text: 'Enable Elitea platform MCP tools for managing applications (agents and pipelines), chat, and toolkits directly from conversations.',
+      text: `Enable ${productName()} platform MCP tools for managing applications (agents and pipelines), chat, and toolkits directly from conversations.`,
     },
   },
   {

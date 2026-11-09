@@ -6,6 +6,7 @@ import type { TourStep } from '../types';
 
 import { SECRETS_TOUR_TARGETS } from './secretsTourTargets.constants';
 import { SECRETS_TOUR_ID, USERS_TOUR_ID } from './tourIds.constants';
+import { productName } from '@/shared/brand';
 
 export { SECRETS_TOUR_ID };
 
@@ -24,7 +25,7 @@ export const secretsTourSteps: TourStep[] = [
     id: 'what-is-secrets',
     target: SECRETS_TOUR_TARGETS.page,
     placement: 'center',
-    title: 'What are ELITEA Secrets?',
+    title: `What are ${productName()} Secrets?`,
     content: `Secrets are a secure store for sensitive values — passwords, API keys, tokens, and other credentials — managed at the project level. Instead of entering sensitive data directly into toolkit credentials, you store the value as a secret and reference it by name. The actual value is never exposed in the credential form.
 
 Secrets are project-specific. Access requires an Editor, Admin, or System role — Viewer and Monitor roles cannot access this section.`,

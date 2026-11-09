@@ -96,7 +96,7 @@ export function LongTermMemoryFormDialog({
           <Typography variant="bodyMedium" sx={descriptionSx}>
             {t(
               'settings.longTermMemory.form.description',
-              'A fact Elitea should remember about you in every conversation, not just this one.',
+              'A fact {{product}} should remember about you in every conversation, not just this one.',
             )}
           </Typography>
           <TextField

@@ -16,6 +16,7 @@
 import { useMemo } from 'react';
 
 import { getConfig } from '@/shared/config';
+import { productName } from '@/shared/brand';
 
 /** Keys the old-app `environment_settings` section exposes. */
 export const ENVIRONMENT_KEYS = {
@@ -36,7 +37,8 @@ export const DEFAULT_TOAST_DURATION = 5000;
  * (`shared/lib/copy.ts`, `entities/participant/model/selectors.ts`) already
  * carry the baseline's `'Elitea'`, so the three disagreed.
  */
-export const DEFAULT_PARTICIPANT_NAME = 'Elitea';
+/** The assistant's name when no sender name is configured: the product's (ADR-0052 W3.3). */
+export const DEFAULT_PARTICIPANT_NAME = productName();
 
 /**
  * Result shape returned by `useEnvironmentSettingByKey`.

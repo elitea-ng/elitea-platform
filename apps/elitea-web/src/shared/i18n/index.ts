@@ -22,7 +22,7 @@ export { I18nProvider } from './I18nProvider';
  * specifically need to bypass the `fallback`-required contract; everywhere
  * else, use `t()` above.
  */
-export { i18n } from './i18n';
+export { applyProductName, i18n } from './i18n';
 
 /** The shipped languages and switching between them (`./locales.ts`). */
 export { LOCALES, applyLocale, currentLocale, detectLocale, isRtl, saveLocale, startLocale } from './locales';

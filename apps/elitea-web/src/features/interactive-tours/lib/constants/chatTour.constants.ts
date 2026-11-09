@@ -5,6 +5,7 @@
 import type { TourStep } from '../types';
 
 import { CHAT_TOUR_TARGETS } from './chatTourTargets.constants';
+import { productName } from '@/shared/brand';
 
 export const CHAT_TOUR_ID = 'chat';
 
@@ -19,10 +20,10 @@ export const chatTourSteps: TourStep[] = [
     id: 'what-is-elitea-chat',
     target: CHAT_TOUR_TARGETS.workspace,
     placement: 'left',
-    title: 'What is ELITEA Chat?',
-    content: `ELITEA Chat is the central hub where all platform capabilities come together. It provides a conversational interface where you can interact with AI models, agents, pipelines, toolkits, and MCP servers — all in one place, using natural language.
+    title: `What is ${productName()} Chat?`,
+    content: `${productName()} Chat is the central hub where all platform capabilities come together. It provides a conversational interface where you can interact with AI models, agents, pipelines, toolkits, and MCP servers — all in one place, using natural language.
 
-Each conversation is an independent dialogue session. Context is not shared between separate conversations. All conversations are stored on the ELITEA server and accessible from any device.`,
+Each conversation is an independent dialogue session. Context is not shared between separate conversations. All conversations are stored on the ${productName()} server and accessible from any device.`,
   },
   {
     id: 'conversation-list',

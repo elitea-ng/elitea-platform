@@ -187,7 +187,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1 }}>
         <LocalWorkSection location={location} run={run} projects={props.projects} projectId={selectedProjectId} />
-        <Box component="nav" aria-label={t('desktop.shell.elitea', 'Elitea')}>
+        <Box component="nav" aria-label={t('desktop.shell.elitea', '{{product}}')}>
           {hasChat && (
             <>
               <ChatsCaption open={chatsOpen} onToggle={toggleChats} onExpand={expandChats} onNewFolder={onNewFolder} onNewChat={mayCreate('chat') ? newChat : undefined} />

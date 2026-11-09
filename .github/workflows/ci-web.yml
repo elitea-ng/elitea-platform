@@ -46,6 +46,10 @@ on:
       # feature-parity table is NOT here: its gate runs in no-binaries.yml,
       # so a table-only edit does not start this pipeline.
       - "libs/ts/client-core/**"
+      # The build reads its brand (ADR-0052) from brand/<id>/ through the loader.
+      - "brand/elitea/**"
+      - "brand/sample/**"
+      - "scripts/brand/**"
       - ".github/workflows/ci-web.yml"
   # No push arm: a merge starts no run (scripts/ci/check-no-push-triggers.mjs).
   # The nightly run on main is the one that WRITES the caches pull requests

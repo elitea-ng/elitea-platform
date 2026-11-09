@@ -30,13 +30,15 @@
  * all) are left without it, matching the old app (which never branches on
  * `params.tab` for those four either).
  */
+import { productName } from '@/shared/brand';
+
 const SECTION_BY_PREFIX: ReadonlyArray<{ prefix: string; label: string; hasTab?: true }> = [
   { prefix: '/chat', label: 'Chat' },
   { prefix: '/agents-hub', label: 'Agent HUB' },
   // `/elitea-catalog` is where `/agents-hub` now redirects; listed here so
   // the title is the catalogue's, not a fallback (baseline
   // `useBrowserPageTitle.js:23` branches on the same prefix).
-  { prefix: '/elitea-catalog', label: 'ELITEA Catalog' },
+  { prefix: '/elitea-catalog', label: `${productName()} Catalog` },
   { prefix: '/agents', label: 'Agents', hasTab: true },
   { prefix: '/pipelines', label: 'Pipelines', hasTab: true },
   { prefix: '/toolkits', label: 'Toolkits', hasTab: true },

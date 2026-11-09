@@ -7,11 +7,14 @@
  * no rebuild. The resolution order is the same for each field:
  *
  *   1. the served pack (channel C, `resolveBrandPack()`), when it states it;
- *   2. the compiled default pack (channel A), when it states it;
- *   3. the literal the app shipped with before the pack carried the field.
+ *   2. the compiled default pack (channel A, the build's brand), when it
+ *      states it;
+ *   3. for the docs origin only, the literal the app shipped with before the
+ *      pack carried the field. A support address has no literal (ADR-0052
+ *      W3.5): with neither pack stating one, the app shows no support link,
+ *      never another brand's mailbox.
  *
- * Step 3 keeps the current appearance for a deployment whose pack predates
- * the field. It is the ONLY place those literals may appear: the theme gate
+ * The docs literal may appear only here: the theme gate
  * (`scripts/theme-gate.mjs` check 8) fails any sub-application screen that
  * writes `docs.elitea.ai` itself.
  *
@@ -36,12 +39,6 @@ import { DEFAULT_BRAND_PACK } from './tokens';
  */
 const FALLBACK_DOCS_URL = 'https://docs.elitea.ai';
 
-/**
- * The pre-pack support address (the baseline's
- * `APPLICATION_REQUEST_SUPPORT_EMAIL`). Fallback 3 for `supportEmail`.
- */
-export const FALLBACK_SUPPORT_EMAIL = 'SupportAlita@epam.com';
-
 function trimSlashes(value: string, side: 'leading' | 'trailing'): string {
   return side === 'leading' ? value.replace(/^\/+/, '') : value.replace(/\/+$/, '');
 }
@@ -63,17 +60,21 @@ export function docsLink(pathSuffix: string, pack: BrandPack = resolveBrandPack(
   return suffix.length === 0 ? base : `${base}/${suffix}`;
 }
 
-/** The support mailbox the app names to a user. */
-export function supportEmail(pack: BrandPack = resolveBrandPack()): string {
-  return pack.product.supportEmail ?? DEFAULT_BRAND_PACK.product.supportEmail ?? FALLBACK_SUPPORT_EMAIL;
+/** The support mailbox the app names to a user; `undefined` when no pack states one (show no link). */
+export function supportEmail(pack: BrandPack = resolveBrandPack()): string | undefined {
+  return pack.product.supportEmail ?? DEFAULT_BRAND_PACK.product.supportEmail;
 }
 
 /**
  * The support destination as a link target: the pack's `supportUrl` when it
- * states one, else a `mailto:` to `supportEmail()`.
+ * states one, else a `mailto:` to `supportEmail()`, else `undefined` (show no
+ * link).
  *
  * @public Wave-1 surface — the help-center and request-access flows link to it once they carry a contact action.
  */
-export function supportUrl(pack: BrandPack = resolveBrandPack()): string {
-  return pack.product.supportUrl ?? DEFAULT_BRAND_PACK.product.supportUrl ?? `mailto:${supportEmail(pack)}`;
+export function supportUrl(pack: BrandPack = resolveBrandPack()): string | undefined {
+  const url = pack.product.supportUrl ?? DEFAULT_BRAND_PACK.product.supportUrl;
+  if (url !== undefined) return url;
+  const email = supportEmail(pack);
+  return email === undefined ? undefined : `mailto:${email}`;
 }

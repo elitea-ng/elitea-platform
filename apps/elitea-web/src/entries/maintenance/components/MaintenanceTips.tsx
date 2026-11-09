@@ -12,7 +12,7 @@ const introText = t(
   'While we get things ready behind the scenes, why not explore some helpful resources?',
 );
 const tipsLinkLabel = t('entries.maintenance.tips.tipsLinkLabel', 'Tips & Features');
-const tipsLineSuffix = t('entries.maintenance.tips.tipsLineSuffix', 'to get the most out of Elitea');
+const tipsLineSuffix = t('entries.maintenance.tips.tipsLineSuffix', 'to get the most out of {{product}}');
 const tipsLinePrefix = t('entries.maintenance.tips.tipsLinePrefix', 'Discover our');
 const docsLinkLabel = t('entries.maintenance.tips.docsLinkLabel', 'Documentation.');
 const docsLinePrefix = t('entries.maintenance.tips.docsLinePrefix', 'Browse our guides in');

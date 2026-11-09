@@ -38,6 +38,8 @@ const PUBLIC_SURFACE = [
   'isSameOriginAssetPath',
   'parseBrandPack',
   'primaryContrastOf',
+  'productFullName',
+  'productName',
   'resolveBrandAsset',
   'resolveBrandPack',
   'resolveScheme',

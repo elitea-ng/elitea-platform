@@ -74,7 +74,7 @@ function Summary({ preview }: { preview: HandoffPreview }): React.JSX.Element {
       </Typography>
       {preview.shadow && (
         <Typography variant="bodySmall" sx={mutedSx}>
-          {t('workspace.handoff.shadow', 'This folder is not a git repository, so Elitea tracks its changes in a private copy kept in the app’s data.')}
+          {t('workspace.handoff.shadow', 'This folder is not a git repository, so {{product}} tracks its changes in a private copy kept in the app’s data.')}
         </Typography>
       )}
     </Box>

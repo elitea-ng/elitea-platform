@@ -63,7 +63,7 @@ export function LongTermMemoryTable({ rows, isLoading, canWrite, onEdit, onToggl
         <Typography variant="bodyMedium">
           {t(
             'settings.longTermMemory.table.empty',
-            'No memories yet. Save something for Elitea to remember across your conversations.',
+            'No memories yet. Save something for {{product}} to remember across your conversations.',
           )}
         </Typography>
       </Paper>
