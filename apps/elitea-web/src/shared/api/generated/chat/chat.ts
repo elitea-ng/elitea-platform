@@ -7527,6 +7527,17 @@ export const getStartLocalTurnUrl = (
  * `created: false` and a fresh recall. The same `question_id` in another
  * conversation, or for another participant, answers 409; after the
  * commit, 409 `local_turn_already_committed`.
+ *
+ * SEVERAL AGENTS (client contract 1.46, ADR-0050 decision 7f). In a
+ * thread with two or more agent participants Main decides who answers,
+ * by the conversation's floor (`meta.floor`), as it does for a cloud
+ * message: send the person's addressees as `addressed_to` and the
+ * composer's target as `participant_id`. The answer's `floor` names the
+ * routed order; the first target answers this turn. Run the others
+ * one at a time, each after the previous turn's commit, with
+ * `floor_turn`. `executor` says where the answering agent runs: a
+ * `cloud` agent gets only the conversation text and attached files,
+ * never the workspace.
  * @summary Start an agent turn that runs on the caller's machine
  */
 export const startLocalTurn = async (
