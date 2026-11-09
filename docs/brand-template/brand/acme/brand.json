@@ -1,0 +1,39 @@
+{
+  "$comment": "Your brand (ADR-0052). Rename the folder and every id from acme to yours before the first build: mobile.bundleId, mobile.appGroup and desktop.identifier are permanent once a build is uploaded. Format: ELITEA docs, Development > Brands. Check: node elitea/scripts/brand-check.mjs brand/acme.",
+  "formatVersion": 1,
+  "id": "acme",
+  "productName": "Acme Assistant",
+  "shortName": "Acme",
+  "publisher": "Acme Corporation",
+  "mobile": {
+    "bundleId": "com.example.acme",
+    "connectSchemes": [
+      "acme"
+    ],
+    "oauthRedirectScheme": "com.example.acme",
+    "appGroup": "group.com.example.acme",
+    "widgetBundleId": "com.example.acme.widgets"
+  },
+  "desktop": {
+    "identifier": "com.example.acme.desktop"
+  },
+  "linkDomain": "acme.example.com",
+  "webUrl": "https://acme.example.com",
+  "privacyUrl": "https://acme.example.com/privacy",
+  "supportUrl": "https://acme.example.com/support",
+  "supportEmail": "support@acme.example.com",
+  "docsUrl": "/docs/",
+  "brand": {
+    "hue": "#7c3aed"
+  },
+  "eas": {
+    "projectId": null,
+    "owner": null
+  },
+  "updates": {
+    "mode": "off"
+  },
+  "push": {
+    "relay": "none"
+  }
+}

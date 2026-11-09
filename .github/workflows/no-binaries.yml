@@ -85,7 +85,10 @@ jobs:
           # ci-mobile and ci-desktop (ADR-0052 W4); its rules are tested here.
           # check-upgrading-notes.mjs keeps upgrade notes one file per change
           # (docs/upgrading/) and docs/UPGRADING.md closed; it runs below.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes brand-output-scan; do
+          # brand-template tests the brand repository template (ADR-0052 W5,
+          # docs/brand-template/) against this tree: its brand passes
+          # brand-check, its secrets match the packaging actions.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes brand-output-scan brand-template; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
@@ -673,3 +676,10 @@ jobs:
           fi
           "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}"
           echo "actionlint: ${count} workflow file(s) clean"
+          # The brand repository template's workflows (docs/brand-template/):
+          # linted as the repository they become, so its own paths resolve.
+          template="${RUNNER_TEMP}/brand-template"
+          rm -rf "${template}" && cp -R docs/brand-template "${template}"
+          git -C "${template}" init -q
+          (cd "${template}" && "${RUNNER_TEMP}/actionlint" -color -shellcheck "${shellcheck}")
+          echo "actionlint: the brand template's workflows are clean"

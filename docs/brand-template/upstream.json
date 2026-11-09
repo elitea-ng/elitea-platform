@@ -1,0 +1,6 @@
+{
+  "$comment": "The ELITEA release this brand builds (ADR-0052 decision 6). v7.6.0 is the first release that carries brand repositories (the packaging actions, docs: Build your own brand); scripts/check-release.mjs refuses an older one. The release-watch workflow opens a pull request when a newer release appears on the channel: `stable` follows vX.Y.Z only, `prerelease` also follows nightlies. Merging that pull request is the upgrade.",
+  "repository": "elitea-ng/elitea-platform",
+  "tag": "v7.6.0",
+  "channel": "stable"
+}
