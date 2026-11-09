@@ -3017,11 +3017,19 @@ main:
     #   - client_id: ai.elitea.app
     #     display_name: Elitea AI
     #     redirect_uris: ["ai.elitea.app:/oauth/callback"]
+    #   - client_id: desktop          # ELITEA's desktop app (ELITEA_DESKTOP_CLIENT_ID)
+    #     display_name: Elitea AI
+    #     redirect_uris: ["http://127.0.0.1/callback"]
     #   - client_id: com.example.acme
     #     display_name: Acme Assistant
     #     redirect_uris: ["com.example.acme:/oauth/callback"]
-    #     min_client_version: 2.0.0   # optional, only raises the deployment's
-    #     enabled: true               # false refuses that brand's sign-in only
+    #     # Optional: this app's oldest served version (it can only raise
+    #     # the deployment-wide minimum) and a per-client switch (false
+    #     # refuses this client's sign-in only; default true).
+    #     min_client_version: 2.0.0
+    #     enabled: true
+    # A second brand's desktop app is one more entry with its own client id
+    # and the same loopback redirect.
     ELITEA_NATIVE_ACCESS_TOKEN_TTL: ""
     ELITEA_NATIVE_REFRESH_IDLE_TTL: ""
     ELITEA_NATIVE_SESSION_MAX_LIFETIME: ""

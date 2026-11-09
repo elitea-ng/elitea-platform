@@ -206,24 +206,30 @@ type stack struct {
 	clockMu   sync.Mutex
 }
 
-type stackOption func(*nativeapi.Config, *domain.Config)
+// stackSetup is what an option may change beyond the two configs.
+type stackSetup struct {
+	// fileClients is the registry's file layer; nil keeps fileClient().
+	fileClients []domain.Client
+}
+
+type stackOption func(*nativeapi.Config, *domain.Config, *stackSetup)
 
 func withRedelivery(window time.Duration) stackOption {
-	return func(_ *nativeapi.Config, cfg *domain.Config) { cfg.RedeliveryWindow = window }
+	return func(_ *nativeapi.Config, cfg *domain.Config, _ *stackSetup) { cfg.RedeliveryWindow = window }
 }
 
 func withAuthenticate(authenticate func(http.Handler) http.Handler) stackOption {
-	return func(cfg *nativeapi.Config, _ *domain.Config) { cfg.Authenticate = authenticate }
+	return func(cfg *nativeapi.Config, _ *domain.Config, _ *stackSetup) { cfg.Authenticate = authenticate }
 }
 
 // withFileClients replaces the conformance client with these file-layer
 // clients (the NATIVE_CLIENTS_PATH layer a deployment boots with).
 func withFileClients(clients ...domain.Client) stackOption {
-	return func(cfg *nativeapi.Config, _ *domain.Config) { cfg.Registry = domain.NewRegistry(clients, nil) }
+	return func(_ *nativeapi.Config, _ *domain.Config, setup *stackSetup) { setup.fileClients = clients }
 }
 
 func withSessionMaxLifetime(lifetime time.Duration) stackOption {
-	return func(_ *nativeapi.Config, cfg *domain.Config) { cfg.SessionMaxLifetime = lifetime }
+	return func(_ *nativeapi.Config, cfg *domain.Config, _ *stackSetup) { cfg.SessionMaxLifetime = lifetime }
 }
 
 // fileClient is the conformance client from the plan's file layer.
@@ -250,15 +256,14 @@ func newStack(t *testing.T, options ...stackOption) *stack {
 		Authenticate: apimw.Auth(authConfig),
 		Audit:        s.audit,
 	}
+	setup := stackSetup{}
 	for _, option := range options {
-		option(&handlerConfig, &storeConfig)
+		option(&handlerConfig, &storeConfig, &setup)
 	}
-	fileLayer := []domain.Client{fileClient()}
-	if handlerConfig.Registry != nil {
-		// withFileClients: keep its file layer, over this test's database.
-		fileLayer = handlerConfig.Registry.FileClients()
+	if setup.fileClients == nil {
+		setup.fileClients = []domain.Client{fileClient()}
 	}
-	s.registry = domain.NewRegistry(fileLayer, pool)
+	s.registry = domain.NewRegistry(setup.fileClients, pool)
 	s.store = domain.NewStore(pool, storeConfig)
 	s.store.SetClock(s.clock)
 	s.validator = domain.NewAccessValidator(pool)

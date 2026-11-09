@@ -89,20 +89,44 @@ func TestTwoBrandsSignInEachWithItsOwnRedirect(t *testing.T) {
 	}
 	// Nor can one brand's code be redeemed as the other brand.
 	code := s.signInWith(userID, "two-brands@example.test", eliteaApp.authorize(nil))
-	if recorder := s.exchangeAs(acmeApp, code); recorder.Code == http.StatusOK {
-		t.Fatalf("ELITEA's code redeemed as acme: %s", recorder.Body.String())
+	recorder := s.exchangeAs(acmeApp, code)
+	var refusal tokenResponse
+	_ = json.Unmarshal(recorder.Body.Bytes(), &refusal)
+	if recorder.Code != http.StatusBadRequest || refusal.Error != "invalid_grant" {
+		t.Fatalf("ELITEA's code as acme = %d %s, want 400 invalid_grant", recorder.Code, recorder.Body.String())
 	}
 }
 
 func TestDisablingOneBrandRefusesOnlyItsSignIn(t *testing.T) {
 	s := newBrandsStack(t)
 	userID := s.seedUser("disable-brand@example.test")
+	// A device of each brand, signed in before the switch-off.
+	acmeDevice := s.exchangeAs(acmeApp, s.signInWith(userID, "disable-brand@example.test", acmeApp.authorize(nil)))
+	eliteaDevice := s.exchangeAs(eliteaApp, s.signInWith(userID, "disable-brand@example.test", eliteaApp.authorize(nil)))
+	var acmeTokens, eliteaTokens tokenResponse
+	_ = json.Unmarshal(acmeDevice.Body.Bytes(), &acmeTokens)
+	_ = json.Unmarshal(eliteaDevice.Body.Bytes(), &eliteaTokens)
+	if acmeTokens.DeviceID == "" || eliteaTokens.DeviceID == "" {
+		t.Fatalf("sign-ins before the disable: acme %s, ELITEA %s", acmeDevice.Body.String(), eliteaDevice.Body.String())
+	}
+
 	disabled := acmeApp.client("Acme Assistant")
 	disabled.Enabled = false
-	if _, err := s.store.UpsertClient(context.Background(), disabled, 0); err != nil {
+	revoked, err := s.store.UpsertClient(context.Background(), disabled, 0)
+	if err != nil {
 		t.Fatalf("disable acme: %v", err)
 	}
 	s.registry.Invalidate()
+	// The admin save signs out that brand's devices, and only those.
+	if revoked != 1 || s.family(acmeTokens.DeviceID).revokedAt == nil {
+		t.Fatalf("disable revoked %d devices, acme family %+v; want acme's one device revoked", revoked, s.family(acmeTokens.DeviceID))
+	}
+	if state := s.family(eliteaTokens.DeviceID); state.revokedAt != nil {
+		t.Fatalf("ELITEA's device was revoked by acme's disable: %+v", state)
+	}
+	if got := s.whoami(eliteaTokens.AccessToken); got.Code != http.StatusOK {
+		t.Fatalf("ELITEA's token after acme's disable = %d, want 200", got.Code)
+	}
 
 	refused := s.do(http.MethodGet, authorizeQuery(acmeApp.authorize(nil)), nil)
 	if refused.Code != http.StatusBadRequest || !strings.Contains(refused.Body.String(), "not registered with this server") {
