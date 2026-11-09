@@ -226,3 +226,10 @@ Use Conventional Commits. Keep architecture-document changes in `elitea-docs`
 and implementation changes here linked by the relevant ADR/specification. Pull
 requests must state the compatibility surface changed, security assumptions,
 failure modes exercised, and checks that were run or intentionally skipped.
+
+**Upgrade notes are one file per change.** A change that needs an operator to
+act on upgrade adds `docs/upgrading/YYYY-MM-DD-<issue>-<slug>.md`
+(`docs/upgrading/README.md`). Do not edit `docs/UPGRADING.md`: it is the closed
+history up to 2026-11-09, and `scripts/ci/check-upgrading-notes.mjs` fails a pull
+request that adds an entry to it. A shared list made every two open pull
+requests conflict.

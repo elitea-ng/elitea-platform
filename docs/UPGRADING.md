@@ -1,26 +1,16 @@
 # Upgrading
 
 Changes that need an operator to act when a deployment moves to a newer
-release. Each entry says what changed, who is affected, and what to do. The
-newest entry is first.
+release. Each entry says what changed, who is affected, and what to do.
 
-## Desktop: MDM packages, and a new signing secret for releases (#1697, ADR-0052 W2b)
+**New entries are in [`docs/upgrading/`](upgrading/), one file per change**
+(the file name starts with the date, so they sort oldest first). Read those first, then the entries below.
 
-The desktop app is now built for device management: a universal macOS app,
-notarised, inside a signed, notarised `.pkg` that installs silently into
-`/Applications` (`.github/workflows/desktop-package.yml`). Nothing is
-attached to a release; the brand owner runs the workflow by hand with
-`keep_artifacts` to get the package (see Admin › Managed devices in the docs).
-
-- **Repository admins: add `APPLE_INSTALLER_SIGNING_IDENTITY`** — the full
-  name of a **Developer ID Installer** identity (`Developer ID Installer:
-  <Name> (<TEAMID>)`), exported into the same `.p12` as
-  `APPLE_CERTIFICATE`. Until it is set, a release's `desktop` check fails
-  ("macOS signing secrets not set"); the images and charts are still
-  released, and the job can be re-run alone once the secret is there.
-- **Windows (MSI, MSIX):** wired but off until the desktop host builds on
-  Windows (#1828). Its secrets (Azure Artifact Signing or a PFX, plus
-  `WINDOWS_PUBLISHER`) are listed in `apps/elitea-desktop/README.md`.
+**This file is closed to new entries.** Every pull request used to add its
+entry at the top of this file, so any two open pull requests conflicted here.
+The entries below, newest first, are the history up to 2026-11-09. Chart
+guards and values comments name them by title, so they stay where they are.
+`scripts/ci/check-upgrading-notes.mjs` fails a pull request that adds one.
 
 ## Mobile: Android managed configuration, `lock_server`, read-only managed server (#1688, ADR-0052 W1b)
 
