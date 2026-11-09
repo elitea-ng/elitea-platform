@@ -214,9 +214,15 @@ jobs:
         run: |
           set -euo pipefail
           bin="${DESKTOP_APP}/Contents/MacOS/elitea-desktop"
-          lipo "$bin" -verify_arch arm64 x86_64
-          lipo "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar" -verify_arch arm64 x86_64
-          lipo -info "$bin"
+          # `lipo -archs` (not -verify_arch, whose argument rules differ between Xcode
+          # releases): each binary holds exactly arm64 and x86_64.
+          for f in "$bin" "${DESKTOP_APP}/Contents/MacOS/elitea-doc-extract-sidecar"; do
+            archs="$(lipo -archs "$f" | tr ' ' '\n' | sort | xargs)"
+            if [ "$archs" != "arm64 x86_64" ]; then
+              echo "::error::$(basename "$f") holds \"$archs\", not arm64 and x86_64"; exit 1
+            fi
+            echo "$(basename "$f"): $archs"
+          done
 
       # A component package that installs into /Applications with no UI: Jamf, Intune
       # for macOS, Kandji and `sudo installer -pkg … -target /` install it silently.
