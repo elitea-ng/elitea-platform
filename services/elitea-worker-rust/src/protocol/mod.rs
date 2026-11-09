@@ -3,6 +3,7 @@ pub mod command;
 pub mod control;
 pub mod delegation;
 pub mod egress;
+pub(crate) mod ephemeral_agents;
 mod error;
 pub mod node_event;
 pub mod output;

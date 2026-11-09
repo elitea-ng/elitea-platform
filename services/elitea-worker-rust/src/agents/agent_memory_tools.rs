@@ -115,17 +115,57 @@ impl AgentMemoryBinding {
     }
 }
 
+/// The most entries one turn's recorder keeps.
+const MAX_RECALLED_ENTRIES: usize = 256;
+
+/// The entries `recall` returned in this turn, by id, with their content
+/// (#1614): a `spawn_agent` brief may name only these, so a creator passes
+/// on only what it recalled itself. One per turn, shared between the
+/// `recall` tool and the sub-agent host.
+#[derive(Default)]
+pub(crate) struct RecalledEntries {
+    entries: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+}
+
+impl RecalledEntries {
+    fn record(&self, entries: &[crate::transport::runtime_context::AgentMemoryRecalledEntry]) {
+        if let Ok(mut recalled) = self.entries.lock() {
+            for entry in entries {
+                if recalled.len() >= MAX_RECALLED_ENTRIES && !recalled.contains_key(&entry.entry_id)
+                {
+                    break;
+                }
+                recalled.insert(entry.entry_id.clone(), entry.content.clone());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_for_test(&self, entry_id: &str, content: &str) {
+        if let Ok(mut recalled) = self.entries.lock() {
+            recalled.insert(entry_id.to_owned(), content.to_owned());
+        }
+    }
+
+    /// The content of an entry recalled this turn.
+    #[must_use]
+    pub(crate) fn content(&self, entry_id: &str) -> Option<String> {
+        self.entries.lock().ok()?.get(entry_id).cloned()
+    }
+}
+
 /// The live claim the tools act under, shared for the run.
 #[derive(Clone)]
 pub(crate) struct AgentMemoryAuthority {
     platform: Arc<PlatformClient>,
     authority: Arc<ClaimBoundRuntimeContextAuthority>,
     untrusted: Arc<UntrustedReads>,
+    recalled: Arc<RecalledEntries>,
 }
 
 impl AgentMemoryAuthority {
     #[must_use]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         platform: Arc<PlatformClient>,
         authority: Arc<ClaimBoundRuntimeContextAuthority>,
         untrusted: Arc<UntrustedReads>,
@@ -134,7 +174,15 @@ impl AgentMemoryAuthority {
             platform,
             authority,
             untrusted,
+            recalled: Arc::new(RecalledEntries::default()),
         }
+    }
+
+    /// Record what `recall` returns into `recalled` (the turn's recorder).
+    #[must_use]
+    pub(crate) fn with_recalled(mut self, recalled: Arc<RecalledEntries>) -> Self {
+        self.recalled = recalled;
+        self
     }
 }
 
@@ -339,11 +387,14 @@ impl Tool for RecallTool {
             .recall_agent_memory(&self.authority.authority, &request)
             .await
         {
-            Ok(outcome) => Ok(json!({
-                "status": "ok",
-                "note": DATA_NOTE,
-                "entries": outcome.entries,
-            })),
+            Ok(outcome) => {
+                self.authority.recalled.record(&outcome.entries);
+                Ok(json!({
+                    "status": "ok",
+                    "note": DATA_NOTE,
+                    "entries": outcome.entries,
+                }))
+            }
             Err(transport) => Ok(failure(RECALL, &host_error(&transport))),
         }
     }
@@ -423,6 +474,21 @@ mod tests {
 
     fn meta(raw: &str) -> Map<String, Value> {
         serde_json::from_str(raw).expect("meta")
+    }
+
+    #[test]
+    fn the_recorder_keeps_what_recall_returned() {
+        let recalled = RecalledEntries::default();
+        let entry = |id: &str| crate::transport::runtime_context::AgentMemoryRecalledEntry {
+            entry_id: id.to_owned(),
+            kind: "fact".to_owned(),
+            content: format!("note {id}"),
+            about_user: String::new(),
+            pinned: false,
+        };
+        recalled.record(&[entry("1"), entry("2")]);
+        assert_eq!(recalled.content("2").as_deref(), Some("note 2"));
+        assert_eq!(recalled.content("3"), None);
     }
 
     #[test]
