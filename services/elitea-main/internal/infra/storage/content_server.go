@@ -124,11 +124,11 @@ type ContentServer struct {
 	runtimeProposeAgent *RuntimeProposeAgentService
 	// runtimeProposeDismissal serves propose_dismissal (#1616).
 	runtimeProposeDismissal *RuntimeProposeDismissalService
-	runtimeArtifacts    *RuntimeArtifactObjectService
-	sandboxBundles      *SandboxBundleContentService
-	compiledSnapshots   *CompiledSnapshotContentService
-	maxBytes            int64
-	requests            chan struct{}
+	runtimeArtifacts        *RuntimeArtifactObjectService
+	sandboxBundles          *SandboxBundleContentService
+	compiledSnapshots       *CompiledSnapshotContentService
+	maxBytes                int64
+	requests                chan struct{}
 	// attachmentRequests is the attachment route's OWN pool. One attachment
 	// read can wait up to attachmentExtractionWait for an extraction, so in
 	// the shared pool a burst of first-time PDFs would answer 503 to every

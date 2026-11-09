@@ -31,7 +31,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/unattendedwire"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/handoffcontinue"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runmandate"
@@ -39,6 +38,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workspacehandoff"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime/securitycontext"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 )

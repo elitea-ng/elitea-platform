@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"

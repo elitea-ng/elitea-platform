@@ -99,6 +99,11 @@ const (
 	// TrimAgentPermissions removes an agent's unused tools, toolkits,
 	// credential grants and egress hosts in a project.
 	TrimAgentPermissions Capability = "trim_agent_permissions"
+	// ManageAgentWorkforce decides agent dismissal and demotion proposals,
+	// applies a ladder stage (suspend, retire, delete), reinstates a
+	// retired agent and reviews an owner's appeal (ADR-0050 decision 5g,
+	// shared 0245).
+	ManageAgentWorkforce Capability = "manage_agent_workforce"
 )
 
 // ExportPermission gates the admin export (administration mode). Shared
@@ -191,6 +196,7 @@ var Capabilities = map[string][]Capability{
 	"credentials.inventory.read":    {ReviewCredentials},
 	"credentials.inventory.manage":  {RevokeCredentials},
 	"agents.trimming.manage":        {TrimAgentPermissions},
+	"agents.workforce.manage":       {ManageAgentWorkforce},
 	"models.admin.audit_trail.view": {ReadAuditTrail},
 
 	// Access.

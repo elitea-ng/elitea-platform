@@ -411,9 +411,9 @@ type GuardSubject struct {
 	ProposerApplicationID int64
 	ProposerTier          string
 	// ProposerIsHR is the proposer version's can_review_agents.
-	ProposerIsHR bool
-	TargetApplicationID   int64
-	TargetTier            string
+	ProposerIsHR        bool
+	TargetApplicationID int64
+	TargetTier          string
 	// TargetIsHR: some version of the target sets can_review_agents.
 	TargetIsHR bool
 	// TargetHiredProposer: the target proposed the agent that is proposing
@@ -461,22 +461,22 @@ func ExemptFromAutomatic(tier string, legalHold bool) bool {
 // Scorecard is one agent's daily scorecard (ADR-0050 decision 5h): platform
 // data only, no transcript.
 type Scorecard struct {
-	Day                    string     `json:"day"`
-	Runs30d                int        `json:"runs_30d"`
-	Failed30d              int        `json:"failed_30d"`
-	CapReached30d          int        `json:"cap_reached_30d"`
-	FailureRate30d         float64    `json:"failure_rate_30d"`
-	BreakerTrips7d         int        `json:"breaker_trips_7d"`
-	ApprovalRejections30d  int        `json:"approval_rejections_30d"`
-	GuardrailHits30d       int        `json:"guardrail_hits_30d"`
-	Spend30dUSD            float64    `json:"spend_30d_usd"`
-	ProjectMedianSpendUSD  float64    `json:"project_median_spend_usd"`
-	ThumbsUp30d            int        `json:"thumbs_up_30d"`
-	ThumbsDown30d          int        `json:"thumbs_down_30d"`
-	LastUsedAt             *time.Time `json:"last_used_at"`
-	UnusedDays             *int       `json:"unused_days"`
-	CertificationState     string     `json:"certification_state"`
-	ComputedAt             time.Time  `json:"computed_at"`
+	Day                   string     `json:"day"`
+	Runs30d               int        `json:"runs_30d"`
+	Failed30d             int        `json:"failed_30d"`
+	CapReached30d         int        `json:"cap_reached_30d"`
+	FailureRate30d        float64    `json:"failure_rate_30d"`
+	BreakerTrips7d        int        `json:"breaker_trips_7d"`
+	ApprovalRejections30d int        `json:"approval_rejections_30d"`
+	GuardrailHits30d      int        `json:"guardrail_hits_30d"`
+	Spend30dUSD           float64    `json:"spend_30d_usd"`
+	ProjectMedianSpendUSD float64    `json:"project_median_spend_usd"`
+	ThumbsUp30d           int        `json:"thumbs_up_30d"`
+	ThumbsDown30d         int        `json:"thumbs_down_30d"`
+	LastUsedAt            *time.Time `json:"last_used_at"`
+	UnusedDays            *int       `json:"unused_days"`
+	CertificationState    string     `json:"certification_state"`
+	ComputedAt            time.Time  `json:"computed_at"`
 }
 
 // Finish fills the derived fields: the failure rate (cap stops are not
