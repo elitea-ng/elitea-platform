@@ -79,6 +79,36 @@ export function hasManagedConfig(config: ManagedConfig): boolean {
   return Object.values(config).some((v) => v !== null);
 }
 
+/** The keys the app reads (the schema above): any other key is not ours to report on. */
+export const MANAGED_KEYS: readonly string[] = Object.freeze(Object.keys(Managed.shape));
+
+/**
+ * What the MDM delivered, as the app saw it: whether a managed dictionary is
+ * there at all (even one whose every value was ignored), and which of OUR keys
+ * it set to a value the parser refused. MDM feedback reports both
+ * (src/security/managedFeedback.ts); nothing else reads them.
+ */
+export interface ManagedDelivery {
+  present: boolean;
+  ignoredKeys: readonly string[];
+}
+
+export const NO_MANAGED_DELIVERY: Readonly<ManagedDelivery> = Object.freeze({ present: false, ignoredKeys: Object.freeze([]) });
+
+export function managedDelivery(raw: unknown, parsed: ManagedConfig = parseManagedConfig(raw)): ManagedDelivery {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return NO_MANAGED_DELIVERY;
+  const dict = raw as Record<string, unknown>;
+  const byKey: Record<string, unknown> = {
+    server_url: parsed.serverUrl,
+    lock_server: parsed.lockServer,
+    require_device_lock: parsed.requireDeviceLock,
+    idle_lock_seconds: parsed.idleLockSeconds,
+    allow_screenshots: parsed.allowScreenshots,
+  };
+  const ignoredKeys = MANAGED_KEYS.filter((key) => key in dict && dict[key] !== undefined && byKey[key] === null);
+  return { present: Object.keys(dict).length > 0, ignoredKeys: Object.freeze(ignoredKeys) };
+}
+
 /**
  * The latest `settingsUpdated` body (RCTSettingsManager sends the WHOLE
  * NSUserDefaults dictionary on every change). Once one has arrived it is the
@@ -127,19 +157,28 @@ function readNative(): unknown {
 }
 
 let current: ManagedConfig = NO_MANAGED_CONFIG;
-let currentKey = JSON.stringify(current);
+let delivery: ManagedDelivery = NO_MANAGED_DELIVERY;
+let currentKey = JSON.stringify([current, delivery]);
 const listeners = new Set<() => void>();
 
 export function getManagedConfig(): ManagedConfig {
   return current;
 }
 
+export function getManagedDelivery(): ManagedDelivery {
+  return delivery;
+}
+
 /** Re-reads the managed dictionary (launch, an MDM push while running). */
 export function refreshManagedConfig(read: () => unknown = readNative): ManagedConfig {
-  const next = parseManagedConfig(read());
-  const key = JSON.stringify(next);
+  const raw = read();
+  const next = parseManagedConfig(raw);
+  const nextDelivery = managedDelivery(raw, next);
+  const key = JSON.stringify([next, nextDelivery]);
   if (key !== currentKey) {
-    current = next;
+    // The config object changes only when the config does (useManagedConfig, managedServerOrigin's cache).
+    if (JSON.stringify(next) !== JSON.stringify(current)) current = next;
+    delivery = nextDelivery;
     currentKey = key;
     for (const listener of [...listeners]) listener();
   }

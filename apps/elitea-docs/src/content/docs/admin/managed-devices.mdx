@@ -17,6 +17,19 @@ An MDM or EMM can configure the mobile app on the devices it manages. On iOS the
 
 The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
 
+### What the app reports back
+
+While a managed configuration is set, the app reports its state to the MDM, so you can see a misconfigured or signed-out app in the console. On iOS this is managed app feedback, the `com.apple.feedback.managed` dictionary. On Android it is keyed app states, which Intune, Workspace ONE, Test DPC and the Android Management API show.
+
+| Key | Fine | Needs a look |
+|---|---|---|
+| `managed_config` | `applied` | `ignored_keys`, with the names of keys whose value had the wrong type |
+| `connection` | `managed_server`, `not_connected` | `managed_server_invalid` (`server_url` is not a workspace address), `other_server` (connected somewhere other than `server_url`) |
+| `sign_in` | `signed_in`, `signed_out` | `signed_out_device_revoked`, `signed_out_credential_rejected`, `signed_out_policy`, `signed_out_managed_server` |
+| `policy` | `ok` | `update_required`, with the minimum version the workspace asks for |
+
+The app never reports user content: no server address, account, project, name, email, message or error text. Without a managed configuration it reports nothing.
+
 ### Microsoft Intune
 
 - **iOS:** Apps › App configuration policies › Add › Managed devices. Choose the app and enter the keys in the configuration designer, or as XML:
