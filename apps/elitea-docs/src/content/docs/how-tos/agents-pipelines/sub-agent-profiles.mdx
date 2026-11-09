@@ -19,7 +19,7 @@ An agent with the `subagents` internal tool starts a sub-agent with `spawn_agent
     "avatar": "default:owl"
   },
   "context": {
-    "excerpts": [{"message_id": "6f1d1c2e-…", "quote": "We ship on Friday after the review."}],
+    "excerpts": [{"message_id": "m-3f9a0c12be", "quote": "We ship on Friday after the review."}],
     "attachments": ["att-0011aabb"],
     "facts": ["The staging cluster runs Kubernetes 1.33."],
     "memory_entries": ["42"]
@@ -45,10 +45,23 @@ A brief may contain at most 20 entries of each kind. The agent can pass only wha
 
 | Entry | The check | Refusal |
 | --- | --- | --- |
-| `excerpts` | `quote` is an exact part of the message `message_id` in the agent's own view of the conversation. | `BRIEF_EXCERPT_NOT_VISIBLE` |
+| `excerpts` | `quote` is an exact part of the text of the message `message_id`, as the agent reads it. A run of spaces or line breaks counts as one space. | `BRIEF_EXCERPT_NOT_VISIBLE` |
 | `attachments` | The id is one of this turn's attachments. | `BRIEF_ATTACHMENT_NOT_READABLE` |
 | `memory_entries` | `recall` gave the agent this entry earlier in the same turn. | `BRIEF_MEMORY_NOT_RECALLED` |
 | `facts` | None: each fact is the agent's own words, at most 500 characters. | |
+
+### Message ids for excerpts
+
+In a cloud run with the sub-agent tools, the agent sees a short id before each message it can quote:
+
+```text
+[message m-3f9a0c12be]
+We ship on Friday after the review.
+```
+
+The agent can quote the person's messages, other participants' messages in its view (see [What an agent sees of a conversation](/how-tos/agents-pipelines/agent-context-view/)), and the current message. Its own earlier answers have no id, and it cannot quote them. The id is `m-` and 10 hex digits. It comes from the message's id only, so it is the same on every turn and prompt caching still works. If a message's own text contains `[message`, the agent sees `&#91;message` there instead, so a message cannot fake the id of another message. A quote is checked against the text after the id line, as the agent reads it.
+
+A regenerated answer or a continued turn has no id on its current message. Quote the current message on a new turn.
 
 A refusal is a tool result that the model reads. No sub-agent starts. The sub-agent gets the checked brief before its task, marked as information and not instructions. The brief counts against the sub-agent's token budget.
 

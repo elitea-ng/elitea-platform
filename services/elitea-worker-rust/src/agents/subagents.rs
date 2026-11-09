@@ -16,8 +16,11 @@
 //! # Profiles, briefs and the record (#1614)
 //!
 //! A `spawn_agent` brief is checked against the creator's own view of this
-//! turn ([`BriefView`]): an excerpt must quote, exactly, a history entry of
-//! a message in the reader's `chat_history_refs`; an attachment must be one
+//! turn ([`BriefView`]): an excerpt must quote, exactly (each run of
+//! whitespace read as one space), the text the model reads of a message it
+//! was shown with a `[message m-...]` line (#1831), by that short id: a
+//! user-role history entry of the reader's `chat_history_refs`, or this
+//! turn's question; an attachment must be one
 //! of this turn's input attachments (`att-` ids); a memory entry must have
 //! been returned by `recall` earlier in the turn. Each spawn and its end go
 //! into the execution's sub-agent ledger, which the settlement path reports
@@ -35,6 +38,7 @@ use adk_rust::{GenerateContentConfig, Llm, Toolset};
 use async_trait::async_trait;
 use elitea_agent_runtime::delegation::DelegationScope;
 use elitea_agent_runtime::host::{HostError, HostErrorCode};
+use elitea_agent_runtime::subagents::message_ref::normalize_whitespace;
 use elitea_agent_runtime::subagents::profile::{
     BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
 };
@@ -58,7 +62,9 @@ pub(crate) const WITHHELD_TOOLSETS: [&str; 2] = [
 /// memory entries it recalled.
 #[derive(Default)]
 pub(crate) struct BriefView {
-    /// Each history entry's message id and text, in order.
+    /// Each quotable message's short id (`m-...`) and the text the model
+    /// reads after its id line, whitespace-normalized, in order
+    /// (`OrdinaryNativeAgentPlan::tag_message_refs`).
     pub(crate) history: Vec<(String, String)>,
     /// This turn's input attachments: id and display name.
     pub(crate) attachments: Vec<(String, String)>,
@@ -74,7 +80,10 @@ impl BriefView {
         recalled: Option<Arc<super::agent_memory_tools::RecalledEntries>>,
     ) -> Self {
         Self {
-            history,
+            history: history
+                .into_iter()
+                .map(|(reference, text)| (reference, normalize_whitespace(&text)))
+                .collect(),
             attachments: attachments
                 .iter()
                 .map(|reference| {
@@ -91,9 +100,11 @@ impl BriefView {
     /// ADR-0050 decision 9d: every reference of `brief` is in this view.
     pub(crate) fn check(&self, brief: &Brief) -> Result<CheckedBrief, &'static str> {
         for excerpt in &brief.excerpts {
-            let quoted = self.history.iter().any(|(message_id, text)| {
-                *message_id == excerpt.message_id && text.contains(excerpt.quote.as_str())
-            });
+            let quote = normalize_whitespace(&excerpt.quote);
+            let quoted = !quote.is_empty()
+                && self.history.iter().any(|(message_id, text)| {
+                    *message_id == excerpt.message_id && text.contains(quote.as_str())
+                });
             if !quoted {
                 return Err(BRIEF_EXCERPT_NOT_VISIBLE);
             }

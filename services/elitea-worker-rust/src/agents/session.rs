@@ -159,6 +159,60 @@ fn ordinary_user_content(
     attachments::append_attachment_parts(base, attachments)
 }
 
+/// The uuid of this turn's question (#1831), when the input names it: a
+/// fresh turn's `execution_generation` (Main sets it to the question's
+/// uuid). A regeneration, an output continuation or a pipeline resume has a
+/// generation that names another message or run, so none.
+fn current_message_id(
+    request: &AgentExecutionRequest,
+    output_continuation: bool,
+    pipeline_resume: Option<(bool, bool)>,
+) -> Option<String> {
+    let payload = &request.payload;
+    if payload.is_regenerate
+        || payload.should_continue
+        || payload.hitl_resume
+        || output_continuation
+        || pipeline_resume.is_some_and(|(should_continue, hitl)| should_continue || hitl)
+    {
+        return None;
+    }
+    payload
+        .execution_generation
+        .as_deref()
+        .and_then(|generation| uuid::Uuid::try_parse(generation).ok())
+        .map(|id| id.to_string())
+}
+
+/// #1831: put `[message <short>]` before the text of `content` and
+/// neutralize every id-like line in its text, so only this line names a
+/// message. Answers the text after the line, as the model reads it, or
+/// `None` for a content without text (it is left as it is).
+fn tag_message(content: &mut Content, short: &str) -> Option<String> {
+    use elitea_agent_runtime::subagents::message_ref::{neutralize, tag};
+    let mut texts = Vec::new();
+    for part in &mut content.parts {
+        if let adk_rust::Part::Text { text } = part
+            && let std::borrow::Cow::Owned(neutral) = neutralize(text)
+        {
+            *text = neutral;
+        }
+    }
+    let first = content
+        .parts
+        .iter()
+        .position(|part| matches!(part, adk_rust::Part::Text { .. }))?;
+    for part in &content.parts {
+        if let adk_rust::Part::Text { text } = part {
+            texts.push(text.clone());
+        }
+    }
+    if let adk_rust::Part::Text { text } = &mut content.parts[first] {
+        text.insert_str(0, &tag(short));
+    }
+    Some(texts.join("\n\n"))
+}
+
 /// Dispatch policy chosen from the complete frozen root tool snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum NativeToolExecutionMode {
@@ -936,6 +990,11 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     /// ADR-0050 decision 9c: one reference per `chat_history` entry, or none
     /// for an input from before field 71.
     chat_history_refs: Vec<super::request::ChatHistoryRef>,
+    /// The chat message group of this turn's own question (#1831): a fresh
+    /// turn's `execution_generation`, which Main sets to the question's
+    /// uuid. `None` on a regeneration or a continuation, whose generation
+    /// names something else.
+    current_message_id: Option<String>,
     context_management: ContextManagementPlan,
     step_compaction: Option<super::context_management::CompactionPolicy>,
     capability_id: &'static str,
@@ -1013,32 +1072,40 @@ impl OrdinaryNativeAgentPlan {
         self.projection.stream_id()
     }
 
-    /// The reader's own view of the conversation, by message (ADR-0050
-    /// decision 9c): each history entry's message id and its text as the
-    /// model reads it. Empty for an input from before field 71, whose
-    /// entries name no message. A `spawn_agent` excerpt must quote one of
-    /// these (#1614).
-    #[must_use]
-    pub(crate) fn history_by_message(&self) -> Vec<(String, String)> {
-        if self.chat_history_refs.len() != self.chat_history.len() {
-            return Vec::new();
+    /// #1831 (ADR-0050 decision 9d): show the model, before each message a
+    /// `spawn_agent` excerpt may quote, its short id
+    /// ([`elitea_agent_runtime::subagents::message_ref`]), and answer what
+    /// the model then reads of each: the short id and the message's text
+    /// after the id line. The messages are the history's user-role entries
+    /// (the person's messages and every other participant's, enveloped) and
+    /// this turn's question. The reader's own answers carry no id.
+    ///
+    /// Only the worker's copy changes, before the session is seeded or
+    /// reconciled, never Main's history or its context-view digest. The id
+    /// comes from the message's uuid alone, so a message has the same bytes
+    /// on every turn and the provider prompt cache still matches. Called
+    /// only when the sub-agent tools are bound.
+    pub(crate) fn tag_message_refs(&mut self) -> Vec<(String, String)> {
+        use elitea_agent_runtime::subagents::message_ref::message_ref;
+        let mut view = Vec::new();
+        if self.chat_history_refs.len() == self.chat_history.len() {
+            for (reference, content) in self.chat_history_refs.iter().zip(&mut self.chat_history) {
+                if content.role != "user" {
+                    continue;
+                }
+                let short = message_ref(&reference.message_id);
+                if let Some(text) = tag_message(content, &short) {
+                    view.push((short, text));
+                }
+            }
         }
-        self.chat_history_refs
-            .iter()
-            .zip(&self.chat_history)
-            .map(|(reference, content)| {
-                let text = content
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        adk_rust::Part::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                (reference.message_id.clone(), text)
-            })
-            .collect()
+        if let Some(id) = &self.current_message_id {
+            let short = message_ref(id);
+            if let Some(text) = tag_message(&mut self.user_content, &short) {
+                view.push((short, text));
+            }
+        }
+        view
     }
 
     /// `attachments` is the RESOLVED chunk list for this turn — see
@@ -1173,6 +1240,7 @@ impl OrdinaryNativeAgentPlan {
             thread_id,
             chat_history: profile.chat_history().to_vec(),
             chat_history_refs: request.payload.chat_history_refs.clone(),
+            current_message_id: current_message_id(request, output_continuation, pipeline_resume),
             context_management: profile.context_management(),
             step_compaction: profile.step_compaction(),
             capability_id,
@@ -3016,6 +3084,7 @@ pub(super) async fn assemble_pipeline_native(
         thread_id,
         chat_history: _,
         chat_history_refs: _,
+        current_message_id: _,
         context_management: _,
         step_compaction: _,
         capability_id: _,
@@ -3602,6 +3671,7 @@ where
         thread_id,
         chat_history,
         chat_history_refs,
+        current_message_id: _,
         context_management,
         step_compaction,
         capability_id: _,
@@ -4317,6 +4387,7 @@ where
         thread_id,
         chat_history: _,
         chat_history_refs: _,
+        current_message_id: _,
         context_management,
         // A direct resume has no model checkpoint to prepare requests in:
         // it keeps the Runner composition of the plan.

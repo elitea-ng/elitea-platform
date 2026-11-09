@@ -38,6 +38,8 @@ fn excerpt(message_id: &str, quote: &str) -> Brief {
 fn a_forged_excerpt_is_refused() {
     let view = view(None);
     assert!(view.check(&excerpt("m-1", "ship on Friday")).is_ok());
+    // #1831: each run of whitespace reads as one space, on both sides.
+    assert!(view.check(&excerpt("m-1", "ship  on\nFriday")).is_ok());
     for forged in [
         excerpt("m-1", "ship on Monday"),
         excerpt("m-3", "ship on Friday"),
