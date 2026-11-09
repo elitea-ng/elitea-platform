@@ -1,4 +1,4 @@
--- 0232_agent_teams.sql — saved teams (rosters) of agents (ADR-0050
+-- 0233_agent_teams.sql — saved teams (rosters) of agents (ADR-0050
 -- decision 8, issue 1620).
 --
 -- A TEAM is a project's saved roster: the agents of a conversation, their
@@ -93,7 +93,7 @@ DO $$
 BEGIN
     IF to_regclass('public.auth_core__role') IS NULL
        OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-        RAISE NOTICE '0232: auth_core tables absent, nothing to grant';
+        RAISE NOTICE '0233: auth_core tables absent, nothing to grant';
         RETURN;
     END IF;
 

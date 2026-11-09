@@ -58,7 +58,7 @@ The setting is the `memory` block of the version's `meta`:
 
 ## The Memory tab
 
-Open an agent and select **Memory**, next to **Evaluation**. The tab lists what the agent remembers in this project. The desktop app has the same tab. The mobile app does not show agent memory yet.
+Open an agent and select **Memory**, next to **Evaluation**. The tab lists what the agent remembers in this project. The desktop app has the same tab. The mobile app shows a shorter version, described [below](#in-the-mobile-app).
 
 - **Search and filter** by text, kind (fact, preference, episode, heartbeat state), status (waiting for approval, active, archived), the person a note is about, who wrote it (the agent or a person), and the day it was created. The person filter offers only the people whose notes you can see.
 - **Approve** or **Reject** a note that waits for approval. A rejected note is archived.
@@ -74,6 +74,20 @@ The tab offers only what you may do: someone who is not a manager sees **Edit** 
 ## In the chat
 
 When the agent saves a note during a turn, its answer shows a line such as **Mira remembered: Prefers short answers**. A note that waits for approval says so, and offers **Approve** if you may approve notes. **Edit** corrects the text and **Forget** deletes the note. A person who is not a manager can edit or forget only a note about themself; for any other note the platform refuses, and the line shows why.
+
+## In the mobile app
+
+On a workspace that runs this release or later, the mobile app shows what an agent remembers in the selected project. There are two ways in:
+
+- In a conversation, open the participants and select **What it remembers** next to an agent.
+- In **Discover**, open an agent and select **What it remembers**. Pipelines have no memory, so it is not offered on them.
+
+The screen lists the notes you may see, the same ones as on the web: notes about other people are shown only to them and to the agent's managers. Each note shows its text, its kind, its status when it is not active, whether it is pinned, who it is about, who wrote it (the agent or a person) and the day it was created. Pull down to refresh; more notes load as you scroll.
+
+- **Delete** removes one note after you confirm. It is offered on notes about you, and on every note if you may delete any note.
+- **Remember things about me** is your opt-out, as on the web. Turning it off asks first, then deletes the agent's notes about you.
+
+When the platform refuses a change, the app shows the platform's own reason. Editing, pinning, archiving, approving, the history, export and **Clear all** are on the web and desktop only. The screen needs a connection; nothing is kept on the phone. If you switch project or workspace while it is open, go back and open the agent again.
 
 ## Who can see and change the notes
 

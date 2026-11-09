@@ -2445,6 +2445,297 @@ func (x *ReportBrowserSessionResponseV1) GetRejection() *RuntimeErrorV1 {
 	return nil
 }
 
+// ReportEphemeralAgents records the sub-agents one claimed execution started
+// with spawn_agent (ADR-0050 decisions 4 and 9d, #1614): one row per spawn
+// in elitea_runtime.ephemeral_agents. It is sent under the live claim,
+// before PrepareSettlement, like ReportEgressSummary. A report is a
+// CUMULATIVE snapshot of this command's spawns, so a retried report
+// upserts the same rows (keyed by execution and agent id). Main takes the
+// project and the conversation from the execution kernel, never from the
+// worker. Best effort: a failed report never fails the run.
+type ReportEphemeralAgentsRequestV1 struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Identity *ExecutionIdentityV1   `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	Fence    *ExecutionFenceV1      `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	// At most 12 spawns (the runtime's per-turn cap), in spawn order.
+	Agents        []*EphemeralAgentV1 `protobuf:"bytes,3,rep,name=agents,proto3" json:"agents,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEphemeralAgentsRequestV1) Reset() {
+	*x = ReportEphemeralAgentsRequestV1{}
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEphemeralAgentsRequestV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEphemeralAgentsRequestV1) ProtoMessage() {}
+
+func (x *ReportEphemeralAgentsRequestV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEphemeralAgentsRequestV1.ProtoReflect.Descriptor instead.
+func (*ReportEphemeralAgentsRequestV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ReportEphemeralAgentsRequestV1) GetIdentity() *ExecutionIdentityV1 {
+	if x != nil {
+		return x.Identity
+	}
+	return nil
+}
+
+func (x *ReportEphemeralAgentsRequestV1) GetFence() *ExecutionFenceV1 {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *ReportEphemeralAgentsRequestV1) GetAgents() []*EphemeralAgentV1 {
+	if x != nil {
+		return x.Agents
+	}
+	return nil
+}
+
+// One spawn. It names the profile and brief by digest and by the ids the
+// brief referenced; never the soul, a quote, a fact or the task.
+type EphemeralAgentV1 struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The child's id: "a_" and 8 lowercase hex digits.
+	AgentId string `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	// The parent's spawn_agent call id, at most 256 bytes.
+	ParentCallId string `protobuf:"bytes,2,opt,name=parent_call_id,json=parentCallId,proto3" json:"parent_call_id,omitempty"`
+	// 1 for the run's first child, then in spawn order.
+	Ordinal uint32 `protobuf:"varint,3,opt,name=ordinal,proto3" json:"ordinal,omitempty"`
+	// At most 60 characters each; empty when not set.
+	Label       string `protobuf:"bytes,4,opt,name=label,proto3" json:"label,omitempty"`
+	DisplayName string `protobuf:"bytes,5,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// An avatar key, stored only; at most 128 bytes.
+	Avatar string `protobuf:"bytes,6,opt,name=avatar,proto3" json:"avatar,omitempty"`
+	// Lowercase hex SHA-256 of the profile (always set).
+	ProfileDigest string `protobuf:"bytes,7,opt,name=profile_digest,json=profileDigest,proto3" json:"profile_digest,omitempty"`
+	// Lowercase hex SHA-256 of the brief; empty for no brief.
+	BriefDigest string `protobuf:"bytes,8,opt,name=brief_digest,json=briefDigest,proto3" json:"brief_digest,omitempty"`
+	// The brief's references as a JSON object (message_ids, attachments,
+	// memory_entries, facts count); empty for no brief. At most 8 KiB.
+	BriefRefsJson string `protobuf:"bytes,9,opt,name=brief_refs_json,json=briefRefsJson,proto3" json:"brief_refs_json,omitempty"`
+	// running, completed, failed, budget_exhausted or cancelled.
+	Status       string `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
+	Steps        uint32 `protobuf:"varint,11,opt,name=steps,proto3" json:"steps,omitempty"`
+	InputTokens  uint64 `protobuf:"varint,12,opt,name=input_tokens,json=inputTokens,proto3" json:"input_tokens,omitempty"`
+	OutputTokens uint64 `protobuf:"varint,13,opt,name=output_tokens,json=outputTokens,proto3" json:"output_tokens,omitempty"`
+	// A stable lowercase code when it failed or was stopped; else empty.
+	ErrorCode           string `protobuf:"bytes,14,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	StartedAtUnixMillis int64  `protobuf:"varint,15,opt,name=started_at_unix_millis,json=startedAtUnixMillis,proto3" json:"started_at_unix_millis,omitempty"`
+	// 0 while it runs.
+	FinishedAtUnixMillis int64 `protobuf:"varint,16,opt,name=finished_at_unix_millis,json=finishedAtUnixMillis,proto3" json:"finished_at_unix_millis,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *EphemeralAgentV1) Reset() {
+	*x = EphemeralAgentV1{}
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EphemeralAgentV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EphemeralAgentV1) ProtoMessage() {}
+
+func (x *EphemeralAgentV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EphemeralAgentV1.ProtoReflect.Descriptor instead.
+func (*EphemeralAgentV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *EphemeralAgentV1) GetAgentId() string {
+	if x != nil {
+		return x.AgentId
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetParentCallId() string {
+	if x != nil {
+		return x.ParentCallId
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetOrdinal() uint32 {
+	if x != nil {
+		return x.Ordinal
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetAvatar() string {
+	if x != nil {
+		return x.Avatar
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetProfileDigest() string {
+	if x != nil {
+		return x.ProfileDigest
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetBriefDigest() string {
+	if x != nil {
+		return x.BriefDigest
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetBriefRefsJson() string {
+	if x != nil {
+		return x.BriefRefsJson
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetSteps() uint32 {
+	if x != nil {
+		return x.Steps
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetInputTokens() uint64 {
+	if x != nil {
+		return x.InputTokens
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetOutputTokens() uint64 {
+	if x != nil {
+		return x.OutputTokens
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *EphemeralAgentV1) GetStartedAtUnixMillis() int64 {
+	if x != nil {
+		return x.StartedAtUnixMillis
+	}
+	return 0
+}
+
+func (x *EphemeralAgentV1) GetFinishedAtUnixMillis() int64 {
+	if x != nil {
+		return x.FinishedAtUnixMillis
+	}
+	return 0
+}
+
+type ReportEphemeralAgentsResponseV1 struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rejection     *RuntimeErrorV1        `protobuf:"bytes,1,opt,name=rejection,proto3" json:"rejection,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportEphemeralAgentsResponseV1) Reset() {
+	*x = ReportEphemeralAgentsResponseV1{}
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportEphemeralAgentsResponseV1) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportEphemeralAgentsResponseV1) ProtoMessage() {}
+
+func (x *ReportEphemeralAgentsResponseV1) ProtoReflect() protoreflect.Message {
+	mi := &file_elitea_runtime_v1_control_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportEphemeralAgentsResponseV1.ProtoReflect.Descriptor instead.
+func (*ReportEphemeralAgentsResponseV1) Descriptor() ([]byte, []int) {
+	return file_elitea_runtime_v1_control_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ReportEphemeralAgentsResponseV1) GetRejection() *RuntimeErrorV1 {
+	if x != nil {
+		return x.Rejection
+	}
+	return nil
+}
+
 var File_elitea_runtime_v1_control_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_control_proto_rawDesc = "" +
@@ -2596,6 +2887,31 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x05state\x18\x05 \x01(\x0e2..elitea.runtime.v1.BrowserSessionReportStateV1R\x05state\x129\n" +
 	"\x19linger_until_unix_seconds\x18\x06 \x01(\x04R\x16lingerUntilUnixSecondsJ\x04\b\a\x10\x10\"g\n" +
 	"\x1eReportBrowserSessionResponseV1\x12?\n" +
+	"\trejection\x18\x01 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x02\x10\v\"\xe2\x01\n" +
+	"\x1eReportEphemeralAgentsRequestV1\x12B\n" +
+	"\bidentity\x18\x01 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
+	"\x05fence\x18\x02 \x01(\v2#.elitea.runtime.v1.ExecutionFenceV1R\x05fence\x12;\n" +
+	"\x06agents\x18\x03 \x03(\v2#.elitea.runtime.v1.EphemeralAgentV1R\x06agentsJ\x04\b\x04\x10\x10\"\xb7\x04\n" +
+	"\x10EphemeralAgentV1\x12\x19\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12$\n" +
+	"\x0eparent_call_id\x18\x02 \x01(\tR\fparentCallId\x12\x18\n" +
+	"\aordinal\x18\x03 \x01(\rR\aordinal\x12\x14\n" +
+	"\x05label\x18\x04 \x01(\tR\x05label\x12!\n" +
+	"\fdisplay_name\x18\x05 \x01(\tR\vdisplayName\x12\x16\n" +
+	"\x06avatar\x18\x06 \x01(\tR\x06avatar\x12%\n" +
+	"\x0eprofile_digest\x18\a \x01(\tR\rprofileDigest\x12!\n" +
+	"\fbrief_digest\x18\b \x01(\tR\vbriefDigest\x12&\n" +
+	"\x0fbrief_refs_json\x18\t \x01(\tR\rbriefRefsJson\x12\x16\n" +
+	"\x06status\x18\n" +
+	" \x01(\tR\x06status\x12\x14\n" +
+	"\x05steps\x18\v \x01(\rR\x05steps\x12!\n" +
+	"\finput_tokens\x18\f \x01(\x04R\vinputTokens\x12#\n" +
+	"\routput_tokens\x18\r \x01(\x04R\foutputTokens\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x0e \x01(\tR\terrorCode\x123\n" +
+	"\x16started_at_unix_millis\x18\x0f \x01(\x03R\x13startedAtUnixMillis\x125\n" +
+	"\x17finished_at_unix_millis\x18\x10 \x01(\x03R\x14finishedAtUnixMillisJ\x04\b\x11\x10 \"h\n" +
+	"\x1fReportEphemeralAgentsResponseV1\x12?\n" +
 	"\trejection\x18\x01 \x01(\v2!.elitea.runtime.v1.RuntimeErrorV1R\trejectionJ\x04\b\x02\x10\v*\xd8\x04\n" +
 	"\x12ClaimDispositionV1\x12$\n" +
 	" CLAIM_DISPOSITION_V1_UNSPECIFIED\x10\x00\x12!\n" +
@@ -2635,7 +2951,7 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"+BROWSER_SESSION_REPORT_STATE_V1_UNSPECIFIED\x10\x00\x12(\n" +
 	"$BROWSER_SESSION_REPORT_STATE_V1_LIVE\x10\x01\x12-\n" +
 	")BROWSER_SESSION_REPORT_STATE_V1_LINGERING\x10\x02\x12)\n" +
-	"%BROWSER_SESSION_REPORT_STATE_V1_ENDED\x10\x032\xa5\x0e\n" +
+	"%BROWSER_SESSION_REPORT_STATE_V1_ENDED\x10\x032\xa5\x0f\n" +
 	"\x15RuntimeControlService\x12x\n" +
 	"\x13AuthorizeSandboxJob\x12/.elitea.runtime.v1.AuthorizeSandboxJobRequestV1\x1a0.elitea.runtime.v1.AuthorizeSandboxJobResponseV1\x12\x96\x01\n" +
 	"\x1dAuthorizeRustCompiledSnapshot\x129.elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1\x1a:.elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1\x12c\n" +
@@ -2652,7 +2968,8 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x13ReportEgressSummary\x12/.elitea.runtime.v1.ReportEgressSummaryRequestV1\x1a0.elitea.runtime.v1.ReportEgressSummaryResponseV1\x12i\n" +
 	"\x0eReportRunSteps\x12*.elitea.runtime.v1.ReportRunStepsRequestV1\x1a+.elitea.runtime.v1.ReportRunStepsResponseV1\x12\x84\x01\n" +
 	"\x17MintDelegationAssertion\x123.elitea.runtime.v1.MintDelegationAssertionRequestV1\x1a4.elitea.runtime.v1.MintDelegationAssertionResponseV1\x12{\n" +
-	"\x14ReportBrowserSession\x120.elitea.runtime.v1.ReportBrowserSessionRequestV1\x1a1.elitea.runtime.v1.ReportBrowserSessionResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
+	"\x14ReportBrowserSession\x120.elitea.runtime.v1.ReportBrowserSessionRequestV1\x1a1.elitea.runtime.v1.ReportBrowserSessionResponseV1\x12~\n" +
+	"\x15ReportEphemeralAgents\x121.elitea.runtime.v1.ReportEphemeralAgentsRequestV1\x1a2.elitea.runtime.v1.ReportEphemeralAgentsResponseV1BTZRgithub.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_elitea_runtime_v1_control_proto_rawDescOnce sync.Once
@@ -2667,7 +2984,7 @@ func file_elitea_runtime_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_elitea_runtime_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_elitea_runtime_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_elitea_runtime_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_elitea_runtime_v1_control_proto_goTypes = []any{
 	(ClaimDispositionV1)(0),                         // 0: elitea.runtime.v1.ClaimDispositionV1
 	(BeginExecutionDispositionV1)(0),                // 1: elitea.runtime.v1.BeginExecutionDispositionV1
@@ -2704,127 +3021,136 @@ var file_elitea_runtime_v1_control_proto_goTypes = []any{
 	(*MintDelegationAssertionResponseV1)(nil),       // 32: elitea.runtime.v1.MintDelegationAssertionResponseV1
 	(*ReportBrowserSessionRequestV1)(nil),           // 33: elitea.runtime.v1.ReportBrowserSessionRequestV1
 	(*ReportBrowserSessionResponseV1)(nil),          // 34: elitea.runtime.v1.ReportBrowserSessionResponseV1
-	(*SignedWorkerCommandEnvelopeV1)(nil),           // 35: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	(*SettlementProposalV1)(nil),                    // 36: elitea.runtime.v1.SettlementProposalV1
-	(*DigestV1)(nil),                                // 37: elitea.runtime.v1.DigestV1
-	(ExecutionOutcomeV1)(0),                         // 38: elitea.runtime.v1.ExecutionOutcomeV1
-	(*ExecutionIdentityV1)(nil),                     // 39: elitea.runtime.v1.ExecutionIdentityV1
-	(*ExecutionFenceV1)(nil),                        // 40: elitea.runtime.v1.ExecutionFenceV1
-	(*ExecutionInputBundleReferenceV1)(nil),         // 41: elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	(*ExecutionInputBundleV1)(nil),                  // 42: elitea.runtime.v1.ExecutionInputBundleV1
-	(DesiredExecutionStateV1)(0),                    // 43: elitea.runtime.v1.DesiredExecutionStateV1
-	(*RuntimeErrorV1)(nil),                          // 44: elitea.runtime.v1.RuntimeErrorV1
-	(*EgressHostReachedV1)(nil),                     // 45: elitea.runtime.v1.EgressHostReachedV1
-	(*EgressHostRefusedV1)(nil),                     // 46: elitea.runtime.v1.EgressHostRefusedV1
-	(*BrowserSessionSpecV1)(nil),                    // 47: elitea.runtime.v1.BrowserSessionSpecV1
-	(*AuthorizeSandboxJobRequestV1)(nil),            // 48: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	(*AuthorizeRustCompiledSnapshotRequestV1)(nil),  // 49: elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
-	(*ReportRunStepsRequestV1)(nil),                 // 50: elitea.runtime.v1.ReportRunStepsRequestV1
-	(*AuthorizeSandboxJobResponseV1)(nil),           // 51: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	(*AuthorizeRustCompiledSnapshotResponseV1)(nil), // 52: elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
-	(*ReportRunStepsResponseV1)(nil),                // 53: elitea.runtime.v1.ReportRunStepsResponseV1
+	(*ReportEphemeralAgentsRequestV1)(nil),          // 35: elitea.runtime.v1.ReportEphemeralAgentsRequestV1
+	(*EphemeralAgentV1)(nil),                        // 36: elitea.runtime.v1.EphemeralAgentV1
+	(*ReportEphemeralAgentsResponseV1)(nil),         // 37: elitea.runtime.v1.ReportEphemeralAgentsResponseV1
+	(*SignedWorkerCommandEnvelopeV1)(nil),           // 38: elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	(*SettlementProposalV1)(nil),                    // 39: elitea.runtime.v1.SettlementProposalV1
+	(*DigestV1)(nil),                                // 40: elitea.runtime.v1.DigestV1
+	(ExecutionOutcomeV1)(0),                         // 41: elitea.runtime.v1.ExecutionOutcomeV1
+	(*ExecutionIdentityV1)(nil),                     // 42: elitea.runtime.v1.ExecutionIdentityV1
+	(*ExecutionFenceV1)(nil),                        // 43: elitea.runtime.v1.ExecutionFenceV1
+	(*ExecutionInputBundleReferenceV1)(nil),         // 44: elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	(*ExecutionInputBundleV1)(nil),                  // 45: elitea.runtime.v1.ExecutionInputBundleV1
+	(DesiredExecutionStateV1)(0),                    // 46: elitea.runtime.v1.DesiredExecutionStateV1
+	(*RuntimeErrorV1)(nil),                          // 47: elitea.runtime.v1.RuntimeErrorV1
+	(*EgressHostReachedV1)(nil),                     // 48: elitea.runtime.v1.EgressHostReachedV1
+	(*EgressHostRefusedV1)(nil),                     // 49: elitea.runtime.v1.EgressHostRefusedV1
+	(*BrowserSessionSpecV1)(nil),                    // 50: elitea.runtime.v1.BrowserSessionSpecV1
+	(*AuthorizeSandboxJobRequestV1)(nil),            // 51: elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	(*AuthorizeRustCompiledSnapshotRequestV1)(nil),  // 52: elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
+	(*ReportRunStepsRequestV1)(nil),                 // 53: elitea.runtime.v1.ReportRunStepsRequestV1
+	(*AuthorizeSandboxJobResponseV1)(nil),           // 54: elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	(*AuthorizeRustCompiledSnapshotResponseV1)(nil), // 55: elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
+	(*ReportRunStepsResponseV1)(nil),                // 56: elitea.runtime.v1.ReportRunStepsResponseV1
 }
 var file_elitea_runtime_v1_control_proto_depIdxs = []int32{
-	35, // 0: elitea.runtime.v1.ClaimCommandRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
-	36, // 1: elitea.runtime.v1.SettlementRecoveryV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
-	37, // 2: elitea.runtime.v1.SettlementRecoveryV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
-	38, // 3: elitea.runtime.v1.SettlementRecoveryV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
+	38, // 0: elitea.runtime.v1.ClaimCommandRequestV1.signed_command:type_name -> elitea.runtime.v1.SignedWorkerCommandEnvelopeV1
+	39, // 1: elitea.runtime.v1.SettlementRecoveryV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
+	40, // 2: elitea.runtime.v1.SettlementRecoveryV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
+	41, // 3: elitea.runtime.v1.SettlementRecoveryV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
 	0,  // 4: elitea.runtime.v1.ClaimReceiptV1.disposition:type_name -> elitea.runtime.v1.ClaimDispositionV1
-	39, // 5: elitea.runtime.v1.ClaimReceiptV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 6: elitea.runtime.v1.ClaimReceiptV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	41, // 7: elitea.runtime.v1.ClaimReceiptV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
-	42, // 8: elitea.runtime.v1.ClaimReceiptV1.input_bundle:type_name -> elitea.runtime.v1.ExecutionInputBundleV1
-	43, // 9: elitea.runtime.v1.ClaimReceiptV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	42, // 5: elitea.runtime.v1.ClaimReceiptV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 6: elitea.runtime.v1.ClaimReceiptV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	44, // 7: elitea.runtime.v1.ClaimReceiptV1.input_bundle_ref:type_name -> elitea.runtime.v1.ExecutionInputBundleReferenceV1
+	45, // 8: elitea.runtime.v1.ClaimReceiptV1.input_bundle:type_name -> elitea.runtime.v1.ExecutionInputBundleV1
+	46, // 9: elitea.runtime.v1.ClaimReceiptV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
 	7,  // 10: elitea.runtime.v1.ClaimReceiptV1.settlement_recovery:type_name -> elitea.runtime.v1.SettlementRecoveryV1
-	44, // 11: elitea.runtime.v1.ClaimReceiptV1.retirement:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	47, // 11: elitea.runtime.v1.ClaimReceiptV1.retirement:type_name -> elitea.runtime.v1.RuntimeErrorV1
 	10, // 12: elitea.runtime.v1.ClaimReceiptV1.vector_token:type_name -> elitea.runtime.v1.VectorClaimTokenV1
 	9,  // 13: elitea.runtime.v1.ClaimReceiptV1.paused_writer:type_name -> elitea.runtime.v1.PausedWriterV1
 	8,  // 14: elitea.runtime.v1.ClaimCommandResponseV1.receipt:type_name -> elitea.runtime.v1.ClaimReceiptV1
-	44, // 15: elitea.runtime.v1.ClaimCommandResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 16: elitea.runtime.v1.BeginExecutionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 17: elitea.runtime.v1.BeginExecutionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	47, // 15: elitea.runtime.v1.ClaimCommandResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 16: elitea.runtime.v1.BeginExecutionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 17: elitea.runtime.v1.BeginExecutionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	1,  // 18: elitea.runtime.v1.BeginExecutionResponseV1.disposition:type_name -> elitea.runtime.v1.BeginExecutionDispositionV1
-	44, // 19: elitea.runtime.v1.BeginExecutionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 20: elitea.runtime.v1.AuthorizeInvocationRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 21: elitea.runtime.v1.AuthorizeInvocationRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	47, // 19: elitea.runtime.v1.BeginExecutionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 20: elitea.runtime.v1.AuthorizeInvocationRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 21: elitea.runtime.v1.AuthorizeInvocationRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	2,  // 22: elitea.runtime.v1.AuthorizeInvocationResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
-	44, // 23: elitea.runtime.v1.AuthorizeInvocationResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 24: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 25: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	37, // 26: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.checkpoint_digest:type_name -> elitea.runtime.v1.DigestV1
+	47, // 23: elitea.runtime.v1.AuthorizeInvocationResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 24: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 25: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	40, // 26: elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1.checkpoint_digest:type_name -> elitea.runtime.v1.DigestV1
 	2,  // 27: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.disposition:type_name -> elitea.runtime.v1.AuthorizeInvocationDispositionV1
-	44, // 28: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 29: elitea.runtime.v1.RenewLeaseRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 30: elitea.runtime.v1.RenewLeaseRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	43, // 31: elitea.runtime.v1.RenewLeaseResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
-	44, // 32: elitea.runtime.v1.RenewLeaseResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 33: elitea.runtime.v1.ObserveDesiredStateRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 34: elitea.runtime.v1.ObserveDesiredStateRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	43, // 35: elitea.runtime.v1.ObserveDesiredStateResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
-	44, // 36: elitea.runtime.v1.ObserveDesiredStateResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 37: elitea.runtime.v1.PrepareSettlementRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 38: elitea.runtime.v1.PrepareSettlementRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	36, // 39: elitea.runtime.v1.PrepareSettlementRequestV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
-	37, // 40: elitea.runtime.v1.PrepareSettlementRequestV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
-	38, // 41: elitea.runtime.v1.PrepareSettlementResponseV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
-	44, // 42: elitea.runtime.v1.PrepareSettlementResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 43: elitea.runtime.v1.RemoveIndexRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 44: elitea.runtime.v1.RemoveIndexRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	47, // 28: elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 29: elitea.runtime.v1.RenewLeaseRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 30: elitea.runtime.v1.RenewLeaseRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	46, // 31: elitea.runtime.v1.RenewLeaseResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	47, // 32: elitea.runtime.v1.RenewLeaseResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 33: elitea.runtime.v1.ObserveDesiredStateRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 34: elitea.runtime.v1.ObserveDesiredStateRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	46, // 35: elitea.runtime.v1.ObserveDesiredStateResponseV1.desired_state:type_name -> elitea.runtime.v1.DesiredExecutionStateV1
+	47, // 36: elitea.runtime.v1.ObserveDesiredStateResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 37: elitea.runtime.v1.PrepareSettlementRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 38: elitea.runtime.v1.PrepareSettlementRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	39, // 39: elitea.runtime.v1.PrepareSettlementRequestV1.proposal:type_name -> elitea.runtime.v1.SettlementProposalV1
+	40, // 40: elitea.runtime.v1.PrepareSettlementRequestV1.proposal_digest:type_name -> elitea.runtime.v1.DigestV1
+	41, // 41: elitea.runtime.v1.PrepareSettlementResponseV1.outcome:type_name -> elitea.runtime.v1.ExecutionOutcomeV1
+	47, // 42: elitea.runtime.v1.PrepareSettlementResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 43: elitea.runtime.v1.RemoveIndexRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 44: elitea.runtime.v1.RemoveIndexRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	3,  // 45: elitea.runtime.v1.RemoveIndexResponseV1.disposition:type_name -> elitea.runtime.v1.RemoveIndexDispositionV1
-	44, // 46: elitea.runtime.v1.RemoveIndexResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 47: elitea.runtime.v1.ClaimSteeringMessagesRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 48: elitea.runtime.v1.ClaimSteeringMessagesRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	47, // 46: elitea.runtime.v1.RemoveIndexResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 47: elitea.runtime.v1.ClaimSteeringMessagesRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 48: elitea.runtime.v1.ClaimSteeringMessagesRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	27, // 49: elitea.runtime.v1.ClaimSteeringMessagesResponseV1.messages:type_name -> elitea.runtime.v1.SteeringMessageV1
-	44, // 50: elitea.runtime.v1.ClaimSteeringMessagesResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 51: elitea.runtime.v1.ReportEgressSummaryRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 52: elitea.runtime.v1.ReportEgressSummaryRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	45, // 53: elitea.runtime.v1.ReportEgressSummaryRequestV1.hosts_reached:type_name -> elitea.runtime.v1.EgressHostReachedV1
-	46, // 54: elitea.runtime.v1.ReportEgressSummaryRequestV1.hosts_refused:type_name -> elitea.runtime.v1.EgressHostRefusedV1
-	44, // 55: elitea.runtime.v1.ReportEgressSummaryResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 56: elitea.runtime.v1.MintDelegationAssertionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 57: elitea.runtime.v1.MintDelegationAssertionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	47, // 50: elitea.runtime.v1.ClaimSteeringMessagesResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 51: elitea.runtime.v1.ReportEgressSummaryRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 52: elitea.runtime.v1.ReportEgressSummaryRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	48, // 53: elitea.runtime.v1.ReportEgressSummaryRequestV1.hosts_reached:type_name -> elitea.runtime.v1.EgressHostReachedV1
+	49, // 54: elitea.runtime.v1.ReportEgressSummaryRequestV1.hosts_refused:type_name -> elitea.runtime.v1.EgressHostRefusedV1
+	47, // 55: elitea.runtime.v1.ReportEgressSummaryResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 56: elitea.runtime.v1.MintDelegationAssertionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 57: elitea.runtime.v1.MintDelegationAssertionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
 	4,  // 58: elitea.runtime.v1.MintDelegationAssertionResponseV1.disposition:type_name -> elitea.runtime.v1.DelegationAssertionDispositionV1
-	44, // 59: elitea.runtime.v1.MintDelegationAssertionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	39, // 60: elitea.runtime.v1.ReportBrowserSessionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
-	40, // 61: elitea.runtime.v1.ReportBrowserSessionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
-	47, // 62: elitea.runtime.v1.ReportBrowserSessionRequestV1.spec:type_name -> elitea.runtime.v1.BrowserSessionSpecV1
+	47, // 59: elitea.runtime.v1.MintDelegationAssertionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 60: elitea.runtime.v1.ReportBrowserSessionRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 61: elitea.runtime.v1.ReportBrowserSessionRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	50, // 62: elitea.runtime.v1.ReportBrowserSessionRequestV1.spec:type_name -> elitea.runtime.v1.BrowserSessionSpecV1
 	5,  // 63: elitea.runtime.v1.ReportBrowserSessionRequestV1.state:type_name -> elitea.runtime.v1.BrowserSessionReportStateV1
-	44, // 64: elitea.runtime.v1.ReportBrowserSessionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
-	48, // 65: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:input_type -> elitea.runtime.v1.AuthorizeSandboxJobRequestV1
-	49, // 66: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:input_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
-	6,  // 67: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
-	12, // 68: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
-	14, // 69: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
-	16, // 70: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
-	18, // 71: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
-	20, // 72: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
-	22, // 73: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
-	24, // 74: elitea.runtime.v1.RuntimeControlService.RemoveIndex:input_type -> elitea.runtime.v1.RemoveIndexRequestV1
-	26, // 75: elitea.runtime.v1.RuntimeControlService.ClaimSteeringMessages:input_type -> elitea.runtime.v1.ClaimSteeringMessagesRequestV1
-	29, // 76: elitea.runtime.v1.RuntimeControlService.ReportEgressSummary:input_type -> elitea.runtime.v1.ReportEgressSummaryRequestV1
-	50, // 77: elitea.runtime.v1.RuntimeControlService.ReportRunSteps:input_type -> elitea.runtime.v1.ReportRunStepsRequestV1
-	31, // 78: elitea.runtime.v1.RuntimeControlService.MintDelegationAssertion:input_type -> elitea.runtime.v1.MintDelegationAssertionRequestV1
-	33, // 79: elitea.runtime.v1.RuntimeControlService.ReportBrowserSession:input_type -> elitea.runtime.v1.ReportBrowserSessionRequestV1
-	51, // 80: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:output_type -> elitea.runtime.v1.AuthorizeSandboxJobResponseV1
-	52, // 81: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:output_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
-	11, // 82: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
-	13, // 83: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
-	15, // 84: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
-	17, // 85: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
-	19, // 86: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
-	21, // 87: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
-	23, // 88: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
-	25, // 89: elitea.runtime.v1.RuntimeControlService.RemoveIndex:output_type -> elitea.runtime.v1.RemoveIndexResponseV1
-	28, // 90: elitea.runtime.v1.RuntimeControlService.ClaimSteeringMessages:output_type -> elitea.runtime.v1.ClaimSteeringMessagesResponseV1
-	30, // 91: elitea.runtime.v1.RuntimeControlService.ReportEgressSummary:output_type -> elitea.runtime.v1.ReportEgressSummaryResponseV1
-	53, // 92: elitea.runtime.v1.RuntimeControlService.ReportRunSteps:output_type -> elitea.runtime.v1.ReportRunStepsResponseV1
-	32, // 93: elitea.runtime.v1.RuntimeControlService.MintDelegationAssertion:output_type -> elitea.runtime.v1.MintDelegationAssertionResponseV1
-	34, // 94: elitea.runtime.v1.RuntimeControlService.ReportBrowserSession:output_type -> elitea.runtime.v1.ReportBrowserSessionResponseV1
-	80, // [80:95] is the sub-list for method output_type
-	65, // [65:80] is the sub-list for method input_type
-	65, // [65:65] is the sub-list for extension type_name
-	65, // [65:65] is the sub-list for extension extendee
-	0,  // [0:65] is the sub-list for field type_name
+	47, // 64: elitea.runtime.v1.ReportBrowserSessionResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	42, // 65: elitea.runtime.v1.ReportEphemeralAgentsRequestV1.identity:type_name -> elitea.runtime.v1.ExecutionIdentityV1
+	43, // 66: elitea.runtime.v1.ReportEphemeralAgentsRequestV1.fence:type_name -> elitea.runtime.v1.ExecutionFenceV1
+	36, // 67: elitea.runtime.v1.ReportEphemeralAgentsRequestV1.agents:type_name -> elitea.runtime.v1.EphemeralAgentV1
+	47, // 68: elitea.runtime.v1.ReportEphemeralAgentsResponseV1.rejection:type_name -> elitea.runtime.v1.RuntimeErrorV1
+	51, // 69: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:input_type -> elitea.runtime.v1.AuthorizeSandboxJobRequestV1
+	52, // 70: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:input_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotRequestV1
+	6,  // 71: elitea.runtime.v1.RuntimeControlService.ClaimCommand:input_type -> elitea.runtime.v1.ClaimCommandRequestV1
+	12, // 72: elitea.runtime.v1.RuntimeControlService.BeginExecution:input_type -> elitea.runtime.v1.BeginExecutionRequestV1
+	14, // 73: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:input_type -> elitea.runtime.v1.AuthorizeInvocationRequestV1
+	16, // 74: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:input_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointRequestV1
+	18, // 75: elitea.runtime.v1.RuntimeControlService.RenewLease:input_type -> elitea.runtime.v1.RenewLeaseRequestV1
+	20, // 76: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:input_type -> elitea.runtime.v1.ObserveDesiredStateRequestV1
+	22, // 77: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:input_type -> elitea.runtime.v1.PrepareSettlementRequestV1
+	24, // 78: elitea.runtime.v1.RuntimeControlService.RemoveIndex:input_type -> elitea.runtime.v1.RemoveIndexRequestV1
+	26, // 79: elitea.runtime.v1.RuntimeControlService.ClaimSteeringMessages:input_type -> elitea.runtime.v1.ClaimSteeringMessagesRequestV1
+	29, // 80: elitea.runtime.v1.RuntimeControlService.ReportEgressSummary:input_type -> elitea.runtime.v1.ReportEgressSummaryRequestV1
+	53, // 81: elitea.runtime.v1.RuntimeControlService.ReportRunSteps:input_type -> elitea.runtime.v1.ReportRunStepsRequestV1
+	31, // 82: elitea.runtime.v1.RuntimeControlService.MintDelegationAssertion:input_type -> elitea.runtime.v1.MintDelegationAssertionRequestV1
+	33, // 83: elitea.runtime.v1.RuntimeControlService.ReportBrowserSession:input_type -> elitea.runtime.v1.ReportBrowserSessionRequestV1
+	35, // 84: elitea.runtime.v1.RuntimeControlService.ReportEphemeralAgents:input_type -> elitea.runtime.v1.ReportEphemeralAgentsRequestV1
+	54, // 85: elitea.runtime.v1.RuntimeControlService.AuthorizeSandboxJob:output_type -> elitea.runtime.v1.AuthorizeSandboxJobResponseV1
+	55, // 86: elitea.runtime.v1.RuntimeControlService.AuthorizeRustCompiledSnapshot:output_type -> elitea.runtime.v1.AuthorizeRustCompiledSnapshotResponseV1
+	11, // 87: elitea.runtime.v1.RuntimeControlService.ClaimCommand:output_type -> elitea.runtime.v1.ClaimCommandResponseV1
+	13, // 88: elitea.runtime.v1.RuntimeControlService.BeginExecution:output_type -> elitea.runtime.v1.BeginExecutionResponseV1
+	15, // 89: elitea.runtime.v1.RuntimeControlService.AuthorizeInvocation:output_type -> elitea.runtime.v1.AuthorizeInvocationResponseV1
+	17, // 90: elitea.runtime.v1.RuntimeControlService.AuthorizeAgentModelCheckpoint:output_type -> elitea.runtime.v1.AuthorizeAgentModelCheckpointResponseV1
+	19, // 91: elitea.runtime.v1.RuntimeControlService.RenewLease:output_type -> elitea.runtime.v1.RenewLeaseResponseV1
+	21, // 92: elitea.runtime.v1.RuntimeControlService.ObserveDesiredState:output_type -> elitea.runtime.v1.ObserveDesiredStateResponseV1
+	23, // 93: elitea.runtime.v1.RuntimeControlService.PrepareSettlement:output_type -> elitea.runtime.v1.PrepareSettlementResponseV1
+	25, // 94: elitea.runtime.v1.RuntimeControlService.RemoveIndex:output_type -> elitea.runtime.v1.RemoveIndexResponseV1
+	28, // 95: elitea.runtime.v1.RuntimeControlService.ClaimSteeringMessages:output_type -> elitea.runtime.v1.ClaimSteeringMessagesResponseV1
+	30, // 96: elitea.runtime.v1.RuntimeControlService.ReportEgressSummary:output_type -> elitea.runtime.v1.ReportEgressSummaryResponseV1
+	56, // 97: elitea.runtime.v1.RuntimeControlService.ReportRunSteps:output_type -> elitea.runtime.v1.ReportRunStepsResponseV1
+	32, // 98: elitea.runtime.v1.RuntimeControlService.MintDelegationAssertion:output_type -> elitea.runtime.v1.MintDelegationAssertionResponseV1
+	34, // 99: elitea.runtime.v1.RuntimeControlService.ReportBrowserSession:output_type -> elitea.runtime.v1.ReportBrowserSessionResponseV1
+	37, // 100: elitea.runtime.v1.RuntimeControlService.ReportEphemeralAgents:output_type -> elitea.runtime.v1.ReportEphemeralAgentsResponseV1
+	85, // [85:101] is the sub-list for method output_type
+	69, // [69:85] is the sub-list for method input_type
+	69, // [69:69] is the sub-list for extension type_name
+	69, // [69:69] is the sub-list for extension extendee
+	0,  // [0:69] is the sub-list for field type_name
 }
 
 func init() { file_elitea_runtime_v1_control_proto_init() }
@@ -2848,7 +3174,7 @@ func file_elitea_runtime_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_elitea_runtime_v1_control_proto_rawDesc), len(file_elitea_runtime_v1_control_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   29,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

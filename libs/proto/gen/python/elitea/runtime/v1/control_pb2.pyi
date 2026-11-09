@@ -430,3 +430,55 @@ class ReportBrowserSessionResponseV1(_message.Message):
     REJECTION_FIELD_NUMBER: _ClassVar[int]
     rejection: _errors_pb2.RuntimeErrorV1
     def __init__(self, rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...
+
+class ReportEphemeralAgentsRequestV1(_message.Message):
+    __slots__ = ("identity", "fence", "agents")
+    IDENTITY_FIELD_NUMBER: _ClassVar[int]
+    FENCE_FIELD_NUMBER: _ClassVar[int]
+    AGENTS_FIELD_NUMBER: _ClassVar[int]
+    identity: _common_pb2.ExecutionIdentityV1
+    fence: _common_pb2.ExecutionFenceV1
+    agents: _containers.RepeatedCompositeFieldContainer[EphemeralAgentV1]
+    def __init__(self, identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., agents: _Optional[_Iterable[_Union[EphemeralAgentV1, _Mapping]]] = ...) -> None: ...
+
+class EphemeralAgentV1(_message.Message):
+    __slots__ = ("agent_id", "parent_call_id", "ordinal", "label", "display_name", "avatar", "profile_digest", "brief_digest", "brief_refs_json", "status", "steps", "input_tokens", "output_tokens", "error_code", "started_at_unix_millis", "finished_at_unix_millis")
+    AGENT_ID_FIELD_NUMBER: _ClassVar[int]
+    PARENT_CALL_ID_FIELD_NUMBER: _ClassVar[int]
+    ORDINAL_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
+    AVATAR_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    BRIEF_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    BRIEF_REFS_JSON_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    STEPS_FIELD_NUMBER: _ClassVar[int]
+    INPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_CODE_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    FINISHED_AT_UNIX_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    agent_id: str
+    parent_call_id: str
+    ordinal: int
+    label: str
+    display_name: str
+    avatar: str
+    profile_digest: str
+    brief_digest: str
+    brief_refs_json: str
+    status: str
+    steps: int
+    input_tokens: int
+    output_tokens: int
+    error_code: str
+    started_at_unix_millis: int
+    finished_at_unix_millis: int
+    def __init__(self, agent_id: _Optional[str] = ..., parent_call_id: _Optional[str] = ..., ordinal: _Optional[int] = ..., label: _Optional[str] = ..., display_name: _Optional[str] = ..., avatar: _Optional[str] = ..., profile_digest: _Optional[str] = ..., brief_digest: _Optional[str] = ..., brief_refs_json: _Optional[str] = ..., status: _Optional[str] = ..., steps: _Optional[int] = ..., input_tokens: _Optional[int] = ..., output_tokens: _Optional[int] = ..., error_code: _Optional[str] = ..., started_at_unix_millis: _Optional[int] = ..., finished_at_unix_millis: _Optional[int] = ...) -> None: ...
+
+class ReportEphemeralAgentsResponseV1(_message.Message):
+    __slots__ = ("rejection",)
+    REJECTION_FIELD_NUMBER: _ClassVar[int]
+    rejection: _errors_pb2.RuntimeErrorV1
+    def __init__(self, rejection: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ...) -> None: ...

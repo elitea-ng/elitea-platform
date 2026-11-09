@@ -156,7 +156,7 @@ argocd app set elitea --revision <new-version>   # an OCI chart source
   # or, for a git source, edit spec.source.targetRevision to the release tag
 ```
 
-The published chart's own `image.tag` already defaults to the chart's version — only override `image.tag` to pin an environment behind the chart's own release, or to test a release candidate. Read the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between the two versions first.
+The published chart's own `image.tag` already defaults to the chart's version — only override `image.tag` to pin an environment behind the chart's own release, or to test a release candidate. Read the notes in [`docs/upgrading/`](https://github.com/elitea-ng/elitea-platform/tree/main/docs/upgrading) dated after the old version, and the entries in [`docs/UPGRADING.md`](https://github.com/elitea-ng/elitea-platform/blob/main/docs/UPGRADING.md) between the two versions, first.
 
 ## Rollback
 

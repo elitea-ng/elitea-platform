@@ -53,6 +53,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-context-view', title: 'What an agent sees of a conversation' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-tool-envelope', title: "Limit an agent's tools" },
         { kind: 'page', slug: 'how-tos/agents-pipelines/agent-teams', title: 'Saved teams of agents' },
+        { kind: 'page', slug: 'how-tos/agents-pipelines/sub-agent-profiles', title: 'Sub-agent profiles and briefs' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/publishing', title: 'Publish agents and skills' },
       ],
     },

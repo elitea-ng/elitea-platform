@@ -1,6 +1,8 @@
 # Store submission material
 
-Everything the App Store and Google Play ask for, drafted from the code. The
+ELITEA's answers (brand/elitea): everything the App Store and Google Play ask
+for, drafted from the code. Another brand starts from [template/](template/)
+(ADR-0052 decision 10). The
 release mechanics (accounts, EAS, TestFlight, OTA, rollback) are in
 [docs/release.md](../release.md).
 

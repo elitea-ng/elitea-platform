@@ -196,7 +196,7 @@ fn run(
     );
     let Ok(tap) = tap else {
         let _ = ready.send(Err(DesktopError::PermissionDenied(
-            "Elitea may not watch the keyboard and pointer (Accessibility or Input Monitoring)"
+            "this app may not watch the keyboard and pointer (Accessibility or Input Monitoring)"
                 .into(),
         )));
         return;

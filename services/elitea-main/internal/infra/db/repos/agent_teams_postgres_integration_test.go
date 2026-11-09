@@ -1,7 +1,7 @@
 package repos
 
 // Saved teams against a real PostgreSQL (ADR-0050 decision 8, issue 1620):
-// the CRUD of shared/0232, the per-project unique name, a conversation's
+// the CRUD of shared/0233, the per-project unique name, a conversation's
 // roster and lead read back as a team, the missing-member probe, and a
 // conversation created from a team writing its floor with the lead's new
 // participant id. Requires ELITEA_TEST_DATABASE_URL; every test skips

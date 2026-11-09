@@ -1401,7 +1401,7 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 -- Issue 1620, saved teams (ADR-0050 decision 8): members list teams and
 -- start conversations from them; admins and editors save, edit and delete
 -- them. Existing databases get the grants (and the tables) from
--- migrations/shared/0232_agent_teams.sql.
+-- migrations/shared/0233_agent_teams.sql.
 INSERT INTO auth_core__role_permission (role_id, permission)
 SELECT role.id, 'models.teams.list'
 FROM auth_core__role AS role

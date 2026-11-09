@@ -3,7 +3,7 @@
 // conversation's agents as a team, and start a conversation from a team.
 //
 // WHO MAY DO WHAT. The router gates every route on a models.teams.*
-// permission (shared 0232). Two routes cross into chat and take the chat
+// permission (shared 0233). Two routes cross into chat and take the chat
 // permission as well:
 //
 //   - saving a conversation as a team also takes

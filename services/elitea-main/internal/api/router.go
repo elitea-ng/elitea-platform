@@ -4424,7 +4424,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireConversationEdit).
 						Put("/context_strategy/prompt_lib/{projectID}/{conversationID}", convHandler.UpdateContextStrategy)
 
-					// Saved teams (ADR-0050 decision 8, #1620; shared 0232).
+					// Saved teams (ADR-0050 decision 8, #1620; shared 0233).
 					// A team adds no capability: saving one from a
 					// conversation also takes the conversation read (and the
 					// handler applies its detail rule), and starting one also

@@ -1013,6 +1013,34 @@ impl OrdinaryNativeAgentPlan {
         self.projection.stream_id()
     }
 
+    /// The reader's own view of the conversation, by message (ADR-0050
+    /// decision 9c): each history entry's message id and its text as the
+    /// model reads it. Empty for an input from before field 71, whose
+    /// entries name no message. A `spawn_agent` excerpt must quote one of
+    /// these (#1614).
+    #[must_use]
+    pub(crate) fn history_by_message(&self) -> Vec<(String, String)> {
+        if self.chat_history_refs.len() != self.chat_history.len() {
+            return Vec::new();
+        }
+        self.chat_history_refs
+            .iter()
+            .zip(&self.chat_history)
+            .map(|(reference, content)| {
+                let text = content
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        adk_rust::Part::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                (reference.message_id.clone(), text)
+            })
+            .collect()
+    }
+
     /// `attachments` is the RESOLVED chunk list for this turn — see
     /// [`ordinary_user_content`]. Callers that performed no read pass
     /// `&request.payload.input_attachments`, which renders exactly what

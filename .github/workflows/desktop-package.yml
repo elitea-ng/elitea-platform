@@ -1,0 +1,196 @@
+name: Desktop — package for device management
+
+# The desktop app's MDM packages (ADR-0052 decisions 4, 6 and 8; W2b): a universal
+# (Apple silicon + Intel) macOS app signed with the brand owner's Developer ID,
+# notarised and stapled, in a signed `.pkg` that installs silently; and (once the
+# host builds on Windows, #1828) an MSI for Intune and an MSIX for the Store.
+#
+# NOTHING IS ATTACHED TO A RELEASE (owner decision 10). ELITEA's desktop app reaches
+# clients only through their device management. The packages stay WORKFLOW
+# ARTIFACTS, and only on a run the brand owner starts by hand (workflow_dispatch)
+# with `keep_artifacts`: a public repository's artifacts are downloadable, so the
+# release check (publish.yml) never keeps them.
+#
+# SECRETS BY FIXED NAME (scripts/desktop-package.mjs `SECRETS`, the list W5
+# publishes). All of a platform's secrets: sign and verify. None: an unsigned dry
+# run with a notice, so forks and pull requests stay green. Some: a failure. A
+# pull request is ALWAYS a dry run: its code must not run with the certificates.
+#
+# WHEN.
+#   pull_request        the packaging files changed: the unsigned dry run.
+#   workflow_call       publish.yml's release check, signed (`require_signed`).
+#   workflow_dispatch   by hand: a signed package to hand to device management.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-package.yml"
+      - "apps/elitea-desktop/scripts/desktop-package.mjs"
+      - "apps/elitea-desktop/scripts/macos-pkg.sh"
+      - "apps/elitea-desktop/scripts/windows-package.mjs"
+      - "apps/elitea-desktop/scripts/stamp-version.mjs"
+      - "apps/elitea-desktop/src-tauri/tauri.conf.json"
+      - "apps/elitea-desktop/src-tauri/tauri.sidecar.conf.json"
+      - ".github/actions/desktop-macos-package/**"
+      - ".github/actions/desktop-windows-package/**"
+  workflow_call:
+    inputs:
+      ref:
+        description: The git ref to build (the release tag).
+        type: string
+        required: true
+      version:
+        description: The full release version to stamp (X.Y.Z or X.Y.Z-pre).
+        type: string
+        required: true
+      require_signed:
+        description: Fail unless every package is signed (the release check).
+        type: boolean
+        default: true
+    secrets:
+      APPLE_CERTIFICATE: { required: false }
+      APPLE_CERTIFICATE_PASSWORD: { required: false }
+      APPLE_SIGNING_IDENTITY: { required: false }
+      APPLE_INSTALLER_SIGNING_IDENTITY: { required: false }
+      APPLE_API_KEY: { required: false }
+      APPLE_API_ISSUER: { required: false }
+      APPLE_API_PRIVATE_KEY: { required: false }
+      WINDOWS_PUBLISHER: { required: false }
+      AZURE_CLIENT_ID: { required: false }
+      AZURE_CLIENT_SECRET: { required: false }
+      AZURE_TENANT_ID: { required: false }
+      AZURE_SIGNING_ENDPOINT: { required: false }
+      AZURE_SIGNING_ACCOUNT: { required: false }
+      AZURE_SIGNING_PROFILE: { required: false }
+      WINDOWS_CERTIFICATE: { required: false }
+      WINDOWS_CERTIFICATE_PASSWORD: { required: false }
+  workflow_dispatch:
+    inputs:
+      keep_artifacts:
+        description: Keep the packages as workflow artifacts (7 days) for device management.
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  macos:
+    name: macOS universal (.app, .pkg)
+    runs-on: macos-latest
+    # A universal build compiles the host twice (arm64 and x86_64).
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          # The npm cache is .github/actions/npm-cache below.
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # The build itself is .github/actions/desktop-macos-package, which brand
+      # repositories run from a release tag (ADR-0052 W5, docs/brand-template/).
+      - name: Build, sign and verify (or dry run)
+        id: package
+        uses: ./.github/actions/desktop-macos-package
+        with:
+          version: ${{ inputs.version }}
+          build-number: ${{ github.run_number }}
+          dry-run: ${{ github.event_name == 'pull_request' }}
+          # A kept package goes to device management: it must be signed.
+          require-signed: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          apple-installer-signing-identity: ${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          apple-api-key: ${{ secrets.APPLE_API_KEY }}
+          apple-api-issuer: ${{ secrets.APPLE_API_ISSUER }}
+          apple-api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+
+      - name: Keep the package (by hand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-pkg
+          path: ${{ steps.package.outputs.package-dir }}/*.pkg
+          retention-days: 7
+          if-no-files-found: error
+
+  # OFF UNTIL THE HOST BUILDS ON WINDOWS (#1828): local-tools and the host are Unix-only
+  # today (process groups, PTYs, the sandbox), so `tauri build` fails on windows-latest.
+  # #1828 sets the repository variable DESKTOP_WINDOWS_PACKAGE=true once it lands; the
+  # inputs (signing overlay, MSIX manifest) are tested now in windows-package.test.mjs.
+  #
+  # An MSI (Tauri's WiX bundle: Intune, SCCM, `msiexec /i … /qn`) and an MSIX (makeappx:
+  # the Store, Intune), the host, the sidecar, the MSI and the MSIX all signed with Azure
+  # Artifact Signing or a code-signing certificate (PFX), timestamped, then verified.
+  windows:
+    name: Windows (.msi, .msix)
+    if: vars.DESKTOP_WINDOWS_PACKAGE == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      - name: Build, sign and verify (or dry run)
+        id: package
+        uses: ./.github/actions/desktop-windows-package
+        with:
+          version: ${{ inputs.version }}
+          dry-run: ${{ github.event_name == 'pull_request' }}
+          require-signed: ${{ inputs.require_signed == true || inputs.keep_artifacts == true }}
+          windows-publisher: ${{ secrets.WINDOWS_PUBLISHER }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-signing-endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          azure-signing-account: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          azure-signing-profile: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          windows-certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
+          windows-certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+
+      - name: Keep the packages (by hand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows
+          path: |
+            ${{ steps.package.outputs.package-dir }}/*.msi
+            ${{ steps.package.outputs.package-dir }}/*.msix
+          retention-days: 7
+          if-no-files-found: error

@@ -1,6 +1,6 @@
 package repos
 
-// Saved teams (ADR-0050 decision 8, issue 1620): the store over shared/0232's
+// Saved teams (ADR-0050 decision 8, issue 1620): the store over shared/0233's
 // elitea_chat.agent_teams and agent_team_members, and the reads that turn a
 // conversation's roster into a team.
 //

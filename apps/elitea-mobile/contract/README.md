@@ -144,3 +144,15 @@ foreground or pull to refresh.
 |---|---|
 | Create an agent | `generateApplicationDraftStream`: `POST /elitea_core/generate_application_draft_stream/prompt_lib/{project_id}` answers an event stream of `draft.token` frames, then one `draft.complete` (the validated draft) or one `draft.error {code, status, message}`; a refusal before it opens (400, 503) is plain JSON `{error, code}`. Not a `ResumableStream`: no event ids, a dropped stream is a failed draft (`src/features/agentBuilder/streamDraft.ts`, through the POST form of `src/api/sse/transport.ts`). Refine sends the last turns and the draft as edited (`conversation_history`, `current_draft`). |
 | Save | `createApplication` with the reviewed draft as an agent with a `base` version (`agentCreateBody`, `@elitea/client-core/agent-builder`), then a chat with it opens. Only the Elitea branch: a phone has no folder for an `AGENTS.md`. Offered on New chat ("Create an agent") when the workspace speaks 1.28. |
+
+## Client contract 1.44
+
+| Area | What |
+|---|---|
+| Agent memory (ADR-0050 1b) | `listAgentMemory` (`GET /elitea_core/agent_memory/prompt_lib/{project_id}/{application_id}`, paged with `limit` 50 and `offset`; the server hides notes about other people from a non-manager), `deleteAgentMemoryEntry` (`DELETE .../{entry_id}`; offered on a note about the caller, or any note when the list says `can_delete`) and `setAgentMemoryOptOut` (`PUT /elitea_core/agent_memory_opt_out/prompt_lib/{project_id}/{application_id}` with `{opted_out}`). A refusal is `{error, code}` and the app shows `error` as written (`src/api/queries/agentMemory.ts`). The screen (`src/app/(app)/agent-memory/[id].tsx`) opens from the participant sheet's "What it remembers" on an agent and from a Discover agent, in the active project. Clear, read-one, edit, approve and the history stay web and desktop only and are not kept in the generated client. |
+
+The app opens the screen only when discovery says `client_contract` >= 1.44 (`AGENT_MEMORY_CONTRACT`); on
+an older server the entry points are hidden. A 404 on the list without a `code` (the router's
+`{error: "not found"}`) reads as a server without the routes; the memory handler's own 404 carries `code`.
+A delete answered 404 `not_found` drops the note: it is already gone. The screen pins the project it was
+opened in; a project or workspace switch while it is open shows "moved" and reads nothing more.

@@ -20,7 +20,7 @@
 // one conversation; starting from the team writes the new conversation's
 // floor with the lead's new participant id.
 //
-// The tables are shared/0232 (elitea_chat.agent_teams and
+// The tables are shared/0233 (elitea_chat.agent_teams and
 // agent_team_members); storage is repos.AgentTeams.
 package agentteams
 
@@ -34,7 +34,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 )
 
-// The permissions (shared 0232).
+// The permissions (shared 0233).
 const (
 	ListPermission   = "models.teams.list"
 	CreatePermission = "models.teams.create"

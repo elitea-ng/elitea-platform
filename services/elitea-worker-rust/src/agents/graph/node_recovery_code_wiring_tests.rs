@@ -355,6 +355,14 @@ impl RuntimeControlService for FakeControl {
             "not part of the Code attempt fixture",
         ))
     }
+    async fn report_ephemeral_agents(
+        &self,
+        _: Request<pb::ReportEphemeralAgentsRequestV1>,
+    ) -> Result<Response<pb::ReportEphemeralAgentsResponseV1>, Status> {
+        Err(Status::unimplemented(
+            "not part of the Code attempt fixture",
+        ))
+    }
     async fn remove_index(
         &self,
         _: Request<pb::RemoveIndexRequestV1>,

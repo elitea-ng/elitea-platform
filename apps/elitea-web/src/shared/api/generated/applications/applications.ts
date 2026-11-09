@@ -5078,6 +5078,11 @@ export type listAgentMemoryResponse403 = {
   status: 403;
 };
 
+export type listAgentMemoryResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listAgentMemoryResponseSuccess = listAgentMemoryResponse200 & {
   headers: Headers;
 };
@@ -5085,6 +5090,7 @@ export type listAgentMemoryResponseError = (
   | listAgentMemoryResponse400
   | listAgentMemoryResponse401
   | listAgentMemoryResponse403
+  | listAgentMemoryResponse426
 ) & {
   headers: Headers;
 };
@@ -5144,7 +5150,8 @@ export const getListAgentMemoryQueryKey = (
 
 export const getListAgentMemoryQueryOptions = <
   TData = Awaited<ReturnType<typeof listAgentMemory>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -5194,11 +5201,12 @@ export type ListAgentMemoryQueryResult = NonNullable<
   Awaited<ReturnType<typeof listAgentMemory>>
 >;
 export type ListAgentMemoryQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useListAgentMemory<
   TData = Awaited<ReturnType<typeof listAgentMemory>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -5227,7 +5235,8 @@ export function useListAgentMemory<
 };
 export function useListAgentMemory<
   TData = Awaited<ReturnType<typeof listAgentMemory>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -5256,7 +5265,8 @@ export function useListAgentMemory<
 };
 export function useListAgentMemory<
   TData = Awaited<ReturnType<typeof listAgentMemory>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -5281,7 +5291,8 @@ export function useListAgentMemory<
 
 export function useListAgentMemory<
   TData = Awaited<ReturnType<typeof listAgentMemory>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6095,6 +6106,11 @@ export type deleteAgentMemoryEntryResponse204 = {
   status: 204;
 };
 
+export type deleteAgentMemoryEntryResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type deleteAgentMemoryEntryResponse401 = {
   data: N401Response;
   status: 401;
@@ -6110,14 +6126,21 @@ export type deleteAgentMemoryEntryResponse404 = {
   status: 404;
 };
 
+export type deleteAgentMemoryEntryResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type deleteAgentMemoryEntryResponseSuccess =
   deleteAgentMemoryEntryResponse204 & {
     headers: Headers;
   };
 export type deleteAgentMemoryEntryResponseError = (
+  | deleteAgentMemoryEntryResponse400
   | deleteAgentMemoryEntryResponse401
   | deleteAgentMemoryEntryResponse403
   | deleteAgentMemoryEntryResponse404
+  | deleteAgentMemoryEntryResponse426
 ) & {
   headers: Headers;
 };
@@ -6165,7 +6188,11 @@ export const getDeleteAgentMemoryEntryQueryKey = (
 
 export const getDeleteAgentMemoryEntryQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
-  TError = N401Response | AgentMemoryRefusal,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | AgentMemoryRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6217,11 +6244,18 @@ export type DeleteAgentMemoryEntryQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteAgentMemoryEntry>>
 >;
 export type DeleteAgentMemoryEntryQueryError =
-  N401Response | AgentMemoryRefusal;
+  | InvalidClientVersionResponse
+  | N401Response
+  | AgentMemoryRefusal
+  | ClientUpgradeRequiredResponse;
 
 export function useDeleteAgentMemoryEntry<
   TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
-  TError = N401Response | AgentMemoryRefusal,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | AgentMemoryRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6250,7 +6284,11 @@ export function useDeleteAgentMemoryEntry<
 };
 export function useDeleteAgentMemoryEntry<
   TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
-  TError = N401Response | AgentMemoryRefusal,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | AgentMemoryRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6279,7 +6317,11 @@ export function useDeleteAgentMemoryEntry<
 };
 export function useDeleteAgentMemoryEntry<
   TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
-  TError = N401Response | AgentMemoryRefusal,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | AgentMemoryRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6304,7 +6346,11 @@ export function useDeleteAgentMemoryEntry<
 
 export function useDeleteAgentMemoryEntry<
   TData = Awaited<ReturnType<typeof deleteAgentMemoryEntry>>,
-  TError = N401Response | AgentMemoryRefusal,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | AgentMemoryRefusal
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6358,6 +6404,11 @@ export type setAgentMemoryOptOutResponse403 = {
   status: 403;
 };
 
+export type setAgentMemoryOptOutResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type setAgentMemoryOptOutResponseSuccess =
   setAgentMemoryOptOutResponse200 & {
     headers: Headers;
@@ -6366,6 +6417,7 @@ export type setAgentMemoryOptOutResponseError = (
   | setAgentMemoryOptOutResponse400
   | setAgentMemoryOptOutResponse401
   | setAgentMemoryOptOutResponse403
+  | setAgentMemoryOptOutResponse426
 ) & {
   headers: Headers;
 };
@@ -6439,7 +6491,8 @@ export const getSetAgentMemoryOptOutQueryKey = (
 
 export const getSetAgentMemoryOptOutQueryOptions = <
   TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6493,11 +6546,12 @@ export type SetAgentMemoryOptOutQueryResult = NonNullable<
   Awaited<ReturnType<typeof setAgentMemoryOptOut>>
 >;
 export type SetAgentMemoryOptOutQueryError =
-  N400Response | N401Response | N403Response;
+  N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse;
 
 export function useSetAgentMemoryOptOut<
   TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6526,7 +6580,8 @@ export function useSetAgentMemoryOptOut<
 };
 export function useSetAgentMemoryOptOut<
   TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6555,7 +6610,8 @@ export function useSetAgentMemoryOptOut<
 };
 export function useSetAgentMemoryOptOut<
   TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,
@@ -6580,7 +6636,8 @@ export function useSetAgentMemoryOptOut<
 
 export function useSetAgentMemoryOptOut<
   TData = Awaited<ReturnType<typeof setAgentMemoryOptOut>>,
-  TError = N400Response | N401Response | N403Response,
+  TError =
+    N400Response | N401Response | N403Response | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   applicationId: number,

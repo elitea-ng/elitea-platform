@@ -11,6 +11,7 @@ import {
 } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
 import { StatusScreen } from '@/components/StatusScreen';
+import { useAgentMemoryAvailable } from '@/features/agentMemory/useAgentMemoryAvailable';
 import { PublicAgentView } from '@/features/discover/PublicAgentView';
 import { useDiscoverAvailable } from '@/features/discover/useDiscoverAvailable';
 import { handOff } from '@/features/intents/intentHandoff';
@@ -39,6 +40,7 @@ export default function PublicAgentScreen() {
   // button's disabled state) has rendered, so one tap creates one conversation.
   const starting = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const memoryAvailable = useAgentMemoryAvailable();
 
   if (!available) return <StatusScreen title="Discover isn't available" />;
   if (projectId === null) return <StatusScreen title="No project selected" />;
@@ -83,6 +85,14 @@ export default function PublicAgentScreen() {
       error={error}
       onStart={() => void start('start', null)}
       onStarter={(index, text) => void start(`starter:${index}`, text)}
+      // The agent's memory is kept in the project its chats run in: the active one. A pipeline has
+      // none (participantAgentId leaves pipelines out too). This screen is a form sheet: replace it,
+      // as starting a chat does, so the memory screen is not pushed underneath the sheet on iOS.
+      onMemory={
+        memoryAvailable && agent.agentType !== 'pipeline'
+          ? () => router.replace({ pathname: '/agent-memory/[id]', params: { id: String(agent.id), name: agent.name } })
+          : undefined
+      }
     />
   );
 }

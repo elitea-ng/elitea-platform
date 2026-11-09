@@ -417,6 +417,8 @@ impl OrdinaryNativeAgentAssembler {
             _ => None,
         };
         tracing::Span::current().record("stage", "toolsets");
+        // What `recall` returns this turn, for a sub-agent brief (#1614).
+        let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
         let (runtime, fresh_execution_mode) = self
             .materialize_runtime(
                 &tool_snapshot,
@@ -434,6 +436,7 @@ impl OrdinaryNativeAgentAssembler {
                     .map(|(factory, authority)| factory.bind(authority)),
                 attachment_library,
                 browser_host.as_ref(),
+                &recalled,
             )
             .await?;
         let runtime = runtime
@@ -569,6 +572,16 @@ impl OrdinaryNativeAgentAssembler {
                     profile.tool_envelope().cloned().unwrap_or_default(),
                     toolkit_kinds(&tool_snapshot),
                 );
+                // ADR-0050 decision 9d (#1614): a brief names only what this
+                // agent sees; each spawn goes to the execution's ledger.
+                let view = super::subagents::BriefView::new(
+                    plan.history_by_message(),
+                    &current_attachments,
+                    profile.agent_memory().map(|_| Arc::clone(&recalled)),
+                );
+                let binding = runtime_context.redemption_binding();
+                let ledger = crate::protocol::ephemeral_agents::EphemeralAgentRegistry::global()
+                    .ledger(binding.execution_id, binding.generation);
                 runtime.with_subagents(move |toolsets, excluded| {
                     super::subagents::toolset(
                         super::subagents::WorkerSubAgents {
@@ -579,6 +592,8 @@ impl OrdinaryNativeAgentAssembler {
                             invocation,
                             toolsets: super::subagents::WorkerSubAgents::child_toolsets(toolsets),
                             config: std::sync::OnceLock::new(),
+                            view,
+                            ledger,
                         },
                         excluded,
                         delegation_root.clone(),
@@ -639,6 +654,7 @@ impl OrdinaryNativeAgentAssembler {
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
         attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
+        recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         let tool_reference_count = tool_snapshot.iter().count();
         let nested_application_count = tool_snapshot
@@ -786,7 +802,9 @@ impl OrdinaryNativeAgentAssembler {
                     Arc::clone(&self.platform),
                     Arc::clone(runtime_context),
                     Arc::clone(tool_policy.content_controls().untrusted()),
-                ),
+                )
+                // A sub-agent brief may name what `recall` returned (#1614).
+                .with_recalled(Arc::clone(recalled)),
             ));
         }
         toolsets.extend(data_toolset);

@@ -29,20 +29,25 @@ type StrictProtoCodec struct {
 // and the worker splits a batch at RunStepReportMaxRequestBytes encoded
 // (ADR-0042, #1499); any single bounded step (two 256 KiB content sides, an
 // 8 KiB summary, 100 documents) fits one. An egress summary carries two host
-// lists of at most 256 entries (ADR-0044 decision 2).
+// lists of at most 256 entries (ADR-0044 decision 2). A sub-agent report
+// carries at most 12 spawns, each with up to 8 KiB of brief references
+// (ADR-0050 decision 9d, #1614).
 const (
-	RunStepReportMaxRequestBytes       = 1024 * 1024
-	EgressSummaryReportMaxRequestBytes = 256 * 1024
+	RunStepReportMaxRequestBytes         = 1024 * 1024
+	EgressSummaryReportMaxRequestBytes   = 256 * 1024
+	EphemeralAgentsReportMaxRequestBytes = 256 * 1024
 )
 
 // WithWorkerReportRequestLimits enlarges only ReportRunStepsRequestV1 (to
-// RunStepReportMaxRequestBytes) and ReportEgressSummaryRequestV1 (to
-// EgressSummaryReportMaxRequestBytes). Every other control method keeps the
-// listener's bound.
+// RunStepReportMaxRequestBytes), ReportEgressSummaryRequestV1 (to
+// EgressSummaryReportMaxRequestBytes) and ReportEphemeralAgentsRequestV1 (to
+// EphemeralAgentsReportMaxRequestBytes). Every other control method keeps
+// the listener's bound.
 func (c *StrictProtoCodec) WithWorkerReportRequestLimits() {
 	c.reportReceiveBytes = map[protoreflect.FullName]int{
-		"elitea.runtime.v1.ReportRunStepsRequestV1":      RunStepReportMaxRequestBytes,
-		"elitea.runtime.v1.ReportEgressSummaryRequestV1": EgressSummaryReportMaxRequestBytes,
+		"elitea.runtime.v1.ReportRunStepsRequestV1":        RunStepReportMaxRequestBytes,
+		"elitea.runtime.v1.ReportEgressSummaryRequestV1":   EgressSummaryReportMaxRequestBytes,
+		"elitea.runtime.v1.ReportEphemeralAgentsRequestV1": EphemeralAgentsReportMaxRequestBytes,
 	}
 }
 

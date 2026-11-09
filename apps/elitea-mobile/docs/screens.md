@@ -67,7 +67,7 @@ G ──────────────────────────
 ```
 
 - When "Enter server address" is chosen, the buttons are replaced in place by a text
-  field labelled "Server address", placeholder `acme.elitea.ai`.
+  field labelled "Server address", placeholder `acme.example.com`.
   - `keyboardType="url"`, `autoCapitalize="none"`, `autoCorrect={false}`,
     `textContentType="URL"`.
   - The field has an inline "Continue" button.
@@ -86,7 +86,7 @@ G ──────────────────────────
           │  LOGO 56 │          workspace logo mark (after pack load), else
           └──────────┘          monogram tile on surface
         Acme Corp AI            title2: product.name from the pack
-     acme.elitea.ai             headline, SYSTEM FONT, textPrimary (never truncated;
+     acme.example.com           headline, SYSTEM FONT, textPrimary (never truncated;
                                 wraps; selectable)
  ┌────────────────────────────┐
  │ 🔒 Secure connection (TLS) │  surface card, footnote rows
@@ -112,16 +112,16 @@ G ──────────────────────────
   │ mark │   │ LOGO │      two separate 64 pt tiles, 16 pt apart
   └──────┘   └──────┘
    Sign in to Acme Corp AI          title2
-   acme.elitea.ai                   footnote, system font
+   acme.example.com                 footnote, system font
  ┌────────────────────────────┐
  │  Continue with SSO         │     filled pill (brand accent now applies)
  └────────────────────────────┘
-   You'll sign in on acme.elitea.ai   footnote
+   You'll sign in on acme.example.com footnote
    in a secure browser window.
          Use a different workspace    text button (wipe-confirm flow)
 ```
 
-- iOS shows its own sheet: '"Elitea AI" Wants to Use "acme.elitea.ai" to Sign In'.
+- iOS shows its own sheet: '"Elitea AI" Wants to Use "acme.example.com" to Sign In'.
   Android opens a Custom Tab.
 - **Progress:** the button shows a spinner and the label "Signing in…". Cancelling
   returns here silently.
@@ -255,11 +255,11 @@ G ──────────────────────────
  └───────────────────────────────┘
   ⧉ 👍 👎 🔊 ↻ ⋯                      action row (latest answer only; ↻ when it can regenerate)
 
- ┌ Approval needed ─────────────┐     approval card (§4.7), warning edge
- │ Research wants to run        │
- │ send_email on acme.elitea.ai │
- │ [Approve] [Reject] [Details] │
- └──────────────────────────────┘
+ ┌ Approval needed ───────────────┐   approval card (§4.7), warning edge
+ │ Research wants to run          │
+ │ send_email on acme.example.com │
+ │ [Approve] [Reject] [Details]   │
+ └────────────────────────────────┘
  ┌──────────────────────────────────┐
  │ (+)  Message Research…   (🎙)    │   floating glass composer (§4.5)
  └──────────────────────────────────┘
@@ -378,11 +378,11 @@ G ──────────────────────────
  Settings                               large title, inset-grouped
  ┌──────────────────────────────────┐
  │ (●) Alex Smith                   │  account row: avatar, name, email
- │     alex@acme.com                │
+ │     alex@acme.example.com        │
  └──────────────────────────────────┘
  WORKSPACE
  │ [LOGO] Acme Corp AI          ›   │  → /workspace sheet
- │        acme.elitea.ai            │  host in system font
+ │        acme.example.com          │  host in system font
  │ Project            Marketing ›   │
  APPEARANCE
  │ Theme       System · Light · Dark│  segmented control (iOS) / M3 segmented button
@@ -411,7 +411,7 @@ G ──────────────────────────
  Workspace                                   title3
  ┌──────────────────────────────────┐
  │ [LOGO] Acme Corp AI           ✓  │  current; host on line 2
- │        acme.elitea.ai            │
+ │        acme.example.com          │
  └──────────────────────────────────┘
  PROJECTS
  │ (•) Personal                     │  radio list, selected = accent check
@@ -420,7 +420,7 @@ G ──────────────────────────
  ┌──────────────────────────────────┐
  │  Switch workspace…               │  tonal button → wipe-confirm sheet:
  └──────────────────────────────────┘  "This removes chats, offline data and
-                                         sign-in for acme.elitea.ai from this device."
+                                         sign-in for acme.example.com from this device."
 ```
 
 - The MVP has one connected workspace. "Switch" therefore means disconnect, wipe, then

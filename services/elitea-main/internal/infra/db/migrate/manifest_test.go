@@ -1063,12 +1063,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agent_floor_turns, the chain link kind agent_turn and the three loop
 	// guard end limits. No backfill, no permission.
 	//
-	// 232: shared/0232_agent_teams.sql, saved teams (ADR-0050 decision 8,
+	// 232: shared/0232_ephemeral_agents.sql, one row per sub-agent a run
+	// started with spawn_agent (ADR-0050 decisions 4 and 9d, issue 1614):
+	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
+	// data, no permission.
+	//
+	// 233: shared/0233_agent_teams.sql, saved teams (ADR-0050 decision 8,
 	// issue 1620): elitea_chat.agent_teams and agent_team_members, and the
 	// permissions models.teams.{list,create,update,delete}: list to the
 	// default-mode admin, editor and viewer, the other three to admin and
 	// editor, and the same on saved project matrices.
-	require.EqualValues(t, 232, Head(shared))
+	require.EqualValues(t, 233, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

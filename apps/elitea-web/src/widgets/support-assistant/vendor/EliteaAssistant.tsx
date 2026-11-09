@@ -16,6 +16,8 @@
  */
 import { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 
+import { productName } from '@/shared/brand';
+
 import {
   ApiContext,
   SupportAssistantContextValue,
@@ -52,10 +54,10 @@ interface EliteaAssistantProps {
 const EliteaAssistant = forwardRef<TEliteaAssistantRef, EliteaAssistantProps>(
   (props, ref) => {
     const {
-      title: titleProp = 'Elitea Assistant',
+      title: titleProp = `${productName()} Assistant`,
       placeholder: placeholderProp = 'Type a message...',
       welcomeMessage:
-        welcomeMessageProp = "Hi! I'm your ELITEA Support Assistant.\nAsk me anything about ELITEA or report any issues you're experiencing. I have context about your current screen and settings.",
+        welcomeMessageProp = `Hi! I'm your ${productName()} Support Assistant.\nAsk me anything about ${productName()} or report any issues you're experiencing. I have context about your current screen and settings.`,
       position = 'bottom-right',
       theme = 'light',
       colors,
