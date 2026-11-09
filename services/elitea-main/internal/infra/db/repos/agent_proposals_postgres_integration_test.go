@@ -27,6 +27,10 @@ const (
 	proposalNewAgent    int64 = 991616
 	proposalPersonalSrc int64 = 991617
 	proposalTeamCopy    int64 = 991618
+	// proposalOldAgent existed before any proposal; proposalOthersAgent's
+	// first version is another person's.
+	proposalOldAgent    int64 = 991619
+	proposalOthersAgent int64 = 991620
 )
 
 func proposalStore(t *testing.T, pool *pgxpool.Pool, now *time.Time) *AgentProposals {
@@ -42,13 +46,47 @@ func proposalStore(t *testing.T, pool *pgxpool.Pool, now *time.Time) *AgentPropo
 	return store.WithClock(func() time.Time { return *now })
 }
 
+// seedProposalApplications writes the agents and their first versions: the
+// columns MarkProposalCreated and IsForkOfBy read (applications.created_at,
+// application_versions author_id and meta) are the tenant schema's own
+// (001_initial.sql), added here because the template's minimal tables lack
+// them. Person 4 wrote every first version but proposalOthersAgent's;
+// proposalTeamCopy is person 4's fork of proposalPersonalSrc in project 3.
 func seedProposalApplications(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
-	for _, id := range []int64{proposalProposer, proposalNewAgent, proposalPersonalSrc, proposalTeamCopy} {
-		if _, err := pool.Exec(ctx, `INSERT INTO p_1.applications (id, name, owner_id) VALUES ($1, $2, 4) ON CONFLICT (id) DO NOTHING`,
-			id, fmt.Sprintf("Agent %d", id)); err != nil {
-			t.Fatalf("seed application %d: %v", id, err)
+	for _, statement := range []string{
+		`ALTER TABLE p_1.applications ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT now()`,
+		`ALTER TABLE p_1.application_versions ADD COLUMN IF NOT EXISTS application_id integer`,
+		`ALTER TABLE p_1.application_versions ADD COLUMN IF NOT EXISTS author_id integer`,
+		`ALTER TABLE p_1.application_versions ADD COLUMN IF NOT EXISTS meta jsonb DEFAULT '{}'::jsonb`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed the application columns: %v", err)
+		}
+	}
+	for _, agent := range []struct {
+		id      int64
+		created string
+		author  int64
+		meta    string
+	}{
+		{proposalProposer, "now()", 4, `{}`},
+		{proposalNewAgent, "now()", 4, `{}`},
+		{proposalPersonalSrc, "now()", 4, `{}`},
+		{proposalTeamCopy, "now()", 4, fmt.Sprintf(`{"parent_entity_id":"%d","parent_project_id":"3"}`, proposalPersonalSrc)},
+		{proposalOldAgent, "(now() - interval '1 day')", 4, `{}`},
+		{proposalOthersAgent, "now()", 5, `{}`},
+	} {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`INSERT INTO p_1.applications (id, name, owner_id, created_at)
+VALUES ($1, $2, 4, %s AT TIME ZONE 'UTC') ON CONFLICT (id) DO NOTHING`, agent.created),
+			agent.id, fmt.Sprintf("Agent %d", agent.id)); err != nil {
+			t.Fatalf("seed application %d: %v", agent.id, err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO p_1.application_versions (application_id, author_id, meta)
+SELECT $1, $2, $3::jsonb WHERE NOT EXISTS (SELECT 1 FROM p_1.application_versions WHERE application_id = $1)`,
+			agent.id, agent.author, agent.meta); err != nil {
+			t.Fatalf("seed the first version of %d: %v", agent.id, err)
 		}
 	}
 }
@@ -193,8 +231,21 @@ func TestAgentProposalsLimitsSuppressionAndDecisions(t *testing.T) {
 	if err := store.MarkProposalCreated(ctx, proposalProject, ids[1], 4, 999999999); !errors.Is(err, ErrProposalNotFound) {
 		t.Fatalf("an agent that does not exist: %v", err)
 	}
+	// Only an agent the caller just made: not one older than the proposal,
+	// not one whose first version another person wrote.
+	for _, agent := range []int64{proposalOldAgent, proposalOthersAgent} {
+		if err := store.MarkProposalCreated(ctx, proposalProject, ids[1], 4, agent); !errors.Is(err, ErrNotYourNewAgent) {
+			t.Fatalf("linking agent %d: %v", agent, err)
+		}
+	}
+	if err := store.MarkProposalCreated(ctx, proposalProject, ids[1], 5, proposalNewAgent); !errors.Is(err, ErrNotYourNewAgent) {
+		t.Fatalf("another person linking person 4's new agent: %v", err)
+	}
 	if err := store.MarkProposalCreated(ctx, proposalProject, ids[1], 4, proposalNewAgent); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.MarkProposalCreated(ctx, proposalProject, ids[2], 4, proposalNewAgent); !errors.Is(err, ErrNotYourNewAgent) {
+		t.Fatalf("one agent linked to a second proposal: %v", err)
 	}
 	created, err := store.GetProposal(ctx, proposalProject, ids[1])
 	if err != nil || created.Status != "created" || created.CreatedApplicationID == nil || *created.CreatedApplicationID != proposalNewAgent {
@@ -287,5 +338,34 @@ RETURNING id`, proposalPersonalSrc)
 	}
 	if _, err := store.SeedAgentMemory(ctx, proposalProject, 999999999, 4, entries, "agent.copied_to_project", "x"); !errors.Is(err, ErrProposalNotFound) {
 		t.Fatalf("a copy into an agent that does not exist: %v", err)
+	}
+
+	// The copy's target must be the caller's fork of the source.
+	for _, check := range []struct {
+		application, user, sourceProject, sourceApplication int64
+		want                                                bool
+	}{
+		{proposalTeamCopy, 4, 3, proposalPersonalSrc, true},
+		{proposalTeamCopy, 5, 3, proposalPersonalSrc, false},
+		{proposalTeamCopy, 4, 2, proposalPersonalSrc, false},
+		{proposalNewAgent, 4, 3, proposalPersonalSrc, false},
+		{999999999, 4, 3, proposalPersonalSrc, false},
+	} {
+		fork, err := store.IsForkOfBy(ctx, proposalProject, check.application, check.user, check.sourceProject, check.sourceApplication)
+		if err != nil || fork != check.want {
+			t.Fatalf("IsForkOfBy%+v = %t %v", check, fork, err)
+		}
+	}
+
+	// Seeding keeps the active limit: the oldest unpinned episodes go.
+	limited := proposalStore(t, pool, &now).WithActiveLimit(2)
+	episodes := []CopiedMemory{{Kind: "episode", Content: "first"}, {Kind: "episode", Content: "second"}, {Kind: "episode", Content: "third"}}
+	if _, err := limited.SeedAgentMemory(ctx, proposalProject, proposalTeamCopy, 4, episodes, "agent.copied_to_project", "x"); err != nil {
+		t.Fatal(err)
+	}
+	var active int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.agent_memory_entries WHERE application_id = $1 AND status = 'active'`,
+		proposalTeamCopy).Scan(&active); err != nil || active != 2 {
+		t.Fatalf("active entries past the limit: %d %v", active, err)
 	}
 }

@@ -57,7 +57,13 @@ const (
 	MaxDisplayNameChars  = 60
 	MaxAvatarBytes       = 128
 	MaxTools             = 64
-	MaxToolKeyBytes      = 256
+	// MaxToolKeyBytes is the runtime's tool key bound (agent-runtime
+	// tool_envelope.rs MAX_KEY_BYTES): a key the spawn accepted is never
+	// refused here.
+	MaxToolKeyBytes = 512
+	// MaxDescriptionChars is the agent description bound (AgentDefinition
+	// in v2.yaml, tenant applications.description VARCHAR(2304)).
+	MaxDescriptionChars = 2304
 	// MaxNameChars is the agent name bound of the create route
 	// (apps/elitea-web shared/lib/limits MAX_NAME_LENGTH).
 	MaxNameChars = 32
@@ -167,10 +173,20 @@ func (e *Error) Error() string { return e.Message }
 
 func invalid(message string) error { return &Error{Code: OutcomeInvalid, Message: message} }
 
+// plain is model-written multi-line text: line breaks (\n, \r\n) and tabs
+// are kept, other control characters are refused.
 func plain(text string) bool {
 	return utf8.ValidString(text) && !strings.ContainsFunc(text, func(r rune) bool {
-		return unicode.IsControl(r) && r != '\n' && r != '\t'
+		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
 	})
+}
+
+// storable is text the proposal records verbatim because the runtime's
+// profile digest covers it (the soul): any valid UTF-8 the runtime accepted,
+// save NUL, which PostgreSQL text cannot hold. Refusing more would refuse a
+// spawn the model cannot change, since the profile comes from the ledger.
+func storable(text string) bool {
+	return utf8.ValidString(text) && !strings.ContainsRune(text, 0)
 }
 
 func oneLine(text string) bool {
@@ -188,11 +204,17 @@ func Check(request Request) (Request, error) {
 	if !ValidAgentID(out.EphemeralAgentID) {
 		return Request{}, invalid("ephemeral_agent_id must be the id spawn_agent answered (a_ and 8 hex digits).")
 	}
-	if out.Rationale == "" || len(out.Rationale) > MaxRationaleBytes || !plain(out.Rationale) {
+	if out.Rationale == "" || len(out.Rationale) > MaxRationaleBytes {
 		return Request{}, invalid(fmt.Sprintf("rationale must say why, in at most %d bytes.", MaxRationaleBytes))
 	}
-	if len(out.Instructions) > MaxInstructionsBytes || !plain(out.Instructions) {
+	if !plain(out.Rationale) {
+		return Request{}, invalid("rationale is plain text: no control characters other than line breaks and tabs.")
+	}
+	if len(out.Instructions) > MaxInstructionsBytes {
 		return Request{}, invalid(fmt.Sprintf("instructions are at most %d bytes.", MaxInstructionsBytes))
+	}
+	if !plain(out.Instructions) {
+		return Request{}, invalid("instructions are plain text: no control characters other than line breaks and tabs.")
 	}
 	profile := request.Profile
 	out.Profile = Profile{
@@ -206,8 +228,11 @@ func Check(request Request) (Request, error) {
 			return Request{}, invalid("the sub-agent's label and display name are at most 60 characters.")
 		}
 	}
-	if len(out.Profile.Soul) > MaxSoulBytes || !plain(out.Profile.Soul) {
+	if len(out.Profile.Soul) > MaxSoulBytes {
 		return Request{}, invalid("the sub-agent's soul is at most 2048 bytes.")
+	}
+	if !storable(out.Profile.Soul) {
+		return Request{}, invalid("the sub-agent's soul is not valid UTF-8 text.")
 	}
 	if len(out.Profile.Avatar) > MaxAvatarBytes || !oneLine(out.Profile.Avatar) {
 		return Request{}, invalid("the sub-agent's avatar is a short key.")
@@ -301,9 +326,15 @@ func Draft(request Request) map[string]any {
 	if runes := []rune(name); len(runes) > MaxNameChars {
 		name = strings.TrimSpace(string(runes[:MaxNameChars]))
 	}
+	// The rationale (up to 4 KiB) opens as the description, cut to the
+	// agent description bound so the editor can save the agent later.
+	description := request.Rationale
+	if runes := []rune(description); len(runes) > MaxDescriptionChars {
+		description = strings.TrimSpace(string(runes[:MaxDescriptionChars]))
+	}
 	draft := map[string]any{
 		"name":                  name,
-		"description":           request.Rationale,
+		"description":           description,
 		"instructions":          request.Instructions,
 		"welcome_message":       "",
 		"conversation_starters": []any{},

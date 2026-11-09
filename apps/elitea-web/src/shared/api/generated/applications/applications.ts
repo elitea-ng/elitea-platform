@@ -7413,7 +7413,7 @@ export type markAgentProposalCreatedResponse401 = {
 };
 
 export type markAgentProposalCreatedResponse403 = {
-  data: N403Response;
+  data: AgentProposalRefusal;
   status: 403;
 };
 
@@ -7511,7 +7511,7 @@ export const getMarkAgentProposalCreatedQueryKey = (
 
 export const getMarkAgentProposalCreatedQueryOptions = <
   TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
-  TError = N400Response | N401Response | N403Response | AgentProposalRefusal,
+  TError = N400Response | N401Response | AgentProposalRefusal,
 >(
   projectId: string,
   proposalId: number,
@@ -7567,11 +7567,11 @@ export type MarkAgentProposalCreatedQueryResult = NonNullable<
   Awaited<ReturnType<typeof markAgentProposalCreated>>
 >;
 export type MarkAgentProposalCreatedQueryError =
-  N400Response | N401Response | N403Response | AgentProposalRefusal;
+  N400Response | N401Response | AgentProposalRefusal;
 
 export function useMarkAgentProposalCreated<
   TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
-  TError = N400Response | N401Response | N403Response | AgentProposalRefusal,
+  TError = N400Response | N401Response | AgentProposalRefusal,
 >(
   projectId: string,
   proposalId: number,
@@ -7600,7 +7600,7 @@ export function useMarkAgentProposalCreated<
 };
 export function useMarkAgentProposalCreated<
   TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
-  TError = N400Response | N401Response | N403Response | AgentProposalRefusal,
+  TError = N400Response | N401Response | AgentProposalRefusal,
 >(
   projectId: string,
   proposalId: number,
@@ -7629,7 +7629,7 @@ export function useMarkAgentProposalCreated<
 };
 export function useMarkAgentProposalCreated<
   TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
-  TError = N400Response | N401Response | N403Response | AgentProposalRefusal,
+  TError = N400Response | N401Response | AgentProposalRefusal,
 >(
   projectId: string,
   proposalId: number,
@@ -7654,7 +7654,7 @@ export function useMarkAgentProposalCreated<
 
 export function useMarkAgentProposalCreated<
   TData = Awaited<ReturnType<typeof markAgentProposalCreated>>,
-  TError = N400Response | N401Response | N403Response | AgentProposalRefusal,
+  TError = N400Response | N401Response | AgentProposalRefusal,
 >(
   projectId: string,
   proposalId: number,

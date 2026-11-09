@@ -51,7 +51,7 @@ A proposal shows up in two places:
 - **In the chat**, under the answer: "Mira proposes saving a sub-agent as a new agent: Risk reviewer", with **Review**.
 - **On the Agents page**, as **Proposals (n)** in the toolbar, for a person who may create agents. Select it to see the open proposals.
 
-**Review** opens the agent form filled in from the proposal: name, description, instructions, display name and soul. It also shows:
+**Review** opens the agent form filled in from the proposal: name, description, instructions, display name and soul. The name is cut to 32 characters and the description (the proposing agent's reason) to 2304, the limits of any agent. It also shows:
 
 - **Proposed tools**, each with its category (Read, Write, Sends externally, Spends money, Destructive). A tool the platform has no category for, or a wildcard such as `github/*`, counts as Write. Tools are **not** added by Create: add them in the agent editor, where their checks apply.
 - **Memory to start with**: tick the entries to keep. Only the ticked ones are saved into the new agent's memory.
@@ -59,7 +59,7 @@ A proposal shows up in two places:
 
 Then:
 
-- **Create agent** creates the agent and opens it. The proposal is marked created.
+- **Create agent** creates the agent and opens it. The proposal is marked created. If the agent was created but the proposal could not be updated, the form says so; **Create agent** again finishes with the same agent instead of creating a second one. A proposal can only be marked created with an agent you just created from it.
 - **Dismiss** closes the proposal. The same profile is not proposed again for 30 days. A person who may create agents, or the owner of the proposing agent, may dismiss.
 - **Save locally as AGENTS.md / SOUL.md** downloads the agent's description, instructions, tools and memory as `AGENTS.md`, and its soul as `SOUL.md`. It saves nothing on the platform. The desktop app reads both files from a Local work folder.
 
@@ -70,6 +70,7 @@ An agent in your personal project has **Copy to project** in the agent editor. P
 - The copy is **an agent of its own**. Changing or deleting one never changes the other.
 - Only the memory you pick is copied, and only active notes about nobody. Notes **about a person** stay in your personal project.
 - You need to be able to create agents in the target project.
+- If the agent was copied but its memory was not, the dialog says so; **Copy** again copies the memory into the same copy. Memory is only ever copied into your own copy of the agent.
 
 Copy to project is the same as [forking](/how-tos/agents-pipelines/forking), plus the memory.
 

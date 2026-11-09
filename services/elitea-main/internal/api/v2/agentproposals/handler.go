@@ -77,6 +77,7 @@ type Store interface {
 	MarkProposalCreated(ctx context.Context, projectID, proposalID, userID, applicationID int64) error
 	SeedAgentMemory(ctx context.Context, projectID, applicationID, userID int64, entries []repos.CopiedMemory, action, resource string) (int, error)
 	MemoryEntriesForCopy(ctx context.Context, projectID, applicationID int64, ids []int64) ([]repos.CopiedMemory, error)
+	IsForkOfBy(ctx context.Context, projectID, applicationID, userID, sourceProjectID, sourceApplicationID int64) (bool, error)
 }
 
 var _ Store = (*repos.AgentProposals)(nil)
@@ -246,7 +247,8 @@ type createdBody struct {
 
 // MarkCreated records the agent the review form created from an open
 // proposal through the create route, and writes the seeds the person kept
-// into that agent's memory.
+// into that agent's memory. The agent must be one the caller just created
+// (repos.ErrNotYourNewAgent, 403 otherwise).
 func (h *Handler) MarkCreated(w http.ResponseWriter, r *http.Request) {
 	if !h.ready(w) {
 		return
@@ -353,6 +355,18 @@ func (h *Handler) CopyMemory(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Copy to project copies a personal agent of yours, with the memory you can read.", "code": "copy_forbidden"})
 		return
 	}
+	// The memory lands only in the caller's own fork of the source: active,
+	// person-written entries in any other agent of the project would bypass
+	// the memory routes' ownership and permission checks.
+	fork, err := h.store.IsForkOfBy(r.Context(), projectID, applicationID, user, body.SourceProjectID, body.SourceApplicationID)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if !fork {
+		writeError(w, r, repos.ErrNotYourNewAgent)
+		return
+	}
 	entries, err := h.store.MemoryEntriesForCopy(r.Context(), body.SourceProjectID, body.SourceApplicationID, body.EntryIDs)
 	if err != nil {
 		writeError(w, r, err)
@@ -396,6 +410,8 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, repos.ErrProposalNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "The proposal or agent does not exist.", "code": "not_found"})
+	case errors.Is(err, repos.ErrNotYourNewAgent):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "The memory can only go into the agent you just created or copied.", "code": "not_your_new_agent"})
 	case errors.Is(err, repos.ErrProposalDecided):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "The proposal was already decided.", "code": "proposal_decided"})
 	default:

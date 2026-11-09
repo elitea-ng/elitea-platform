@@ -90,6 +90,11 @@ const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
 const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
+/// Main's own request ceiling for `propose_agent`
+/// (`maxRuntimeProposeAgentRequestBytes`): a proposal carries instructions
+/// up to 16 KiB, a 4 KiB rationale, a 2 KiB soul and memory seeds, so the
+/// agent memory ceiling would refuse valid proposals.
+const MAX_PROPOSE_AGENT_REQUEST_BYTES: usize = 32 * 1_024;
 /// The `artifact` toolkit family's four schemas (#906).
 const ARTIFACT_LIST_SCHEMA: &str = "elitea.runtime.artifact-list.v1";
 const ARTIFACT_READ_SCHEMA: &str = "elitea.runtime.artifact-read.v1";
@@ -1055,7 +1060,7 @@ impl RuntimeContextClient {
             &binding,
             ProposeAgentRequestV1 {
                 scope: Some(scope(&binding)),
-                request_json: encode_agent_memory_body(request)?,
+                request_json: encode_bounded_body(request, MAX_PROPOSE_AGENT_REQUEST_BYTES)?,
             },
             PROPOSE_AGENT_AUTHORITY_MALFORMED,
         )?;
@@ -2073,12 +2078,18 @@ const fn agent_memory_rejection() -> RuntimeContextError {
 fn encode_agent_memory_body<T: serde::Serialize>(
     request: &T,
 ) -> Result<Vec<u8>, RuntimeContextError> {
-    let body = serde_json::to_vec(request).map_err(|_| {
-        RuntimeContextError::InvalidConfiguration("the agent memory request is not encodable")
-    })?;
-    if body.len() > MAX_AGENT_MEMORY_REQUEST_BYTES {
+    encode_bounded_body(request, MAX_AGENT_MEMORY_REQUEST_BYTES)
+}
+
+fn encode_bounded_body<T: serde::Serialize>(
+    request: &T,
+    max_bytes: usize,
+) -> Result<Vec<u8>, RuntimeContextError> {
+    let body = serde_json::to_vec(request)
+        .map_err(|_| RuntimeContextError::InvalidConfiguration("the request is not encodable"))?;
+    if body.len() > max_bytes {
         return Err(RuntimeContextError::ResourceExhausted(
-            "the agent memory request exceeds the approved limit",
+            "the request exceeds the approved limit",
         ));
     }
     Ok(body)

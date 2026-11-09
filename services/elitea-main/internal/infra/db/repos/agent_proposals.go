@@ -30,9 +30,10 @@ import (
 // change is a security audit event in the change's transaction
 // (TypeAgentProposalChanged).
 type AgentProposals struct {
-	pool  *pgxpool.Pool
-	audit securityaudit.Appender
-	now   func() time.Time
+	pool        *pgxpool.Pool
+	audit       securityaudit.Appender
+	now         func() time.Time
+	memoryLimit int
 }
 
 var _ storage.ProposeAgentSink = (*AgentProposals)(nil)
@@ -42,6 +43,13 @@ var ErrProposalNotFound = errors.New("agent proposal not found")
 
 // ErrProposalDecided is a decision on a proposal that is no longer open.
 var ErrProposalDecided = errors.New("agent proposal already decided")
+
+// ErrNotYourNewAgent is a Create record or a memory copy that names an agent
+// the caller did not just make: one created before the proposal, one whose
+// first version another person wrote, or (Copy to project) one that is not a
+// fork of the source agent. Seeding writes active, person-written memory, so
+// it may only land in the agent the caller's own Create or Fork made.
+var ErrNotYourNewAgent = errors.New("agent proposals: not an agent the caller just made")
 
 // NewAgentProposals builds the store. A nil appender is refused.
 func NewAgentProposals(pool *pgxpool.Pool, audit securityaudit.Appender) (*AgentProposals, error) {
@@ -58,6 +66,22 @@ func ComposeAgentProposals(pool *pgxpool.Pool) (*AgentProposals, error) {
 		return nil, err
 	}
 	return NewAgentProposals(pool, appender)
+}
+
+// WithActiveLimit sets the per-agent active memory limit seeding enforces
+// (tests); the default is agentmemory.DefaultActiveLimit.
+func (s *AgentProposals) WithActiveLimit(limit int) *AgentProposals {
+	if limit > 0 {
+		s.memoryLimit = limit
+	}
+	return s
+}
+
+func (s *AgentProposals) activeLimit() int {
+	if s.memoryLimit > 0 {
+		return s.memoryLimit
+	}
+	return agentmemory.DefaultActiveLimit
 }
 
 // WithClock sets the clock the suppression window is measured on (tests).
@@ -458,8 +482,10 @@ WHERE project_id = $1 AND id = $2 AND status = 'proposed'`, projectID, proposalI
 }
 
 // MarkProposalCreated records the agent a person created from an open
-// proposal. The application must exist in the project's schema: the create
-// route made it, and this only links it. The new agent's registry row is
+// proposal. The create route made it, and this only links it: the
+// application must be in the project's schema, created no earlier than the
+// proposal, its first version written by the caller, and linked to no other
+// proposal (ErrNotYourNewAgent otherwise). The new agent's registry row is
 // the create route's own (tier low); nothing here sets a tier.
 func (s *AgentProposals) MarkProposalCreated(ctx context.Context, projectID, proposalID, userID, applicationID int64) error {
 	schema, err := tenantschema.QuoteInt(projectID)
@@ -467,13 +493,25 @@ func (s *AgentProposals) MarkProposalCreated(ctx context.Context, projectID, pro
 		return err
 	}
 	return s.decide(ctx, projectID, proposalID, userID, func(tx pgx.Tx) (pgconn.CommandTag, error) {
-		var exists bool
-		if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.applications WHERE id = $1)`, schema),
-			applicationID).Scan(&exists); err != nil {
+		var exists, mine bool
+		if err := tx.QueryRow(ctx, fmt.Sprintf(`
+SELECT true,
+       app.created_at >= (proposal.created_at AT TIME ZONE 'UTC') - interval '1 minute'
+       AND (SELECT version.author_id FROM %[1]s.application_versions AS version
+            WHERE version.application_id = app.id ORDER BY version.id LIMIT 1) = $3
+       AND NOT EXISTS (SELECT 1 FROM elitea_lifecycle.agent_proposals AS other
+                       WHERE other.project_id = $4 AND other.created_application_id = app.id)
+FROM %[1]s.applications AS app,
+     elitea_lifecycle.agent_proposals AS proposal
+WHERE app.id = $1 AND proposal.project_id = $4 AND proposal.id = $2`, schema),
+			applicationID, proposalID, userID, projectID).Scan(&exists, &mine); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return pgconn.CommandTag{}, err
 		}
 		if !exists {
 			return pgconn.CommandTag{}, ErrProposalNotFound
+		}
+		if !mine {
+			return pgconn.CommandTag{}, ErrNotYourNewAgent
 		}
 		return tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_proposals
@@ -520,7 +558,8 @@ type CopiedMemory struct {
 // entries: active, written_by person, no conversation and no subject. It
 // serves the review form's accepted seeds and Copy to project's chosen
 // entries; both are a person's decision, so nothing waits for review. The
-// agent memory limit applies as for any write.
+// agent memory limit applies as for any write: the oldest unpinned episodes
+// past it are archived in the same transaction (AgentMemory.enforceLimit).
 func (s *AgentProposals) SeedAgentMemory(ctx context.Context, projectID, applicationID, userID int64, entries []CopiedMemory, action, resource string) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
@@ -567,12 +606,41 @@ RETURNING id`, schema), applicationID, string(kind), content, entry.Pinned, user
 		if written == 0 {
 			return nil
 		}
+		limiter := AgentMemory{activeLimit: s.activeLimit()}
+		if err := limiter.enforceLimit(ctx, tx, schema, applicationID); err != nil {
+			return err
+		}
 		return s.append(ctx, tx, projectID, action, "user:"+strconv.FormatInt(userID, 10), resource, "")
 	})
 	if err != nil {
 		return 0, err
 	}
 	return written, nil
+}
+
+// IsForkOfBy answers whether an agent of the project is the caller's fork
+// of the source agent: its first version written by the caller, with the
+// fork provenance (meta parent_entity_id, parent_project_id) naming the
+// source. Copy to project only writes memory into such an agent.
+func (s *AgentProposals) IsForkOfBy(ctx context.Context, projectID, applicationID, userID, sourceProjectID, sourceApplicationID int64) (bool, error) {
+	schema, err := tenantschema.QuoteInt(projectID)
+	if err != nil {
+		return false, err
+	}
+	var fork bool
+	err = s.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT COALESCE((
+    SELECT version.author_id = $2
+       AND version.meta->>'parent_entity_id' = $3
+       AND version.meta->>'parent_project_id' = $4
+    FROM %s.application_versions AS version
+    WHERE version.application_id = $1
+    ORDER BY version.id LIMIT 1), false)`, schema),
+		applicationID, userID, strconv.FormatInt(sourceApplicationID, 10), strconv.FormatInt(sourceProjectID, 10)).Scan(&fork)
+	if err != nil {
+		return false, fmt.Errorf("agent proposals: read the copy's provenance: %w", err)
+	}
+	return fork, nil
 }
 
 // MemoryEntriesForCopy reads the chosen ACTIVE entries of an agent that are

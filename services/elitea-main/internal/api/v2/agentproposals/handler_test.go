@@ -23,6 +23,7 @@ type fakeStore struct {
 	seedTo    [2]int64
 	copyFrom  [2]int64
 	decideErr error
+	notFork   bool
 }
 
 func (f *fakeStore) ListProposals(context.Context, int64, repos.AgentProposalFilter) ([]repos.AgentProposal, int, error) {
@@ -51,6 +52,10 @@ func (f *fakeStore) MarkProposalCreated(_ context.Context, _, _, _, applicationI
 func (f *fakeStore) SeedAgentMemory(_ context.Context, projectID, applicationID, _ int64, entries []repos.CopiedMemory, _, _ string) (int, error) {
 	f.seedTo, f.seeded = [2]int64{projectID, applicationID}, entries
 	return len(entries), nil
+}
+
+func (f *fakeStore) IsForkOfBy(context.Context, int64, int64, int64, int64, int64) (bool, error) {
+	return !f.notFork, nil
 }
 
 func (f *fakeStore) MemoryEntriesForCopy(_ context.Context, projectID, applicationID int64, _ []int64) ([]repos.CopiedMemory, error) {
@@ -154,6 +159,22 @@ func TestCopyMemoryOnlyFromTheCallersPersonalAgent(t *testing.T) {
 	}
 	if got := serve(t, &fakeStore{}, true, nil, 7, http.MethodPost, path, `{"source_project_id":7,"source_application_id":9}`); got.Code != http.StatusBadRequest {
 		t.Fatalf("a copy into the same project: %d", got.Code)
+	}
+	// The target must be the caller's own fork of the source: any other
+	// agent of the project gets no person-written memory.
+	store = &fakeStore{notFork: true}
+	if got := serve(t, store, true, nil, 3, http.MethodPost, path, body); got.Code != http.StatusForbidden || store.seedTo != [2]int64{} {
+		t.Fatalf("a copy into an agent that is not the caller's fork: %d into %v", got.Code, store.seedTo)
+	}
+}
+
+// Create may only record (and seed) an agent the caller just made; the
+// store refuses any other and the route answers 403, seeding nothing.
+func TestMarkCreatedRefusesAnAgentTheCallerDidNotJustMake(t *testing.T) {
+	store := &fakeStore{decideErr: repos.ErrNotYourNewAgent}
+	got := serve(t, store, false, nil, 0, http.MethodPost, "/agent_proposals/prompt_lib/7/5/created", `{"application_id":42,"memory_seeds":[0]}`)
+	if got.Code != http.StatusForbidden || store.seeded != nil {
+		t.Fatalf("someone else's agent: %d, seeded %v", got.Code, store.seeded)
 	}
 }
 

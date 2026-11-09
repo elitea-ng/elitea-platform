@@ -50,6 +50,7 @@ export const AgentProposalRefusal = zod
       "proposal_decided",
       "proposal_decision_forbidden",
       "copy_forbidden",
+      "not_your_new_agent",
     ]),
   })
   .describe(

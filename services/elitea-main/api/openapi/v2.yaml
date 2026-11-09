@@ -8900,7 +8900,7 @@ components:
       required: [error, code]
       properties:
         error: { type: string }
-        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden] }
+        code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden, not_your_new_agent] }
       description: >
         NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
     AgentRegistryRecord:
@@ -28934,7 +28934,15 @@ paths:
                   memory_seeded: { type: integer }
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403':
+          description: >
+            The caller lacks applications.create, or (code not_your_new_agent)
+            the agent is not one the caller just created from this proposal:
+            created before it, its first version another person's, or linked
+            to another proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
         '404':
           description: (code not_found) No such proposal, or no such agent in this project
           content:
@@ -28994,7 +29002,10 @@ paths:
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403':
-          description: (code copy_forbidden) The source is not a personal agent of the caller, or its memory is not readable
+          description: >
+            (code copy_forbidden) The source is not a personal agent of the
+            caller, or its memory is not readable; (code not_your_new_agent)
+            the path's agent is not the caller's own fork of the source
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
