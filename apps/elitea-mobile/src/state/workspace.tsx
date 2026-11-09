@@ -270,6 +270,47 @@ export function wipeRevokedWorkspace(id: string, reason: 'device_revoked' | 'cre
   }, { replacesActive: false });
 }
 
+/**
+ * MDM `lock_server` (ADR-0052 W1b): the device keeps only the workspace at
+ * `origin`. Every other workspace is signed out and wiped like a logout: the
+ * active one through `endSession` (the app lands on the connect screen), any
+ * other through `wipeStoredWorkspace` with a best-effort revoke. A slot whose
+ * origin cannot be read is left for the next run (it is never guessed).
+ * Nothing is restored when the MDM removes the key: wiped is wiped.
+ * Resolves with the ids that are gone. Never throws.
+ */
+export function keepOnlyWorkspace(origin: string): Promise<string[]> {
+  return serial(async () => {
+    const registry = await readRegistry().catch(() => null);
+    if (registry === null) return [];
+    const removed: string[] = [];
+    for (const id of registry.ids) {
+      let stored: string | null;
+      try {
+        stored = await getSecureItemIn(id, SECURE_KEYS.serverOrigin);
+      } catch (error) {
+        log.warn('managed server lock: a workspace origin could not be read', { error });
+        continue;
+      }
+      if (stored === origin) continue;
+      const wiped =
+        boundWorkspace() === id
+          ? (await endSession({ reason: 'managed_server' })).storageWiped
+          : (await wipeStoredWorkspace(id, { reason: 'managed_server', revoke: (signal) => revokeStoredSession(id, signal) }))
+              .wiped;
+      if (wiped) removed.push(id);
+    }
+    if (getSession().returnWorkspaceId !== null && removed.includes(getSession().returnWorkspaceId!)) {
+      setSession({ returnWorkspaceId: null });
+    }
+    if (removed.length > 0) {
+      log.info('managed server lock removed other workspaces', { count: removed.length });
+      void refreshWorkspaceList();
+    }
+    return removed;
+  }, { replacesActive: false });
+}
+
 /** "Can't unlock → reset": every workspace on this device is logged out and wiped. */
 export async function removeAllWorkspaces(): Promise<boolean> {
   let ok = (await endSession({ reason: 'reset' })).storageWiped;

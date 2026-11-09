@@ -20,6 +20,7 @@ export type EndReason =
   | 'credential_rejected'
   | 'server_switch'
   | 'policy'
+  | 'managed_server'
   | 'reset';
 
 export interface UpgradeRequired {

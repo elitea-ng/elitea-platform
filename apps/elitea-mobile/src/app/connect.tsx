@@ -41,6 +41,7 @@ const END_REASON_TEXT: Partial<Record<EndReason, (host: string) => string>> = {
   device_revoked: (host) => `This device was signed out by the workspace ${host}. Its data was removed from this device.`,
   credential_rejected: (host) => `The workspace ${host} no longer accepts your sign-in. Connect and sign in again.`,
   policy: (host) => `The security policy of ${host} signed this device out.`,
+  managed_server: (host) => `Your organization manages this device and allows only its own workspace. ${host} was signed out and its data was removed from this device.`,
 };
 
 export default function ConnectScreen() {

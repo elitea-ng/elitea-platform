@@ -1,0 +1,104 @@
+import { identity } from '@/config/identity';
+import { log } from '@/lib/log';
+import { parseConnectLink } from '@/linking/parseConnectLink';
+import { getManagedConfig, subscribeManagedConfig, type ManagedConfig } from '@/security/managedConfig';
+import { getSession, subscribeSession } from '@/state/session';
+import { keepOnlyWorkspace } from '@/state/workspace';
+
+/**
+ * MDM `lock_server` (ADR-0052 W1b, decision 7): with `server_url` set, the app
+ * keeps one workspace. It is applied once the session is hydrated (the
+ * resumed wipes are done and the registry is readable) and again on every
+ * change of the managed configuration while the app runs.
+ *
+ * Every other workspace is signed out and wiped like a logout
+ * (`keepOnlyWorkspace`). When the MDM removes the key nothing comes back.
+ * `lock_server` without a usable `server_url` locks nothing: there is no
+ * server to keep, and wiping every workspace on a typo is not "tightening".
+ */
+
+/** The managed origin to keep, or null when nothing is locked. */
+export function lockedOrigin(managed: ManagedConfig, allowPrivateHttp: boolean = __DEV__): string | null {
+  if (managed.lockServer !== true || managed.serverUrl === null) return null;
+  const parsed = parseConnectLink(managed.serverUrl, { connectSchemes: identity.connectSchemes, allowPrivateHttp });
+  if (!parsed.ok) {
+    log.warn('managed server lock ignored: server_url is not a workspace address', { error: parsed.error });
+    return null;
+  }
+  return parsed.origin;
+}
+
+export interface ManagedServerLockDeps {
+  keepOnly?: (origin: string) => Promise<unknown>;
+  allowPrivateHttp?: boolean;
+}
+
+let started = false;
+let applied: string | null = null;
+let running: Promise<void> | null = null;
+let again = false;
+
+function apply(deps: ManagedServerLockDeps): Promise<void> {
+  if (running) {
+    again = true;
+    return running;
+  }
+  running = (async () => {
+    do {
+      again = false;
+      if (!getSession().hydrated) return;
+      const origin = lockedOrigin(getManagedConfig(), deps.allowPrivateHttp);
+      if (origin === null) {
+        // Unlocked (or never locked): forget, so locking again re-applies.
+        applied = null;
+        continue;
+      }
+      if (origin === applied) continue;
+      try {
+        await (deps.keepOnly ?? keepOnlyWorkspace)(origin);
+        applied = origin;
+      } catch (error) {
+        log.warn('managed server lock not applied', { error });
+      }
+    } while (again);
+  })().finally(() => {
+    running = null;
+  });
+  return running;
+}
+
+/**
+ * Starts following `lock_server`. Once applied for an origin it is not run
+ * again for it in this process: a workspace connected later can only be the
+ * managed one (the connect screen offers no other server).
+ */
+export function startManagedServerLock(deps: ManagedServerLockDeps = {}): () => void {
+  if (started) return () => {};
+  started = true;
+  const offManaged = subscribeManagedConfig(() => void apply(deps));
+  let wasHydrated = getSession().hydrated;
+  const offSession = subscribeSession(() => {
+    const hydrated = getSession().hydrated;
+    if (hydrated && !wasHydrated) void apply(deps);
+    wasHydrated = hydrated;
+  });
+  void apply(deps);
+  return () => {
+    offManaged();
+    offSession();
+    started = false;
+  };
+}
+
+/** Tests only: the run under way (or a settled promise). */
+export function managedServerLockSettled(): Promise<void> {
+  return running ?? Promise.resolve();
+}
+
+/** Test helper. */
+export function __resetManagedServerLockForTests(): void {
+  started = false;
+  applied = null;
+  running = null;
+  again = false;
+}
