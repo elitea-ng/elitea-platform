@@ -84,6 +84,7 @@ async function regenerateStreamedWithRetry(
     readonly questionId: string;
     readonly question: string;
     readonly updatedItems?: readonly UpdatedMessageItem[] | undefined;
+    readonly participantId?: string | undefined;
   },
 ): Promise<StreamStartOutcome> {
   for (let index = 0; ; index += 1) {
@@ -201,6 +202,8 @@ export function createRegenerateAnswer(
           questionId: questionMessage.id,
           question: questionMessage.content,
           ...(updatedItems !== undefined ? { updatedItems } : {}),
+          // The agent the question went to answers it again (ADR-0050 D7c).
+          ...(questionMessage.participantId !== undefined ? { participantId: questionMessage.participantId } : {}),
         },
       );
       if (outcome.started) return;
