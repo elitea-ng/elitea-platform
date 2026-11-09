@@ -43,6 +43,7 @@ mod local_commands;
 mod logging;
 mod loopback;
 mod lsp_commands;
+mod managed;
 mod mcp;
 mod mcp_commands;
 mod menu;

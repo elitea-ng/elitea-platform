@@ -8,6 +8,7 @@ services:
     # drop migration removes the pgvector leftovers. `task down:clean` starts
     # over instead.
     image: postgres:18
+    restart: unless-stopped
     shm_size: '2g'
     environment:
       POSTGRES_USER: elitea
@@ -42,6 +43,7 @@ services:
   # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
     image: nats:2.12.0
+    restart: unless-stopped
     command: ["-c", "/etc/nats-config/nats.conf"]
     volumes:
       - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
@@ -55,6 +57,7 @@ services:
   # wget). SIGINT stops it at once: Python handles SIGINT, not SIGTERM, as PID 1.
   nats-health:
     image: docker.io/library/python:3.12.14-slim-trixie
+    restart: unless-stopped
     command: ["python3", "-c", "import time; time.sleep(1 << 30)"]
     stop_signal: SIGINT
     healthcheck:
@@ -74,6 +77,7 @@ services:
   # posture is the opt-in overlay docker-compose.nats-secure.yml.
   nats-bootstrap:
     image: docker.io/natsio/nats-box:0.19.7
+    restart: "no"
     command: ["sh", "/bootstrap/bootstrap.sh"]
     environment:
       NATS_URL: "nats://nats:4222"
@@ -88,6 +92,7 @@ services:
   # service), the bucket created by rustfs-bucket-init below.
   rustfs:
     image: docker.io/rustfs/rustfs:latest
+    restart: unless-stopped
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -132,6 +137,7 @@ services:
   # writeup.
   oidc-mock:
     image: ghcr.io/geigerzaehler/oidc-provider-mock:latest
+    restart: unless-stopped
     command: ["--port", "9400"]
     networks:
       default:
@@ -153,6 +159,7 @@ services:
   # see otel-collector-config.yaml for the scope-boundary rationale.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.114.0
+    restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
@@ -201,6 +208,7 @@ services:
     restart: "no"
 
   elitea-main:
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-main/Containerfile
@@ -414,6 +422,7 @@ services:
   # =unavailable refuses every tool.
   elitea-deepwiki:
     profiles: ["deepwiki"]
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-subapp-host/Containerfile
@@ -511,6 +520,7 @@ services:
   # DEEPWIKI_NATIVE_RUNNER=fixture gives canned results with no model.
   elitea-deepwiki-engine:
     profiles: ["deepwiki"]
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-deepwiki-engine/Containerfile
@@ -594,6 +604,7 @@ services:
   qdrant:
     profiles: ["deepwiki"]
     image: docker.io/qdrant/qdrant:v1.19.2
+    restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
     command:
       - 'QDRANT__SERVICE__API_KEY="$$(cat /run/qdrant/api-key)" exec ./entrypoint.sh'
@@ -622,6 +633,7 @@ services:
   # It checks no key-file permission bits, so the 0644 bind mount is right.
   elitea-vector:
     profiles: ["deepwiki"]
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: services/elitea-vector/Containerfile
@@ -665,6 +677,7 @@ services:
   # The UI (apps/elitea-web), built the way docker-compose.standalone-full.yml
   # builds it. elitea-main relays /app and /docs here (ELITEA_WEB_UPSTREAM).
   elitea-web:
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: apps/elitea-web/Containerfile

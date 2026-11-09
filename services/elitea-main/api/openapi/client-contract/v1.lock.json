@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.44",
+  "client_contract": "1.45",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -2730,6 +2730,10 @@
                     },
                     "require_device_lock": {
                       "type": "boolean"
+                    },
+                    "support_contact": {
+                      "type": "string",
+                      "max_length": 200
                     }
                   }
                 },
@@ -4334,6 +4338,234 @@
                     },
                     "author_id": {
                       "type": "string"
+                    },
+                    "avatar_pack": {
+                      "type": "object",
+                      "nullable": true,
+                      "required": [
+                        "schema",
+                        "slots"
+                      ],
+                      "properties": {
+                        "schema": {
+                          "type": "string"
+                        },
+                        "slots": {
+                          "type": "object",
+                          "required": [
+                            "still"
+                          ],
+                          "properties": {
+                            "error": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "idle": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "speaking": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "still": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "success": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "thinking": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "waiting": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "waking": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            },
+                            "working": {
+                              "type": "object",
+                              "required": [
+                                "url"
+                              ],
+                              "properties": {
+                                "generated_by": {
+                                  "type": "string",
+                                  "max_length": 256
+                                },
+                                "media_type": {
+                                  "type": "string"
+                                },
+                                "poster_url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "max_length": 160
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
                     },
                     "conversation_starters": {
                       "type": "array",
@@ -16001,6 +16233,10 @@
                     },
                     "require_device_lock": {
                       "type": "boolean"
+                    },
+                    "support_contact": {
+                      "type": "string",
+                      "max_length": 200
                     }
                   }
                 },

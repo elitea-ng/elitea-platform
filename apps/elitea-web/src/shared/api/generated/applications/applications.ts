@@ -66,6 +66,10 @@ import type {
   AgentGateOverride,
   AgentLifecycleReason,
   AgentLifecycleRefusal,
+  AgentMediaGenerateRequest,
+  AgentMediaGenerateResponse,
+  AgentMediaObject,
+  AgentMediaRefusal,
   AgentMemoryEntry,
   AgentMemoryList,
   AgentMemoryRefusal,
@@ -218,6 +222,7 @@ import type {
   TrendingAuthor,
   UnpublishRequest,
   UnpublishResponse,
+  UploadAgentMediaBody,
   UploadApplicationIconBody,
   UploadedIconsList,
   ValidateForPublishRequest,
@@ -7951,6 +7956,760 @@ export function useCopyAgentMemory<
     copyAgentMemoryBody,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type uploadAgentMediaResponse201 = {
+  data: AgentMediaObject;
+  status: 201;
+};
+
+export type uploadAgentMediaResponse400 = {
+  data: AgentMediaRefusal;
+  status: 400;
+};
+
+export type uploadAgentMediaResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type uploadAgentMediaResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type uploadAgentMediaResponse413 = {
+  data: AgentMediaRefusal;
+  status: 413;
+};
+
+export type uploadAgentMediaResponse503 = {
+  data: AgentMediaRefusal;
+  status: 503;
+};
+
+export type uploadAgentMediaResponseSuccess = uploadAgentMediaResponse201 & {
+  headers: Headers;
+};
+export type uploadAgentMediaResponseError = (
+  | uploadAgentMediaResponse400
+  | uploadAgentMediaResponse401
+  | uploadAgentMediaResponse403
+  | uploadAgentMediaResponse413
+  | uploadAgentMediaResponse503
+) & {
+  headers: Headers;
+};
+
+export type uploadAgentMediaResponse =
+  uploadAgentMediaResponseSuccess | uploadAgentMediaResponseError;
+
+export const getUploadAgentMediaUrl = (projectId: string) => {
+  return `/elitea_core/agent_media/prompt_lib/${projectId}`;
+};
+
+/**
+ * ADR-0050 decision 6. Stores one file in the project's `agent-media` bucket under its SHA-256 and answers its url. The type is read from the bytes, never from the file name or the part's Content-Type. A still is PNG, JPEG, WebP or SVG (an SVG with a script, an event handler, an external reference or a DOCTYPE is refused); an animation is an animated WebP that loops forever, or a muted MP4 (H.264) or WebM (VP9 or AV1); every file is at most 2 MiB and 512 px, and an animation at most 4 s. A refused file answers 400 `avatar_media_invalid` and is not stored. Requires `models.applications.upload_icon.post`.
+ * @summary Upload one avatar pack media file
+ */
+export const uploadAgentMedia = async (
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<uploadAgentMediaResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, uploadAgentMediaBody.file);
+
+  return eliteaFetch<uploadAgentMediaResponse>(
+    getUploadAgentMediaUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      body: formData,
+    },
+  );
+};
+
+export const getUploadAgentMediaQueryKey = (
+  projectId: string,
+  uploadAgentMediaBody?: UploadAgentMediaBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_media/prompt_lib/${projectId}`,
+    uploadAgentMediaBody,
+  ] as const;
+};
+
+export const getUploadAgentMediaQueryOptions = <
+  TData = Awaited<ReturnType<typeof uploadAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUploadAgentMediaQueryKey(projectId, uploadAgentMediaBody);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof uploadAgentMedia>>
+  > = ({ signal }) =>
+    uploadAgentMedia(projectId, uploadAgentMediaBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof uploadAgentMedia>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UploadAgentMediaQueryResult = NonNullable<
+  Awaited<ReturnType<typeof uploadAgentMedia>>
+>;
+export type UploadAgentMediaQueryError =
+  AgentMediaRefusal | N401Response | N403Response;
+
+export function useUploadAgentMedia<
+  TData = Awaited<ReturnType<typeof uploadAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadAgentMedia>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof uploadAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadAgentMedia<
+  TData = Awaited<ReturnType<typeof uploadAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadAgentMedia>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof uploadAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof uploadAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUploadAgentMedia<
+  TData = Awaited<ReturnType<typeof uploadAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Upload one avatar pack media file
+ */
+
+export function useUploadAgentMedia<
+  TData = Awaited<ReturnType<typeof uploadAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  uploadAgentMediaBody: UploadAgentMediaBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof uploadAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUploadAgentMediaQueryOptions(
+    projectId,
+    uploadAgentMediaBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type generateAgentMediaResponse201 = {
+  data: AgentMediaGenerateResponse;
+  status: 201;
+};
+
+export type generateAgentMediaResponse400 = {
+  data: AgentMediaRefusal;
+  status: 400;
+};
+
+export type generateAgentMediaResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type generateAgentMediaResponse402 = {
+  data: AgentMediaRefusal;
+  status: 402;
+};
+
+export type generateAgentMediaResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type generateAgentMediaResponse429 = {
+  data: AgentMediaRefusal;
+  status: 429;
+};
+
+export type generateAgentMediaResponse502 = {
+  data: AgentMediaRefusal;
+  status: 502;
+};
+
+export type generateAgentMediaResponse503 = {
+  data: AgentMediaRefusal;
+  status: 503;
+};
+
+export type generateAgentMediaResponseSuccess =
+  generateAgentMediaResponse201 & {
+    headers: Headers;
+  };
+export type generateAgentMediaResponseError = (
+  | generateAgentMediaResponse400
+  | generateAgentMediaResponse401
+  | generateAgentMediaResponse402
+  | generateAgentMediaResponse403
+  | generateAgentMediaResponse429
+  | generateAgentMediaResponse502
+  | generateAgentMediaResponse503
+) & {
+  headers: Headers;
+};
+
+export type generateAgentMediaResponse =
+  generateAgentMediaResponseSuccess | generateAgentMediaResponseError;
+
+export const getGenerateAgentMediaUrl = (projectId: string) => {
+  return `/elitea_core/agent_media_generate/prompt_lib/${projectId}`;
+};
+
+/**
+ * ADR-0050 decision 6, "Generation". Calls the LLM gateway under the caller's identity, so the project budget pays and the request log records it. Every result passes the upload validator and is stored as a draft in `agent-media`; nothing joins a pack until the version is saved with it. A gateway refusal passes through as 400, 402, 403 or 429 (code generation_refused); any other provider failure is 502. Requires `models.applications.upload_icon.post`.
+ * @summary Generate avatar still candidates or one state loop
+ */
+export const generateAgentMedia = async (
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<generateAgentMediaResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<generateAgentMediaResponse>(
+    getGenerateAgentMediaUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentMediaGenerateRequest),
+    },
+  );
+};
+
+export const getGenerateAgentMediaQueryKey = (
+  projectId: string,
+  agentMediaGenerateRequest?: AgentMediaGenerateRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_media_generate/prompt_lib/${projectId}`,
+    agentMediaGenerateRequest,
+  ] as const;
+};
+
+export const getGenerateAgentMediaQueryOptions = <
+  TData = Awaited<ReturnType<typeof generateAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGenerateAgentMediaQueryKey(projectId, agentMediaGenerateRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof generateAgentMedia>>
+  > = ({ signal }) =>
+    generateAgentMedia(projectId, agentMediaGenerateRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof generateAgentMedia>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GenerateAgentMediaQueryResult = NonNullable<
+  Awaited<ReturnType<typeof generateAgentMedia>>
+>;
+export type GenerateAgentMediaQueryError =
+  AgentMediaRefusal | N401Response | N403Response;
+
+export function useGenerateAgentMedia<
+  TData = Awaited<ReturnType<typeof generateAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateAgentMedia>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof generateAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateAgentMedia<
+  TData = Awaited<ReturnType<typeof generateAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateAgentMedia>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof generateAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof generateAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGenerateAgentMedia<
+  TData = Awaited<ReturnType<typeof generateAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Generate avatar still candidates or one state loop
+ */
+
+export function useGenerateAgentMedia<
+  TData = Awaited<ReturnType<typeof generateAgentMedia>>,
+  TError = AgentMediaRefusal | N401Response | N403Response,
+>(
+  projectId: string,
+  agentMediaGenerateRequest: AgentMediaGenerateRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof generateAgentMedia>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGenerateAgentMediaQueryOptions(
+    projectId,
+    agentMediaGenerateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentMediaResponse200ImagePng = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse200ImageJpeg = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse200ImageWebp = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse200ImageSvgXml = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse200VideoMp4 = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse200VideoWebm = {
+  data: Blob;
+  status: 200;
+};
+
+export type getAgentMediaResponse206VideoMp4 = {
+  data: Blob;
+  status: 206;
+};
+
+export type getAgentMediaResponse206VideoWebm = {
+  data: Blob;
+  status: 206;
+};
+
+export type getAgentMediaResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getAgentMediaResponseSuccess = (
+  | getAgentMediaResponse200ImagePng
+  | getAgentMediaResponse200ImageJpeg
+  | getAgentMediaResponse200ImageWebp
+  | getAgentMediaResponse200ImageSvgXml
+  | getAgentMediaResponse200VideoMp4
+  | getAgentMediaResponse200VideoWebm
+  | getAgentMediaResponse206VideoMp4
+  | getAgentMediaResponse206VideoWebm
+) & {
+  headers: Headers;
+};
+export type getAgentMediaResponseError = getAgentMediaResponse404 & {
+  headers: Headers;
+};
+
+export type getAgentMediaResponse =
+  getAgentMediaResponseSuccess | getAgentMediaResponseError;
+
+export const getGetAgentMediaUrl = (projectId: string, file: string) => {
+  return `/agent_media/${projectId}/${file}`;
+};
+
+/**
+ * Immutable for a year. A `Range` request answers 206, as a <video> element asks.
+ * @summary Download one avatar pack media file
+ */
+export const getAgentMedia = async (
+  projectId: string,
+  file: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentMediaResponse> => {
+  return eliteaFetch<getAgentMediaResponse>(
+    getGetAgentMediaUrl(projectId, file),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentMediaQueryKey = (projectId: string, file: string) => {
+  return [`/agent_media/${projectId}/${file}`] as const;
+};
+
+export const getGetAgentMediaQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentMedia>>,
+  TError = N404Response,
+>(
+  projectId: string,
+  file: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentMedia>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAgentMediaQueryKey(projectId, file);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentMedia>>> = ({
+    signal,
+  }) => getAgentMedia(projectId, file, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      file !== null &&
+      file !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentMedia>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentMediaQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentMedia>>
+>;
+export type GetAgentMediaQueryError = N404Response;
+
+export function useGetAgentMedia<
+  TData = Awaited<ReturnType<typeof getAgentMedia>>,
+  TError = N404Response,
+>(
+  projectId: string,
+  file: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentMedia>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentMedia<
+  TData = Awaited<ReturnType<typeof getAgentMedia>>,
+  TError = N404Response,
+>(
+  projectId: string,
+  file: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentMedia>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentMedia>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentMedia>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentMedia<
+  TData = Awaited<ReturnType<typeof getAgentMedia>>,
+  TError = N404Response,
+>(
+  projectId: string,
+  file: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentMedia>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Download one avatar pack media file
+ */
+
+export function useGetAgentMedia<
+  TData = Awaited<ReturnType<typeof getAgentMedia>>,
+  TError = N404Response,
+>(
+  projectId: string,
+  file: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentMedia>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentMediaQueryOptions(projectId, file, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

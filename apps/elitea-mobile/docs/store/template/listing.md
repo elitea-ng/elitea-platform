@@ -87,7 +87,8 @@ App Review Information (and Play's App access, TestFlight's Test Information):
 > [legal entity name] for review purposes.
 >
 > Device management and notifications: the app reads managed app
-> configuration (server address, device lock, screenshots) only on a device
+> configuration (server address, device lock, screenshots, an IT support
+> contact) only on a device
 > enrolled in an organization's MDM, and reports its connection and sign-in
 > state back to that MDM (managed app feedback); without one these settings
 > are absent, nothing is reported, and they change nothing. It never asks for a push token, and has no Local Push

@@ -23,6 +23,7 @@ export function newestAnswerByParticipant(chatHistory: readonly ChatMessage[]): 
 export function answerHasIdentity(message: ChatMessage): boolean {
   return (
     message.authorIconUrl !== undefined ||
+    message.authorAvatarPack !== undefined ||
     message.authorRole !== undefined ||
     message.messageClass === MESSAGE_CLASS.Ephemeral ||
     message.messageClass === MESSAGE_CLASS.Heartbeat

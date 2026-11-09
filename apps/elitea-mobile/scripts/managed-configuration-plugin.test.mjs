@@ -28,6 +28,7 @@ test('types match the parser: string, bool, integer', () => {
     require_device_lock: 'bool',
     idle_lock_seconds: 'integer',
     allow_screenshots: 'bool',
+    support_contact: 'string',
   });
 });
 

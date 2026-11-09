@@ -23,7 +23,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
-// AgentProposals stores elitea_lifecycle.agent_proposals (shared/0235,
+// AgentProposals stores elitea_lifecycle.agent_proposals (shared/0234,
 // ADR-0050 decision 5a, #1615): the propose_agent tool writes a proposal
 // (storage.ProposeAgentSink), the registry inbox lists and decides them, and
 // Copy to project copies chosen memory entries between two agents. Every

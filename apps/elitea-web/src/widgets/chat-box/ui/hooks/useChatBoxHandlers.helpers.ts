@@ -131,6 +131,8 @@ export interface ChatBoxHandlerDeps {
     readonly questionId: string;
     readonly question: string;
     readonly updatedItems?: readonly UpdatedMessageItem[] | undefined;
+    /** The participant the question went to, who answers the regeneration. */
+    readonly participantId?: string | undefined;
   }) => Promise<StreamStartOutcome>;
 }
 /**

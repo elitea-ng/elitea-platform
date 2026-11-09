@@ -298,6 +298,7 @@ func (r *ConversationsRepo) ListParticipants(ctx context.Context, projectID, con
 	}
 	r.enrichAgentParticipantTools(ctx, s, items)
 	r.enrichAgentParticipantPublication(ctx, s, items)
+	r.enrichAgentParticipantAvatarPack(ctx, s, items)
 	r.enrichParticipantNesting(ctx, s, items)
 	return items, nil
 }
@@ -465,6 +466,76 @@ func (r *ConversationsRepo) enrichAgentParticipantPublication(
 		for _, i := range indexes {
 			items[i].Meta["version_status"] = state.status
 			items[i].Meta["version_withdrawn"] = state.withdrawn
+		}
+	}
+}
+
+// enrichAgentParticipantAvatarPack adds the avatar pack of an agent
+// participant's version to its persona as `persona.avatar_pack` (ADR-0050
+// decision 6, the "later avatar_pack" of Participant.Persona). It is read
+// live, not snapshotted like the rest of the persona: a pack names
+// content-addressed media, so a new still shows from the next read. The
+// client falls back to `entity_settings.icon_meta` without one. An
+// enrichment only: a tenant without the column (tenant/0165 not yet run)
+// keeps its participants as read.
+func (r *ConversationsRepo) enrichAgentParticipantAvatarPack(
+	ctx context.Context,
+	s string,
+	items []conversations.Participant,
+) {
+	// Version ids are per-schema serials, so only a participant of THIS
+	// project is looked up here, and its version must belong to its own
+	// application: a catalogue agent's version 42 is not this project's
+	// version 42 (the same guard as enrichParticipantNesting).
+	type versionKey struct {
+		application int64
+		version     int32
+	}
+	byVersion := map[versionKey][]int{}
+	for i := range items {
+		if items[i].EntityName != participantEntityApplication {
+			continue
+		}
+		applicationID, okApplication := positiveInteger(items[i].EntityMeta["id"])
+		project, okProject := positiveInteger(items[i].EntityMeta["project_id"])
+		versionID, okVersion := participantVersionID(items[i].EntitySettings)
+		if !okApplication || !okProject || !okVersion || schema(strconv.FormatInt(project, 10)) != s {
+			continue
+		}
+		key := versionKey{application: applicationID, version: versionID}
+		byVersion[key] = append(byVersion[key], i)
+	}
+	if len(byVersion) == 0 {
+		return
+	}
+	versionIDs := make([]int32, 0, len(byVersion))
+	for key := range byVersion {
+		versionIDs = append(versionIDs, key.version)
+	}
+	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
+		SELECT av.application_id, av.id, av.avatar_pack::text
+		FROM %s.application_versions av
+		WHERE av.id = ANY($1::int[]) AND jsonb_typeof(av.avatar_pack) = 'object'`, s), versionIDs)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var applicationID int64
+		var versionID int32
+		var raw string
+		if err := rows.Scan(&applicationID, &versionID, &raw); err != nil {
+			continue
+		}
+		var pack map[string]any
+		if json.Unmarshal([]byte(raw), &pack) != nil {
+			continue
+		}
+		for _, i := range byVersion[versionKey{application: applicationID, version: versionID}] {
+			if items[i].Persona == nil {
+				items[i].Persona = map[string]any{}
+			}
+			items[i].Persona["avatar_pack"] = pack
 		}
 	}
 }
@@ -690,7 +761,11 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		conversations.Participant{EntityName: "user", EntityMeta: map[string]any{"id": access.ActorID}},
 		conversations.Participant{EntityName: "dummy", EntityMeta: map[string]any{}},
 	)
-	for _, participant := range participants {
+	if conv.LeadParticipant < 0 || conv.LeadParticipant > len(conv.Participants) {
+		return conversations.Conversation{}, apierr.BadRequest("invalid lead participant")
+	}
+	leadID := 0
+	for index, participant := range participants {
 		switch participant.EntityName {
 		case "user", "dummy", "llm", "application", "toolkit", "prompt":
 		default:
@@ -700,8 +775,24 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 			return conversations.Conversation{}, apierr.BadRequest("invalid participant metadata")
 		}
 		body := map[string]any{"entity_name": participant.EntityName, "entity_meta": participant.EntityMeta, "entity_settings": participant.EntitySettings}
-		if _, err := addConversationParticipant(ctx, tx, s, id, body); err != nil {
+		participantID, err := addConversationParticipant(ctx, tx, s, id, body)
+		if err != nil {
 			return conversations.Conversation{}, err
+		}
+		if index+1 == conv.LeadParticipant {
+			leadID = participantID
+		}
+	}
+	// A saved team's lead (ADR-0050 decision 8): the floor names the lead by
+	// its participant id, which exists only now.
+	if leadID > 0 {
+		floor, err := json.Marshal(map[string]any{"policy": "lead", "lead_participant_id": leadID})
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations
+			SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('floor', $1::jsonb) WHERE id = $2`, s), floor, id); err != nil {
+			return conversations.Conversation{}, fmt.Errorf("conversations: write the lead: %w", err)
 		}
 	}
 	if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT meta FROM %s.chat_conversations WHERE id=$1`, s), id).Scan(&metaBytes); err != nil {

@@ -57,6 +57,7 @@ describe('Android managed configuration', () => {
       requireDeviceLock: true,
       idleLockSeconds: 120,
       allowScreenshots: false,
+      supportContact: null,
     });
   });
 

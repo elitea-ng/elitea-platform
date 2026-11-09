@@ -45,6 +45,8 @@ in the active project.
 Agent memory (1.44): what an agent remembers in the project, from a conversation's
 participants or a Discover agent; delete a note (yours, or any with the permission)
 and the "remember things about me" switch.
+IT support line (1.45): the administrator's support contact in Settings › About and About;
+a managed `support_contact` (MDM) wins over the workspace's.
 Native behaviour is verified by hand with
 [docs/device-verification.md](docs/device-verification.md).
 See [docs/design.md](docs/design.md) for the planned product and

@@ -91,6 +91,20 @@ fn forwarded(app: &AppHandle, id: &str) -> tauri::Result<MenuItem<Wry>> {
     MenuItem::with_id(app, id, text(id), true, accelerator)
 }
 
+/// The About panel's support line: the managed one, else the stored policy's
+/// (the policy file only: the menu is built on the main thread, so no
+/// keychain read; the file is removed at sign-out).
+fn support_line(app: &AppHandle) -> Option<String> {
+    let policy = app
+        .try_state::<crate::commands::AppState>()
+        .and_then(|state| state.auth.stored_policy());
+    crate::managed::effective_support_contact(
+        crate::managed::support_contact().as_deref(),
+        policy.as_ref(),
+    )
+    .map(|line| text("about_support").replace("{contact}", &line))
+}
+
 /// The whole menu bar, labelled in the app's language (`labels.rs`).
 ///
 /// # Errors
@@ -104,6 +118,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             AboutMetadataBuilder::new()
                 .name(Some(crate::brand::product()))
                 .version(Some(env!("CARGO_PKG_VERSION")))
+                // The IT support line (ADR-0052 W6.2): managed, else the
+                // workspace's. The menu is rebuilt at every boot, so a new
+                // line shows from the next launch.
+                .credits(support_line(app))
                 .build(),
         ),
     )?;

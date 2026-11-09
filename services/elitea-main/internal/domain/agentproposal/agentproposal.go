@@ -2,7 +2,7 @@
 // proposes that a temporary sub-agent it started become a saved agent, and a
 // person decides.
 //
-// WHAT A PROPOSAL IS. A row of elitea_lifecycle.agent_proposals (shared/0235)
+// WHAT A PROPOSAL IS. A row of elitea_lifecycle.agent_proposals (shared/0234)
 // with a draft the review form opens with, the evidence (the spawn it
 // promotes, by its ephemeral_agents key) and suggested memory seeds. It is
 // not an agent: Create calls the ordinary create route, and only that writes

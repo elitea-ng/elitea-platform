@@ -1,6 +1,6 @@
 package repos
 
-// Agent proposals (shared/0235, ADR-0050 decision 5a, #1615) and Copy to
+// Agent proposals (shared/0234, ADR-0050 decision 5a, #1615) and Copy to
 // project's memory copy against a REAL migrated database. It SKIPS without
 // ELITEA_TEST_DATABASE_URL, and a skip prints the same `ok`, so each case
 // asserts values a skip could not have produced.

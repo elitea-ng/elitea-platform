@@ -178,6 +178,17 @@ func nativeClientPolicySection() map[string]any {
 				"section": section,
 				"default": defaults.AllowSystemSurfaces,
 			},
+			{
+				"key":   platformconfig.KeyNativeSupportContact,
+				"type":  "string",
+				"title": "IT Support Contact",
+				"description": "Shown in the apps' About and Settings, for example `IT Service Desk, +1 555 0100` " +
+					"or `help@example.com`. An email address, a phone number or an https address is a link. " +
+					"A device's managed configuration can set its own. Leave empty to show none.",
+				"section":   section,
+				"default":   defaults.SupportContact,
+				"maxLength": platformconfig.MaxSupportContactRunes,
+			},
 		}, localWorkFields(section, defaults.LocalWork)...),
 	}
 }
@@ -478,6 +489,13 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 		if !platformconfig.ValidNotificationPreview(preview) {
 			return fmt.Sprintf("%q must be one of: %s", platformconfig.KeyNativeNotificationPreview,
 				strings.Join(platformconfig.NotificationPreviewValues(), ", "))
+		}
+	}
+	if raw, present := values[platformconfig.KeyNativeSupportContact]; present {
+		contact, ok := raw.(string)
+		if !ok || !platformconfig.ValidSupportContact(strings.TrimSpace(contact)) {
+			return fmt.Sprintf("%q must be text of at most %d characters on one line", platformconfig.KeyNativeSupportContact,
+				platformconfig.MaxSupportContactRunes)
 		}
 	}
 	if raw, present := values[platformconfig.KeyNativeLocalWorkMaxSandboxMode]; present {

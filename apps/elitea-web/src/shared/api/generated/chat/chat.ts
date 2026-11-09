@@ -54,6 +54,12 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AgentTeam,
+  AgentTeamFromConversation,
+  AgentTeamList,
+  AgentTeamRefusal,
+  AgentTeamStart,
+  AgentTeamWrite,
   CanvasPresence,
   CanvasPresenceRequest,
   ChatContinueRequest,
@@ -95,6 +101,7 @@ import type {
   HandOffChatExecutionSteeringBody,
   InvalidClientVersionError,
   InvalidClientVersionResponse,
+  ListAgentTeamsParams,
   ListConversationMessagesParams,
   ListConversationsParams,
   ListMemoriesParams,
@@ -22329,6 +22336,1951 @@ export function useDeleteMemory<
   const queryOptions = getDeleteMemoryQueryOptions(
     projectId,
     memoryId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentTeamsResponse200 = {
+  data: AgentTeamList;
+  status: 200;
+};
+
+export type listAgentTeamsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type listAgentTeamsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentTeamsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentTeamsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listAgentTeamsResponseSuccess = listAgentTeamsResponse200 & {
+  headers: Headers;
+};
+export type listAgentTeamsResponseError = (
+  | listAgentTeamsResponse400
+  | listAgentTeamsResponse401
+  | listAgentTeamsResponse403
+  | listAgentTeamsResponse500
+) & {
+  headers: Headers;
+};
+
+export type listAgentTeamsResponse =
+  listAgentTeamsResponseSuccess | listAgentTeamsResponseError;
+
+export const getListAgentTeamsUrl = (
+  projectId: string,
+  params?: ListAgentTeamsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_teams/prompt_lib/${projectId}?${stringifiedParams}`
+    : `/elitea_core/agent_teams/prompt_lib/${projectId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's List (ADR-0050 decision 8,
+ * issue 1620). A saved team is a project's roster of agents with its
+ * floor policy and lead. Gated on `models.teams.list`. Most recently
+ * updated first; `query` filters by a case-insensitive substring of the
+ * name.
+ * @summary List the project's saved teams of agents
+ */
+export const listAgentTeams = async (
+  projectId: string,
+  params?: ListAgentTeamsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentTeamsResponse> => {
+  return eliteaFetch<listAgentTeamsResponse>(
+    getListAgentTeamsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentTeamsQueryKey = (
+  projectId: string,
+  params?: ListAgentTeamsParams,
+) => {
+  return [
+    `/elitea_core/agent_teams/prompt_lib/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentTeamsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentTeams>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListAgentTeamsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listAgentTeams>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListAgentTeamsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listAgentTeams>>> = ({
+    signal,
+  }) => listAgentTeams(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentTeams>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentTeamsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentTeams>>
+>;
+export type ListAgentTeamsQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useListAgentTeams<
+  TData = Awaited<ReturnType<typeof listAgentTeams>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params: undefined | ListAgentTeamsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listAgentTeams>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentTeams>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentTeams>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentTeams<
+  TData = Awaited<ReturnType<typeof listAgentTeams>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListAgentTeamsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listAgentTeams>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentTeams>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentTeams>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentTeams<
+  TData = Awaited<ReturnType<typeof listAgentTeams>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListAgentTeamsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listAgentTeams>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the project's saved teams of agents
+ */
+
+export function useListAgentTeams<
+  TData = Awaited<ReturnType<typeof listAgentTeams>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  projectId: string,
+  params?: ListAgentTeamsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listAgentTeams>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentTeamsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createAgentTeamResponse201 = {
+  data: AgentTeam;
+  status: 201;
+};
+
+export type createAgentTeamResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createAgentTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createAgentTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createAgentTeamResponse409 = {
+  data: AgentTeamRefusal;
+  status: 409;
+};
+
+export type createAgentTeamResponse422 = {
+  data: AgentTeamRefusal;
+  status: 422;
+};
+
+export type createAgentTeamResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createAgentTeamResponseSuccess = createAgentTeamResponse201 & {
+  headers: Headers;
+};
+export type createAgentTeamResponseError = (
+  | createAgentTeamResponse400
+  | createAgentTeamResponse401
+  | createAgentTeamResponse403
+  | createAgentTeamResponse409
+  | createAgentTeamResponse422
+  | createAgentTeamResponse500
+) & {
+  headers: Headers;
+};
+
+export type createAgentTeamResponse =
+  createAgentTeamResponseSuccess | createAgentTeamResponseError;
+
+export const getCreateAgentTeamUrl = (projectId: string) => {
+  return `/elitea_core/agent_teams/prompt_lib/${projectId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's Create (issue 1620). Gated on
+ * `models.teams.create`. A team grants nothing: starting a conversation
+ * from it adds its agents through the ordinary participant path, under
+ * the caller's own access.
+ * @summary Save a team of agents
+ */
+export const createAgentTeam = async (
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createAgentTeamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createAgentTeamResponse>(
+    getCreateAgentTeamUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentTeamWrite),
+    },
+  );
+};
+
+export const getCreateAgentTeamQueryKey = (
+  projectId: string,
+  agentTeamWrite?: AgentTeamWrite,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_teams/prompt_lib/${projectId}`,
+    agentTeamWrite,
+  ] as const;
+};
+
+export const getCreateAgentTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof createAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateAgentTeamQueryKey(projectId, agentTeamWrite);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof createAgentTeam>>> = ({
+    signal,
+  }) =>
+    createAgentTeam(projectId, agentTeamWrite, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createAgentTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateAgentTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createAgentTeam>>
+>;
+export type CreateAgentTeamQueryError =
+  ErrorResponse | N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useCreateAgentTeam<
+  TData = Awaited<ReturnType<typeof createAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentTeam<
+  TData = Awaited<ReturnType<typeof createAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentTeam<
+  TData = Awaited<ReturnType<typeof createAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Save a team of agents
+ */
+
+export function useCreateAgentTeam<
+  TData = Awaited<ReturnType<typeof createAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateAgentTeamQueryOptions(
+    projectId,
+    agentTeamWrite,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentTeamResponse200 = {
+  data: AgentTeam;
+  status: 200;
+};
+
+export type getAgentTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentTeamResponse404 = {
+  data: AgentTeamRefusal;
+  status: 404;
+};
+
+export type getAgentTeamResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAgentTeamResponseSuccess = getAgentTeamResponse200 & {
+  headers: Headers;
+};
+export type getAgentTeamResponseError = (
+  | getAgentTeamResponse401
+  | getAgentTeamResponse403
+  | getAgentTeamResponse404
+  | getAgentTeamResponse500
+) & {
+  headers: Headers;
+};
+
+export type getAgentTeamResponse =
+  getAgentTeamResponseSuccess | getAgentTeamResponseError;
+
+export const getGetAgentTeamUrl = (projectId: string, teamId: number) => {
+  return `/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's Get (issue 1620). Gated on
+ * `models.teams.list`. A team of another project answers 404.
+ * @summary Read one saved team
+ */
+export const getAgentTeam = async (
+  projectId: string,
+  teamId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentTeamResponse> => {
+  return eliteaFetch<getAgentTeamResponse>(
+    getGetAgentTeamUrl(projectId, teamId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentTeamQueryKey = (projectId: string, teamId: number) => {
+  return [`/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`] as const;
+};
+
+export const getGetAgentTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAgentTeamQueryKey(projectId, teamId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentTeam>>> = ({
+    signal,
+  }) => getAgentTeam(projectId, teamId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      teamId !== null &&
+      teamId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentTeam>>
+>;
+export type GetAgentTeamQueryError =
+  N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useGetAgentTeam<
+  TData = Awaited<ReturnType<typeof getAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentTeam>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentTeam<
+  TData = Awaited<ReturnType<typeof getAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentTeam>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentTeam<
+  TData = Awaited<ReturnType<typeof getAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one saved team
+ */
+
+export function useGetAgentTeam<
+  TData = Awaited<ReturnType<typeof getAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof getAgentTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentTeamQueryOptions(projectId, teamId, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type updateAgentTeamResponse200 = {
+  data: AgentTeam;
+  status: 200;
+};
+
+export type updateAgentTeamResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type updateAgentTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type updateAgentTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type updateAgentTeamResponse404 = {
+  data: AgentTeamRefusal;
+  status: 404;
+};
+
+export type updateAgentTeamResponse409 = {
+  data: AgentTeamRefusal;
+  status: 409;
+};
+
+export type updateAgentTeamResponse422 = {
+  data: AgentTeamRefusal;
+  status: 422;
+};
+
+export type updateAgentTeamResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type updateAgentTeamResponseSuccess = updateAgentTeamResponse200 & {
+  headers: Headers;
+};
+export type updateAgentTeamResponseError = (
+  | updateAgentTeamResponse400
+  | updateAgentTeamResponse401
+  | updateAgentTeamResponse403
+  | updateAgentTeamResponse404
+  | updateAgentTeamResponse409
+  | updateAgentTeamResponse422
+  | updateAgentTeamResponse500
+) & {
+  headers: Headers;
+};
+
+export type updateAgentTeamResponse =
+  updateAgentTeamResponseSuccess | updateAgentTeamResponseError;
+
+export const getUpdateAgentTeamUrl = (projectId: string, teamId: number) => {
+  return `/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's Update (issue 1620). Gated on
+ * `models.teams.update`. A full-record replace: the roster sent is the
+ * roster kept.
+ * @summary Replace a saved team
+ */
+export const updateAgentTeam = async (
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<updateAgentTeamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<updateAgentTeamResponse>(
+    getUpdateAgentTeamUrl(projectId, teamId),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentTeamWrite),
+    },
+  );
+};
+
+export const getUpdateAgentTeamQueryKey = (
+  projectId: string,
+  teamId: number,
+  agentTeamWrite?: AgentTeamWrite,
+) => {
+  return [
+    "PUT",
+    `/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`,
+    agentTeamWrite,
+  ] as const;
+};
+
+export const getUpdateAgentTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof updateAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getUpdateAgentTeamQueryKey(projectId, teamId, agentTeamWrite);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof updateAgentTeam>>> = ({
+    signal,
+  }) =>
+    updateAgentTeam(projectId, teamId, agentTeamWrite, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      teamId !== null &&
+      teamId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof updateAgentTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type UpdateAgentTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof updateAgentTeam>>
+>;
+export type UpdateAgentTeamQueryError =
+  ErrorResponse | N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useUpdateAgentTeam<
+  TData = Awaited<ReturnType<typeof updateAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentTeam<
+  TData = Awaited<ReturnType<typeof updateAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof updateAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof updateAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useUpdateAgentTeam<
+  TData = Awaited<ReturnType<typeof updateAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace a saved team
+ */
+
+export function useUpdateAgentTeam<
+  TData = Awaited<ReturnType<typeof updateAgentTeam>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamWrite: AgentTeamWrite,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof updateAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getUpdateAgentTeamQueryOptions(
+    projectId,
+    teamId,
+    agentTeamWrite,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type deleteAgentTeamResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type deleteAgentTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type deleteAgentTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type deleteAgentTeamResponse404 = {
+  data: AgentTeamRefusal;
+  status: 404;
+};
+
+export type deleteAgentTeamResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type deleteAgentTeamResponseSuccess = deleteAgentTeamResponse204 & {
+  headers: Headers;
+};
+export type deleteAgentTeamResponseError = (
+  | deleteAgentTeamResponse401
+  | deleteAgentTeamResponse403
+  | deleteAgentTeamResponse404
+  | deleteAgentTeamResponse500
+) & {
+  headers: Headers;
+};
+
+export type deleteAgentTeamResponse =
+  deleteAgentTeamResponseSuccess | deleteAgentTeamResponseError;
+
+export const getDeleteAgentTeamUrl = (projectId: string, teamId: number) => {
+  return `/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's Delete (issue 1620). Gated on
+ * `models.teams.delete`. Conversations started from the team are not
+ * touched.
+ * @summary Delete a saved team
+ */
+export const deleteAgentTeam = async (
+  projectId: string,
+  teamId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<deleteAgentTeamResponse> => {
+  return eliteaFetch<deleteAgentTeamResponse>(
+    getDeleteAgentTeamUrl(projectId, teamId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getDeleteAgentTeamQueryKey = (
+  projectId: string,
+  teamId: number,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/agent_team/prompt_lib/${projectId}/${teamId}`,
+  ] as const;
+};
+
+export const getDeleteAgentTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof deleteAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDeleteAgentTeamQueryKey(projectId, teamId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof deleteAgentTeam>>> = ({
+    signal,
+  }) => deleteAgentTeam(projectId, teamId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      teamId !== null &&
+      teamId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof deleteAgentTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DeleteAgentTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof deleteAgentTeam>>
+>;
+export type DeleteAgentTeamQueryError =
+  N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useDeleteAgentTeam<
+  TData = Awaited<ReturnType<typeof deleteAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof deleteAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteAgentTeam<
+  TData = Awaited<ReturnType<typeof deleteAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof deleteAgentTeam>>,
+          TError,
+          Awaited<ReturnType<typeof deleteAgentTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDeleteAgentTeam<
+  TData = Awaited<ReturnType<typeof deleteAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Delete a saved team
+ */
+
+export function useDeleteAgentTeam<
+  TData = Awaited<ReturnType<typeof deleteAgentTeam>>,
+  TError = N401Response | N403Response | AgentTeamRefusal | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof deleteAgentTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDeleteAgentTeamQueryOptions(
+    projectId,
+    teamId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createAgentTeamFromConversationResponse201 = {
+  data: AgentTeam;
+  status: 201;
+};
+
+export type createAgentTeamFromConversationResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type createAgentTeamFromConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createAgentTeamFromConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type createAgentTeamFromConversationResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type createAgentTeamFromConversationResponse409 = {
+  data: AgentTeamRefusal;
+  status: 409;
+};
+
+export type createAgentTeamFromConversationResponse422 = {
+  data: AgentTeamRefusal;
+  status: 422;
+};
+
+export type createAgentTeamFromConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createAgentTeamFromConversationResponseSuccess =
+  createAgentTeamFromConversationResponse201 & {
+    headers: Headers;
+  };
+export type createAgentTeamFromConversationResponseError = (
+  | createAgentTeamFromConversationResponse400
+  | createAgentTeamFromConversationResponse401
+  | createAgentTeamFromConversationResponse403
+  | createAgentTeamFromConversationResponse404
+  | createAgentTeamFromConversationResponse409
+  | createAgentTeamFromConversationResponse422
+  | createAgentTeamFromConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type createAgentTeamFromConversationResponse =
+  | createAgentTeamFromConversationResponseSuccess
+  | createAgentTeamFromConversationResponseError;
+
+export const getCreateAgentTeamFromConversationUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/agent_team_from_conversation/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's CreateFromConversation
+ * (issue 1620). Gated on `models.teams.create` and the conversation
+ * read permission; the caller must be able to read the conversation.
+ * The team's members are the conversation's agent participants in the
+ * order they joined, with the version each one runs; its floor policy
+ * and lead are the conversation's floor (`meta.floor`).
+ * @summary Save a conversation's agents as a team
+ */
+export const createAgentTeamFromConversation = async (
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createAgentTeamFromConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createAgentTeamFromConversationResponse>(
+    getCreateAgentTeamFromConversationUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentTeamFromConversation),
+    },
+  );
+};
+
+export const getCreateAgentTeamFromConversationQueryKey = (
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation?: AgentTeamFromConversation,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_team_from_conversation/prompt_lib/${projectId}/${conversationId}`,
+    agentTeamFromConversation,
+  ] as const;
+};
+
+export const getCreateAgentTeamFromConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateAgentTeamFromConversationQueryKey(
+      projectId,
+      conversationId,
+      agentTeamFromConversation,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createAgentTeamFromConversation>>
+  > = ({ signal }) =>
+    createAgentTeamFromConversation(
+      projectId,
+      conversationId,
+      agentTeamFromConversation,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateAgentTeamFromConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createAgentTeamFromConversation>>
+>;
+export type CreateAgentTeamFromConversationQueryError =
+  ErrorResponse | N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useCreateAgentTeamFromConversation<
+  TData = Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentTeamFromConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentTeamFromConversation<
+  TData = Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+          TError,
+          Awaited<ReturnType<typeof createAgentTeamFromConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateAgentTeamFromConversation<
+  TData = Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Save a conversation's agents as a team
+ */
+
+export function useCreateAgentTeamFromConversation<
+  TData = Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  agentTeamFromConversation: AgentTeamFromConversation,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createAgentTeamFromConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateAgentTeamFromConversationQueryOptions(
+    projectId,
+    conversationId,
+    agentTeamFromConversation,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type startAgentTeamConversationResponse201 = {
+  data: CreatedConversation;
+  status: 201;
+};
+
+export type startAgentTeamConversationResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type startAgentTeamConversationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startAgentTeamConversationResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type startAgentTeamConversationResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type startAgentTeamConversationResponse422 = {
+  data: AgentTeamRefusal;
+  status: 422;
+};
+
+export type startAgentTeamConversationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type startAgentTeamConversationResponseSuccess =
+  startAgentTeamConversationResponse201 & {
+    headers: Headers;
+  };
+export type startAgentTeamConversationResponseError = (
+  | startAgentTeamConversationResponse400
+  | startAgentTeamConversationResponse401
+  | startAgentTeamConversationResponse403
+  | startAgentTeamConversationResponse404
+  | startAgentTeamConversationResponse422
+  | startAgentTeamConversationResponse500
+) & {
+  headers: Headers;
+};
+
+export type startAgentTeamConversationResponse =
+  | startAgentTeamConversationResponseSuccess
+  | startAgentTeamConversationResponseError;
+
+export const getStartAgentTeamConversationUrl = (
+  projectId: string,
+  teamId: number,
+) => {
+  return `/elitea_core/agent_team_conversation/prompt_lib/${projectId}/${teamId}`;
+};
+
+/**
+ * internal/api/v2/agentteams/handler.go's Start (issue 1620). Gated on
+ * `models.teams.list` and `models.chat.conversations.create`. Creates
+ * the conversation through the same path as `createConversation`, so
+ * every agent is added with the participant checks a hand-made add
+ * applies: a team adds no capability. An agent of the team's project
+ * that no longer exists is refused as `team_member_unavailable` with
+ * its position; an agent of another project the caller cannot use is
+ * refused by the participant path. With floor policy `lead` the new
+ * conversation's `meta.floor` names the lead's new participant.
+ * @summary Start a conversation with a saved team
+ */
+export const startAgentTeamConversation = async (
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startAgentTeamConversationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<startAgentTeamConversationResponse>(
+    getStartAgentTeamConversationUrl(projectId, teamId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentTeamStart),
+    },
+  );
+};
+
+export const getStartAgentTeamConversationQueryKey = (
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_team_conversation/prompt_lib/${projectId}/${teamId}`,
+    agentTeamStart,
+  ] as const;
+};
+
+export const getStartAgentTeamConversationQueryOptions = <
+  TData = Awaited<ReturnType<typeof startAgentTeamConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startAgentTeamConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartAgentTeamConversationQueryKey(projectId, teamId, agentTeamStart);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof startAgentTeamConversation>>
+  > = ({ signal }) =>
+    startAgentTeamConversation(projectId, teamId, agentTeamStart, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      teamId !== null &&
+      teamId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startAgentTeamConversation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartAgentTeamConversationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startAgentTeamConversation>>
+>;
+export type StartAgentTeamConversationQueryError =
+  ErrorResponse | N401Response | N403Response | AgentTeamRefusal | N500Response;
+
+export function useStartAgentTeamConversation<
+  TData = Awaited<ReturnType<typeof startAgentTeamConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamStart: undefined | AgentTeamStart,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startAgentTeamConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startAgentTeamConversation>>,
+          TError,
+          Awaited<ReturnType<typeof startAgentTeamConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartAgentTeamConversation<
+  TData = Awaited<ReturnType<typeof startAgentTeamConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startAgentTeamConversation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startAgentTeamConversation>>,
+          TError,
+          Awaited<ReturnType<typeof startAgentTeamConversation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartAgentTeamConversation<
+  TData = Awaited<ReturnType<typeof startAgentTeamConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startAgentTeamConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start a conversation with a saved team
+ */
+
+export function useStartAgentTeamConversation<
+  TData = Awaited<ReturnType<typeof startAgentTeamConversation>>,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | AgentTeamRefusal
+    | N500Response,
+>(
+  projectId: string,
+  teamId: number,
+  agentTeamStart?: AgentTeamStart,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof startAgentTeamConversation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartAgentTeamConversationQueryOptions(
+    projectId,
+    teamId,
+    agentTeamStart,
     options,
   );
 

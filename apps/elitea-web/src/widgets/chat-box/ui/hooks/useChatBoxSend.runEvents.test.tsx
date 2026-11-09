@@ -65,7 +65,7 @@ function harness(overrides: Partial<UseChatBoxSendParams> = {}, createWithLifecy
       projectId: 7,
       projectIdString: '7',
       isAgentsPage: true,
-      activeParticipant: PIPELINE_PARTICIPANT,
+      target: PIPELINE_PARTICIPANT,
       participants: [PIPELINE_PARTICIPANT],
       onAgentEvent: (frame) => agentEvents.push(frame),
       ...overrides,
@@ -135,7 +135,7 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     );
     const overrides = {
       isAgentsPage: false,
-      activeParticipant: { id: 2, entity_name: 'dummy' },
+      target: { id: 2, entity_name: 'dummy' },
       participants: [{ id: 2, entity_name: 'dummy' }],
       userId: '5',
       llmSettings: selectedSettings,

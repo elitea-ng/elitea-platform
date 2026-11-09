@@ -200,8 +200,17 @@ export function useApplicationTabs(
   isPublicProject: boolean,
   totals: ApplicationsTabTotals,
   hasAdminPermission: boolean,
+  teams?: ReactNode,
 ): ApplicationTab[] {
   const publicTabs = usePublicApplicationTabs(totals, hasAdminPermission);
   const privateTabs = usePrivateApplicationTabs(totals);
-  return isPublicProject ? publicTabs : privateTabs;
+  return useMemo(() => {
+    if (isPublicProject) return publicTabs;
+    // ADR-0050 decision 8 (issue 1620): the project's saved teams, after the
+    // status tabs; absent for a caller without `models.teams.list`.
+    return teams === undefined ? privateTabs : [...privateTabs, { value: TEAMS_TAB, label: 'Teams', count: undefined, content: teams }];
+  }, [isPublicProject, publicTabs, privateTabs, teams]);
 }
+
+/** The Teams tab's `:tab` value (`/agents/teams`). */
+export const TEAMS_TAB = 'teams';
