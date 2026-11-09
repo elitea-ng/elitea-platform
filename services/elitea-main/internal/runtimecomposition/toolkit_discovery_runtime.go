@@ -79,10 +79,12 @@ type currentToolkitDiscoveryRuntime struct {
 	jitter func(time.Duration) time.Duration
 }
 
-// Run repeats the retirement and artifact sweep passes until ctx ends. A
-// failed pass is logged and retried after a bounded backoff (1 s doubling to
-// 30 s, reset by a clean pass): a database outage never stops the runner, so
-// it never stops Main (FU-275). Run returns only ctx's own error.
+// Run repeats the retirement and artifact sweep passes until ctx ends. A pass
+// that fails on a dependency failure that heals on its own is logged and
+// retried after a bounded backoff (1 s doubling to 30 s, reset by a clean
+// pass): a database outage never stops the runner, so it never stops Main
+// (FU-275). Any other failure is returned, so the runner set names it and
+// ends Main instead of retrying a permanent fault for ever.
 func (r *currentToolkitDiscoveryRuntime) Run(ctx context.Context) error {
 	failures := 0
 	for {
@@ -91,13 +93,15 @@ func (r *currentToolkitDiscoveryRuntime) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if !depfailure.Transient(err, ctx) {
+				return err
+			}
 			failures++
 			delay = runnerRestartDelay(failures, r.jitterSource())
 			r.log().Error(
 				fmt.Sprintf("The toolkit discovery housekeeping pass failed; retrying in %s", delay.Round(time.Millisecond)),
 				"attempt", failures,
 				"cause", depfailure.Describe(err),
-				"err", err,
 			)
 		} else {
 			failures = 0
@@ -119,29 +123,11 @@ func (r *currentToolkitDiscoveryRuntime) pass(ctx context.Context) error {
 }
 
 func (r *currentToolkitDiscoveryRuntime) waitFor(ctx context.Context, delay time.Duration) error {
-	if r.wait != nil {
-		return r.wait(ctx, delay)
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return waitOrSeam(ctx, delay, r.wait)
 }
 
 func (r *currentToolkitDiscoveryRuntime) jitterSource() func(time.Duration) time.Duration {
-	if r.jitter != nil {
-		return r.jitter
-	}
-	return randomRestartJitter
+	return jitterOrRandom(r.jitter)
 }
 
-func (r *currentToolkitDiscoveryRuntime) log() *slog.Logger {
-	if r.logger != nil {
-		return r.logger
-	}
-	return slog.New(slog.DiscardHandler)
-}
+func (r *currentToolkitDiscoveryRuntime) log() *slog.Logger { return loggerOrDiscard(r.logger) }

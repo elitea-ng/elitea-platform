@@ -101,3 +101,22 @@ func TestToolkitDiscoveryHousekeepingStopsAtOnceWhenItsOwnerEnds(t *testing.T) {
 		t.Fatal("Run did not stop when its owner ended")
 	}
 }
+
+// A permanent fault (here a missing table) is not waited out: the runner
+// returns it, so the runner set names it and ends Main.
+func TestToolkitDiscoveryHousekeepingReturnsAPermanentFault(t *testing.T) {
+	missingTable := fmt.Errorf("lock expired executions: %w", &pgconn.PgError{Severity: "ERROR", Code: "42P01", Message: "relation \"elitea_runtime.toolkit_available_tools_executions\" does not exist"})
+	passes := &scriptedDiscoveryPass{script: []error{missingTable}}
+	waited := false
+	runtime := &currentToolkitDiscoveryRuntime{
+		jobs: passes, artifacts: passes,
+		wait: func(context.Context, time.Duration) error { waited = true; return nil },
+	}
+	err := runtime.Run(context.Background())
+	if !errors.Is(err, missingTable) {
+		t.Fatalf("Run = %v, want the permanent fault", err)
+	}
+	if waited || passes.calls != 1 {
+		t.Fatalf("a permanent fault was retried (waited=%v, passes=%d)", waited, passes.calls)
+	}
+}

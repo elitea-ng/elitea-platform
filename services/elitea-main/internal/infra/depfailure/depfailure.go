@@ -22,15 +22,29 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// transientSQLStates are the SQLSTATEs a server or PgBouncer returns while it
-// is shutting down, starting, recovering or full. Class 08 (connection
-// exception, including PgBouncer's 08P01 "server login has been failing") is
-// matched by prefix in Transient.
+// transientSQLStates are the SQLSTATEs a server returns while it is shutting
+// down, starting, recovering or full. Class 08 (connection exception) is
+// matched by prefix in Transient, except 08P01, below.
 var transientSQLStates = map[string]struct{}{
 	"57P01": {}, // admin_shutdown
 	"57P02": {}, // crash_shutdown
 	"57P03": {}, // cannot_connect_now: starting up or in recovery
 	"53300": {}, // too_many_connections
+}
+
+// transientPgBouncerMessages are the 08P01 answers that heal on their own.
+// PgBouncer reports almost every refusal as 08P01 (protocol_violation),
+// including permanent ones ("no such database", "no such user", a failed
+// password), and PostgreSQL uses 08P01 for real protocol violations, so 08P01
+// is transient only with one of these messages.
+var transientPgBouncerMessages = []string{
+	"server login has been failing",
+	"pgbouncer cannot connect to server",
+	"server conn crashed",
+	"query_wait_timeout",
+	"the database system is shutting down",
+	"the database system is starting up",
+	"the database system is in recovery mode",
 }
 
 // transientNATSErrors are the errors a live NATS connection returns while it
@@ -58,6 +72,9 @@ func Transient(err error, owner context.Context) bool {
 	if errors.As(err, &pgErr) {
 		// The server answered: its SQLSTATE decides, also when the answer
 		// arrived inside a ConnectError (a wrong password is 28P01 there).
+		if pgErr.Code == "08P01" {
+			return hasTransientPgBouncerMessage(pgErr.Message)
+		}
 		return strings.HasPrefix(pgErr.Code, "08") || isTransientSQLState(pgErr.Code)
 	}
 	for _, natsErr := range transientNATSErrors {
@@ -79,8 +96,20 @@ func Transient(err error, owner context.Context) bool {
 	if errors.As(err, &opErr) {
 		return true
 	}
+	// A name that does not resolve now resolved at boot (every pool and
+	// connection is dialled and pinged there, and a mistyped host fails the
+	// boot), so at run time it is a container or pod being replaced.
 	var dnsErr *net.DNSError
 	return errors.As(err, &dnsErr) && (dnsErr.IsTemporary || dnsErr.IsNotFound || dnsErr.IsTimeout)
+}
+
+func hasTransientPgBouncerMessage(message string) bool {
+	for _, transient := range transientPgBouncerMessages {
+		if strings.Contains(message, transient) {
+			return true
+		}
+	}
+	return false
 }
 
 func isTransientSQLState(code string) bool {

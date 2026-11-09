@@ -26,6 +26,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/health"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/credentialgovernance/profile"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/depfailure"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
@@ -205,7 +206,7 @@ func databaseReadinessCheck(pool *pgxpool.Pool) health.Check {
 		Critical: true,
 		Probe: func(ctx context.Context) (string, string) {
 			if err := pool.Ping(ctx); err != nil {
-				return health.StateUnavailable, err.Error()
+				return health.StateUnavailable, depfailure.Describe(err)
 			}
 			return health.StateOK, ""
 		},
@@ -317,9 +318,12 @@ func TestRuntimeRunnersSurviveADatabaseOutageAndLogEachTransitionOnce(t *testing
 	if n := countLines(t, records, "ERROR", "The "); n != countLines(t, records, "ERROR", "The toolkit discovery housekeeping pass failed") {
 		t.Fatalf("an ERROR other than the housekeeping pass failures was logged: %d", n)
 	}
-	for _, entry := range records.entries(t) {
-		if cause, _ := entry["cause"].(string); entry["runner"] != nil && (strings.Contains(cause, config.ConnConfig.User) || strings.Contains(cause, config.ConnConfig.Database)) {
-			t.Fatalf("restart line leaks connection details: %v", entry)
+	records.mu.Lock()
+	captured := records.buf.String()
+	records.mu.Unlock()
+	for _, detail := range []string{config.ConnConfig.Database, proxy.addr, target} {
+		if strings.Contains(captured, detail) {
+			t.Fatalf("a log line carries the connection detail %q", detail)
 		}
 	}
 }

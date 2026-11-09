@@ -230,3 +230,58 @@ func TestMonitorRunEvaluatesOnItsOwnUntilItsOwnerEnds(t *testing.T) {
 		t.Fatalf("monitor evaluated %d times in 60 ms at a 10 ms interval", calls)
 	}
 }
+
+func TestReadinessIsNotReadyWhenAnyCheckCannotComeBackOnItsOwn(t *testing.T) {
+	code, status, _ := readinessOf(t, []Check{{Name: "db", Critical: true, Probe: fixed(StateOK, "")}, {Name: "nats", Probe: fixed(StateUnavailable, "closed")}})
+	if code != http.StatusServiceUnavailable || status.Status != "not_ready" || status.Checks["nats"] != StateUnavailable {
+		t.Fatalf("readiness with a closed NATS connection = %d %+v, want 503 not_ready", code, status)
+	}
+}
+
+func TestMonitorIgnoresAnEvaluationOlderThanTheOneItApplied(t *testing.T) {
+	var mu sync.Mutex
+	state := StateUnavailable
+	checks := []Check{{Name: "db", Critical: true, Probe: func(context.Context) (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return state, "the connection was refused"
+	}, Lost: "Main lost its database", Recovered: "Main reached its database again"}}
+	logs := &monitorLog{}
+	monitor, err := NewMonitor(checks, slog.New(slog.NewJSONHandler(logs, nil)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := Evaluate(context.Background(), checks)
+	stale := Evaluate(context.Background(), checks) // started while the database was down
+	mu.Lock()
+	state = StateOK
+	mu.Unlock()
+	recovered := Evaluate(context.Background(), checks)
+
+	monitor.Observe(lost)
+	monitor.Observe(recovered)
+	monitor.Observe(stale) // finishes last, started before the recovery
+	lines := logs.lines(t)
+	if len(lines) != 2 || lines[0]["level"] != "WARN" || lines[1]["level"] != "INFO" {
+		t.Fatalf("log = %v, want one loss and one recovery; the stale evaluation must not log a second loss", lines)
+	}
+}
+
+func TestReadinessDoesNotReportACancelledProbeAsAnOutage(t *testing.T) {
+	checks := []Check{{Name: "db", Critical: true, Probe: func(ctx context.Context) (string, string) {
+		<-ctx.Done()
+		return StateUnavailable, "the work was cancelled"
+	}, Lost: "Main lost its database", Recovered: "Main reached its database again"}}
+	logs := &monitorLog{}
+	monitor, err := NewMonitor(checks, slog.New(slog.NewJSONHandler(logs, nil)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(ctx)
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	RoutesWithDeps(Deps{Checks: checks, Monitor: monitor}).ServeHTTP(httptest.NewRecorder(), request)
+	if lines := logs.lines(t); len(lines) != 0 {
+		t.Fatalf("a probe that went away was logged as an outage: %v", lines)
+	}
+}

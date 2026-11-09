@@ -166,7 +166,7 @@ func TestMainReadinessFollowsARealNATSRestart(t *testing.T) {
 		return code == http.StatusOK && status.Status == "ready"
 	})
 	waitFor(t, "the recovery line", func() bool { return logs.count("INFO", "Main reached NATS again after ") == 1 })
-	if n := logs.count("WARN", "Main lost NATS and is reconnecting"); n != 1 {
+	if n := logs.count("WARN", "Main lost NATS;"); n != 1 {
 		t.Fatalf("loss lines = %d, want exactly 1 for one outage\n%s", n, logs.buf.String())
 	}
 	if n := logs.count("INFO", "Main reached NATS again after "); n != 1 {
@@ -182,5 +182,18 @@ func waitFor(t *testing.T, what string, condition func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestMainReadinessIsNotReadyWhenANATSConnectionIsClosed(t *testing.T) {
+	closed := func() nats.Status { return nats.CLOSED }
+	reconnecting := func() nats.Status { return nats.RECONNECTING }
+	code, status := readyz(t, health.Deps{Checks: mainReadinessChecks(nil, []func() nats.Status{reconnecting, closed}, nil)})
+	if code != http.StatusServiceUnavailable || status.Checks["nats"] != health.StateUnavailable {
+		t.Fatalf("readiness with a closed NATS connection = %d %+v, want 503 with nats unavailable", code, status)
+	}
+	code, status = readyz(t, health.Deps{Checks: mainReadinessChecks(nil, []func() nats.Status{reconnecting}, nil)})
+	if code != http.StatusOK || status.Status != "degraded" || status.Checks["nats"] != health.StateReconnecting {
+		t.Fatalf("readiness while reconnecting = %d %+v, want 200 degraded", code, status)
 	}
 }

@@ -180,12 +180,16 @@ var errRunnerStoppedByOwner = errors.New("runtime runner stopped by its owner")
 
 // supervise runs one runner until its owner ends or it stops for a reason
 // that does not heal on its own. It starts the runner again only after the
-// previous Run has returned, so there is never more than one copy.
+// previous Run has returned, so there is never more than one copy, and each
+// attempt gets its own context, cancelled when that Run returns, so work the
+// failed attempt started cannot outlive it.
 func (s *publisherSet) supervise(ctx context.Context, runner namedRunner) error {
 	failures := 0
 	for {
 		startedAt := s.clock()
-		err := runner.Run(ctx)
+		attemptCtx, endAttempt := context.WithCancel(ctx)
+		err := runner.Run(attemptCtx)
+		endAttempt()
 		if ctx.Err() != nil {
 			return errRunnerStoppedByOwner
 		}
@@ -249,7 +253,6 @@ func (s *publisherSet) reportFatal(name string, err error) {
 	s.log().Error(
 		fmt.Sprintf("The %s runner stopped and Main is exiting: %s", name, depfailure.Describe(err)),
 		"runner", name,
-		"err", err,
 	)
 }
 
@@ -261,8 +264,13 @@ func (s *publisherSet) clock() time.Time {
 }
 
 func (s *publisherSet) jitterSource() func(time.Duration) time.Duration {
-	if s.jitter != nil {
-		return s.jitter
+	return jitterOrRandom(s.jitter)
+}
+
+// jitterOrRandom returns jitter, or randomRestartJitter when it is nil.
+func jitterOrRandom(jitter func(time.Duration) time.Duration) func(time.Duration) time.Duration {
+	if jitter != nil {
+		return jitter
 	}
 	return randomRestartJitter
 }
@@ -276,8 +284,13 @@ func randomRestartJitter(maximum time.Duration) time.Duration {
 }
 
 func (s *publisherSet) waitFor(ctx context.Context, delay time.Duration) error {
-	if s.wait != nil {
-		return s.wait(ctx, delay)
+	return waitOrSeam(ctx, delay, s.wait)
+}
+
+// waitOrSeam waits delay or until ctx ends, through wait when a test set it.
+func waitOrSeam(ctx context.Context, delay time.Duration, wait func(context.Context, time.Duration) error) error {
+	if wait != nil {
+		return wait(ctx, delay)
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -289,9 +302,11 @@ func (s *publisherSet) waitFor(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (s *publisherSet) log() *slog.Logger {
-	if s.logger != nil {
-		return s.logger
+func (s *publisherSet) log() *slog.Logger { return loggerOrDiscard(s.logger) }
+
+func loggerOrDiscard(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
 	}
 	return slog.New(slog.DiscardHandler)
 }

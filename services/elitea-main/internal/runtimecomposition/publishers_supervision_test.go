@@ -392,3 +392,35 @@ func TestPublisherSetFlattensNestedSetsAndNamesUnnamedRunners(t *testing.T) {
 		t.Fatalf("runner names = %v, want %v", names, want)
 	}
 }
+
+// Work a failed attempt started on its context ends with that attempt, so a
+// restarted runner never runs beside its predecessor's goroutines.
+func TestARestartedRunnersPreviousAttemptContextIsCancelled(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1_800_000_000, 0)}
+	var attempts []context.Context
+	var mu sync.Mutex
+	runner := publisherRunnerFunc(func(ctx context.Context) error {
+		mu.Lock()
+		attempts = append(attempts, ctx)
+		n := len(attempts)
+		mu.Unlock()
+		if n == 1 {
+			return recoveryModeError()
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	set, _ := supervisedSet(t, clock, &logRecords{}, named("background publisher", runner))
+	cancel, done := runUntil(t, set, func() bool { mu.Lock(); defer mu.Unlock(); return len(attempts) == 2 })
+	mu.Lock()
+	first, second := attempts[0], attempts[1]
+	mu.Unlock()
+	if first.Err() == nil {
+		t.Fatal("the failed attempt's context is still live after its restart")
+	}
+	if second.Err() != nil {
+		t.Fatal("the running attempt's context ended early")
+	}
+	cancel()
+	<-done
+}

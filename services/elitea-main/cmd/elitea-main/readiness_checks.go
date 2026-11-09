@@ -26,15 +26,17 @@ type degradedRunnerSource interface {
 
 // mainReadinessChecks are Main's readiness dependencies (FU-275):
 //
-//   - db (critical): one ping per pool, concurrently, through the pools'
-//     own connections. Every pool here reaches the same PostgreSQL, so one
-//     outage is one "db" transition, not one per pool.
+//   - db (critical): one ping of the main pool, through its own
+//     connections. The runtime pools reach the same PostgreSQL; their small
+//     pools are not pinged, so an admission burst that holds every runtime
+//     connection cannot read as a database outage and take every replica out
+//     of service.
 //   - nats: the client-side state of each NATS connection, read with
-//     Conn.Status (no round trip).
-//     Reconnecting is degraded, not not-ready: admitted commands wait in the
-//     outbox and claimed runs renew their leases over gRPC, so taking every
-//     Main replica out of service for a shared NATS blip would turn a
-//     degraded UI into an outage.
+//     Conn.Status (no round trip). Reconnecting is degraded, not not-ready:
+//     admitted commands wait in the outbox and claimed runs renew their
+//     leases over gRPC, so taking every Main replica out of service for a
+//     shared NATS blip would turn a degraded UI into an outage. A closed
+//     connection never comes back on its own, so it is unavailable (503).
 //   - runners: runtime runners restarted after a dependency failure; their
 //     restarts are logged by the supervisor, so this check logs nothing.
 func mainReadinessChecks(pools []*pgxpool.Pool, natsStatuses []func() nats.Status, runners degradedRunnerSource) []health.Check {
@@ -49,7 +51,7 @@ func mainReadinessChecks(pools []*pgxpool.Pool, natsStatuses []func() nats.Statu
 		checks = append(checks, health.Check{
 			Name:      "nats",
 			Probe:     func(context.Context) (string, string) { return probeNATS(natsStatuses) },
-			Lost:      "Main lost NATS and is reconnecting; admitted runs wait in the outbox and claimed runs continue",
+			Lost:      "Main lost NATS; admitted runs wait in the outbox and claimed runs continue",
 			Recovered: "Main reached NATS again",
 		})
 	}
@@ -89,10 +91,15 @@ func probePools(ctx context.Context, pools []*pgxpool.Pool) (string, string) {
 }
 
 func probeNATS(statuses []func() nats.Status) (string, string) {
+	state, cause := health.StateOK, ""
 	for _, status := range statuses {
-		if status := status(); status != nats.CONNECTED {
-			return health.StateReconnecting, "a NATS connection is " + strings.ToLower(status.String())
+		switch current := status(); current {
+		case nats.CONNECTED:
+		case nats.CLOSED:
+			return health.StateUnavailable, "a NATS connection is closed and will not reconnect"
+		default:
+			state, cause = health.StateReconnecting, "a NATS connection is "+strings.ToLower(current.String())
 		}
 	}
-	return health.StateOK, ""
+	return state, cause
 }

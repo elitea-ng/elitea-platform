@@ -1679,9 +1679,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose the cloud executor adapters: %w", err)
 	}
 	var runtimeRoot *runtimecomposition.Runtime
-	// readinessPools are the pools readiness pings: the main pool and, with
-	// the runtime enabled, its admission pool (FU-275).
-	readinessPools := []*pgxpool.Pool{pool}
 	var productionRuntime *api.ProductionRuntimeRoutes
 
 	// The run brief and the goal check of unattended chains (ADR-0045
@@ -2131,7 +2128,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return openErr
 		}
 		defer runtimePools.Close()
-		readinessPools = append(readinessPools, runtimePools.Admission)
 		if len(runtimeConfig.VectorIntrospectionClients) > 0 {
 			if err := runtimePools.openVectorIntrospection(ctx, dbDSN, databasePoolLimits, openRuntimePostgresPool); err != nil {
 				return err
@@ -3001,13 +2997,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		readinessNATS = append(readinessNATS, runtimeRoot.RuntimeNATSStatus)
 		readinessRunners = runtimeRoot
 	}
-	readinessMonitor, monitorErr := health.NewMonitor(mainReadinessChecks(readinessPools, readinessNATS, readinessRunners), logger, readinessMonitorInterval)
+	readinessMonitor, monitorErr := health.NewMonitor(mainReadinessChecks([]*pgxpool.Pool{pool}, readinessNATS, readinessRunners), logger, readinessMonitorInterval)
 	if monitorErr != nil {
 		return monitorErr
 	}
 	// Logs each dependency's loss and recovery once per outage, also when
-	// nothing probes Main; it ends with ctx.
-	go readinessMonitor.Run(ctx)
+	// nothing probes Main. It ends with run, before the deferred pool closes,
+	// so it never reads a pool Main closed on its way out as an outage.
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	go readinessMonitor.Run(monitorCtx)
 	r := api.NewRouter(api.RouterConfig{
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
