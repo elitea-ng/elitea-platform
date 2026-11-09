@@ -10,17 +10,36 @@
  * the name as `{{product}}`, filled in by `interpolation.defaultVariables`
  * (`shared/i18n/i18n.ts`).
  *
- * Pure: takes the pack as an optional argument, like `brandLinks.ts`.
+ * Takes the pack as an optional argument, like `brandLinks.ts`. Without one
+ * it resolves the served pack once per pack object: dozens of module-scope
+ * constants (tours, participant defaults) read the name at load, and
+ * `resolveBrandPack()` trial-builds a theme on every call. The desktop app
+ * publishes a new global object for each deployment, which resolves afresh.
  */
-import { resolveBrandPack } from './channelC';
+import { BRAND_PACK_GLOBAL, resolveBrandPack } from './channelC';
 import type { BrandPack } from './schema';
+import { DEFAULT_BRAND_PACK } from './tokens';
+
+const resolved = new WeakMap<object, BrandPack>();
+
+/** The resolved pack (channel C, else A), parsed once per served pack object. */
+function currentPack(): BrandPack {
+  if (typeof window === 'undefined') return DEFAULT_BRAND_PACK;
+  const candidate: unknown = (window as unknown as Record<string, unknown>)[BRAND_PACK_GLOBAL];
+  if (typeof candidate !== 'object' || candidate === null) return resolveBrandPack();
+  const cached = resolved.get(candidate);
+  if (cached !== undefined) return cached;
+  const pack = resolveBrandPack();
+  resolved.set(candidate, pack);
+  return pack;
+}
 
 /** The short product name, for running text ("Back to Elitea"). */
-export function productName(pack: BrandPack = resolveBrandPack()): string {
+export function productName(pack: BrandPack = currentPack()): string {
   return pack.product.shortName;
 }
 
 /** The full product name, for titles ("Elitea AI"). */
-export function productFullName(pack: BrandPack = resolveBrandPack()): string {
+export function productFullName(pack: BrandPack = currentPack()): string {
   return pack.product.name;
 }

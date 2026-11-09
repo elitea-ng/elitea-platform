@@ -8,15 +8,16 @@
  * "A string" is a string literal, a template literal's text, or JSX text, as
  * @babel/parser sees them. Comments, identifiers and import paths are not
  * strings; wire names (`X-Elitea-…` headers, `ELITEA_…` variables) are
- * excluded by the pattern (the name followed or preceded by `-`, `_`, a
- * letter, a digit, `.`, `/` or `@`).
+ * excluded by the pattern (the name preceded by `-`, `_`, a letter, a
+ * digit, `.`, `/` or `@`, or followed by one of those or by a `.` that
+ * starts a domain: "elitea.ai" is a wire name, "…in Elitea." is copy).
  */
 import { parse } from '@babel/parser';
 
 import { walk } from './budgets-core.mjs';
 
 /** The product name as a word on its own, not part of a wire name. */
-const PRODUCT_LITERAL_RE = /(?<![-\w/.@])(?:Elitea|ELITEA|EliteA)(?![-\w/.@])/;
+const PRODUCT_LITERAL_RE = /(?<![-\w/.@])(?:Elitea|ELITEA|EliteA)(?![-\w/@]|\.\w)/;
 
 /**
  * Files allowed to name the product, each with why. Paths are relative to

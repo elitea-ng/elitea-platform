@@ -10,13 +10,14 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 describe('productLiterals', () => {
   it('finds the product name in strings, templates and JSX text', () => {
     const found = productLiterals(
-      "const a = 'Welcome to Elitea';\nconst b = `Open ${x} in ELITEA`;\nconst c = <p>Your EliteA workspace</p>;",
+      "const a = 'Welcome to Elitea';\nconst b = `Open ${x} in ELITEA`;\nconst c = <p>Your EliteA workspace</p>;\nconst d = 'Not reversible from Elitea.';",
       { jsx: true },
     );
     expect(found).toEqual([
       { line: 1, text: 'Welcome to Elitea' },
       { line: 2, text: 'in ELITEA' },
       { line: 3, text: 'Your EliteA workspace' },
+      { line: 4, text: 'Not reversible from Elitea.' },
     ]);
   });
 

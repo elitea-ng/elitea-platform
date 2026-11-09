@@ -36,6 +36,23 @@ describe('productName (ADR-0052 W3.2)', () => {
     expect(productName()).toBe(DEFAULT_BRAND_PACK.product.shortName);
   });
 
+  it('resolves a served pack once, and a new served pack afresh', () => {
+    globalWindow[BRAND_PACK_GLOBAL] = servedPack;
+    expect(productName()).toBe('Machina');
+    globalWindow[BRAND_PACK_GLOBAL] = { ...servedPack, product: { ...servedPack.product, shortName: 'Other' } };
+    expect(productName()).toBe('Other');
+  });
+
+  it('applyProductName re-reads the name a later-published pack states (the desktop launch)', async () => {
+    const { applyProductName, t } = await import('@/shared/i18n');
+    globalWindow[BRAND_PACK_GLOBAL] = servedPack;
+    applyProductName();
+    expect(t('pages.admin.nav.backToApp', 'Back to {{product}}')).toBe('Back to Machina');
+    delete globalWindow[BRAND_PACK_GLOBAL];
+    applyProductName();
+    expect(t('pages.admin.nav.backToApp', 'Back to {{product}}')).toBe(`Back to ${DEFAULT_BRAND_PACK.product.shortName}`);
+  });
+
   it('fills {{product}} in every message from the pack loaded before the bundle', async () => {
     globalWindow[BRAND_PACK_GLOBAL] = servedPack;
     vi.resetModules();

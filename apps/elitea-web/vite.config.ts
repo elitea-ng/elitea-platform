@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import babel from '@rolldown/plugin-babel';
@@ -12,6 +12,7 @@ import { build, defineConfig, searchForWorkspaceRoot, type Plugin, type PluginOp
 // forward-compat notice would break `tsc --noEmit`. Vite resolves the
 // extensionless form today regardless of that loader setting.
 import { nestCatalogue } from './src/shared/i18n/nestCatalogue';
+import { BrandPack } from './src/shared/brand/schema';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 import { loadBrand } from '../../scripts/brand/load.mjs';
@@ -232,6 +233,15 @@ function prepareBrand(): BrandBuild | undefined {
   const dir = resolvePath(`./${BRAND_CACHE_DIR}/${BRAND.id}`);
   mkdirSync(join(dir, 'brand'), { recursive: true });
   const pack = join(dir, 'default.pack.json');
+  // The app parses its default pack at load (`tokens/index.ts`): an invalid
+  // one fails the build here rather than blanking every page of the app.
+  const parsed = BrandPack.safeParse(brandDefaultPack(BRAND, reference));
+  if (!parsed.success) {
+    const problems = parsed.error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`).join('\n');
+    throw new Error(
+      `brand ${BRAND.id}: its default pack (pack.json or brand.json) is not a valid brand pack\n${problems}`,
+    );
+  }
   writeFileSync(pack, `${JSON.stringify(brandDefaultPack(BRAND, reference), null, 2)}\n`);
   const logos = brandLogoFiles(BRAND);
   const icons: Record<string, string> = {};
@@ -246,6 +256,9 @@ function prepareBrand(): BrandBuild | undefined {
 /** Redirects the default pack and the logo SVGs (keeping `?react`) to a brand's generated files. */
 function brandResolveId(built: BrandBuild): NonNullable<Plugin['resolveId']> {
   return async function (source, importer, options) {
+    // Only the pack and the logo SVGs are redirected: skip every other import
+    // without resolving it a second time.
+    if (!source.includes('default.pack') && !source.includes('logo')) return null;
     const [path = '', query] = source.split('?');
     const resolved = await this.resolve(path, importer, { ...options, skipSelf: true });
     if (resolved === null) return null;
@@ -289,7 +302,9 @@ export function brandPlugin(): Plugin {
           const from = context.filename.slice(0, context.filename.lastIndexOf('/'));
           out = out.replace(
             /(href=")[^"]*public\/brand\/favicon\.svg/,
-            `$1${relative(from, join(built.dir, 'brand', 'favicon.svg'))}`,
+            `$1${relative(from, join(built.dir, 'brand', 'favicon.svg'))
+              .split(sep)
+              .join('/')}`,
           );
         }
         return out;

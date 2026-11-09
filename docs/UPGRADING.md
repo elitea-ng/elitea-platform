@@ -6,8 +6,12 @@ newest entry is first.
 
 ## Web app brand from the brand manifest (#1701, ADR-0052 W3)
 
-ELITEA's web build is unchanged (the same files, byte for byte). The web
-client now reads the brand from `brand/<id>/` at build time.
+The web client now reads the brand from `brand/<id>/` at build time.
+ELITEA's default pack, logos, favicon and titles are unchanged. Copy that
+wrote the name in capitals now uses the product's short name: the tours,
+the catalogue's page title ("Elitea Catalog") and the name the app
+registers with remote MCP OAuth servers ("Elitea MCP Client"; clients
+already registered keep theirs).
 
 - **Another brand:** set `ELITEA_BRAND` before `npm run build`, or pass
   `--build-arg ELITEA_BRAND=<id or path>` to the web and elitea-main image

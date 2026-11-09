@@ -160,17 +160,17 @@ The host reads the product name and identifier from the configuration compiled i
 
 ## Web app
 
-`apps/elitea-web/vite.config.ts` loads the brand (`brandPlugin`). For brand/elitea every build is the committed files, byte for byte. For any other brand the build writes `apps/elitea-web/.brand/<id>/` (gitignored) and uses it in place of the committed files:
+`apps/elitea-web/vite.config.ts` loads the brand (`brandPlugin`). For brand/elitea every build uses the committed default pack and logos. For any other brand the build writes `apps/elitea-web/.brand/<id>/` (gitignored) and uses it in place of the committed files:
 
 ```bash
 cd apps/elitea-web
 ELITEA_BRAND=sample npm run build      # every entry, as the sample brand
 ```
 
-- **Default pack** (channel A, `src/shared/brand/tokens/default.pack.json`): the brand's `pack.json` when the folder has one, else a pack derived from `brand.json` (`scripts/brand-web.mjs`): `productName` and `shortName` as the product's name and short name, `docsUrl`, `supportUrl` and `supportEmail`, and `brand.hue` with the colour tokens derived from it. A served pack (`/api/v2/branding/bootstrap.js`, channel C) still wins over it at runtime.
+- **Default pack** (channel A, `src/shared/brand/tokens/default.pack.json`): the brand's `pack.json` when the folder has one, else a pack derived from `brand.json` (`scripts/brand-web.mjs`), checked against the brand pack schema so an invalid one fails the build: `productName` and `shortName` as the product's name and short name, `docsUrl`, `supportUrl` and `supportEmail`, and `brand.hue` with the colour tokens derived from it. A served pack (`/api/v2/branding/bootstrap.js`, channel C) still wins over it at runtime.
 - **Logos and favicon:** `logo/logo-mark.svg`, `logo/logo-full.svg` and `web/favicon.svg` replace the compiled logo components and `public/brand/*.svg`.
 - **Titles:** every entry's `<title>` names the brand's product. The running app's title follows the served pack.
-- **Messages:** the catalogues write the product as `{{product}}` (all 19 locales); i18next fills in the pack's `shortName`. Code reads `productName()` and `productFullName()` from `@/shared/brand`. `scripts/lib/product-literals.test.mjs` fails on a string in the source that names the product, outside a short allow-list.
+- **Messages:** the catalogues write the product as `{{product}}` (all 19 locales); i18next fills in the pack's `shortName` (the desktop app re-reads it once it has the deployment's pack). Code reads `productName()` and `productFullName()` from `@/shared/brand`. `scripts/lib/product-literals.test.mjs` fails on a string in the source that names the product, outside a short allow-list.
 - **Push notices:** the push worker titles a notice that names no run with the build's `shortName`.
 - **Support address:** the app has none of its own. `supportEmail()` and `supportUrl()` return the served pack's, else the build default's, else nothing, and the screen shows no link.
 

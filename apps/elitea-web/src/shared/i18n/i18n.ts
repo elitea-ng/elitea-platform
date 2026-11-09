@@ -76,7 +76,8 @@ i18next
       // a literal, so a brand (build-time default pack) or a served pack
       // (channel C) renames it everywhere. Read once: the served pack is
       // loaded before the bundle (index.html) and does not change while the
-      // page runs. A call that passes its own `product` wins.
+      // page runs. A call that passes its own `product` wins. The desktop app
+      // publishes its deployment's pack later and calls `applyProductName()`.
       defaultVariables: { product: productName() },
     },
     returnEmptyString: false,
@@ -84,6 +85,15 @@ i18next
     missingKeyHandler: warnOnMissingKey,
   })
   .catch(logInitFailure);
+
+/**
+ * Re-reads the product name `{{product}}` stands for from the resolved pack.
+ * The desktop app calls it after it publishes the deployment's pack
+ * (`launchApp.tsx`); i18next reads `defaultVariables` on every `t()`.
+ */
+export function applyProductName(): void {
+  i18next.options.interpolation = { ...i18next.options.interpolation, defaultVariables: { product: productName() } };
+}
 
 /** The live, configured instance — `./I18nProvider.tsx` binds React's context to this. */
 export const i18n = i18next;
