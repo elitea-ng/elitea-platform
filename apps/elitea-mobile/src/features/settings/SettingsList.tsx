@@ -7,6 +7,8 @@ import { COPY_ADDRESS_ACTION, copyWorkspaceAddress, workspaceAddressTitle } from
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { BrandImage } from '@/theme/brandPack';
 import { Avatar, Icon, ListRow, ListSection, SegmentedControl, Text } from '@/ui';
+import { SupportContactRow } from '@/features/settings/SupportContactRow';
+import type { SupportContact } from '@elitea/client-core/support';
 import { identity } from '@/config/identity';
 
 export interface SettingsListProps {
@@ -46,6 +48,9 @@ export interface SettingsListProps {
   onSwitchWorkspace: () => void;
   onPrivacy: () => void;
   onSupport: () => void;
+  /** The IT support line (managed, else the workspace's); no row without it. */
+  supportContact?: SupportContact | null;
+  onSupportContact?: (() => void) | null;
   /** Development builds: the design gallery row. */
   onDesignGallery?: (() => void) | null;
   onLogOut: () => void;
@@ -79,6 +84,8 @@ export function SettingsList({
   onSwitchWorkspace,
   onPrivacy,
   onSupport,
+  supportContact = null,
+  onSupportContact = null,
   onDesignGallery,
   onLogOut,
 }: SettingsListProps) {
@@ -175,6 +182,7 @@ export function SettingsList({
         {onAbout ? <ListRow icon="sparkles" title={`About ${identity.displayName}`} value={appVersion ?? null} onPress={onAbout} /> : null}
         <ListRow icon="info" title="Privacy policy" onPress={onPrivacy} />
         <ListRow icon="link" title="Support" onPress={onSupport} />
+        <SupportContactRow contact={supportContact} onPress={onSupportContact} />
         {onDesignGallery ? <ListRow icon="palette" title="Design gallery" subtitle="Development builds only" onPress={onDesignGallery} /> : null}
       </ListSection>
 
