@@ -8579,6 +8579,41 @@ components:
             max_tokens: { type: integer, minimum: 100, maximum: 8000 }
       description: >
         NOTE(W2): internal/domain/agentmemory/agentmemory.go, Parse.
+    AgentToolEnvelope:
+      type: object
+      additionalProperties: false
+      properties:
+        tool_limits:
+          type: object
+          maxProperties: 256
+          additionalProperties: { type: integer, minimum: 1, maximum: 10000 }
+          description: >
+            The most calls of one tool in a turn, keyed "<toolkit>/<tool>"
+            (the toolkit by its name in the agent or by its type; "*" for
+            every tool of the toolkit). The lowest matching limit and the
+            platform's agents.max_tool_limit apply; the call past it does
+            not run and answers tool_limit_reached.
+        unattended_tools:
+          type: array
+          maxItems: 256
+          items: { type: string }
+          description: >
+            The tools the agent may use in a turn nobody waits on (a turn
+            another agent handed it). Absent is the read-only tools; a tool
+            that writes needs the platform's agents.unattended_tools_allowlist
+            too. Empty is no tool.
+        subagent_tools:
+          type: array
+          maxItems: 256
+          items: { type: string }
+          description: >
+            The tools a sub-agent of this agent may be given, writes
+            included. Absent is the read-only tools. A spawn_agent call whose
+            profile.tools names another is refused with
+            SUBAGENT_TOOL_NOT_GRANTED.
+      description: >
+        NOTE(W2): internal/domain/toolenvelope/toolenvelope.go, Parse. Every
+        control only narrows the tools the agent already has.
     AgentMemoryEntryVersion:
       type: object
       required: [version, kind, content, status, pinned, written_by_kind, written_by_user_id, created_at]
@@ -11463,6 +11498,16 @@ components:
             indicator on the answer (`meta.grounding` of the message). Null,
             absent or `off` is no citation rule. A save with another value is
             refused with 400. Pipelines and nested agents ignore it.
+        tool_envelope:
+          allOf: [{ $ref: '#/components/schemas/AgentToolEnvelope' }]
+          nullable: true
+          description: >
+            The agent's tool envelope (ADR-0050 decision 3): per-tool call
+            limits, the tools it may use unattended, and the tools its
+            sub-agents may get. Main freezes it, with the platform's agents
+            ceilings, into each run; nested agents follow the root agent's.
+            A save with an invalid block is refused with 422
+            tool_envelope_invalid.
       additionalProperties: true
       x-elitea-passthrough: >-
         NOTE(W2): DB jsonb column `application_versions.meta` round-trips

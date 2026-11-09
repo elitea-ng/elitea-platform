@@ -205,6 +205,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             model_reasoning: None,
             chat_history_refs: Vec::new(),
             floor: None,
+            tool_envelope: None,
         },
     }
 }

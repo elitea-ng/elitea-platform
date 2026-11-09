@@ -86,6 +86,7 @@ export * from "./agentRegistryUpdate.zod";
 export * from "./agentRiskTier.zod";
 export * from "./agentSchemaResponse.zod";
 export * from "./agentSoulV1.zod";
+export * from "./agentToolEnvelope.zod";
 export * from "./agentToolkitPin.zod";
 export * from "./agentToolkitPinRequest.zod";
 export * from "./analyticsAgentsList.zod";

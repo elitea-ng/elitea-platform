@@ -28,6 +28,7 @@ use elitea_agent_runtime::host::{HostError, HostErrorCode};
 use elitea_agent_runtime::subagents::{
     ChildIdentity, MAX_CHILD_STEPS, SubAgentConfig, SubAgentHost, SubAgents,
 };
+use elitea_agent_runtime::tool_envelope::SubAgentGrant;
 
 use crate::transport::model_facade::{ModelAdapterKind, ModelFacade, ModelInvocation};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
@@ -112,16 +113,18 @@ impl SubAgentHost for WorkerSubAgents {
 /// whole of what it is told.
 /// Every child counts one level of the run's delegation depth from
 /// `delegation` (ADR-0044 decision 3).
+/// `grant` is the agent's `subagent_tools` (ADR-0050 decision 3): a child
+/// is offered the tools it names, writes included; without them, the
+/// read-only tools.
 pub(crate) fn toolset(
     host: WorkerSubAgents,
     excluded: Vec<String>,
     delegation: DelegationScope,
+    grant: SubAgentGrant,
 ) -> Arc<dyn Toolset> {
-    SubAgents::new(
-        Arc::new(host),
-        SubAgentConfig::new("")
-            .with_excluded_tools(excluded)
-            .with_delegation(delegation),
-    )
-    .toolset()
+    let config = SubAgentConfig::new("")
+        .with_excluded_tools(excluded)
+        .with_delegation(delegation)
+        .with_grant(grant);
+    SubAgents::new(Arc::new(host), config).toolset()
 }

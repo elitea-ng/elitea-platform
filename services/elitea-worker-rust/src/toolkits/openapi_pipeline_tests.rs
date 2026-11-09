@@ -309,5 +309,6 @@ fn resume_payload(authorize: bool, resource: &str) -> AgentExecutionPayload {
         model_reasoning: None,
         chat_history_refs: Vec::new(),
         floor: None,
+        tool_envelope: None,
     }
 }

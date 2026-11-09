@@ -8,6 +8,7 @@ use crate::transport::input_content::content_fake::{
     ContextAnswer, ContextCall, ContextRoutes, Routes,
 };
 use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
+use elitea_agent_runtime::toolkits::FrozenToolset;
 use tonic::Status;
 
 struct HandFloorRpc {
@@ -250,7 +251,12 @@ fn an_unattended_turn_keeps_only_read_only_tools() {
             read_only: false,
         }) as Arc<dyn Tool>],
     );
-    let (retained, kept, dropped) = retain_read_only(vec![mixed, writes_only]);
+    // No envelope: an unattended turn keeps the read-only tools.
+    let (retained, kept, dropped) = elitea_agent_runtime::tool_envelope::retain_unattended(
+        vec![mixed, writes_only],
+        &elitea_agent_runtime::tool_envelope::ToolEnvelope::none(),
+        &elitea_agent_runtime::tool_envelope::ToolkitKinds::new(),
+    );
     assert_eq!((kept, dropped), (1, 2));
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0].name(), "github");

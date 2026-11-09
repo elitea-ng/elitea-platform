@@ -554,6 +554,122 @@ async fn write_tool_cannot_reach_a_child() {
     }
 }
 
+/// The run's sub-agent grant (`subagent_tools` over the "local" toolset).
+fn granted(host: &Arc<TestHost>, keys: &[&str]) -> SubAgents {
+    use crate::tool_envelope::{SubAgentGrant, ToolEnvelope, ToolEnvelopeInput, ToolkitKinds};
+    let envelope = ToolEnvelope::from_input(&ToolEnvelopeInput {
+        subagent_tools: keys.iter().map(|key| (*key).to_owned()).collect(),
+        subagent_tools_set: true,
+        ..ToolEnvelopeInput::default()
+    })
+    .unwrap();
+    SubAgents::new(
+        host.clone(),
+        SubAgentConfig::new("").with_grant(SubAgentGrant::new(envelope, ToolkitKinds::new())),
+    )
+}
+
+fn spawn_with_tools(tools: Value) -> Box<Script> {
+    Box::new(move |n, request| match n {
+        0 => vec![call(
+            "spawn-0",
+            SPAWN_AGENT,
+            json!({"task": "write", "profile": {"tools": tools.clone()}}),
+        )],
+        1 if !agent_ids(request).is_empty() => vec![call(
+            "wait-1",
+            WAIT_AGENT,
+            json!({"agent_ids": agent_ids(request)}),
+        )],
+        _ => vec![text("done")],
+    })
+}
+
+/// ADR-0050 decision 3: `subagent_tools` is the grant. A write it names
+/// reaches a child; a read it does not name does not.
+#[tokio::test]
+async fn subagent_tools_grant_a_write_and_drop_the_rest() {
+    let host = TestHost::new();
+    let children = granted(&host, &["local/write_file"]);
+    let responses = run_parent("parent", &children, spawn_then_wait(vec!["write".into()])).await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    assert_eq!(
+        host.write.0.load(Ordering::SeqCst),
+        1,
+        "the granted write ran"
+    );
+    for offered in host.model.offered.lock().unwrap().iter() {
+        assert_eq!(offered, &["write_file".to_owned()]);
+    }
+}
+
+/// ADR-0050 decision 4: `profile.tools` outside the grant is refused with
+/// `SUBAGENT_TOOL_NOT_GRANTED`, and no child starts.
+#[tokio::test]
+async fn profile_tools_outside_the_grant_are_not_granted() {
+    // No grant: only read-only tools may go to a child.
+    let host = TestHost::new();
+    let children = subagents(&host);
+    let responses = run_parent(
+        "parent",
+        &children,
+        spawn_with_tools(json!(["local/write_file"])),
+    )
+    .await;
+    let (_, refusal) = responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .unwrap();
+    assert_eq!(
+        refusal["code"],
+        crate::tool_envelope::SUBAGENT_TOOL_NOT_GRANTED
+    );
+    assert!(host.started.lock().unwrap().is_empty());
+
+    // A grant that names the write, but a key for a tool the parent lacks.
+    let host = TestHost::new();
+    let children = granted(&host, &["local/*"]);
+    let responses = run_parent("parent", &children, spawn_with_tools(json!(["github/*"]))).await;
+    let (_, refusal) = responses
+        .iter()
+        .find(|(name, _)| name == SPAWN_AGENT)
+        .unwrap();
+    assert_eq!(
+        refusal["code"],
+        crate::tool_envelope::SUBAGENT_TOOL_NOT_GRANTED
+    );
+
+    // Within the grant: the child gets exactly the tools asked for.
+    let host = TestHost::new();
+    let children = granted(&host, &["local/*"]);
+    let responses = run_parent("parent", &children, spawn_with_tools(json!(["local/look"]))).await;
+    assert_eq!(wait_results(&responses)[0]["status"], "completed");
+    assert_eq!(host.write.0.load(Ordering::SeqCst), 0);
+    for offered in host.model.offered.lock().unwrap().iter() {
+        assert_eq!(offered, &["look".to_owned()]);
+    }
+}
+
+#[tokio::test]
+async fn profile_keys_other_than_tools_are_refused() {
+    let host = TestHost::new();
+    let children = subagents(&host);
+    let responses = run_parent(
+        "parent",
+        &children,
+        Box::new(|n, _| match n {
+            0 => vec![call(
+                "spawn-0",
+                SPAWN_AGENT,
+                json!({"task": "x", "profile": {"soul": "terse"}}),
+            )],
+            _ => vec![text("done")],
+        }),
+    )
+    .await;
+    assert_eq!(responses[0].1["code"], "invalid_arguments");
+}
+
 #[tokio::test]
 async fn depth_one_only() {
     let host = TestHost::new();

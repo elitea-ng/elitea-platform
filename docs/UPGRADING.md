@@ -19,6 +19,24 @@ The mobile app now reads managed configuration on Android as well as iOS
 - **Android:** the app declares its managed keys, so Intune, Workspace ONE
   and Test DPC list them. Nothing to do for existing deployments.
 
+## Per-agent tool envelope (#1613, ADR-0050 decision 3)
+
+**Upgrade every worker before Main.** Main now freezes an agent's
+`meta.tool_envelope` and the new `agents` Configuration section into each run
+input (`AgentExecutionInputV1.tool_envelope`, field 74); a worker of an
+earlier release refuses an input with a field it does not know. Main sends the
+field only for an agent whose version sets an envelope or once an
+administrator saved the `agents` section, so before that inputs are unchanged
+byte for byte.
+
+- No migration. The `agents` section uses the existing
+  `configuration.governance` permission.
+- Unattended (agent-to-agent) turns still bind the read-only tools by default;
+  the agent's `unattended_tools` and the platform's
+  `agents.unattended_tools_allowlist` replace the #1611 read-only filter.
+- A version save, import or internal MCP version update with an invalid block
+  is refused with `422 tool_envelope_invalid`.
+
 ## Web app brand from the brand manifest (#1701, ADR-0052 W3)
 
 The web client now reads the brand from `brand/<id>/` at build time.
@@ -659,7 +677,6 @@ windows, input only into the named app while it is frontmost, 10 acts and
 2 screenshots a second) hold in every mode, bypass included. See the how-to page "Let the
 agent use your other apps (desktop)".
 
-
 ## Cloud browser: the worker's browser toolkit (#1596, ADR-0049 decisions 3, 5, 7 and 8)
 
 Nothing changes unless you turn it on. Upgrade the workers before Main:
@@ -746,7 +763,6 @@ There is nothing else to do. A session created before this release has no
 message ids. For such a session, the first turn appends the messages
 written after the agent's last answer, then marks the session, and later
 turns match by id.
-
 
 ## Cloud browser: the supervisor's `browser` profile (#1595, ADR-0049 decisions 1 and 10)
 

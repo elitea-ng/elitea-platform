@@ -230,6 +230,9 @@ type AdmissionService struct {
 	// preamble freezes the platform preamble into the input
 	// (WithPlatformPreamble, ADR-0043 decision 3).
 	preamble PlatformPreambleSource
+	// toolSettings freezes the tool envelope under the platform's agents
+	// ceilings into the input (WithToolEnvelope, ADR-0050 decision 3).
+	toolSettings AgentToolSettingsSource
 }
 
 func NewAdmissionService(
@@ -294,6 +297,11 @@ func (s *AdmissionService) Submit(
 	// preamble is part of the request entry, and a retry of the same request
 	// stays the same request when the preamble changed in between.
 	stamped, err := s.stampPlatformPreamble(ctx, request.Input)
+	if err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
+	request.Input = stamped
+	stamped, err = s.stampToolEnvelope(ctx, request.CapabilityID, request.Input)
 	if err != nil {
 		return executionapp.AdmissionOutcome{}, err
 	}

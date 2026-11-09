@@ -4031,6 +4031,30 @@
                           "type": "integer",
                           "nullable": true
                         },
+                        "tool_envelope": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "subagent_tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "max_items": 256
+                            },
+                            "tool_limits": {
+                              "type": "object",
+                              "open": true
+                            },
+                            "unattended_tools": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "max_items": 256
+                            }
+                          }
+                        },
                         "variables": {
                           "type": "array",
                           "items": {
@@ -4419,6 +4443,30 @@
                           "step_limit": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "tool_envelope": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "subagent_tools": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "max_items": 256
+                              },
+                              "tool_limits": {
+                                "type": "object",
+                                "open": true
+                              },
+                              "unattended_tools": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "max_items": 256
+                              }
+                            }
                           },
                           "variables": {
                             "type": "array",
@@ -8978,6 +9026,30 @@
                           "step_limit": {
                             "type": "integer",
                             "nullable": true
+                          },
+                          "tool_envelope": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "subagent_tools": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "max_items": 256
+                              },
+                              "tool_limits": {
+                                "type": "object",
+                                "open": true
+                              },
+                              "unattended_tools": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                },
+                                "max_items": 256
+                              }
+                            }
                           },
                           "variables": {
                             "type": "array",
