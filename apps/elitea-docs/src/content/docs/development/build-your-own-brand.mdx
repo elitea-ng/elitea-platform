@@ -47,7 +47,7 @@ ELITEA is licensed under the Apache License 2.0. Section 4(d) says that a redist
 
 - Keep the ELITEA release's `NOTICE` text, unchanged, in your repository's `NOTICE`, after your own notice. The template's `NOTICE` has a placeholder for it.
 - When the [release watch](#upgrade-to-a-new-release) moves you to a new release, compare that release's `NOTICE` with yours and copy any change.
-- Keep the `LICENSE` and `NOTICE` the apps ship (the about screens and the packaged licence files come from the release). The brand changes the product name, not the licences.
+- Distribute the attribution with the apps. Section 4(d) accepts the `NOTICE` text inside a `NOTICE` file you distribute, in the documentation you ship with the apps, or in a screen the apps show. The release does not put it into the app bundles for you: choose one, for example a licences page your apps' help link opens. The brand changes the product name, not the licences.
 - Your own notice may add your copyright and your terms for your changes. It must not modify the Apache License.
 
 ## No patches: ask for a manifest field
@@ -70,7 +70,7 @@ Open an issue in `elitea-ng/elitea-platform` that asks for a manifest field. Say
 | `APPLE_INSTALLER_SIGNING_IDENTITY` | The Developer ID Installer identity, for the `.pkg` |
 | `APPLE_API_KEY` | The App Store Connect API key id, for notarisation |
 | `APPLE_API_ISSUER` | The API key's issuer id |
-| `APPLE_API_PRIVATE_KEY` | The API key's `.p8` contents |
+| `APPLE_API_PRIVATE_KEY` | The API key's `.p8` file, base64 (`base64 -i AuthKey_<id>.p8`) |
 
 ### Windows
 

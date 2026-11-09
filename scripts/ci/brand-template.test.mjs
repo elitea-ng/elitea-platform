@@ -109,7 +109,7 @@ test("the template's own tests pass", () => {
 });
 
 /** The release watch's github-script body, run against a fake GitHub (a fake release tag). */
-async function runWatch({ releases, forced = '', openPulls = [], branchExists = false }) {
+async function runWatch({ releases, forced = '', openPulls = [], branchTag = null }) {
   const yml = read('.github/workflows/release-watch.yml');
   const body = yml.slice(yml.indexOf('          script: |\n') + '          script: |\n'.length).split('\n').map((l) => l.slice(12)).join('\n');
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'release-watch-'));
@@ -118,15 +118,22 @@ async function runWatch({ releases, forced = '', openPulls = [], branchExists = 
   const calls = [];
   const rec = (name, result = {}) => async (args) => {
     calls.push([name, args]);
-    if (name === 'updateRef' && !branchExists) throw Object.assign(new Error('not found'), { status: 422 });
-    return { data: result };
+    return { data: typeof result === 'function' ? result(args) : result };
   };
   const github = {
     paginate: async (fn, args) => (calls.push(['listReleases', args]), releases),
     rest: {
       repos: {
         listReleases: () => {},
-        getContent: rec('getContent', { sha: 'blob-sha' }),
+        get: rec('get', { default_branch: 'main' }),
+        getContent: async (args) => {
+          calls.push(['getContent', args]);
+          // Before the reset, the branch holds branchTag (or does not exist).
+          const created = calls.some(([c]) => c === 'createRef' || c === 'updateRef');
+          if (!created && branchTag === null) throw Object.assign(new Error('Not Found'), { status: 404 });
+          const tag = created ? JSON.parse(read('upstream.json')).tag : branchTag;
+          return { data: { sha: 'blob-sha', content: Buffer.from(JSON.stringify({ tag })).toString('base64') } };
+        },
         createOrUpdateFileContents: rec('createOrUpdateFileContents'),
       },
       git: { getRef: rec('getRef', { object: { sha: 'main-sha' } }), updateRef: rec('updateRef'), createRef: rec('createRef') },
@@ -135,7 +142,8 @@ async function runWatch({ releases, forced = '', openPulls = [], branchExists = 
   };
   const notices = [];
   const core = { notice: (m) => notices.push(m) };
-  const context = { repo: { owner: 'acme', repo: 'acme-brand' }, payload: { repository: { default_branch: 'main' } } };
+  // A scheduled run's payload carries no repository.
+  const context = { repo: { owner: 'acme', repo: 'acme-brand' }, payload: { schedule: '17 6 * * *' } };
   const env = { ...process.env, GITHUB_WORKSPACE: workspace, FORCED_TAG: forced };
   const saved = process.env;
   process.env = env;
@@ -165,11 +173,16 @@ test('the release watch opens one pull request for a newer release (a fake tag)'
 });
 
 test('the release watch updates its open pull request, and does nothing when nothing is newer', async () => {
-  const again = await runWatch({ releases: [], forced: 'v99.1.0', openPulls: [{ number: 5 }], branchExists: true });
+  const again = await runWatch({ releases: [], forced: 'v99.1.0', openPulls: [{ number: 5 }], branchTag: 'v99.0.0' });
   assert.equal(again.byName('listReleases').length, 0, 'a forced tag skips the release list');
   assert.equal(again.byName('create').length, 0);
   assert.equal(again.byName('update')[0].pull_number, 5);
   assert.equal(again.byName('updateRef')[0].force, true);
+  // The next day, the branch already pins the newest release: a fix pushed to the
+  // pull request stays, and nothing rebuilds.
+  const nextDay = await runWatch({ releases: [{ tag_name: 'v99.1.0', prerelease: false, draft: false }], openPulls: [{ number: 5 }], branchTag: 'v99.1.0' });
+  for (const write of ['updateRef', 'createRef', 'createOrUpdateFileContents', 'update', 'create']) assert.equal(nextDay.byName(write).length, 0, write);
+  assert.match(nextDay.notices.join(), /already builds v99\.1\.0/);
   const pinned = JSON.parse(read('upstream.json')).tag;
   const same = await runWatch({ releases: [{ tag_name: pinned, prerelease: false, draft: false }, { tag_name: 'v99.0.0-nightly.1', prerelease: true, draft: false }] });
   assert.equal(same.byName('createOrUpdateFileContents').length, 0);

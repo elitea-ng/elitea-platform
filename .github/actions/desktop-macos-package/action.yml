@@ -78,7 +78,8 @@ runs:
       env:
         VERSION: ${{ inputs.version }}
         BUILD: ${{ inputs.build-number }}
-      run: node "$ELITEA_ROOT/apps/elitea-desktop/scripts/stamp-version.mjs" "$VERSION" "$BUILD"
+      # No build number: stamp the version alone (an empty argument is not one).
+      run: node "$ELITEA_ROOT/apps/elitea-desktop/scripts/stamp-version.mjs" "$VERSION" ${BUILD:+"$BUILD"}
 
     # `tauri build` runs the web desktop build first (beforeBuildCommand).
     - name: Install web and desktop (locked)

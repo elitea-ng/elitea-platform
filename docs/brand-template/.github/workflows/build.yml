@@ -75,6 +75,14 @@ jobs:
       # and no ELITEA name, id or asset reused.
       - name: brand-check (the release's rules)
         run: node elitea/scripts/brand-check.mjs "$BRAND_DIR"
+      # A signed mobile build copies the brand into elitea/brand/<id>: the id
+      # must not be one of the release's own folders.
+      - name: The brand id is not one of the release's
+        run: |
+          id="$(basename "$BRAND_DIR")"
+          if [ -e "elitea/brand/$id" ]; then
+            echo "::error::brand/$id is a folder of the ELITEA release; rename your brand folder"; exit 1
+          fi
 
   # Dry run: the release config check, the JS bundle and the resolved config.
   # Signed: the brand's own EAS project builds and signs (EAS holds the keys).
@@ -118,7 +126,10 @@ jobs:
           npm run check:release-config
           npx expo export --platform "$PLATFORM" --output-dir "$RUNNER_TEMP/export"
           npx expo config --json --type public > "$RUNNER_TEMP/expo-config.json"
-          find "$RUNNER_TEMP/export" -name '*.hbc' -print
+          # The bundle is Hermes bytecode, as the store build's is.
+          hbc="$(find "$RUNNER_TEMP/export" -name '*.hbc' -print -quit)"
+          if [ -z "$hbc" ]; then echo "::error::expo export wrote no Hermes bundle"; exit 1; fi
+          echo "bundle: $hbc"
       # Signed builds go through the brand's own EAS project (eas.projectId in
       # the manifest): EAS holds the signing credentials and the store keys.
       - name: Sign or dry run
@@ -152,7 +163,6 @@ jobs:
         run: |
           set -euo pipefail
           brand_id="$(basename "$BRAND_DIR")"
-          rm -rf "../../brand/$brand_id"
           cp -R "$GITHUB_WORKSPACE/$BRAND_DIR" "../../brand/$brand_id"
           export ELITEA_BRAND="$brand_id"
           node scripts/eas-preflight.mjs build

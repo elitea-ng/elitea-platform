@@ -7,7 +7,9 @@ name: Watch for ELITEA releases
 # failed signed build later. Merging the pull request is the upgrade.
 #
 # The bump branch is always `release-watch/upstream`: a second new release
-# before the first is merged updates the same pull request.
+# before the first is merged updates the same pull request. While the branch
+# already pins the newest release the watch leaves it alone, so a fix pushed to
+# the bump pull request (a new manifest field) stays.
 #
 # A pull request opened with the default GITHUB_TOKEN starts no workflow (GitHub's
 # rule against recursive runs). Set the repository secret RELEASE_WATCH_TOKEN
@@ -78,15 +80,30 @@ jobs:
               return;
             }
 
-            const base = context.payload.repository.default_branch;
+            // A scheduled run's payload has no repository: ask for the default branch.
+            const { data: repository } = await github.rest.repos.get(context.repo);
+            const base = repository.default_branch;
             const branch = 'release-watch/upstream';
-            const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${base}` });
-            // The branch is ours alone: reset it to the default branch every time.
+            // The branch already moves the pin to this tag: leave it, and any fix a
+            // maintainer pushed to it, alone (and start no rebuild).
+            let onBranch = null;
             try {
-              await github.rest.git.updateRef({ ...context.repo, ref: `heads/${branch}`, sha: head.object.sha, force: true });
+              const { data } = await github.rest.repos.getContent({ ...context.repo, path: 'upstream.json', ref: branch });
+              onBranch = JSON.parse(Buffer.from(data.content, 'base64').toString()).tag;
             } catch (error) {
-              if (error.status !== 422 && error.status !== 404) throw error;
+              if (error.status !== 404) throw error;
+            }
+            if (onBranch === tag) {
+              core.notice(`${branch} already builds ${tag}`);
+              return;
+            }
+            // A newer release than the branch's: the branch is ours alone, so it
+            // starts again from the default branch.
+            const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${base}` });
+            if (onBranch === null) {
               await github.rest.git.createRef({ ...context.repo, ref: `refs/heads/${branch}`, sha: head.object.sha });
+            } else {
+              await github.rest.git.updateRef({ ...context.repo, ref: `heads/${branch}`, sha: head.object.sha, force: true });
             }
             const { data: current } = await github.rest.repos.getContent({ ...context.repo, path: 'upstream.json', ref: branch });
             await github.rest.repos.createOrUpdateFileContents({
