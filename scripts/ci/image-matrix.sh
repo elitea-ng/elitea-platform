@@ -48,10 +48,9 @@ EXEMPT=.github/image-scan-exempt.txt
 # Bake targets that are built but NOT published. Each needs a reason.
 # elitea-inventory-engine (ADR-0027) is published like every other image.
 #
-# elitea-browser-session-lite (ADR-0049 decision 2, #1599): the Moli session
-# image ships only once the bake-off admits Moli; the admitting change
-# publishes it and removes it from this list.
-UNPUBLISHED="elitea-browser-session-lite"
+# elitea-browser-session-lite (ADR-0049 decision 2, #1599) is published since
+# the bake-off admitted `auto` (ADR-0049 Appendix A), which starts on Moli.
+UNPUBLISHED=""
 
 die() { printf '::error::%s\n' "$1" >&2; exit 1; }
 

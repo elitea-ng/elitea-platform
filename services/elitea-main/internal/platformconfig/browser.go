@@ -52,24 +52,62 @@ const (
 	BrowserEngineAuto = "auto"
 )
 
-// BrowserLiteAdmitted says whether the bake-off of ADR-0049 decision 9
-// admitted Moli. It is false until the bake-off passes: Moli succeeds on at
-// least 80% of the read and extract tasks, loses no more than 10 points
-// against `full` overall, and has no crash or hang the session agent cannot
-// recover. The result is recorded as the ADR-0049 appendix
-// (deploy/browser-bakeoff, the browser-bakeoff workflow). Only the change
-// that records a passing appendix may set this to true; until then a
-// project's `browser` setting accepts only `full`, whatever the deployment
-// ships.
+// BrowserAutoAdmitted says whether the bake-off of ADR-0049 decision 9
+// admitted `auto` (Moli first, Chrome when Moli cannot serve the page). It is
+// true by the owner decision of 2026-11-08 recorded in the ADR-0049
+// appendix ("Appendix A: the engine bake-off"): bake-off run 42513255705
+// (browser-bakeoff workflow, corpus revision 4) measured `auto` at 40/40,
+// read and extract 100%, 0 points behind `full`, and no crash or hang. It
+// moved to Chrome on the 3 tasks Moli crashed on (`engine_lost`).
+const BrowserAutoAdmitted = true
+
+// BrowserLiteAdmitted says whether the same bake-off admitted `lite` (Moli
+// alone). It is false: in run 42513255705 Moli passed the success rules
+// (37/40, read and extract 90.6%, 7.5 points behind `full`) but crashed on 3
+// tasks, and the rule admits no engine with a crash or hang the session
+// agent cannot recover (ADR-0049 appendix). Only a change that records a
+// passing re-run in the appendix may set this to true; until then a
+// project's `browser` setting refuses `lite`, whatever the deployment ships.
 const BrowserLiteAdmitted = false
 
-// BrowserEngines answers the engines a project may choose: `full` only, or
-// all three once Moli is admitted.
-func BrowserEngines(liteAdmitted bool) []string {
-	if liteAdmitted {
-		return []string{BrowserEngineFull, BrowserEngineLite, BrowserEngineAuto}
+// BrowserAdmission is what the bake-off admitted. `full` is always admitted.
+type BrowserAdmission struct {
+	Auto bool
+	Lite bool
+}
+
+// AdmittedBrowserEngines is the platform's admission (BrowserAutoAdmitted,
+// BrowserLiteAdmitted).
+var AdmittedBrowserEngines = BrowserAdmission{Auto: BrowserAutoAdmitted, Lite: BrowserLiteAdmitted}
+
+// BrowserEngineNotAdmittedMessage is the refusal of a project setting that
+// names an engine the bake-off did not admit.
+const BrowserEngineNotAdmittedMessage = "engine_not_admitted: the cloud browser engine is not admitted by the " +
+	"ADR-0049 engine bake-off (Appendix A); choose full or auto. lite (Moli alone) is not offered"
+
+// BrowserEngines answers the engines a project may choose: `full` always,
+// `lite` when it is admitted and `auto` when it is, in that order. So `full`
+// and `auto` today, and all three once Moli alone passes a re-run.
+func BrowserEngines(admission BrowserAdmission) []string {
+	engines := []string{BrowserEngineFull}
+	if admission.Lite {
+		engines = append(engines, BrowserEngineLite)
 	}
-	return []string{BrowserEngineFull}
+	if admission.Auto {
+		engines = append(engines, BrowserEngineAuto)
+	}
+	return engines
+}
+
+// IsBrowserEngine reports whether engine is one of the three engines,
+// admitted or not.
+func IsBrowserEngine(engine string) bool {
+	switch engine {
+	case BrowserEngineFull, BrowserEngineLite, BrowserEngineAuto:
+		return true
+	default:
+		return false
+	}
 }
 
 // BrowserSettings is the platform section.

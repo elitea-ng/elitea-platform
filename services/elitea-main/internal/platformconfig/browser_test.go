@@ -1,6 +1,9 @@
 package platformconfig
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestBrowserSettingsFromValues(t *testing.T) {
 	for _, test := range []struct {
@@ -30,5 +33,24 @@ func TestBrowserSettingsFromValues(t *testing.T) {
 				t.Fatalf("got %+v, want %+v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestBrowserEnginesFollowTheAdmission(t *testing.T) {
+	for _, test := range []struct {
+		admission BrowserAdmission
+		want      []string
+	}{
+		{BrowserAdmission{}, []string{"full"}},
+		{BrowserAdmission{Auto: true}, []string{"full", "auto"}},
+		{BrowserAdmission{Auto: true, Lite: true}, []string{"full", "lite", "auto"}},
+	} {
+		if got := BrowserEngines(test.admission); !slices.Equal(got, test.want) {
+			t.Fatalf("%+v: got %v, want %v", test.admission, got, test.want)
+		}
+	}
+	// The recorded appendix: auto admitted, lite not.
+	if AdmittedBrowserEngines != (BrowserAdmission{Auto: true}) {
+		t.Fatalf("admission = %+v, want auto only", AdmittedBrowserEngines)
 	}
 }

@@ -551,6 +551,9 @@ func writeCurrentConfigurationMutationServiceError(w http.ResponseWriter, err er
 		case configurationapp.CurrentConfigurationMutationSharedNotAllowed:
 			writeCurrentConfigurationMutationError(w, http.StatusBadRequest,
 				"shared_config_not_allowed: this configuration type can only be used by its own project", field)
+		case configurationapp.CurrentConfigurationMutationEngineNotAdmitted:
+			writeCurrentConfigurationMutationError(w, http.StatusBadRequest,
+				configurationapp.BrowserEngineNotAdmittedMessage, field)
 		default:
 			writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
 		}
