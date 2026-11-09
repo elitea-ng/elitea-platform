@@ -14,7 +14,7 @@ import (
 )
 
 func withAddresses(addresses nativeapi.ClientAddresses) stackOption {
-	return func(cfg *nativeapi.Config, _ *domain.Config) { cfg.Addresses = addresses }
+	return func(cfg *nativeapi.Config, _ *domain.Config, _ *stackSetup) { cfg.Addresses = addresses }
 }
 
 func authorizeOutcome(t *testing.T, s *stack) string {
