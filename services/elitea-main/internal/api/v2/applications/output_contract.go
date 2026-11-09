@@ -9,6 +9,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentmemory"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 )
 
@@ -40,6 +41,9 @@ func checkOutputContracts(w http.ResponseWriter, body map[string]any, agentType 
 		return false
 	}
 	if !checkToolEnvelope(w, body) {
+		return false
+	}
+	if !checkProactivity(w, body) {
 		return false
 	}
 	var err error
@@ -126,6 +130,20 @@ func checkContextBlock(w http.ResponseWriter, body map[string]any) bool {
 	if _, err := contextview.Parse(meta[contextview.MetaKey]); err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 			"error": err.Error(), "code": "context_block_invalid",
+		})
+		return false
+	}
+	return true
+}
+
+// checkProactivity refuses an invalid meta.proactivity (ADR-0050 decision
+// 2, issue 1618) with a typed 422. It answers false when it wrote the
+// refusal.
+func checkProactivity(w http.ResponseWriter, body map[string]any) bool {
+	meta, _ := body["meta"].(map[string]any)
+	if err := proactivity.Check(meta); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+			"error": err.Error(), "code": proactivity.Code,
 		})
 		return false
 	}

@@ -360,6 +360,13 @@ func (s *Service) Scan(ctx context.Context) (PassResult, error) {
 			}
 		}
 		for _, agent := range agents {
+			// A wake can take a whole triage call: stop while there is
+			// time for one more, so the pass ends inside its lease. The
+			// rest stay due for the next minute.
+			if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < proactivity.TriageTimeout+5*time.Second {
+				result.Truncated = true
+				break
+			}
 			result.Due++
 			woke, err := s.wake(ctx, agent, settings, projectOn, now)
 			if err != nil {
