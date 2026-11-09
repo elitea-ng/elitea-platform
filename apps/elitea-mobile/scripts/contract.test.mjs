@@ -263,3 +263,14 @@ describe('client contract 1.44', () => {
     assert.deepEqual(doc.components.schemas.AgentMemoryRefusal.required, ['error', 'code']);
   });
 });
+
+describe('client contract 1.45', () => {
+  it('keeps the IT support line in both policy schemas, one bounded line', () => {
+    const { doc } = buildContract();
+    for (const schema of ['NativeClientPolicy', 'ClientPublicPolicy']) {
+      const prop = doc.components.schemas[schema].properties.support_contact;
+      assert.equal(prop?.type, 'string', `${schema}.support_contact`);
+      assert.equal(prop.maxLength, 200, `${schema}.support_contact maxLength`);
+    }
+  });
+});

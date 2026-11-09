@@ -39,6 +39,11 @@ const (
 	KeyNativeAllowNotificationActions = "allow_notification_actions"
 	KeyNativeAllowSystemSurfaces      = "allow_system_surfaces"
 
+	// KeyNativeSupportContact is the IT support line the apps show in About
+	// and Settings (ADR-0052 decision 7, client contract 1.45). A device's
+	// managed `support_contact` wins over it.
+	KeyNativeSupportContact = "support_contact"
+
 	// Local work on the desktop (ADR-0029 decision 6, client contract 1.5).
 	// The section stores flat keys, because the admin form and the save
 	// validator are flat; the policy delivers them as one `local_work` group.
@@ -224,11 +229,20 @@ const (
 // control characters (a pattern is shown to the user and matched by the
 // desktop; a newline or NUL in it is never intended).
 func ValidLocalWorkPattern(pattern string) bool {
-	if strings.TrimSpace(pattern) == "" || len(pattern) > MaxLocalWorkPatternBytes || !utf8.ValidString(pattern) {
+	return strings.TrimSpace(pattern) != "" && len(pattern) <= MaxLocalWorkPatternBytes && plainLine(pattern)
+}
+
+// plainLine reports whether text is valid UTF-8 with no control character
+// (C0, DEL, C1) and no bidirectional embedding, override or isolate
+// (U+202A..U+202E, U+2066..U+2069), which could make a shown line read
+// differently from what it is. The clients apply the same rule
+// (@elitea/client-core/support, apps/elitea-desktop src/managed.rs).
+func plainLine(text string) bool {
+	if !utf8.ValidString(text) {
 		return false
 	}
-	for _, r := range pattern {
-		if unicode.IsControl(r) {
+	for _, r := range text {
+		if unicode.IsControl(r) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) {
 			return false
 		}
 	}
@@ -476,6 +490,16 @@ const (
 	MaxOfflineMB            = 102400
 )
 
+// MaxSupportContactRunes bounds KeyNativeSupportContact, in characters.
+const MaxSupportContactRunes = 200
+
+// ValidSupportContact reports whether a trimmed support line may be stored:
+// empty (none), or at most MaxSupportContactRunes characters on one plain line
+// (plainLine). It is shown as text, so a newline is never intended.
+func ValidSupportContact(value string) bool {
+	return value == strings.TrimSpace(value) && utf8.RuneCountInString(value) <= MaxSupportContactRunes && plainLine(value)
+}
+
 // NativeClientPolicy is the full policy. Field order is the JSON key order of
 // the `client_policy` object in a token response; adding a field is additive,
 // renaming or removing one is a client_contract major bump.
@@ -510,6 +534,11 @@ type NativeClientPolicy struct {
 
 	// LocalWork is the desktop's local work group (client contract 1.5).
 	LocalWork LocalWorkPolicy `json:"local_work"`
+
+	// SupportContact is the IT support line (client contract 1.45): free
+	// text, an email address, a phone number or an https address; empty
+	// means none. The apps show it in About and Settings.
+	SupportContact string `json:"support_contact"`
 }
 
 // DefaultNativeClientPolicy is the policy of a deployment that never saved the
@@ -532,7 +561,8 @@ func DefaultNativeClientPolicy() NativeClientPolicy {
 		AllowNotificationActions: true,
 		AllowSystemSurfaces:      false,
 
-		LocalWork: DefaultLocalWorkPolicy(),
+		LocalWork:      DefaultLocalWorkPolicy(),
+		SupportContact: "",
 	}
 }
 
@@ -590,5 +620,8 @@ func NativeClientPolicyFromValues(values Values) NativeClientPolicy {
 		policy.NotificationPreview = preview
 	}
 	policy.LocalWork = localWorkPolicyFromValues(values)
+	if contact := values.trimmed(KeyNativeSupportContact); ValidSupportContact(contact) {
+		policy.SupportContact = contact
+	}
 	return policy
 }

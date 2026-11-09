@@ -19,6 +19,8 @@ export interface HostState {
   clientId: string;
   /** The server-driven `native_client_policy`, stored verbatim (enforcement of `local_work` is later work). */
   policy: Record<string, unknown> | null;
+  /** The IT support line the device management set (macOS configuration profile); it beats the policy's. */
+  managedSupportContact?: string | null;
 }
 
 /** The result of `GET /.well-known/elitea-client` reduced to what the connect screen shows. */

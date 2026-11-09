@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
+import { normalizeSupportContact } from '@elitea/client-core/support';
+
 import { registerWipeHook } from '@/security/endSession';
 import { getManagedConfig, subscribeManagedConfig, type ManagedConfig } from '@/security/managedConfig';
 
@@ -31,6 +33,8 @@ export interface ClientPolicy {
   notification_preview: NotificationPreview;
   allow_notification_actions: boolean;
   allow_system_surfaces: boolean;
+  /** Client contract 1.45: the workspace's IT support line, or null (src/security/supportContact.ts). */
+  support_contact: string | null;
 }
 
 /** What a notification may show on the lock screen. */
@@ -112,6 +116,7 @@ export const STRICT_DEFAULTS: Readonly<ClientPolicy> = Object.freeze({
   offline_max_mb: 0,
   offline_attachments: false,
   ...DATA_CONTROL_DEFAULTS,
+  support_contact: null,
 });
 
 export interface PolicyState {
@@ -176,6 +181,7 @@ export function setPolicy(policy: Partial<ClientPolicy>, source: PolicySource): 
   }
   if (typeof policy.offline_attachments === 'boolean') next.offline_attachments = policy.offline_attachments;
   Object.assign(next, dataControlsFrom(policy as Record<string, unknown>));
+  next.support_contact = normalizeSupportContact(policy.support_contact);
   unfloored = { policy: next, source };
   state = withFloor(next, source);
   for (const listener of [...listeners]) listener();

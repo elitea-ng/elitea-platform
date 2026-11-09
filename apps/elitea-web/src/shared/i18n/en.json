@@ -5911,5 +5911,6 @@
   "features.agentTeams.startFailed": "The conversation was not started. Try again.",
   "features.agentTeams.unnamedAgent": "Agent {{id}}",
   "features.agentTeams.deleteAction": "Delete",
-  "features.agentTeams.editAction": "Edit"
+  "features.agentTeams.editAction": "Edit",
+  "desktop.account.itSupport": "IT support"
 }
