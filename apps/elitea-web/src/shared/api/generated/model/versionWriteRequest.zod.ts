@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentAvatarPackV1 } from "./agentAvatarPackV1.zod";
 import { AgentSoulV1 } from "./agentSoulV1.zod";
 import { ConversationStarters } from "./conversationStarters.zod";
 import { LlmSettings } from "./llmSettings.zod";
@@ -88,6 +89,12 @@ export const VersionWriteRequest = zod.object({
     .optional()
     .describe(
       "ADR-0050 decision 1a. Omit the key to leave the stored soul alone; null clears it; an object replaces it whole. An object that fails AgentSoulV1 is REFUSED with a 400 before anything is written: `soul_capability_key` names a key that would read as a grant (tools, credentials, permissions and the like), `soul_too_large` a document over 16384 bytes of text, `soul_invalid` anything else.\n",
+    ),
+  avatar_pack: zod
+    .union([AgentAvatarPackV1, zod.null()])
+    .optional()
+    .describe(
+      "ADR-0050 decision 6. Omit the key to leave the stored pack alone; null clears it; an object replaces it whole and also writes its still into `meta.icon_meta`, so a client that reads only the old field shows it. Every url must be media uploaded to this project (`/api/v2/agent_media/{this project}/...`). A pack that breaks a rule is REFUSED with a 400 `avatar_pack_invalid` before anything is written.\n",
     ),
   llm_settings: LlmSettings.optional(),
   conversation_starters: ConversationStarters.optional(),

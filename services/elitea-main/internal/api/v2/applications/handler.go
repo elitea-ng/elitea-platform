@@ -318,7 +318,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 	var createdAt interface{}
 	var authorID *int
 	var authorEmail, authorName string
-	var soulJSON *string
+	var soulJSON, avatarPackJSON *string
 
 	// The author is JOINED here rather than left to the caller. The write
 	// echo answers an `author` object — `{id, email, name}`, built by
@@ -335,14 +335,14 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 			COALESCE(v.conversation_starters::text, '[]'),
 			COALESCE(v.pipeline_settings::text, '{}'),
 			v.author_id, COALESCE(u.email, ''), COALESCE(u.name, ''),
-			v.soul::text
+			v.soul::text, v.avatar_pack::text
 		FROM %s.application_versions v
 		LEFT JOIN public.auth_core__user u ON u.id = v.author_id
 		WHERE v.application_id = $1 AND v.id = $2`, s), applicationID, versionID).Scan(
 		&id, &appID, &name, &status, &createdAt,
 		&agentType, &instructions, &welcomeMsg,
 		&llmSettingsJSON, &metaJSON, &startersJSON, &pipelineSettingsJSON,
-		&authorID, &authorEmail, &authorName, &soulJSON,
+		&authorID, &authorEmail, &authorName, &soulJSON, &avatarPackJSON,
 	)
 	if err != nil {
 		return nil
@@ -476,6 +476,7 @@ func (h *Handler) fetchVersionDetails(ctx context.Context, projectID, applicatio
 		"instructions":          instrVal,
 		"welcome_message":       welcomeVal,
 		"soul":                  soulValue(soulJSON),
+		"avatar_pack":           avatarPackValue(avatarPackJSON),
 		"notes":                 notes,
 		"llm_settings":          llmSettings,
 		"meta":                  meta,
@@ -594,6 +595,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !applySoul(w, vBody, req.InitialVersion) {
+				return
+			}
+			if !applyAvatarPack(w, vBody, projectID, req.InitialVersion, storedAvatarPacks{}) {
 				return
 			}
 			initialVariables, _ = vBody["variables"].([]any)
@@ -889,6 +893,7 @@ func versionDetailsResponse(ver applications.Version, user auth.User, userID str
 		"instructions":          ver.Instructions,
 		"welcome_message":       ver.WelcomeMessage,
 		"soul":                  soulObject(ver.Soul),
+		"avatar_pack":           soulObject(ver.AvatarPack),
 		"llm_settings":          llm,
 		"conversation_starters": starters,
 		"pipeline_settings":     pipelineSettings,
@@ -1248,6 +1253,9 @@ func (h *Handler) CreateVersion(w http.ResponseWriter, r *http.Request) {
 	if !applySoul(w, body, input) {
 		return
 	}
+	if !applyAvatarPack(w, body, projectID, input, h.avatarPacksForCreate(r.Context(), projectID, applicationID)) {
+		return
+	}
 	input.CopySkillsFromVersionID = optionalSkillSourceVersionID(body["copy_skills_from_version_id"])
 	ver, err := h.repo.CreateVersion(r.Context(), projectID, applicationID, *input)
 	if err != nil {
@@ -1476,6 +1484,11 @@ func (h *Handler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	// editor restores on reload.
 	if pipelineSettings, ok := body["pipeline_settings"].(map[string]any); ok {
 		v.PipelineSettings = pipelineSettings
+	}
+	// ADR-0050 decision 6: after the meta branches, because the pack's still
+	// joins the meta patch as icon_meta.
+	if !applyAvatarPack(w, body, projectID, &v, h.avatarPacksForUpdate(r.Context(), projectID, applicationID, versionID)) {
+		return
 	}
 
 	// The saving user authors the revision this save appends (ADR-0040

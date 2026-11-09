@@ -8,7 +8,8 @@ use super::input_content::content_fake::{ContextAnswer, ContextCall, ContextRout
 use super::runtime_context::{
     AgentMemoryForgetRequest, AgentMemoryRecallRequest, AgentMemoryRememberRequest,
     ArtifactDeleteRequest, ArtifactListRequest, ArtifactReadRequest, ArtifactWriteRequest,
-    RuntimeContextClient, RuntimeContextConfig, RuntimeContextError,
+    ProposeAgentProfile, ProposeAgentRequest, ProposeAgentSeed, RuntimeContextClient,
+    RuntimeContextConfig, RuntimeContextError,
 };
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::protocol::control::test_runtime_context_authority;
@@ -773,6 +774,56 @@ async fn a_refused_artifact_document_is_terminal() {
     };
     assert_eq!(error.code(), "runtime_context.rejected");
     assert!(!error.retryable());
+}
+
+/// A proposal is bounded by Main's `propose_agent` ceiling (32 KiB), not the
+/// agent memory one (8 KiB): 12 KiB of instructions and a few seeds are a
+/// valid proposal and reach Main, while one past 32 KiB never leaves the
+/// worker.
+#[tokio::test(flavor = "current_thread")]
+async fn propose_agent_is_bounded_by_its_own_ceiling() {
+    let raw = serde_json::json!({
+        "schema_version": "elitea.runtime.propose-agent.v1",
+        "status": "proposed",
+    })
+    .to_string();
+    let request = |instructions: usize| ProposeAgentRequest {
+        ephemeral_agent_id: "a_0123abcd".to_owned(),
+        rationale: "r".repeat(2_000),
+        instructions: "i".repeat(instructions),
+        profile: ProposeAgentProfile {
+            label: "researcher".to_owned(),
+            display_name: "Researcher".to_owned(),
+            soul: "s".repeat(1_000),
+            avatar: String::new(),
+            tools: None,
+        },
+        memory_seeds: vec![
+            ProposeAgentSeed {
+                kind: "fact".to_owned(),
+                content: "m".repeat(1_500),
+            };
+            3
+        ],
+    };
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let answer = client
+        .propose_agent(&test_runtime_context_authority(), &request(12 * 1_024))
+        .await
+        .expect("a 12 KiB proposal is sent");
+    assert_eq!(answer["status"], "proposed");
+    assert_eq!(
+        captured.lock().expect("captured call")[0].route,
+        "agent-proposals/propose"
+    );
+
+    let (client, captured) = fake_client(ok(&raw), Duration::from_secs(1), 32 * 1_024);
+    let error = client
+        .propose_agent(&test_runtime_context_authority(), &request(40 * 1_024))
+        .await
+        .expect_err("a proposal past Main's ceiling stays in the worker");
+    assert!(matches!(error, RuntimeContextError::ResourceExhausted(_)));
+    assert!(captured.lock().expect("captured calls").is_empty());
 }
 
 /// The agent memory tools (#1607): one claim-bound call each, the entry in

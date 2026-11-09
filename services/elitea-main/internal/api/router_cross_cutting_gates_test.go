@@ -109,6 +109,7 @@ func (gatePermissions) ResolveMembershipPermissions(context.Context, auth.User, 
 // a principal (so neither gate can judge it) and chooses its own caching.
 var outsideTheGroupByDesign = []struct{ prefix, reason string }{
 	{"/api/v2/branding", "the brand pack and assets a browser loads before it has a session; it chooses its own revalidating Cache-Control."},
+	{"/api/v2/agent_media/", "agent avatar media (ADR-0050 decision 6) an <img> or <video> loads with no credential, like /icons; content-addressed, so it is immutable-cached."},
 	{SharedChatViewPath, "share-by-link, the ANONYMOUS half (shared_chat_routes.go); no principal to gate."},
 	{SharedChatUnlockPath, "share-by-link unlock, anonymous for the same reason."},
 	{"/api/v2/pipeline_trigger/", "the inbound pipeline trigger; its only credential is the per-pipeline secret, so there is no principal to gate."},

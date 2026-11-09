@@ -271,6 +271,7 @@ export function ApplicationAnswer({
           name={participantName}
           personaRole={answer.authorRole}
           iconUrl={answer.authorIconUrl}
+          pack={answer.authorAvatarPack}
           messageClass={answer.messageClass}
           motion={motion}
         />

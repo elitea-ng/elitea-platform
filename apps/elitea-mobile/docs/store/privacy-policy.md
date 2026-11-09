@@ -67,6 +67,10 @@ conversations, agents and notifications from your organization's systems.
 
 ### 4. App updates (Expo)
 
+[Only while EAS Update is on. brand/elitea ships with updates off
+(`updates.mode: "off"`): leave this section out, and drop the Device ID rows
+in privacy.md, until the owner turns updates on.]
+
 The app can download bug fixes from our update service, provided by Expo
 (650 Industries, Inc.). Each check sends the platform, the app's runtime
 version and update ids, and a random identifier for this installation (it is

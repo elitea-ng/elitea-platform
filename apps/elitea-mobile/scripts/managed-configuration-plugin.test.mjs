@@ -28,6 +28,7 @@ test('types match the parser: string, bool, integer', () => {
     require_device_lock: 'bool',
     idle_lock_seconds: 'integer',
     allow_screenshots: 'bool',
+    support_contact: 'string',
   });
 });
 
@@ -66,4 +67,22 @@ test('app.config.ts registers the plugin', () => {
     names.some((name) => typeof name === 'string' && name.includes('withManagedConfiguration')),
     JSON.stringify(names),
   );
+});
+
+test('MDM feedback: adds the pinned keyed-app-states dependency once', () => {
+  const gradle = 'android {\n}\n\ndependencies {\n    implementation("com.facebook.react:react-android")\n}\n';
+  const once = plugin.addFeedbackDependency(gradle);
+  assert.match(once, /dependencies \{\n {4}\/\/ @generated managed-configuration: MDM feedback \(keyed app states\)\n {4}implementation\("androidx\.enterprise:enterprise-feedback:1\.1\.0"\)\n {4}implementation\("com\.facebook/);
+  assert.equal(plugin.addFeedbackDependency(once), once, 'idempotent');
+  assert.throws(() => plugin.addFeedbackDependency('android {}\n'), /no dependencies/);
+  // A stable release, never an alpha.
+  assert.match(plugin.ENTERPRISE_FEEDBACK, /:\d+\.\d+\.\d+$/);
+});
+
+test('MDM feedback: the inline module imports what the dependency provides', () => {
+  const kt = readFileSync(join(root, 'native-modules', 'ManagedRestrictions.kt'), 'utf8');
+  assert.match(kt, /^import androidx\.enterprise\.feedback\.KeyedAppStatesReporter$/m);
+  assert.match(kt, /Function\("reportStates"\)/);
+  const js = readFileSync(join(root, 'src', 'security', 'managedFeedback.ts'), 'utf8');
+  assert.match(js, /loadNative\('ManagedRestrictions'\)\?\.reportStates\(/);
 });

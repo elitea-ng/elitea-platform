@@ -94,6 +94,11 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// of a turn has it: a nested agent or a pipeline keeps its tools as
     /// before.
     tool_envelope: Option<elitea_agent_runtime::tool_envelope::ToolEnvelope>,
+    /// The version's `meta.capabilities.can_propose_agents` (ADR-0050
+    /// decision 5a, #1615): binds `propose_agent` beside the sub-agents.
+    /// Only a root application agent has it. Main checks it again, with the
+    /// person's create permission, on every call.
+    can_propose_agents: bool,
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -300,6 +305,7 @@ impl OrdinaryNoToolProfile {
             unattended: None,
             floor: None,
             tool_envelope: None,
+            can_propose_agents: false,
         })
     }
 
@@ -357,6 +363,7 @@ impl OrdinaryNoToolProfile {
             unattended: None,
             floor: request.payload.floor.clone(),
             tool_envelope: request.payload.tool_envelope.clone(),
+            can_propose_agents: application_can_propose_agents(request),
         })
     }
 
@@ -471,6 +478,7 @@ impl OrdinaryNoToolProfile {
             unattended: None,
             floor: None,
             tool_envelope: None,
+            can_propose_agents: false,
         })
     }
 
@@ -525,6 +533,13 @@ impl OrdinaryNoToolProfile {
         &self,
     ) -> Option<&elitea_agent_runtime::tool_envelope::ToolEnvelope> {
         self.tool_envelope.as_ref()
+    }
+
+    /// Whether the version lets the agent propose its sub-agents as saved
+    /// agents (`meta.capabilities.can_propose_agents`).
+    #[must_use]
+    pub(crate) const fn can_propose_agents(&self) -> bool {
+        self.can_propose_agents
     }
 
     /// The agent memory tools the version binds (`meta.memory`).
@@ -987,6 +1002,23 @@ fn application_agent_memory(
         _ => None,
     };
     super::agent_memory_tools::AgentMemoryBinding::from_meta(meta)
+}
+
+/// `meta.capabilities.can_propose_agents` of a root application agent:
+/// anything but a literal `true` is false.
+fn application_can_propose_agents(request: &AgentExecutionRequest) -> bool {
+    if request.kind != AgentExecutionKind::Application {
+        return false;
+    }
+    request
+        .payload
+        .application
+        .get("version_details")
+        .and_then(|version| version.get("meta"))
+        .and_then(|meta| meta.get(super::propose_agent_tool::CAPABILITIES_KEY))
+        .and_then(|capabilities| capabilities.get(super::propose_agent_tool::CAPABILITY_KEY))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn application_citations(

@@ -42,8 +42,8 @@ use crate::protocol::elitea::runtime::v1::{
     WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
 use crate::protocol::elitea::runtime::v1::{
-    ForgetAgentMemoryRequestV1, HandFloorRequestV1, RecallAgentMemoryRequestV1,
-    RememberAgentMemoryRequestV1,
+    ForgetAgentMemoryRequestV1, HandFloorRequestV1, ProposeAgentRequestV1,
+    RecallAgentMemoryRequestV1, RememberAgentMemoryRequestV1,
 };
 use crate::workspace_run::context::{
     RUNTIME_CONTEXT_FIELD as WORKSPACE_FIELD, WorkspaceRuntimeContext,
@@ -87,8 +87,14 @@ const AGENT_MEMORY_RECALL_SCHEMA: &str = "elitea.runtime.agent-memory-recall.v1"
 const AGENT_MEMORY_FORGET_SCHEMA: &str = "elitea.runtime.agent-memory-forget.v1";
 /// The turn-taking hand-off's schema (ADR-0050 decision 11, #1611).
 const HAND_FLOOR_SCHEMA: &str = "elitea.runtime.hand-floor.v1";
+const PROPOSE_AGENT_SCHEMA: &str = "elitea.runtime.propose-agent.v1";
 /// Main's own request ceiling for the three (`maxRuntimeAgentMemoryRequestBytes`).
 const MAX_AGENT_MEMORY_REQUEST_BYTES: usize = 8 * 1_024;
+/// Main's own request ceiling for `propose_agent`
+/// (`maxRuntimeProposeAgentRequestBytes`): a proposal carries instructions
+/// up to 16 KiB, a 4 KiB rationale, a 2 KiB soul and memory seeds, so the
+/// agent memory ceiling would refuse valid proposals.
+const MAX_PROPOSE_AGENT_REQUEST_BYTES: usize = 32 * 1_024;
 /// The `artifact` toolkit family's four schemas (#906).
 const ARTIFACT_LIST_SCHEMA: &str = "elitea.runtime.artifact-list.v1";
 const ARTIFACT_READ_SCHEMA: &str = "elitea.runtime.artifact-read.v1";
@@ -1038,6 +1044,48 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the turn-taking hand-off timed out"))?
     }
 
+    /// Propose that a temporary sub-agent become a saved agent (ADR-0050
+    /// decision 5a, #1615). Main reads the project, the proposing agent, the
+    /// person and the conversation from the claimed execution, checks the
+    /// capability, the person's create permission and the limits, and stores
+    /// a proposal; nothing becomes an agent until a person presses Create.
+    pub(crate) async fn propose_agent(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        request: &ProposeAgentRequest,
+    ) -> Result<Value, RuntimeContextError> {
+        let binding = authority.redemption_binding();
+        validate_binding(&binding)?;
+        let request = scoped(
+            &binding,
+            ProposeAgentRequestV1 {
+                scope: Some(scope(&binding)),
+                request_json: encode_bounded_body(request, MAX_PROPOSE_AGENT_REQUEST_BYTES)?,
+            },
+            PROPOSE_AGENT_AUTHORITY_MALFORMED,
+        )?;
+        let mut rpc = self.rpc();
+        let operation = async {
+            let body = rpc
+                .propose_agent(request)
+                .await
+                .map_err(|status| {
+                    context_status(
+                        status,
+                        Some(RuntimeContextError::Rejected(
+                            "the agent proposal was refused",
+                        )),
+                    )
+                })?
+                .into_inner()
+                .response_json;
+            propose_agent_response(&bounded_document(body, self.config.max_response_bytes)?)
+        };
+        timeout(self.config.deadline, operation)
+            .await
+            .map_err(|_| RuntimeContextError::Timeout("the agent proposal timed out"))?
+    }
+
     /// One artifact response document, within the artifact family's own
     /// envelope ceiling.
     fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
@@ -1884,6 +1932,61 @@ pub(crate) struct HandFloorRequest {
 
 const HAND_FLOOR_AUTHORITY_MALFORMED: &str = "the turn-taking request authority is malformed";
 
+/// One tool of a proposed sub-agent's profile, as a reference.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ProposeAgentTool {
+    pub(crate) key: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) toolkit_type: String,
+}
+
+/// The proposed sub-agent's profile, as `spawn_agent` made it. Main computes
+/// the profile digest from it with the runtime's own algorithm.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ProposeAgentProfile {
+    pub(crate) label: String,
+    pub(crate) display_name: String,
+    pub(crate) soul: String,
+    pub(crate) avatar: String,
+    /// `None` is a profile without a tool list (the child got its grants).
+    pub(crate) tools: Option<Vec<ProposeAgentTool>>,
+}
+
+/// A suggested memory entry.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ProposeAgentSeed {
+    pub(crate) kind: String,
+    pub(crate) content: String,
+}
+
+/// The `propose_agent` tool's request (`agentproposal.Request` in Main).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ProposeAgentRequest {
+    pub(crate) ephemeral_agent_id: String,
+    pub(crate) rationale: String,
+    pub(crate) instructions: String,
+    pub(crate) profile: ProposeAgentProfile,
+    pub(crate) memory_seeds: Vec<ProposeAgentSeed>,
+}
+
+const PROPOSE_AGENT_AUTHORITY_MALFORMED: &str = "the agent proposal request authority is malformed";
+
+/// Main's propose-agent answer: a JSON object of the expected schema with a
+/// status.
+fn propose_agent_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
+    let decoded: Value = serde_json::from_slice(body).map_err(|_| {
+        RuntimeContextError::InvalidResponse("the agent proposal response is malformed")
+    })?;
+    if decoded.get("schema_version").and_then(Value::as_str) != Some(PROPOSE_AGENT_SCHEMA)
+        || decoded.get("status").and_then(Value::as_str).is_none()
+    {
+        return Err(RuntimeContextError::InvalidResponse(
+            "the agent proposal response has an unexpected schema",
+        ));
+    }
+    Ok(decoded)
+}
+
 /// Main's hand-floor answer: a JSON object of the expected schema.
 fn hand_floor_response(body: &[u8]) -> Result<Value, RuntimeContextError> {
     let decoded: Value = serde_json::from_slice(body).map_err(|_| {
@@ -1975,12 +2078,18 @@ const fn agent_memory_rejection() -> RuntimeContextError {
 fn encode_agent_memory_body<T: serde::Serialize>(
     request: &T,
 ) -> Result<Vec<u8>, RuntimeContextError> {
-    let body = serde_json::to_vec(request).map_err(|_| {
-        RuntimeContextError::InvalidConfiguration("the agent memory request is not encodable")
-    })?;
-    if body.len() > MAX_AGENT_MEMORY_REQUEST_BYTES {
+    encode_bounded_body(request, MAX_AGENT_MEMORY_REQUEST_BYTES)
+}
+
+fn encode_bounded_body<T: serde::Serialize>(
+    request: &T,
+    max_bytes: usize,
+) -> Result<Vec<u8>, RuntimeContextError> {
+    let body = serde_json::to_vec(request)
+        .map_err(|_| RuntimeContextError::InvalidConfiguration("the request is not encodable"))?;
+    if body.len() > max_bytes {
         return Err(RuntimeContextError::ResourceExhausted(
-            "the agent memory request exceeds the approved limit",
+            "the request exceeds the approved limit",
         ));
     }
     Ok(body)

@@ -718,6 +718,40 @@ fn the_edit_profile_follows_the_model_and_meta_edit_format() {
     );
 }
 
+#[test]
+fn only_a_literal_true_capability_lets_an_application_propose_agents() {
+    fn admit(kind: AgentExecutionKind, capabilities: Option<Value>) -> bool {
+        let mut request = ordinary_request(kind);
+        if let Some(capabilities) = capabilities {
+            insert_application_meta(&mut request, "capabilities", capabilities);
+        }
+        OrdinaryNoToolProfile::validate(&request)
+            .expect("admitted")
+            .can_propose_agents()
+    }
+    use AgentExecutionKind::{Adhoc, Application};
+    assert!(!admit(Application, None));
+    assert!(!admit(Application, Some(json!(null))));
+    assert!(!admit(Application, Some(json!({}))));
+    assert!(!admit(
+        Application,
+        Some(json!({"can_propose_agents": false}))
+    ));
+    assert!(!admit(
+        Application,
+        Some(json!({"can_propose_agents": "true"}))
+    ));
+    assert!(!admit(Application, Some(json!(true))));
+    assert!(admit(
+        Application,
+        Some(json!({"can_propose_agents": true}))
+    ));
+    assert!(
+        !admit(Adhoc, None),
+        "an ad hoc run has no version to grant it"
+    );
+}
+
 fn insert_application_meta(request: &mut AgentExecutionRequest, key: &str, value: Value) {
     request
         .payload

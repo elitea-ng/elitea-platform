@@ -9,6 +9,7 @@ import type {
 } from '@/shared/api/generated/model';
 
 import { soulWriteField } from './agentSoulDraft';
+import { avatarPackWriteField } from './avatarPackDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 
 /**
@@ -158,7 +159,7 @@ function selectLlmSettings(
 function toVersionMetaBody(
   version: ApplicationVersionDetail,
   edits?: EditApplicationVersionFields,
-): Pick<VersionWriteRequest, 'meta' | 'soul'> {
+): Pick<VersionWriteRequest, 'meta' | 'soul' | 'avatar_pack'> {
   // `variables` is DROPPED from the stored blob, and this is load-bearing.
   //
   // Both handlers fold the body's TOP-LEVEL `variables` list into `meta`
@@ -177,7 +178,7 @@ function toVersionMetaBody(
   // The update path folds on key PRESENCE and so was never exposed; dropping
   // the key is correct for both, because both rebuild it from the list.
   const { variables: _storedVariables, ...storedMeta } = (version.meta ?? {}) as Record<string, unknown>;
-  const soul = soulWriteField(version.soul, edits?.soul);
+  const soul = { ...soulWriteField(version.soul, edits?.soul), ...avatarPackWriteField(version.avatar_pack, edits?.avatarPack) };
   if (edits === undefined) return { meta: { ...storedMeta }, ...soul };
   return {
     ...soul,
@@ -226,8 +227,8 @@ function toVersionMetaBody(
  * editor state still gets the stored values.
  *
  * Only keys the Go `CreateVersion` handler reads are sent; `tags`/`tools` are
- * omitted (see `features/agents/model/useSaveNewVersion.ts`). `meta` and the
- * ADR-0050 `soul` are read there, so both are sent.
+ * omitted (see `features/agents/model/useSaveNewVersion.ts`). `meta`, the
+ * ADR-0050 `soul` and `avatar_pack` are read there, so all three are sent.
  */
 export function toVersionWriteBody(
   version: ApplicationVersionDetail,
@@ -393,8 +394,7 @@ export function toVersionDraft(
       .map((tag) => tag.name)
       .filter((name): name is string => typeof name === 'string'),
     tools: version.tools ?? [],
-    // This page (A1g, the agents domain) never carries a pipeline's
-    // node/edge layout — the pipelines domain (A2) has its own edit page.
+    // Never a pipeline's layout here: the pipelines domain (A2) has its own edit page.
     pipelineSettings: undefined,
   };
 }

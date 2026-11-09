@@ -30,6 +30,8 @@ export const queryKeys = {
   recommendations: (projectId: number) => ['p', projectId, 'recommendations'] as const,
   /** The caller's own memories (client contract 1.3); online only, never in the offline store. */
   memories: (projectId: number) => ['p', projectId, 'memories'] as const,
+  /** One agent's memory in the project (client contract 1.44); online only, never in the offline store. */
+  agentMemory: (projectId: number, applicationId: number) => ['p', projectId, 'agent-memory', applicationId] as const,
   /** Current-period usage against the budget (client contract 1.3), keyed below by scope. */
   usage: (projectId: number) => ['p', projectId, 'usage'] as const,
   /** The public agent catalogue as read from this project (client contract 1.3, Discover). */

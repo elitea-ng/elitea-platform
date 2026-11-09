@@ -5,6 +5,7 @@ import { Alert, ScrollView, StyleSheet } from 'react-native';
 import { getClientVersion } from '@/api/clientVersion';
 import { speaksContract } from '@/api/discovery';
 import { identity } from '@/config/identity';
+import { openSupportContact, useSupportContact } from '@/security/supportContact';
 import { useDesign } from '@/design/DesignProvider';
 import { displayHost } from '@/features/connect/connectFlow';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
@@ -33,6 +34,7 @@ export default function SettingsScreen() {
   const profile = useSelfProfile();
   const activeWorkspace = useActiveWorkspace();
   const host = serverOrigin ? displayHost(serverOrigin) : null;
+  const supportContact = useSupportContact();
   // Client contract 1.3: memory and usage.
   const contract13 = speaksContract(useWorkspaceInfo()?.discovery, 1, 3);
 
@@ -97,6 +99,8 @@ export default function SettingsScreen() {
         onSwitchWorkspace={onSwitchWorkspace}
         onPrivacy={() => void WebBrowser.openBrowserAsync(identity.privacyUrl)}
         onSupport={() => void WebBrowser.openBrowserAsync(identity.supportUrl)}
+        supportContact={supportContact}
+        onSupportContact={supportContact ? () => openSupportContact(supportContact) : null}
         onLogOut={onLogOut}
       />
     </ScrollView>

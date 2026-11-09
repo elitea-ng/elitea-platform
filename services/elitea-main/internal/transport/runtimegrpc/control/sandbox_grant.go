@@ -65,7 +65,7 @@ func (s *Server) AuthorizeSandboxJob(ctx context.Context, request *runtimev1.Aut
 	}
 	peer, err := s.authorizer.AuthorizeWorkload(ctx, request.GetFence().GetWorkloadSessionId(), request.GetFence().GetProducerId())
 	if err != nil || !sandboxIdentity(peer) {
-		return nil, status.Error(codes.Unauthenticated, "The workload session is not accepted.")
+		return nil, workloadRefusalStatus(err)
 	}
 	fence, err := fenceDomain(request.GetIdentity(), request.GetFence(), peer)
 	if err != nil {

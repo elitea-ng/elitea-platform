@@ -18,11 +18,18 @@ type Checker interface {
 	Ping(ctx context.Context) error
 }
 
-// Deps are the readiness dependencies. The database is the only one: the
-// Form graph's sign-in state moved from the auth Redis into it (shared
-// migration 0153), so no Redis decides readiness any more.
+// Deps are the readiness dependencies. The Form graph's sign-in state moved
+// from the auth Redis into the database (shared migration 0153), so no Redis
+// decides readiness any more.
+//
+// DB alone keeps the original single-database readiness. Checks replaces it
+// with the full set (FU-275: database, NATS, runtime runners), evaluated
+// concurrently under one bound; Monitor, when set, also sees every probe's
+// evaluation so it can log transitions.
 type Deps struct {
-	DB Checker
+	DB      Checker
+	Checks  []Check
+	Monitor *Monitor
 }
 
 func Routes() chi.Router {
@@ -42,6 +49,9 @@ func livenessHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func readinessHandler(deps Deps) http.HandlerFunc {
+	if len(deps.Checks) != 0 {
+		return readinessFromChecks(deps.Checks, deps.Monitor)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()

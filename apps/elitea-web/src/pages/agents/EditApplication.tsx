@@ -28,6 +28,7 @@ import { useIsVersionNotFound } from './lib/useIsVersionNotFound';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
 import { EditApplicationActions } from './ui/EditApplicationActions';
 import { EditApplicationAiEditSlot } from './ui/EditApplicationAiEditSlot';
+import { EditApplicationAvatarPanel } from './ui/EditApplicationAvatarPanel';
 import { EditApplicationConfigurationPanel } from './ui/EditApplicationConfigurationPanel';
 import { EditApplicationEditorTabs } from './ui/EditApplicationEditorTabs';
 import { EditApplicationPersonaPanel } from './ui/EditApplicationPersonaPanel';
@@ -372,6 +373,7 @@ export function EditApplication(): ReactNode {
             applicationVersionId={versionControls.activeVersionId}
             versions={versionControls.versionOptions}
             personaPanel={<EditApplicationPersonaPanel versionFields={versionFields} disabled={isEditorDisabled} />}
+            avatarPanel={<EditApplicationAvatarPanel projectId={projectId} versionFields={versionFields} disabled={isEditorDisabled} />}
             configurationPanel={
               <EditApplicationConfigurationPanel
                 projectId={projectId}

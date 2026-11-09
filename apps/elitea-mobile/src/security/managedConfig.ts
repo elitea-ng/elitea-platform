@@ -3,6 +3,8 @@ import { DeviceEventEmitter, Platform, Settings } from 'react-native';
 import { useSyncExternalStore } from 'react';
 import { z } from 'zod';
 
+import { normalizeSupportContact } from '@elitea/client-core/support';
+
 import { log } from '@/lib/log';
 
 /**
@@ -21,7 +23,9 @@ import { log } from '@/lib/log';
  * - `lock_server`: with `server_url`, the app keeps only that workspace;
  * - `require_device_lock`, `idle_lock_seconds`, `allow_screenshots`: a lock
  *   policy FLOOR. It only ever tightens what a workspace sends (true lock,
- *   the shorter idle time, never "0 = no relock"; screenshots off); it never loosens one.
+ *   the shorter idle time, never "0 = no relock"; screenshots off); it never loosens one;
+ * - `support_contact`: the IT support line shown in About and Settings; it
+ *   beats the workspace's (src/security/supportContact.ts).
  *
  * Device configuration, not workspace data: it is not wiped with a
  * workspace, and a value of the wrong type is ignored (never trusted half).
@@ -35,6 +39,7 @@ export interface ManagedConfig {
   requireDeviceLock: boolean | null;
   idleLockSeconds: number | null;
   allowScreenshots: boolean | null;
+  supportContact: string | null;
 }
 
 export const NO_MANAGED_CONFIG: Readonly<ManagedConfig> = Object.freeze({
@@ -43,6 +48,7 @@ export const NO_MANAGED_CONFIG: Readonly<ManagedConfig> = Object.freeze({
   requireDeviceLock: null,
   idleLockSeconds: null,
   allowScreenshots: null,
+  supportContact: null,
 });
 
 const field = <T extends z.ZodType>(schema: T) => schema.optional().catch(undefined);
@@ -58,6 +64,8 @@ const Managed = z.looseObject({
   require_device_lock: field(plistBoolean),
   idle_lock_seconds: field(z.number().int().min(0).max(86_400)),
   allow_screenshots: field(plistBoolean),
+  // One line (normalizeSupportContact: trimmed, at most 200 characters, no control characters).
+  support_contact: field(z.string().refine((v) => normalizeSupportContact(v) !== null).transform((v) => v.trim())),
 });
 
 /** The managed dictionary as the app uses it; anything that is not a dictionary is "none". */
@@ -72,11 +80,43 @@ export function parseManagedConfig(raw: unknown): ManagedConfig {
     requireDeviceLock: d.require_device_lock ?? null,
     idleLockSeconds: d.idle_lock_seconds ?? null,
     allowScreenshots: d.allow_screenshots ?? null,
+    supportContact: d.support_contact ?? null,
   };
 }
 
 export function hasManagedConfig(config: ManagedConfig): boolean {
   return Object.values(config).some((v) => v !== null);
+}
+
+/** The keys the app reads (the schema above): any other key is not ours to report on. */
+export const MANAGED_KEYS: readonly string[] = Object.freeze(Object.keys(Managed.shape));
+
+/**
+ * What the MDM delivered, as the app saw it: whether a managed dictionary is
+ * there at all (even one whose every value was ignored), and which of OUR keys
+ * it set to a value the parser refused. MDM feedback reports both
+ * (src/security/managedFeedback.ts); nothing else reads them.
+ */
+export interface ManagedDelivery {
+  present: boolean;
+  ignoredKeys: readonly string[];
+}
+
+export const NO_MANAGED_DELIVERY: Readonly<ManagedDelivery> = Object.freeze({ present: false, ignoredKeys: Object.freeze([]) });
+
+export function managedDelivery(raw: unknown, parsed: ManagedConfig = parseManagedConfig(raw)): ManagedDelivery {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return NO_MANAGED_DELIVERY;
+  const dict = raw as Record<string, unknown>;
+  const byKey: Record<string, unknown> = {
+    server_url: parsed.serverUrl,
+    lock_server: parsed.lockServer,
+    require_device_lock: parsed.requireDeviceLock,
+    idle_lock_seconds: parsed.idleLockSeconds,
+    allow_screenshots: parsed.allowScreenshots,
+    support_contact: parsed.supportContact,
+  };
+  const ignoredKeys = MANAGED_KEYS.filter((key) => key in dict && dict[key] !== undefined && byKey[key] === null);
+  return { present: Object.keys(dict).length > 0, ignoredKeys: Object.freeze(ignoredKeys) };
 }
 
 /**
@@ -127,20 +167,32 @@ function readNative(): unknown {
 }
 
 let current: ManagedConfig = NO_MANAGED_CONFIG;
-let currentKey = JSON.stringify(current);
+let delivery: ManagedDelivery = NO_MANAGED_DELIVERY;
+let configKey = JSON.stringify(current);
+let deliveryKey = JSON.stringify(delivery);
 const listeners = new Set<() => void>();
 
 export function getManagedConfig(): ManagedConfig {
   return current;
 }
 
+export function getManagedDelivery(): ManagedDelivery {
+  return delivery;
+}
+
 /** Re-reads the managed dictionary (launch, an MDM push while running). */
 export function refreshManagedConfig(read: () => unknown = readNative): ManagedConfig {
-  const next = parseManagedConfig(read());
-  const key = JSON.stringify(next);
-  if (key !== currentKey) {
-    current = next;
-    currentKey = key;
+  const raw = read();
+  const next = parseManagedConfig(raw);
+  const nextDelivery = managedDelivery(raw, next);
+  const nextConfigKey = JSON.stringify(next);
+  const nextDeliveryKey = JSON.stringify(nextDelivery);
+  if (nextConfigKey !== configKey || nextDeliveryKey !== deliveryKey) {
+    // The config object changes only when the config does (useManagedConfig, managedServerOrigin's cache).
+    if (nextConfigKey !== configKey) current = next;
+    delivery = nextDelivery;
+    configKey = nextConfigKey;
+    deliveryKey = nextDeliveryKey;
     for (const listener of [...listeners]) listener();
   }
   return current;

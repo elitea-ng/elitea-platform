@@ -7,6 +7,8 @@ import android.content.IntentFilter
 import android.content.RestrictionsManager
 import android.os.Build
 import android.os.Bundle
+import androidx.enterprise.feedback.KeyedAppState
+import androidx.enterprise.feedback.KeyedAppStatesReporter
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -22,10 +24,17 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * - `onChange` fires on ACTION_APPLICATION_RESTRICTIONS_CHANGED while JS listens, with the
  *   new map: also when the EMM removes the configuration (an empty map).
  *
- * Nothing is cached here and nothing is written: Android keeps the restrictions.
+ * - `reportStates(states)` sends MDM feedback (W6.1, src/security/managedFeedback.ts) as
+ *   keyed app states to the device or profile owner and Play. The JS side builds every
+ *   state from fixed codes and never passes user content; this side only clips to the
+ *   API's limits (key 100, message and data 1000 characters).
+ *
+ * Nothing is cached here: Android keeps the restrictions and the reported states.
  */
 class ManagedRestrictions : Module() {
   private var receiver: BroadcastReceiver? = null
+  /** One reporter for the app: it keeps its bindings (KeyedAppStatesReporter.create). */
+  private var reporter: KeyedAppStatesReporter? = null
 
   private fun context(): Context? = appContext.reactContext?.applicationContext
 
@@ -64,6 +73,21 @@ class ManagedRestrictions : Module() {
     Events("onChange")
 
     Function("read") { restrictions() }
+
+    Function("reportStates") { states: List<Map<String, Any?>> ->
+      val ctx = context() ?: return@Function
+      val r = reporter ?: KeyedAppStatesReporter.create(ctx).also { reporter = it }
+      val built = states.mapNotNull { s ->
+        val key = (s["key"] as? String)?.take(100) ?: return@mapNotNull null
+        KeyedAppState.builder()
+          .setKey(key)
+          .setSeverity(if (s["severity"] == "error") KeyedAppState.SEVERITY_ERROR else KeyedAppState.SEVERITY_INFO)
+          .setMessage((s["message"] as? String)?.take(1000))
+          .setData((s["data"] as? String)?.take(1000))
+          .build()
+      }
+      if (built.isNotEmpty()) r.setStates(built, null)
+    }
 
     OnStartObserving {
       val ctx = context() ?: return@OnStartObserving
