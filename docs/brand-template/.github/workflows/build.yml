@@ -1,0 +1,257 @@
+name: Build the brand
+
+# A brand repository builds RELEASED ELITEA code with its own brand folder and
+# no patches (ADR-0052 decision 6, the VSCodium model). Each job checks out the
+# release upstream.json pins into `elitea/`, puts this repository's brand folder
+# next to it, selects it with ELITEA_BRAND, checks it, and builds.
+#
+# SIGNING BY FIXED SECRET NAME (docs: Development › Build your own brand). For
+# each platform: every secret set → signed; none set → an unsigned dry run with a
+# notice, so a fork and every pull request stay green; some set → a failure.
+# A pull request is ALWAYS a dry run: its code must not run with the certificates.
+#
+# WHEN.
+#   pull_request        any change: the dry run of every platform.
+#   workflow_dispatch   by hand: signed builds; `keep_artifacts` keeps them 7 days.
+#   (no push trigger)   merging the release-watch pull request starts nothing:
+#                       run this workflow by hand when the brand is ready to ship.
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: Which platforms to build
+        type: choice
+        options: [all, ios, android, macos, windows]
+        default: all
+      keep_artifacts:
+        description: Keep the signed builds as workflow artifacts (7 days).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The brand folder (brand/<id>/); its name is the manifest id.
+  BRAND_DIR: brand/acme
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Reads upstream.json and checks the brand against that release's rules, once.
+  prepare:
+    name: Upstream release and brand-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.upstream.outputs.tag }}
+      repository: ${{ steps.upstream.outputs.repository }}
+      version: ${{ steps.upstream.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Read upstream.json
+        id: upstream
+        run: node scripts/upstream.mjs github-output
+      - name: Check out the ELITEA release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.tag }}
+          path: elitea
+          persist-credentials: false
+      - name: The release supports brand repositories
+        run: node scripts/check-release.mjs elitea
+      # The release's own brand-check: its manifest format, assets, contrast,
+      # and no ELITEA name, id or asset reused.
+      - name: brand-check (the release's rules)
+        run: node elitea/scripts/brand-check.mjs "$BRAND_DIR"
+
+  # Dry run: the release config check, the JS bundle and the resolved config.
+  # Signed: the brand's own EAS project builds and signs (EAS holds the keys).
+  mobile:
+    name: Mobile (${{ matrix.platform }})
+    needs: prepare
+    if: github.event_name == 'pull_request' || inputs.platforms == 'all' || inputs.platforms == 'ios' || inputs.platforms == 'android'
+    strategy:
+      fail-fast: false
+      matrix:
+        # A dispatch for one platform builds only that one.
+        platform: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.platforms != 'all') && format('["{0}"]', inputs.platforms) || '["ios","android"]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the ELITEA release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.prepare.outputs.repository }}
+          ref: ${{ needs.prepare.outputs.tag }}
+          path: elitea
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Select the brand
+        run: echo "ELITEA_BRAND=$GITHUB_WORKSPACE/$BRAND_DIR" >> "$GITHUB_ENV"
+      - name: Install (locked)
+        working-directory: elitea/apps/elitea-mobile
+        run: npm ci --no-audit --no-fund
+      - name: Release config and bundle
+        working-directory: elitea/apps/elitea-mobile
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          npm run check:release-config
+          npx expo export --platform "$PLATFORM" --output-dir "$RUNNER_TEMP/export"
+          npx expo config --json --type public > "$RUNNER_TEMP/expo-config.json"
+          find "$RUNNER_TEMP/export" -name '*.hbc' -print
+      # Signed builds go through the brand's own EAS project (eas.projectId in
+      # the manifest): EAS holds the signing credentials and the store keys.
+      - name: Sign or dry run
+        id: plan
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [ "$DRY_RUN" = true ] || [ -z "$EXPO_TOKEN" ]; then
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::mobile: unsigned dry run (bundle and config only; set EXPO_TOKEN and run by hand to build on EAS)"
+          else
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: expo/expo-github-action@9da89d3617bb88139671bad31b09c65714c2ee06 # v9.0.1
+        if: steps.plan.outputs.sign == 'true'
+        with:
+          eas-version: 24.12.0
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+      # ELITEA_BRAND must also be an EAS environment variable of the brand's
+      # project (`eas env:create`): EAS runs app.config.ts again on its servers.
+      - name: Build on EAS (production profile)
+        if: steps.plan.outputs.sign == 'true'
+        working-directory: elitea/apps/elitea-mobile
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          node scripts/eas-preflight.mjs build
+          eas build --profile production --platform "$PLATFORM" --non-interactive --no-wait
+
+  desktop-macos:
+    name: Desktop macOS (.pkg)
+    needs: prepare
+    if: github.event_name == 'pull_request' || inputs.platforms == 'all' || inputs.platforms == 'macos'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the ELITEA release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.prepare.outputs.repository }}
+          ref: ${{ needs.prepare.outputs.tag }}
+          path: elitea
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Select the brand
+        run: echo "ELITEA_BRAND=$GITHUB_WORKSPACE/$BRAND_DIR" >> "$GITHUB_ENV"
+      # The release's own packaging action: the same steps ELITEA's release runs.
+      - name: Build, sign and verify (or dry run)
+        id: package
+        uses: ./elitea/.github/actions/desktop-macos-package
+        with:
+          root: elitea
+          version: ${{ needs.prepare.outputs.version }}
+          build-number: ${{ github.run_number }}
+          dry-run: ${{ github.event_name == 'pull_request' }}
+          require-signed: ${{ inputs.keep_artifacts == true }}
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-signing-identity: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          apple-installer-signing-identity: ${{ secrets.APPLE_INSTALLER_SIGNING_IDENTITY }}
+          apple-api-key: ${{ secrets.APPLE_API_KEY }}
+          apple-api-issuer: ${{ secrets.APPLE_API_ISSUER }}
+          apple-api-private-key: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+      - name: Keep the package (by hand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-pkg
+          path: ${{ steps.package.outputs.package-dir }}/*.pkg
+          retention-days: 7
+          if-no-files-found: error
+
+  # Off until ELITEA's desktop host builds on Windows; set the repository
+  # variable DESKTOP_WINDOWS_PACKAGE=true once the pinned release says it does.
+  desktop-windows:
+    name: Desktop Windows (.msi, .msix)
+    needs: prepare
+    if: vars.DESKTOP_WINDOWS_PACKAGE == 'true' && (github.event_name == 'pull_request' || inputs.platforms == 'all' || inputs.platforms == 'windows')
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out the ELITEA release
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ needs.prepare.outputs.repository }}
+          ref: ${{ needs.prepare.outputs.tag }}
+          path: elitea
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Select the brand
+        run: echo "ELITEA_BRAND=$GITHUB_WORKSPACE/$BRAND_DIR" >> "$GITHUB_ENV"
+      - name: Build, sign and verify (or dry run)
+        id: package
+        uses: ./elitea/.github/actions/desktop-windows-package
+        with:
+          root: elitea
+          version: ${{ needs.prepare.outputs.version }}
+          dry-run: ${{ github.event_name == 'pull_request' }}
+          require-signed: ${{ inputs.keep_artifacts == true }}
+          windows-publisher: ${{ secrets.WINDOWS_PUBLISHER }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-signing-endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          azure-signing-account: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          azure-signing-profile: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          windows-certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
+          windows-certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      - name: Keep the packages (by hand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.keep_artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows
+          path: |
+            ${{ steps.package.outputs.package-dir }}/*.msi
+            ${{ steps.package.outputs.package-dir }}/*.msix
+          retention-days: 7
+          if-no-files-found: error
