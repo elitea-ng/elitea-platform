@@ -5,6 +5,7 @@ import Box from '@mui/material/Box';
 import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport } from '@/features/agent-lifecycle';
+import { ProposalsInboxButton } from '@/features/agent-proposals';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { EntityListFilters, useRailTagSelection } from '@/shared/ui/EntityRail';
@@ -132,13 +133,24 @@ export function Applications(): ReactNode {
          */
         secondaryActions={
           isPublicProject ? undefined : (
-            <EntityImportButton
-              testIdPrefix="agents"
-              isImporting={entityImport.run.isPending}
-              onImport={async (document) => {
-                await entityImport.run.mutateAsync(document);
-              }}
-            />
+            <>
+              {/* ADR-0050 decision 5a: the open agent proposals, for a person who may create agents. */}
+              {canCreate && (
+                <ProposalsInboxButton
+                  projectId={projectId}
+                  onCreated={(created) =>
+                    void navigate({ to: '/agents/$tab/$agentId', params: { tab: params.tab ?? 'latest', agentId: String(created.applicationId) } })
+                  }
+                />
+              )}
+              <EntityImportButton
+                testIdPrefix="agents"
+                isImporting={entityImport.run.isPending}
+                onImport={async (document) => {
+                  await entityImport.run.mutateAsync(document);
+                }}
+              />
+            </>
           )
         }
         primaryAction={createAction}

@@ -1175,8 +1175,12 @@ const GENERATED_OPERATION_COUNT = 483;
  * 317 -> 323 (issue 1608, ADR-0050 decision 1b): agentMemory.list, get,
  * update, delete, clear and optOut, the agent editor's Memory tab and the
  * chat's "remembered" chip (features/agent-memory). Generated.
+ *
+ * 323 -> 328 (issue 1615, ADR-0050 decisions 5a and 1): agentProposals.list,
+ * get, dismiss, markCreated and copyMemory, the proposals inbox, the chat's
+ * proposal card and Copy to project (features/agent-proposals). Generated.
  */
-const MANIFEST_ENTRY_COUNT = 323;
+const MANIFEST_ENTRY_COUNT = 328;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

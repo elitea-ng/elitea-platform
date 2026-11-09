@@ -136,7 +136,8 @@ const (
 	TypeAgentMemoryChanged EventType = "ai.elitea.security.v1.agent.memory.changed"
 	// TypeAgentProposalChanged is a change of an agent proposal (ADR-0050
 	// decision 5a, #1615): action agent.proposal.proposed, .created,
-	// .dismissed, or agent.copied_to_project for a Copy to project.
+	// .dismissed, .seeded (the kept memory saved into the new agent), or
+	// agent.copied_to_project for a Copy to project.
 	// ResourceID is the proposal id ("<source project>:<application id>"
 	// for a copy). No draft text is in the event.
 	TypeAgentProposalChanged EventType = "ai.elitea.security.v1.agent.proposal.changed"
