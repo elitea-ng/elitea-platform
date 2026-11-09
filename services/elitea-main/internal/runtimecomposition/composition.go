@@ -2652,6 +2652,13 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, err
 		}
 		controlServer.WithRunSteps(runSteps)
+		// The sub-agents a run started (ADR-0050 decisions 4 and 9d,
+		// #1614): one ephemeral_agents row per spawn.
+		ephemeralAgents, err := repos.NewEphemeralAgents(dependencies.ControlPool)
+		if err != nil {
+			return nil, err
+		}
+		controlServer.WithEphemeralAgents(ephemeralAgentRecorder{store: ephemeralAgents})
 	}
 	if browserView != nil {
 		// The worker reports its run's browser session here (the view

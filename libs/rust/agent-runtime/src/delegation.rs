@@ -1000,7 +1000,7 @@ fn explicit_url_host(text: &str) -> Option<(String, u16)> {
     Some((host, port))
 }
 
-fn hex_sha256(value: &Value) -> String {
+pub(crate) fn hex_sha256(value: &Value) -> String {
     let bytes = crate::canonical::to_vec(value).unwrap_or_default();
     digest::digest(&digest::SHA256, &bytes)
         .as_ref()

@@ -25,9 +25,9 @@ use crate::protocol::elitea::runtime::v1::{
     ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
     PrepareSettlementResponseV1, RemoveIndexRequestV1, RemoveIndexResponseV1, RenewLeaseRequestV1,
     RenewLeaseResponseV1, ReportBrowserSessionRequestV1, ReportBrowserSessionResponseV1,
-    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
-    ReportRunStepsResponseV1, RustCompiledSnapshotPurposeV1,
-    runtime_control_service_client::RuntimeControlServiceClient,
+    ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportEphemeralAgentsRequestV1,
+    ReportEphemeralAgentsResponseV1, ReportRunStepsRequestV1, ReportRunStepsResponseV1,
+    RustCompiledSnapshotPurposeV1, runtime_control_service_client::RuntimeControlServiceClient,
 };
 
 const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
@@ -49,6 +49,11 @@ const DELEGATION_ASSERTION_DEADLINE: Duration = Duration::from_secs(5);
 /// A browser session report rides a tool call (the start) or the run's end:
 /// it never waits long.
 const BROWSER_SESSION_REPORT_DEADLINE: Duration = Duration::from_secs(5);
+/// A sub-agent report carries at most 12 spawns of bounded fields (Main's
+/// codec admits 256 KiB for it).
+const MAX_EPHEMERAL_AGENTS_REQUEST_BYTES: usize = 256 * 1024;
+/// The sub-agent report sits on the settlement path: it never waits long.
+const EPHEMERAL_AGENTS_DEADLINE: Duration = Duration::from_secs(5);
 const MAX_METADATA_BYTES: usize = 256;
 
 /// Immutable transport identity and deadline for every control call.
@@ -209,6 +214,17 @@ pub trait ControlRpc: Send + Sync {
         ))
     }
 
+    /// `ReportEphemeralAgents` (ADR-0050 decisions 4 and 9d, #1614): the
+    /// sub-agents one execution started, before settlement. A transport
+    /// that does not serve it answers `Unimplemented`; the report is best
+    /// effort and the run settles anyway.
+    async fn report_ephemeral_agents(
+        &self,
+        _request: Request<ReportEphemeralAgentsRequestV1>,
+    ) -> Result<Response<ReportEphemeralAgentsResponseV1>, Status> {
+        Err(Status::unimplemented("sub-agent reports are unavailable"))
+    }
+
     async fn renew_lease(
         &self,
         request: Request<RenewLeaseRequestV1>,
@@ -331,6 +347,13 @@ impl ControlRpc for TonicControlRpc {
         request: Request<ReportBrowserSessionRequestV1>,
     ) -> Result<Response<ReportBrowserSessionResponseV1>, Status> {
         self.client.clone().report_browser_session(request).await
+    }
+
+    async fn report_ephemeral_agents(
+        &self,
+        request: Request<ReportEphemeralAgentsRequestV1>,
+    ) -> Result<Response<ReportEphemeralAgentsResponseV1>, Status> {
+        self.client.clone().report_ephemeral_agents(request).await
     }
 
     async fn renew_lease(
@@ -761,6 +784,35 @@ impl<R: ControlRpc> ControlGrpcClient<R> {
             .map_err(|status| match status.code() {
                 tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
                     "Main does not serve browser session reports on its control plane",
+                ),
+                _ => unavailable(),
+            })?
+            .into_inner();
+        validate_response(&response)?;
+        Ok(response)
+    }
+
+    /// Send one execution's sub-agents (ADR-0050 decisions 4 and 9d,
+    /// #1614), once, with a short deadline. The caller treats every failure
+    /// as best effort.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable size, configuration, or availability error; a
+    /// transport that does not serve the RPC is an `InvalidConfiguration`.
+    pub async fn report_ephemeral_agents(
+        &self,
+        message: ReportEphemeralAgentsRequestV1,
+    ) -> Result<ReportEphemeralAgentsResponseV1, ControlGrpcError> {
+        let deadline = self.config.deadline.min(EPHEMERAL_AGENTS_DEADLINE);
+        let mut request = self.request_with_limit(message, MAX_EPHEMERAL_AGENTS_REQUEST_BYTES)?;
+        request.set_timeout(deadline);
+        let response = timeout(deadline, self.rpc.report_ephemeral_agents(request))
+            .await
+            .map_err(|_| unavailable())?
+            .map_err(|status| match status.code() {
+                tonic::Code::Unimplemented => ControlGrpcError::InvalidConfiguration(
+                    "Main does not serve sub-agent reports on its control plane",
                 ),
                 _ => unavailable(),
             })?

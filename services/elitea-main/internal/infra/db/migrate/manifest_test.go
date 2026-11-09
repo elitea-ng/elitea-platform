@@ -1062,7 +1062,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (ADR-0050 decisions 7c and 7d, issue 1611): agent_floor_exchanges and
 	// agent_floor_turns, the chain link kind agent_turn and the three loop
 	// guard end limits. No backfill, no permission.
-	require.EqualValues(t, 231, Head(shared))
+	//
+	// 232: shared/0232_ephemeral_agents.sql, one row per sub-agent a run
+	// started with spawn_agent (ADR-0050 decisions 4 and 9d, issue 1614):
+	// elitea_runtime.ephemeral_agents, written by ReportEphemeralAgents. No
+	// data, no permission.
+	require.EqualValues(t, 232, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

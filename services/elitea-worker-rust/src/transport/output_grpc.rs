@@ -1997,7 +1997,8 @@ pub(crate) mod tests {
         DesiredExecutionStateV1, DigestV1, ExecutionFenceV1, ExecutionIdentityV1,
         ObserveDesiredStateRequestV1, ObserveDesiredStateResponseV1, PrepareSettlementRequestV1,
         PrepareSettlementResponseV1, RenewLeaseRequestV1, RenewLeaseResponseV1,
-        ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1, ReportRunStepsRequestV1,
+        ReportEgressSummaryRequestV1, ReportEgressSummaryResponseV1,
+        ReportEphemeralAgentsRequestV1, ReportEphemeralAgentsResponseV1, ReportRunStepsRequestV1,
         ReportRunStepsResponseV1, RuntimeErrorV1, SettlementProposalV1,
     };
     use crate::spool::{
@@ -2066,6 +2067,8 @@ pub(crate) mod tests {
         /// Scripted answers to the step reports, first to last; accepted
         /// once they run out.
         run_steps_answers: Arc<Mutex<VecDeque<RunStepsAnswer>>>,
+        /// The sub-agent report received (#1614).
+        ephemeral_agents: Arc<Mutex<Option<ReportEphemeralAgentsRequestV1>>>,
     }
 
     #[async_trait]
@@ -2197,6 +2200,21 @@ pub(crate) mod tests {
                     rejection,
                 })),
                 Err(code) => Err(Status::new(code, "test-only")),
+            }
+        }
+
+        async fn report_ephemeral_agents(
+            &self,
+            request: Request<ReportEphemeralAgentsRequestV1>,
+        ) -> Result<Response<ReportEphemeralAgentsResponseV1>, Status> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("report_ephemeral_agents");
+            *self.ephemeral_agents.lock().expect("ephemeral agents") = Some(request.into_inner());
+            match self.egress_failure {
+                Some(code) => Err(Status::new(code, "test-only")),
+                None => Ok(Response::new(ReportEphemeralAgentsResponseV1::default())),
             }
         }
 
@@ -3520,6 +3538,71 @@ pub(crate) mod tests {
             assert_eq!(report.other_hosts, 0);
             assert!(
                 registry.summary_for_settlement(identity).is_none(),
+                "a settled execution is no longer tracked"
+            );
+        }
+    }
+
+    /// #1614: one row per spawn goes to Main under the live claim BEFORE
+    /// `PrepareSettlement`; a failed report never fails the settlement, and
+    /// a settled execution's ledger is forgotten.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_sub_agents_are_reported_before_settlement_best_effort() {
+        use elitea_agent_runtime::subagents::profile::{Brief, Profile, SpawnRecord};
+        use elitea_agent_runtime::subagents::{ChildIdentity, ChildReport, ChildStatus};
+        for failure in [None, Some(tonic::Code::Unavailable)] {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let (acknowledged, terminal) = settle_ready(temp.path()).await;
+            let identity = terminal.identity.clone().expect("identity");
+            let registry =
+                Arc::new(crate::protocol::ephemeral_agents::EphemeralAgentRegistry::default());
+            let ledger = registry.ledger(&identity.execution_id, identity.generation);
+            let child = ChildIdentity {
+                agent_id: "a_0011aabb".to_owned(),
+                parent_call_id: "call-1".to_owned(),
+                label: None,
+                ordinal: 1,
+                record: SpawnRecord::new(&Profile::default(), &Brief::default()),
+            };
+            ledger.started(&child, 1_000);
+            ledger.finished(
+                &child,
+                &ChildReport {
+                    agent_id: child.agent_id.clone(),
+                    status: ChildStatus::Completed,
+                    result: None,
+                    steps: 2,
+                    input_tokens: 10,
+                    output_tokens: 1,
+                    error: None,
+                },
+                2_000,
+            );
+            let rpc = SettlementRpc {
+                egress_failure: failure,
+                ..SettlementRpc::default()
+            };
+            let (calls, report) = (Arc::clone(&rpc.calls), Arc::clone(&rpc.ephemeral_agents));
+            let control = settlement_control(rpc, &Arc::default())
+                .with_ephemeral_agent_registry(Arc::clone(&registry));
+            control
+                .prepare_agent_settlement(acknowledged)
+                .await
+                .expect("settled despite the report's fate");
+            assert_eq!(
+                *calls.lock().expect("calls"),
+                ["report_ephemeral_agents", "prepare_settlement"],
+                "{failure:?}"
+            );
+            let report = report.lock().expect("report").clone().expect("report sent");
+            assert_eq!(report.identity, terminal.identity);
+            assert_eq!(report.fence, terminal.fence);
+            assert_eq!(report.agents.len(), 1);
+            assert_eq!(report.agents[0].agent_id, "a_0011aabb");
+            assert_eq!(report.agents[0].status, "completed");
+            assert_eq!(
+                registry.snapshot_for_settlement(&identity, 0).len(),
+                0,
                 "a settled execution is no longer tracked"
             );
         }
