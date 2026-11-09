@@ -89,16 +89,19 @@ type WorkforceActor struct {
 // WorkforceProposal is one proposal as the inbox and the agent's page read
 // it.
 type WorkforceProposal struct {
-	ID                    int64                    `json:"id"`
-	ProjectID             int64                    `json:"project_id"`
-	ApplicationID         int64                    `json:"application_id"`
-	ApplicationName       string                   `json:"application_name"`
-	Kind                  string                   `json:"kind"`
-	Stage                 string                   `json:"stage"`
-	Source                string                   `json:"source"`
-	ProposedByUserID      *int64                   `json:"proposed_by_user_id"`
-	ProposerApplicationID *int64                   `json:"proposer_application_id"`
-	ExecutionID           *string                  `json:"execution_id"`
+	ID                    int64   `json:"id"`
+	ProjectID             int64   `json:"project_id"`
+	ApplicationID         int64   `json:"application_id"`
+	ApplicationName       string  `json:"application_name"`
+	Kind                  string  `json:"kind"`
+	Stage                 string  `json:"stage"`
+	Source                string  `json:"source"`
+	ProposedByUserID      *int64  `json:"proposed_by_user_id"`
+	ProposerApplicationID *int64  `json:"proposer_application_id"`
+	ExecutionID           *string `json:"execution_id"`
+	// PolicyRule names the rule of a stage the workforce policy applied or
+	// noticed (source policy, ADR-0050 decision 5k).
+	PolicyRule            *string                  `json:"policy_rule"`
 	Rationale             string                   `json:"rationale"`
 	Narrowing             agentworkforce.Narrowing `json:"narrowing"`
 	Evidence              map[string]any           `json:"evidence"`
@@ -124,7 +127,7 @@ p.id, p.project_id, p.application_id, p.kind, p.stage, p.source, p.proposed_by_u
 p.proposer_application_id, p.execution_id, p.rationale, p.narrowing, p.evidence, p.evidence_digest,
 p.status, p.owner_comment, p.decided_by_user_id, p.decided_at, p.decision_note, p.applied,
 p.appeal_state, p.appeal_reason, p.appealed_by_user_id, p.appealed_at, p.appeal_decided_by_user_id,
-p.appeal_decided_at, p.appeal_note, p.created_at`
+p.appeal_decided_at, p.appeal_note, p.created_at, p.policy_rule`
 
 func scanWorkforceProposal(row pgx.Row) (WorkforceProposal, error) {
 	var (
@@ -135,7 +138,7 @@ func scanWorkforceProposal(row pgx.Row) (WorkforceProposal, error) {
 		&p.ProposerApplicationID, &p.ExecutionID, &p.Rationale, &narrowing, &evidence, &p.EvidenceDigest,
 		&p.Status, &p.OwnerComment, &p.DecidedByUserID, &p.DecidedAt, &p.DecisionNote, &applied,
 		&p.AppealState, &p.AppealReason, &p.AppealedByUserID, &p.AppealedAt, &p.AppealDecidedByUserID,
-		&p.AppealDecidedAt, &p.AppealNote, &p.CreatedAt); err != nil {
+		&p.AppealDecidedAt, &p.AppealNote, &p.CreatedAt, &p.PolicyRule); err != nil {
 		return WorkforceProposal{}, err
 	}
 	if err := json.Unmarshal(narrowing, &p.Narrowing); err != nil {
@@ -293,6 +296,19 @@ type WorkforceAgent struct {
 	SuspensionSource string     `json:"suspension_source"`
 	LegalHold        bool       `json:"legal_hold"`
 	IsHRAgent        bool       `json:"is_hr_agent"`
+	// AutoHiredAt: the workforce policy hired the agent (ADR-0050 decision
+	// 5c). It is on probation until an agent manager keeps it; the hire can
+	// be undone until ProbationUntil.
+	AutoHiredAt         *time.Time `json:"auto_hired_at"`
+	ProbationUntil      *time.Time `json:"probation_until"`
+	ProbationReviewedAt *time.Time `json:"probation_reviewed_at"`
+	// OrphanedSince: the agent's owners left the project (decision 5k).
+	OrphanedSince *time.Time `json:"orphaned_since"`
+}
+
+// OnProbation reports an automatically hired agent nobody has kept yet.
+func (a WorkforceAgent) OnProbation() bool {
+	return a.AutoHiredAt != nil && a.ProbationReviewedAt == nil
 }
 
 // IsOwner reports whether userID owns the agent.
@@ -309,7 +325,8 @@ func readWorkforceAgent(ctx context.Context, q lifecycleQuerier, projectID, appl
 	}
 	statement := `
 SELECT tenant_project_id, application_id, risk_tier, COALESCE(business_owner_id, 0), COALESCE(technical_owner_id, 0),
-       under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after
+       under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after,
+       auto_hired_at, probation_until, probation_reviewed_at, orphaned_since
 FROM elitea_lifecycle.agent_registry
 WHERE tenant_project_id = $1 AND application_id = $2`
 	if lock {
@@ -318,7 +335,8 @@ WHERE tenant_project_id = $1 AND application_id = $2`
 	var agent WorkforceAgent
 	err := q.QueryRow(ctx, statement, projectID, applicationID).Scan(&agent.ProjectID, &agent.ApplicationID, &agent.Tier,
 		&agent.BusinessOwnerID, &agent.TechnicalOwnerID, &agent.UnderReview, &agent.UnderReviewSince, &agent.State,
-		&agent.RetiredAt, &agent.RetiredBy, &agent.ReinstateUntil, &agent.PurgeAfter)
+		&agent.RetiredAt, &agent.RetiredBy, &agent.ReinstateUntil, &agent.PurgeAfter,
+		&agent.AutoHiredAt, &agent.ProbationUntil, &agent.ProbationReviewedAt, &agent.OrphanedSince)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkforceAgent{}, agentworkforce.Refuse(agentworkforce.NotFoundCode, "The agent does not exist.")
 	}
@@ -460,6 +478,8 @@ type insertSource struct {
 	hrAgent       int64
 	executionID   string
 	principalHint string
+	// policyRule: the workforce policy's rule (source policy).
+	policyRule string
 }
 
 func (s *AgentWorkforce) insertProposal(ctx context.Context, tx pgx.Tx, agent WorkforceAgent, input agentworkforce.ProposalInput, source insertSource) (WorkforceProposal, error) {
@@ -478,20 +498,29 @@ func (s *AgentWorkforce) insertProposal(ctx context.Context, tx pgx.Tx, agent Wo
 		return WorkforceProposal{}, fmt.Errorf("agent workforce: encode the narrowing: %w", err)
 	}
 	kind := agentworkforce.SourcePerson
-	var execution *string
-	if source.hrAgent > 0 {
+	var execution, rule *string
+	switch {
+	case source.policyRule != "":
+		kind = agentworkforce.SourcePolicy
+		rule = &source.policyRule
+		evidence["policy_rule"] = source.policyRule
+		digest = agentworkforce.EvidenceDigest(evidence)
+		if encodedEvidence, err = json.Marshal(evidence); err != nil {
+			return WorkforceProposal{}, fmt.Errorf("agent workforce: encode the evidence: %w", err)
+		}
+	case source.hrAgent > 0:
 		kind = agentworkforce.SourceHRAgent
 		execution = &source.executionID
 	}
 	proposal, err := scanWorkforceProposal(tx.QueryRow(ctx, `
 INSERT INTO elitea_lifecycle.agent_workforce_proposals AS p
     (project_id, application_id, kind, stage, source, proposed_by_user_id, proposer_application_id, execution_id,
-     rationale, narrowing, evidence, evidence_digest)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12)
+     rationale, narrowing, evidence, evidence_digest, policy_rule)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13)
 RETURNING `+workforceProposalColumns,
 		agent.ProjectID, agent.ApplicationID, input.Stage.Kind(), string(input.Stage), kind,
 		nullablePositive(source.userID), nullablePositive(source.hrAgent), execution, input.Rationale,
-		string(narrowing), string(encodedEvidence), digest))
+		string(narrowing), string(encodedEvidence), digest, rule))
 	if isUniqueViolation(err, "agent_workforce_proposals_one_open") {
 		return WorkforceProposal{}, agentworkforce.Refuse(agentworkforce.OpenProposalCode,
 			"The agent already has an open proposal. Decide it first.")

@@ -676,12 +676,24 @@ UPDATE %s.pipeline_triggers SET revoked_at = NULL, revoked_by = NULL WHERE id = 
 	if err != nil {
 		return nil, err
 	}
+	// An automatically hired agent restarts its probation (ADR-0050
+	// decision 5l): the old clock is not restored.
+	probationUntil := s.now().UTC().Add(agentworkforce.ProbationWindow)
 	if _, err := tx.Exec(ctx, `
 UPDATE elitea_lifecycle.agent_registry
 SET lifecycle_state = 'active', retired_at = NULL, retired_by = NULL, reinstate_until = NULL, purge_after = NULL,
-    retire_snapshot = NULL, under_review = false, under_review_since = NULL, updated_at = clock_timestamp()
-WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.ApplicationID); err != nil {
+    retire_snapshot = NULL, under_review = false, under_review_since = NULL,
+    probation_until = CASE WHEN auto_hired_at IS NOT NULL THEN $3::timestamptz END,
+    probation_reviewed_at = NULL, probation_reviewed_by = NULL, updated_at = clock_timestamp()
+WHERE tenant_project_id = $1 AND application_id = $2`, agent.ProjectID, agent.ApplicationID, probationUntil); err != nil {
 		return nil, fmt.Errorf("agent workforce: reinstate the registry row: %w", err)
+	}
+	if agent.AutoHiredAt != nil {
+		if _, err := s.insertAction(ctx, tx, agent.ProjectID, agent.ApplicationID, agentworkforce.ActionAutoHire,
+			agentworkforce.RuleAutoHire, "", 0, agentworkforce.ActionApplied, &probationUntil,
+			map[string]any{"reinstated": true, "probation_until": probationUntil}, true); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.append(ctx, tx, agent.ProjectID, "agent.workforce.reinstated", personRef(actorID),
 		strconv.FormatInt(agent.ApplicationID, 10), "", "via:"+via,

@@ -424,6 +424,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startAgentScorecard(ctx, pool, executionSuspensions, logger); err != nil {
 		return err
 	}
+	// The workforce policy pass (ADR-0050 decisions 5c and 5k, #1617): the
+	// main.agent_workforce_policy routine, paused in maintenance; a project
+	// with no policy (the default) is never touched.
+	if err := startAgentWorkforcePolicy(ctx, pool, executionSuspensions, logger); err != nil {
+		return err
+	}
 
 	// The run-safety Configuration sections (#1496, #1498): the
 	// administrator's session policy and the whole-run wall cap, one cache
