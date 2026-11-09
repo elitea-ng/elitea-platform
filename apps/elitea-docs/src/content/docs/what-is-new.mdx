@@ -5,6 +5,10 @@ description: "Recent user-visible changes to Elitea, summarized from the platfor
 
 Elitea ships frequent, small releases. This page summarizes the most recent user-visible changes; it is not a full changelog.
 
+## Automatic hiring and dismissal of agents
+
+A project can now hire and dismiss agents automatically, under **Settings → Agent workforce**. Both are off until a manager turns them on. Automatic hiring creates an agent only from a low-tier, read-only proposal whose spec ran successfully enough times, unpublished and with no tools bound, on probation until a manager keeps it; for 14 days a manager can undo the hire. Automatic dismissal applies the project's rules to each agent's scorecard: watch and suspend apply at once, and retire waits for a grace period during which the owner can object. The policy never demotes or deletes and leaves critical-tier agents and agents under legal hold alone. Agents whose owners left the project are flagged for a new owner and moved to watch after 30 days. See [Automatic hiring and dismissal](/how-tos/agents-pipelines/agent-workforce/#automatic-hiring-and-dismissal).
+
 ## Agent scorecards and the dismissal ladder
 
 Every agent now has a daily scorecard on a new **Workforce** tab: runs and failure rate, budget-cap stops, breaker trips, approval rejections, guardrail hits, spend against the project median, feedback and last use. A person, or a reviewer agent with the `can_review_agents` capability, can propose **Watch**, **Demote** (taking away exactly what it names), **Suspend**, **Retire** or **Delete**; a person with the new `agents.workforce.manage` permission or the agent's owner decides, after an impact preview. A retired agent leaves conversations, saved teams, nesting and schedules and can be **reinstated** for 30 days. The owner can appeal once to a different manager. Critical-tier agents and agents under legal hold are exempt. **Upgrade every worker before Main.** See [Agent workforce](/how-tos/agents-pipelines/agent-workforce/).

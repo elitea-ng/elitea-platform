@@ -8826,7 +8826,8 @@ components:
       required: [id, project_id, application_id, application_name, kind, stage, source, proposed_by_user_id,
         proposer_application_id, execution_id, rationale, narrowing, evidence, evidence_digest, status,
         owner_comment, decided_by_user_id, decided_at, decision_note, applied, appeal_state, appeal_reason,
-        appealed_by_user_id, appealed_at, appeal_decided_by_user_id, appeal_decided_at, appeal_note, created_at]
+        appealed_by_user_id, appealed_at, appeal_decided_by_user_id, appeal_decided_at, appeal_note, created_at,
+        policy_rule]
       properties:
         id: { type: integer, format: int64 }
         project_id: { type: integer, format: int64 }
@@ -8834,7 +8835,7 @@ components:
         application_name: { type: string }
         kind: { type: string, description: dismiss or demote. }
         stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
-        source: { type: string, description: person or hr_agent. }
+        source: { type: string, description: 'person, hr_agent or policy (the project''s automatic dismissal policy).' }
         proposed_by_user_id: { type: integer, format: int64, nullable: true }
         proposer_application_id: { type: integer, format: int64, nullable: true, description: The HR agent that proposed it. }
         execution_id: { type: string, nullable: true }
@@ -8872,6 +8873,10 @@ components:
         appeal_decided_at: { type: string, format: date-time, nullable: true }
         appeal_note: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        policy_rule:
+          type: string
+          nullable: true
+          description: The rule of a stage the workforce policy applied or noticed (source policy).
     AgentScorecard:
       type: object
       required: [day, runs_30d, failed_30d, cap_reached_30d, failure_rate_30d, breaker_trips_7d,
@@ -8898,7 +8903,8 @@ components:
       type: object
       required: [project_id, application_id, application_name, risk_tier, business_owner_id, technical_owner_id,
         under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after,
-        suspension_id, suspension_source, legal_hold, is_hr_agent]
+        suspension_id, suspension_source, legal_hold, is_hr_agent, auto_hired_at, probation_until,
+        probation_reviewed_at, orphaned_since]
       properties:
         project_id: { type: integer, format: int64 }
         application_id: { type: integer, format: int64 }
@@ -8917,6 +8923,26 @@ components:
         suspension_source: { type: string }
         legal_hold: { type: boolean }
         is_hr_agent: { type: boolean }
+        auto_hired_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The workforce policy hired the agent (it is on probation until a manager keeps it).
+        probation_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Until when an agent manager can undo the automatic hire.
+        probation_reviewed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When an agent manager kept or undid the automatic hire.
+        orphaned_since:
+          type: string
+          format: date-time
+          nullable: true
+          description: The agent's owners left the project; it is offered for reassignment.
         scorecard:
           allOf: [{ $ref: '#/components/schemas/AgentScorecard' }]
           nullable: true
@@ -8980,6 +9006,110 @@ components:
         workforce_state_conflict, workforce_confirm_nested,
         workforce_legal_hold, workforce_retention_pending,
         workforce_reinstate_closed, workforce_appeal_closed.
+    AgentWorkforceCondition:
+      type: object
+      additionalProperties: false
+      required: [metric, op, value]
+      properties:
+        metric:
+          type: string
+          description: >
+            runs_30d, failed_30d, cap_reached_30d, failure_rate_30d,
+            breaker_trips_7d, approval_rejections_30d, guardrail_hits_30d,
+            spend_ratio (spend against the project median), thumbs_down_30d,
+            unused_days, auto_hired (1 or 0) or probation_failed (1 or 0).
+        op: { type: string, description: '>=, >, <=, < or =' }
+        value: { type: number, minimum: 0, maximum: 1000000000 }
+    AgentWorkforceRule:
+      type: object
+      additionalProperties: false
+      required: [id, conditions, stage]
+      properties:
+        id: { type: string, pattern: '^[a-z][a-z0-9_]{0,39}$' }
+        conditions:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items: { $ref: '#/components/schemas/AgentWorkforceCondition' }
+        stage: { type: string, description: 'watch, suspend or retire. Demote and delete are never automatic.' }
+    AgentWorkforcePolicyInput:
+      type: object
+      additionalProperties: false
+      required: [auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled, auto_dismiss_rules, grace_days]
+      properties:
+        auto_hire_enabled: { type: boolean }
+        min_successful_runs: { type: integer, minimum: 1, maximum: 100 }
+        max_auto_hired: { type: integer, minimum: 1, maximum: 50 }
+        auto_dismiss_enabled: { type: boolean }
+        auto_dismiss_rules:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+        grace_days: { type: integer, minimum: 1, maximum: 90 }
+    AgentWorkforcePolicy:
+      type: object
+      required: [project_id, saved, auto_hire_enabled, min_successful_runs, max_auto_hired, auto_dismiss_enabled,
+        auto_dismiss_rules, grace_days, updated_by, updated_at, default_rules, open_auto_hired, can_manage]
+      properties:
+        project_id: { type: integer, format: int64 }
+        saved: { type: boolean, description: 'An agent manager saved a policy (false is the defaults, everything off).' }
+        auto_hire_enabled: { type: boolean }
+        min_successful_runs: { type: integer }
+        max_auto_hired: { type: integer }
+        auto_dismiss_enabled: { type: boolean }
+        auto_dismiss_rules:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+        grace_days: { type: integer }
+        updated_by: { type: integer, format: int64, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+        default_rules:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceRule' }
+          description: The platform's starting rules.
+        open_auto_hired: { type: integer, description: Automatically hired agents nobody kept yet. }
+        can_manage: { type: boolean, description: The caller holds agents.workforce.manage here. }
+    AgentAutomaticAction:
+      type: object
+      required: [id, project_id, application_id, application_name, kind, rule, stage, proposal_id, status, due_at,
+        evidence, evidence_digest, note, decided_by_user_id, decided_at, applied_at, created_at, can_undo, can_object]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        kind: { type: string, description: 'auto_hire, auto_dismiss or orphan.' }
+        rule: { type: string }
+        stage: { type: string, nullable: true, description: 'watch, suspend or retire; null for a hire.' }
+        proposal_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The agent proposal of a hire, or the workforce proposal of a stage.
+        status:
+          type: string
+          description: 'pending, flagged, applied, held, objected, undone, kept, resolved or cancelled.'
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The end of a retire notice's grace period, an orphan's watch date, or a hire's undo window.
+        evidence:
+          type: object
+          additionalProperties: true
+          description: What the policy read (the scorecard and the rule, or the hire's evidence).
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.AutomaticAction.Evidence
+            (internal/infra/db/repos/agent_workforce_policy.go:181) is the
+            jsonb the pass stored, built per action kind in insertAction.
+        evidence_digest: { type: string }
+        note: { type: string, nullable: true }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        applied_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        can_undo: { type: boolean, description: An automatic hire still in its 14-day undo window. }
+        can_object: { type: boolean, description: A retire notice still in its grace period. }
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -29426,6 +29556,224 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/policy:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getAgentWorkforcePolicy
+      summary: Read the project's automatic hiring and dismissal policy
+      description: >
+        The project's workforce policy (ADR-0050 decisions 5c and 5k). Off
+        by default: a project that never saved one answers saved false with
+        both policies off and the platform's default numbers and rules.
+        Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforcePolicy' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    put:
+      operationId: setAgentWorkforcePolicy
+      summary: Set the project's automatic hiring and dismissal policy
+      description: >
+        Turns auto_hire and auto_dismiss on or off and sets their numbers and
+        rules. A rule maps scorecard conditions to watch, suspend or retire;
+        demote and delete are refused. Turning auto_dismiss off cancels its
+        open retire notices and orphan flags. Requires
+        `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforcePolicyInput' }
+      responses:
+        '200':
+          description: The saved policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforcePolicy' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) Only an agent manager sets the policy
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_policy_invalid) A number, rule, metric or stage is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentAutomaticActions
+      summary: List the workforce policy's automatic actions
+      description: >
+        Every hire, stage, retire notice and orphan flag the workforce policy
+        made, newest first. status narrows them (open is pending and
+        flagged); application_id narrows them to one agent. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, description: 'open, pending, flagged, applied, held, objected, undone, kept, resolved or cancelled', schema: { type: string } }
+        - { name: application_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The actions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentAutomaticAction' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/undo:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: undoAgentAutoHire
+      summary: Undo an automatic hire
+      description: >
+        Within 14 days of an automatic hire, retires the agent through the dismissal ladder (it can be reinstated for 30 days) and ends its probation; the same spec is not hired automatically again for 30 days. confirm_nested confirms retiring an agent other agents nest. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/keep:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: keepAgentAutoHire
+      summary: Keep an automatically hired agent
+      description: >
+        Ends the probation of an automatically hired agent: it stops counting against max_auto_hired. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/automatic_actions/{action_id}/object:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: action_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: objectAgentAutomaticAction
+      summary: Object to a retire notice
+      description: >
+        In a retire notice's grace period, the agent's owner or an agent manager objects: the notice is rejected, the agent stays, and the rule stays quiet for this agent for 30 days. Requires `models.applications.applications.list`, and ownership of the agent or `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The automatic action
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentAutomaticAction' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (code workforce_forbidden) The caller may not do this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such automatic action in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_action_closed, workforce_confirm_nested, workforce_state_conflict) The action is no longer open, or the agent is nested by others
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
 
   /elitea_core/agent_copy_memory/prompt_lib/{project_id}/{application_id}:
     parameters:

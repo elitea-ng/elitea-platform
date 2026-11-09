@@ -61,6 +61,26 @@ export const AgentWorkforceAgent = zod.object({
   suspension_source: zod.string(),
   legal_hold: zod.boolean(),
   is_hr_agent: zod.boolean(),
+  auto_hired_at: zod.iso
+    .datetime({ offset: true })
+    .nullable()
+    .describe(
+      "The workforce policy hired the agent (it is on probation until a manager keeps it).",
+    ),
+  probation_until: zod.iso
+    .datetime({ offset: true })
+    .nullable()
+    .describe("Until when an agent manager can undo the automatic hire."),
+  probation_reviewed_at: zod.iso
+    .datetime({ offset: true })
+    .nullable()
+    .describe("When an agent manager kept or undid the automatic hire."),
+  orphaned_since: zod.iso
+    .datetime({ offset: true })
+    .nullable()
+    .describe(
+      "The agent's owners left the project; it is offered for reassignment.",
+    ),
   scorecard: zod
     .union([AgentScorecard, zod.null()])
     .optional()

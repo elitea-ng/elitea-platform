@@ -68,6 +68,9 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
       : []),
     { id: 'secrets', label: 'Secrets' },
     { id: 'webhooks', label: 'Webhooks' },
+    // ADR-0050 decisions 5c and 5k (issue 1617): the automatic hiring and
+    // dismissal policy. Ungated: the page says when the caller cannot edit.
+    { id: 'agent-workforce', label: 'Agent workforce' },
     ...(isPersonalProject ? [] : [{ id: 'users', label: 'Users' }]),
     ...(analyticsVisible ? [{ id: 'analytics', label: 'Analytics' }] : []),
     ...(usageVisible ? [{ id: 'usage', label: 'Usage' }] : []),

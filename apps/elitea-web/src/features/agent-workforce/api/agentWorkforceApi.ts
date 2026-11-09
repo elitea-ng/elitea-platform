@@ -11,6 +11,12 @@ import {
   decideAgentWorkforceAppeal,
   getAgentWorkforce,
   getAgentWorkforceImpact,
+  getAgentWorkforcePolicy,
+  keepAgentAutoHire,
+  listAgentAutomaticActions,
+  objectAgentAutomaticAction,
+  setAgentWorkforcePolicy,
+  undoAgentAutoHire,
   listAgentScorecards,
   listAgentWorkforceProposals,
   proposeAgentWorkforceStage,
@@ -18,10 +24,15 @@ import {
   reinstateAgent,
 } from '@/shared/api/generated/applications/applications';
 import type {
+  AgentAutomaticAction,
   AgentWorkforceAgent,
   AgentWorkforceDecisionBody,
   AgentWorkforceImpact,
+  AgentWorkforcePolicy,
+  AgentWorkforcePolicyInput,
   AgentWorkforceProposal,
+  ListAgentAutomaticActions200,
+  ListAgentAutomaticActionsParams,
   ListAgentScorecards200,
   ListAgentWorkforceProposals200,
   ListAgentWorkforceProposalsParams,
@@ -93,4 +104,37 @@ export async function appeal(projectId: string, proposalId: number, text: string
 /* manifest: agentWorkforce.decideAppeal */
 export async function decideAppeal(projectId: string, proposalId: number, grant: boolean, note: string): Promise<AgentWorkforceProposal> {
   return bodyOf<AgentWorkforceProposal>(await decideAgentWorkforceAppeal(projectId, proposalId, note === '' ? { grant } : { grant, note }));
+}
+
+/* manifest: agentWorkforce.policy */
+export async function fetchPolicy(projectId: string): Promise<AgentWorkforcePolicy> {
+  return bodyOf<AgentWorkforcePolicy>(await getAgentWorkforcePolicy(projectId));
+}
+
+/* manifest: agentWorkforce.setPolicy */
+export async function savePolicy(projectId: string, body: AgentWorkforcePolicyInput): Promise<AgentWorkforcePolicy> {
+  return bodyOf<AgentWorkforcePolicy>(await setAgentWorkforcePolicy(projectId, body));
+}
+
+/* manifest: agentWorkforce.automaticActions */
+export async function fetchAutomaticActions(projectId: string, params: ListAgentAutomaticActionsParams): Promise<ListAgentAutomaticActions200> {
+  return bodyOf<ListAgentAutomaticActions200>(await listAgentAutomaticActions(projectId, params));
+}
+
+/** What a person can do with an automatic action. */
+export type AutomaticActionDecision = 'undo' | 'keep' | 'object';
+
+/*
+ * manifest: agentWorkforce.undoAutoHire
+ * manifest: agentWorkforce.keepAutoHire
+ * manifest: agentWorkforce.objectAction
+ */
+export async function decideAutomaticAction(
+  projectId: string,
+  actionId: number,
+  decision: AutomaticActionDecision,
+  body: AgentWorkforceDecisionBody,
+): Promise<AgentAutomaticAction> {
+  const call = decision === 'undo' ? undoAgentAutoHire : decision === 'keep' ? keepAgentAutoHire : objectAgentAutomaticAction;
+  return bodyOf<AgentAutomaticAction>(await call(projectId, actionId, body));
 }

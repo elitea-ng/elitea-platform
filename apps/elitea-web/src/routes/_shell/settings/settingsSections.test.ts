@@ -32,6 +32,8 @@ describe('buildSettingsSections — PROJECT', () => {
     // (the outbound webhook registry is a capability this platform added,
     // see webhook/handler.go's file header) — it is added by #876 right
     // after Secrets, the other project-scoped credential-shaped tab.
+    // `agent-workforce` (issue 1617, the automatic hiring and dismissal
+    // policy) is new too and follows Webhooks.
     expect(
       projectTabIds({ ...ALL_OPEN, isPersonalProject: true }),
     ).toEqual([
@@ -40,6 +42,7 @@ describe('buildSettingsSections — PROJECT', () => {
       'project-params',
       'secrets',
       'webhooks',
+      'agent-workforce',
       'analytics',
       'usage',
     ]);

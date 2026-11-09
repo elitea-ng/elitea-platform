@@ -911,7 +911,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // listAgentWorkforceProposals, proposeAgentWorkforceStage,
 // getAgentWorkforceProposal, approve/reject/askOwner/comment/appeal
 // AgentWorkforceProposal and decideAgentWorkforceAppeal, the agent workforce.
-const GENERATED_OPERATION_COUNT = 496;
+// 496 -> 502 (issue 1617, ADR-0050 decisions 5c and 5k): get/set
+// AgentWorkforcePolicy, listAgentAutomaticActions, undoAgentAutoHire,
+// keepAgentAutoHire and objectAgentAutomaticAction, the automatic hiring and
+// dismissal policy.
+const GENERATED_OPERATION_COUNT = 502;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1190,8 +1194,13 @@ const GENERATED_OPERATION_COUNT = 496;
  * askOwner, comment, appeal and decideAppeal, the agent editor's Workforce
  * tab (features/agent-workforce). Generated. The single-proposal read
  * (getAgentWorkforceProposal) is generated but not called.
+ *
+ * 340 -> 346 (issue 1617, ADR-0050 decisions 5c and 5k): agentWorkforce
+ * .policy, setPolicy, automaticActions, undoAutoHire, keepAutoHire and
+ * objectAction, Settings › Agent workforce (features/agent-workforce).
+ * Generated.
  */
-const MANIFEST_ENTRY_COUNT = 340;
+const MANIFEST_ENTRY_COUNT = 346;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

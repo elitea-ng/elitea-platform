@@ -53,6 +53,14 @@ describe('WorkforcePanel', () => {
     expect(await screen.findByTestId('agent-workforce-proposal-7')).toHaveTextContent('reviewer agent');
   });
 
+  it('names the rule of a notice the workforce policy raised', async () => {
+    mock(workforceAgent({ scorecard: scorecard() }), [
+      workforceProposal({ source: 'policy', policy_rule: 'unused', proposer_application_id: null, execution_id: null }),
+    ]);
+    renderWithQueryAndTheme(<WorkforcePanel projectId="1" applicationId={41} />);
+    expect(await screen.findByTestId('agent-workforce-proposal-7')).toHaveTextContent('workforce policy (rule unused)');
+  });
+
   it('approving a retirement previews the impact and confirms the nesting', async () => {
     let body: unknown;
     mock();

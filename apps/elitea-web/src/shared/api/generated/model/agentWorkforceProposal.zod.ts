@@ -50,7 +50,11 @@ export const AgentWorkforceProposal = zod.object({
   application_name: zod.string(),
   kind: zod.string().describe("dismiss or demote."),
   stage: zod.string().describe("watch, demote, suspend, retire or delete."),
-  source: zod.string().describe("person or hr_agent."),
+  source: zod
+    .string()
+    .describe(
+      "person, hr_agent or policy (the project's automatic dismissal policy).",
+    ),
   proposed_by_user_id: zod.int().nullable(),
   proposer_application_id: zod
     .int()
@@ -83,6 +87,12 @@ export const AgentWorkforceProposal = zod.object({
   appeal_decided_at: zod.iso.datetime({ offset: true }).nullable(),
   appeal_note: zod.string().nullable(),
   created_at: zod.iso.datetime({ offset: true }),
+  policy_rule: zod
+    .string()
+    .nullable()
+    .describe(
+      "The rule of a stage the workforce policy applied or noticed (source policy).",
+    ),
 });
 
 export type AgentWorkforceProposal = zod.input<typeof AgentWorkforceProposal>;
