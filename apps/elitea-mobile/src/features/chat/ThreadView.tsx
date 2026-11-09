@@ -22,6 +22,7 @@ import { MessageBubble } from '@/features/chat/MessageBubble';
 import { readRevision, useMarkConversationRead } from '@/features/chat/useMarkConversationRead';
 import { useAutoConversationName } from '@/features/chat/useAutoConversationName';
 import { speaksContract } from '@/api/discovery';
+import { AGENT_MEMORY_CONTRACT } from '@/api/queries/agentMemory';
 import { AnswerActions } from '@/features/chat/actions/AnswerActions';
 import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
@@ -172,6 +173,8 @@ export function ThreadView({
   const contract112 = speaksContract(workspace?.discovery, 1, 12);
   // Client contract 1.27: a message sent while the answer runs steers it.
   const contract127 = speaksContract(workspace?.discovery, 1, 27);
+  // Client contract 1.44: what an agent participant remembers (ADR-0050 1b).
+  const agentMemoryAvailable = speaksContract(workspace?.discovery, AGENT_MEMORY_CONTRACT.major, AGENT_MEMORY_CONTRACT.minor);
   const { policy } = usePolicy();
   const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
@@ -847,6 +850,14 @@ export function ThreadView({
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
           // The update replaces the whole meta: no lead control without the meta that was read.
           conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
+          onAgentMemory={
+            agentMemoryAvailable
+              ? (agentId, name) => {
+                  setPeopleOpen(false);
+                  router.push({ pathname: '/agent-memory/[id]', params: { id: String(agentId), name } });
+                }
+              : undefined
+          }
         />
       ) : null}
       <ThreadLayout
