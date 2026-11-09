@@ -42,6 +42,9 @@ text unless the workspace policy allows titles
 Discover (1.3): the workspace's public agents with search, category, tags and icon,
 an agent page with its welcome message and conversation starters, and a chat started
 in the active project.
+Agent memory (1.44): what an agent remembers in the project, from a conversation's
+participants or a Discover agent; delete a note (yours, or any with the permission)
+and the "remember things about me" switch.
 Native behaviour is verified by hand with
 [docs/device-verification.md](docs/device-verification.md).
 See [docs/design.md](docs/design.md) for the planned product and
