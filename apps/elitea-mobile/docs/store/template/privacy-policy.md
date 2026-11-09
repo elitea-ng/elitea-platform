@@ -2,10 +2,11 @@
 
 > Draft for the owner. Replace every `[bracketed]` value, have it reviewed
 > (Canadian PIPEDA, Quebec Law 25, GDPR and the US state laws apply depending on
-> where users are), and publish it at `{privacyUrl}` before
-> the first external TestFlight round. Section 4 applies only while your
-> brand turns EAS Update on (`updates.mode` in brand.json); remove it otherwise. It must match the App Store and Play
-> answers in privacy.md; it follows answer A ("Who collects").
+> where users are), and publish it at `{privacyUrl}` before the first
+> external TestFlight round. Section 4 applies only while your brand turns
+> EAS Update on (`updates.mode` in brand.json); remove it otherwise. It must
+> match the App Store and Play answers in ../privacy.md; it follows answer A
+> ("Who collects").
 
 ---
 

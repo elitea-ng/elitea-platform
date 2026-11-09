@@ -17,7 +17,7 @@ stores'; counts are given where they are tight. Wording rules:
 | Support URL | `https://elitea.ai/support` |
 | Marketing URL | `https://elitea.ai` |
 | Price | Free, no in-app purchases, no ads |
-| Copyright (App Store) | `2026 EPAM Systems` (the manifest's `publisher`; legal entity to confirm) |
+| Copyright (App Store) | `2026 [legal entity name]` |
 
 ## App Store
 
