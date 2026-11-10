@@ -159,9 +159,12 @@ Shapes refused before and admitted now:
     `child_missing`).
 - **Depth 2.** A fan-out member resumes from its frozen occurrence (W3-2a). Its Agent node re-enters the saved child
   at its frontier, and the Code journal decides there.
-- **Member failure.** An Agent member whose saved child's Code ended `child_effect_unknown` (or the Code deadline)
-  now names that code as the member failure (`graph_error_code`, `parallel.rs:2686`). Before, it was
-  `graph.node_execution_failed`.
+- **Member failure (accepted behaviour change).** An Agent member whose saved child's Code ended
+  `child_effect_unknown` (or the Code deadline) now names that code as the member failure (`graph_error_code`,
+  `parallel.rs:2686`: a bare inner code now matches, as well as `code: sentence`). Before, it was
+  `graph.node_execution_failed`. This was not requested; the orchestrator accepted it on 2026-11-10 as clearer, and it
+  is in scope for /code-review. No existing assertion changed. Test: the C/F case of
+  `real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never_rerun` asserts the named code.
 
 ### D-b4, refusals
 
@@ -188,9 +191,11 @@ Shapes refused before and admitted now:
     limited to applications reachable from the root's frozen definition.
   - `RegisterSavedChild` (unwired) writes `execution_saved_child_definitions`, not captures. Project deletion
     (`projectprovisioning/steps.go:444`) only deletes captures.
-  - **So a capture is not reachability evidence.** The resolver proves reachability from the root down: the
-    `saved_child_edge` stage checks that the root's frozen source declares the edge. That is one level, and deeper
-    levels are refused (B4).
+  - **So a capture alone proves nothing about reachability.** The single writer records whatever application and
+    version the Worker names. What makes the resolver sound is the root-edge check, `saved_child_edge`: the run
+    root's frozen source must declare the Agent node that selects exactly that application and version. The capture
+    then only pins the version and digest the Worker ran. That check is one level deep; deeper levels are refused (B4).
+    Accepted by the orchestrator on 2026-11-10.
   - Test: "an application the root selects but Main never captured" is refused at `saved_child_capture`. "An
     application the Agent node does not select" is refused at `saved_child_edge`, although it is captured.
 - **B2, every field bound in the effect transaction.** See the table above. The tests:
@@ -238,8 +243,17 @@ Shapes refused before and admitted now:
   - `code_below_a_second_saved_pipeline_is_refused_by_its_path` asserts the code and the detail `nested_saved_code`,
     and that one level down is admitted.
   - Main: "a nested saved child" is refused at `saved_child_edge`.
-  - Reported for an FU: proving the scope through the chain (FU-318, proposed).
-- **B5.** Real PostgreSQL. See the rows and "Tests"; the limits are stated under "Not done".
+  - Reported for an FU: proving the scope through the chain (FU-318, registered).
+- **B5, accepted on the same basis as W3-2a (orchestrator, 2026-11-10).** The basis is:
+  - Main's real repository path on real PostgreSQL, including the takeover re-registration
+    (`TestATakeoverReRegistersSavedChildCodeOnTheProductionPathPostgres`);
+  - Worker real-PG kills at the root and at depth 2, both for a Map and for a Parallel branch
+    (`real_pg_a_parallel_of_saved_children_with_code_survives_worker_replacement`);
+  - the browser kill passes (a Worker kill and a Supervisor kill, on `silver_partition` and on the root case),
+    pending in the orchestrating session.
+
+  A real Worker↔Main harness does not exist; it is shared test-infrastructure work with W3-2a and is registered as
+  exit work FU-321, under PLAN-REMAINING 0.6 (the #1261 crash suite, Docker lane).
 - **B6.** `a_router_loop_beyond_the_saved_child_code_time_is_refused_per_attempt` (`code_slots_tests.rs`, paused
   clock).
   - Two Code nodes counted; the activation is admitted at exactly `60 s + 90 s`.
@@ -260,7 +274,7 @@ Shapes refused before and admitted now:
 | Main packages | `go vet ./...`; `go test -p 1 ./internal/infra/storage/ ./internal/infra/db/repos/` on PostgreSQL 18 | clean; pass |
 | Faults gate | `go generate` + `go test ./...` in `libs/go/faults` | pass |
 | Worker unit | `saved_code_child_tests.rs` (3: root scope JSON exact, member family, 6 + 1 + 4 refusals); `a_saved_pipeline_with_code_and_a_router_runs_as_a_map_worker_admitted_per_code_node` (the `silver_partition` Map compiles; admission `[2, 2, 2]`; no item starts when refused); `code_below_a_second_saved_pipeline_is_refused_by_its_path` (B4); `a_router_loop_beyond_the_saved_child_code_time_is_refused_per_attempt` (B6) | pass |
-| Worker real PostgreSQL, CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::` (`node_recovery_saved_code_pg_tests.rs`; production compiler, production `NativePipelineApplicationResolver`, production checkpoint family, production `RemoteCodeRuntime`; fake Main and Supervisor) | root: `real_pg_a_saved_child_code_at_the_root_survives_worker_replacement` (R), `real_pg_a_supervisor_losing_a_saved_child_code_attempt_at_the_root_reruns_it_once` (I), `real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_never_rerun` (C / F); depth 2: `real_pg_a_map_of_saved_children_with_code_survives_worker_replacement` (R), `real_pg_a_supervisor_losing_saved_child_code_in_a_map_reruns_each_once` (I), `real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never_rerun` (C / F). Every test asserts the scope each visit named. | 6 of 6 pass; the whole prefix 43 passed, 0 failed (W3-2a's 37 + 6) |
+| Worker real PostgreSQL, CI prefix `agents::graph::node_recovery_runtime::tests::code_owner_tests::` (`node_recovery_saved_code_pg_tests.rs`; production compiler, production `NativePipelineApplicationResolver`, production checkpoint family, production `RemoteCodeRuntime`; fake Main and Supervisor) | root: `real_pg_a_saved_child_code_at_the_root_survives_worker_replacement` (R), `real_pg_a_supervisor_losing_a_saved_child_code_attempt_at_the_root_reruns_it_once` (I), `real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_never_rerun` (C / F); depth 2: `real_pg_a_map_of_saved_children_with_code_survives_worker_replacement` (R), `real_pg_a_supervisor_losing_saved_child_code_in_a_map_reruns_each_once` (I), `real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never_rerun` (C / F); depth 2, Parallel: `real_pg_a_parallel_of_saved_children_with_code_survives_worker_replacement` (two branches each running the saved pipeline; killed with both `validate` attempts completed and both `normalize` attempts submitted: the same 4 identities, 4 resolved rows, 6 submissions = 4 first + 2 re-attached, completed attempts never submitted again, one answer per branch). Every test asserts the scope each visit named. | 7 of 7 pass (the Parallel test 4 runs in a row); the whole prefix 44 passed, 0 failed (W3-2a's 37 + 7) |
 | Worker real PostgreSQL, two processes (`pipeline_fanout_effect_pg_tests.rs`; production `PipelineNativeAgentAssembler`, real `CodeRuntimeFactory`, the real inspect → authorize → `assemble_checkpoint` reclaim) | `postgres_a_saved_child_lost_inside_its_first_code_attempt_is_recovered_by_its_journal` (`starts_at_code`), `postgres_a_saved_child_lost_inside_a_later_code_attempt_is_recovered_by_its_journal` (Code leaf after a State Modifier). The crash process dies at Main's visit once its Started record is durable and its visit names its scope. The reclaim's walk admits the frontier, and the attempt re-enters the same journal thread. With the walk change disabled, both fail at the recover phase. | pass |
 
 Existing tests deleted, each only asserting the `ContainsCode` refusal:
@@ -285,13 +299,15 @@ Existing tests changed, with no assertion changed:
   133 ignored.
   - The 3 `graph_receipts` tests need the URL's database to be `postgres` (their own guard); rerun so, they pass 3
     of 3.
-- **Real-PG prefix** `code_owner_tests::` `--ignored`: 43 passed, 0 failed.
-- **CI guard** `check-worker-ignored-tests.mjs`: 133 ignored, 119 run by CI invocations, 14 allowlisted, 0 run by
+- **Real-PG prefix** `code_owner_tests::` `--ignored`: 44 passed, 0 failed (after the Parallel kill test was added;
+  fmt, clippy and doc rerun clean on a cold build).
+- **CI guard** `check-worker-ignored-tests.mjs`: 134 ignored, 120 run by CI invocations, 14 allowlisted, 0 run by
   nothing.
 - **Main.** `go vet ./...` is clean. `go test -p 1 ./internal/infra/storage/ ./internal/infra/db/repos/` passes.
 - **Faults gate** passes.
-- **Agent runtime.** Its tests were not run: this change does not touch `libs/rust`, and the shared disk fell below
-  10 GiB during the run.
+- **Agent runtime** (`cd libs/rust && cargo test --offline --locked -p elitea-agent-runtime`): 1636 passed, 0 failed,
+  1 ignored (lib 1633, plus 2 + 1 in the other targets). This change does not touch `libs/rust`.
+- Every build directory was removed with `cargo clean` after its step.
 
 ## Performance
 
@@ -305,7 +321,7 @@ Existing tests changed, with no assertion changed:
 - **Worker.** One provider allocation per use at compile time, and one string strip per visit. Admission adds O(Code
   nodes) per child at bind.
 - **Not measured.** The +30 ms p99 per-child budget is W3-2a's, and the saved child's Code path is the same
-  `RemoteCodeRuntime` path with one more provider call. A dedicated measurement is a follow-up (FU-320, proposed).
+  `RemoteCodeRuntime` path with one more provider call. A dedicated measurement is a follow-up (FU-320, registered).
 
 ## Durability
 
@@ -363,6 +379,7 @@ Existing tests changed, with no assertion changed:
 | Supervisor kill × saved child's Code, root case | I (lost runtime re-run once, new identity) / R | the journal's runtime-lost retry (FU-214) | `real_pg_a_supervisor_losing_a_saved_child_code_attempt_at_the_root_reruns_it_once` |
 | Platform-client Code item killed after dispatch, root case | C (reconciled from the owner journal, never re-run) / F `child_effect_unknown` without owner proof | owner query, visit rule | `real_pg_a_saved_child_platform_client_code_at_the_root_is_reconciled_never_rerun` |
 | Worker kill × saved child's Code in a Map member (depth 2) | R | frozen occurrence + the member's family journals (`branch_journal_resolver`) | `real_pg_a_map_of_saved_children_with_code_survives_worker_replacement` (killed at 4 submissions: every started identity kept, 8 identities, 8 resolved rows); Main takeover test |
+| Worker kill × saved child's Code in a Parallel branch (depth 2) | R (completed attempts replay, in-flight re-attach) | as above, member kind `parallel_branch` | `real_pg_a_parallel_of_saved_children_with_code_survives_worker_replacement` |
 | Supervisor kill × depth 2 | I / R | as above | `real_pg_a_supervisor_losing_saved_child_code_in_a_map_reruns_each_once` |
 | Platform-client item killed after dispatch × depth 2 | C / F (member failure names `child_effect_unknown`) | as above, `parallel.rs:2686` | `real_pg_a_saved_child_platform_client_code_in_a_map_is_reconciled_never_rerun` |
 | Main × saved-child Code visit, intent and read authorization | fails closed | `code_source_saved_child.go:73` | B2/B3 tests |
@@ -373,8 +390,9 @@ Existing tests changed, with no assertion changed:
 pre-start refusal, and a per-attempt deadline. A Parallel branch running a saved pipeline with Code is admitted:
 
 - **Main**: its depth-2 registration is proven (`…InAFanoutMember…`, branches 0 and 1).
-- **Worker**: it uses the same member path as a Map item (`branch_journal_resolver`, member kind `parallel_branch`).
-- **Not done**: the Worker real-PG kill tests ran on the Map only.
+- **Worker**: a Worker kill mid-Parallel is proven (`real_pg_a_parallel_of_saved_children_with_code_survives_worker_replacement`):
+  completed attempts are never dispatched again, in-flight ones re-attach to their own identity, and each branch
+  lands one answer under its own `parallel_branch` member scope.
 
 The recovery walk refuses no shape this change admits:
 
@@ -384,14 +402,13 @@ The recovery walk refuses no shape this change admits:
 
 ## Not done, limits
 
-- **Real Main in the Worker.** No harness drives the Rust Worker against the Go Main. B5's halves are proven
-  separately: the Worker's real-PG tests use W3-2a's fake Main and Supervisor, and Main's real-PG tests use the
-  production repository path with the Worker's request shapes. Both halves agree on the wire shape: the Worker test
-  asserts every field Main resolves. The end-to-end proof is the browser pass.
-- **Parallel-branch kills.** The Worker real-PG kill and reattach tests cover the Map (depth 2) and the root, not a
-  Parallel branch. The Parallel member uses the same binding.
+- **Real Main in the Worker.** No harness drives the Rust Worker against the Go Main (FU-321, exit work, under
+  PLAN-REMAINING 0.6). B5's halves are proven separately: the Worker's real-PG tests use W3-2a's fake Main and
+  Supervisor, and Main's real-PG tests use the production repository path with the Worker's request shapes. Both
+  halves agree on the wire shape: the Worker test asserts every field Main resolves. The end-to-end proof is the
+  browser pass.
 - **Agent as tool.** An ordinary root Agent (not a pipeline) calling a saved pipeline as a tool still has no owner
-  scope for that pipeline's Code, which fails closed as before (FU-319, proposed).
+  scope for that pipeline's Code, which fails closed as before (FU-319, registered).
 - **Real-browser evidence: pending (orchestrating session).** Cases:
   - the ETL `silver_partition` Map, with one partition routed to the error output;
   - a Worker kill and a Supervisor kill;
@@ -402,10 +419,13 @@ The recovery walk refuses no shape this change admits:
 
 - **FU-316:** `RegisterSavedChild` is either wired or deleted. It must not stay a dead authority path.
 - **FU-317:** a Map or Parallel of Code inside a saved child (`graph.fanout.code_below_root`), after FU-239.
-- **FU-318 (proposed, B4):** Code in a saved pipeline below another saved pipeline, proved through the chain from the
+- **FU-318 (registered, B4):** Code in a saved pipeline below another saved pipeline, proved through the chain from the
   root down. Today it is refused, `graph.fanout.nested_saved_code`.
-- **FU-319 (proposed):** an owner scope for Code in a saved pipeline run as an ordinary Agent's tool. The child thread
+- **FU-319 (registered):** an owner scope for Code in a saved pipeline run as an ordinary Agent's tool. The child thread
   is `<root>/static-v1:…`, and the edge is the tool call lineage.
-- **FU-320 (proposed):** measure the saved-child Code overhead against W3-2a's +30 ms p99 budget.
+- **FU-320 (registered):** measure the saved-child Code overhead against W3-2a's +30 ms p99 budget. It runs in this
+  PR only if the browser pass shows a p99 regression; otherwise it waits for the polish pass.
+- **FU-321 (exit work, PLAN-REMAINING 0.6):** a real Worker↔Main harness for the crash suite (#1261, Docker lane),
+  shared with W3-2a.
 - W3-2a's FU-310 to FU-315 are unchanged. Operator recovery of a saved child's Code, which is `child_effect_unknown`
   today, is FU-310.
