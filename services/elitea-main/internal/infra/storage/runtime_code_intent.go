@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"math"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 
 	runtime "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/runtime"
@@ -233,7 +236,7 @@ func (s *ContentServer) RegisterCodeVisit(ctx context.Context, request *runtimev
 	}
 	visit, err := s.originalCodeIntents.RegisterOriginalCodeVisit(ctx, claim, visitRequest)
 	if err != nil {
-		return nil, originalCodeStatus(err)
+		return nil, s.originalCodeStatus(ctx, claim, "visit", err)
 	}
 	encoded, err := nodeRecoveryJSON(visit)
 	if err != nil {
@@ -268,13 +271,28 @@ func (s *ContentServer) RegisterCodeIntent(ctx context.Context, request *runtime
 	}
 	intent, err := s.originalCodeIntents.RegisterOriginalCodeIntent(ctx, claim, intentRequest)
 	if err != nil {
-		return nil, originalCodeStatus(err)
+		return nil, s.originalCodeStatus(ctx, claim, "intent", err)
 	}
 	encoded, err := nodeRecoveryJSON(code.IntentResponse{Schema: "elitea.sandbox.original-code-intent-response.v1", Intent: intent})
 	if err != nil {
 		return nil, err
 	}
 	return &runtimev1.RegisterCodeIntentResponseV1{ResponseJson: encoded}, nil
+}
+
+// originalCodeStatus answers a registration failure. A registration that
+// stayed contended after its bounded retries (B3) writes one operator fault
+// line and is answered retryable, its status naming the registry code; it is
+// never a refusal.
+func (s *ContentServer) originalCodeStatus(ctx context.Context, claim ContentClaim, registration string, err error) error {
+	if errors.Is(err, code.ErrRegistrationContended) {
+		faults.Log(ctx, s.logger, slog.LevelWarn, faults.New(faults.CodeRegistrationContended, err,
+			slog.String("execution_id", claim.ExecutionID),
+			slog.String("support_ref", claim.ExecutionID),
+			slog.String("registration", registration)))
+		return grpcstatus.Error(codes.Unavailable, fmt.Sprintf("%s (%s)", faults.CodeRegistrationContended.Sentence(), faults.CodeRegistrationContended))
+	}
+	return originalCodeStatus(err)
 }
 
 func originalCodeStatus(err error) error {

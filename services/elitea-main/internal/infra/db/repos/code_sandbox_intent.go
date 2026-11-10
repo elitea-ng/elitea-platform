@@ -249,7 +249,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeVisit(ctx context.Context, cl
 		return code.VisitResponse{}, code.ErrRejected
 	}
 	var out code.VisitResponse
-	err = r.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+	err = withinCodeRegistrationTx(ctx, r.shared, claim.ExecutionID, claim.Generation, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
 			return err
@@ -425,7 +425,7 @@ func (r *CodeIntentRepository) RegisterOriginalCodeIntent(ctx context.Context, c
 		return code.SignedGrant{}, code.ErrRejected
 	}
 	var claims code.IntentClaims
-	err = r.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
+	err = withinCodeRegistrationTx(ctx, r.shared, claim.ExecutionID, claim.Generation, func(tx sqlExecutor) error {
 		a, err := r.lockAccess(ctx, tx, claim, "RUNNING")
 		if err != nil {
 			return err

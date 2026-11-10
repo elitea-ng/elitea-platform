@@ -24,6 +24,11 @@ const MaxReceiptBytes = 1024 * 1024
 
 var ErrRejected = errors.New("original Code authority denied")
 
+// ErrRegistrationContended: a Code visit or intent registration kept
+// conflicting with concurrent registrations of the same run after its
+// bounded retries. It is retryable; it is never a refusal.
+var ErrRegistrationContended = errors.New("original Code registration contended")
+
 type OriginalVisitRef struct {
 	VisitID      string `json:"visit_id"`
 	Revision     uint8  `json:"revision"`

@@ -24,6 +24,8 @@ const (
 	AgentProgressOutputRejected Code = "agent_progress.output_rejected"
 	// Main's output service did not answer a progress update, so the update is kept and sent again.
 	AgentProgressOutputUnavailable Code = "agent_progress.output_unavailable"
+	// A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.
+	CodeRegistrationContended Code = "code.registration_contended"
 	// Main lost its database; requests that need it fail and Workers get retryable answers until it is back.
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
@@ -38,6 +40,8 @@ const (
 	InternalUnexpected Code = "internal.unexpected"
 	// A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin.
 	PipelineCodeDeadlineInsufficient Code = "pipeline.code.deadline_insufficient"
+	// Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.
+	PipelineCodeMainRetrying Code = "pipeline.code.main_retrying"
 	// A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.
 	PipelineCodeNestedSlot Code = "pipeline.code.nested_slot"
 	// A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow.

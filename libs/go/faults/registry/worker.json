@@ -114,6 +114,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.code.main_retrying",
+      "sentence": "Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline.",
+      "action": "Nothing when it is rare; main_code names Main's registered cause when Main gave one (for example code.registration_contended), otherwise reason says how the call failed.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.code.nested_slot",
       "sentence": "A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself.",
       "action": "Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen.",

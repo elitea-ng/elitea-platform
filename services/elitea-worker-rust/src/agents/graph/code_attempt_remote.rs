@@ -843,10 +843,14 @@ where
     loop {
         match call().await {
             Err(error) if error.retryable() && tokio::time::Instant::now() < deadline => {
-                tracing::warn!(
+                // B3: the line names the registered cause Main gave, never
+                // "Main was unavailable" for a contended registration.
+                elitea_faults::fault!(
+                    tracing::Level::WARN,
+                    code = elitea_faults::codes::PIPELINE_CODE_MAIN_RETRYING,
                     event = "code_main_call_retrying",
                     reason = error.code(),
-                    "Main was unavailable for a Code intent call; retrying"
+                    main_code = main_fault_code(&error).map(elitea_faults::Code::as_str)
                 );
                 tokio::time::sleep_until(
                     (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL)
@@ -857,6 +861,26 @@ where
             other => return other,
         }
     }
+}
+
+/// The registered code Main names at the end of a retryable status message,
+/// `"<sentence> (<code>)"` (the FU-299 status convention), when it is one the
+/// registry knows. Any other text is ignored, never logged.
+pub(in crate::agents::graph) fn main_fault_code(
+    error: &crate::transport::InputContentError,
+) -> Option<elitea_faults::Code> {
+    let crate::transport::InputContentError::Transport(
+        crate::transport::input_content::InputContentTransportError::Status(status),
+    ) = error
+    else {
+        return None;
+    };
+    let code = status
+        .message()
+        .strip_suffix(')')?
+        .rsplit_once(" (")?
+        .1;
+    elitea_faults::Code::lookup(code)
 }
 
 /// How long the platform-journal proof retries Main after a terminal runtime
@@ -1007,6 +1031,38 @@ mod tests {
         .await;
         assert!(matches!(down, Err(InputContentError::Timeout(_))));
         assert!(tokio::time::Instant::now() >= near);
+    }
+
+    /// B3: the retry line names Main's registered cause from the status
+    /// convention `"<sentence> (<code>)"`; unknown or absent codes are not
+    /// copied from Main's text.
+    #[test]
+    fn a_retryable_main_answer_names_its_registered_code_only() {
+        let status = |message: &str| {
+            InputContentError::transport(tonic::Status::unavailable(message.to_owned()))
+        };
+        let contended = elitea_faults::Code::lookup("code.registration_contended")
+            .expect("Main's contended registration code is registered");
+        assert_eq!(
+            main_fault_code(&status(&format!(
+                "{} ({})",
+                contended.sentence(),
+                contended.as_str()
+            ))),
+            Some(contended)
+        );
+        for message in [
+            "Node recovery control is unavailable",
+            "Node recovery control is busy",
+            "busy (secret.not_registered)",
+            "trailing (code.registration_contended) text",
+        ] {
+            assert_eq!(main_fault_code(&status(message)), None, "{message}");
+        }
+        assert_eq!(
+            main_fault_code(&InputContentError::DependencyUnavailable("down")),
+            None
+        );
     }
 
     #[test]

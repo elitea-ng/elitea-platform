@@ -26,6 +26,14 @@
       "owner": "elitea-main"
     },
     {
+      "code": "code.registration_contended",
+      "sentence": "A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.",
+      "action": "Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference.",
+      "audience": "operator",
+      "retryable": "yes",
+      "owner": "elitea-main"
+    },
+    {
       "code": "dependency.database_unavailable",
       "sentence": "Main lost its database; requests that need it fail and Workers get retryable answers until it is back.",
       "action": "Check PostgreSQL and PgBouncer; Main resumes on its own when the database answers again.",

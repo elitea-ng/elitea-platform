@@ -49,6 +49,12 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | `agent_progress.output_rejected` | Main refused this run's progress update, so the turn will be recovered from its last checkpoint. | Read the cause; if Main keeps refusing updates for new runs, check the Worker and Main versions. | operator | no | elitea-worker-rust |
 | `agent_progress.output_unavailable` | Main's output service did not answer a progress update, so the update is kept and sent again. | Check Main's runtime listener; the Worker reconnects on its own. | operator | yes | elitea-worker-rust |
 
+### code
+
+| Code | What happened | What to do | Who sees it | Retry | Raised by |
+|---|---|---|---|---|---|
+| `code.registration_contended` | A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable. | Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference. | operator | yes | elitea-main |
+
 ### dependency
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
@@ -75,6 +81,7 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
 | `pipeline.code.deadline_insufficient` | A Code attempt was refused before it started because the run's remaining time is shorter than the Code timeout plus the observation margin. | Nothing when the run was near its end; when cause is slot_wait, the Worker was full, so raise code_slots together with the Supervisor's concurrency. | operator | no | elitea-worker-rust |
+| `pipeline.code.main_retrying` | Main answered a Code visit or intent call with a retryable failure, so the Worker sends the same idempotent call again until the attempt's deadline. | Nothing when it is rare; main_code names Main's registered cause when Main gave one (for example code.registration_contended), otherwise reason says how the call failed. | operator | yes | elitea-worker-rust |
 | `pipeline.code.nested_slot` | A Code attempt that already held a Code slot asked for a second one, so it was refused at once instead of waiting for a slot it holds itself. | Report it with the support reference: a code path acquires a Code slot inside another Code attempt, which must not happen. | operator | no | elitea-worker-rust |
 | `pipeline.code.slot_waited` | A Code attempt waited more than a second for a slot because this Worker was already running as many Code attempts on that Supervisor as its code_slots allow. | Nothing when it is rare; if it repeats, raise code_slots together with the Supervisor's concurrency. | operator | n/a | elitea-worker-rust |
 | `pipeline.code.supervisor_busy` | The sandbox Supervisor answered busy to a Code attempt, so the attempt keeps its slot and retries with backoff until the Supervisor has room. | Nothing when it is rare; if it repeats, more Worker slots share the Supervisor than its concurrency allows, so lower code_slots or raise the concurrency. | operator | yes | elitea-worker-rust |
