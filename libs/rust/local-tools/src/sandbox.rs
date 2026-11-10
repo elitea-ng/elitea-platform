@@ -195,6 +195,25 @@ pub fn credential_paths(home: &Path) -> Vec<PathBuf> {
         "Library/Application Support/Vivaldi",
         "Library/Application Support/com.operasoftware.Opera",
         "Library/Application Support/elitea*",
+        // Windows (#1828): under the profile's `AppData`. Every system
+        // lists them, as it lists `Library` on Linux: a profile copied or
+        // mounted elsewhere keeps them.
+        "AppData/Roaming/GitHub CLI",
+        "AppData/Roaming/gcloud",
+        "AppData/Roaming/Docker",
+        "AppData/Roaming/Microsoft/Credentials",
+        "AppData/Roaming/Microsoft/Protect",
+        "AppData/Roaming/Microsoft/Crypto",
+        "AppData/Local/Microsoft/Credentials",
+        "AppData/Roaming/Mozilla",
+        "AppData/Local/Google/Chrome",
+        "AppData/Local/Chromium",
+        "AppData/Local/BraveSoftware",
+        "AppData/Local/Microsoft/Edge",
+        "AppData/Local/Vivaldi",
+        "AppData/Roaming/Opera Software",
+        "AppData/Roaming/elitea*",
+        "AppData/Local/elitea*",
     ];
     RELATIVE
         .iter()

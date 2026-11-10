@@ -40,6 +40,12 @@ fn synthetic_mode(meta: &std::fs::Metadata) -> u32 {
     }
 }
 
+/// The stand-in for a change time: the later of creation and last write.
+fn change_ticks(meta: &std::fs::Metadata) -> u64 {
+    use std::os::windows::fs::MetadataExt as _;
+    meta.creation_time().max(meta.last_write_time())
+}
+
 /// `t` (100 ns ticks since 1601) as seconds and nanoseconds since 1970.
 fn unix_time(ticks: u64) -> (i64, i64) {
     const EPOCH_DIFF_SECS: i64 = 11_644_473_600;
@@ -229,6 +235,7 @@ pub mod fs {
         NOFOLLOW = 16,
         CLOEXEC = 32,
         NONBLOCK = 64,
+        TRUNC = 128,
     });
 
     flags!(AtFlags {
@@ -349,6 +356,9 @@ pub mod fs {
                 options.create_new(true);
             } else if create {
                 options.create(true);
+            }
+            if flags.contains(OFlags::TRUNC) {
+                options.truncate(true);
             }
         } else {
             options.read(true);
@@ -479,9 +489,12 @@ pub mod fs {
     /// `NOENT`, or the OS error.
     pub fn unlink<P: AsRef<Path>>(path: P) -> Result<()> {
         let path = path.as_ref();
+        /// `FILE_ATTRIBUTE_DIRECTORY`.
+        const ATTRIBUTE_DIRECTORY: u32 = 0x10;
         let meta = std::fs::symlink_metadata(path)?;
-        if meta.file_type().is_symlink() && std::fs::metadata(path).is_ok_and(|m| m.is_dir()) {
-            // A directory symlink or a junction is removed as a directory.
+        // A directory symlink or a junction is removed as a directory: the
+        // link's own attributes say which, whether or not its target exists.
+        if meta.file_type().is_symlink() && meta.file_attributes() & ATTRIBUTE_DIRECTORY != 0 {
             return std::fs::remove_dir(path).map_err(Errno::from);
         }
         std::fs::remove_file(path).map_err(Errno::from)
@@ -576,12 +589,15 @@ pub mod os {
             super::unix_time(std::os::windows::fs::MetadataExt::last_write_time(self)).1
         }
 
+        /// No change time through `std`: the later of the creation and the
+        /// last write, so a file replaced by a rename (a new creation time)
+        /// or rewritten (a new write time) changes it.
         fn ctime(&self) -> i64 {
-            super::unix_time(std::os::windows::fs::MetadataExt::creation_time(self)).0
+            super::unix_time(super::change_ticks(self)).0
         }
 
         fn ctime_nsec(&self) -> i64 {
-            super::unix_time(std::os::windows::fs::MetadataExt::creation_time(self)).1
+            super::unix_time(super::change_ticks(self)).1
         }
     }
 

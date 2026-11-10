@@ -36,9 +36,10 @@ use crate::workspace::CASE_INSENSITIVE_FS;
 
 /// The host app's directories under its identifier `app_id` in the default
 /// layouts: macOS (`~/Library`: Application Support, Caches, Logs, the
-/// webview's `WebKit` and `HTTPStorages`, saved window state, preferences) and
-/// Linux XDG defaults (`~/.config`, `~/.local/share`, `~/.cache`). Both
-/// layouts, whatever the OS: they are fallbacks for directories the host did
+/// webview's `WebKit` and `HTTPStorages`, saved window state, preferences),
+/// Linux XDG defaults (`~/.config`, `~/.local/share`, `~/.cache`) and
+/// Windows (`~/AppData/Roaming`, `~/AppData/Local`). Every layout, whatever
+/// the OS: they are fallbacks for directories the host did
 /// not resolve, never the authority. Empty for an identifier that is not a
 /// plain name (empty, `.`, `..`, or holding `/`, `\` or NUL).
 #[must_use]
@@ -58,6 +59,10 @@ pub fn app_paths(home: &Path, app_id: &str) -> Vec<PathBuf> {
         format!("Library/HTTPStorages/{app_id}.binarycookies"),
         format!("Library/Saved Application State/{app_id}.savedState"),
         format!("Library/Preferences/{app_id}.plist"),
+        // Windows (#1828): Tauri's app data, config, cache and the
+        // WebView2 profile (`AppData/Local/<id>/EBWebView`).
+        format!("AppData/Roaming/{app_id}"),
+        format!("AppData/Local/{app_id}"),
     ]
     .iter()
     .map(|relative| home.join(relative))
@@ -288,12 +293,32 @@ mod tests {
             "Library/HTTPStorages/com.example.app.binarycookies",
             "Library/Saved Application State/com.example.app.savedState",
             "Library/Preferences/com.example.app.plist",
+            "AppData/Roaming/com.example.app",
+            "AppData/Local/com.example.app",
         ] {
             assert!(paths.contains(&home.join(relative)), "{relative}");
         }
         for odd in ["", ".", "..", "a/b", "a\\b"] {
             assert!(app_paths(home, odd).is_empty(), "{odd:?}");
         }
+    }
+
+    /// The Windows profile's credentials and the app's own data are in
+    /// every list (#1828).
+    #[test]
+    fn windows_profile_locations_are_denied() {
+        let home = Path::new("/h");
+        let list = DenyList::for_session(Some(home), Some("ai.elitea.desktop"), true, Vec::new());
+        for relative in [
+            "AppData/Roaming/GitHub CLI/hosts.yml",
+            "AppData/Local/Google/Chrome/User Data/Default/Login Data",
+            "AppData/Roaming/Microsoft/Credentials/x",
+            "AppData/Roaming/ai.elitea.desktop/session.json",
+            "AppData/Local/ai.elitea.desktop/EBWebView/Default/Cookies",
+        ] {
+            assert!(list.covers(&home.join(relative)), "{relative}");
+        }
+        assert!(!list.covers(&home.join("AppData/Local/Temp/build.log")));
     }
 
     /// Both spellings through a symlinked intermediate directory, for

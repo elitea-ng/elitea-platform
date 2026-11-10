@@ -623,14 +623,18 @@ impl Process {
         true
     }
 
-    /// `SIGKILL` its group, when it still runs.
+    /// `SIGKILL` its group, when it still runs. On Windows the `SIGTERM`
+    /// already closed the job (there is no graceful stop), so the record
+    /// keeps the stop that was actually sent.
     fn kill_hard(&self) {
         {
             let mut status = lock(&self.status);
             if status.state != ProcessState::Running {
                 return;
             }
-            status.stopping = Some("SIGKILL");
+            if cfg!(unix) || status.stopping.is_none() {
+                status.stopping = Some("SIGKILL");
+            }
         }
         self.signal_group(crate::sys::process::Signal::KILL);
     }

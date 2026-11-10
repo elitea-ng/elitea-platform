@@ -59,13 +59,22 @@ pub const PROTECTED_DIR: &str = ".git";
 /// name the same directory there. Lowercasing everywhere costs nothing on a
 /// case-sensitive file system (no agent needs to write a `.GIT`).
 #[must_use]
+///
+/// NTFS adds its own aliases (git's `is_ntfs_dotgit`): the 8.3 short name
+/// `git~1`, trailing dots and spaces (`.git.`, `.git `), and a stream
+/// suffix (`.git::$INDEX_ALLOCATION`). They are refused everywhere: no
+/// agent needs to write one, and a checkout copied to Windows keeps them.
 pub fn is_protected_name(name: &str) -> bool {
     let folded: String = name
         .nfc()
         .filter(|c| !is_hfs_ignorable(*c))
         .flat_map(char::to_lowercase)
         .collect();
-    folded == PROTECTED_DIR
+    // A stream suffix names the same file: `.git::$INDEX_ALLOCATION`.
+    let folded = folded.split(':').next().unwrap_or_default();
+    // NTFS drops trailing dots and spaces.
+    let folded = folded.trim_end_matches(['.', ' ']);
+    folded == PROTECTED_DIR || folded == "git~1"
 }
 
 /// Code points HFS+ drops when comparing names (git's `is_hfs_dotgit` list).
@@ -268,6 +277,39 @@ fn normalise_absolute(path: &Path) -> Option<PathBuf> {
         }
     }
     rooted.then_some(out)
+}
+
+#[cfg(test)]
+mod protected_name_tests {
+    use super::is_protected_name;
+
+    #[test]
+    fn every_spelling_of_git_is_protected() {
+        for name in [
+            ".git",
+            ".GIT",
+            ".g\u{200c}it",
+            "git~1",
+            "GIT~1",
+            ".git.",
+            ".git ",
+            ".git. .",
+            ".git::$INDEX_ALLOCATION",
+            ".GIT:stream",
+        ] {
+            assert!(is_protected_name(name), "{name:?}");
+        }
+        for name in [
+            ".github",
+            "git",
+            ".gitignore",
+            "git~2",
+            ".git-blame",
+            "a.git",
+        ] {
+            assert!(!is_protected_name(name), "{name:?}");
+        }
+    }
 }
 
 #[cfg(all(test, windows))]
