@@ -10,7 +10,7 @@
 //! | Unix | Windows |
 //! |---|---|
 //! | Walks from a directory descriptor with `openat(O_NOFOLLOW)`: a swapped component cannot redirect an operation | Walks by path, one component at a time, each opened without following a reparse point (symlink or junction) and refused when it is one. A component swapped between the check and the use is not caught as `openat` catches it |
-//! | Process groups: `kill(-pgid)` stops a command and everything it started | Job Objects with kill-on-close ([`process::Group`]): closing the job stops every process in it. A process the command starts before it is assigned to the job (its first instant) can escape |
+//! | Process groups: `kill(-pgid)` stops a command and everything it started | Job Objects with kill-on-close ([`process::Group`]): closing the job stops every process in it. A process the command starts in the moment between its own start and its assignment to the job can escape (no `CREATE_SUSPENDED` without `unsafe`). The processes end with exit code 0 |
 //! | `SIGTERM`, then `SIGKILL` after a grace | No graceful stop: both close the job |
 //! | Owner and mode bits on private files | Not checked: files under the person's profile carry its owner-only ACL. The read-only attribute stands for the write bits |
 //! | The OS sandbox (Seatbelt, bubblewrap, Landlock) | None ([`crate::sandbox`]): confined commands are refused unless the host allows unenforced commands |

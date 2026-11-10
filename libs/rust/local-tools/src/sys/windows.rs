@@ -742,6 +742,18 @@ pub mod process {
         }
 
         /// End every process in the job (any signal).
+        ///
+        /// The job is closed, and kill-on-close ends what is in it. Every
+        /// clone shares this one handle (the `Arc`), and nothing else holds
+        /// one, so taking it closes the job whatever clones are alive.
+        ///
+        /// Known gaps (no `unsafe` here: `TerminateJobObject` and
+        /// `ResumeThread` are `unsafe fn`, and this crate forbids unsafe code):
+        /// * the processes end with exit code 0, not 1 as `TerminateJobObject`
+        ///   would give: the callers record the stop themselves;
+        /// * the child is assigned to the job after it started, not created
+        ///   suspended: a process it starts in the moment between its start
+        ///   and the assignment (microseconds) is outside the job.
         pub fn signal(&self, _signal: Signal) {
             let job = self
                 .0
@@ -836,16 +848,60 @@ mod tests {
         );
     }
 
-    /// Ending a group ends its child: the Job Object closes with kill.
+    /// Ending a group ends its whole tree: `cmd` AND the `ping` it started
+    /// (a grandchild), at once instead of after 30 seconds.
+    ///
+    /// `ping` inherits `cmd`'s stdout pipe, so the pipe reaches end of file
+    /// only when both have exited: a grandchild that escaped the job would
+    /// hold it open for the rest of its 30 seconds. The first line `ping`
+    /// prints proves it runs before the kill. The exit code proves nothing
+    /// (a job closed with kill-on-close may end its processes with 0); the
+    /// callers record a stop themselves (`timed_out`, `stopping`).
     #[test]
-    fn a_group_ends_its_process_tree() {
+    fn a_group_ends_its_process_tree_grandchildren_included() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+
         let mut child = std::process::Command::new("cmd")
-            .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+            .args(["/C", "ping -n 30 127.0.0.1"])
+            .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("spawn");
         let group = super::process::Group::of_child(&child).expect("job");
+        let stdout = child.stdout.take().expect("stdout");
+        let (lines, received) = std::sync::mpsc::channel::<Option<String>>();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if lines.send(Some(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = lines.send(None); // end of file: every writer is gone
+        });
+        // Wait until ping answers once: the grandchild runs.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match received.recv_timeout(left).expect("ping printed nothing") {
+                Some(line) if line.contains("127.0.0.1") && line.contains('=') => break,
+                Some(_) => {}
+                None => panic!("the pipe closed before ping ran"),
+            }
+        }
+        let started = Instant::now();
         group.signal(super::process::Signal::KILL);
-        let status = child.wait().expect("wait");
-        assert!(!status.success());
+        child.wait().expect("wait");
+        loop {
+            let left = Duration::from_secs(10).saturating_sub(started.elapsed());
+            match received.recv_timeout(left) {
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(error) => panic!(
+                    "ping outlived its job for {:?} ({error})",
+                    started.elapsed()
+                ),
+            }
+        }
     }
 }
