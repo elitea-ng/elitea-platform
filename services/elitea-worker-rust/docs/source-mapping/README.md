@@ -380,8 +380,10 @@ Maintained Rust runtime ownership registry:
   application/ad-hoc process proof now passes;
 - `src/diagnostics.rs`, model adapters, state adapters and
   `src/execution/{agent_delivery_processor,agent_preparation,agent_coordinator,agent_invocation,invocation_supervisor,native_agent_lifecycle,output_delivery,command_delivery}.rs`:
-  crate-scoped structured logs, standard OTLP export and authenticated
-  lifecycle/assembly/tool correlation. Valid W3C `traceparent` values continue
+  crate-scoped structured logs (since FU-299 a JSON-lines operator stream on
+  stdout with registered fault codes; span timing to OTLP, or to stderr under
+  `ELITEA_RUST_SPAN_TIMING=stderr` for performance evidence), standard OTLP
+  export and authenticated lifecycle/assembly/tool correlation. Valid W3C `traceparent` values continue
   the upstream trace. Delivery, claim, preparation, ADK execution, model,
   session, checkpoint, output, settlement and retirement spans use allowlisted
   identity, phase, outcome and stable error-code fields only. The concrete

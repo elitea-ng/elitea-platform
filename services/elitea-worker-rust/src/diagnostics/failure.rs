@@ -13,6 +13,7 @@ use super::DiagnosticInitError;
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static EPOCH: OnceLock<Instant> = OnceLock::new();
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(0);
+static NEXT_PANIC_BACKTRACE: AtomicU64 = AtomicU64::new(0);
 const MAX_BYTES: usize = 8192;
 const MAX_SPANS: usize = 32;
 
@@ -39,6 +40,20 @@ pub(crate) fn capture() -> Option<String> {
         return None;
     }
     Some(capture_detail())
+}
+
+/// The panic hook's backtrace (FU-299): always on, under the same bounds as
+/// [`capture`] (one per second process-wide, [`MAX_BYTES`]) with an allowance
+/// of its own, so a panic storm cannot flood the operator stream and opt-in
+/// failure captures do not starve it.
+pub(super) fn panic_backtrace() -> Option<String> {
+    let seconds = EPOCH.get_or_init(Instant::now).elapsed().as_secs();
+    if !admit(&NEXT_PANIC_BACKTRACE, seconds) {
+        return None;
+    }
+    let mut output = BoundedText(String::with_capacity(MAX_BYTES));
+    let _ignored = write!(output, "{}", Backtrace::force_capture());
+    Some(output.0)
 }
 
 fn admit(next: &AtomicU64, seconds: u64) -> bool {
