@@ -16,13 +16,19 @@
       beyond that is checked per attempt: it ends with "The Code node could not start: too little time was left before
       the run's deadline." and never overruns.
   - **Still refused, readably, before the run starts:**
-    - Code in a saved pipeline that another saved pipeline runs. New code: `graph.fanout.nested_saved_code`.
+    - Code in a saved pipeline that another saved pipeline runs. New code: `pipeline.saved_code.nested`.
+    - In a conversation an older Worker paused (continued on the unscoped resolver), a saved pipeline with Code as
+      a Map worker or Parallel branch, as before this change. New code: `pipeline.saved_code.unscoped`.
     - A Map or Parallel of Code inside a saved pipeline. Unchanged: `graph.fanout.code_below_root`.
     - A Router as the direct Map worker or Parallel branch. Unchanged.
   - **Main** resolves the owner of every such Code visit in the visit's own transaction, against its own freeze
     capture of the saved pipeline and the run root's frozen definition, and fails closed. A refused visit writes the
-    usual WARN line `code.registration_refused`, with `stage` naming the failed check: `saved_child_scope`,
-    `saved_child_parent`, `saved_child_thread`, `saved_child_edge`, `saved_child_capture` or `saved_child_code`.
+    usual WARN line `code.registration_refused`, with `stage` naming the failed check, one of:
+    `saved_child_scope`, `saved_child_parent`, `saved_child_thread`, `saved_child_root` (the run root's frozen source
+    could not be read), `saved_child_edge`, `saved_child_capture` or `saved_child_code`. A scope that does not decode
+    at all is refused at `source`.
+  - **With node recovery off** (the Helm default `agentNodeRecovery: false`), a saved pipeline with Code compiles and
+    runs as before this change; its Code fails readably only if it is reached, as root Code does without recovery.
 - **Who is affected.**
   - Pipeline authors who use saved pipelines with Code.
   - Operators who roll out Main and the Workers separately.

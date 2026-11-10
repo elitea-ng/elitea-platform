@@ -394,6 +394,7 @@ async fn real_pg_a_map_of_saved_children_with_code_survives_worker_replacement()
     assert!(killed.is_none(), "the first Worker died mid-Map");
     drop(graph);
     let before = identities(&h);
+    let first_visits = scopes(&h).len();
     let graph = compiled(&h, 2, "saved-map", &root, &["silver"], false).await;
     let state = graph
         .invoke(HashMap::new(), ExecutionConfig::new("saved-map"))
@@ -413,6 +414,13 @@ async fn real_pg_a_map_of_saved_children_with_code_survives_worker_replacement()
     );
     assert_eq!(dispatch_rows(&h).await, (8, 0), "all resolved");
     assert_saved_scopes(&h, &["silver"], Some(("map_item", "each")));
+    // C4: the recovered occurrence knows its frozen family: every visit the
+    // replacement registered names its member and the frozen item count.
+    let resumed = &scopes(&h)[first_visits..];
+    assert!(!resumed.is_empty(), "the replacement registered visits");
+    for scope in resumed {
+        assert_eq!(scope["fanout"]["item_count"], 4, "{scope}");
+    }
     let members = scopes(&h)
         .iter()
         .map(|scope| scope["fanout"]["ordinal"].as_u64().unwrap())

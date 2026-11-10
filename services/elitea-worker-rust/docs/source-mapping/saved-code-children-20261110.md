@@ -64,17 +64,21 @@ Shapes refused before and admitted now:
   - `pipeline/saved_code_child.rs` (new): owner, member, scope, provider.
   - `pipeline/saved_child_http.rs`: `CodeVisitScope::SavedChild`.
   - `pipeline.rs`: the owner on root-level participants, the per-use provider, the B4 call, a test resolver.
-  - `pipeline/composition.rs`: Main's frozen digest kept; `refuse_nested_saved_code`.
+  - `pipeline/composition.rs`: Main's frozen digest kept; `refuse_nested_saved_code`, `refuse_unscoped_saved_code`,
+    `is_saved_code_refusal`.
+  - `execution/native_agent_lifecycle.rs`: a saved-Code refusal ends with the readable "node type not available"
+    terminal.
   - `pipeline/parallel_application_resolver.rs`: member rebinding.
   - `graph/application.rs`: the resolver hook.
-  - `graph/compiler.rs`: runtime fields, journals for saved Code, Code leaves, `NestedSavedCode`, the `ContainsCode`
-    removal.
+  - `graph/compiler.rs`: runtime fields, journals for saved Code (none with node recovery off), Code leaves,
+    `fanout_owned_application_aliases`, the `ContainsCode` removal.
   - `graph/parallel_compiler.rs`: `ContainsCode` check removed, Q2 for saved children, member binding.
   - `graph/parallel.rs`: a bare inner code names the member failure.
   - `session.rs`: Code leaves in the recovery walk.
   - Tests listed below.
 - `libs/go/faults/registry/worker.json`, plus generated `codes_gen.go` and `docs/errors/README.md`: add
-  `graph.fanout.nested_saved_code`. `libs/go/faults/legacy-codes.txt` drops `graph.fanout.child_contains_code`, so the
+  `pipeline.saved_code.nested` and `pipeline.saved_code.unscoped`. `libs/go/faults/legacy-codes.txt` drops
+  `graph.fanout.child_contains_code`, so the
   list only shrinks.
 - `docs/upgrading/2026-11-10-0-saved-code-children.md` (number assigned at PR time).
 - Web: unchanged. No copy says that saved pipelines with Code are refused (`git grep` over `apps/elitea-web/src`). The
@@ -96,9 +100,10 @@ Shapes refused before and admitted now:
   | `saved_child_scope` | `:75` | Application and version are 1..2^31−1, the digest is valid, and the node ids are valid. The scope's child thread is the visit's thread, and its Code node is the visit's node. |
   | `saved_child_parent` | `:79-90` | The parent is the run's root thread (from Main's own claim access and input) when `fanout` is null. Otherwise it is a W3-2a fan-out child thread of the scope's family (`m1:`/`p1:`, not the root). |
   | `saved_child_thread` | `:94` | The child thread is exactly `parent + "/" + agent_node_id`: the subgraph thread ADK derives for an Agent node (`SavedCodeChildThread`, `runtime_saved_code_child.go:67`). At most 512 bytes. |
+  | `saved_child_root` | `:98` | The run root's frozen source is read under the original access (`readOriginalRootSourceUnderOriginalAccess`). |
   | `saved_child_edge` | `:102` | The root's frozen source (`readOriginalRootSourceUnderOriginalAccess`) declares that Agent node selecting exactly the scope's application and version (`SavedCodeChildEdge`, `runtime_saved_code_child.go:28`). |
-  | `saved_child_capture` | `:106-111` | A capture row exists for this execution, generation, application, version, digest, root-input digest, project and actor. The captured definition bytes are read and their digest recomputed (`FrozenDefinitionDigest`). The pre-redemption source is then read through the same capture (`readCapturedSavedChildSource`). |
-  | `saved_child_code` | `:116` | The node is declared `type: code` in the captured saved pipeline, outside any Map or Parallel of it (`RootSavedCodePolicy` on the child's document). |
+  | `saved_child_capture` | `:104-116` | A capture row exists for this execution, generation, application, version, digest, root-input digest, project and actor. One read (C5) returns the captured definition bytes, whose digest is recomputed (`FrozenDefinitionDigest`), and, through the same capture row, the pre-redemption source, which is decoded and checked against the scope's application and version. |
+  | `saved_child_code` | `:121` | The node is declared `type: code` in the captured saved pipeline, outside any Map or Parallel of it (`RootSavedCodePolicy` on the child's document). |
 
   For the edge check:
   - At the root, no Map or Parallel may own the Agent node (`:46`).
@@ -171,11 +176,16 @@ Shapes refused before and admitted now:
 - `ContainsCode` (`graph.fanout.child_contains_code`) is deleted (`parallel_compiler.rs:696`).
 - `CodeBelowRoot` is kept.
 - A direct Router child stays refused. A Router inside the saved child is admitted (unit test below).
-- B4: `NestedSavedCode` (`graph.fanout.nested_saved_code`, registered) refuses a Code node of a saved pipeline that
-  another saved pipeline runs.
-  - It refuses before the run starts, by its path (`refuse_nested_saved_code`, `composition.rs:392`, called by the
-    scoped root resolver at `pipeline.rs:1046`).
-  - The terminal is readable: `PipelineNodeTypeNotAvailable`, through `FanoutChildRefusal::is_code`.
+- B4: `pipeline.saved_code.nested` (registered; a non-fan-out refusal since review C7) refuses a Code node of a
+  saved pipeline that another saved pipeline runs.
+  - It refuses before the run starts (`refuse_nested_saved_code`, `composition.rs:392`, called by the scoped root
+    resolver at `pipeline.rs:1047` and by the unscoped one at `pipeline.rs:940`).
+  - The terminal is readable: `PipelineNodeTypeNotAvailable`, through `is_saved_code_refusal`
+    (`native_agent_lifecycle.rs:1843`).
+- C2: a conversation continued on the unscoped resolver an older Worker paused with (`LegacyUnscoped`) names no
+  saved Code owner. It refuses, before the run, a saved pipeline with Code run as a Map worker or Parallel branch
+  (`pipeline.saved_code.unscoped`, `refuse_unscoped_saved_code`, `composition.rs:413`), as `ContainsCode` refused it
+  before W3-2b, and nested Code as on the scoped path.
   - Main refuses the same shape independently at `saved_child_edge`: the scope's Agent node must be declared by the
     root.
 - Typed reducers: the delta's fact 6 is not accurate. `compile_subgraph_with_runtime` refuses typed reducers in a
@@ -239,9 +249,9 @@ Shapes refused before and admitted now:
   | Map-owned Agent node named at the root | `saved_child_edge` |
   | Root Agent node named as a member | `saved_child_edge` |
   | Unknown scope field | `source` |
-- **B4.** Refused readably and registered: `graph.fanout.nested_saved_code`.
-  - `code_below_a_second_saved_pipeline_is_refused_by_its_path` asserts the code and the detail `nested_saved_code`,
-    and that one level down is admitted.
+- **B4.** Refused readably and registered: `pipeline.saved_code.nested`.
+  - `code_below_a_second_saved_pipeline_is_refused_by_its_path` asserts the code, and that one level down is
+    admitted.
   - Main: "a nested saved child" is refused at `saved_child_edge`.
   - Reported for an FU: proving the scope through the chain (FU-318, registered).
 - **B5, accepted on the same basis as W3-2a (orchestrator, 2026-11-10).** The basis is:
@@ -260,7 +270,9 @@ Shapes refused before and admitted now:
   - Each attempt takes 10 s. Three attempts run, the fourth (a Router re-entry) is refused `DeadlineInsufficient`
     before the deadline, and it holds no slot.
 - **B7.**
-  - `graph.fanout.nested_saved_code` is registered in the same commit as its use, and the legacy list only shrinks.
+  - `pipeline.saved_code.nested` and `pipeline.saved_code.unscoped` are registered in the same commit as their use
+    (review C7 replaced the first version's `graph.fanout.nested_saved_code`, never released), and the legacy list
+    only shrinks.
   - Main adds no code. Its stages are labels on the existing `code.registration_*` lines.
   - No definition content, item values or Code source reaches a refusal: the refusals are `ErrRejected` plus a stage,
     and on the Worker the node path.
@@ -283,7 +295,8 @@ Existing tests deleted, each only asserting the `ContainsCode` refusal:
 - `parallel_compiler_tests.rs` `a_branch_whose_saved_pipeline_contains_code_is_refused_typed`, at :485;
 - `parallel_compiler_tests.rs` `a_branch_with_code_is_refused_inside_a_nested_child_too`, at :518.
 
-The shapes they refused are now admitted, or refused by `NestedSavedCode` / `ContainsParallel`.
+The shapes they refused are now admitted, or refused by `pipeline.saved_code.nested` /
+`pipeline.saved_code.unscoped` / `ContainsParallel`.
 
 Existing tests changed, with no assertion changed:
 
@@ -291,22 +304,55 @@ Existing tests changed, with no assertion changed:
 - `composition.rs` tests: one `AdmittedSavedPipeline` literal gained `frozen_definition_sha256: None`.
 - The W3-2a fake Main records each visit's `saved_child_scope`.
 
-## Runs (PostgreSQL 18, disposable `postgres:18`)
+## Code review fixes (full-delta /code-review, 2026-11-10)
+
+Each fix was test-first: the test was written, run against the code with the fix reverted (failing), then run green.
+
+| Item | Fix | Failing-first test |
+|---|---|---|
+| C1, node recovery off | A saved child's Code gets its owner scope only together with journals (`compiler.rs:1921`). With node recovery off (the Helm default) the saved subgraph compiles as before W3-2b, and its Code fails readably only if reached, never an untyped `Unavailable` for the whole subgraph. | `a_saved_pipeline_with_code_compiles_at_the_root_with_node_recovery_off`, `a_saved_pipeline_with_code_runs_as_a_map_worker_with_node_recovery_off` (both failed before: the root did not compile; every Map item failed) |
+| C2, unscoped continuation | `refuse_unscoped_saved_code` on the `LegacyUnscoped` resolver path (`pipeline.rs:940`). | `an_unscoped_continuation_refuses_saved_code_it_cannot_own_before_the_run` (production assembler, `LegacyUnscoped`: a Map worker running saved Code, and nested saved Code; failed before) |
+| C3, member thread bound to its ordinal | **Not done; decision needed.** See "C3" below. | — |
+| C4, member on a recovered occurrence | No code change: the premise does not hold. `family_size` is the frozen occurrence's child count on every path, fresh and restored (`parallel.rs:1028`; `restore_branches` receives the full frozen input list and refuses a mismatched prepared set). | `real_pg_a_map_of_saved_children_with_code_survives_worker_replacement` now also asserts that every visit the replacement Worker registered names its member and the frozen `item_count` 4 (passes; it would fail with a member-less scope) |
+| C5, one capture read | The capture, the definition and the source are read in one statement (`code_source_saved_child.go:104`). | None possible without a statement counter. Behaviour preserved: the 24 + 3 negatives and the positives pass unchanged. |
+| C6, member rebinding | `rebind_saved_code_member` returns `None` when no participant has a saved Code owner (`parallel_application_resolver.rs:95`), so nothing is rebuilt per branch. | `a_member_resolver_without_saved_code_owners_is_kept` (failed before) |
+| C7, refusal naming | Nested saved Code is a non-fan-out refusal, `pipeline.saved_code.nested`; `FanoutChildRefusal::NestedSavedCode` and `graph.fanout.nested_saved_code` are gone. | `code_below_a_second_saved_pipeline_is_refused_by_its_path` now expects the new code (failed against the old code) |
+| C8, stages | The upgrade note and the stage table list all seven stages, `saved_child_root` included, and `source` for a scope that does not decode. | docs |
+
+**C3, open.** Main checks only the member thread's family form (`m1:` / `p1:`), not that the thread is the one the
+Worker derives for the scope's fan-out node and ordinal. Main cannot recompute that thread: the Worker derives it
+(`fanout_children.rs:80`) from the claim writer's definition digest, the occurrence's activation key and frozen
+origin, the branch key and ordinal, and the frozen item input digest, and Main holds none of the last four. The same
+gap exists for W3-2a's direct Code children (FU-315). Alternatives, for the orchestrator to choose:
+
+1. The Worker sends the derivation inputs (origin, activation key, branch key, input digest) and Main recomputes the
+   thread from them. That binds the fan-out node and ordinal into the hash, but the inputs are still the Worker's
+   word.
+2. Main binds the first (fan-out node, ordinal, family) a member thread registers with, per execution and generation,
+   and refuses any later visit that names that thread with another member, or that member with another thread in the
+   same occurrence. This needs a binding table, and an occurrence identity to tell a loop's second occurrence apart.
+3. Keep it with FU-315 (thread-derivation hardening), on W3-2a's accepted justification: only the claim holder names
+   threads; Main never authorizes by thread. A Map's members share one worker application, so a wrong ordinal changes
+   no authorization. For a Parallel, the application is still one that the root declares at the named ordinal.
+
+**Not fixed, by decision: Q2 over-admission.** The Q2 sum counts every Code node of a saved child once, including
+nodes on mutually exclusive Router branches, so the activation window can be larger than any single path needs. That
+is the orchestrator's Q2 decision (a conservative sum); the per-attempt check guards the other direction (B6).
+
+## Runs (PostgreSQL 18, disposable `postgres:18`), after the review fixes
 
 - **Worker.** `cargo fmt --all -- --check`, `clippy --lib --tests --all-features -D warnings` and
   `cargo doc -D warnings` are clean.
-- **Worker lib** with `ELITEA_TEST_DATABASE_URL` and the receipt guard set as CI sets them: 3182 passed, 0 failed,
-  133 ignored.
-  - The 3 `graph_receipts` tests need the URL's database to be `postgres` (their own guard); rerun so, they pass 3
-    of 3.
-- **Real-PG prefix** `code_owner_tests::` `--ignored`: 44 passed, 0 failed (after the Parallel kill test was added;
-  fmt, clippy and doc rerun clean on a cold build).
+- **Worker lib** with `ELITEA_TEST_DATABASE_URL` and the receipt guard set as CI sets them: 3186 passed, 3 failed, 134
+  ignored. The 3 failures are the `graph_receipts` tests, whose own guard needs the URL's database to be `postgres`;
+  rerun so, they pass 3 of 3.
+- **Real-PG prefix** `code_owner_tests::` `--ignored`: 44 passed, 0 failed.
 - **CI guard** `check-worker-ignored-tests.mjs`: 134 ignored, 120 run by CI invocations, 14 allowlisted, 0 run by
   nothing.
 - **Main.** `go vet ./...` is clean. `go test -p 1 ./internal/infra/storage/ ./internal/infra/db/repos/` passes.
-- **Faults gate** passes.
-- **Agent runtime** (`cd libs/rust && cargo test --offline --locked -p elitea-agent-runtime`): 1636 passed, 0 failed,
-  1 ignored (lib 1633, plus 2 + 1 in the other targets). This change does not touch `libs/rust`.
+- **Faults gate** (`go generate`, `go test ./...` in `libs/go/faults`) passes.
+- **Agent runtime** (`cd libs/rust && cargo test --offline --locked -p elitea-agent-runtime`, before the review
+  fixes, which do not touch `libs/rust`): 1636 passed, 0 failed, 1 ignored.
 - Every build directory was removed with `cargo clean` after its step.
 
 ## Performance
@@ -343,7 +389,7 @@ Existing tests changed, with no assertion changed:
   - `pipeline.code_authorization_failed`;
   - `pipeline.code.deadline_insufficient`;
   - `pipeline.node_recovery.child_effect_unknown`, now also as an Agent member's failure code;
-  - `graph.fanout.nested_saved_code`.
+  - `pipeline.saved_code.nested`, `pipeline.saved_code.unscoped`.
 
 ## Security
 
@@ -420,7 +466,7 @@ The recovery walk refuses no shape this change admits:
 - **FU-316:** `RegisterSavedChild` is either wired or deleted. It must not stay a dead authority path.
 - **FU-317:** a Map or Parallel of Code inside a saved child (`graph.fanout.code_below_root`), after FU-239.
 - **FU-318 (registered, B4):** Code in a saved pipeline below another saved pipeline, proved through the chain from the
-  root down. Today it is refused, `graph.fanout.nested_saved_code`.
+  root down. Today it is refused, `pipeline.saved_code.nested`.
 - **FU-319 (registered):** an owner scope for Code in a saved pipeline run as an ordinary Agent's tool. The child thread
   is `<root>/static-v1:…`, and the edge is the tool call lineage.
 - **FU-320 (registered):** measure the saved-child Code overhead against W3-2a's +30 ms p99 budget. It runs in this
