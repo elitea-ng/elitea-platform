@@ -20,6 +20,8 @@ import (
 //     that an agent may still use in a turn nobody waits on. A tool that
 //     writes and is not named stays out of unattended turns whatever the
 //     agent's envelope says.
+//   - subagents_max_depth (ADR-0050 decision 4, issue 1824) is how deep
+//     sub-agents may nest: 1 (the default) or 2.
 //
 // Main reads it (through a per-replica cache) at every agent admission and
 // freezes it into the run input (AgentExecutionInputV1.tool_envelope).
@@ -31,18 +33,28 @@ const (
 	KeyAgentsUnattendedToolsAllowlist  = "unattended_tools_allowlist"
 	MaxAgentsMaxToolLimit              = 10_000
 	MaxAgentsUnattendedAllowlistLength = 256
+	KeyAgentsSubagentsMaxDepth         = "subagents_max_depth"
+	// DefaultSubagentsMaxDepth and MaxSubagentsMaxDepth bound
+	// subagents_max_depth (ADR-0050 decision 4, issue 1824): 1 lets an
+	// agent start sub-agents that start none; 2 lets each of them start
+	// sub-agents of its own, which start none.
+	DefaultSubagentsMaxDepth = 1
+	MaxSubagentsMaxDepth     = 2
 )
 
 // AgentToolSettings is the section.
 type AgentToolSettings struct {
 	MaxToolLimit             uint32   `json:"max_tool_limit"`
 	UnattendedToolsAllowlist []string `json:"unattended_tools_allowlist"`
+	// SubagentsMaxDepth is 1 or 2; 0 (a section never saved) is the
+	// default, 1. Read it through SubagentsDepth.
+	SubagentsMaxDepth uint32 `json:"subagents_max_depth"`
 }
 
-// Empty reports the defaults: no ceiling and no tool that writes allowed
-// unattended.
+// Empty reports the defaults: no ceiling, no tool that writes allowed
+// unattended, and sub-agents one level deep.
 func (s AgentToolSettings) Empty() bool {
-	return s.MaxToolLimit == 0 && len(s.UnattendedToolsAllowlist) == 0
+	return s.MaxToolLimit == 0 && len(s.UnattendedToolsAllowlist) == 0 && s.SubagentsDepth() == DefaultSubagentsMaxDepth
 }
 
 // AgentToolSettingsFromValues is the overlay. A limit out of range is
@@ -74,7 +86,30 @@ func AgentToolSettingsFromValues(values Values) AgentToolSettings {
 			settings.UnattendedToolsAllowlist = settings.UnattendedToolsAllowlist[:MaxAgentsUnattendedAllowlistLength]
 		}
 	}
+	// A depth out of range or unreadable is the default: a hand-written row
+	// never lets sub-agents nest deeper than the maximum.
+	if raw, present := values[KeyAgentsSubagentsMaxDepth]; present && raw != nil {
+		if ValidSubagentsMaxDepth(raw) {
+			settings.SubagentsMaxDepth = uint32(raw.(float64))
+		} else {
+			settings.SubagentsMaxDepth = DefaultSubagentsMaxDepth
+		}
+	}
 	return settings
+}
+
+// SubagentsDepth is the effective depth: 1 or 2.
+func (s AgentToolSettings) SubagentsDepth() uint32 {
+	if s.SubagentsMaxDepth >= MaxSubagentsMaxDepth {
+		return MaxSubagentsMaxDepth
+	}
+	return DefaultSubagentsMaxDepth
+}
+
+// ValidSubagentsMaxDepth reports 1 or 2. JSON numbers arrive as float64.
+func ValidSubagentsMaxDepth(raw any) bool {
+	number, ok := raw.(float64)
+	return ok && (number == DefaultSubagentsMaxDepth || number == MaxSubagentsMaxDepth)
 }
 
 // ValidAgentToolKey reports a "<toolkit>/<tool>" key, the tool part "*" for

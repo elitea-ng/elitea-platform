@@ -1950,6 +1950,10 @@ pub(crate) struct ProposeAgentProfile {
     pub(crate) avatar: String,
     /// `None` is a profile without a tool list (the child got its grants).
     pub(crate) tools: Option<Vec<ProposeAgentTool>>,
+    /// The model `profile.model` named (#1825); empty for the parent's model,
+    /// and then not sent, so the body is the one from before.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub(crate) model: String,
 }
 
 /// A suggested memory entry.

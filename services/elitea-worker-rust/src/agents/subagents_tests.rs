@@ -109,3 +109,84 @@ fn a_memory_entry_must_have_been_recalled() {
         [("7".to_owned(), "the team prefers short reports".to_owned())]
     );
 }
+
+/// #1825: a child binds the agent's model for "inherit" or the agent's own
+/// name, a named model of the run's policy with that model's limits, and
+/// nothing for any other name.
+#[test]
+fn a_child_binds_the_named_model_or_none() {
+    use crate::agents::assembly::SummaryModelProfile;
+    use crate::agents::request::{ModelContextLimits, SummaryModelSnapshot};
+    use crate::transport::model_facade::{ModelAdapterKind, ModelInvocation};
+
+    let snapshot = SummaryModelSnapshot {
+        llm_settings: serde_json::json!({
+            "model_name": "claude-small", "model_project_id": 9,
+            "max_tokens": 1024, "openai_compatible": false, "temperature": 0.2,
+        })
+        .as_object()
+        .cloned()
+        .expect("object"),
+        model_context_limits: ModelContextLimits {
+            context_window_tokens: 32_000,
+            max_output_tokens: 4_000,
+            context_window_fallback: false,
+            max_output_fallback: false,
+            max_input_tokens: None,
+        },
+        model_reasoning: None,
+    };
+    let small = SummaryModelProfile::admit(&snapshot, &serde_json::Map::new()).expect("admitted");
+    let agent = ModelInvocation {
+        response_schema: Some(serde_json::json!({"type": "object"})),
+        allow_text_continuation: false,
+        context_budget: None,
+        model_name: "agent-model".to_owned(),
+        system_instruction: String::new(),
+        max_tokens: Some(8_000),
+        reasoning_effort: None,
+        reasoning: None,
+        temperature: Some(0.7),
+        max_model_turns: 12,
+        run_caps: None,
+        preamble: Some(Arc::from("preamble")),
+    };
+    let models = vec![small];
+    for own in [None, Some("agent-model")] {
+        let (adapter, project, invocation) =
+            super::child_invocation(&agent, ModelAdapterKind::OpenAiCompatible, 4, &models, own)
+                .expect("the agent's model");
+        assert_eq!((adapter, project), (ModelAdapterKind::OpenAiCompatible, 4));
+        assert_eq!(invocation.model_name, "agent-model");
+    }
+    let (adapter, project, invocation) = super::child_invocation(
+        &agent,
+        ModelAdapterKind::OpenAiCompatible,
+        4,
+        &models,
+        Some("claude-small"),
+    )
+    .expect("the named model");
+    assert_eq!((adapter, project), (ModelAdapterKind::Anthropic, 9));
+    assert_eq!(invocation.model_name, "claude-small");
+    assert_eq!(invocation.max_tokens, Some(1024));
+    assert_eq!(invocation.temperature, Some(0.2));
+    assert!(invocation.response_schema.is_none());
+    assert_eq!(
+        invocation
+            .context_budget
+            .map(|budget| budget.limits.max_output_tokens),
+        Some(4_000)
+    );
+    assert_eq!(invocation.preamble.as_deref(), Some("preamble"));
+    assert!(
+        super::child_invocation(
+            &agent,
+            ModelAdapterKind::OpenAiCompatible,
+            4,
+            &models,
+            Some("gpt-unknown")
+        )
+        .is_none()
+    );
+}

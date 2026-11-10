@@ -44,10 +44,18 @@ func (s *AdmissionService) stampToolEnvelope(
 	ctx context.Context, capabilityID string, input *runtimev1.AgentExecutionInputV1,
 ) (*runtimev1.AgentExecutionInputV1, error) {
 	if s.toolSettings == nil {
-		if input.GetToolEnvelope() == nil {
+		// Without the section the depth is the default, whatever the input
+		// carried.
+		policy := StampedSubagentPolicy(input.GetSubagentPolicy(), platformconfig.AgentToolSettings{})
+		if input.GetToolEnvelope() == nil && proto.Equal(policy, input.GetSubagentPolicy()) {
 			return input, nil
 		}
-		return withToolEnvelope(input, nil)
+		stamped, err := withToolEnvelope(input, nil)
+		if err != nil {
+			return nil, err
+		}
+		stamped.SubagentPolicy = policy
+		return stamped, nil
 	}
 	settings, err := s.toolSettings.Get(ctx)
 	if err != nil {
@@ -60,10 +68,37 @@ func (s *AdmissionService) stampToolEnvelope(
 		}
 	}
 	frozen := FrozenToolEnvelope(envelope, settings)
-	if frozen == nil && input.GetToolEnvelope() == nil {
+	policy := StampedSubagentPolicy(input.GetSubagentPolicy(), settings)
+	if frozen == nil && input.GetToolEnvelope() == nil &&
+		proto.Equal(policy, input.GetSubagentPolicy()) {
 		return input, nil
 	}
-	return withToolEnvelope(input, frozen)
+	stamped, err := withToolEnvelope(input, frozen)
+	if err != nil {
+		return nil, err
+	}
+	stamped.SubagentPolicy = policy
+	return stamped, nil
+}
+
+// StampedSubagentPolicy is the input's sub-agent policy with the
+// platform's subagents_max_depth (ADR-0050 decision 4, #1824): the depth
+// is always the platform's, never what the input carried. The models stay
+// those the freeze wrote. nil at depth 1 without models, so a run on a
+// platform that never set the depth is unchanged byte for byte.
+func StampedSubagentPolicy(
+	frozen *runtimev1.SubAgentPolicyV1, settings platformconfig.AgentToolSettings,
+) *runtimev1.SubAgentPolicyV1 {
+	depth := settings.SubagentsDepth()
+	models := frozen.GetModels()
+	if depth == platformconfig.DefaultSubagentsMaxDepth && len(models) == 0 {
+		return nil
+	}
+	policy := &runtimev1.SubAgentPolicyV1{MaxDepth: depth}
+	for _, model := range models {
+		policy.Models = append(policy.Models, proto.Clone(model).(*runtimev1.SubAgentModelV1))
+	}
+	return policy
 }
 
 func withToolEnvelope(

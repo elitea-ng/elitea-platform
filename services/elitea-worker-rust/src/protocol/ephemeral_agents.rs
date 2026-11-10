@@ -260,6 +260,8 @@ mod tests {
             parent_call_id: format!("call-{ordinal}"),
             label: Some("Owl".to_owned()),
             ordinal,
+            depth: 1,
+            parent_agent_id: None,
             record: SpawnRecord::new(
                 &Profile {
                     display_name: Some("Owl".to_owned()),

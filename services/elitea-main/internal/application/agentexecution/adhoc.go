@@ -463,6 +463,10 @@ func currentAdhocInput(
 	if err != nil {
 		return nil, err
 	}
+	subagentPolicy, err := currentFrozenSubagentPolicy(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	// ADR-0050 decision 9 (issue 1609): a model participant has no version,
 	// so its view is the default one (every visible message, side talk only
 	// when it is a party).
@@ -479,6 +483,7 @@ func currentAdhocInput(
 		ModelContextLimits: modelContextLimits,
 		ModelReasoning:     modelReasoning,
 		SummaryModel:       summaryModel,
+		SubagentPolicy:     subagentPolicy,
 		Llm:                llm, ChatHistory: view.History, UserInput: userInput,
 		ChatHistoryRefs: chatHistoryRefsInput(view.Refs),
 		ThreadId:        &threadID, Tools: toolsJSON, Application: application,

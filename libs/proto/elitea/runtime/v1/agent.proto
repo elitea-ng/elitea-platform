@@ -186,6 +186,37 @@ message AgentExecutionInputV1 {
   // question is in its history). Workers are upgraded before Main, because
   // a worker from an earlier release refuses this tag.
   optional string current_message_id = 75;
+  // Field 76 is claimed by #1826.
+  // ADR-0050 decision 4 (#1824, #1825): how the run's sub-agents may nest
+  // and which other models they may run on. Main freezes the models from
+  // the authorized project catalogue when the agent can start sub-agents,
+  // and admission stamps the depth from the platform's `agents` section.
+  // The caller never supplies either. ABSENT: depth 1, and every sub-agent
+  // runs on its parent's model, as before. Workers are upgraded before
+  // Main, because a worker from an earlier release refuses this tag.
+  SubAgentPolicyV1 subagent_policy = 77;
+}
+
+// The run's sub-agent policy (ADR-0050 decision 4).
+message SubAgentPolicyV1 {
+  // The platform's subagents_max_depth: 2 lets a sub-agent start
+  // sub-agents of its own, which never start more. 0 or 1 is depth 1.
+  uint32 max_depth = 1;
+  // The models other than the parent's that a sub-agent may name in
+  // profile.model, at most 64, each name once.
+  repeated SubAgentModelV1 models = 2;
+  reserved 3 to 15;
+}
+
+// One catalogue model a sub-agent may run on. llm_settings uses the frozen
+// application-model shape: model_name, model_project_id,
+// openai_compatible, max_tokens and temperature. Credentials stay in
+// claim-scoped redemption.
+message SubAgentModelV1 {
+  bytes llm_settings = 1;
+  ModelContextLimitsV1 model_context_limits = 2;
+  ModelReasoningV1 model_reasoning = 3;
+  reserved 4 to 15;
 }
 
 // The per-agent tool envelope (ADR-0050 decision 3). A tool key is

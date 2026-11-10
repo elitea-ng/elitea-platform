@@ -1002,6 +1002,7 @@ fn resume_payload(input: &str) -> AgentExecutionPayload {
         floor: None,
         tool_envelope: None,
         current_message_id: None,
+        subagent_policy: None,
     }
 }
 

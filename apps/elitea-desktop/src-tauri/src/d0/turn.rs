@@ -6388,6 +6388,7 @@ fn execution_request(
             floor: None,
             tool_envelope: None,
             current_message_id: None,
+            subagent_policy: None,
         },
     }
 }

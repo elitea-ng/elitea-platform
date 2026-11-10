@@ -255,6 +255,79 @@ mod tool_envelope_tests {
 }
 
 #[cfg(test)]
+mod subagent_policy_tests {
+    use super::{MAX_SUBAGENT_MODELS, subagent_policy};
+    use crate::protocol::elitea::runtime::v1::{
+        ModelContextLimitsV1, SubAgentModelV1, SubAgentPolicyV1,
+    };
+
+    fn model(name: &str) -> SubAgentModelV1 {
+        SubAgentModelV1 {
+            llm_settings: format!(r#"{{"model_name":"{name}","model_project_id":3}}"#).into_bytes(),
+            model_context_limits: Some(ModelContextLimitsV1 {
+                context_window_tokens: 32_000,
+                max_output_tokens: 4_000,
+                ..ModelContextLimitsV1::default()
+            }),
+            model_reasoning: None,
+        }
+    }
+
+    /// #1824, #1825: the frozen policy decodes; a depth of 0 is depth 1.
+    #[test]
+    fn the_policy_decodes() {
+        let policy = subagent_policy(SubAgentPolicyV1 {
+            max_depth: 2,
+            models: vec![model("small"), model("large")],
+        })
+        .expect("policy");
+        assert_eq!(policy.max_depth, 2);
+        assert_eq!(policy.models.len(), 2);
+        assert_eq!(policy.models[0].llm_settings["model_name"], "small");
+        assert_eq!(
+            subagent_policy(SubAgentPolicyV1::default())
+                .expect("empty")
+                .max_depth,
+            1
+        );
+    }
+
+    #[test]
+    fn a_malformed_policy_is_refused() {
+        let mut no_limits = model("small");
+        no_limits.model_context_limits = None;
+        let mut no_name = model("small");
+        no_name.llm_settings = br#"{"model_project_id":3}"#.to_vec();
+        for refused in [
+            SubAgentPolicyV1 {
+                max_depth: 3,
+                ..SubAgentPolicyV1::default()
+            },
+            SubAgentPolicyV1 {
+                models: vec![model("small"), model("small")],
+                ..SubAgentPolicyV1::default()
+            },
+            SubAgentPolicyV1 {
+                models: vec![no_limits],
+                ..SubAgentPolicyV1::default()
+            },
+            SubAgentPolicyV1 {
+                models: vec![no_name],
+                ..SubAgentPolicyV1::default()
+            },
+            SubAgentPolicyV1 {
+                models: (0..=MAX_SUBAGENT_MODELS)
+                    .map(|index| model(&format!("m{index}")))
+                    .collect(),
+                ..SubAgentPolicyV1::default()
+            },
+        ] {
+            assert!(subagent_policy(refused.clone()).is_err(), "{refused:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod agent_floor_tests {
     use super::agent_floor;
     use crate::agents::request::{AgentFloorPeer, FloorCause};
@@ -504,24 +577,13 @@ pub fn request_from(
             summary_model: message
                 .summary_model
                 .map(|summary| {
-                    Ok(super::request::SummaryModelSnapshot {
-                        llm_settings: json_object(
-                            &summary.llm_settings,
-                            "the summary model settings must be an object",
-                        )?,
-                        model_context_limits: model_context_limits(
-                            summary.model_context_limits.ok_or(
-                                AgentProtocolError::InvalidInput(
-                                    "the summary model limits are required",
-                                ),
-                            )?,
-                        ),
-                        model_reasoning: summary
-                            .model_reasoning
-                            .as_ref()
-                            .map(model_reasoning)
-                            .transpose()?,
-                    })
+                    model_snapshot(
+                        &summary.llm_settings,
+                        summary.model_context_limits,
+                        summary.model_reasoning.as_ref(),
+                        "the summary model settings must be an object",
+                        "the summary model limits are required",
+                    )
                 })
                 .transpose()?,
             model_reasoning: message
@@ -545,6 +607,7 @@ pub fn request_from(
                 .as_deref()
                 .map(current_message_id)
                 .transpose()?,
+            subagent_policy: message.subagent_policy.map(subagent_policy).transpose()?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -743,6 +806,70 @@ fn chat_history_refs(
             readers_own: entry.readers_own,
         })
         .collect())
+}
+
+/// The most models a sub-agent policy may name.
+pub(crate) const MAX_SUBAGENT_MODELS: usize = 64;
+
+/// ADR-0050 decision 4 (#1824, #1825): the run's sub-agent policy Main
+/// froze. A depth above 2, too many models, a model without its limits or
+/// a name given twice is refused; a depth of 0 is depth 1.
+fn subagent_policy(
+    policy: crate::protocol::elitea::runtime::v1::SubAgentPolicyV1,
+) -> Result<super::request::SubAgentPolicy, AgentProtocolError> {
+    if policy.max_depth > elitea_agent_runtime::subagents::MAX_DEPTH {
+        return Err(AgentProtocolError::InvalidInput(
+            "the sub-agent depth is out of range",
+        ));
+    }
+    if policy.models.len() > MAX_SUBAGENT_MODELS {
+        return Err(AgentProtocolError::ResourceExhausted(
+            "the sub-agent policy names too many models",
+        ));
+    }
+    let models = policy
+        .models
+        .into_iter()
+        .map(|model| {
+            model_snapshot(
+                &model.llm_settings,
+                model.model_context_limits,
+                model.model_reasoning.as_ref(),
+                "the sub-agent model settings must be an object",
+                "the sub-agent model limits are required",
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut names = HashSet::new();
+    for model in &models {
+        let name = model.llm_settings.get("model_name").and_then(Value::as_str);
+        if !name.is_some_and(|name| names.insert(name.to_owned())) {
+            return Err(AgentProtocolError::InvalidInput(
+                "a sub-agent model has no name or is named twice",
+            ));
+        }
+    }
+    Ok(super::request::SubAgentPolicy {
+        max_depth: policy.max_depth.max(1),
+        models,
+    })
+}
+
+/// One frozen catalogue model: its settings, limits and thinking control.
+fn model_snapshot(
+    llm_settings: &[u8],
+    limits: Option<crate::protocol::elitea::runtime::v1::ModelContextLimitsV1>,
+    reasoning: Option<&crate::protocol::elitea::runtime::v1::ModelReasoningV1>,
+    settings_error: &'static str,
+    limits_error: &'static str,
+) -> Result<super::request::SummaryModelSnapshot, AgentProtocolError> {
+    Ok(super::request::SummaryModelSnapshot {
+        llm_settings: json_object(llm_settings, settings_error)?,
+        model_context_limits: model_context_limits(
+            limits.ok_or(AgentProtocolError::InvalidInput(limits_error))?,
+        ),
+        model_reasoning: reasoning.map(model_reasoning).transpose()?,
+    })
 }
 
 fn model_context_limits(

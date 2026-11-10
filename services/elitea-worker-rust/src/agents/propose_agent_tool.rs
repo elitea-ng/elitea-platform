@@ -184,6 +184,7 @@ fn reported_profile(
         display_name: profile.display_name.clone().unwrap_or_default(),
         soul: profile.soul.clone().unwrap_or_default(),
         avatar: profile.avatar.clone().unwrap_or_default(),
+        model: profile.model.clone().unwrap_or_default(),
         tools: profile.tools.as_ref().map(|tools| {
             tools
                 .iter()

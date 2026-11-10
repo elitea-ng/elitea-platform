@@ -740,6 +740,23 @@ impl DelegationScope {
         filter: &str,
         excluded: &BTreeSet<String>,
     ) -> Result<DelegationEvidence, DelegationRefusal> {
+        self.delegate_subagent_scope(filter, excluded)
+            .map(|delegation| delegation.evidence)
+    }
+
+    /// [`Self::delegate_subagent`] with the child's own scope: one level
+    /// deeper, with this caller's grants (a child's tools are a subset of
+    /// them). A child that may start sub-agents of its own (ADR-0050
+    /// decision 4, #1824) delegates from this scope.
+    ///
+    /// # Errors
+    ///
+    /// [`DelegationRefusal::DepthExceeded`] past the maximum depth.
+    pub fn delegate_subagent_scope(
+        &self,
+        filter: &str,
+        excluded: &BTreeSet<String>,
+    ) -> Result<Delegation, DelegationRefusal> {
         let depth = self.next_depth()?;
         let digest = hex_sha256(&json!({
             "schema": "elitea.delegation.subagent.v1",
@@ -747,11 +764,18 @@ impl DelegationScope {
             "filter": filter,
             "excluded": excluded,
         }));
-        Ok(DelegationEvidence {
-            depth,
-            effective_grant_digest: digest,
-            refusal: None,
-            enforced: false,
+        Ok(Delegation {
+            scope: Self {
+                policy: Arc::clone(&self.policy),
+                grants: Arc::clone(&self.grants),
+                depth,
+            },
+            evidence: DelegationEvidence {
+                depth,
+                effective_grant_digest: digest,
+                refusal: None,
+                enforced: false,
+            },
         })
     }
 

@@ -13,15 +13,26 @@ use super::child::{self, Child, InputRefused};
 use super::profile::{
     self, BRIEF_ATTACHMENT_NOT_READABLE, BRIEF_EXCERPT_NOT_VISIBLE, BRIEF_MEMORY_NOT_RECALLED,
     Brief, MAX_AVATAR_BYTES, MAX_BRIEF_ITEMS, MAX_BRIEF_TEXT_CHARS, MAX_DISPLAY_NAME_CHARS,
-    MAX_PROFILE_TOOLS, MAX_SOUL_BYTES, Profile, SpawnRecord,
+    MAX_PROFILE_TOOLS, MAX_SOUL_BYTES, Profile, SUBAGENT_MODEL_NOT_ALLOWED, SpawnRecord,
 };
 use super::{
     CHILD_AGENT_PREFIX, CLOSE_AGENT, ChildIdentity, DEFAULT_WAIT_SECONDS, DEPTH_EXCEEDED,
-    MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Registry,
-    SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
+    MAX_CHILD_STEPS, MAX_LABEL_CHARS, MAX_TASK_CHARS, MAX_WAIT_IDS, MAX_WAIT_SECONDS, Nesting,
+    Registry, RunRefusal, SEND_INPUT, SPAWN_AGENT, WAIT_AGENT,
 };
-use crate::delegation::DelegationEvidence;
+use crate::delegation::Delegation;
 use crate::tool_envelope::{RequestedTool, SUBAGENT_TOOL_NOT_GRANTED};
+
+/// One spawn, checked and on its reserved slot.
+struct Spawn {
+    identity: ChildIdentity,
+    task: String,
+    steps: u32,
+    isolated: bool,
+    profile: Profile,
+    brief: Brief,
+    delegation: Option<Delegation>,
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {
@@ -119,6 +130,20 @@ fn spawn_arguments(args: &Value) -> Result<(String, Option<String>, Profile, Bri
 }
 
 /// A brief the host refused, by its code.
+/// The answer to a spawn whose child could not be started, by its code.
+fn start_refused(code: &'static str) -> Value {
+    match code {
+        SUBAGENT_TOOL_NOT_GRANTED => refused(SUBAGENT_TOOL_NOT_GRANTED, TOOL_NOT_GRANTED_MESSAGE),
+        SUBAGENT_MODEL_NOT_ALLOWED => {
+            refused(SUBAGENT_MODEL_NOT_ALLOWED, MODEL_NOT_ALLOWED_MESSAGE)
+        }
+        code => refused(code, "The sub-agent could not be started."),
+    }
+}
+
+const TOOL_NOT_GRANTED_MESSAGE: &str = "A tool in `profile.tools` is not one of your tools a sub-agent may get. Name only your own tools that the agent's sub-agent tools allow (read-only tools when it sets none).";
+const MODEL_NOT_ALLOWED_MESSAGE: &str = "The model in `profile.model` is not one a sub-agent may use here. Name a model of this project that you may use, or \"inherit\".";
+
 fn brief_refused(code: &str) -> Value {
     let message = match code {
         BRIEF_EXCERPT_NOT_VISIBLE => {
@@ -178,8 +203,8 @@ fn spawn_schema() -> Value {
                     },
                     "model": {
                         "type": "string",
-                        "enum": [profile::INHERIT_MODEL],
-                        "description": "Only \"inherit\": it uses your model"
+                        "maxLength": profile::MAX_MODEL_NAME_BYTES,
+                        "description": "\"inherit\" (the default): it uses your model. Or the name of another model of this project that you may use; any other is refused"
                     },
                     "avatar": {
                         "type": "string",
@@ -296,12 +321,14 @@ impl SubAgentTool {
 
     /// ADR-0044 decision 3: a child is one delegation deeper. Its tools are
     /// a subset of this agent's by construction (the read-only or isolated
-    /// filter), so only the depth can refuse it.
+    /// filter), so only the depth can refuse it. The child's own scope comes
+    /// back with the evidence: a child that starts children of its own
+    /// delegates from it (#1824).
     fn delegate(
         &self,
         isolated: bool,
         requested: Option<&[RequestedTool]>,
-    ) -> Result<Option<DelegationEvidence>, Value> {
+    ) -> Result<Option<Delegation>, Value> {
         let Some(scope) = self.registry.delegation.as_ref() else {
             return Ok(None);
         };
@@ -334,7 +361,7 @@ impl SubAgentTool {
             }
         };
         scope
-            .delegate_subagent(&filter, &self.registry.excluded)
+            .delegate_subagent_scope(&filter, &self.registry.excluded)
             .map(Some)
             .map_err(|refusal| {
                 let mut value = refused(refusal.code(), refusal.message());
@@ -343,8 +370,10 @@ impl SubAgentTool {
             })
     }
 
-    /// The next child's identity, or the refusal when this turn may start
-    /// no more sub-agents.
+    /// The next child's identity, or the refusal when this agent or the run
+    /// may start no more sub-agents. The run's spawn slot is reserved here
+    /// (#1824: the budget is the run's, every level counted); the caller
+    /// gives it back through [`super::RunChildren::settle`].
     fn identity(
         &self,
         ctx: &dyn ToolContext,
@@ -352,21 +381,36 @@ impl SubAgentTool {
         record: SpawnRecord,
     ) -> Result<ChildIdentity, Value> {
         let limits = self.registry.limits;
-        let children = self.children();
-        if children.len() >= limits.max_per_turn {
-            return Err(refused(
-                "subagent_limit",
-                format!(
-                    "This turn already started {} sub-agents, the most it may; use their results.",
-                    limits.max_per_turn
-                ),
-            ));
-        }
-        let running = children
-            .iter()
-            .filter(|child| !child.status().is_settled())
-            .count();
+        let reservation = match self.registry.run.reserve(limits.max_per_turn, new_agent_id) {
+            Ok(reservation) => reservation,
+            Err(RunRefusal::Limit) => {
+                return Err(refused(
+                    "subagent_limit",
+                    format!(
+                        "This turn already started {} sub-agents, the most it may; use their results.",
+                        limits.max_per_turn
+                    ),
+                ));
+            }
+            Err(RunRefusal::Busy(running)) => {
+                return Err(refused(
+                    "subagent_busy",
+                    format!(
+                        "{running} sub-agents of this turn are already running, the most at once; wait for one (`{WAIT_AGENT}`) first."
+                    ),
+                ));
+            }
+            Err(RunRefusal::NoId) => {
+                return Err(refused(
+                    "subagent_unavailable",
+                    "No sub-agent id could be made.",
+                ));
+            }
+        };
+        // This agent's own running cap, after the run's budget.
+        let running = self.running();
         if running >= limits.max_concurrent {
+            self.registry.run.settle(reservation.ordinal, None);
             return Err(refused(
                 "subagent_busy",
                 format!(
@@ -374,23 +418,17 @@ impl SubAgentTool {
                 ),
             ));
         }
-        let Some(agent_id) = (0..4).find_map(|_| {
-            new_agent_id().filter(|id| {
-                children
-                    .iter()
-                    .all(|child| &child.identity().agent_id != id)
-            })
-        }) else {
-            return Err(refused(
-                "subagent_unavailable",
-                "No sub-agent id could be made.",
-            ));
-        };
         Ok(ChildIdentity {
-            agent_id,
+            agent_id: reservation.agent_id,
             parent_call_id: ctx.function_call_id().to_owned(),
             label,
-            ordinal: children.len() + 1,
+            ordinal: reservation.ordinal,
+            depth: self.registry.level + 1,
+            parent_agent_id: self
+                .registry
+                .owner
+                .as_ref()
+                .map(|owner| owner.agent_id.clone()),
             record,
         })
     }
@@ -405,18 +443,46 @@ impl SubAgentTool {
             Err(refusal) => return refusal,
         };
         let delegation = match self.delegate(isolated, profile.tools.as_deref()) {
-            Ok(evidence) => evidence,
+            Ok(delegation) => delegation,
             Err(refusal) => return refusal,
         };
-        let limits = self.registry.limits;
-        let steps = match max_steps(args, limits.default_steps) {
+        let steps = match max_steps(args, self.registry.limits.default_steps) {
             Ok(steps) => steps,
             Err(refusal) => return refusal,
         };
-        let mut identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
+        let identity = match self.identity(ctx, label, SpawnRecord::new(&profile, &brief)) {
             Ok(identity) => identity,
             Err(refusal) => return refusal,
         };
+        let ordinal = identity.ordinal;
+        let (value, child) = self
+            .start(Spawn {
+                identity,
+                task,
+                steps,
+                isolated,
+                profile,
+                brief,
+                delegation,
+            })
+            .await;
+        // The reserved slot: the run's child, or given back.
+        self.registry.run.settle(ordinal, child);
+        value
+    }
+
+    /// Start the child of `spawn` on its reserved slot: the answer, and the
+    /// child when it started.
+    async fn start(&self, spawn: Spawn) -> (Value, Option<Child>) {
+        let Spawn {
+            mut identity,
+            task,
+            steps,
+            isolated,
+            profile,
+            brief,
+            delegation,
+        } = spawn;
         // ADR-0050 decision 9d: the brief names only what this agent itself
         // sees; the host checks each reference before anything starts.
         let task = if brief.is_empty() {
@@ -430,50 +496,73 @@ impl SubAgentTool {
                         None => task,
                     }
                 }
-                Err(code) => return brief_refused(code),
+                Err(code) => return (brief_refused(code), None),
             }
         };
         let agent_id = identity.agent_id.clone();
+        let requested = profile.tools.map(Arc::new);
+        // #1825: the named model, else the one this agent runs on.
+        let model = profile
+            .model
+            .clone()
+            .or_else(|| self.registry.inherited_model.clone());
+        let nests = self.registry.child_nests(isolated);
+        // #1824: a child that may start children gets the four tools over a
+        // registry of its own, one level deeper, under its own scope.
+        let nested = nests.then(|| {
+            self.registry
+                .nested(Nesting {
+                    owner: identity.clone(),
+                    delegation: delegation
+                        .as_ref()
+                        .map(|delegation| delegation.scope.clone()),
+                    model: model.clone(),
+                    requested: requested.clone(),
+                })
+                .toolset()
+        });
         let started = child::start(child::Start {
             identity,
             task,
             steps,
-            budget: limits.input_token_budget,
+            budget: self.registry.limits.input_token_budget,
             instruction: self
                 .registry
-                .instruction_for(isolated, profile.soul.as_deref()),
+                .instruction_for(isolated, nests, profile.soul.as_deref()),
             excluded: Arc::new(self.registry.excluded.clone()),
             host: Arc::clone(&self.registry.host),
             isolated,
             grant: self.registry.grant.clone(),
-            requested: profile.tools.map(Arc::new),
+            requested,
+            ancestors: self.registry.ancestors.clone(),
+            model,
+            nested,
         })
         .await;
         match started {
             Ok(child) => {
                 if let Ok(mut children) = self.registry.children.lock() {
-                    children.push(child);
+                    children.push(child.clone());
                 } else {
                     child.close();
-                    return refused(
-                        "subagent_unavailable",
-                        "The sub-agent could not be started.",
+                    return (
+                        refused(
+                            "subagent_unavailable",
+                            "The sub-agent could not be started.",
+                        ),
+                        None,
                     );
                 }
                 let mut value = json!({"agent_id": agent_id, "status": "running"});
-                if let Some(evidence) = delegation {
+                if let Some(delegation) = delegation {
                     value["delegation"] = json!({
-                        "depth": evidence.depth,
-                        "effective_grant_digest": evidence.effective_grant_digest,
+                        "depth": delegation.evidence.depth,
+                        "effective_grant_digest": delegation.evidence.effective_grant_digest,
                     });
                 }
-                value
+                (value, Some(child))
             }
-            Err(SUBAGENT_TOOL_NOT_GRANTED) => refused(
-                SUBAGENT_TOOL_NOT_GRANTED,
-                "A tool in `profile.tools` is not one of your tools a sub-agent may get. Name only your own tools that the agent's sub-agent tools allow (read-only tools when it sets none).",
-            ),
-            Err(code) => refused(code, "The sub-agent could not be started."),
+            Err(code) => (start_refused(code), None),
         }
     }
 
@@ -673,9 +762,16 @@ impl Tool for SubAgentTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
-        // One level deep: a child is never given these tools, and a call
-        // from a child's context is refused all the same.
-        if ctx.agent_name().starts_with(CHILD_AGENT_PREFIX) {
+        // The run's agent calls the run's registry; a child calls only the
+        // registry it owns (#1824). Any other caller (a child of a run where
+        // children never start children, a grandchild, a child calling
+        // another's tools) is refused.
+        let caller = ctx.agent_name();
+        let allowed = match &self.registry.owner {
+            None => !caller.starts_with(CHILD_AGENT_PREFIX),
+            Some(owner) => caller == owner.agent_name(),
+        };
+        if !allowed {
             return Ok(refused(
                 DEPTH_EXCEEDED,
                 "A sub-agent cannot start or manage other sub-agents.",

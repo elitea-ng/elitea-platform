@@ -69,6 +69,18 @@ func agentToolsSection() map[string]any {
 				"default":  []any{},
 				"maxItems": platformconfig.MaxAgentsUnattendedAllowlistLength,
 			},
+			{
+				"key":   platformconfig.KeyAgentsSubagentsMaxDepth,
+				"type":  "integer",
+				"title": "Sub-Agent Depth",
+				"description": "How deep sub-agents may nest. 1 (the default): an agent's sub-agents cannot start " +
+					"sub-agents. 2: each sub-agent may start sub-agents of its own, which cannot start more. " +
+					"All of them share the run's sub-agent limits and each one gets only tools its parent has.",
+				"section": section,
+				"default": platformconfig.DefaultSubagentsMaxDepth,
+				"minimum": platformconfig.DefaultSubagentsMaxDepth,
+				"maximum": platformconfig.MaxSubagentsMaxDepth,
+			},
 		},
 	}
 }
@@ -83,6 +95,11 @@ func validateAgentToolsValues(section string, values map[string]any) string {
 		!platformconfig.ValidAgentsMaxToolLimit(raw) {
 		return fmt.Sprintf("%q must be a whole number from 0 to %d", platformconfig.KeyAgentsMaxToolLimit,
 			platformconfig.MaxAgentsMaxToolLimit)
+	}
+	if raw, present := values[platformconfig.KeyAgentsSubagentsMaxDepth]; present && raw != nil &&
+		!platformconfig.ValidSubagentsMaxDepth(raw) {
+		return fmt.Sprintf("%q must be %d or %d", platformconfig.KeyAgentsSubagentsMaxDepth,
+			platformconfig.DefaultSubagentsMaxDepth, platformconfig.MaxSubagentsMaxDepth)
 	}
 	if raw, present := values[platformconfig.KeyAgentsUnattendedToolsAllowlist]; present && raw != nil {
 		items, ok := raw.([]any)

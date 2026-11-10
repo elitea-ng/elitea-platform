@@ -18,6 +18,7 @@ func TestValidateAgentToolsValues(t *testing.T) {
 		"defaults":  {},
 		"ceiling":   {platformconfig.KeyAgentsMaxToolLimit: float64(25)},
 		"allowlist": {platformconfig.KeyAgentsUnattendedToolsAllowlist: []any{"github/create_comment", "jira/*"}},
+		"depth 2":   {platformconfig.KeyAgentsSubagentsMaxDepth: float64(2)},
 	} {
 		if reason := validateAgentToolsValues(platformconfig.SectionAgents, values); reason != "" {
 			t.Errorf("%s: refused: %s", name, reason)
@@ -30,6 +31,8 @@ func TestValidateAgentToolsValues(t *testing.T) {
 		"not list":  {platformconfig.KeyAgentsUnattendedToolsAllowlist: "github/*"},
 		"bad key":   {platformconfig.KeyAgentsUnattendedToolsAllowlist: []any{"github"}},
 		"partial *": {platformconfig.KeyAgentsUnattendedToolsAllowlist: []any{"github/create_*"}},
+		"depth 3":   {platformconfig.KeyAgentsSubagentsMaxDepth: float64(3)},
+		"depth 0":   {platformconfig.KeyAgentsSubagentsMaxDepth: float64(0)},
 	} {
 		if validateAgentToolsValues(platformconfig.SectionAgents, values) == "" {
 			t.Errorf("%s: want a refusal", name)

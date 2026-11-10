@@ -133,6 +133,21 @@ pub struct AgentExecutionPayload {
     /// its own (a regeneration of an addressed turn, a continuation), or an
     /// input from before field 75.
     pub current_message_id: Option<String>,
+    /// How the run's sub-agents may nest and which other models they may
+    /// run on (ADR-0050 decision 4, #1824, #1825), frozen by Main. `None`:
+    /// an input from before field 77; depth 1, and every sub-agent runs on
+    /// its parent's model.
+    pub subagent_policy: Option<SubAgentPolicy>,
+}
+
+/// The run's sub-agent policy (ADR-0050 decision 4).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubAgentPolicy {
+    /// 1 or 2: with 2 a sub-agent may start sub-agents of its own.
+    pub max_depth: u32,
+    /// The catalogue models other than the parent's that a sub-agent may
+    /// name in `profile.model`, each in the summary model's shape.
+    pub models: Vec<SummaryModelSnapshot>,
 }
 
 /// The turn-taking floor this invocation holds (ADR-0050 decision 11).

@@ -31,8 +31,19 @@
 //! are. Children stop with the run (the toolset that owns them is dropped
 //! with the agent), so a turn that pauses for a person and resumes under a
 //! new claim starts with none.
+//!
+//! # Depth and model (ADR-0050 decision 4, #1824, #1825)
+//!
+//! The run's frozen sub-agent policy sets the depth: with 2 a child gets
+//! the four tools too, inside the run's budget, and its children never do.
+//! A `profile.model` must be one of the policy's models, which Main froze
+//! from the project catalogue the agent's own model came from; the child
+//! then calls that model with its limits, adapter and thinking control,
+//! under the same claim (so the same budget gate and egress). Any other
+//! name is refused with `SUBAGENT_MODEL_NOT_ALLOWED`.
 
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use adk_rust::{GenerateContentConfig, Llm, Toolset};
 use async_trait::async_trait;
@@ -48,6 +59,7 @@ use elitea_agent_runtime::subagents::{
 };
 use elitea_agent_runtime::tool_envelope::SubAgentGrant;
 
+use super::assembly::{OrdinaryModelProvider, SummaryModelProfile};
 use crate::transport::model_facade::{ModelAdapterKind, ModelFacade, ModelInvocation};
 use crate::transport::runtime_context::ClaimScopedEliteaContext;
 
@@ -170,8 +182,12 @@ pub(crate) struct WorkerSubAgents {
     /// its turns.
     pub(crate) invocation: ModelInvocation,
     pub(crate) toolsets: Vec<Arc<dyn Toolset>>,
-    /// The generation config the facade admits, from the first binding.
-    pub(crate) config: OnceLock<GenerateContentConfig>,
+    /// The other catalogue models a child may name (#1825), admitted from
+    /// the run's sub-agent policy.
+    pub(crate) models: Arc<Vec<SummaryModelProfile>>,
+    /// The generation config the facade admits for each model (`None`: the
+    /// agent's own), from that model's first binding.
+    pub(crate) configs: Mutex<HashMap<Option<String>, GenerateContentConfig>>,
     /// What the creator sees, for its briefs (#1614).
     pub(crate) view: BriefView,
     /// The execution's sub-agent ledger, reported before settlement.
@@ -196,34 +212,49 @@ mod tests;
 
 #[async_trait]
 impl SubAgentHost for WorkerSubAgents {
+    /// #1825: `model` is `None` for the agent's own model, or a name the
+    /// run's sub-agent policy admitted (Main froze it from the project
+    /// catalogue, with its limits); any other name is refused.
     fn bind_model(
         &self,
         _child: &ChildIdentity,
         system_instruction: &str,
+        model: Option<&str>,
     ) -> Result<Arc<dyn Llm>, HostError> {
+        let (adapter, model_project_id, invocation) = child_invocation(
+            &self.invocation,
+            self.adapter,
+            self.model_project_id,
+            &self.models,
+            model,
+        )
+        .ok_or_else(|| {
+            HostError::new(
+                HostErrorCode::AuthorizationFailed,
+                "the sub-agent's model is not one this run may use",
+            )
+        })?;
         let invocation = ModelInvocation {
             system_instruction: system_instruction.to_owned(),
             max_model_turns: MAX_CHILD_STEPS,
-            ..self.invocation.clone()
+            ..invocation
         };
-        self.facade
-            .bind(
-                self.adapter,
-                self.context.as_ref(),
-                self.model_project_id,
-                invocation,
-            )
-            .map(|bound| {
-                let chat = bound.admitted_chat();
-                let _ = self.config.set(chat.config);
-                chat.model
-            })
+        let bound = self
+            .facade
+            .bind(adapter, self.context.as_ref(), model_project_id, invocation)
             .map_err(|_| {
                 HostError::new(
                     HostErrorCode::DependencyUnavailable,
                     "the sub-agent's model could not be bound",
                 )
-            })
+            })?;
+        let chat = bound.admitted_chat();
+        if let Ok(mut configs) = self.configs.lock() {
+            configs
+                .entry(model.map(str::to_owned))
+                .or_insert(chat.config);
+        }
+        Ok(chat.model)
     }
 
     async fn toolsets(&self, _child: &ChildIdentity) -> Result<Vec<Arc<dyn Toolset>>, HostError> {
@@ -231,10 +262,13 @@ impl SubAgentHost for WorkerSubAgents {
     }
 
     /// The facade admits only the config its binding fixes, the one it
-    /// answered the first binding with: every child shares the agent's
-    /// controls, so it is the same for each.
-    fn generation_config(&self) -> Option<GenerateContentConfig> {
-        self.config.get().cloned()
+    /// answered the first binding of that model with: every child on one
+    /// model shares its controls, so it is the same for each.
+    fn generation_config(&self, model: Option<&str>) -> Option<GenerateContentConfig> {
+        self.configs
+            .lock()
+            .ok()
+            .and_then(|configs| configs.get(&model.map(str::to_owned)).cloned())
     }
 
     fn check_brief(
@@ -260,6 +294,50 @@ impl SubAgentHost for WorkerSubAgents {
     }
 }
 
+/// What a child's model call binds (#1825): the agent's own model for
+/// `None` or the agent's own name, else the named model of `models` with
+/// its adapter, project, output cap, temperature, limits and thinking
+/// control. The agent's turn caps and preamble stay; its response schema
+/// does not (a child answers its parent in text). `None` when `models`
+/// does not name it.
+pub(crate) fn child_invocation(
+    agent: &ModelInvocation,
+    adapter: ModelAdapterKind,
+    model_project_id: u32,
+    models: &[SummaryModelProfile],
+    model: Option<&str>,
+) -> Option<(ModelAdapterKind, u32, ModelInvocation)> {
+    let Some(name) = model.filter(|name| *name != agent.model_name) else {
+        return Some((adapter, model_project_id, agent.clone()));
+    };
+    let named = models
+        .iter()
+        .find(|candidate| candidate.model_name == name)?;
+    let adapter = match named.model_provider {
+        OrdinaryModelProvider::OpenAiChat => ModelAdapterKind::OpenAiCompatible,
+        OrdinaryModelProvider::NativeAnthropic => ModelAdapterKind::Anthropic,
+    };
+    Some((
+        adapter,
+        named.model_project_id,
+        ModelInvocation {
+            response_schema: None,
+            allow_text_continuation: false,
+            context_budget: Some(named.context_budget),
+            model_name: named.model_name.clone(),
+            max_tokens: Some(named.max_tokens),
+            // The agent's thinking setting applies only where the named
+            // model declares how its thinking is controlled.
+            reasoning_effort: agent
+                .reasoning_effort
+                .filter(|_| named.model_reasoning.is_some()),
+            reasoning: named.model_reasoning,
+            temperature: named.temperature,
+            ..agent.clone()
+        },
+    ))
+}
+
 /// The four tools, over `host`; a child is never offered a tool in `excluded`.
 /// A cloud child's prompt is the runtime's preamble alone: its task is the
 /// whole of what it is told.
@@ -268,15 +346,19 @@ impl SubAgentHost for WorkerSubAgents {
 /// `grant` is the agent's `subagent_tools` (ADR-0050 decision 3): a child
 /// is offered the tools it names, writes included; without them, the
 /// read-only tools.
+/// `max_depth` is the run's frozen `subagents_max_depth` (#1824): with 2 a
+/// child may start children of its own, inside the same budget.
 pub(crate) fn toolset(
     host: WorkerSubAgents,
     excluded: Vec<String>,
     delegation: DelegationScope,
     grant: SubAgentGrant,
+    max_depth: u32,
 ) -> Arc<dyn Toolset> {
     let config = SubAgentConfig::new("")
         .with_excluded_tools(excluded)
         .with_delegation(delegation)
-        .with_grant(grant);
+        .with_grant(grant)
+        .with_max_depth(max_depth);
     SubAgents::new(Arc::new(host), config).toolset()
 }

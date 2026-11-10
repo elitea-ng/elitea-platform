@@ -148,7 +148,20 @@ func TestSpecDigestMatchesTheRuntime(t *testing.T) {
 	if SpecDigest(relabelled) != sampleProfileDigest {
 		t.Fatal("the label changed the digest")
 	}
+	// Issue 1825: a named model is part of the digest (the runtime's
+	// a_profile_digest_matches_mains_vectors pins the same vector).
+	if got := SpecDigest(Profile{Soul: "s", Model: "gpt-5"}); got != modelProfileDigest {
+		t.Fatalf("model profile digest %s", got)
+	}
+	if _, err := Check(Request{EphemeralAgentID: "a_0000002a", Rationale: "why", Profile: Profile{Model: "inherit"}}); err == nil {
+		t.Fatal("\"inherit\" is never sent as a model")
+	}
+	if _, err := Check(Request{EphemeralAgentID: "a_0000002a", Rationale: "why", Profile: Profile{Model: "a\nb"}}); err == nil {
+		t.Fatal("a model name is one line")
+	}
 }
+
+const modelProfileDigest = "269196e377071ba701f1bfe522036f8b22561dbe114e6ff1ded015ebea4b4d94"
 
 const (
 	emptyProfileDigest  = "8e93047b83c690ec8ada61c3103afaece889147e8adf85467c1e173e51b72083"

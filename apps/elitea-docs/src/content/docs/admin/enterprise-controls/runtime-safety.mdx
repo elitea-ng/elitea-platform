@@ -383,6 +383,7 @@ Under **Configuration › Agent tools**, a platform administrator (permission `c
 
 - **Maximum Calls of One Tool**: the most calls of any one toolkit tool in a turn (the platform's own tools such as the planner are not capped), whatever the agent's own limits say. 0 (the default) sets none; at most 10000.
 - **Tools That Write, Allowed Unattended**: `type/tool` keys, the toolkit by its type and never by the name an author gave it (`github/*` for every tool of the type), of tools that write and that an agent may still use with nobody present, when its own `unattended_tools` names them too. Empty (the default) allows none. Read-only tools need no entry.
+- **Sub-Agent Depth** (`subagents_max_depth`): how deep sub-agents may nest. 1 (the default): an agent's sub-agents cannot start sub-agents. 2: each sub-agent may start sub-agents of its own, which cannot start more. All of them share the run's sub-agent limits and delegation depth, and each one gets only tools its parent has. See [How deep sub-agents go](/how-tos/agents-pipelines/sub-agent-profiles/#how-deep-sub-agents-go).
 
 A save drops the cache on this replica at once; other replicas see it within a minute. **Save it only after every worker runs this release**: an earlier worker refuses a run input that carries an envelope.
 

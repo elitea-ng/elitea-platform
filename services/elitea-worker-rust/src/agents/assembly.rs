@@ -99,6 +99,38 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// Only a root application agent has it. Main checks it again, with the
     /// person's create permission, on every call.
     can_propose_agents: bool,
+    /// The run's sub-agent policy (ADR-0050 decision 4, #1824, #1825):
+    /// the depth, and the other catalogue models a sub-agent may name,
+    /// each admitted like the summary model. Only the root agent of a turn
+    /// has it; a nested agent or a pipeline keeps depth 1 and no model.
+    subagent_policy: SubAgentModels,
+}
+
+/// The admitted sub-agent policy of a root agent.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SubAgentModels {
+    pub(crate) max_depth: u32,
+    pub(crate) models: Arc<Vec<SummaryModelProfile>>,
+}
+
+impl SubAgentModels {
+    fn admit(
+        policy: Option<&super::request::SubAgentPolicy>,
+        settings: &Map<String, Value>,
+    ) -> Result<Self, NativeAgentAssemblyError> {
+        let Some(policy) = policy else {
+            return Ok(Self::default());
+        };
+        let models = policy
+            .models
+            .iter()
+            .map(|snapshot| SummaryModelProfile::admit(snapshot, settings))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            max_depth: policy.max_depth,
+            models: Arc::new(models),
+        })
+    }
 }
 
 /// Admitted independently from the task model before credential redemption.
@@ -306,6 +338,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            subagent_policy: SubAgentModels::default(),
         })
     }
 
@@ -364,6 +397,10 @@ impl OrdinaryNoToolProfile {
             floor: request.payload.floor.clone(),
             tool_envelope: request.payload.tool_envelope.clone(),
             can_propose_agents: application_can_propose_agents(request),
+            subagent_policy: SubAgentModels::admit(
+                request.payload.subagent_policy.as_ref(),
+                &request.payload.context_settings,
+            )?,
         })
     }
 
@@ -479,6 +516,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            subagent_policy: SubAgentModels::default(),
         })
     }
 
@@ -540,6 +578,12 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) const fn can_propose_agents(&self) -> bool {
         self.can_propose_agents
+    }
+
+    /// The run's admitted sub-agent policy (ADR-0050 decision 4).
+    #[must_use]
+    pub(crate) const fn subagent_policy(&self) -> &SubAgentModels {
+        &self.subagent_policy
     }
 
     /// The agent memory tools the version binds (`meta.memory`).

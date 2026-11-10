@@ -56,6 +56,7 @@ const (
 	MaxSoulBytes         = 2 * 1024
 	MaxDisplayNameChars  = 60
 	MaxAvatarBytes       = 128
+	MaxModelBytes        = 256
 	MaxTools             = 64
 	// MaxToolKeyBytes is the runtime's tool key bound (agent-runtime
 	// tool_envelope.rs MAX_KEY_BYTES): a key the spawn accepted is never
@@ -144,6 +145,10 @@ type Profile struct {
 	Soul        string `json:"soul"`
 	Avatar      string `json:"avatar"`
 	Tools       []Tool `json:"tools"`
+	// Model is the catalogue model the sub-agent ran on (profile.model,
+	// issue 1825); empty for the parent's model. The digest covers it; the
+	// draft does not carry it (a saved agent picks its own model).
+	Model string `json:"model,omitempty"`
 }
 
 // Seed is a suggested memory entry the person may keep.
@@ -222,6 +227,7 @@ func Check(request Request) (Request, error) {
 		DisplayName: strings.TrimSpace(profile.DisplayName),
 		Soul:        strings.TrimSpace(profile.Soul),
 		Avatar:      strings.TrimSpace(profile.Avatar),
+		Model:       strings.TrimSpace(profile.Model),
 	}
 	for _, text := range []string{out.Profile.Label, out.Profile.DisplayName} {
 		if utf8.RuneCountInString(text) > MaxDisplayNameChars || !oneLine(text) {
@@ -236,6 +242,9 @@ func Check(request Request) (Request, error) {
 	}
 	if len(out.Profile.Avatar) > MaxAvatarBytes || !oneLine(out.Profile.Avatar) {
 		return Request{}, invalid("the sub-agent's avatar is a short key.")
+	}
+	if len(out.Profile.Model) > MaxModelBytes || !oneLine(out.Profile.Model) || out.Profile.Model == "inherit" {
+		return Request{}, invalid("the sub-agent's model is a model name of at most 256 bytes.")
 	}
 	if len(profile.Tools) > MaxTools {
 		return Request{}, invalid(fmt.Sprintf("at most %d tools.", MaxTools))
@@ -364,7 +373,8 @@ func Draft(request Request) map[string]any {
 // SpecDigest is the profile's digest exactly as the runtime computes it for
 // the spawn's record (libs/rust/agent-runtime subagents/profile.rs
 // Profile::digest, stored as ephemeral_agents.profile_digest): the SHA-256 of
-// the sorted-key compact JSON of {avatar, display_name, model "inherit",
+// the sorted-key compact JSON of {avatar, display_name, model (the name, or
+// "inherit" for the parent's),
 // schema "elitea.subagent.profile.v1", soul, tools}, an unset key null, the
 // tool keys lower-case, sorted and unique. The label is not part of it.
 func SpecDigest(profile Profile) string {
@@ -387,7 +397,13 @@ func SpecDigest(profile Profile) string {
 	optionalString(&out, profile.Avatar)
 	out.WriteString(`,"display_name":`)
 	optionalString(&out, profile.DisplayName)
-	out.WriteString(`,"model":"inherit","schema":"elitea.subagent.profile.v1","soul":`)
+	out.WriteString(`,"model":`)
+	model := profile.Model
+	if model == "" {
+		model = "inherit"
+	}
+	quote(&out, model)
+	out.WriteString(`,"schema":"elitea.subagent.profile.v1","soul":`)
 	optionalString(&out, profile.Soul)
 	out.WriteString(`,"tools":`)
 	if tools == nil {

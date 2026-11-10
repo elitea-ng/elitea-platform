@@ -797,6 +797,7 @@ async fn propose_agent_is_bounded_by_its_own_ceiling() {
             soul: "s".repeat(1_000),
             avatar: String::new(),
             tools: None,
+            model: String::new(),
         },
         memory_seeds: vec![
             ProposeAgentSeed {
