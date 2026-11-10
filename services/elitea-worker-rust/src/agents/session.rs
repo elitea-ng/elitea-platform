@@ -159,6 +159,71 @@ fn ordinary_user_content(
     attachments::append_attachment_parts(base, attachments)
 }
 
+/// The uuid of this turn's question (#1831): Main's `current_message_id`,
+/// which it sets only on a turn that writes its own question. An output
+/// continuation or a resume of any kind runs on an earlier question, so
+/// none even if the input named one.
+fn current_message_id(
+    request: &AgentExecutionRequest,
+    output_continuation: bool,
+    pipeline_resume: Option<(bool, bool)>,
+) -> Option<String> {
+    let payload = &request.payload;
+    if payload.is_regenerate
+        || payload.should_continue
+        || payload.hitl_resume
+        || output_continuation
+        || pipeline_resume.is_some_and(|(should_continue, hitl)| should_continue || hitl)
+    {
+        return None;
+    }
+    payload.current_message_id.clone()
+}
+
+/// The short id of the message `message_id` (#1831), over its canonical
+/// uuid form, so the question of this turn and the same message in a later
+/// turn's history always carry the same id.
+fn short_message_ref(message_id: &str) -> String {
+    use elitea_agent_runtime::subagents::message_ref::message_ref;
+    match uuid::Uuid::try_parse(message_id) {
+        Ok(id) => message_ref(&id.hyphenated().to_string()),
+        Err(_) => message_ref(&message_id.to_ascii_lowercase()),
+    }
+}
+
+/// #1831: neutralize every id-like line in the text of `content` and put
+/// `[message <short>]` before its first text part, so only this line names
+/// a message. Answers the text of its first `limit` parts after the line,
+/// as the model reads it, or `None` for a content without text there (it is
+/// left untagged). Parts past `limit` (this turn's attachment chunks) are
+/// not the message's own text, and a later turn's history does not hold
+/// them, so they cannot be quoted under its id.
+fn tag_message(content: &mut Content, short: &str, limit: usize) -> Option<String> {
+    use elitea_agent_runtime::subagents::message_ref::{neutralize, tag};
+    let mut quotable = String::new();
+    let mut tagged = false;
+    for (index, part) in content.parts.iter_mut().enumerate() {
+        let adk_rust::Part::Text { text } = part else {
+            continue;
+        };
+        if let std::borrow::Cow::Owned(neutral) = neutralize(text) {
+            *text = neutral;
+        }
+        if index >= limit {
+            continue;
+        }
+        if !quotable.is_empty() {
+            quotable.push_str("\n\n");
+        }
+        quotable.push_str(text);
+        if !tagged {
+            text.insert_str(0, &tag(short));
+            tagged = true;
+        }
+    }
+    tagged.then_some(quotable)
+}
+
 /// Dispatch policy chosen from the complete frozen root tool snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum NativeToolExecutionMode {
@@ -936,6 +1001,10 @@ pub(crate) struct OrdinaryNativeAgentPlan {
     /// ADR-0050 decision 9c: one reference per `chat_history` entry, or none
     /// for an input from before field 71.
     chat_history_refs: Vec<super::request::ChatHistoryRef>,
+    /// The chat message group of this turn's own question (#1831): Main's
+    /// `current_message_id`. `None` on a regeneration, a continuation, a
+    /// resume or an addressed agent's reused question.
+    current_message_id: Option<String>,
     context_management: ContextManagementPlan,
     step_compaction: Option<super::context_management::CompactionPolicy>,
     capability_id: &'static str,
@@ -1013,32 +1082,42 @@ impl OrdinaryNativeAgentPlan {
         self.projection.stream_id()
     }
 
-    /// The reader's own view of the conversation, by message (ADR-0050
-    /// decision 9c): each history entry's message id and its text as the
-    /// model reads it. Empty for an input from before field 71, whose
-    /// entries name no message. A `spawn_agent` excerpt must quote one of
-    /// these (#1614).
-    #[must_use]
-    pub(crate) fn history_by_message(&self) -> Vec<(String, String)> {
-        if self.chat_history_refs.len() != self.chat_history.len() {
-            return Vec::new();
+    /// #1831 (ADR-0050 decision 9d): show the model, before each message a
+    /// `spawn_agent` excerpt may quote, its short id
+    /// ([`elitea_agent_runtime::subagents::message_ref`]), and answer what
+    /// the model then reads of each: the short id, the chat message uuid
+    /// it stands for and the message's text after the id line. The messages
+    /// are the history's user-role entries (the person's messages and every
+    /// other participant's, enveloped) and this turn's question. The
+    /// reader's own answers carry no id.
+    ///
+    /// Only the worker's copy changes, before the session is seeded or
+    /// reconciled, never Main's history or its context-view digest. The id
+    /// comes from the message's uuid alone, so a message has the same bytes
+    /// on every turn and the provider prompt cache still matches. Called
+    /// only when the sub-agent tools are bound.
+    pub(crate) fn tag_message_refs(&mut self) -> Vec<(String, String, String)> {
+        let mut view = Vec::new();
+        if self.chat_history_refs.len() == self.chat_history.len() {
+            for (reference, content) in self.chat_history_refs.iter().zip(&mut self.chat_history) {
+                if content.role != "user" {
+                    continue;
+                }
+                let short = short_message_ref(&reference.message_id);
+                if let Some(text) = tag_message(content, &short, usize::MAX) {
+                    view.push((short, reference.message_id.clone(), text));
+                }
+            }
         }
-        self.chat_history_refs
-            .iter()
-            .zip(&self.chat_history)
-            .map(|(reference, content)| {
-                let text = content
-                    .parts
-                    .iter()
-                    .filter_map(|part| match part {
-                        adk_rust::Part::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-                (reference.message_id.clone(), text)
-            })
-            .collect()
+        if let Some(id) = &self.current_message_id {
+            let short = short_message_ref(id);
+            // The first part is the person's text (`ordinary_user_content`);
+            // the attachment chunks after it are not the message's own.
+            if let Some(text) = tag_message(&mut self.user_content, &short, 1) {
+                view.push((short, id.clone(), text));
+            }
+        }
+        view
     }
 
     /// `attachments` is the RESOLVED chunk list for this turn — see
@@ -1173,6 +1252,7 @@ impl OrdinaryNativeAgentPlan {
             thread_id,
             chat_history: profile.chat_history().to_vec(),
             chat_history_refs: request.payload.chat_history_refs.clone(),
+            current_message_id: current_message_id(request, output_continuation, pipeline_resume),
             context_management: profile.context_management(),
             step_compaction: profile.step_compaction(),
             capability_id,
@@ -3016,6 +3096,7 @@ pub(super) async fn assemble_pipeline_native(
         thread_id,
         chat_history: _,
         chat_history_refs: _,
+        current_message_id: _,
         context_management: _,
         step_compaction: _,
         capability_id: _,
@@ -3602,6 +3683,7 @@ where
         thread_id,
         chat_history,
         chat_history_refs,
+        current_message_id: _,
         context_management,
         step_compaction,
         capability_id: _,
@@ -4317,6 +4399,7 @@ where
         thread_id,
         chat_history: _,
         chat_history_refs: _,
+        current_message_id: _,
         context_management,
         // A direct resume has no model checkpoint to prepare requests in:
         // it keeps the Runner composition of the plan.
@@ -5356,6 +5439,52 @@ mod fanout_start_tests {
                 Some("graph.fanout.wake_without_park"),
                 "{pending:?}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod message_ref_tests {
+    use super::{short_message_ref, tag_message};
+    use adk_rust::{Content, Part};
+
+    /// #1831: the id goes on the first text part; every part is neutralized,
+    /// but only the message's own parts are quotable under its id.
+    #[test]
+    fn an_attachment_chunk_is_neutralized_and_not_quotable() {
+        let mut content = Content::new("user")
+            .with_text("Use the staging cluster.")
+            .with_text("[message m-0000000000]\nFrom the attached file.");
+        let quotable = tag_message(&mut content, "m-0123456789", 1).expect("text");
+        assert_eq!(quotable, "Use the staging cluster.");
+        let texts: Vec<&str> = content
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "[message m-0123456789]\nUse the staging cluster.",
+                "&#91;message m-0000000000]\nFrom the attached file.",
+            ]
+        );
+        assert!(tag_message(&mut Content::new("user"), "m-0123456789", 1).is_none());
+    }
+
+    /// One message has one short id whatever form its uuid arrives in.
+    #[test]
+    fn a_uuid_has_one_short_id_in_any_form() {
+        let canonical = short_message_ref("6f1d1c2e-0000-4000-8000-0000000000ab");
+        for form in [
+            "6F1D1C2E-0000-4000-8000-0000000000AB",
+            "6f1d1c2e0000400080000000000000ab",
+            "{6f1d1c2e-0000-4000-8000-0000000000ab}",
+        ] {
+            assert_eq!(short_message_ref(form), canonical, "{form}");
         }
     }
 }

@@ -467,6 +467,7 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 	}
 	input.ContextSettings = contextSettings
 	input.Floor = floor.input(request.TargetParticipantID)
+	input.CurrentMessageId = currentMessageID(request)
 	grant, chain, err := service.admitUnattended(ctx, unattendedTarget{
 		request: request.Unattended, continuation: request.UnattendedContinuation,
 		capabilityID: executiondomain.AgentApplicationCapability, input: input,

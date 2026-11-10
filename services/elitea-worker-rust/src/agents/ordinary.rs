@@ -315,7 +315,7 @@ impl OrdinaryNativeAgentAssembler {
             attachment_library,
             sandbox_authority,
             profile,
-            plan,
+            mut plan,
             toolsets: tool_snapshot,
             start,
             mcp_tokens,
@@ -573,9 +573,10 @@ impl OrdinaryNativeAgentAssembler {
                     toolkit_kinds(&tool_snapshot),
                 );
                 // ADR-0050 decision 9d (#1614): a brief names only what this
-                // agent sees; each spawn goes to the execution's ledger.
+                // agent sees; each spawn goes to the execution's ledger. The
+                // messages it may quote carry their short ids (#1831).
                 let view = super::subagents::BriefView::new(
-                    plan.history_by_message(),
+                    plan.tag_message_refs(),
                     &current_attachments,
                     profile.agent_memory().map(|_| Arc::clone(&recalled)),
                 );
