@@ -99,3 +99,16 @@ func TestCheckRefusesADirectRouterChildWithItsOwnText(t *testing.T) {
 		}
 	}
 }
+
+// D7: the generic branch refusal names Code, in the exact sentence the Web
+// editor shows (graphParallelAdmission.helpers.ts branchKindMessage).
+func TestTheBranchRefusalSentenceNamesCodeAsTheWebEditorDoes(t *testing.T) {
+	var api *apierr.APIError
+	if !errors.As(pipelinelimits.Check(parallelOver("state_modifier")), &api) {
+		t.Fatal("a State Modifier branch was admitted")
+	}
+	const web = `node "second" as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline), an LLM node or a Code node. Put the "state_modifier" node in a saved pipeline and run that pipeline from an Agent node.`
+	if !strings.HasSuffix(api.Message, web) {
+		t.Errorf("message %q does not end with the Web sentence", api.Message)
+	}
+}

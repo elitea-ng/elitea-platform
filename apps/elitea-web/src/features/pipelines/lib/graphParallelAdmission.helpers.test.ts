@@ -94,7 +94,7 @@ describe('strict fixed Parallel admission', () => {
     const value = document();
     const stateModifier = { ...value, nodes: value.nodes?.map((node) => node.id === 'Agent_left' ? { ...node, type: 'state_modifier' } : node) ?? [] };
     expect(graphParallelIssues(stateModifier).map((issue) => issue.message)).toContain(
-      'branches[0].node: Node "Agent_left" is a "state_modifier" node, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. '
+      'branches[0].node: Node "Agent_left" is a "state_modifier" node, but a branch can only run an Agent node (a saved agent or pipeline), an LLM node or a Code node. '
         + 'Put the "state_modifier" node in a saved pipeline and run that pipeline from an Agent node.',
     );
     expect(parallelOwnedAgent(stateModifier, 'extension', 0)).toBeUndefined();

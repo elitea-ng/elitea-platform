@@ -24,7 +24,7 @@ function branchKindMessage(id: string, matches: readonly YamlPipelineNode[]): st
   const kind = matches.length === 1 ? matches[0]?.type : undefined;
   if (typeof kind !== 'string') return 'Select one exact declared Agent, LLM or Code node id.';
   if (kind === 'router') return `Node "${id}" is a "router" node, but ${ROUTER_CHILD_TEXT}.`;
-  return `Node "${id}" is a "${kind}" node, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. `
+  return `Node "${id}" is a "${kind}" node, but a branch can only run an Agent node (a saved agent or pipeline), an LLM node or a Code node. `
     + `Put the "${kind}" node in a saved pipeline and run that pipeline from an Agent node.`;
 }
 /** yaml.rs::RawParallelBranchDefinition and parallel_compiler.rs::validate_parallel_ownership. */

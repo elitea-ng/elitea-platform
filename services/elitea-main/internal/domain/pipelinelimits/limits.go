@@ -61,8 +61,8 @@ const (
 	// (parallel_compiler.rs validate_parallel_ownership).
 	CodeParallelBranchUnsupported = "PIPELINE_PARALLEL_BRANCH_UNSUPPORTED"
 	// CodeMapFormUnsupported is a Map node whose form the runtime cannot run:
-	// a worker that is not a State Modifier, Agent or LLM node (Code and a
-	// direct Router wait for Wave 3), `reduction` together with `join` or
+	// a worker that is not a State Modifier, Agent, LLM or Code node (a
+	// direct Router is refused with its own text), `reduction` together with `join` or
 	// `on_error`, or `join: merge` (every item lands the same keys).
 	// The Worker compiler refuses the same (map_compiler.rs
 	// validate_map_ownership, map_yaml.rs MAP_REDUCTION_AND_JOIN).
@@ -228,7 +228,7 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 				Status: http.StatusBadRequest,
 				Code:   CodeParallelBranchUnsupported,
 				// The Web editor mirrors this text exactly (graphParallelAdmission.helpers.ts).
-				Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline) or an LLM node. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
+				Message: fmt.Sprintf("%s runs node %s as a Parallel branch, but a branch can only run an Agent node (a saved agent or pipeline), an LLM node or a Code node. Put the %s node in a saved pipeline and run that pipeline from an Agent node.",
 					nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
 			}
 		}

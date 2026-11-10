@@ -20,7 +20,7 @@ function OwnedAgentSummary({ ownerId, ordinal, disabled }: { readonly ownerId: s
   const context = useContext(FlowEditorContext);
   if (!context) return null;
   const agent = parallelOwnedAgent(context.yamlJsonObject, ownerId, ordinal);
-  if (!agent) return <Typography variant="bodySmall">{t('pipelines.parallel.exactOwner', 'Select an Agent or LLM node with one exact fixed branch owner.')}</Typography>;
+  if (!agent) return <Typography variant="bodySmall">{t('pipelines.parallel.exactOwner', 'Select an Agent, LLM or Code node with one exact fixed branch owner.')}</Typography>;
   const outputs = extensionStrings(agent.output).join(', ');
   const task = extensionRecord(extensionRecord(agent.input_mapping)['task']);
   const removeTransition = (): void => {
@@ -58,7 +58,7 @@ export function ParallelBranches({ ownerId, branches, disabled, change }: Parall
         <ExtensionField label={t('pipelines.parallel.branchId', 'Branch {{number}} result key', { number })}
           value={extensionText(row['id'])} disabled={disabled}
           change={(next) => update(patchParallelBranch(branches, ordinal, 'id', next))} />
-        <ExtensionChoice label={t('pipelines.parallel.branchAgent', 'Branch {{number}} Agent or LLM node', { number })}
+        <ExtensionChoice label={t('pipelines.parallel.branchAgent', 'Branch {{number}} Agent, LLM or Code node', { number })}
           value={selected} choices={['', ...choices, ...(selected && !choices.includes(selected) ? [selected] : [])]} disabled={disabled}
           change={(next) => update(patchParallelBranch(branches, ordinal, 'node', next))} />
         <OwnedAgentSummary ownerId={ownerId} ordinal={ordinal} disabled={disabled} />
