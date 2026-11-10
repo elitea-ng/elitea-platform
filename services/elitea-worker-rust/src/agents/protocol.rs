@@ -545,6 +545,10 @@ pub fn request_from(
                 .as_deref()
                 .map(current_message_id)
                 .transpose()?,
+            context_view_history: message
+                .context_view
+                .as_ref()
+                .map(|view| view.history.clone()),
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
