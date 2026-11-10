@@ -24,7 +24,7 @@ text-splitter = { version = "0.33.1", features = ["code"] }
 # unknown-language token split. Compiled in: no runtime download.
 tiktoken-rs = "0.12.1"
 # The syntax tree the method walk reads; the version code-parsers pins.
-tree-sitter = "=0.27.1"
+tree-sitter = "=0.27.2"
 
 [dev-dependencies]
 # Pins the SDK prompts by digest (content-source already locks it).
