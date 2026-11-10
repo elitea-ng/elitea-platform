@@ -620,6 +620,40 @@ pub(crate) struct AdkParallelBranchRuntime {
 }
 
 impl AdkParallelBranchRuntime {
+    /// B2 (FU-299): one operator line per failed child, so a fan-out failure
+    /// can be traced to the item that caused it. Only registered codes, the
+    /// code's fixed sentence, identifiers and [`safe_graph_cause`] are
+    /// written: never state, inputs, outputs or error text.
+    fn log_child_failure(
+        &self,
+        activation: &ParallelActivation,
+        item: &str,
+        child_thread: &str,
+        failure: &ChildFailure,
+        error: &GraphError,
+    ) {
+        let execution_id = self
+            .checkpoints
+            .child_origin(activation)
+            .map(|origin| origin.execution_id)
+            .unwrap_or_default();
+        let cause =
+            serde_json::to_string(&safe_graph_cause(error)).unwrap_or_else(|_| String::from("[]"));
+        elitea_faults::fault!(
+            tracing::Level::WARN,
+            code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED,
+            event = "fanout_child_failed",
+            member_code = failure.code.as_str(),
+            member_sentence = failure.message_safe.as_str(),
+            cause = cause.as_str(),
+            execution_id = execution_id.as_str(),
+            support_ref = execution_id.as_str(),
+            node_id = activation.node_id.as_str(),
+            item = item,
+            item_ref = elitea_agent_runtime::graph::fanout::plan::support_ref_for(child_thread)
+        );
+    }
+
     pub(crate) fn new(
         checkpoints: Arc<dyn ParallelChildCheckpointerFactory>,
         graphs: Arc<dyn ParallelBranchGraphFactory>,
@@ -729,6 +763,7 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
             Arc::clone(&branch.store),
             branch.thread_id.clone(),
         ));
+        let (branch_key, child_thread) = (branch.branch.id().to_owned(), branch.thread_id.clone());
         let result = self
             .invoke_inner(activation, branch, Arc::clone(&checkpoint), context)
             .await;
@@ -745,8 +780,10 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
                     .flatten()
                     .filter(|saved| matches!(saved.receipt, Some(BranchReceipt::Failed { .. })))
                     .map(|saved| saved.checkpoint_id);
+                let failure = branch_failure_of(&error);
+                self.log_child_failure(activation, &branch_key, &child_thread, &failure, &error);
                 ParallelBranchOutcome::Failed {
-                    failure: branch_failure_of(&error),
+                    failure,
                     checkpoint_id,
                 }
             }
@@ -2703,6 +2740,70 @@ fn unwrap_node_failures(mut message: &str) -> &str {
         message = inner;
     }
     message
+}
+
+/// A child failure's cause chain, safe by construction: the error's kind,
+/// each node id it passed through (pipeline identifiers, never values), and
+/// the innermost message only when it starts with a registered-shape dotted
+/// code (`checkpoint.invalid_scope`, `pipeline.code_failed`). Free text is
+/// never copied. Bounded like a FU-299 chain.
+pub(super) fn safe_graph_cause(error: &GraphError) -> Vec<String> {
+    let mut chain = vec![graph_error_code(error).to_owned()];
+    let mut message = match error {
+        GraphError::NodeExecutionFailed { node, message } => {
+            chain.push(format!("node {node}"));
+            message.as_str()
+        }
+        GraphError::CheckpointError(message) | GraphError::Other(message) => message.as_str(),
+        _ => "",
+    };
+    while let Some(rest) = message.strip_prefix("Node '")
+        && let Some((node, inner)) = rest.split_once("' execution failed: ")
+        && !node.contains('\'')
+        && chain.len() < elitea_faults::MAX_CAUSES - 1
+    {
+        let element = format!("node {node}");
+        if chain.last() != Some(&element) {
+            chain.push(element);
+        }
+        message = inner;
+    }
+    let message = message
+        .strip_prefix("Checkpoint error: ")
+        .unwrap_or(message);
+    if let Some(code) = leading_dotted_code(message)
+        && chain.first().map(String::as_str) != Some(code)
+    {
+        chain.push(code.to_owned());
+    }
+    chain.truncate(elitea_faults::MAX_CAUSES);
+    for element in &mut chain {
+        if element.len() > 128 {
+            let mut end = 128;
+            while !element.is_char_boundary(end) {
+                end -= 1;
+            }
+            element.truncate(end);
+        }
+    }
+    chain
+}
+
+/// `a.b[.c]` made of `[a-z0-9_]` segments at the start of `message`, ended by
+/// `:` or the end of the text; anything else is not a code.
+fn leading_dotted_code(message: &str) -> Option<&str> {
+    let end = message.find(':').unwrap_or(message.len());
+    let candidate = &message[..end];
+    let segments = candidate.split('.').collect::<Vec<_>>();
+    (segments.len() >= 2
+        && candidate.len() <= 96
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        }))
+    .then_some(candidate)
 }
 
 fn valid_failure_code(code: &str) -> bool {

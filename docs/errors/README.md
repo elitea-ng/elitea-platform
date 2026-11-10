@@ -60,6 +60,7 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
+| `graph.fanout.child_failed` | A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item. | Find the item by item and item_ref (the support_ref of its failed join entry); member_code and cause say why it failed. | operator | n/a | elitea-worker-rust |
 | `graph.fanout.deadline_insufficient` | A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline. | Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time. | operator | no | elitea-worker-rust |
 
 ### internal

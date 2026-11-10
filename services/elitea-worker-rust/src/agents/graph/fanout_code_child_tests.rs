@@ -601,6 +601,37 @@ fn a_64_item_code_map_logs_no_item_values_or_index() {
         "the ordinary failures were logged: {}",
         output.stdout
     );
+    // B2: each failed child writes one operator line naming its own code,
+    // fixed sentence, safe cause chain, ids and support references.
+    let child = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED;
+    let failed: Vec<_> = lines
+        .iter()
+        .filter(|line| line.get("code").is_some_and(|value| value == child.as_str()))
+        .collect();
+    assert_eq!(failed.len(), 2, "one line per failed child: {}", output.stdout);
+    for line in &failed {
+        assert_eq!(line["level"], "WARN");
+        assert_eq!(line["msg"], child.sentence());
+        assert_eq!(line["event"], "fanout_child_failed");
+        assert_eq!(line["node_id"], "map_entities");
+        assert_eq!(line["item"], "0");
+        assert!(line["member_sentence"].as_str().is_some_and(|text| !text.is_empty()));
+        let execution = line["execution_id"].as_str().unwrap();
+        assert!(!execution.is_empty());
+        assert_eq!(line["support_ref"], execution);
+        assert!(
+            line["item_ref"]
+                .as_str()
+                .is_some_and(|value| value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        );
+        let cause = line["cause"].as_array().expect("cause is a JSON array");
+        assert!(!cause.is_empty() && cause.len() <= elitea_faults::MAX_CAUSES, "{cause:?}");
+    }
+    let codes: Vec<_> = failed.iter().map(|line| line["member_code"].clone()).collect();
+    assert!(
+        codes.contains(&json!(crate::agents::graph::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE)),
+        "{codes:?}"
+    );
 }
 
 #[test]

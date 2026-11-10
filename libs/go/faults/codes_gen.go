@@ -28,6 +28,8 @@ const (
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
+	// A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.
+	GraphFanoutChildFailed Code = "graph.fanout.child_failed"
 	// A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.
 	GraphFanoutDeadlineInsufficient Code = "graph.fanout.deadline_insufficient"
 	// A component crashed on an unexpected condition; the request or task it was handling failed.

@@ -82,6 +82,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "graph.fanout.child_failed",
+      "sentence": "A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.",
+      "action": "Find the item by item and item_ref (the support_ref of its failed join entry); member_code and cause say why it failed.",
+      "audience": "operator",
+      "retryable": "n/a",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "graph.fanout.deadline_insufficient",
       "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
       "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",

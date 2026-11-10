@@ -3174,3 +3174,34 @@ async fn a_frozen_activation_is_never_re_admitted_on_resume() {
     assert_eq!(output.updates["gathered"][1]["outputs"]["output"], "pause");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "never re-admitted");
 }
+
+/// B2: a failed child's operator cause keeps kinds, node ids and a leading
+/// dotted code only; free text after it, or text that is not a code, never
+/// reaches the line.
+#[test]
+fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
+    use super::parallel::safe_graph_cause;
+    let scoped = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: Checkpoint error: checkpoint.invalid_scope: secret_marker detail".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&scoped),
+        ["graph.node_execution_failed", "node gather", "node js_a", "checkpoint.invalid_scope"]
+    );
+    let free = GraphError::NodeExecutionFailed {
+        node: "shout".into(),
+        message: "secret_marker: value.with.dots".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&free),
+        ["graph.node_execution_failed", "node shout"]
+    );
+    let other = GraphError::Other("Secret.Marker text".into());
+    assert_eq!(safe_graph_cause(&other), ["graph.other"]);
+    let deep = GraphError::NodeExecutionFailed {
+        node: "n".into(),
+        message: (0..20).map(|index| format!("Node 'n{index}' execution failed: ")).collect::<String>(),
+    };
+    assert!(safe_graph_cause(&deep).len() <= elitea_faults::MAX_CAUSES);
+}

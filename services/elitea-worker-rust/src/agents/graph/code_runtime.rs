@@ -294,6 +294,34 @@ impl CodeNode {
         self.events = events;
         self
     }
+
+    /// The committed stop's operator line names its failure class (B2), a
+    /// finite enum: never source, inputs, outputs or owner text.
+    async fn report_stop(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+        class: Option<NodeFailureClass>,
+    ) -> Result<(), GraphError> {
+        tracing::error!(
+            node_id = self.definition.id(),
+            graph_thread_id = context.config.thread_id,
+            activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
+            attempt = authority.attempt(),
+            error_code = code,
+            failure_class = class.map(|class| format!("{class:?}")),
+            "pipeline Code node stopped"
+        );
+        self.record_failure(code);
+        if let Some(events) = &self.events {
+            events
+                .send_execution_failure(code)
+                .await
+                .map_err(|_| code_error("The pipeline failure channel closed."))?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -516,22 +544,17 @@ impl NodeAttemptBody for CodeNode {
         authority: &NodeAttemptAuthority,
         code: &'static str,
     ) -> Result<(), GraphError> {
-        tracing::error!(
-            node_id = self.definition.id(),
-            graph_thread_id = context.config.thread_id,
-            activation_id = %crate::sandbox::code_recovery::hex(&authority.dispatch_activation()),
-            attempt = authority.attempt(),
-            error_code = code,
-            "pipeline Code node stopped"
-        );
-        self.record_failure(code);
-        if let Some(events) = &self.events {
-            events
-                .send_execution_failure(code)
-                .await
-                .map_err(|_| code_error("The pipeline failure channel closed."))?;
-        }
-        Ok(())
+        self.report_stop(context, authority, code, None).await
+    }
+
+    async fn report_terminal_failure_classified(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+        code: &'static str,
+        class: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        self.report_stop(context, authority, code, Some(class)).await
     }
 
     async fn report_restored_terminal_failure(
