@@ -4354,6 +4354,8 @@ impl AgentHost {
         )
         .await?;
         turn_context.mark_ran();
+        // #1827: the message under its `[message m-…]` line, the images named.
+        let question = super::brief::TurnQuestion::new(&started.question_id, &message, images);
         // What changes every turn goes in a host message before the
         // person's (`TurnTail`): the system prompt stays the thread's.
         let tail = Arc::new(TurnTail {
@@ -4363,7 +4365,7 @@ impl AgentHost {
                 &started.memory_recall.text,
                 &nonce,
             ) + &hook_context,
-            anchor: message.clone(),
+            anchor: question.anchor(),
         });
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
@@ -4636,7 +4638,8 @@ impl AgentHost {
                     events.clone(),
                     recorder.clone(),
                 )
-                .with_checkouts(checkouts),
+                .with_checkouts(checkouts)
+                .with_brief_view(question.view()),
             ),
             // A child only reads, and never gets near the parent's processes
             // (`process_output`, `process_list` and `process_wait` read, but
@@ -4787,7 +4790,7 @@ impl AgentHost {
                 .as_ref()
                 .map_or(ContinuePolicy::Ask, |turn| turn.grant.step_policy()),
         );
-        let mut content = Content::new("user").with_text(message);
+        let mut content = question.content();
         for image in images {
             content = content.with_inline_data(image.picture.mime, image.picture.bytes.clone());
         }

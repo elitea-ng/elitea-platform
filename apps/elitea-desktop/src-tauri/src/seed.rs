@@ -7,13 +7,17 @@
 //! for its input and output). This module is the pure part: it folds those
 //! JSON documents into adk [`Event`]s, in order.
 //!
-//! * a question group becomes a `user` event;
+//! * a question group becomes a `user` event, its text after the line
+//!   `[message m-…]` of its uuid and neutralized (#1827,
+//!   [`crate::d0::brief`]): the id a `spawn_agent` excerpt names it by;
 //! * an answer group (one that replies to a question) becomes, in order, a
 //!   `FunctionCall` event and a `FunctionResponse` event per tool step, text
 //!   notes for the approvals the person answered (`hitl_exchanges`), and the
 //!   answer's text as a `model` event;
 //! * a question and its answer share one invocation id, so the session's
 //!   whole-invocation trimming never separates them;
+//! * an answer another participant wrote is one labelled user event, under
+//!   the line of its own uuid;
 //! * an answer whose meta says `executed_by: cloud_executor` is stored with
 //!   `executed_by = 'cloud_executor'` (ADR-0034 take-back), every other one
 //!   as `desktop`.
@@ -34,6 +38,7 @@ use chrono::{DateTime, Utc};
 use elitea_agent_runtime::untrusted::{MessageAuthorKind, message_envelope};
 use serde_json::{Value, json};
 
+use crate::d0::brief::tagged;
 use crate::sessions::{EXECUTED_BY_CLOUD, EXECUTED_BY_DESKTOP, NewEvent, WITHHELD_BODY};
 
 /// The groups a seed asks the server for (the `threads.sqlite` turn bound).
@@ -284,9 +289,10 @@ impl Reader<'_> {
 }
 
 /// One labelled, untrusted user event for a message another participant
-/// wrote.
+/// wrote, under the id line of `message_uuid` (#1827).
 fn labelled(
     invocation: &str,
+    message_uuid: &str,
     kind: MessageAuthorKind,
     name: &str,
     text: &str,
@@ -297,7 +303,7 @@ fn labelled(
         "user",
         "user",
         vec![Part::Text {
-            text: message_envelope(kind, name, text),
+            text: tagged(message_uuid, &message_envelope(kind, name, text)),
         }],
         at,
     )
@@ -362,7 +368,7 @@ pub fn fold(
             if let Some((kind, name)) = reader.other_author(group) {
                 let text = group_text(group);
                 if !text.is_empty() {
-                    push(labelled(&invocation, kind, &name, &text, at));
+                    push(labelled(&invocation, &uuid, kind, &name, &text, at));
                 }
                 continue;
             }
@@ -448,8 +454,16 @@ pub fn fold(
             }
             let invocation = format!("seed-{answer_uuid}");
             let event = match reader.other_author(group) {
-                Some((kind, name)) => labelled(&invocation, kind, &name, &text, at),
-                None => event(&invocation, "user", "user", vec![Part::Text { text }], at),
+                Some((kind, name)) => labelled(&invocation, &uuid, kind, &name, &text, at),
+                None => event(
+                    &invocation,
+                    "user",
+                    "user",
+                    vec![Part::Text {
+                        text: tagged(&uuid, &text),
+                    }],
+                    at,
+                ),
             };
             out.push(NewEvent {
                 turn_execution_id: turn,
@@ -465,6 +479,40 @@ pub fn fold(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A user message's text without its `[message m-…]` line (#1827).
+    fn shown(text: &str) -> &str {
+        crate::d0::tests::without_message_id(text)
+    }
+
+    /// #1827: each user message opens with the line of its group's uuid,
+    /// another participant's answer too; the reader's own answer has none.
+    #[test]
+    fn a_user_message_carries_the_id_line_of_its_group() {
+        let events = fold(
+            &groups(),
+            &HashMap::new(),
+            "elitea_agent",
+            Reader::default(),
+            false,
+        );
+        let first = events[0].event.llm_response.content.as_ref().unwrap();
+        let Part::Text { text } = &first.parts[0] else {
+            panic!("{first:?}");
+        };
+        assert_eq!(*text, crate::d0::brief::tagged("q1", "create hello.txt"));
+        assert!(text.starts_with("[message m-"), "{text}");
+        let answer = events
+            .iter()
+            .rev()
+            .find(|e| e.event.author == "elitea_agent")
+            .unwrap();
+        let Part::Text { text } = &answer.event.llm_response.content.as_ref().unwrap().parts[0]
+        else {
+            panic!("{answer:?}");
+        };
+        assert!(!text.starts_with("[message"), "{text}");
+    }
 
     fn text(content: &str) -> Value {
         json!([{"item_type": "text_message", "item_details": {"content": content}}])
@@ -514,7 +562,7 @@ mod tests {
             .map(|e| {
                 let content = e.event.llm_response.content.as_ref().unwrap();
                 let kind = match &content.parts[0] {
-                    Part::Text { text } => format!("text:{text}"),
+                    Part::Text { text } => format!("text:{}", shown(text)),
                     Part::FunctionCall { name, .. } => format!("call:{name}"),
                     Part::FunctionResponse { .. } => "response".to_owned(),
                     _ => "other".to_owned(),
@@ -597,13 +645,13 @@ mod tests {
         );
         assert_eq!(events.len(), 3);
         let last = events[2].event.llm_response.content.as_ref().unwrap();
-        assert!(matches!(&last.parts[0], Part::Text { text } if text == "unanswered"));
+        assert!(matches!(&last.parts[0], Part::Text { text } if shown(text) == "unanswered"));
         assert_eq!(events[2].event.invocation_id, "seed-q3");
     }
 
     fn note_text(event: &NewEvent) -> Option<&str> {
         match event.event.llm_response.content.as_ref()?.parts.first()? {
-            Part::Text { text } => Some(text),
+            Part::Text { text } => Some(shown(text)),
             _ => None,
         }
     }
@@ -732,7 +780,7 @@ mod tests {
             .map(|e| {
                 let content = e.event.llm_response.content.as_ref().unwrap();
                 let kind = match &content.parts[0] {
-                    Part::Text { text } => format!("text:{text}"),
+                    Part::Text { text } => format!("text:{}", shown(text)),
                     Part::FunctionCall { name, .. } => format!("call:{name}"),
                     _ => "other".to_owned(),
                 };
