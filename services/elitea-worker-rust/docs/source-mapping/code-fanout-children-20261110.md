@@ -368,6 +368,12 @@ Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), kept
 | two int4 (`objsubid` 2, shares the space with this lock) | Main personalproject `ensurer.go:551` class `0x454C5041` ("ELPA"); Main deepwiki history `deepwiki_history.go:100,192` class `0x0DEE0417`; Main nativeauth `store.go:915-917` class `250025`; deepwiki-engine `storage/build.rs`, `storage/delete.rs` `hashtext(<name>)` first key; inventory-engine `store/mod.rs:557`, `store/sources.rs:483` `hashtext('elitea_inventory.graph' / '.ingest')` (both engines use their own databases); test-only deepwiki-engine fixtures |
 | one bigint (`objsubid` 1, a separate space) | Main: `hashtextextended(...)` keys in oidc, agent_memory, agent_proposals, agent_steering (`'steering:'`), agent_workforce_policy, conversation_fork, conversations, index_registry, local_child_turns, vector_claim_tokens (`'elitea_memory_conversation:'`), web_push (`'web_push_user:'`), workspace_store, workspace_handoffs, execution_suspensions, pgvault, code_debug_artifacts (seed 701); `hashtext(...)` in cloud_executor_attestation/settings, connector_inventory, connector_requests; constants in secrets_header_value, supportassistant, compiled_snapshots, platform_preamble, migrate/lock.go, dbtest/template.go, auth_provisioning.sql; session locks in auditexport/relay.go and securityaudit/relay.go; subapp-host `spi/pgstore.go`; scheduler `pricesync`; Rust `pg-migrate`; Worker test `640064`; two database scripts |
 
+**Reruns after the code review (R1-R10, M1, M2), PostgreSQL 18.4, disposable.** Worker lib with
+`ELITEA_TEST_DATABASE_URL` and the receipt guard as CI sets them: **3179 passed, 0 failed, 127 ignored**. Real-PG prefix
+`code_owner_tests::` `--ignored`: **37 passed, 0 failed**. Agent-runtime 1829 passed. `fmt`, `clippy -D warnings`,
+`cargo doc -D warnings` clean. Main `go vet ./...` clean; `repos`, `storage`, `pipelinelimits` pass (`-p 1`); faults gate
+passes. Web `vitest run pipelines`: 274 files, 2963 passed, 1 expected fail; `tsc`, oxlint and the i18n check clean.
+
 **Raw i18n key on the Map card** (`pipelines.graphExtensions.values.` beside "Owned worker" and "Worker output 1"):
 `ExtensionChoice` renders the empty choice as `t('pipelines.graphExtensions.values.' + '', '')`; i18next ignores the
 empty default and shows the key. Unchanged from `origin/main` (`ExtensionFields.tsx:27`), not introduced here; not

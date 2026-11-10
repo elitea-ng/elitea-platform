@@ -16,6 +16,7 @@ use crate::state::{
 };
 use adk_rust::graph::{Checkpointer, CompiledGraph};
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 fn map_yaml(concurrency: usize, platform_client: bool) -> String {
     let platform = if platform_client {
@@ -506,11 +507,13 @@ fn parallel_yaml(branches: usize, concurrency: usize) -> String {
         .map(|index| format!("{{id: b{index}, node: code_{index}}}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let nodes = (0..branches)
-        .map(|index| {
-            format!("  - {{id: code_{index}, type: code, language: python, code: 'return 41', input: [topic], output: [count]}}\n")
-        })
-        .collect::<String>();
+    let mut nodes = String::new();
+    for index in 0..branches {
+        let _ = writeln!(
+            nodes,
+            "  - {{id: code_{index}, type: code, language: python, code: 'return 41', input: [topic], output: [count]}}"
+        );
+    }
     format!(
         "entry_point: gather\nstate:\n  topic: {{type: str, value: slots}}\n  count: {{type: int, value: 0}}\n  joined: {{type: list, value: []}}\nnodes:\n  - {{id: gather, type: parallel, branches: [{declared}], max_concurrency: {concurrency}, wait: all, output: [joined], transition: END}}\n{nodes}"
     )
