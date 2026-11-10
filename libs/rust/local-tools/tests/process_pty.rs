@@ -7,6 +7,7 @@
 //! The Python test skips without `python3` on `PATH`, unless
 //! `ELITEA_REQUIRE_PTY=1`.
 
+#![cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
 

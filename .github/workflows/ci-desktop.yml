@@ -2,7 +2,8 @@ name: CI — Desktop client
 
 # apps/elitea-desktop (ADR-0029 decision 9): the Tauri host and the elitea-web
 # `desktop` build mode it bundles. ONE job on macOS (the first platform), plus
-# `pane-drivers` (Windows and Linux: the browser pane's drivers, #1593): the
+# `pane-drivers` (Windows and Linux: the browser pane's drivers, #1593) and
+# `windows-host` (the host and the local tools on Windows, #1828): the
 # organisation is on the GitHub free plan with a 20-concurrent-job cap, and a
 # macOS minute costs ten Linux ones, so this is deliberately a single cached job
 # that does the cheap, decisive work — Rust format, lint and tests for the host,
@@ -256,11 +257,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Windows lints and tests the pane driver crates only: the host links
-        # elitea-local-tools, which is Unix-only today (PTY sessions, file
-        # descriptors, rustix), so the host itself does not build on Windows
-        # until the Windows desktop build (#1697) ports it. Linux builds the
-        # whole host.
+        # Windows lints and tests the pane driver crates only here: the
+        # `windows-host` job below lints and tests the host and the local
+        # tools on Windows (#1828). Linux builds the whole host.
         include:
           - os: windows-latest
             clippy: -p elitea-browser-driver-dom -p elitea-browser-driver-windows
@@ -345,3 +344,73 @@ jobs:
         working-directory: apps/elitea-desktop/src-tauri
         timeout-minutes: 10
         run: ${{ matrix.engine_run }}
+
+  # The host and the local tools on Windows (#1828): the OS layer of
+  # elitea-local-tools (src/sys: Job Objects, ConPTY, no mode bits) and the
+  # host's Windows paths (the toast AUMID, no owner checks). Clippy for the
+  # host and for local-tools, local-index and workspace-store in the libs
+  # workspace, then their tests. The tests that need Unix files (mode bits,
+  # symlinks, /bin/sh, git hooks) are Unix-only; the macOS job and
+  # ci-local-tools-macos.yml run them. Windows has no OS sandbox here: a
+  # confined command is refused (crate::sandbox), so no test runs one. The
+  # web bundle is a stub and the build has no brand overlay, as pane-drivers.
+  windows-host:
+    name: Host + local tools — windows-latest (clippy, tests)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+
+      - name: Install web (locked, for tsc)
+        working-directory: apps/elitea-web
+        env:
+          NPM_CONFIG_FETCH_RETRIES: "6"
+          NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+          NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
+        run: npm ci
+
+      - name: The embedded web bundle is a stub (the tests render nothing)
+        run: |
+          mkdir -p apps/elitea-web/dist-desktop
+          printf '<!doctype html><title>stub</title>' > apps/elitea-web/dist-desktop/index.html
+
+      - name: Assert the pinned toolchain
+        working-directory: apps/elitea-desktop/src-tauri
+        run: bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            apps/elitea-desktop/src-tauri
+            libs/rust
+          prefix-key: windows-host
+
+      - name: Run Clippy (host)
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo clippy --locked -p elitea-desktop --all-targets -- -D warnings
+
+      - name: Run Clippy (local tools, local index, workspace store)
+        working-directory: libs/rust
+        run: >
+          cargo clippy --locked -p elitea-local-tools --features handoff
+          -p elitea-local-index -p elitea-workspace-store --all-targets -- -D warnings
+
+      - name: Run tests (host)
+        working-directory: apps/elitea-desktop/src-tauri
+        run: cargo test --locked -p elitea-desktop --all-targets
+
+      - name: Run tests (local tools, local index, workspace store)
+        working-directory: libs/rust
+        run: >
+          cargo test --locked -p elitea-local-tools --features handoff
+          -p elitea-local-index -p elitea-workspace-store --all-targets

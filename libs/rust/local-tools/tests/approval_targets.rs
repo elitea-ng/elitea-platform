@@ -3,7 +3,8 @@
 //! rule that asks before writing `src/**` is not bypassed through
 //! `docs/link.md`, and one that allows `docs/**` does not vouch for it.
 
-use std::os::unix::fs::symlink;
+#![cfg(unix)]
+use elitea_local_tools::sys::os::symlink;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;

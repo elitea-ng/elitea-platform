@@ -1147,7 +1147,7 @@ fn apply_mode(
     Ok(applied)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1197,7 +1197,7 @@ mod tests {
     /// A repository with a task worktree of its `HEAD`.
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let root = base.join("repo");
         let data = base.join("data");
         std::fs::create_dir_all(&root).expect("repo");

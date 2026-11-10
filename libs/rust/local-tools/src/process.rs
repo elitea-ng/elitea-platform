@@ -19,10 +19,10 @@
 //! `SIGKILL` after [`TERM_GRACE`]. Dropping the registry (the session's
 //! end) stops every process it holds.
 
+use crate::sys::os::CommandExt as _;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::num::NonZeroU16;
-use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -385,7 +385,7 @@ pub struct Process {
     started_at: u64,
     started: Instant,
     pinned: AtomicBool,
-    group: Option<rustix::process::Pid>,
+    group: Option<crate::sys::process::Group>,
     status: Mutex<Status>,
     buffer: Mutex<OutputBuffer>,
     screen: Option<Mutex<vt100::Parser>>,
@@ -604,9 +604,9 @@ impl Process {
         Ok(())
     }
 
-    fn signal_group(&self, signal: rustix::process::Signal) {
-        if let Some(group) = self.group {
-            let _ = rustix::process::kill_process_group(group, signal);
+    fn signal_group(&self, signal: crate::sys::process::Signal) {
+        if let Some(group) = &self.group {
+            group.signal(signal);
         }
     }
 
@@ -619,7 +619,7 @@ impl Process {
             }
             status.stopping.get_or_insert("SIGTERM");
         }
-        self.signal_group(rustix::process::Signal::TERM);
+        self.signal_group(crate::sys::process::Signal::TERM);
         true
     }
 
@@ -632,7 +632,7 @@ impl Process {
             }
             status.stopping = Some("SIGKILL");
         }
-        self.signal_group(rustix::process::Signal::KILL);
+        self.signal_group(crate::sys::process::Signal::KILL);
     }
 
     /// Stop it: `SIGTERM` to its group, `SIGKILL` after [`TERM_GRACE`] if
@@ -702,10 +702,11 @@ enum Child {
 }
 
 impl Child {
-    fn pid(&self) -> Option<u32> {
+    /// Its process tree: the group it leads (Unix), its job (Windows).
+    fn group(&self) -> Option<crate::sys::process::Group> {
         match self {
-            Self::Piped(child) => Some(child.id()),
-            Self::Pty(child) => child.process_id(),
+            Self::Piped(child) => crate::sys::process::Group::of_child(child),
+            Self::Pty(child) => crate::sys::process::Group::of_pty(child.as_ref()),
         }
     }
 
@@ -714,7 +715,7 @@ impl Child {
         match self {
             Self::Piped(child) => match child.wait() {
                 Ok(status) => {
-                    use std::os::unix::process::ExitStatusExt as _;
+                    use crate::sys::os::ExitStatusExt as _;
                     (status.code(), status.signal().map(signal_name))
                 }
                 Err(_) => (None, None),
@@ -849,10 +850,7 @@ impl ProcessRegistry {
             spawn_piped(&spec)?
         };
         let (queue, jobs) = std::sync::mpsc::sync_channel(1);
-        let group = child
-            .pid()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw);
+        let group = child.group();
         let process = Arc::new(Process {
             id,
             started_at: unix_millis(SystemTime::now()),
@@ -1114,7 +1112,7 @@ fn start_threads(
         let (code, signal) = child.wait();
         // Whatever the leader left in its group (a server's workers) goes
         // with it; the group id stays ours until then.
-        waiting.signal_group(rustix::process::Signal::KILL);
+        waiting.signal_group(crate::sys::process::Signal::KILL);
         {
             let mut status = lock(&waiting.status);
             status.ended_at = Some(unix_millis(SystemTime::now()));
@@ -1189,7 +1187,7 @@ fn pump(process: &Arc<Process>, shared: &Shared) {
         };
         if running && process.started.elapsed() > process.spec.max_wall {
             lock(&process.status).timed_out = true;
-            process.signal_group(rustix::process::Signal::KILL);
+            process.signal_group(crate::sys::process::Signal::KILL);
         }
         let events = shared.events();
         let emitted = process.emitted.load(Ordering::SeqCst);
@@ -1241,7 +1239,7 @@ fn pump(process: &Arc<Process>, shared: &Shared) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;

@@ -339,11 +339,7 @@ fn trust_open_file(path: &Path, file: &fs::File) -> Result<(), ReadError> {
 pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
-    }
+    no_follow(&mut options);
     options.open(path)
 }
 
@@ -351,27 +347,34 @@ pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
 fn open_lock_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
-    }
+    owner_only(&mut options);
+    no_follow(&mut options);
     options.open(path)
 }
 
 pub(crate) fn create_private_file(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
-    }
+    owner_only(&mut options);
+    no_follow(&mut options);
     options.open(path)
+}
+
+/// Never through a symlink: `O_NOFOLLOW` on Unix; on Windows the link
+/// itself is opened (a reparse point), which is then not a regular file.
+fn no_follow(options: &mut fs::OpenOptions) {
+    use elitea_local_tools::sys::os::OpenOptionsExt as _;
+    options.custom_flags(
+        elitea_local_tools::sys::fs::OFlags::NOFOLLOW
+            .bits()
+            .cast_signed(),
+    );
+}
+
+/// `0600` on Unix; Windows keeps the profile's owner-only ACL.
+fn owner_only(options: &mut fs::OpenOptions) {
+    use elitea_local_tools::sys::os::OpenOptionsExt as _;
+    options.mode(0o600);
 }
 
 /// Create `dir` (and its parents) owner-only, or narrow an existing one to
@@ -446,7 +449,7 @@ impl SecretStore for FileSlot {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

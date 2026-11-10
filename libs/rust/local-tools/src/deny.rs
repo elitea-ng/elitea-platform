@@ -83,7 +83,7 @@ fn resolve_existing(path: &Path) -> Option<PathBuf> {
     let mut rest = Vec::new();
     let mut current = path;
     loop {
-        if let Ok(canonical) = std::fs::canonicalize(current) {
+        if let Ok(canonical) = crate::sys::canonicalize(current) {
             let mut out = canonical;
             for name in rest.iter().rev() {
                 out.push(name);
@@ -135,7 +135,8 @@ impl DenyList {
     #[must_use]
     pub fn reopening(mut self, dirs: impl IntoIterator<Item = PathBuf>) -> Self {
         for dir in dirs {
-            let text = fold(dir.to_string_lossy().trim_end_matches('/'));
+            let text = fold(&dir.to_string_lossy());
+            let text = text.trim_end_matches('/').to_owned();
             if !text.is_empty() && !self.reopened.contains(&text) {
                 self.reopened.push(text);
             }
@@ -173,9 +174,7 @@ impl DenyList {
     /// that gave no list gets.
     #[must_use]
     pub fn env_home_credentials() -> Self {
-        let home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from);
+        let home = crate::sys::home_dir();
         Self::for_session(home.as_deref(), None, true, Vec::new())
     }
 
@@ -201,15 +200,12 @@ impl DenyList {
             let spellings = paths
                 .iter()
                 .map(|path| {
-                    let text = path.to_string_lossy();
+                    let text = fold(&path.to_string_lossy());
                     let (text, prefix) = match text.strip_suffix('*') {
                         Some(stem) => (stem.to_owned(), true),
                         None => (text.trim_end_matches('/').to_owned(), false),
                     };
-                    Spelling {
-                        text: fold(&text),
-                        prefix,
-                    }
+                    Spelling { text, prefix }
                 })
                 .collect();
             (paths, spellings)
@@ -254,11 +250,19 @@ impl DenyList {
     }
 }
 
+/// `text` as entries and paths are compared: lowercase where the file
+/// system folds case, and on Windows with `\` written `/` (an entry joined
+/// from the home folder and `.config/gh` mixes both).
 fn fold(text: &str) -> String {
+    let text = if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_owned()
+    };
     if CASE_INSENSITIVE_FS {
         text.to_lowercase()
     } else {
-        text.to_owned()
+        text
     }
 }
 
@@ -295,15 +299,16 @@ mod tests {
     /// Both spellings through a symlinked intermediate directory, for
     /// existing entries, missing ones and prefixes alike; a missing entry
     /// under a symlink is covered once created.
+    #[cfg(unix)]
     #[test]
     fn both_spellings_through_a_symlinked_config() {
         let dir = tempfile::tempdir().expect("dir");
-        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let base = crate::sys::canonicalize(dir.path()).expect("canonical");
         let home = base.join("home");
         let real = base.join("dotfiles/config");
         std::fs::create_dir_all(real.join("gh")).expect("gh");
         std::fs::create_dir_all(&home).expect("home");
-        std::os::unix::fs::symlink(&real, home.join(".config")).expect("symlink");
+        crate::sys::os::symlink(&real, home.join(".config")).expect("symlink");
         let list = DenyList::for_session(Some(&home), Some("com.example.app"), true, Vec::new());
         for path in [
             home.join(".config/gh"),

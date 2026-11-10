@@ -6482,7 +6482,7 @@ impl EventSink for TurnSink {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

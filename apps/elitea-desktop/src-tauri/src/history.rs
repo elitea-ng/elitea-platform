@@ -1736,9 +1736,8 @@ pub fn unique_aside_dir(parent: &Path, name: &str) -> Result<PathBuf, HostError>
         let random: u32 = rand::random();
         let dir = parent.join(format!("{name}.broken-{stamp}-{random:08x}"));
         let mut builder = fs::DirBuilder::new();
-        #[cfg(unix)]
         {
-            use std::os::unix::fs::DirBuilderExt as _;
+            use elitea_local_tools::sys::os::DirBuilderExt as _;
             builder.mode(0o700);
         }
         match builder.create(&dir) {
@@ -2587,7 +2586,7 @@ impl EventEmitter for TurnTap {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::d0::events::VecEmitter;

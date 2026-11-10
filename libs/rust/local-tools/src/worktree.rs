@@ -158,13 +158,13 @@ pub fn create(
         return Err(exists("the worktree's folder already exists"));
     }
     {
-        use std::os::unix::fs::DirBuilderExt as _;
+        use crate::sys::os::DirBuilderExt as _;
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(path)
             .map_err(|error| ToolError::io("cannot create the worktree's folder", &error))?;
     }
-    let path = std::fs::canonicalize(path)
+    let path = crate::sys::canonicalize(path)
         .map_err(|error| ToolError::io("cannot resolve the worktree's folder", &error))?;
     let entry = RegisteredWorktree {
         worktree: path.clone(),
@@ -296,7 +296,7 @@ pub fn remove(repo: &Repo, entry: &RegisteredWorktree, keep_branch: bool) -> Too
     if !crate::git::valid_worktree_name(&entry.name) {
         return Err(ToolError::invalid("not a worktree name"));
     }
-    let entry_top = std::fs::canonicalize(&entry.top).unwrap_or_else(|_| entry.top.clone());
+    let entry_top = crate::sys::canonicalize(&entry.top).unwrap_or_else(|_| entry.top.clone());
     if entry_top != repo.top() {
         return Err(ToolError::invalid(
             "the worktree belongs to another repository",
@@ -351,7 +351,7 @@ fn remove_tree(path: &Path, what: &str) -> ToolResult<()> {
 /// folder)`. What the Doctor compares with the host's registry.
 #[must_use]
 pub fn host_created(repo: &Repo, dir: &Path) -> Vec<(String, PathBuf)> {
-    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let dir = crate::sys::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let Ok(entries) = std::fs::read_dir(repo.common_dir().join("worktrees")) else {
         return Vec::new();
     };

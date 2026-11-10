@@ -1970,5 +1970,5 @@ impl StateStore for DesktopStateStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

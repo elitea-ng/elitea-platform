@@ -226,7 +226,7 @@ pub(crate) fn junit_path(temp_dir: &Path) -> ToolResult<PathBuf> {
     std::fs::create_dir_all(temp_dir).map_err(|error| {
         ToolError::io("cannot create the session's temporary directory", &error)
     })?;
-    let temp = std::fs::canonicalize(temp_dir).map_err(|error| {
+    let temp = crate::sys::canonicalize(temp_dir).map_err(|error| {
         ToolError::io("cannot resolve the session's temporary directory", &error)
     })?;
     let nanos = SystemTime::now()
@@ -240,8 +240,8 @@ pub(crate) fn junit_path(temp_dir: &Path) -> ToolResult<PathBuf> {
 /// most [`MAX_REPORT_BYTES`]; removed after. `None` otherwise (not
 /// written, or not trusted).
 pub(crate) fn take_private_report(path: &Path) -> Option<String> {
-    use rustix::fs::{FileType, Mode, OFlags};
-    let fd = rustix::fs::open(
+    use crate::sys::fs::{FileType, Mode, OFlags};
+    let fd = crate::sys::fs::open(
         path,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
@@ -249,12 +249,12 @@ pub(crate) fn take_private_report(path: &Path) -> Option<String> {
     .ok();
     // Its links are counted before it is removed (removed whatever it is:
     // a later run must not read it).
-    let stat = fd.as_ref().and_then(|fd| rustix::fs::fstat(fd).ok());
-    let _ = rustix::fs::unlink(path);
+    let stat = fd.as_ref().and_then(|fd| crate::sys::fs::fstat(fd).ok());
+    let _ = crate::sys::fs::unlink(path);
     let (fd, stat) = (fd?, stat?);
     let trusted = FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
         && stat.st_nlink == 1
-        && stat.st_uid == rustix::process::getuid().as_raw()
+        && stat.st_uid == crate::sys::process::getuid().as_raw()
         && u64::try_from(stat.st_size).is_ok_and(|size| size <= MAX_REPORT_BYTES);
     if !trusted {
         return None;
@@ -570,7 +570,7 @@ pub(crate) fn answer(
     Value::Object(answer)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::path::Path;
     use std::time::{Duration, SystemTime};
@@ -707,7 +707,7 @@ mod tests {
         let secret = dir.path().join("secret");
         std::fs::write(&secret, "<testsuite/>").expect("secret");
         let link = dir.path().join("report.xml");
-        std::os::unix::fs::symlink(&secret, &link).expect("link");
+        crate::sys::os::symlink(&secret, &link).expect("link");
         assert_eq!(take_private_report(&link), None);
         assert!(secret.exists(), "the target is left alone");
         let plain = dir.path().join("plain.xml");
@@ -826,8 +826,7 @@ mod tests {
             // Hidden: never a module; reached only through the link below.
             (".real/target/surefire-reports/TEST-real.xml", &real),
         ]);
-        std::os::unix::fs::symlink(dir.path().join(".real"), dir.path().join("module"))
-            .expect("link");
+        crate::sys::os::symlink(dir.path().join(".real"), dir.path().join("module")).expect("link");
         let started = SystemTime::now() - Duration::from_secs(1);
         let reports = workspace_reports(&workspace, &WsPath::root(), ProjectKind::Maven, started);
         assert_eq!(reports.len(), 3, "{reports:?}");

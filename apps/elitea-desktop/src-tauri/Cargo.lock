@@ -1884,6 +1884,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
+ "tauri-winrt-notification",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -1891,6 +1892,7 @@ dependencies = [
  "unicode-general-category",
  "url",
  "uuid",
+ "windows",
 ]
 
 [[package]]
@@ -2031,6 +2033,7 @@ dependencies = [
  "adk-core",
  "async-trait",
  "base64 0.23.1",
+ "dunce",
  "elitea-agent-runtime",
  "elitea-content-source",
  "elitea-doc-extract",
@@ -2057,6 +2060,8 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "vt100",
+ "win32job",
+ "winapi-util",
 ]
 
 [[package]]
@@ -8956,6 +8961,16 @@ checksum = "984cc87572ddeee205caab3372ca4d84596c363e6c809294dc4514ef43f5e83e"
 dependencies = [
  "once_cell",
  "winapi",
+]
+
+[[package]]
+name = "win32job"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21b25acac91041257d64f5625690b626133e0ca9e4e17814552b5803b1a82f7c"
+dependencies = [
+ "thiserror 1.0.69",
+ "windows",
 ]
 
 [[package]]

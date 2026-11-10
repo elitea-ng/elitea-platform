@@ -505,7 +505,7 @@ pub fn harvest(selected: &[String], offered: &[(String, String)], limits: EnvLim
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{EffectivePolicy, EnvLimits, FolderSettings, harvest, name_matches, offered};
     use serde_json::json;

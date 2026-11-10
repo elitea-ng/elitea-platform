@@ -83,5 +83,5 @@ pub mod tools;
 pub mod turn;
 pub mod unattended;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod tests;

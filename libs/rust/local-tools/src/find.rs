@@ -110,7 +110,7 @@ pub fn find_paths(workspace: &Workspace, query: &str, limit: usize) -> ToolResul
         .collect())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::fs;
 
@@ -189,8 +189,8 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         fs::write(outside.path().join("passwords.txt"), "x").unwrap();
         let (dir, workspace) = tree(&[]);
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("escape")).unwrap();
-        std::os::unix::fs::symlink(
+        crate::sys::os::symlink(outside.path(), dir.path().join("escape")).unwrap();
+        crate::sys::os::symlink(
             outside.path().join("passwords.txt"),
             dir.path().join("link.txt"),
         )
