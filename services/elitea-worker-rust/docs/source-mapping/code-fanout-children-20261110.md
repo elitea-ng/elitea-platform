@@ -31,7 +31,7 @@ ends typed and is never re-run blindly.
   `runtime_saved_code_input_policy.go`; `internal/infra/db/repos/code_source_definition.go`, `code_sandbox_intent.go`.
 - Web: `src/features/pipelines/lib/{graphExtensions.types,graphMapAdmission.helpers,graphParallelAdmission.helpers,graphParallel.helpers}.ts`,
   `ui/settings/parallel/ParallelBranches.tsx`, `src/shared/i18n/en.json` (one new key).
-- `docs/upgrading/2026-11-10-0-code-fanout-children.md` (number assigned at PR time).
+- `docs/upgrading/2026-11-10-1896-code-fanout-children.md` (number assigned at PR time).
 
 ## Design as built
 
