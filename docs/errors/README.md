@@ -54,6 +54,8 @@ Panics and unexpected errors also carry a bounded stack (Go `stack`, Rust `backt
 | Code | What happened | What to do | Who sees it | Retry | Raised by |
 |---|---|---|---|---|---|
 | `code.registration_contended` | A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable. | Nothing when it is rare; the Worker tries again. If one run repeats it, report the support reference. | operator | yes | elitea-main |
+| `code.registration_failed` | Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable. | Read stage and cause; check Main's database if it repeats. The Worker tries the same registration again. | operator | yes | elitea-main |
+| `code.registration_refused` | Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed. | Read stage: claim means the Worker's claim, lease or the actor's permission; the others mean the Worker's request did not match the run's frozen pipeline. Report the support reference if the run was healthy. | operator | no | elitea-main |
 
 ### dependency
 

@@ -218,10 +218,12 @@ func (s *ContentServer) RegisterCodeVisit(ctx context.Context, request *runtimev
 	}
 	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "visit", "claim_identity", claim, err)
 		return nil, grpcstatus.Error(codes.PermissionDenied, "Code visit claim denied")
 	}
 	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationFailed, "visit", "busy", claim, err)
 		return nil, err
 	}
 	defer release()
@@ -229,14 +231,18 @@ func (s *ContentServer) RegisterCodeVisit(ctx context.Context, request *runtimev
 	invalid := grpcstatus.Error(codes.InvalidArgument, "Invalid Code visit")
 	var visitRequest code.VisitRequest
 	if len(raw) > maxCodeRegistrationBytes || code.Decode(raw, &visitRequest, maxCodeRegistrationBytes) != nil || !code.RequiredFields(raw, []string{"schema", "activation_id", "node_id", "graph_thread", "step", "attempt", "node_digest", "owning_yaml_sha256", "exact_configuration_json_base64url", "pre_workspace_prepared_job_json_base64url", "saved_child_scope"}, "saved_child_scope") {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "visit", "request", claim, errInvalidCodeRegistration)
 		return nil, invalid
 	}
 	if _, _, err := ValidateOriginalCodeVisit(visitRequest); err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "visit", "request", claim, errInvalidCodeRegistration)
 		return nil, invalid
 	}
 	visit, err := s.originalCodeIntents.RegisterOriginalCodeVisit(ctx, claim, visitRequest)
 	if err != nil {
-		return nil, s.originalCodeStatus(ctx, claim, "visit", err)
+		return nil, s.originalCodeStatus(ctx, claim, "visit", err,
+			slog.String("node_id", visitRequest.NodeID), slog.String("graph_thread", visitRequest.GraphThread),
+			slog.String("activation_id", visitRequest.ActivationID), slog.Uint64("attempt", uint64(visitRequest.Attempt)))
 	}
 	encoded, err := nodeRecoveryJSON(visit)
 	if err != nil {
@@ -253,10 +259,12 @@ func (s *ContentServer) RegisterCodeIntent(ctx context.Context, request *runtime
 	}
 	claim, err := parseExecutionClaim(ctx, request.GetScope())
 	if err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "intent", "claim_identity", claim, err)
 		return nil, grpcstatus.Error(codes.PermissionDenied, "Code intent claim denied")
 	}
 	release, err := takeNodeRecoverySlot(s.requests)
 	if err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationFailed, "intent", "busy", claim, err)
 		return nil, err
 	}
 	defer release()
@@ -264,14 +272,17 @@ func (s *ContentServer) RegisterCodeIntent(ctx context.Context, request *runtime
 	invalid := grpcstatus.Error(codes.InvalidArgument, "Invalid Code intent")
 	var intentRequest code.IntentRequest
 	if len(raw) > maxCodeRegistrationBytes || code.Decode(raw, &intentRequest, maxCodeRegistrationBytes) != nil || !code.RequiredFields(raw, []string{"schema", "original_visit", "dispatch_activation", "request_digest", "supervisor_audience", "prepared_job_json_base64url", "compiled_binding_json_base64url", "selected_descriptor_sha256"}, "compiled_binding_json_base64url", "selected_descriptor_sha256") {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "intent", "request", claim, errInvalidCodeRegistration)
 		return nil, invalid
 	}
 	if _, err := ValidateOriginalCodeIntent(intentRequest); err != nil {
+		s.logCodeRegistration(ctx, faults.CodeRegistrationRefused, "intent", "request", claim, errInvalidCodeRegistration)
 		return nil, invalid
 	}
 	intent, err := s.originalCodeIntents.RegisterOriginalCodeIntent(ctx, claim, intentRequest)
 	if err != nil {
-		return nil, s.originalCodeStatus(ctx, claim, "intent", err)
+		return nil, s.originalCodeStatus(ctx, claim, "intent", err,
+			slog.String("visit_id", intentRequest.OriginalVisit.VisitID), slog.String("dispatch_activation", intentRequest.DispatchActivation))
 	}
 	encoded, err := nodeRecoveryJSON(code.IntentResponse{Schema: "elitea.sandbox.original-code-intent-response.v1", Intent: intent})
 	if err != nil {
@@ -280,19 +291,54 @@ func (s *ContentServer) RegisterCodeIntent(ctx context.Context, request *runtime
 	return &runtimev1.RegisterCodeIntentResponseV1{ResponseJson: encoded}, nil
 }
 
-// originalCodeStatus answers a registration failure. A registration that
-// stayed contended after its bounded retries (B3) writes one operator fault
-// line and is answered retryable, its status naming the registry code; it is
-// never a refusal.
-func (s *ContentServer) originalCodeStatus(ctx context.Context, claim ContentClaim, registration string, err error) error {
-	if errors.Is(err, code.ErrRegistrationContended) {
-		faults.Log(ctx, s.logger, slog.LevelWarn, faults.New(faults.CodeRegistrationContended, err,
-			slog.String("execution_id", claim.ExecutionID),
-			slog.String("support_ref", claim.ExecutionID),
-			slog.String("registration", registration)))
-		return grpcstatus.Error(codes.Unavailable, fmt.Sprintf("%s (%s)", faults.CodeRegistrationContended.Sentence(), faults.CodeRegistrationContended))
+// errInvalidCodeRegistration is the cause logged for a malformed request; the
+// request bytes themselves are never logged.
+var errInvalidCodeRegistration = errors.New("the registration document is malformed or out of bounds")
+
+// logCodeRegistration writes the operator line of a registration refused or
+// failed before it reached the repository.
+func (s *ContentServer) logCodeRegistration(ctx context.Context, fault faults.Code, registration, stage string, claim ContentClaim, err error) {
+	faults.Log(ctx, s.logger, slog.LevelWarn, faults.New(fault, err,
+		slog.String("registration", registration), slog.String("stage", stage),
+		slog.String("execution_id", claim.ExecutionID), slog.String("support_ref", claim.ExecutionID)))
+}
+
+// codeRegistrationStager is a registration failure that names its step.
+type codeRegistrationStager interface{ Stage() string }
+
+// originalCodeStatus answers a registration failure and writes one operator
+// fault line for it (B6): the registry code, the step that refused or
+// failed, the safe cause chain, the ids and support_ref (the execution id).
+// Never the Code source, input, configuration or prepared job. A refusal
+// keeps its Aborted status; a registration still contended after its retries
+// and any other failure are answered retryable, naming their code.
+func (s *ContentServer) originalCodeStatus(ctx context.Context, claim ContentClaim, registration string, err error, ids ...slog.Attr) error {
+	stage := "unknown"
+	var stager codeRegistrationStager
+	if errors.As(err, &stager) {
+		stage = stager.Stage()
 	}
-	return originalCodeStatus(err)
+	attrs := append([]slog.Attr{
+		slog.String("registration", registration),
+		slog.String("stage", stage),
+		slog.String("execution_id", claim.ExecutionID),
+		slog.String("support_ref", claim.ExecutionID),
+		slog.Uint64("generation", claim.Generation),
+	}, ids...)
+	var fault faults.Code
+	status := originalCodeStatus(err)
+	switch {
+	case errors.Is(err, code.ErrRegistrationContended):
+		fault = faults.CodeRegistrationContended
+		status = grpcstatus.Error(codes.Unavailable, fmt.Sprintf("%s (%s)", fault.Sentence(), fault))
+	case grpcstatus.Code(status) == codes.Aborted:
+		fault = faults.CodeRegistrationRefused
+	default:
+		fault = faults.CodeRegistrationFailed
+		status = grpcstatus.Error(codes.Unavailable, fmt.Sprintf("%s (%s)", fault.Sentence(), fault))
+	}
+	faults.Log(ctx, s.logger, slog.LevelWarn, faults.New(fault, err, attrs...))
+	return status
 }
 
 func originalCodeStatus(err error) error {

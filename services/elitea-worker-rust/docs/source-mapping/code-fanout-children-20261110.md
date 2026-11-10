@@ -256,7 +256,7 @@ platform-client item with the owner's proof is reconciled (C).
 |---|---|---|---|
 | B1 (blocker) | `ApplicationBranchCatalog::for_child` refused any Parallel branch with no application path: a Code branch has none, so the gather node failed `checkpoint.invalid_scope` ("the owned application checkpoint family is not admitted") before any Code attempt. Only a path-free Map worker was allowed. Test 1 used a Map, so it never met this. | Every path-free child (State Modifier, Code) gets an empty family in both kinds (`application_children.rs` `for_child`); Agent and inline LLM children keep their paths, admitted at assembly. | Real assembly path: `postgres_a_parallel_of_code_branches_starts_each_branch_through_assembly` (`AuthorizedNativeAssembler` with a `CodeRuntimeFactory`; before: `agent.legacy` + `invalid_scope`; after: each branch runs its attempt and fails typed as a member against the unreachable sandbox, `graph.fanout.member_failed`). Real-PG production family: `real_pg_a_parallel_of_code_branches_runs_on_the_production_family` (before: `invalid_scope`). Unit: `a_path_free_child_gets_no_family_in_a_parallel_and_a_map`. |
 | B2 | A failed child's cause was logged nowhere: only "Fan-out failed". | One WARN line per failed child, registry code `graph.fanout.child_failed`: `member_code`, `member_sentence` (the code's fixed text), `cause` (error kind, node ids and a leading dotted code only, never free text), `execution_id`, `support_ref` (= execution id), `node_id`, `item`, `item_ref` (the join entry's support reference) (`parallel.rs` `log_child_failure`, `safe_graph_cause`). A committed Code stop names its `failure_class` on "pipeline Code node stopped". | `a_64_item_code_map_logs_no_item_values_or_index` (two child lines with every field; no item marker logged), `a_child_failure_cause_keeps_codes_and_node_ids_only`. |
-| B3 | Main's Code visit and intent registrations are Serializable and wait on the run's claim lock with a snapshot taken before the wait, so the items of one Map registering together abort with 40001: answered as a silent `Unavailable`, or as a refusal when the conflict surfaced in a read Main maps to `ErrRejected`/`ErrContentUnauthorized`. The Worker logged "Main was unavailable". Retrying alone cannot settle a burst: every waiter loses to every earlier holder. | Main: a per-run session advisory lock taken before `BEGIN` (`WithinRunSerializedTx`, snapshot after the lock); a 40001/40P01 met by any statement is recorded and the transaction retried at most 3 times with jitter (`code_registration_retry.go`); still contended → one WARN fault line `code.registration_contended` (execution id, support_ref) and a retryable `Unavailable` whose message names the code. Worker: the retry line is the fault line `pipeline.code.main_retrying` with `main_code` parsed from Main's `"<sentence> (<code>)"` status only when the registry knows it. | Real PostgreSQL 18: 8 concurrent registrations of one run, the first held until the other 7 wait on the lock (deterministic): `TestOriginalCodeVisitRegistrationsConflictWithoutRetryPostgres` (without the fix 7 of 7 fail 40001), `TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres` (all 8 commit; measured with retry alone and no lock: 1 of 8 still contended after 3 attempts). `TestAContendedCodeRegistrationIsRetryableAndLoggedOnce`, `a_retryable_main_answer_names_its_registered_code_only`. |
+| B3 | Main's Code visit and intent registrations are Serializable and wait on the run's claim lock with a snapshot taken before the wait, so the items of one Map registering together abort with 40001: answered as a silent `Unavailable`, or as a refusal when the conflict surfaced in a read Main maps to `ErrRejected`/`ErrContentUnauthorized`. The Worker logged "Main was unavailable". Retrying alone cannot settle a burst: every waiter loses to every earlier holder. | (Superseded below: READ COMMITTED with the claim row lock first.) Main: a per-run session advisory lock taken before `BEGIN` (`WithinRunSerializedTx`, snapshot after the lock); a 40001/40P01 met by any statement is recorded and the transaction retried at most 3 times with jitter (`code_registration_retry.go`); still contended → one WARN fault line `code.registration_contended` (execution id, support_ref) and a retryable `Unavailable` whose message names the code. Worker: the retry line is the fault line `pipeline.code.main_retrying` with `main_code` parsed from Main's `"<sentence> (<code>)"` status only when the registry knows it. | Real PostgreSQL 18: 8 concurrent registrations of one run, the first held until the other 7 wait on the lock (deterministic): `TestOriginalCodeVisitRegistrationsConflictWithoutRetryPostgres` (without the fix 7 of 7 fail 40001), `TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres` (all 8 commit; measured with retry alone and no lock: 1 of 8 still contended after 3 attempts). `TestAContendedCodeRegistrationIsRetryableAndLoggedOnce`, `a_retryable_main_answer_names_its_registered_code_only`. |
 | B4 | The Map worker hint did not name Code. | "It can be a State Modifier, an LLM node, a Code node, or a saved agent or pipeline." | `graphExtensions.families.test.ts` pins the catalogue text and the component default. |
 | B5 (blocker) | **Not root-caused in this change**; see below. | — | `real_pg_a_worker_killed_mid_registration_is_resumed_by_the_replacement` (passes; does not reproduce). |
 
@@ -270,18 +270,67 @@ clean; `go test ./...` passes, `authflow`/`authsession`/`migrate` only with `-pa
 (53200 "out of shared memory" when many tests apply all migrations at once; those packages are untouched). Web
 `vitest run pipelines`: 274 files, 2961 passed, 1 expected fail; `tsc`, oxlint and the i18n check clean.
 
-**B3 lock, as accepted with conditions** (`code_registration_retry.go`, `WithinRunSerializedTx`). An explicitly
-acquired pool connection takes `pg_advisory_lock(int4, int4)` with the dedicated class
-`codeRegistrationLockClass = 0x43524547` ("CREG") and `hashtext('<execution>:<generation>')`, before `BEGIN`. Defers
-run on every path (error, panic, ctx cancel): roll back, then unlock (bounded to 5 s, skipped when the caller's ctx is
-done), then release. The connection goes back to the pool only when the unlock returned `true` and the connection is
-idle; otherwise it is hijacked from the pool and closed, and the server drops the lock with the session. Real-PG
-tests (PG 18.4): `TestRunRegistrationLockIsReleasedAfterAnErrorOrPanicPostgres` (after an error and after a panic, no
-advisory lock is left and the next registration of the run completes within 2 s),
-`TestRunRegistrationLockDoesNotLeakOnCancelPostgres` (1 lock while held; ctx cancelled; 0 after, next registration
-within 2 s), and the 8-way test now ends with `pg_locks` advisory count 0 in its database.
+**B3 lock: superseded, not reverted.** The session-level advisory lock (`4e6664cf2`, hardened in `9c2fd2048`) is
+gone: the next commit replaces `WithinRunSerializedTx` and the executor wrapper. The registration transaction now runs
+**READ COMMITTED** (`codeRegistrationTx`, `code_registration_retry.go`); its first statement is `lockAccess`'s
+`FOR UPDATE OF j,c,ws,command` on the run's job and claim rows, so registrations of one run run one after another and
+every later statement takes a fresh snapshot after the wait. PostgreSQL releases those row locks on commit, rollback or
+connection loss. Invariants: the per-run visit cap counts under that row lock; visit and intent rows are inserted
+`ON CONFLICT DO NOTHING` (primary key and the `(execution, generation, activation, attempt)` unique key) and read back
+`FOR UPDATE` and compared byte for byte; the claim, fence, lease and permission are read under the lock, and the intent
+re-reads the claim before signing. None of them needs SERIALIZABLE. A 40001/40P01 still met is retried at most 3 times
+(raw errors only, no wrapper); after that, `code.registration_contended`.
 
-Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), so the class cannot collide:
+**B6 (blocker, a regression from the B3 change).** On w32b (images at `4e6664cf2`) a plain concurrent Map was refused:
+`pipeline.code_authorization_failed`, class `AuthorizationDenied`, and the run had **0** rows in
+`original_code_visits`. Root cause: Main's production permission check `checkRecoveryPermission`
+(`node_recovery.go:49`) type-asserts the transaction executor to `pgxExecutor`; the B3 change handed the registration
+callback a `conflictRecordingExecutor` wrapper, so the assertion failed → `ErrNotAllowed` → `lockAccess` →
+`ErrContentUnauthorized` → `Aborted` → the Worker's `AuthorizationDenied`. Every visit registration was refused,
+concurrent or not. It is the B3 change, not the C1 child-scope resolver: the 17 C1 negatives are unchanged and still
+refuse (`TestFanoutCodeChildScopeResolvesItsOwnerAndFailsClosed`). The B3 tests missed it because they stubbed the
+permission check, and the Worker tests fake Main. Fix: no wrapper; the callback gets the store's own executor. Test on
+the production path (`code_registration_real_path_postgres_integration_test.go`: `NewCodeIntentRepository`'s shared
+store and `checkRecoveryPermission` over seeded RBAC, the captured root source, `CodeDefinitionSourceAdapter`, real
+claim): `TestFourConcurrentMapItemsRegisterOnTheProductionPathPostgres` (4 Map items' visit + intent at once) **failed
+at `9c2fd2048` with all 4 refused** (`input content authorization failed`, 0 visits), passes after (4 visits, 4
+intents, replay idempotent, nothing locked).
+
+**The w32b leaked lock** (pid 219, `classid 1354237349 objid 3365584093` = `hashtextextended('code_registration:7f64…e0e4:1',0)`,
+idle in the pool, a session later used by the admission publisher) came from `4e6664cf2`'s session lock surviving on a
+pooled connection; every later registration of that run waited until the Worker's 10 s timeout ("canceling statement
+due to user request" every ~11 s) and ended Unavailable with no code. With row locks there is nothing to leak:
+`TestRunRegistrationCancelledWhileWaitingLeavesNoLockPostgres` (cancel while waiting) and
+`TestRunRegistrationsCancelledInFlightLeaveNoLockPostgres` (one holding, three waiting, all cancelled as a killed Worker
+would) end with 0 advisory locks, 0 lock waits, 0 open transactions in the database, and the next registration of the
+run commits within 2 s. The 8-way test (`..._OfOneRunAllCommitPostgres`) commits all 8 in one attempt and leaves the
+same zeros.
+
+**Main fault lines (B6 observability).** Every refused or failed Code visit or intent registration writes one WARN line
+(`runtime_code_intent.go`): `code.registration_refused` (Aborted), `code.registration_failed` (retryable, its status
+now names the code) or `code.registration_contended`; with the registry sentence, `stage` (the step that refused:
+`claim`, `source`, `policy`, `configuration`, `prepared`, `input_policy`, `input`, `visit_cap`, `visit_mismatch`,
+`dispatch`, `workspace`, `broker`, `request_digest`, `binding`, `intent_mismatch`, `claim_recheck`, …, or
+`claim_identity`, `busy`, `request` before the repository), the safe cause chain, `execution_id`, `generation`,
+`support_ref` (= execution id) and, for a visit, `node_id`, `graph_thread`, `activation_id`, `attempt`; for an intent
+`visit_id`, `dispatch_activation`. Never Code source, input, configuration or the prepared job.
+`TestEveryRefusedOrFailedCodeRegistrationWritesOneFaultLine` captures the handler's log for refused, failed and
+contended visits and intents carrying a marker in their source, input and configuration: one line each, every field,
+no marker.
+
+**B5, Main's half on the production path.** `TestATakeoverReRegistersEveryMapItemOnTheProductionPathPostgres`: a
+Worker registers 4 of 8 Map items; item 4 holds the claim lock and items 5-7 wait when it is killed (ctx cancelled);
+the old claim is released and a new claim (attempt 2, epoch 2) re-registers all 8 at once: all succeed, the 4
+registered items re-attach to the same visit ids, one visit and one intent per item, nothing locked. On w32b the
+takeover failed because of B6 (items 2, 4, 5 refused) and the leaked lock (item 1 retried Main until its deadline:
+`DependencyUnavailable` → `pipeline.code_failed`). The first B5 run (`44c792f4f`, SERIALIZABLE, before any B3 change)
+fits the same mechanism without the leak: at takeover the 4 re-admitted items re-register together and only the
+claim-lock holder commits each round, so an item can exhaust its Main retries (`DependencyUnavailable`), or meet the
+conflict in a read Main maps to a refusal. The Worker-side real takeover still runs against a fake Main
+(`real_pg_a_map_of_8_code_items_survives_worker_replacement`); real-browser confirmation of R/I is pending the next
+pass.
+
+Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), kept for reference (the registration no longer takes any advisory lock):
 
 | Form | Users and keys |
 |---|---|

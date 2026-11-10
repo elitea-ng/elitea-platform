@@ -26,9 +26,11 @@
   - **Operator lines for fan-out failures and Code registrations.** Each failed Map item or Parallel branch now
     writes one WARN line, code `graph.fanout.child_failed`, with `member_code`, `member_sentence`, `cause`,
     `execution_id`, `support_ref`, `node_id`, `item` and `item_ref`; "pipeline Code node stopped" names its
-    `failure_class`. Main's Code visit and intent registrations of one run now wait for each other on a per-run lock
-    and retry a residual serialization conflict at most 3 times; one still contended writes a WARN line
-    `code.registration_contended` and is answered retryable. The Worker's retry line is now
+    `failure_class`. Main's Code visit and intent registrations now run READ COMMITTED behind the run's claim row lock
+    (registrations of one run commit one after another, nothing outlives the transaction) and retry a residual
+    conflict at most 3 times. Every refused or failed registration writes one WARN line in Main:
+    `code.registration_refused`, `code.registration_failed` or `code.registration_contended`, with `stage`,
+    `execution_id`, `support_ref` and the visit or intent ids. The Worker's retry line is now
     `pipeline.code.main_retrying` (it replaces the plain "Main was unavailable for a Code intent call; retrying"),
     with `main_code` when Main named one. A Parallel whose branches are Code nodes now runs (it failed before any Code
     attempt with `checkpoint.invalid_scope`).

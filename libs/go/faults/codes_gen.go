@@ -26,6 +26,10 @@ const (
 	AgentProgressOutputUnavailable Code = "agent_progress.output_unavailable"
 	// A Code visit or intent registration kept conflicting with concurrent registrations of the same run after its bounded retries, so Main answered it as retryable.
 	CodeRegistrationContended Code = "code.registration_contended"
+	// Main could not complete a Code visit or intent registration because a dependency failed, so it answered it as retryable.
+	CodeRegistrationFailed Code = "code.registration_failed"
+	// Main refused a Code visit or intent registration: a claim, permission, source, configuration, input or record check failed closed.
+	CodeRegistrationRefused Code = "code.registration_refused"
 	// Main lost its database; requests that need it fail and Workers get retryable answers until it is back.
 	DependencyDatabaseUnavailable Code = "dependency.database_unavailable"
 	// Main lost NATS; admitted runs wait in the outbox and claimed runs continue.

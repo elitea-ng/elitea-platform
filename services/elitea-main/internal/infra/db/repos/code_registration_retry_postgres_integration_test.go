@@ -1,12 +1,16 @@
 package repos
 
 // Real-PostgreSQL evidence for B3: the visit registrations of one run's Map
-// items run together, and PostgreSQL aborts all but one with a serialization
-// failure (40001). Boundary crossed: real PostgreSQL, real migrations, the real
-// claim/fence/lease lock (CodeIntentRepository.lockAccess) and the exact
-// statements RegisterOriginalCodeVisit runs against original_code_visits. The
-// saved-source and YAML policy decode before them is not rebuilt here (it reads
-// and writes no shared row). Requires ELITEA_TEST_DATABASE_URL.
+// items run together. Under SERIALIZABLE PostgreSQL aborts all but one with a
+// serialization failure (40001); under the registration's READ COMMITTED
+// transaction, whose first statement is the claim row lock, they commit one
+// after another and leave no lock behind. Boundary crossed: real PostgreSQL,
+// real migrations, the real claim/fence/lease lock
+// (CodeIntentRepository.lockAccess) and the exact statements
+// RegisterOriginalCodeVisit runs against original_code_visits; the full
+// production path (permission check, source, policy) is
+// code_registration_real_path_postgres_integration_test.go. Requires
+// ELITEA_TEST_DATABASE_URL.
 
 import (
 	"context"
@@ -123,20 +127,12 @@ func countVisits(t *testing.T, w *effectsWorld, execution string) int {
 	return visits
 }
 
-// Without the bounded retry the run's concurrent registrations fail: this is
-// the B3 browser failure (40001 on the visit insert, answered Unavailable, or
-// on the claim lock, answered as a refusal).
+// Under SERIALIZABLE (the isolation before B3) the run's concurrent
+// registrations fail: the B3 browser failure (40001 on the visit insert).
 func TestOriginalCodeVisitRegistrationsConflictWithoutRetryPostgres(t *testing.T) {
 	w, repo, claim := newRegistrationWorld(t, effectsParent, effectsClaim2, 3)
 	errs := registerConcurrently(t, w, repo, claim, func(ctx context.Context, fn func(sqlExecutor) error) error {
-		return repo.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, func(tx sqlExecutor) error {
-			conflict := false
-			err := fn(conflictRecordingExecutor{next: tx, conflict: &conflict})
-			if err != nil && conflict {
-				return fmt.Errorf("%w (a statement met a conflict)", err)
-			}
-			return err
-		})
+		return repo.shared.WithinTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, fn)
 	})
 	if errs[0] != nil {
 		t.Fatalf("the first registration failed: %v", errs[0])
@@ -155,12 +151,13 @@ func TestOriginalCodeVisitRegistrationsConflictWithoutRetryPostgres(t *testing.T
 	}
 }
 
-// With it, every concurrent registration of the run commits; none is
-// answered unavailable or refused.
+// Under the registration transaction every concurrent registration of the
+// run commits in one attempt; none is answered unavailable or refused, and no
+// lock is left.
 func TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres(t *testing.T) {
 	w, repo, claim := newRegistrationWorld(t, effectsForeign, effectsClaim3, 4)
 	errs := registerConcurrently(t, w, repo, claim, func(ctx context.Context, fn func(sqlExecutor) error) error {
-		return withinCodeRegistrationTx(ctx, repo.shared, claim.ExecutionID, claim.Generation, fn)
+		return withinCodeRegistrationTx(ctx, repo.shared, fn)
 	})
 	for item, err := range errs {
 		if err != nil {
@@ -173,99 +170,140 @@ func TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres(t *testing.T) {
 	waitNoAdvisoryLocks(t, w)
 }
 
-// advisoryLocks counts the advisory locks held in the test's own database.
-func advisoryLocks(t *testing.T, w *effectsWorld) int {
+// heldLocks counts the advisory locks, and the row-lock waits and open
+// transactions of other sessions, in the test's own database.
+func heldLocks(t *testing.T, w *effectsWorld) (advisory, waiting, open int) {
 	t.Helper()
-	var held int
-	if err := w.pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database())`).Scan(&held); err != nil {
+	if err := w.pool.QueryRow(t.Context(), `SELECT
+ (SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND database=(SELECT oid FROM pg_database WHERE datname=current_database())),
+ (SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING(pid) WHERE NOT l.granted AND a.datname=current_database()),
+ (SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND xact_start IS NOT NULL)`).Scan(&advisory, &waiting, &open); err != nil {
 		t.Fatal(err)
 	}
-	return held
+	return advisory, waiting, open
 }
 
-// waitNoAdvisoryLocks allows a destroyed connection's backend a moment to
-// exit (its locks go with it), then requires none to remain.
+// waitNoAdvisoryLocks allows a cancelled session a moment to end its
+// transaction, then requires no advisory lock, no lock wait and no open
+// transaction to remain (row locks live only as long as their transaction).
 func waitNoAdvisoryLocks(t *testing.T, w *effectsWorld) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for advisoryLocks(t, w) != 0 {
+	for {
+		advisory, waiting, open := heldLocks(t, w)
+		if advisory == 0 && waiting == 0 && open == 0 {
+			return
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d advisory locks leaked", advisoryLocks(t, w))
+			t.Fatalf("left behind: %d advisory locks, %d lock waits, %d open transactions", advisory, waiting, open)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-func runSerializedStore(t *testing.T) (*effectsWorld, *postgresSharedStore) {
-	t.Helper()
-	w := newEffectsWorld(t)
-	store, err := newPostgresSharedStore(w.pool)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return w, store
-}
-
-var registrationTx = pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}
-
-// requireLockFree proves the run's lock is free: a registration of the same
-// run finishes well before it could if it had to wait.
-func requireLockFree(t *testing.T, store *postgresSharedStore) {
+// requireRunFree proves nothing holds the run: a registration of the same
+// run commits within a bound it could not meet if it had to wait.
+func requireRunFree(t *testing.T, repo *CodeIntentRepository, claim storage.ContentClaim, item int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	if err := store.WithinRunSerializedTx(ctx, effectsParent, 1, registrationTx, func(tx sqlExecutor) error {
-		_, err := tx.Exec(ctx, `SELECT 1`)
-		return err
+	if err := withinCodeRegistrationTx(ctx, repo.shared, func(tx sqlExecutor) error {
+		return registerVisitStatements(ctx, repo, tx, claim, item, func() {})
 	}); err != nil {
 		t.Fatalf("the next registration of the run waited or failed: %v", err)
 	}
 }
 
-// An error or a panic inside the transaction releases the run's lock.
-func TestRunRegistrationLockIsReleasedAfterAnErrorOrPanicPostgres(t *testing.T) {
-	w, store := runSerializedStore(t)
-	failed := errors.New("registration refused")
-	if err := store.WithinRunSerializedTx(t.Context(), effectsParent, 1, registrationTx, func(sqlExecutor) error { return failed }); !errors.Is(err, failed) {
-		t.Fatalf("err = %v", err)
-	}
-	waitNoAdvisoryLocks(t, w)
-	requireLockFree(t, store)
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("the panic did not propagate")
-			}
-		}()
-		_ = store.WithinRunSerializedTx(t.Context(), effectsParent, 1, registrationTx, func(sqlExecutor) error { panic("registration panicked") })
-	}()
-	waitNoAdvisoryLocks(t, w)
-	requireLockFree(t, store)
-}
-
-// A ctx cancelled while the lock is held destroys the connection; the lock
-// does not outlive it.
-func TestRunRegistrationLockDoesNotLeakOnCancelPostgres(t *testing.T) {
-	w, store := runSerializedStore(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	entered := make(chan struct{})
-	done := make(chan error, 1)
+// A registration whose ctx is cancelled while it waits on the run's claim
+// lock ends; when the holder commits nothing of the cancelled one remains.
+func TestRunRegistrationCancelledWhileWaitingLeavesNoLockPostgres(t *testing.T) {
+	w, repo, claim := newRegistrationWorld(t, effectsParent, effectsClaim2, 3)
+	holding, release := make(chan struct{}), make(chan struct{})
+	held := make(chan error, 1)
 	go func() {
-		done <- store.WithinRunSerializedTx(ctx, effectsParent, 1, registrationTx, func(sqlExecutor) error {
-			close(entered)
-			<-ctx.Done()
-			return ctx.Err()
+		held <- withinCodeRegistrationTx(t.Context(), repo.shared, func(tx sqlExecutor) error {
+			return registerVisitStatements(t.Context(), repo, tx, claim, 0, func() {
+				close(holding)
+				<-release
+			})
 		})
 	}()
-	<-entered
-	if held := advisoryLocks(t, w); held != 1 {
-		t.Fatalf("advisory locks while held = %d, want 1", held)
+	<-holding
+	ctx, cancel := context.WithCancel(t.Context())
+	waited := make(chan error, 1)
+	go func() {
+		waited <- withinCodeRegistrationTx(ctx, repo.shared, func(tx sqlExecutor) error {
+			return registerVisitStatements(ctx, repo, tx, claim, 1, func() {})
+		})
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, waiting, _ := heldLocks(t, w); waiting >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second registration never waited on the claim lock")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v", err)
+	if err := <-waited; err == nil {
+		t.Fatal("a cancelled registration committed")
+	}
+	close(release)
+	if err := <-held; err != nil {
+		t.Fatalf("the holder failed: %v", err)
 	}
 	waitNoAdvisoryLocks(t, w)
-	requireLockFree(t, store)
+	requireRunFree(t, repo, claim, 2)
+	if got := countVisits(t, w, effectsParent); got != 2 {
+		t.Fatalf("visits = %d, want the holder's and the next one", got)
+	}
+}
+
+// A killed Worker: 4 registrations in flight, one holding the run's claim
+// lock and three waiting, then every ctx is cancelled. Nothing is left
+// locked and the next registration of the run commits at once.
+func TestRunRegistrationsCancelledInFlightLeaveNoLockPostgres(t *testing.T) {
+	w, repo, claim := newRegistrationWorld(t, effectsParent, effectsClaim2, 3)
+	ctx, cancel := context.WithCancel(t.Context())
+	holding := make(chan struct{})
+	errs := make(chan error, 4)
+	go func() {
+		errs <- withinCodeRegistrationTx(ctx, repo.shared, func(tx sqlExecutor) error {
+			return registerVisitStatements(ctx, repo, tx, claim, 0, func() {
+				close(holding)
+				<-ctx.Done()
+			})
+		})
+	}()
+	<-holding
+	for item := 1; item < 4; item++ {
+		go func() {
+			errs <- withinCodeRegistrationTx(ctx, repo.shared, func(tx sqlExecutor) error {
+				return registerVisitStatements(ctx, repo, tx, claim, item, func() {})
+			})
+		}()
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, waiting, _ := heldLocks(t, w); waiting >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the three registrations never waited on the claim lock")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	for range 4 {
+		if err := <-errs; err == nil {
+			t.Fatal("a cancelled registration committed")
+		}
+	}
+	waitNoAdvisoryLocks(t, w)
+	requireRunFree(t, repo, claim, 4)
+	if got := countVisits(t, w, effectsParent); got != 1 {
+		t.Fatalf("visits = %d, want only the one registered after the kill", got)
+	}
 }
