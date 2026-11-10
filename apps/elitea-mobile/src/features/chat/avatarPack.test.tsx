@@ -105,6 +105,11 @@ describe('fetchAgentMedia', () => {
     expect(await fetchAgentMedia(`${FIXTURE_ORIGIN}${SPEAKING_WEBP}`)).toEqual({ kind: 'animated' });
   });
 
+  it('keeps an animated WebP still, drawn as its first frame: the server accepts one as the still', async () => {
+    mockExpoFetch.mockResolvedValueOnce(answer(ANIMATED_WEBP, 'image/webp'));
+    expect((await fetchAgentMedia(`${FIXTURE_ORIGIN}${SPEAKING_WEBP}`, { still: true }))?.kind).toBe('image');
+  });
+
   it('refuses a video, an SVG, a non-image body, a failed status and an oversized file', async () => {
     mockExpoFetch.mockResolvedValueOnce(answer(PNG, 'video/mp4'));
     expect(await fetchAgentMedia(`${FIXTURE_ORIGIN}${WORKING_MP4}`)).toBeNull();
@@ -169,6 +174,22 @@ describe('PackAvatar', () => {
     );
     await waitFor(() => expect(shown()).toBe(uriOf(STILL)));
     expect(motionLayer('speaking')).toBeTruthy();
+  });
+
+  it('asks for the still as a still, so an animated WebP still is kept', async () => {
+    const fetchMedia = served();
+    await withQueries(<PackAvatar projectId={7} pack={FULL} motion="still" name="Mira" imageUri={null} mark fetchMedia={fetchMedia} />);
+    await waitFor(() => expect(shown()).toBe(uriOf(STILL)));
+    expect(fetchMedia).toHaveBeenCalledWith(`${FIXTURE_ORIGIN}${STILL}`, { still: true });
+  });
+
+  it("draws no default motion for a state whose own slot is the still's file", async () => {
+    const same = pack({ still: { url: STILL }, speaking: { url: STILL } });
+    const fetchMedia = served();
+    await withQueries(<PackAvatar projectId={7} pack={same} motion="speaking" name="Mira" imageUri={null} mark fetchMedia={fetchMedia} />);
+    await waitFor(() => expect(shown()).toBe(uriOf(STILL)));
+    expect(motionLayer('speaking')).toBeNull();
+    expect(fetchMedia).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to the old icon when the still is refused, and to the monogram without either', async () => {

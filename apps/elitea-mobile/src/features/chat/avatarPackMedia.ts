@@ -74,17 +74,31 @@ export function isAnimatedWebp(bytes: Uint8Array): boolean {
   return bytes.length >= 21 && at(0, 'RIFF') && at(8, 'WEBP') && at(12, 'VP8X') && (bytes[20] & 0x02) !== 0;
 }
 
+/** How one pack media file is used. */
+export interface AgentMediaOptions {
+  /**
+   * The file is the pack's still. The server accepts an animated WebP as the still, and `<Image>`
+   * with animation off draws its first frame, so a still keeps its bytes either way.
+   */
+  readonly still?: boolean;
+}
+
 /**
  * One pack media file, or null. Downloaded the way Discover's icons are (SEC-3): on the workspace
  * origin only, redirects refused, no credential, a 200 with a raster Content-Type, at most
  * MAX_AGENT_MEDIA_BYTES, and the bytes must start with a PNG, JPEG or WebP signature. Only those
- * bytes reach `<Image>`; an animated WebP keeps no bytes at all.
+ * bytes reach `<Image>`. An animated WebP state slot keeps no bytes at all; an animated WebP
+ * still is kept and drawn as its first frame.
  */
-export async function fetchAgentMedia(uri: string, fetchImpl: BaseFetch = noRedirectFetch): Promise<AgentMedia | null> {
+export async function fetchAgentMedia(
+  uri: string,
+  options: AgentMediaOptions = {},
+  fetchImpl: BaseFetch = noRedirectFetch,
+): Promise<AgentMedia | null> {
   const bytes = await fetchBrandAsset(uri, /^image\/(png|jpeg|webp)$/, MAX_AGENT_MEDIA_BYTES, fetchImpl);
   if (bytes === null) return null;
   const mime = rasterTypeOf(bytes);
   if (mime === null) return null;
-  if (mime === 'image/webp' && isAnimatedWebp(bytes)) return { kind: 'animated' };
+  if (options.still !== true && mime === 'image/webp' && isAnimatedWebp(bytes)) return { kind: 'animated' };
   return { kind: 'image', uri: `data:${mime};base64,${base64Of(bytes)}` };
 }

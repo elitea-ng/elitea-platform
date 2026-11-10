@@ -6,7 +6,7 @@ import { publicAgentIconUrl } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
 import { useDesign } from '@/design/DesignProvider';
 import { AgentMotion } from '@/features/chat/AgentMotion';
-import { fetchAgentMedia, packMediaPlan, type AgentMedia } from '@/features/chat/avatarPackMedia';
+import { fetchAgentMedia, packMediaPlan, type AgentMedia, type AgentMediaOptions } from '@/features/chat/avatarPackMedia';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
 import { useSession } from '@/state/session';
 import { Avatar } from '@/ui';
@@ -41,20 +41,31 @@ export function AssistantAvatar({ name, imageUri, mark, size }: { name: string; 
   return <Avatar name={name} kind="agent" imageUri={imageUri} mark={mark} size={size ?? design.size.avatar.sm} decorative />;
 }
 
+/** Downloads one pack media file; `fetchAgentMedia` in the app, a fake in tests. */
+export type FetchAgentMedia = (uri: string, options?: AgentMediaOptions) => Promise<AgentMedia | null>;
+
 /**
  * One avatar pack media file (`/api/v2/agent_media/...`) after its download check, or null while
- * it loads or when it is refused. Cached for good under the project's agent queries (the url is a
- * content address, so it never changes); the session wipe and a project switch drop it.
+ * it loads or when it is refused. Kept for good under the project's agent queries (the url is a
+ * content address, so it never changes): no stale time and no garbage collection, so a state's
+ * file is not downloaded again on a later turn. The session wipe and a project switch drop it.
  */
-export function useAgentMedia(projectId: number | null, path: string | null, fetchMedia = fetchAgentMedia): AgentMedia | null {
+export function useAgentMedia(
+  projectId: number | null,
+  path: string | null,
+  fetchMedia: FetchAgentMedia = fetchAgentMedia,
+  options: AgentMediaOptions = {},
+): AgentMedia | null {
   const origin = useSession((s) => s.serverOrigin);
   const uri = publicAgentIconUrl(path, origin);
+  const still = options.still === true;
   const media = useQuery({
-    queryKey: [...queryKeys.agents(projectId ?? 0), 'media', uri ?? ''],
+    queryKey: [...queryKeys.agents(projectId ?? 0), 'media', still ? 'still' : 'state', uri ?? ''],
     enabled: uri !== null && projectId !== null,
     staleTime: Infinity,
+    gcTime: Infinity,
     retry: false,
-    queryFn: () => fetchMedia(uri as string),
+    queryFn: () => fetchMedia(uri as string, { still }),
   });
   return uri !== null ? (media.data ?? null) : null;
 }
@@ -85,20 +96,23 @@ export function PackAvatar({
   imageUri: string | null;
   mark: boolean;
   size?: number;
-  fetchMedia?: (uri: string) => Promise<AgentMedia | null>;
+  fetchMedia?: FetchAgentMedia;
 }) {
   const design = useDesign();
   const edge = size ?? design.size.avatar.sm;
   const still = packMediaPlan(pack, 'still');
   const planned = motion === 'still' ? null : packMediaPlan(pack, motion);
-  // A state with no slot of its own plans the still: nothing more to download.
-  const state = planned !== null && planned.path !== still?.path ? planned : null;
-  const stillMedia = useAgentMedia(projectId, still?.path ?? null, fetchMedia);
+  // A state that plans the still's file (no slot of its own, or a slot set to the same file)
+  // downloads nothing more; a slot of its own still turns the default motion off.
+  const sameAsStill = planned !== null && planned.path === still?.path;
+  const state = planned !== null && !sameAsStill ? planned : null;
+  const stillMedia = useAgentMedia(projectId, still?.path ?? null, fetchMedia, { still: true });
   const stateMedia = useAgentMedia(projectId, state?.path ?? null, fetchMedia);
   const stateUri = state !== null && stateMedia?.kind === 'image' ? stateMedia.uri : null;
   const stillUri = stillMedia?.kind === 'image' ? stillMedia.uri : null;
+  const ownImage = (stateUri !== null && state?.ownMotion === true) || (sameAsStill && planned?.ownMotion === true && stillUri !== null);
   return (
-    <AgentMotion motion={stateUri !== null && state?.ownMotion === true ? 'still' : motion} size={edge}>
+    <AgentMotion motion={ownImage ? 'still' : motion} size={edge}>
       <Avatar name={name} kind="agent" imageUri={stateUri ?? stillUri ?? imageUri} mark={mark} size={edge} decorative />
     </AgentMotion>
   );
