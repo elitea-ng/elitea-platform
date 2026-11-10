@@ -57,6 +57,14 @@ func TestRoute(t *testing.T) {
 		{"lead: no address goes to the lead", lead, 12, nil, roster, []int64{13}, nil},
 		{"lead: an address beats the lead", lead, 0, []int64{11}, roster, []int64{11}, nil},
 		{"lead: a removed lead falls back to the sticky target", lead, 12, nil, []int64{11, 12}, []int64{12}, nil},
+		// Issue 1804: participant_id alone is the composer's target, never an
+		// address, so it does not override the lead; an address does.
+		{"lead: a composer pick without an address goes to the lead", lead, 11, nil, roster, []int64{13}, nil},
+		{"lead: a composer pick that is addressed answers", lead, 11, []int64{11}, roster, []int64{11}, nil},
+		{"lead: the lead's own pick goes to the lead", lead, 13, nil, roster, []int64{13}, nil},
+		{"lead: several addressed, the picked one first, no lead", lead, 12, []int64{11, 12}, roster, []int64{12, 11}, nil},
+		{"lead: no pick and no address goes to the lead", lead, 0, nil, roster, []int64{13}, nil},
+		{"lead: a removed lead with no pick asks for one", lead, 0, nil, []int64{11, 12}, nil, ErrNoTarget},
 		{"an addressee that is not an agent", Default, 0, []int64{99}, roster, nil, ErrNotInConversation},
 		{"a participant outside the address", Default, 11, []int64{12}, roster, nil, ErrNotInConversation},
 	}

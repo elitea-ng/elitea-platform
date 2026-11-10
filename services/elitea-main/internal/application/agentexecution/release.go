@@ -45,3 +45,12 @@ func (run *ReleaseRun) Clone() *ReleaseRun {
 	clone := *run
 	return &clone
 }
+
+// sameReleaseRun reports two release runs that are the same release (both
+// nil, or equal).
+func sameReleaseRun(a, b *ReleaseRun) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}

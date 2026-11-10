@@ -1814,7 +1814,7 @@ components:
       properties:
         trigger_origin:
           type: string
-          description: How the runs started. One of schedule, webhook or index.
+          description: How the runs started. One of schedule, webhook, index or idle_compaction (an agent's idle compaction run, ADR-0050 decision 9b2).
         executions:
           type: integer
           format: int64
@@ -1899,7 +1899,7 @@ components:
         capability_id: { type: string }
         trigger_origin:
           type: string
-          description: How the run started. One of manual, api, schedule, webhook or index.
+          description: How the run started. One of manual, api, schedule, webhook, index or idle_compaction.
         actor_user_id: { type: string }
         state: { type: string }
         admitted_at: { type: string, format: date-time }

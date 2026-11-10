@@ -873,6 +873,16 @@ WHERE execution_id = $1 AND generation = $2`,
 			admission.Binding.ClientStreamID, participantID); err != nil {
 			return executionapp.AdmissionOutcome{}, nil, err
 		}
+	} else if applicationID := admission.ApplicationID(); participantID == 0 && admission.CurrentIdleCompactionTurn == nil &&
+		applicationID > 0 && applicationID <= math.MaxInt32 && currentProjectID > 0 {
+		// A turn of an agent that names no participant (an ad hoc path, an
+		// old client; issue 1776): the QUEUED checks of that agent in this
+		// conversation end, found by the agent their source ran. A running
+		// idle run is left to the session lease.
+		if err := cancelApplicationIdleCompactions(ctx, pgxExecutor{queryer: tx}, currentProjectID,
+			admission.Binding.ClientStreamID, applicationID); err != nil {
+			return executionapp.AdmissionOutcome{}, nil, err
+		}
 	}
 	// The unattended chain (ADR-0045 decision 4): the chain's first run, or
 	// the continuation's chain check, in this transaction. A refused
@@ -1806,6 +1816,10 @@ func agentApplicationVersionID(admission agentexecutionapp.Admission) int64 {
 		return admission.CurrentRegenerateTurn.ApplicationVersionID
 	case admission.CurrentContinueTurn != nil:
 		return admission.CurrentContinueTurn.ApplicationVersionID
+	case admission.CurrentIdleCompactionTurn != nil:
+		// The source's version, so the idle run binds the source's agent
+		// identity (ADR-0039, issue 1776).
+		return admission.CurrentIdleCompactionTurn.ApplicationVersionID
 	}
 	return 0
 }

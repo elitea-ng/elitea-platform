@@ -54,7 +54,7 @@ export const AnalyticsExecution = zod
     trigger_origin: zod
       .string()
       .describe(
-        "How the run started. One of manual, api, schedule, webhook or index.",
+        "How the run started. One of manual, api, schedule, webhook, index or idle_compaction.",
       ),
     actor_user_id: zod.string(),
     state: zod.string(),
