@@ -488,9 +488,9 @@ pub mod fs {
     ///
     /// `NOENT`, or the OS error.
     pub fn unlink<P: AsRef<Path>>(path: P) -> Result<()> {
-        let path = path.as_ref();
         /// `FILE_ATTRIBUTE_DIRECTORY`.
         const ATTRIBUTE_DIRECTORY: u32 = 0x10;
+        let path = path.as_ref();
         let meta = std::fs::symlink_metadata(path)?;
         // A directory symlink or a junction is removed as a directory: the
         // link's own attributes say which, whether or not its target exists.
