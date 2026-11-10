@@ -2172,3 +2172,109 @@ mod typed_refusal_gate_tests {
         );
     }
 }
+
+/// FU-299: every registered runtime failure is a `runtime.*` entry of the
+/// shared fault registry (`libs/go/faults/registry/runtime.json`) with the
+/// same sentence, byte for byte, and the same retryability, and the registry
+/// has no other `runtime.*` entry. Main pins its own copy of the messages, so
+/// this table stays the source; the registry mirrors it.
+#[cfg(test)]
+mod fault_registry_parity_tests {
+    use super::*;
+
+    /// `runtime.<kind>` or `runtime.<kind>.<payload>`, lower snake case.
+    fn registry_code(kind: RuntimeFailureKind) -> String {
+        let debug = format!("{kind:?}");
+        let (variant, payload) = match debug.split_once('(') {
+            Some((variant, rest)) => (variant, Some(rest.trim_end_matches(')'))),
+            None => (debug.as_str(), None),
+        };
+        let mut code = format!("runtime.{}", snake(variant));
+        if let Some(payload) = payload {
+            code.push('.');
+            code.push_str(&snake(payload));
+        }
+        code
+    }
+
+    fn snake(camel: &str) -> String {
+        let mut out = String::with_capacity(camel.len() + 4);
+        for (index, character) in camel.chars().enumerate() {
+            if character.is_ascii_uppercase() {
+                if index > 0 {
+                    out.push('_');
+                }
+                out.push(character.to_ascii_lowercase());
+            } else {
+                out.push(character);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_registered_runtime_failure_is_in_the_fault_registry_byte_identically() {
+        let mut expected = std::collections::BTreeSet::new();
+        for kind in REGISTERED_RUNTIME_FAILURES {
+            let (wire, message, retryable) = runtime_error_policy(*kind);
+            let code = registry_code(*kind);
+            let entry = elitea_faults::Code::lookup(&code)
+                .unwrap_or_else(|| panic!("{kind:?}: {code} is not registered"))
+                .entry();
+            assert_eq!(entry.sentence(), message, "{code}: sentence differs");
+            let registered = match entry.retryable() {
+                elitea_faults::Retryable::Yes => true,
+                elitea_faults::Retryable::No => false,
+                elitea_faults::Retryable::NotApplicable => panic!("{code}: retryable is n/a"),
+            };
+            assert_eq!(registered, retryable, "{code}: retryable differs");
+            assert_eq!(
+                entry.runtime_kind(),
+                Some(format!("{kind:?}").as_str()),
+                "{code}"
+            );
+            assert_eq!(entry.wire_code(), Some(wire.as_str_name()), "{code}");
+            assert_eq!(entry.audience(), elitea_faults::Audience::User, "{code}");
+            assert_eq!(entry.owner(), "elitea-worker-rust", "{code}");
+            assert!(
+                expected.insert(code.clone()),
+                "{code}: two kinds map to one code"
+            );
+        }
+        let registered: std::collections::BTreeSet<String> = elitea_faults::REGISTRY
+            .iter()
+            .map(elitea_faults::Entry::code)
+            .filter(|code| code.starts_with("runtime."))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            registered, expected,
+            "the registry's runtime.* entries differ"
+        );
+    }
+
+    /// Writes the registry rows of [`REGISTERED_RUNTIME_FAILURES`] as JSON to
+    /// the file `ELITEA_RUNTIME_REGISTRY_DUMP` names (without `action`, which
+    /// is written by hand). A generator, not a gate.
+    #[test]
+    #[ignore = "generator for libs/go/faults/registry/runtime.json; run by hand"]
+    fn dump_runtime_failure_registry_rows() {
+        let Ok(path) = std::env::var("ELITEA_RUNTIME_REGISTRY_DUMP") else {
+            return;
+        };
+        let rows: Vec<serde_json::Value> = REGISTERED_RUNTIME_FAILURES
+            .iter()
+            .map(|kind| {
+                let (wire, message, retryable) = runtime_error_policy(*kind);
+                serde_json::json!({
+                    "code": registry_code(*kind),
+                    "sentence": message,
+                    "retryable": if retryable { "yes" } else { "no" },
+                    "runtime_kind": format!("{kind:?}"),
+                    "wire_code": wire.as_str_name(),
+                })
+            })
+            .collect();
+        std::fs::write(path, serde_json::to_vec_pretty(&rows).expect("rows")).expect("dump");
+    }
+}

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
 )
 
 // Check states in the readiness body. The body carries only these words,
@@ -43,6 +45,8 @@ type Check struct {
 	// Leave both empty for a check whose events are logged elsewhere.
 	Lost      string
 	Recovered string
+	// Code is the registered code of the loss line (FU-299).
+	Code faults.Code
 }
 
 // Evaluation is the outcome of one readiness evaluation.
@@ -109,6 +113,35 @@ type Monitor struct {
 	mu          sync.Mutex
 	since       map[string]time.Time // set while the check is failing
 	lastStarted time.Time            // start of the newest evaluation applied
+	outages     *faults.Transitions  // shared with the runners' cycle reporters
+	lastConfirm time.Time            // the last check a runner's failure asked for
+}
+
+// WithOutages shares the monitor's outage state with outages, which the
+// background runners' cycle reporters read: while the monitor reports a
+// dependency lost, their failures from it are DEBUG (FU-299 C3).
+func (m *Monitor) WithOutages(outages *faults.Transitions) *Monitor {
+	m.outages = outages
+	outages.SetConfirm(m.confirm)
+	return m
+}
+
+// confirmEvery bounds how often a runner's failure can make the monitor
+// check its dependencies before its next tick.
+const confirmEvery = time.Second
+
+// confirm evaluates the checks now, at most once a second, so a runner's
+// first failure in an outage finds the outage reported (FU-299 C3).
+func (m *Monitor) confirm(string) {
+	m.mu.Lock()
+	now := m.now()
+	if now.Sub(m.lastConfirm) < confirmEvery {
+		m.mu.Unlock()
+		return
+	}
+	m.lastConfirm = now
+	m.mu.Unlock()
+	m.Observe(Evaluate(context.Background(), m.checks))
 }
 
 // NewMonitor returns a Monitor over checks. interval must be positive.
@@ -160,10 +193,17 @@ func (m *Monitor) Observe(evaluation Evaluation) {
 			continue
 		}
 		since, failing := m.since[check.Name]
+		if m.outages != nil {
+			m.outages.Observe(check.Name, state != StateOK)
+		}
 		switch {
 		case state != StateOK && !failing:
 			m.since[check.Name] = now
-			m.logger.Warn(check.Lost, "dependency", check.Name, "state", state, "cause", evaluation.causes[check.Name])
+			attrs := []any{"dependency", check.Name, "state", state, "cause", evaluation.causes[check.Name]}
+			if check.Code != "" {
+				attrs = append(attrs, "code", check.Code.String())
+			}
+			m.logger.Warn(check.Lost, attrs...)
 		case state == StateOK && failing:
 			delete(m.since, check.Name)
 			outage := now.Sub(since).Round(time.Second)

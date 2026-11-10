@@ -214,6 +214,8 @@ where
             "agent.delivery",
             execution_kind = ?verified.kind(),
             execution_id = %command.execution_id,
+            // FU-299: what a user quotes to support is the execution id.
+            support_ref = %command.execution_id,
             root_execution_id = %command.root_execution_id,
             generation = command.generation,
             command_id = %command.command_id,
@@ -883,10 +885,12 @@ impl AgentDeliveryProcessOutcome {
                 tracing::Span::current().record("outcome", "retained_no_ack");
                 tracing::Span::current().record("result_code", code);
                 tracing::Span::current().record("retryable", retryable);
-                tracing::warn!(
+                elitea_faults::fault!(
+                    tracing::Level::WARN,
+                    code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK,
                     event = "agent_delivery_retained_no_ack",
                     result_code = code,
-                    retryable,
+                    retryable
                 );
             }
         }
@@ -969,5 +973,62 @@ pub(super) const fn preflight_recovery_code(kind: AgentOutputRecoveryRequiredKin
         AgentOutputRecoveryRequiredKind::ReconciledStaleProgress => {
             "agent_delivery.reconciled_progress_recovery"
         }
+    }
+}
+
+/// FU-299: the retained-delivery outcome is a registered fault line.
+#[cfg(test)]
+mod fault_line_tests {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
+    use super::AgentDeliveryProcessOutcome;
+
+    const CHILD_ENV: &str = "ELITEA_RETAINED_NO_ACK_FAULT_LINE_CHILD";
+
+    #[test]
+    fn retained_delivery_is_one_registered_fault_line() {
+        let output = elitea_faults::logtest::run_child(
+            "execution::agent_delivery_processor::fault_line_tests::retained_delivery_child",
+            CHILD_ENV,
+        );
+        let lines = output.operator_lines();
+        assert_eq!(lines.len(), 1, "{}", output.stdout);
+        let line = &lines[0];
+        let code = elitea_faults::codes::AGENT_DELIVERY_RETAINED_NO_ACK;
+        assert_eq!(line["level"], "WARN");
+        assert_eq!(line["msg"], code.sentence());
+        assert_eq!(line["code"], code.as_str());
+        assert_eq!(line["action"], code.action());
+        assert_eq!(line["event"], "agent_delivery_retained_no_ack");
+        assert_eq!(line["result_code"], "agent_delivery.scripted_retry");
+        assert_eq!(line["retryable"], true);
+        assert_eq!(line["support_ref"], "exec-retained");
+        assert_eq!(line["span"], "agent.delivery");
+    }
+
+    #[test]
+    fn retained_delivery_child() {
+        if !elitea_faults::logtest::is_child(CHILD_ENV) {
+            return;
+        }
+        tracing_subscriber::registry()
+            .with(
+                crate::diagnostics::log_layer(Some("info"), std::io::stdout)
+                    .expect("operator stream"),
+            )
+            .init();
+        let span = tracing::info_span!(
+            "agent.delivery",
+            execution_id = "exec-retained",
+            support_ref = "exec-retained",
+            outcome = tracing::field::Empty,
+            result_code = tracing::field::Empty,
+            retryable = tracing::field::Empty,
+        );
+        span.in_scope(|| {
+            AgentDeliveryProcessOutcome::retained("agent_delivery.scripted_retry", true).record();
+        });
+        elitea_faults::logtest::child_ran();
     }
 }

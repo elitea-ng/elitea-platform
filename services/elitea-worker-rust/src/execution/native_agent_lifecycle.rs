@@ -156,6 +156,8 @@ where
             tenant_id = %run.trace_tenant_id(),
             resource_project_id = %run.trace_resource_project_id(),
             execution_id = %run.trace_execution_id(),
+            // FU-299: what a user quotes to support is the execution id.
+            support_ref = %run.trace_execution_id(),
             generation = run.trace_generation(),
             command_id = %run.trace_command_id(),
             outcome = tracing::field::Empty,

@@ -21,6 +21,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 	"github.com/nats-io/nats.go"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
@@ -161,7 +164,10 @@ func main() {
 		os.Exit(code)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// The shared handler (FU-299): err keeps today's string; typed faults add
+	// code, action and cause; every line in a request carries its
+	// server-generated support_ref. The level stays Info, as before.
+	logger := logx.New(os.Stdout, logx.Options{Describe: describeForLog})
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -1679,6 +1685,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose the cloud executor adapters: %w", err)
 	}
 	var runtimeRoot *runtimecomposition.Runtime
+	// One outage tracker per process (FU-299 C3): the readiness monitor
+	// reports a dependency lost here, and the runtime's background runners
+	// log their failures from that dependency at DEBUG meanwhile.
+	outages := faults.NewTransitions()
 	var productionRuntime *api.ProductionRuntimeRoutes
 
 	// The run brief and the goal check of unattended chains (ADR-0045
@@ -2186,6 +2196,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return fmt.Errorf("compose the delegation assertion mint: %w", mintErr)
 		}
 		runtimeRoot, err = runtimecomposition.New(ctx, runtimeConfig, runtimecomposition.Dependencies{
+			Outages:                          outages,
 			DelegationAssertions:             delegationAssertions,
 			AdmissionPool:                    runtimePools.Admission,
 			CredentialProfile:                credentialAdmission,
@@ -3022,6 +3033,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if monitorErr != nil {
 		return monitorErr
 	}
+	readinessMonitor.WithOutages(outages)
 	// Logs each dependency's loss and recovery once per outage, also when
 	// nothing probes Main. It ends with run, before the deferred pool closes,
 	// so it never reads a pool Main closed on its way out as an outage.

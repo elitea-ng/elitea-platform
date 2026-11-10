@@ -34,10 +34,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/faults"
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/httperr"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitcalltoolapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
@@ -287,7 +290,21 @@ func lowerFirst(subject string) string {
 // WriteError maps a run that never settled. It is the only place a tool-run
 // failure becomes a status code, so a caller sees the same code from both
 // handlers.
+//
+// WriteError has no request, so it cannot carry the support reference;
+// handlers use WriteRequestError.
 func WriteError(w http.ResponseWriter, err error) {
+	writeError(w, nil, err)
+}
+
+// WriteRequestError is WriteError with the request: its failures are logged
+// once with the request's support reference, which the body also carries
+// (FU-299; FU-300 was a silent 5xx here).
+func WriteRequestError(w http.ResponseWriter, r *http.Request, err error) {
+	writeError(w, r, err)
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if status, body, refused := safety.HTTPRefusal(err); refused {
 		// The kill switch (ADR-0041 decision 1): 409 execution_suspended, or
 		// 503 when the suspension state could not be read. Nothing ran.
@@ -339,15 +356,14 @@ func WriteError(w http.ResponseWriter, err error) {
 			"ok": false, "error": "invalid tool-run request",
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitSettingsResolutionUnavailable):
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-			"ok": false, "error": "toolkit settings could not be resolved",
-		})
+		httperr.Write(w, r, slog.Default(), http.StatusServiceUnavailable,
+			faults.New(faults.ToolkitSettingsUnresolved, err), httperr.KeepOKFalse())
 	default:
-		// The cause is not put on the wire. It is a server fault, not the
-		// caller's, and this boundary never relays an internal message.
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"ok": false, "error": "failed to run the toolkit tool",
-		})
+		// The cause is not put on the wire: it is a server fault, not the
+		// caller's. It is logged once, with a bounded stack and the support
+		// reference the body carries.
+		httperr.Write(w, r, slog.Default(), http.StatusInternalServerError,
+			faults.Unexpected(err), httperr.KeepOKFalse())
 	}
 }
 

@@ -141,3 +141,21 @@ func TestDescribeKeepsTheCauseAndDropsConnectionDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestDependencyNamesTheOutageAFailureBelongsTo(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want string
+	}{
+		"database answer": {pgError("57P03", "the database system is in recovery mode"), "db"},
+		"own timeout":     {fmt.Errorf("claim: %w", context.DeadlineExceeded), "db"},
+		"NATS request":    {fmt.Errorf("publish: %w", nats.ErrTimeout), "nats"},
+		"permanent fault": {pgError("42P01", "relation does not exist"), ""},
+		"programming bug": {errors.New("nil map"), ""},
+	}
+	for name, tc := range cases {
+		if got := Dependency(tc.err); got != tc.want {
+			t.Errorf("%s: Dependency = %q, want %q", name, got, tc.want)
+		}
+	}
+}
