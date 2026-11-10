@@ -193,6 +193,11 @@ func (r *CodeIntentRepository) originalSource(ctx context.Context, tx sqlExecuto
 		return scope.SourceDefinition{}, code.ErrRejected
 	}
 	source, err := r.sources.readOriginalCodeSource(ctx, tx, claim.ExecutionID, claim.Generation, a, v.Scope, purpose, v.Thread, v.Node)
+	var labelled *codeRegistrationStage
+	if errors.As(err, &labelled) {
+		// A refusal keeps the step that refused it, for Main's fault line.
+		return scope.SourceDefinition{}, staged(labelled.stage, code.ErrRejected)
+	}
 	if err != nil || source.Reference.Validate() != nil || source.ResourceProjectID != a.project || source.ActorID != a.actorID || source.Reference.YAMLSHA256 != v.YAML || code.Digest([]byte(source.Instructions)) != v.YAML {
 		return scope.SourceDefinition{}, code.ErrRejected
 	}
