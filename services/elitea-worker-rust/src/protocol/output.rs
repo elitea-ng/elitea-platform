@@ -1004,8 +1004,7 @@ pub(crate) const CODE_DEADLINE_INSUFFICIENT_MESSAGE: &str =
     "The Code node could not start: too little time was left before the run's deadline.";
 
 /// Registered text of [`RuntimeFailureKind::FanoutDeadlineInsufficient`]; Main holds the same text.
-pub(crate) const FANOUT_DEADLINE_INSUFFICIENT_MESSAGE: &str =
-    "The fan-out node could not start: too little time was left before the run's deadline for its items.";
+pub(crate) const FANOUT_DEADLINE_INSUFFICIENT_MESSAGE: &str = "The fan-out node could not start: too little time was left before the run's deadline for its items.";
 
 /// Registered text of [`RuntimeFailureKind::ApplicationCompositionInvalid`]. Data-free: Main's
 /// attach and pipeline save checks name the attachment; Main registers this exact text.

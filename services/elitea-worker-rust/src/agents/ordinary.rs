@@ -421,7 +421,9 @@ impl OrdinaryNativeAgentAssembler {
         let recalled = Arc::new(super::agent_memory_tools::RecalledEntries::default());
         // W3-1: Code runs admitted against the run's deadline.
         let code_runtime = match self.sandbox.as_ref().zip(sandbox_authority) {
-            Some((factory, authority)) => Some(factory.bind(authority, plan.code_admission_deadline()?)),
+            Some((factory, authority)) => {
+                Some(factory.bind(authority, plan.code_admission_deadline()?))
+            }
             None => None,
         };
         let (runtime, fresh_execution_mode) = self
