@@ -3471,6 +3471,9 @@ pub(crate) enum FanoutChildRefusal {
     /// The member's saved Agent calls a saved pipeline among its tools; that
     /// pipeline's checkpoint threads are not admitted to the member (FU-291).
     AgentCallsPipeline,
+    /// A Code worker or branch of a Map or Parallel inside a saved child
+    /// pipeline: its visit scope is the run root's only (R4, W3-2b).
+    CodeBelowRoot,
 }
 
 impl FanoutChildRefusal {
@@ -3481,6 +3484,7 @@ impl FanoutChildRefusal {
             Self::ContainsCode => "graph.fanout.child_contains_code",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
             Self::AgentCallsPipeline => "graph.fanout.agent_calls_saved_pipeline",
+            Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
         }
     }
 
@@ -3493,6 +3497,7 @@ impl FanoutChildRefusal {
             Self::ContainsCode,
             Self::ContainsParallel,
             Self::AgentCallsPipeline,
+            Self::CodeBelowRoot,
         ]
         .iter()
         .any(|refusal| refusal.code() == code)
@@ -3512,6 +3517,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             }
             Self::AgentCallsPipeline => {
                 "an Agent that calls a saved pipeline cannot run as a Map item or Parallel branch yet"
+            }
+            Self::CodeBelowRoot => {
+                "a Code worker or branch runs only in a Map or Parallel of the started pipeline, not inside a saved child pipeline yet"
             }
         })
     }
@@ -3554,6 +3562,7 @@ impl PipelineConfigurationError {
                 FanoutChildRefusal::ContainsCode => "fanout_child_code",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
                 FanoutChildRefusal::AgentCallsPipeline => "fanout_agent_calls_pipeline",
+                FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
             }),
         }
     }

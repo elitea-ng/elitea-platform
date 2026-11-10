@@ -90,6 +90,14 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "graph.fanout.code_below_root",
+      "sentence": "A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now.",
+      "action": "Nothing on the platform; the author moves the Map or Parallel into the started pipeline, or runs the Code inside a child pipeline without a fan-out.",
+      "audience": "operator",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "graph.fanout.deadline_insufficient",
       "sentence": "A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.",
       "action": "Nothing on the platform; the user lowers the item count or raises the node's concurrency, or the run is given more time.",

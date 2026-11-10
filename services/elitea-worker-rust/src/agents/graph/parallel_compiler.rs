@@ -644,6 +644,20 @@ fn reject_nested_parallel(
     runtimes: &PipelineNodeRuntimes,
 ) -> Result<(), PipelineConfigurationError> {
     reject_agent_calling_pipeline(owned, runtimes)?;
+    // R4: a fan-out below the run root (inside a saved child pipeline) binds
+    // its children to the root's visit scope only; its Code children would be
+    // refused at run time, so they are refused here, by name (W3-2b).
+    if !runtimes.application_scope_path.is_empty()
+        && let Some(code) = owned.values().find_map(|branch| match branch {
+            OwnedBranch::Code(child) => Some(child.node.id().to_owned()),
+            _ => None,
+        })
+    {
+        return Err(PipelineConfigurationError::FanoutChildUnsupported {
+            node: code,
+            refusal: FanoutChildRefusal::CodeBelowRoot,
+        });
+    }
     // Only an Agent branch runs a saved composition; an LLM branch has none.
     let owned = owned
         .iter()

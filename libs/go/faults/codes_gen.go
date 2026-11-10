@@ -36,6 +36,8 @@ const (
 	DependencyNatsUnavailable Code = "dependency.nats_unavailable"
 	// A Map item or Parallel branch failed; this line names its own code, its fixed sentence and a safe cause chain, so the fan-out failure can be traced to one item.
 	GraphFanoutChildFailed Code = "graph.fanout.child_failed"
+	// A Map or Parallel whose worker or branch is a Code node sits inside a saved child pipeline, so the pipeline was refused before it started: fan-out Code runs only in the started pipeline for now.
+	GraphFanoutCodeBelowRoot Code = "graph.fanout.code_below_root"
 	// A fan-out node with Code items was refused before it started because its items cannot finish before the run's deadline.
 	GraphFanoutDeadlineInsufficient Code = "graph.fanout.deadline_insufficient"
 	// A component crashed on an unexpected condition; the request or task it was handling failed.

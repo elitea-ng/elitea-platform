@@ -357,6 +357,48 @@ async fn a_code_child_with_all_inputs_reads_its_item_or_roots() {
     }
 }
 
+/// R4: a Map or Parallel of Code inside a saved child pipeline (compiled
+/// below the run root) is refused at compile time with its registry code:
+/// fan-out Code below the root is W3-2b. At the root it compiles.
+#[test]
+fn a_code_fanout_below_the_root_is_refused_at_compile_time() {
+    let authority = Arc::new(MemoryAuthority::default());
+    let (checkpointer, runtimes) = bound(&authority);
+    let code = Arc::new(FakeCode::default());
+    let child = with_code(runtimes, &code).with_application_scope_path("parent_agent".to_owned());
+    let map = PipelineDefinition::from_yaml(MAP_CODE).unwrap();
+    match map.compile_subgraph_with_runtime(checkpointer, &child) {
+        Err(error @ PipelineConfigurationError::FanoutChildUnsupported { .. }) => {
+            assert_eq!(
+                error.code(),
+                elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str()
+            );
+            assert!(error.to_string().contains("shout"), "{error}");
+        }
+        Err(other) => panic!("expected the below-root refusal, got {other:?}"),
+        Ok(_) => panic!("a Map of Code below the root compiled"),
+    }
+    let parallel_authority: Arc<dyn ParallelCheckpointAuthority> =
+        Arc::new(BranchAuthority::default());
+    let parallel_checkpointer: Arc<dyn Checkpointer> = parallel_authority.clone();
+    let runtimes =
+        PipelineNodeRuntimes::default().with_parallel(ParallelCompilerBinding::for_tests(
+            parallel_authority,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            None,
+        ));
+    let code = Arc::new(FakeCode::default());
+    let child = with_code(runtimes, &code).with_application_scope_path("parent_agent".to_owned());
+    let parallel = PipelineDefinition::from_yaml(PARALLEL_CODE).unwrap();
+    match parallel.compile_subgraph_with_runtime(parallel_checkpointer, &child) {
+        Err(error) => assert_eq!(
+            error.code(),
+            elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str()
+        ),
+        Ok(_) => panic!("a Parallel of Code below the root compiled"),
+    }
+}
+
 /// W3-2 D3: an activation whose Code items cannot fit the run's deadline is
 /// refused whole, before freezing: no item starts, no child thread is
 /// activated, and the run ends with the registered fan-out failure.
