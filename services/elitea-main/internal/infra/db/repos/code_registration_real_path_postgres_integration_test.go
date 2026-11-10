@@ -430,3 +430,76 @@ func parsesPerVisit(t *testing.T, r *realPathWorld) int {
 	}
 	return int(storage.SavedCodeParsesForTests() - before)
 }
+
+// R5: a permission revoked while an intent registration is in flight (the
+// intent passed its first claim and permission check, then waits on its
+// visit row, held here by another session) is seen by the intent's final
+// claim and permission re-check before signing: the registration fails
+// typed (refused at claim_recheck), no intent row is written and no grant is
+// signed. Under SERIALIZABLE that re-check would read the transaction's
+// first snapshot and sign against the revoked state.
+func TestAPermissionRevokedDuringIntentRegistrationIsNeverSignedPostgres(t *testing.T) {
+	r := newRealPathWorld(t, effectsParent, effectsClaim2, 3)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	request, prepared := r.visit(t, 0, 2)
+	visit, err := r.repo.RegisterOriginalCodeVisit(ctx, r.claim, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := storage.OriginalSavedCodePolicy(r.instructions, r.yamlSHA, "shout")
+	declaration, _ := storage.MatchOriginalSavedCodeConfiguration(policy, realPathWorkerCfg)
+	metadata, err := storage.MatchCodePrepared(declaration, []byte(realPathWorkerCfg), prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := code.IntentRequest{Schema: "elitea.sandbox.original-code-intent-request.v1", OriginalVisit: visit.OriginalVisit, DispatchActivation: fmt.Sprintf("%064x", 0xd000),
+		RequestDigest: metadata.Fingerprint, SupervisorAudience: realPathAudience, PreparedBase64URL: base64.RawURLEncoding.EncodeToString(prepared)}
+
+	// Another session holds the visit row: the intent passes its first
+	// lockAccess, then waits on readVisit's FOR UPDATE.
+	holder, err := r.w.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Release()
+	hold, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM elitea_runtime.original_code_visits WHERE visit_id=$1 FOR UPDATE`, visit.OriginalVisit.VisitID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.repo.RegisterOriginalCodeIntent(ctx, r.claim, intent)
+		done <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, waiting, _ := heldLocks(t, r.w); waiting >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the intent never waited on its visit row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The revocation commits while the intent is in flight.
+	r.w.exec(`DELETE FROM public.auth_core__project_user_role WHERE user_id=$1`, realPathActor)
+	if err := hold.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	err = <-done
+	if !errors.Is(err, storage.ErrContentUnauthorized) {
+		t.Fatalf("an intent was answered %v after the permission was revoked, want a typed refusal", err)
+	}
+	var stager interface{ Stage() string }
+	if !errors.As(err, &stager) || stager.Stage() != "claim_recheck" {
+		t.Fatalf("refused at %v, want claim_recheck", err)
+	}
+	if intents := r.count(t, "original_code_intents"); intents != 0 {
+		t.Fatalf("intents = %d, want none written", intents)
+	}
+	waitNoAdvisoryLocks(t, r.w)
+}

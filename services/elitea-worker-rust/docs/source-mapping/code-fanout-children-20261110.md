@@ -330,6 +330,28 @@ conflict in a read Main maps to a refusal. The Worker-side real takeover still r
 (`real_pg_a_map_of_8_code_items_survives_worker_replacement`); real-browser confirmation of R/I: 3 Worker kills and 3 Supervisor kills
 all resumed (see Real-browser evidence).
 
+**R5: READ COMMITTED, table by table** (`services/elitea-main/internal/infra/db/repos/code_sandbox_intent.go`,
+visit closure from `:256`, intent closure from `:451`). The first statement of both is `lockAccess` (`:69-88`,
+`FOR UPDATE OF j,c,ws,command`); the intent re-runs `lockAccess` (claim, attempt, epoch, input digest and the actor's
+permission) at `:522` after every lookup and before signing, and the grant is signed only after commit.
+
+| Read (path:line) | Lock | Writers, and why no write skew |
+|---|---|---|
+| `execution_jobs` j, `execution_claims` c, `workload_sessions` ws, `command_outbox` (codeAccessSQL `:69-88`) | `FOR UPDATE` | claim takeover, release, lease renewal, cancel and job state all update these rows, so they wait for the registration's commit; the intent re-reads them at `:522` |
+| `agent_execution_jobs`, `input_bundle_entries` (same statement, joined) | none | written once at admission, immutable (the input digest is re-checked at `:522`) |
+| `centry.project.suspended` (same statement) | none | admin suspend; a suspension committed before the intent's recheck refuses it (`:522`); one committed after is ordered after the registration, as under SERIALIZABLE (a read-write antidependency without a cycle does not abort) |
+| RBAC tables via `checkRecoveryPermission` (`node_recovery.go:48`, legacy resolver) | none | grant and revoke writers do not take the run lock. A revocation committed before the intent's final `:522` recheck is seen there (fresh statement snapshot under READ COMMITTED) and refuses the intent at `claim_recheck`; under SERIALIZABLE that recheck reads the first snapshot and signs. Proven: `TestAPermissionRevokedDuringIntentRegistrationIsNeverSignedPostgres` (revocation committed while the intent waits mid-transaction: refused, no intent row, no grant), and the same test **fails under SERIALIZABLE** (the intent is answered `nil`, measured by setting the isolation back) |
+| `execution_claims.model_checkpoint_digest`, `node_recovery_visits` (`:124`, `:127`) | c is `FOR UPDATE`; `FOR SHARE` | recovery-mode checks; the rows are locked |
+| `execution_definition_source_refs`, `execution_captured_definitions` (`execution_source_definitions.go:57`) | `FOR SHARE OF r,d` | immutable captures (insert once, `ON CONFLICT DO NOTHING`); project deletion blocks on the share lock |
+| `original_code_visits` (`:299` count, `:307` insert, `:312`/`:345` read) | the count runs behind the run's row lock; read-back and `readVisit` `FOR UPDATE` | only registration writes visits; every registration of the run holds the run's row lock first, so the count is exact; the unique keys hold identity |
+| `original_code_intents` (`:506` insert, `:511` read) | read-back `FOR UPDATE` | only registration writes it, behind the same row lock |
+| `original_code_broker_bindings` (`code_platform_policy.go:74,81`, `VerifyOriginalCodeBroker`) | read-back `FOR UPDATE` | the visit's own binding row, written only here; the broker policy is static configuration (`p.policies`), not a revocable grant |
+| `code_workspace_snapshots` (`postgres_code_workspace.go:43`, `VerifyOriginalCodeWorkspace` → `receipts.Verify`) | `FOR SHARE` | writers: `Reserve`/`Commit` of the same visit (`:28`, `:85`) and project deletion (`projectprovisioning/steps.go:415`); a deletion committed first leaves no row and refuses the intent (`ErrContentUnauthorized`); otherwise it waits on the share lock until the registration commits |
+| compiled snapshot index (`r.snapshots`, `:389`, `:396`) | outside the transaction | content-addressed immutable descriptors; read through the store, never in the registration transaction under either isolation |
+
+Conclusion: no consulted table needs SERIALIZABLE; READ COMMITTED with the run's row lock first is equal or stronger
+for every check (strictly stronger for a revocation during the intent).
+
 Advisory-lock users in the repo (`git grep pg_advisory / pg_try_advisory`), kept for reference (the registration no longer takes any advisory lock):
 
 | Form | Users and keys |
