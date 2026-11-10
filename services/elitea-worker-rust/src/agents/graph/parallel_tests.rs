@@ -3187,7 +3187,12 @@ fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
     };
     assert_eq!(
         safe_graph_cause(&scoped),
-        ["graph.node_execution_failed", "node gather", "node js_a", "checkpoint.invalid_scope"]
+        [
+            "graph.node_execution_failed",
+            "node gather",
+            "node js_a",
+            "checkpoint.invalid_scope"
+        ]
     );
     let free = GraphError::NodeExecutionFailed {
         node: "shout".into(),
@@ -3201,7 +3206,7 @@ fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
     assert_eq!(safe_graph_cause(&other), ["graph.other"]);
     let deep = GraphError::NodeExecutionFailed {
         node: "n".into(),
-        message: (0..20).map(|index| format!("Node 'n{index}' execution failed: ")).collect::<String>(),
+        message: "Node 'n' execution failed: ".repeat(20),
     };
     assert!(safe_graph_cause(&deep).len() <= elitea_faults::MAX_CAUSES);
 }

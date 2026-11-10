@@ -250,6 +250,56 @@ platform-client item with the owner's proof is reconciled (C).
 6. **Web copy (D7, done).** The generic Parallel refusal sentence, the branch picker label and the owner hint name Code;
    Main's sentence is the same, pinned by `TestTheBranchRefusalSentenceNamesCodeAsTheWebEditorDoes`.
 
+## Browser-pass defects (after `44c792f4f`)
+
+| Id | Root cause | Fix | Test (failed before, passes after) |
+|---|---|---|---|
+| B1 (blocker) | `ApplicationBranchCatalog::for_child` refused any Parallel branch with no application path: a Code branch has none, so the gather node failed `checkpoint.invalid_scope` ("the owned application checkpoint family is not admitted") before any Code attempt. Only a path-free Map worker was allowed. Test 1 used a Map, so it never met this. | Every path-free child (State Modifier, Code) gets an empty family in both kinds (`application_children.rs` `for_child`); Agent and inline LLM children keep their paths, admitted at assembly. | Real assembly path: `postgres_a_parallel_of_code_branches_starts_each_branch_through_assembly` (`AuthorizedNativeAssembler` with a `CodeRuntimeFactory`; before: `agent.legacy` + `invalid_scope`; after: each branch runs its attempt and fails typed as a member against the unreachable sandbox, `graph.fanout.member_failed`). Real-PG production family: `real_pg_a_parallel_of_code_branches_runs_on_the_production_family` (before: `invalid_scope`). Unit: `a_path_free_child_gets_no_family_in_a_parallel_and_a_map`. |
+| B2 | A failed child's cause was logged nowhere: only "Fan-out failed". | One WARN line per failed child, registry code `graph.fanout.child_failed`: `member_code`, `member_sentence` (the code's fixed text), `cause` (error kind, node ids and a leading dotted code only, never free text), `execution_id`, `support_ref` (= execution id), `node_id`, `item`, `item_ref` (the join entry's support reference) (`parallel.rs` `log_child_failure`, `safe_graph_cause`). A committed Code stop names its `failure_class` on "pipeline Code node stopped". | `a_64_item_code_map_logs_no_item_values_or_index` (two child lines with every field; no item marker logged), `a_child_failure_cause_keeps_codes_and_node_ids_only`. |
+| B3 | Main's Code visit and intent registrations are Serializable and wait on the run's claim lock with a snapshot taken before the wait, so the items of one Map registering together abort with 40001: answered as a silent `Unavailable`, or as a refusal when the conflict surfaced in a read Main maps to `ErrRejected`/`ErrContentUnauthorized`. The Worker logged "Main was unavailable". Retrying alone cannot settle a burst: every waiter loses to every earlier holder. | Main: a per-run session advisory lock taken before `BEGIN` (`WithinRunSerializedTx`, snapshot after the lock); a 40001/40P01 met by any statement is recorded and the transaction retried at most 3 times with jitter (`code_registration_retry.go`); still contended → one WARN fault line `code.registration_contended` (execution id, support_ref) and a retryable `Unavailable` whose message names the code. Worker: the retry line is the fault line `pipeline.code.main_retrying` with `main_code` parsed from Main's `"<sentence> (<code>)"` status only when the registry knows it. | Real PostgreSQL 18: 8 concurrent registrations of one run, the first held until the other 7 wait on the lock (deterministic): `TestOriginalCodeVisitRegistrationsConflictWithoutRetryPostgres` (without the fix 7 of 7 fail 40001), `TestOriginalCodeVisitRegistrationsOfOneRunAllCommitPostgres` (all 8 commit; measured with retry alone and no lock: 1 of 8 still contended after 3 attempts). `TestAContendedCodeRegistrationIsRetryableAndLoggedOnce`, `a_retryable_main_answer_names_its_registered_code_only`. |
+| B4 | The Map worker hint did not name Code. | "It can be a State Modifier, an LLM node, a Code node, or a saved agent or pipeline." | `graphExtensions.families.test.ts` pins the catalogue text and the component default. |
+| B5 (blocker) | **Not root-caused in this change**; see below. | — | `real_pg_a_worker_killed_mid_registration_is_resumed_by_the_replacement` (passes; does not reproduce). |
+
+**Reruns after B1-B4 (PostgreSQL 18.4, disposable).** Worker lib with `ELITEA_TEST_DATABASE_URL`: 3171 passed,
+123 ignored; the 3 `graph_receipts` tests need `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` and the PG18 guard as CI sets
+them, and then pass (3/3). Real-PG prefix `--ignored`: **33 passed, 0 failed** (adds the B1 and kill-mid-registration
+tests); run alone, the overhead gate measured p99 6.4 ms (root Code 18.1/21.8, child 20.2/28.2, activation 15.7/33.1
+ms). With Main's full suite on the same database it read 441.7 ms (activation p99 2.9 s) and failed: contention, not
+the code. Agent-runtime 1829 passed. `fmt`, `clippy -D warnings`, `cargo doc -D warnings` clean. Main `go vet ./...`
+clean; `go test ./...` passes, `authflow`/`authsession`/`migrate` only with `-parallel 1`/`-p 1` on this container
+(53200 "out of shared memory" when many tests apply all migrations at once; those packages are untouched). Web
+`vitest run pipelines`: 274 files, 2961 passed, 1 expected fail; `tsc`, oxlint and the i18n check clean.
+
+**Raw i18n key on the Map card** (`pipelines.graphExtensions.values.` beside "Owned worker" and "Worker output 1"):
+`ExtensionChoice` renders the empty choice as `t('pipelines.graphExtensions.values.' + '', '')`; i18next ignores the
+empty default and shows the key. Unchanged from `origin/main` (`ExtensionFields.tsx:27`), not introduced here; not
+fixed (report only).
+
+**B5 — what is known.** Takeover log "Fan-out started resumed:false" is not evidence of a lost occurrence:
+`resumed` is a constant `false` passed to `fanout_trace::activation_span` by the shared 2a-2 adapter
+(`parallel.rs:2009`, unchanged from `origin/main`), for every family. "start fresh" is the correct label for an
+in-flight child with no receipt. Main held 8 visits and 8 intents with distinct activations, so the frozen
+occurrence and the child identities were restored: the shared takeover is not the cause, and the STOP condition does
+not apply. Item 1 ended `pipeline.code_failed` at **attempt 1** on the journaled path, i.e. the replacement Worker
+re-attached the started attempt and that reconciliation failed with a class mapped to `pipeline.code_failed` under the
+default Stop policy (DependencyUnavailable, Unknown, InvalidResult, AttemptTimeout, RuntimeLost exhausted, invalid
+configuration or input), not an authorization class (that would be `pipeline.code_authorization_failed`). The line did
+not name the class, and the stack was torn down, so the class is not known.
+
+Ruled out against code: Main intent replay across claims (binding claim-independent, `ON CONFLICT` + exact compare,
+fresh signature per claim); the Supervisor ledger binding (claim-independent); the Worker dispatch scope (execution and
+generation); the visit record (deterministic fields incl. the fan-out scope; canonical child visit fixed earlier); N3
+(skipped when `prior_dispatch`). Why test 1 passed while the browser failed: test 1 drives the production compiler,
+checkpoint family, node journals and `RemoteCodeRuntime` but fakes Main and the Supervisor, which answer every replay
+at once; the real answers on the re-attach path (Main under concurrent registration, B3; the Supervisor for a job a
+dead connection submitted) are where it can diverge. Tests 2 and 5 exercise the same production Worker path with the
+same fakes, so they share that limit.
+
+Most likely contributor, now fixed: at takeover the four in-flight items re-register at once; B3 made Main answer them
+`Unavailable` or, when the conflict hit the claim-lock read, as a refusal. Instrumentation added so the next browser
+pass names the cause: `failure_class` on "pipeline Code node stopped", the `graph.fanout.child_failed` line (member
+code and safe cause), and `main_code` on every Main retry. Real-browser confirmation of B5 is open.
+
 ## Real-browser evidence
 
 Pending (done by the orchestrating session): plan §5 cases 1, 3, 4, 5 and 6 on a disposable production-profile stack.

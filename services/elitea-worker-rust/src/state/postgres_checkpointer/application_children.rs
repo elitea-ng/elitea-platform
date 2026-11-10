@@ -54,14 +54,9 @@ impl ApplicationBranchCatalog {
     /// or worker) is admitted by path at assembly (`composition_paths`,
     /// PM-4), so a miss is exactly a path-free child; were that ever not so,
     /// the child's own scoped writes would be refused, never widened.
-    fn for_child(
-        &self,
-        activation: &ParallelActivation,
-        node: &str,
-    ) -> Result<&[String], GraphError> {
-        Ok(self
-            .for_owned_node(&activation.root_thread_id, node)
-            .unwrap_or(&[]))
+    fn for_child(&self, activation: &ParallelActivation, node: &str) -> &[String] {
+        self.for_owned_node(&activation.root_thread_id, node)
+            .unwrap_or(&[])
     }
 
     fn for_owned_node(&self, parent_thread: &str, node: &str) -> Result<&[String], GraphError> {
@@ -308,7 +303,7 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         origin: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         let parent = self.for_thread(&activation.root_thread_id)?;
-        let paths = self.branch_paths.for_child(activation, branch.node())?;
+        let paths = self.branch_paths.for_child(activation, branch.node());
         // The compiler admits the branch identity and frozen definition first.
         // The parent adapter adds its opaque claim scope to the hashed lineage.
         let child = parent
@@ -341,7 +336,7 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         for request in children {
             let paths = self
                 .branch_paths
-                .for_child(activation, request.branch.node())?;
+                .for_child(activation, request.branch.node());
             let thread_id = parent.branch_thread_id(
                 activation,
                 request.branch,
@@ -475,14 +470,12 @@ mod tests {
             serde_json::from_value(map_value).unwrap();
         assert!(map.map.is_some());
         for activation in [&parallel, &map] {
-            assert!(
-                catalog
-                    .for_child(activation, "code_branch")
-                    .unwrap()
-                    .is_empty()
+            assert_eq!(
+                catalog.for_child(activation, "code_branch"),
+                [] as [&str; 0]
             );
             assert_eq!(
-                catalog.for_child(activation, "agent_branch").unwrap(),
+                catalog.for_child(activation, "agent_branch"),
                 ["agent_branch", "agent_branch/leaf"]
             );
         }

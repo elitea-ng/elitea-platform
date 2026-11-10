@@ -23,6 +23,15 @@
     never refused this way.
   - **A Code attempt never waits for a second Code slot.** If a code path ever asked for one inside an attempt that
     already holds a slot, the Worker refuses it at once and logs one ERROR line, code `pipeline.code.nested_slot`.
+  - **Operator lines for fan-out failures and Code registrations.** Each failed Map item or Parallel branch now
+    writes one WARN line, code `graph.fanout.child_failed`, with `member_code`, `member_sentence`, `cause`,
+    `execution_id`, `support_ref`, `node_id`, `item` and `item_ref`; "pipeline Code node stopped" names its
+    `failure_class`. Main's Code visit and intent registrations of one run now wait for each other on a per-run lock
+    and retry a residual serialization conflict at most 3 times; one still contended writes a WARN line
+    `code.registration_contended` and is answered retryable. The Worker's retry line is now
+    `pipeline.code.main_retrying` (it replaces the plain "Main was unavailable for a Code intent call; retrying"),
+    with `main_code` when Main named one. A Parallel whose branches are Code nodes now runs (it failed before any Code
+    attempt with `checkpoint.invalid_scope`).
 - **Who is affected.** Pipeline authors (Code is now offered as a Map worker and a Parallel branch); operators who
   roll out Main and the Workers separately.
 - **What to do.**

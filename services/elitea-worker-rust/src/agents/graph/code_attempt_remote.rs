@@ -875,11 +875,7 @@ pub(in crate::agents::graph) fn main_fault_code(
     else {
         return None;
     };
-    let code = status
-        .message()
-        .strip_suffix(')')?
-        .rsplit_once(" (")?
-        .1;
+    let code = status.message().strip_suffix(')')?.rsplit_once(" (")?.1;
     elitea_faults::Code::lookup(code)
 }
 

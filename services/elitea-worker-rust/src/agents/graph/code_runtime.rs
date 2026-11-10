@@ -554,7 +554,8 @@ impl NodeAttemptBody for CodeNode {
         code: &'static str,
         class: NodeFailureClass,
     ) -> Result<(), GraphError> {
-        self.report_stop(context, authority, code, Some(class)).await
+        self.report_stop(context, authority, code, Some(class))
+            .await
     }
 
     async fn report_restored_terminal_failure(
