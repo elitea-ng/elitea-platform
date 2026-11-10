@@ -6,7 +6,7 @@
  * The class comes from `@elitea/client-core/conversation`, so web, desktop
  * and mobile apply one rule.
  */
-import { classifyMessage, participantKindOf, type MessageClass } from '@elitea/client-core/conversation';
+import { avatarPackOf, classifyMessage, participantKindOf, type AvatarPack, type MessageClass } from '@elitea/client-core/conversation';
 
 import type { MessageGroupWire, MessageParticipantWire } from '@/entities/message/lib/wire';
 
@@ -16,6 +16,8 @@ export interface AnswerAuthor {
   readonly personaName?: string;
   readonly authorRole?: string;
   readonly authorIconUrl?: string;
+  /** The author's avatar pack (ADR-0050 decision 6); its slots win over `authorIconUrl`. */
+  readonly authorAvatarPack?: AvatarPack;
   /** The answering agent's application id (`entity_meta.id` of an `application` participant): its memory's key (ADR-0050 1b). */
   readonly authorApplicationId?: number;
   /** The names of the participants the row is addressed to (`addressed_to`), for a side-talk label (ADR-0050 7e). */
@@ -101,6 +103,7 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
   const personaName = trimmed(author?.persona?.display_name);
   const authorRole = trimmed(author?.persona?.role);
   const authorIconUrl = participantIconUrl(author);
+  const authorAvatarPack = avatarPackOf(author?.persona?.avatar_pack);
   const authorApplicationId = participantApplicationId(participants, authorParticipantId);
   const addresseeNames = addresseeNamesOf(group.addressed_to, participants);
   return {
@@ -109,6 +112,7 @@ export function answerAuthor(group: MessageGroupWire, participants: readonly Mes
     ...(personaName !== undefined ? { personaName } : {}),
     ...(authorRole !== undefined ? { authorRole } : {}),
     ...(authorIconUrl !== undefined ? { authorIconUrl } : {}),
+    ...(authorAvatarPack !== undefined ? { authorAvatarPack } : {}),
     ...(authorApplicationId !== undefined ? { authorApplicationId } : {}),
     ...(addresseeNames.length > 0 ? { addresseeNames } : {}),
   };

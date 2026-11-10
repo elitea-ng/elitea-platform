@@ -46,6 +46,8 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  AgentTeam,
+  AgentTeamList,
   CanvasPresence,
   ChatExecutionStarted,
   ClearMemories200,
@@ -2459,6 +2461,274 @@ export const getUpdateMemoryResponseMock = (
   ...overrideResponse,
 });
 
+export const getListAgentTeamsResponseMock = (
+  overrideResponse: Partial<Extract<AgentTeamList, object>> = {},
+): AgentTeamList => ({
+  rows: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    id: faker.number.int(),
+    project_id: faker.number.int(),
+    name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+    description: faker.string.alpha({ length: { min: 10, max: 2000 } }),
+    floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    lead_position: faker.helpers.arrayElement([
+      faker.number.int({ min: 1, max: 16 }),
+      null,
+    ]),
+    members: Array.from(
+      { length: faker.number.int({ min: 1, max: 16 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      application_id: faker.number.int({ min: 1 }),
+      project_id: faker.number.int({ min: 1 }),
+      version_id: faker.number.int({ min: 1 }),
+      name: faker.string.alpha({ length: { min: 10, max: 256 } }),
+    })),
+    created_by: faker.number.int(),
+    created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+    updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  })),
+  total: faker.number.int(),
+  ...overrideResponse,
+});
+
+export const getCreateAgentTeamResponseMock = (
+  overrideResponse: Partial<Extract<AgentTeam, object>> = {},
+): AgentTeam => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 2000 } }),
+  floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  lead_position: faker.helpers.arrayElement([
+    faker.number.int({ min: 1, max: 16 }),
+    null,
+  ]),
+  members: Array.from(
+    { length: faker.number.int({ min: 1, max: 16 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    application_id: faker.number.int({ min: 1 }),
+    project_id: faker.number.int({ min: 1 }),
+    version_id: faker.number.int({ min: 1 }),
+    name: faker.string.alpha({ length: { min: 10, max: 256 } }),
+  })),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getGetAgentTeamResponseMock = (
+  overrideResponse: Partial<Extract<AgentTeam, object>> = {},
+): AgentTeam => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 2000 } }),
+  floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  lead_position: faker.helpers.arrayElement([
+    faker.number.int({ min: 1, max: 16 }),
+    null,
+  ]),
+  members: Array.from(
+    { length: faker.number.int({ min: 1, max: 16 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    application_id: faker.number.int({ min: 1 }),
+    project_id: faker.number.int({ min: 1 }),
+    version_id: faker.number.int({ min: 1 }),
+    name: faker.string.alpha({ length: { min: 10, max: 256 } }),
+  })),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getUpdateAgentTeamResponseMock = (
+  overrideResponse: Partial<Extract<AgentTeam, object>> = {},
+): AgentTeam => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 2000 } }),
+  floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  lead_position: faker.helpers.arrayElement([
+    faker.number.int({ min: 1, max: 16 }),
+    null,
+  ]),
+  members: Array.from(
+    { length: faker.number.int({ min: 1, max: 16 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    application_id: faker.number.int({ min: 1 }),
+    project_id: faker.number.int({ min: 1 }),
+    version_id: faker.number.int({ min: 1 }),
+    name: faker.string.alpha({ length: { min: 10, max: 256 } }),
+  })),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getCreateAgentTeamFromConversationResponseMock = (
+  overrideResponse: Partial<Extract<AgentTeam, object>> = {},
+): AgentTeam => ({
+  id: faker.number.int(),
+  project_id: faker.number.int(),
+  name: faker.string.alpha({ length: { min: 10, max: 128 } }),
+  description: faker.string.alpha({ length: { min: 10, max: 2000 } }),
+  floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  lead_position: faker.helpers.arrayElement([
+    faker.number.int({ min: 1, max: 16 }),
+    null,
+  ]),
+  members: Array.from(
+    { length: faker.number.int({ min: 1, max: 16 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    application_id: faker.number.int({ min: 1 }),
+    project_id: faker.number.int({ min: 1 }),
+    version_id: faker.number.int({ min: 1 }),
+    name: faker.string.alpha({ length: { min: 10, max: 256 } }),
+  })),
+  created_by: faker.number.int(),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  ...overrideResponse,
+});
+
+export const getStartAgentTeamConversationResponseMock = (
+  overrideResponse: Partial<Extract<CreatedConversation, object>> = {},
+): CreatedConversation => ({
+  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  uuid: faker.helpers.arrayElement([faker.string.uuid(), undefined]),
+  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  description: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+  created_by: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  message_count: faker.number.int(),
+  folder_id: faker.helpers.arrayElement([
+    faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      null,
+    ]),
+    undefined,
+  ]),
+  is_private: faker.helpers.arrayElement([faker.datatype.boolean(), undefined]),
+  meta: faker.helpers.arrayElement([{}, undefined]),
+  source: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  instructions: faker.helpers.arrayElement([
+    faker.string.alpha({ length: { min: 10, max: 20 } }),
+    undefined,
+  ]),
+  participants: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.number.int(),
+      entity_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      entity_meta: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            id: faker.helpers.arrayElement([faker.number.int(), undefined]),
+            project_id: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            model_name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+          },
+          null,
+        ]),
+        undefined,
+      ]),
+      entity_settings: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            version_id: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            context_history: faker.helpers.arrayElement([
+              faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                null,
+              ]),
+              undefined,
+            ]),
+          },
+          null,
+        ]),
+        undefined,
+      ]),
+      meta: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          {
+            user_name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+            name: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+          },
+          null,
+        ]),
+        undefined,
+      ]),
+      kind: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          "human",
+          "agent",
+          "ephemeral_agent",
+          "system",
+        ] as const),
+        undefined,
+      ]),
+      persona: faker.helpers.arrayElement([
+        {
+          display_name: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          pronouns: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          role: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+          avatar_pack: faker.helpers.arrayElement([
+            faker.string.alpha({ length: { min: 10, max: 20 } }),
+            undefined,
+          ]),
+        },
+        undefined,
+      ]),
+    })),
+    undefined,
+  ]),
+  ...overrideResponse,
+});
+
 export const getGetMessageFeedbackResponseMock = (
   overrideResponse: Partial<Extract<MessageFeedbackSummary, object>> = {},
 ): MessageFeedbackSummary => ({
@@ -4323,6 +4593,184 @@ export const getDeleteMemoryMockHandler = (
   );
 };
 
+export const getListAgentTeamsMockHandler = (
+  overrideResponse?:
+    | AgentTeamList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentTeamList> | AgentTeamList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_teams/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAgentTeamsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCreateAgentTeamMockHandler = (
+  overrideResponse?:
+    | AgentTeam
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentTeam> | AgentTeam),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_teams/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateAgentTeamResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAgentTeamMockHandler = (
+  overrideResponse?:
+    | AgentTeam
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentTeam> | AgentTeam),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/agent_team/prompt_lib/:projectId/:teamId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentTeamResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getUpdateAgentTeamMockHandler = (
+  overrideResponse?:
+    | AgentTeam
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<AgentTeam> | AgentTeam),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/elitea_core/agent_team/prompt_lib/:projectId/:teamId",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getUpdateAgentTeamResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDeleteAgentTeamMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/agent_team/prompt_lib/:projectId/:teamId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
+export const getCreateAgentTeamFromConversationMockHandler = (
+  overrideResponse?:
+    | AgentTeam
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<AgentTeam> | AgentTeam),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_team_from_conversation/prompt_lib/:projectId/:conversationId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateAgentTeamFromConversationResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getStartAgentTeamConversationMockHandler = (
+  overrideResponse?:
+    | CreatedConversation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<CreatedConversation> | CreatedConversation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/agent_team_conversation/prompt_lib/:projectId/:teamId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getStartAgentTeamConversationResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetMessageFeedbackMockHandler = (
   overrideResponse?:
     | MessageFeedbackSummary
@@ -4470,6 +4918,13 @@ export const getChatMock = () => [
   getClearMemoriesMockHandler(),
   getUpdateMemoryMockHandler(),
   getDeleteMemoryMockHandler(),
+  getListAgentTeamsMockHandler(),
+  getCreateAgentTeamMockHandler(),
+  getGetAgentTeamMockHandler(),
+  getUpdateAgentTeamMockHandler(),
+  getDeleteAgentTeamMockHandler(),
+  getCreateAgentTeamFromConversationMockHandler(),
+  getStartAgentTeamConversationMockHandler(),
   getGetMessageFeedbackMockHandler(),
   getSetMessageFeedbackMockHandler(),
   getDeleteMessageFeedbackMockHandler(),

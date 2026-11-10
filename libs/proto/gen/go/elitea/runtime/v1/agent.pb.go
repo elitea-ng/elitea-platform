@@ -320,9 +320,18 @@ type AgentExecutionInputV1 struct {
 	// has. ABSENT: no per-tool limit, unattended turns and sub-agents get
 	// read-only tools. Workers are upgraded before Main, because a worker from
 	// an earlier release refuses this tag.
-	ToolEnvelope  *AgentToolEnvelopeV1 `protobuf:"bytes,74,opt,name=tool_envelope,json=toolEnvelope,proto3" json:"tool_envelope,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ToolEnvelope *AgentToolEnvelopeV1 `protobuf:"bytes,74,opt,name=tool_envelope,json=toolEnvelope,proto3" json:"tool_envelope,omitempty"`
+	// #1831 (ADR-0050 decision 9d): the chat message group uuid of this
+	// turn's own question, which `user_input` holds, so the worker can show
+	// the model its short id and accept a `spawn_agent` excerpt of it. Set
+	// only on a turn that writes its question: a fresh turn or an
+	// agent-to-agent turn. ABSENT: a regeneration, a continuation, a resume,
+	// or an addressed agent's turn that reuses the person's question (the
+	// question is in its history). Workers are upgraded before Main, because
+	// a worker from an earlier release refuses this tag.
+	CurrentMessageId *string `protobuf:"bytes,75,opt,name=current_message_id,json=currentMessageId,proto3,oneof" json:"current_message_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AgentExecutionInputV1) Reset() {
@@ -705,6 +714,13 @@ func (x *AgentExecutionInputV1) GetToolEnvelope() *AgentToolEnvelopeV1 {
 	return nil
 }
 
+func (x *AgentExecutionInputV1) GetCurrentMessageId() string {
+	if x != nil && x.CurrentMessageId != nil {
+		return *x.CurrentMessageId
+	}
+	return ""
+}
+
 // The per-agent tool envelope (ADR-0050 decision 3). A tool key is
 // "toolkit/tool": the toolkit by its name in the agent or by its type,
 // and "*" for every tool of the toolkit.
@@ -868,7 +884,8 @@ func (x *AgentToolLimitV1) GetMaxCalls() uint32 {
 // (ADR-0050 decisions 7c and 7d).
 type AgentFloorV1 struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// What started this turn: human_message or agent_mention.
+	// What started this turn: human_message, agent_mention or heartbeat (a
+	// proactive agent's act, ADR-0050 decision 2).
 	Cause string `protobuf:"bytes,1,opt,name=cause,proto3" json:"cause,omitempty"`
 	// The other agents of the conversation the reader may hand the floor to,
 	// at most 16. Empty: no hand_floor tool.
@@ -2120,7 +2137,7 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x10request_entry_id\x18\x01 \x01(\tR\x0erequestEntryId\x12(\n" +
 	"\x10client_stream_id\x18\x02 \x01(\tR\x0eclientStreamId\x12*\n" +
 	"\x11client_message_id\x18\x03 \x01(\tR\x0fclientMessageId\x12\x1b\n" +
-	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xe6\x14\n" +
+	"\tsio_event\x18\x04 \x01(\tR\bsioEventJ\x04\b\x05\x10\x10\"\xb0\x15\n" +
 	"\x15AgentExecutionInputV1\x12'\n" +
 	"\x0fschema_revision\x18\x01 \x01(\tR\x0eschemaRevision\x12\x10\n" +
 	"\x03llm\x18\x02 \x01(\fR\x03llm\x12!\n" +
@@ -2179,7 +2196,8 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x11chat_history_refs\x18G \x03(\v2#.elitea.runtime.v1.ChatHistoryRefV1R\x0fchatHistoryRefs\x12C\n" +
 	"\fcontext_view\x18H \x01(\v2 .elitea.runtime.v1.ContextViewV1R\vcontextView\x125\n" +
 	"\x05floor\x18I \x01(\v2\x1f.elitea.runtime.v1.AgentFloorV1R\x05floor\x12K\n" +
-	"\rtool_envelope\x18J \x01(\v2&.elitea.runtime.v1.AgentToolEnvelopeV1R\ftoolEnvelopeB\f\n" +
+	"\rtool_envelope\x18J \x01(\v2&.elitea.runtime.v1.AgentToolEnvelopeV1R\ftoolEnvelope\x121\n" +
+	"\x12current_message_id\x18K \x01(\tH\tR\x10currentMessageId\x88\x01\x01B\f\n" +
 	"\n" +
 	"_thread_idB\x10\n" +
 	"\x0e_checkpoint_idB\x0e\n" +
@@ -2189,7 +2207,8 @@ const file_elitea_runtime_v1_agent_proto_rawDesc = "" +
 	"\x15_execution_generationB\x12\n" +
 	"\x10_conversation_idB\x1d\n" +
 	"\x1b_exception_handling_enabledB\r\n" +
-	"\v_debug_modeJ\x04\b(\x10@\"\xf7\x02\n" +
+	"\v_debug_modeB\x15\n" +
+	"\x13_current_message_idJ\x04\b(\x10@\"\xf7\x02\n" +
 	"\x13AgentToolEnvelopeV1\x12D\n" +
 	"\vtool_limits\x18\x01 \x03(\v2#.elitea.runtime.v1.AgentToolLimitV1R\n" +
 	"toolLimits\x12$\n" +

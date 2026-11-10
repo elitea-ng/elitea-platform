@@ -69,6 +69,39 @@ describe('ProposalReviewDialog', () => {
     expect(screen.getByTestId('agent-proposal-dismiss')).toBeDisabled();
   });
 
+  it('a failed record after the agent exists says so, and the retry records the same agent', async () => {
+    const calls: string[] = [];
+    let recordAttempts = 0;
+    server.use(
+      http.post(CREATE, () => {
+        calls.push('create');
+        return HttpResponse.json({ id: '77', name: 'Ada', description: '', type: 'interface', icon: '', owner_id: '1', created_at: '2026-11-09T10:00:00Z' }, { status: 201 });
+      }),
+      http.post(CREATED, async ({ request }) => {
+        calls.push('created');
+        recordAttempts += 1;
+        if (recordAttempts === 1) return HttpResponse.json({ error: 'boom' }, { status: 500 });
+        expect(await request.json()).toMatchObject({ application_id: 77 });
+        return HttpResponse.json({ proposal: proposalFixture({ status: 'created', created_application_id: 77 }), memory_seeded: 0 });
+      }),
+    );
+    const onCreated = vi.fn();
+    renderWithProviders(<ProposalReviewDialog projectId="1" proposal={proposalFixture()} onClose={() => undefined} onCreated={onCreated} />);
+    await userEvent.click(screen.getByTestId('agent-proposal-create'));
+    expect(await screen.findByTestId('agent-proposal-error')).toHaveTextContent(/created|boom/);
+    await userEvent.click(screen.getByTestId('agent-proposal-create'));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ applicationId: 77, memorySeeded: 0 }));
+    expect(calls).toEqual(['create', 'created', 'created']);
+  });
+
+  it('cuts a long prefilled name and description to the create bounds', () => {
+    const proposal = proposalFixture();
+    const long = { ...proposal, draft: { ...proposal.draft, name: 'n'.repeat(80), description: 'd'.repeat(3000) } };
+    renderWithProviders(<ProposalReviewDialog projectId="1" proposal={long} onClose={() => undefined} />);
+    expect(screen.getByTestId('agent-proposal-name')).toHaveValue('n'.repeat(32));
+    expect(screen.getByTestId('agent-proposal-description')).toHaveValue('d'.repeat(2304));
+  });
+
   it('refuses Create without a name', async () => {
     renderWithProviders(<ProposalReviewDialog projectId="1" proposal={proposalFixture()} onClose={() => undefined} />);
     await userEvent.clear(screen.getByTestId('agent-proposal-name'));

@@ -27,9 +27,12 @@ type privateServerRunner interface {
 // components. The caller owns Run's context, waits for Run to drain, and calls
 // Close after Run returns.
 type Runtime struct {
-	codeOwnerClient        interface{ Close() }
-	browserViewClient      interface{ Close() }
-	publisher              publisherRunner
+	codeOwnerClient   interface{ Close() }
+	browserViewClient interface{ Close() }
+	publisher         publisherRunner
+	// runners is the supervised set behind publisher; it reports which
+	// runners are degraded after a dependency failure.
+	runners                *publisherSet
 	private                privateServerRunner
 	runtimeNATS            *nats.Conn
 	sandboxSpoolDir        string
@@ -53,6 +56,24 @@ type Runtime struct {
 	publisherEnd        context.CancelFunc
 	privateEnd          context.CancelFunc
 	runDone             chan struct{}
+}
+
+// DegradedRunners names the runtime runners restarted after a dependency
+// failure that have not yet run cleanly for a minute.
+func (r *Runtime) DegradedRunners() []string {
+	if r == nil {
+		return nil
+	}
+	return r.runners.DegradedRunners()
+}
+
+// RuntimeNATSStatus is the runtime NATS connection's client-side state. It
+// makes no round trip.
+func (r *Runtime) RuntimeNATSStatus() nats.Status {
+	if r == nil || r.runtimeNATS == nil {
+		return nats.DISCONNECTED
+	}
+	return r.runtimeNATS.Status()
 }
 
 func (r *Runtime) PublicRoutes() PublicRoutes {

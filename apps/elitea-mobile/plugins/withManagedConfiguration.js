@@ -55,6 +55,12 @@ const RESTRICTIONS = Object.freeze([
     title: 'Allow screenshots',
     description: 'Off blocks screenshots and screen recording of the app.',
   },
+  {
+    key: 'support_contact',
+    type: 'string',
+    title: 'IT support contact',
+    description: 'One line shown in About and Settings, for example "IT Service Desk, +1 555 0100". Replaces the workspace value.',
+  },
 ]);
 
 /**

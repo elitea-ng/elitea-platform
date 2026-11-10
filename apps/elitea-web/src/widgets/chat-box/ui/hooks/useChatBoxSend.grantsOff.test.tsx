@@ -50,7 +50,7 @@ function mount(grant: Record<string, unknown>): () => UseChatBoxSendResult | und
     live = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: () => undefined, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      activeParticipant: PARTICIPANT, participants: [PARTICIPANT],
+      target: PARTICIPANT, participants: [PARTICIPANT],
       unattended: () => grant,
     });
     return null;
@@ -77,7 +77,7 @@ it('sends the message again without the grant once when grants are off, and hide
     live = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: () => undefined, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      activeParticipant: PARTICIPANT, participants: [PARTICIPANT],
+      target: PARTICIPANT, participants: [PARTICIPANT],
       unattended: () => GRANT,
     });
     return null;

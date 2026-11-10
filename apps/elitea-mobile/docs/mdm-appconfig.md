@@ -24,6 +24,7 @@ next launch.
 | `require_device_lock` | boolean | `bool` | `true` requires Face ID / Touch ID / fingerprint / passcode at launch, whatever the workspace policy says. `false` changes nothing. |
 | `idle_lock_seconds` | integer, 1 to 86400 | `integer` | With a device lock, relock after this many seconds in the background when it is shorter than the workspace's (or the workspace sets 0, "never relock"). `0` changes nothing. |
 | `allow_screenshots` | boolean | `bool` | `false` blocks screenshots and screen recording, and hides the app-switcher snapshot where the device allows it. `true` changes nothing. |
+| `support_contact` | string | `string` | The IT support line, shown as "IT support" in Settings › About and in About. One line, at most 200 characters, for example `IT Service Desk, +1 555 0100`. It **replaces** the workspace's `support_contact` (Admin › Configuration › Native client policy). An `https://` address, an email address or a phone number in it is a link (in that order: the first of them); anything else is text. A value with a line break or control characters is ignored and the workspace's line shows. |
 
 The lock keys are a **floor**: they only ever tighten the workspace's client
 policy, never loosen it. Settings says when the device management made the
@@ -77,6 +78,7 @@ XML data":
   <key>require_device_lock</key><true/>
   <key>idle_lock_seconds</key><integer>60</integer>
   <key>allow_screenshots</key><false/>
+  <key>support_contact</key><string>IT Service Desk, +1 555 0100</string>
 </dict>
 ```
 
@@ -117,6 +119,18 @@ Configuration", one row per key:
 **Android:** Apps & Books › the app › Assignment › "Application
 Configuration". Workspace ONE reads the app's restrictions and shows one
 field per key; fill them in as above.
+
+## Certificates and per-app VPN
+
+Both are OS features delivered by the MDM; the app has no key for them.
+Scope them by app identifier: `ai.elitea.app` (iOS bundle id and Android
+package). The widget extension makes no network requests. Android trusts
+only the CAs that ship with Android (the app ships no network security
+config), so an MDM-pushed CA, which lands in the user store, is not trusted
+by the app: serve the workspace with a public certificate. The app presents no
+client certificate; sign-in runs in the system browser, which must reach the
+identity provider through the VPN or directly. Admin guide: "Managed devices
+(MDM)" › "Certificates and per-app VPN".
 
 ## Testing without an MDM
 

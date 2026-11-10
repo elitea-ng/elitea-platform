@@ -42,6 +42,8 @@
  */
 import * as zod from "zod";
 
+export const clientPublicPolicySupportContactMax = 200;
+
 export const ClientPublicPolicy = zod
   .object({
     require_device_lock: zod
@@ -89,6 +91,13 @@ export const ClientPublicPolicy = zod
       .boolean()
       .describe(
         "Client contract 1.5 (ADR-0029 decision 6). The token policy's `local_work.allowed`: a desktop app may offer local work. The rest of the `local_work` group travels only with a token. Default false.",
+      ),
+    support_contact: zod
+      .string()
+      .max(clientPublicPolicySupportContactMax)
+      .optional()
+      .describe(
+        "Client contract 1.45 (ADR-0052 decision 7). The IT support line the apps show in About and Settings, one line of text (an email address, a phone number or an https address among it is a link); empty means none. A device's managed `support_contact` wins over it. A server before 1.45 sends none.",
       ),
   })
   .describe(

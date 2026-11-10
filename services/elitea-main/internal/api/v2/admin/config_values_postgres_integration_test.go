@@ -811,6 +811,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		// ADR-0050 decision 3 (#1613): every agent admission freezes it
 		// into the turn's tool envelope (agentexecution.WithToolEnvelope).
 		"agents": true,
+		// ADR-0050 decision 2 (#1618): every agent.heartbeat.scan.v1 pass
+		// and the heartbeat settings route (personal_self_approve).
+		"proactivity": true,
 		// ADR-0041 decision 5 (#1491): every schedule and trigger admission
 		// and the projection of an unattended pause.
 		"approvals": true,

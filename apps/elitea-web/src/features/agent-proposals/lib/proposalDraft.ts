@@ -16,6 +16,7 @@
  * promises.
  */
 import type { AgentProposal, ApplicationCreateRequest } from '@/shared/api/generated/model';
+import { MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH } from '@/shared/lib/limits';
 
 /** The version name every create path uses for an agent's first version. */
 const FIRST_VERSION_NAME = 'base';
@@ -36,6 +37,12 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** At most `max` characters (code points), as the create route counts them. */
+function clamp(value: string, max: number): string {
+  const characters = Array.from(value);
+  return characters.length <= max ? value : characters.slice(0, max).join('').trim();
+}
+
 function strings(value: unknown): readonly string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '') : [];
 }
@@ -44,8 +51,10 @@ export function reviewDraftOf(proposal: Pick<AgentProposal, 'draft'>): ReviewDra
   const draft = proposal.draft;
   const soul = draft['soul'] !== null && typeof draft['soul'] === 'object' ? (draft['soul'] as Record<string, unknown>) : {};
   return {
-    name: text(draft['name']),
-    description: text(draft['description']),
+    // Cut to the create route's bounds: a proposal stored before the server
+    // cut them would otherwise open with a value Create refuses.
+    name: clamp(text(draft['name']), MAX_NAME_LENGTH),
+    description: clamp(text(draft['description']), MAX_DESCRIPTION_LENGTH),
     instructions: text(draft['instructions']),
     welcomeMessage: text(draft['welcome_message']),
     conversationStarters: strings(draft['conversation_starters']),

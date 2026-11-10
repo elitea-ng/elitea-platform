@@ -301,6 +301,9 @@ func (h *Hook) startNext(ctx context.Context, chain unattended.Chain, participan
 			TargetParticipantID: start.ParticipantID, QuestionID: questionID,
 			UserInput: text, TriggerOrigin: triggerOrigin(chain),
 			UnattendedContinuation: continuation,
+			// A heartbeat chain's later runs keep the heartbeat floor:
+			// unattended tools only (ADR-0050 decision 2).
+			Heartbeat: start.Heartbeat,
 		})
 	case agentexecution.CloudStartContractAdhoc:
 		_, err = h.starter.StartCurrentAdhoc(ctx, agentexecution.CurrentAdhocStartRequest{

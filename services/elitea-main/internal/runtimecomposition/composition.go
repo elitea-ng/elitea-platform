@@ -1268,7 +1268,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		return nil, err
 	}
 	if config.AgentExecutionDispatchEnabled {
-		publisherRoot, err = newPublisherSet(publisherRoot, agentPublisher, toolkitPublisher)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("agent outbox publisher", agentPublisher), named("toolkit execute outbox publisher", toolkitPublisher))
 		if err != nil {
 			return nil, fmt.Errorf("compose agent and direct toolkit publishers: %w", err)
 		}
@@ -1290,18 +1290,18 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if reaperErr != nil {
 			return nil, fmt.Errorf("construct agent admission reservation reaper: %w", reaperErr)
 		}
-		publisherRoot, err = newPublisherSet(publisherRoot, agentReservationReaper)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("agent admission reservation reaper", agentReservationReaper))
 		if err != nil {
 			return nil, fmt.Errorf("compose agent admission reservation reaper: %w", err)
 		}
 		if fanoutWakes != nil {
-			publisherRoot, err = newPublisherSet(publisherRoot, fanoutWakes)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("fan-out wake admitter", fanoutWakes))
 			if err != nil {
 				return nil, fmt.Errorf("compose fanout wake admitter: %w", err)
 			}
 		}
 		if idleCompactions != nil {
-			publisherRoot, err = newPublisherSet(publisherRoot, idleCompactions)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("idle compaction admitter", idleCompactions))
 			if err != nil {
 				return nil, fmt.Errorf("compose idle compaction admitter: %w", err)
 			}
@@ -1318,7 +1318,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if workerErr != nil {
 				return nil, fmt.Errorf("construct unattended approval worker: %w", workerErr)
 			}
-			publisherRoot, err = newPublisherSet(publisherRoot, unattendedApprovals)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("unattended approval worker", unattendedApprovals))
 			if err != nil {
 				return nil, fmt.Errorf("compose unattended approval worker: %w", err)
 			}
@@ -1329,7 +1329,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			if sweepErr != nil {
 				return nil, fmt.Errorf("construct unattended chain sweeper: %w", sweepErr)
 			}
-			publisherRoot, err = newPublisherSet(publisherRoot, chainSweeper)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("unattended chain sweeper", chainSweeper))
 			if err != nil {
 				return nil, fmt.Errorf("compose unattended chain sweeper: %w", err)
 			}
@@ -1350,7 +1350,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if err != nil {
 			return nil, fmt.Errorf("construct execution replay wake bus: %w", err)
 		}
-		publisherRoot, err = newPublisherSet(publisherRoot, replayWake)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("execution replay wake bus", replayWake))
 		if err != nil {
 			return nil, fmt.Errorf("compose execution replay wake bus: %w", err)
 		}
@@ -1371,7 +1371,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct execution replay retention janitor: %w", retentionErr)
 		}
 		replayMaintenance = replayRetention
-		publisherRoot, err = newPublisherSet(publisherRoot, replayRetention)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("execution replay retention janitor", replayRetention))
 		if err != nil {
 			return nil, fmt.Errorf("compose execution replay retention janitor: %w", err)
 		}
@@ -1405,7 +1405,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 					reconcileErr,
 				)
 			}
-			publisherRoot, err = newPublisherSet(publisherRoot, indexMetaReconciler)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("index metadata terminal reconciler", indexMetaReconciler))
 			if err != nil {
 				return nil, fmt.Errorf(
 					"compose current index metadata terminal reconciler: %w",
@@ -1433,7 +1433,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			}
 			publisherRoot, err = newPublisherSet(
 				publisherRoot,
-				indexManualStopCleanupReconciler,
+				named("index manual Stop cleanup reconciler", indexManualStopCleanupReconciler),
 			)
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -1459,7 +1459,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				if reconcileErr != nil {
 					return nil, fmt.Errorf("construct index tombstone reconciler: %w", reconcileErr)
 				}
-				publisherRoot, err = newPublisherSet(publisherRoot, tombstoneReconciler)
+				publisherRoot, err = newPublisherSet(publisherRoot, named("index tombstone reconciler", tombstoneReconciler))
 				if err != nil {
 					return nil, fmt.Errorf("compose index tombstone reconciler: %w", err)
 				}
@@ -1475,7 +1475,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		if lifecycleErr != nil {
 			return nil, fmt.Errorf("construct current configuration lifecycle processor: %w", lifecycleErr)
 		}
-		publisherRoot, err = newPublisherSet(publisherRoot, configurationLifecycle)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("configuration lifecycle processor", configurationLifecycle))
 		if err != nil {
 			return nil, fmt.Errorf("compose current configuration lifecycle processor: %w", err)
 		}
@@ -1489,6 +1489,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	controlPeerAuthorizer.WithLogger(dependencies.Logger, "runtime control")
 	capabilityVersions := configuredWorkerCapabilityVersions(config, toolkitRoute)
 	verifier, err := control.NewProductionCommandVerifier(control.ProductionVerifierConfig{
 		EnvelopeSchemaRevision: envelopeSchemaRevision,
@@ -1681,17 +1682,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 	}
 	if dependencies.ExecutionSuspensions != nil {
-		publisherRoot, err = newPublisherSet(publisherRoot, suspensionInvalidationRunner{
+		publisherRoot, err = newPublisherSet(publisherRoot, named("suspension invalidation fan-out", suspensionInvalidationRunner{
 			gate: dependencies.ExecutionSuspensions, transport: natsSuspensionTransport{conn: runtimeNATS},
-		})
+		}))
 		if err != nil {
 			return nil, fmt.Errorf("compose suspension invalidation fan-out: %w", err)
 		}
 	}
 	if dependencies.SecurityInvalidations != nil {
-		publisherRoot, err = newPublisherSet(publisherRoot, securityInvalidationRunner{
+		publisherRoot, err = newPublisherSet(publisherRoot, named("security invalidation fan-out", securityInvalidationRunner{
 			hub: dependencies.SecurityInvalidations, transport: natsSecurityInvalidationTransport{conn: runtimeNATS},
-		})
+		}))
 		if err != nil {
 			return nil, fmt.Errorf("compose security invalidation fan-out: %w", err)
 		}
@@ -1745,6 +1746,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	outputPeerAuthorizer.WithLogger(dependencies.Logger, "runtime output")
 	outputClaimsRepository, err := repos.NewClaimsRepository(dependencies.OutputPool)
 	if err != nil {
 		return nil, fmt.Errorf("construct output claims: %w", err)
@@ -2206,7 +2208,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 
 		indexPublishers := []publisherRunner{
 			publisherRoot,
-			currentIndex.initializer,
+			named("index metadata initializer", currentIndex.initializer),
 		}
 		if config.IndexSchedulingEnabled {
 			catalog, catalogErr := repos.NewCurrentIndexScheduleCatalog(
@@ -2470,7 +2472,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 				)
 			}
 			scheduler.WithControls(routineControls)
-			indexPublishers = append(indexPublishers, scheduler)
+			indexPublishers = append(indexPublishers, named("index scheduler", scheduler))
 		}
 		publisherRoot, err = newPublisherSet(indexPublishers...)
 		if err != nil {
@@ -2536,12 +2538,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		toolkitCallTool = toolkitCallToolRuntime.run
 		codeToolkitRuns = toolkitCallToolRuntime.run
-		publisherRoot, err = newPublisherSet(publisherRoot, toolkitCallToolRuntime)
+		publisherRoot, err = newPublisherSet(publisherRoot, named("toolkit call-tool recovery", toolkitCallToolRuntime))
 		if err != nil {
 			return nil, err
 		}
 		if config.ToolkitDiscoveryEnabled {
-			toolkitDiscoveryRuntime, err = newCurrentToolkitDiscoveryRuntime(dependencies.AdmissionPool, standaloneToolkitReader, standaloneToolkitSettings, dependencies.ToolkitCatalogue, dependencies.WorkerToolkitCapability, toolkitDiscoveryProducer, toolkitCallToolDispatchPolicy, toolkitDiscoveryArtifacts)
+			toolkitDiscoveryRuntime, err = newCurrentToolkitDiscoveryRuntime(dependencies.AdmissionPool, standaloneToolkitReader, standaloneToolkitSettings, dependencies.ToolkitCatalogue, dependencies.WorkerToolkitCapability, toolkitDiscoveryProducer, toolkitCallToolDispatchPolicy, toolkitDiscoveryArtifacts, dependencies.Logger)
 			if err != nil {
 				return nil, err
 			}
@@ -2550,7 +2552,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			toolkitDiscovery = toolkitDiscoveryRuntime.service.WithConnectorGate(connectorGate)
 		}
 		if toolkitDiscoveryRuntime != nil {
-			publisherRoot, err = newPublisherSet(publisherRoot, toolkitDiscoveryRuntime)
+			publisherRoot, err = newPublisherSet(publisherRoot, named("toolkit discovery housekeeping", toolkitDiscoveryRuntime))
 			if err != nil {
 				return nil, err
 			}
@@ -2807,7 +2809,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 
 	closeNATS = false
 	return &Runtime{
-		publisher:              publisherRoot,
+		publisher:              publisherRoot.withLogger(dependencies.Logger),
+		runners:                publisherRoot,
 		private:                privateServers,
 		runtimeNATS:            runtimeNATS,
 		sandboxSpoolDir:        sandboxSpoolDir,

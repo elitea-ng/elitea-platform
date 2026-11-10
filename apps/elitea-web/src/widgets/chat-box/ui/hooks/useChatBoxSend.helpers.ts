@@ -30,10 +30,9 @@ export interface SendDeps {
  * the pair circular (the layer gate's no-circular rule).
  */
 export interface ChatStreamContextSource {
-  readonly activeParticipant?: unknown;
+  /** The participant the turn goes to (`useResolvedTarget`); the answer is attributed to it. */
+  readonly target?: unknown;
   readonly participants?: readonly unknown[] | undefined;
-  /** The agent the history last addressed (`stickyAgentParticipantId`), the target when nothing is selected. */
-  readonly stickyParticipantId?: string | undefined;
   readonly userName?: string | undefined;
   readonly userAvatar?: string | undefined;
 }
@@ -42,13 +41,8 @@ export interface ChatStreamContextSource {
 export function buildChatStreamContext(
   params: ChatStreamContextSource,
 ): ChatStreamContext {
-  const target = resolveTargetParticipant(
-    params.activeParticipant,
-    params.participants,
-    params.stickyParticipantId,
-  );
   const participantId = (
-    target as { id?: string | number } | undefined
+    params.target as { id?: string | number } | undefined
   )?.id;
   return {
     ...(participantId !== undefined

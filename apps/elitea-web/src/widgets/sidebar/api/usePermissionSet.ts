@@ -34,3 +34,14 @@ export function usePermissionSet(projectId: string | undefined): ReadonlySet<str
     return new Set(permissions.filter((permission) => permission.enabled).map((permission) => permission.name));
   }, [query.data]);
 }
+
+/**
+ * Whether the permission list behind `usePermissionSet` has settled (loaded or
+ * failed). A page that hides a tab behind a permission must not read the empty
+ * set it sees while loading as "no permission": it would redirect a direct
+ * link away before the list arrives. Shares the same react-query cache entry.
+ */
+export function usePermissionSetSettled(projectId: string | undefined): boolean {
+  const query = usePermissionList(projectId ?? '', { query: { enabled: projectId !== undefined } });
+  return projectId === undefined || query.isSuccess || query.isError;
+}

@@ -1,4 +1,4 @@
--- 0245_agent_workforce.sql — the agent workforce: the daily scorecard, the
+-- 0236_agent_workforce.sql — the agent workforce: the daily scorecard, the
 -- dismissal ladder with the retired registry state, dismissal and demotion
 -- proposals from people and HR agents, the appeal and the reinstatement
 -- (ADR-0050 decisions 5b, 5g-5j, 5l and 5m, issue 1616).
@@ -228,7 +228,7 @@ DO $$
 BEGIN
     IF to_regclass('public.auth_core__role') IS NULL
        OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-        RAISE NOTICE '0245: auth_core tables absent, nothing to grant';
+        RAISE NOTICE '0236: auth_core tables absent, nothing to grant';
         RETURN;
     END IF;
 

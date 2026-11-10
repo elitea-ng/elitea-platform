@@ -22,6 +22,8 @@ use tauri::{AppHandle, Manager as _};
 /// replaced with the tool's name, `{product}` with the brand's product name.
 pub const KEYS: &[(&str, &str)] = &[
     ("about", "About {product}"),
+    // The About panel's IT support line (ADR-0052 W6.2); `{contact}` is the line.
+    ("about_support", "IT support: {contact}"),
     ("services", "Services"),
     ("hide", "Hide {product}"),
     ("hide_others", "Hide Others"),
@@ -145,6 +147,9 @@ pub fn validate(labels: &HashMap<String, String>) -> Result<(), String> {
         }
         if english.contains("{tool}") && !label.contains("{tool}") {
             return Err(format!("menu label `{key}` must keep {{tool}}"));
+        }
+        if english.contains("{contact}") && !label.contains("{contact}") {
+            return Err(format!("menu label `{key}` must keep {{contact}}"));
         }
     }
     Ok(())

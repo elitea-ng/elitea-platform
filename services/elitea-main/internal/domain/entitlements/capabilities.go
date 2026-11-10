@@ -102,7 +102,7 @@ const (
 	// ManageAgentWorkforce decides agent dismissal and demotion proposals,
 	// applies a ladder stage (suspend, retire, delete), reinstates a
 	// retired agent and reviews an owner's appeal (ADR-0050 decision 5g,
-	// shared 0245).
+	// shared 0236).
 	ManageAgentWorkforce Capability = "manage_agent_workforce"
 )
 
@@ -246,7 +246,13 @@ var OwnerCapabilities = []Capability{EditAgentRegistry}
 // permission that is in neither this set nor Capabilities fails the
 // coverage test, so it cannot silently escape the export.
 var NotGovernanceRelevant = map[string]bool{
-	"models.applications.memory.list":                   true,
+	"models.applications.memory.list": true,
+	// Saved teams (ADR-0050 decision 8, shared 0233): a team names agents and
+	// grants nothing, so saving or starting one configures nothing.
+	"models.teams.list":                                 true,
+	"models.teams.create":                               true,
+	"models.teams.update":                               true,
+	"models.teams.delete":                               true,
 	"admin.moderation.create":                           true,
 	"admin.moderation.view":                             true,
 	"configuration.artifacts.artifacts.create":          true,

@@ -156,6 +156,41 @@ impl Brief {
 pub struct CheckedBrief {
     pub attachments: Vec<(String, String)>,
     pub memory_entries: Vec<(String, String)>,
+    /// The message each excerpt's id names, for the record: the model's
+    /// short id (`m-…`, #1831) and the chat message uuid it stands for.
+    /// Empty: the record keeps the ids as the brief gave them.
+    pub message_ids: Vec<(String, String)>,
+}
+
+impl SpawnRecord {
+    /// Name, in [`Brief::references`], each message by the id `checked`
+    /// resolved it to: the record keeps the chat message, not the model's
+    /// short id for it.
+    pub fn resolve_messages(&mut self, checked: &CheckedBrief) {
+        if checked.message_ids.is_empty() {
+            return;
+        }
+        let Some(ids) = self
+            .brief_refs
+            .get_mut("message_ids")
+            .and_then(Value::as_array_mut)
+        else {
+            return;
+        };
+        let resolved: BTreeSet<String> = ids
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|id| {
+                checked
+                    .message_ids
+                    .iter()
+                    .find(|(short, _)| short == id)
+                    .map_or(id, |(_, message)| message.as_str())
+                    .to_owned()
+            })
+            .collect();
+        *ids = resolved.into_iter().map(Value::String).collect();
+    }
 }
 
 /// The source name of the brief's untrusted envelope.

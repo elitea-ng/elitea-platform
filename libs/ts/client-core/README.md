@@ -27,6 +27,7 @@ and each app generates its own client from it.
 | | `localAgentPrompt`, `validateLocalAgent`, `localAgentPath`: the local agent (`AGENTS.md`) and the loader's caps | desktop (`features/agent-builder`) |
 | | `agentBranches`: the one branch question (local or Elitea agent) | web, desktop, mobile |
 | | `agentCreateBody`: the create-application body for a reviewed draft | mobile (the web review form keeps its own) |
+| `@elitea/client-core/support` | `effectiveSupportContact`, `normalizeSupportContact`, `supportContactLink`: the IT support line (client contract 1.45, ADR-0052 decision 7): the managed `support_contact` beats the workspace's, one line of at most 200 characters, and at most one `https:`, `mailto:` or `tel:` link made from it | desktop (`widgets/account-menu`, Settings › Troubleshoot), mobile (`security/supportContact.ts`) |
 | `@elitea/client-core/brand` | `ELITEA_MARK_SVG`, `ELITEA_MARK_VIEWBOX`, `ELITEA_MARK_ASPECT`: the Elitea mark | mobile (`components/EliteaMark.tsx`) |
 | | `DEFAULT_PRODUCT`, `DEFAULT_BRAND_HUE`: the default identity | web (`defaultPackSync.test.ts`), mobile (`EliteaMark.tsx`) |
 | | `DEFAULT_PACK_ACCENTS`: the default pack's accent inputs | mobile (`theme/brandPack.ts`) |

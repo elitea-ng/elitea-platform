@@ -18,6 +18,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/citations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/outputcontract"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolenvelope"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -394,6 +395,11 @@ func parseInternalVersionUpdate(
 			problem, _ := internalApplicationBadRequest(err.Error())
 			return internalVersionUpdate{}, &problem
 		}
+		// ADR-0050 decision 2 (#1618): the heartbeat block.
+		if err := proactivity.Check(meta); err != nil {
+			problem, _ := internalApplicationBadRequest(err.Error())
+			return internalVersionUpdate{}, &problem
+		}
 	}
 	if metaChanged || agentType != state.agentType {
 		if err := outputcontract.CheckMeta(agentType, meta); err != nil {
@@ -526,10 +532,10 @@ func cloneInternalVersion(
 	err := tx.QueryRow(ctx, fmt.Sprintf(`
 		INSERT INTO %s.application_versions
 			(application_id, name, status, author_id, llm_settings, instructions,
-			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul,
+			 conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack,
 			 shared_owner_id, shared_id, created_at)
 		SELECT application_id, $2, 'draft', $3, llm_settings, instructions,
-		       conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul,
+		       conversation_starters, welcome_message, agent_type, meta, pipeline_settings, soul, avatar_pack,
 		       NULL, NULL, now() AT TIME ZONE 'UTC'
 		FROM %s.application_versions
 		WHERE application_id = $1 AND id = $4

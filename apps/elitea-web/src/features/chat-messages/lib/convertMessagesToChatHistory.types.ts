@@ -40,6 +40,8 @@ export interface ChatMessage {
   readonly authorRole?: string | undefined;
   /** The author's icon URL (`icon_meta.url`); absent shows the brand mark. */
   readonly authorIconUrl?: string | undefined;
+  /** The author's avatar pack (ADR-0050 decision 6), when the participant carries one. */
+  readonly authorAvatarPack?: unknown;
   /** The answering agent's application id, for its memory routes (ADR-0050 decision 1b). */
   readonly authorApplicationId?: number | undefined;
   readonly name: string;

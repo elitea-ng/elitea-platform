@@ -82,7 +82,7 @@ const (
 	SourceCertification Source = "certification"
 	SourceSelfTest      Source = "self_test"
 	// SourceDismissal is the dismissal ladder's Suspend stage (ADR-0050
-	// decision 5g, shared 0245): an agent manager approved a suspension
+	// decision 5g, shared 0236): an agent manager approved a suspension
 	// proposal. Any project or platform administrator resumes it, and a
 	// granted appeal or a reinstatement resumes it too.
 	SourceDismissal Source = "dismissal"

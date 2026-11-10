@@ -12,7 +12,7 @@ import { stopChatGeneration } from './hooks/useEditorTestTransport';
  * for features/ (R-L1, `.dependency-cruiser.cjs`'s `no-sideways-features`).
  */
 import type { ComponentRef } from 'react';
-import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 
 import { Box } from '@mui/material';
 import { useNavBlockerStore } from '@/widgets/app-shell';
@@ -61,7 +61,7 @@ import { useChatBoxData } from './hooks/useChatBoxData';
 import { useChatBoxState } from './hooks/useChatBoxState';
 import { useChatBoxHandlers } from './hooks/useChatBoxHandlers';
 import { useChatBoxParticipant } from './hooks/useChatBoxParticipant';
-import { stickyAgentParticipantId } from './hooks/useChatBoxSend.helpers';
+import { useResolvedTarget } from './hooks/useResolvedTarget';
 import { useChatBoxModelSelection } from './hooks/useChatBoxModelSelection';
 import { useChatBoxInternalTools } from './hooks/useChatBoxInternalTools';
 import { useChatBoxVersioning } from './hooks/useChatBoxVersioning';
@@ -107,13 +107,9 @@ const ChatBoxInner = memo(function ChatBox({
 
   const data = useChatBoxData(buildChatBoxDataParams({ activeConversation, activeParticipant, projectId, userId, userName, userAvatar, isAgentsPage }));
   const messages = data.messageList.messages;
-  // ADR-0050 D7c: with several agents and none picked, a send goes to the agent the history last addressed.
-  const stickyParticipantId = useMemo(() => stickyAgentParticipantId(messages, conversationParticipants), [messages, conversationParticipants]);
-
-  // Participant normalisation + details fetch
-  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools } = useChatBoxParticipant({
-    activeParticipant, conversationParticipants, stickyParticipantId, isAgentsPage,
-  });
+  // ADR-0050 D7c: who an unaddressed message goes to, derived once for the send, the stream identity, the attachments gate and "To:".
+  const target = useResolvedTarget(activeParticipant, conversationParticipants, messages);
+  const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
   // ADR-0045: "Run to completion", on by default: the grant each send carries.
   const unattended = useChatBoxUnattended(conversationUuid, grantableTools, !editorTest);
@@ -178,7 +174,7 @@ const ChatBoxInner = memo(function ChatBox({
   const { startStreamedExecution, continueStreamedExecution, regenerateStreamedExecution, reattachStreamedExecution, stopStreamedExecution, streamTarget, isStreaming: isStreamedExecution, createConversationForSend, uploadAttachmentsForSend } = useChatBoxSend({
     deps: { createConversation: lifecycle.createConversation, uploadAttachments: data.attachments.upload.uploadAttachments },
     setChatHistory: data.setChatHistory, projectId, projectIdString, isAgentsPage, conversationUuid,
-    activeParticipant, participants: conversationParticipants, stickyParticipantId, userName, userAvatar,
+    target, participants: conversationParticipants, userName, userAvatar,
     llmSettings, model: data.selectedModel, configuredModelProjectId, userId, onAgentEvent, getInternalToolsForSend, editorTest, onSteerEvent: applySteeringEvent,
     unattended: unattended.wire,
   });
@@ -357,7 +353,7 @@ const ChatBoxInner = memo(function ChatBox({
           })}
         />
         {contextIndicator}
-        <ChatBoxFloorTarget agents={mentions.addressableAgents} meta={conversationMeta} activeParticipant={activeParticipant} participants={conversationParticipants} stickyParticipantId={stickyParticipantId} onSelect={onChangeParticipant} onAddress={mentions.handleAddressAgent} />
+        <ChatBoxFloorTarget agents={mentions.addressableAgents} meta={conversationMeta} target={target} participants={conversationParticipants} onSelect={onChangeParticipant} onAddress={mentions.handleAddressAgent} />
         <NewChatInput
           ref={chatInputRef}
           conversationId={conversationId !== undefined ? String(conversationId) : undefined}

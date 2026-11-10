@@ -43,11 +43,13 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/proactivity"
 )
 
 const (
 	// ManagePermission is the agent manager ("HR"): decide workforce
-	// proposals, apply a stage, reinstate, review an appeal. Shared 0245
+	// proposals, apply a stage, reinstate, review an appeal. Shared 0236
 	// grants it to the project admin.
 	ManagePermission = "agents.workforce.manage"
 	// CapabilitiesKey is the version meta key of an agent's capabilities.
@@ -264,7 +266,10 @@ type Narrowing struct {
 	RemoveToolkitIDs []int64 `json:"remove_toolkit_ids,omitempty"`
 	// MemoryReview sets the memory write mode to review.
 	MemoryReview bool `json:"memory_review,omitempty"`
-	// ProactivityOff turns the heartbeat off (meta.proactivity.enabled).
+	// ProactivityOff turns the heartbeat off: the draft's proactivity block
+	// (#1618) gets mode "off", and the agent's heartbeat settings row is
+	// disabled at once, since the heartbeat reads the RELEASE's block and
+	// that keeps its block until the narrowed draft is published.
 	ProactivityOff bool `json:"proactivity_off,omitempty"`
 	// RemoveCapabilities removes can_propose_agents and can_review_agents.
 	RemoveCapabilities []string `json:"remove_capabilities,omitempty"`
@@ -350,13 +355,13 @@ func NarrowMeta(meta map[string]any, n Narrowing) map[string]any {
 		out["memory"] = next
 	}
 	if n.ProactivityOff {
-		proactivity, _ := out["proactivity"].(map[string]any)
-		next := make(map[string]any, len(proactivity)+1)
-		for key, value := range proactivity {
+		block, _ := out[proactivity.MetaKey].(map[string]any)
+		next := make(map[string]any, len(block)+1)
+		for key, value := range block {
 			next[key] = value
 		}
-		next["enabled"] = false
-		out["proactivity"] = next
+		next["mode"] = proactivity.ModeOff
+		out[proactivity.MetaKey] = next
 	}
 	return out
 }

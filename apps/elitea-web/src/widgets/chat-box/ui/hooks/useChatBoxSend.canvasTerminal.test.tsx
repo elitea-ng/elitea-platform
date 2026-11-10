@@ -64,7 +64,7 @@ it.each([
     const send = useChatBoxSend({
       deps: { createConversation: () => Promise.resolve(undefined), uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }) },
       setChatHistory: setHistory, conversationUuid: CONVERSATION, projectId: 7, projectIdString: '7',
-      isAgentsPage: true, activeParticipant: PARTICIPANT, participants: [PARTICIPANT],
+      isAgentsPage: true, target: PARTICIPANT, participants: [PARTICIPANT],
       onAgentEvent: frame => canvas.onRcvAgentEvent(frame as unknown as RunSocketEvent),
     });
     live = { send, canvas, nodes, history };

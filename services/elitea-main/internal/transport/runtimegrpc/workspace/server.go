@@ -93,7 +93,8 @@ func (s *Server) authorize(ctx context.Context, claim *runtimev1.WorkspaceClaimV
 	}
 	identity, err := s.authorizer.AuthorizeWorkload(ctx, claim.GetFence().GetWorkloadSessionId(), claim.GetFence().GetProducerId())
 	if err != nil || identity == "" {
-		return workspaceruntime.ClaimRef{}, rejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_AUTHENTICATION_FAILED, "The workload session is not accepted.", false)
+		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
+		return workspaceruntime.ClaimRef{}, rejection(refusalCode, refusalMessage, refusalRetryable)
 	}
 	fence, err := fenceDomain(claim.GetIdentity(), claim.GetFence(), identity)
 	if err != nil {
