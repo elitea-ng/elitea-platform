@@ -11,10 +11,12 @@ import { t } from '@/shared/i18n';
 import { useIsAnalyticsVisible } from '@/shared/lib/hooks/useIsAnalyticsVisible';
 import { useIsUsageVisible } from '@/shared/lib/hooks/useIsUsageVisible';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
+import { usePermissionSet, usePermissionSetSettled } from '@/widgets/sidebar';
 import { SETTINGS_LAYOUT } from '@/shared/ui/settings/settings.constants';
 import { type SettingsSection, SettingsDrawer } from '@/shared/ui/settings/SettingsDrawer';
 import {
   type SettingsSectionGates,
+  WORKFORCE_MANAGE_PERMISSION,
   buildSettingsSections,
   isTabHidden,
 } from './settingsSections';
@@ -92,11 +94,18 @@ export function SettingsLayout() {
   const selectedProjectId = useSelectedProjectStore((state) => state.project?.id ?? '');
   const personalProjectId = usePersonalProjectId();
   const isPersonalProject = useIsPersonalProject(selectedProjectId, personalProjectId);
+  // The Agent workforce row is the agent manager's (issue 1617). The set is
+  // empty until the permission list answers, so the row is hidden while it
+  // loads and the redirect below waits for the answer.
+  const permissionProjectId = selectedProjectId === '' ? undefined : selectedProjectId;
+  const permissions = usePermissionSet(permissionProjectId);
+  const permissionsSettled = usePermissionSetSettled(permissionProjectId);
   const gates: SettingsSectionGates = {
     isPublicProject: isPublicProject(selectedProjectId),
     isPersonalProject,
     analyticsVisible,
     usageVisible,
+    workforceManager: permissions.has(WORKFORCE_MANAGE_PERMISSION),
   };
   const sections: SettingsSection[] = buildSettingsSections(gates);
 
@@ -119,7 +128,9 @@ export function SettingsLayout() {
    * personal project has one member and no membership to manage.
    */
   const location = useLocation();
-  const isHiddenTab = isTabHidden(location.pathname.split('/').at(-1), gates);
+  const currentTab = location.pathname.split('/').at(-1);
+  const isHiddenTab =
+    isTabHidden(currentTab, gates) && (currentTab !== 'agent-workforce' || permissionsSettled);
 
   useEffect(() => {
     if (!isHiddenTab) return;

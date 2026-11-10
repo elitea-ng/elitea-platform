@@ -1021,6 +1021,25 @@ BEGIN
             PRIMARY KEY (application_id, user_id)
         )', schema_name);
 
+    -- The view each agent answer was given (ADR-0050 decision 9, issue
+    -- 1669). The same shape as tenant/0167_chat_message_context_views.sql,
+    -- which carries the full account.
+    EXECUTE format('
+        CREATE TABLE IF NOT EXISTS %I.chat_message_context_views (
+            message_group_uuid UUID PRIMARY KEY
+                REFERENCES %I.chat_message_group (uuid) ON DELETE CASCADE,
+            reader_participant_id INTEGER NOT NULL CHECK (reader_participant_id > 0),
+            history TEXT NOT NULL
+                CHECK (history IN (''full'', ''since_joined'', ''addressed_only'', ''none'')),
+            include_side_talk TEXT NOT NULL CHECK (include_side_talk IN (''party'', ''none'')),
+            participant_history TEXT
+                CHECK (participant_history IS NULL OR length(participant_history) <= 32),
+            window_tokens BIGINT NOT NULL CHECK (window_tokens >= 0),
+            digest TEXT NOT NULL CHECK (digest ~ ''^[0-9a-f]{64}$''),
+            entries JSONB NOT NULL DEFAULT ''[]''::jsonb CHECK (jsonb_typeof(entries) = ''array''),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+        )', schema_name, schema_name);
+
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1421,6 +1440,15 @@ CROSS JOIN (VALUES
     ('models.teams.delete')
 ) AS grant_row(permission)
 WHERE role.mode = 'default' AND role.name IN ('admin', 'editor')
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- Issue 1616, the agent workforce (ADR-0050 decision 5b): the project admin
+-- is the agent manager. Existing databases get the grant from
+-- migrations/shared/0236_agent_workforce.sql.
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT role.id, 'agents.workforce.manage'
+FROM auth_core__role AS role
+WHERE role.mode = 'default' AND role.name = 'admin'
 ON CONFLICT (role_id, permission) DO NOTHING;
 
 -- Default dev user

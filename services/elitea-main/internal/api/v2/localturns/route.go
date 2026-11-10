@@ -108,6 +108,38 @@ type startBody struct {
 	ParticipantID int64  `json:"participant_id"`
 	// Unattended is the turn's grant (ADR-0045, client contract 1.30).
 	Unattended *unattendedBody `json:"unattended"`
+	// AddressedTo are the agents the person addressed, and FloorTurn a
+	// later turn of a routed message (ADR-0050 decision 7f, contract 1.47).
+	AddressedTo []int64        `json:"addressed_to"`
+	FloorTurn   *floorTurnBody `json:"floor_turn"`
+}
+
+type floorTurnBody struct {
+	QuestionID string `json:"question_id"`
+	Position   int    `json:"position"`
+}
+
+func (body *floorTurnBody) ref() *localturn.FloorTurnRef {
+	if body == nil {
+		return nil
+	}
+	return &localturn.FloorTurnRef{QuestionID: body.QuestionID, Position: body.Position}
+}
+
+// floorStarted is LocalTurnStarted.floor.
+func floorStarted(floor localturn.FloorStarted) map[string]any {
+	agents := make([]map[string]any, 0, len(floor.Agents))
+	for _, agent := range floor.Agents {
+		agents = append(agents, map[string]any{
+			"participant_id": agent.ParticipantID, "name": agent.Name, "executor": agent.Executor,
+		})
+	}
+	return map[string]any{
+		"question_id": floor.QuestionID,
+		"position":    floor.Position,
+		"targets":     floor.Targets,
+		"agents":      agents,
+	}
 }
 
 type commitBody struct {
@@ -202,6 +234,7 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 		NativeClientID: user.NativeClientID, ConversationUUID: chi.URLParam(request, "conversationID"),
 		QuestionID: body.QuestionID, UserInput: body.UserInput, ParticipantID: body.ParticipantID,
 		AuditRoute: StartPath, Unattended: body.Unattended.request(),
+		AddressedTo: body.AddressedTo, FloorTurn: body.FloorTurn.ref(),
 	})
 	if err != nil {
 		writeUseCaseError(request.Context(), writer, "start", err)
@@ -224,6 +257,10 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 	if outcome.Unattended != nil {
 		started["unattended"] = unattendedStarted(*outcome.Unattended)
 	}
+	if outcome.Floor != nil {
+		started["floor"] = floorStarted(*outcome.Floor)
+	}
+	started["executor"] = outcome.Executor
 	// The project's computer use setting (ADR-0047 decision 9, contract 1.41).
 	started["computer_use"] = h.computerUseStarted(request.Context(), projectID)
 	desktopwire.WriteJSON(writer, http.StatusOK, started)
@@ -296,6 +333,18 @@ func writeUseCaseError(ctx context.Context, writer http.ResponseWriter, operatio
 	case errors.Is(err, localturn.ErrParticipant):
 		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "local_turn_participant",
 			"The answering participant is not an agent or model participant of this conversation.")
+	case errors.Is(err, localturn.ErrAgentTargetRequired):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "agent_target_required",
+			"This thread holds several agents: address one, or set a lead.")
+	case errors.Is(err, localturn.ErrAddressee):
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "addressee_not_in_conversation",
+			"An addressed agent is not an agent of this thread.")
+	case errors.Is(err, localturn.ErrFloorTurn):
+		desktopwire.WriteError(writer, http.StatusConflict, "floor_turn_refused",
+			"This turn is not the next agent of a message Main routed in this thread.")
+	case errors.Is(err, localturn.ErrFloorSuperseded):
+		desktopwire.WriteError(writer, http.StatusConflict, "floor_turn_superseded",
+			"A newer message started in this thread, so the earlier message's remaining agents do not answer.")
 	case errors.Is(err, localturn.ErrConflict):
 		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_conflict",
 			"The question id is already used by another turn.")

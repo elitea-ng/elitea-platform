@@ -254,6 +254,9 @@ pub fn continuation(record: &ResumeRecord) -> Result<TurnRequest, TurnError> {
         command: None,
         images: Vec::new(),
         unattended,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     })
 }
 

@@ -168,3 +168,27 @@ func Describe(err error) string {
 	}
 	return fmt.Sprintf("an unclassified error (%T)", err)
 }
+
+// Dependencies names the outages a failure that heals on its own may belong
+// to: ["nats"] for a NATS error, ["db"] for a PostgreSQL answer or a broken
+// pooled connection, ["db", "nats"] when it cannot tell (a timeout or a
+// network error could be either), and none for a failure that is not
+// Transient. The names are the readiness monitor's Transitions keys, so a
+// runner's failure is demoted only while one of those outages is reported
+// (FU-299 C3).
+func Dependencies(err error) []string {
+	if !Transient(err, nil) {
+		return nil
+	}
+	for _, natsErr := range transientNATSErrors {
+		if errors.Is(err, natsErr) {
+			return []string{"nats"}
+		}
+	}
+	var pgErr *pgconn.PgError
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &pgErr) || errors.As(err, &connectErr) || errors.Is(err, pgconn.ErrConnClosed) {
+		return []string{"db"}
+	}
+	return []string{"db", "nats"}
+}

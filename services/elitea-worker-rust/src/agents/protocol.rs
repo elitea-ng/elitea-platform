@@ -195,6 +195,41 @@ mod chat_history_ref_tests {
 }
 
 #[cfg(test)]
+mod recalled_memory_tests {
+    use super::recalled_memory;
+    use crate::protocol::elitea::runtime::v1::RecalledMemoryEntryV1;
+
+    fn entry(id: &str, content: &str) -> RecalledMemoryEntryV1 {
+        RecalledMemoryEntryV1 {
+            entry_id: id.to_owned(),
+            content: content.to_owned(),
+        }
+    }
+
+    /// #1826: each recalled entry is a positive decimal id, named once,
+    /// with the content of one stored entry.
+    #[test]
+    fn recalled_memory_is_checked() {
+        assert_eq!(recalled_memory(&[]).expect("none"), Vec::new());
+        let parsed = recalled_memory(&[entry("7", "a"), entry("42", "b")]).expect("two");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[1].entry_id, "42");
+        assert_eq!(parsed[1].content, "b");
+        for bad in [
+            vec![entry("", "a")],
+            vec![entry("07", "a")],
+            vec![entry("m-1", "a")],
+            vec![entry("7", "")],
+            vec![entry("7", &"x".repeat(2049))],
+            vec![entry("7", "a"), entry("7", "b")],
+            (1..=51).map(|id| entry(&id.to_string(), "a")).collect(),
+        ] {
+            assert!(recalled_memory(&bad).is_err(), "{bad:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tool_envelope_tests {
     use super::tool_envelope;
     use crate::agents::AgentProtocolError;
@@ -292,6 +327,11 @@ mod agent_floor_tests {
         let human = agent_floor(&floor("human_message", Vec::new())).expect("ok");
         assert_eq!(human.cause, FloorCause::HumanMessage);
         assert_eq!(human.peers, Vec::new());
+        // ADR-0050 decision 2: a heartbeat act binds only unattended tools.
+        let heartbeat = agent_floor(&floor("heartbeat", Vec::new())).expect("ok");
+        assert_eq!(heartbeat.cause, FloorCause::Heartbeat);
+        assert!(heartbeat.unattended_tools_only);
+        assert!(agent_floor(&floor("cron", Vec::new())).is_err());
     }
 
     #[test]
@@ -549,6 +589,7 @@ pub fn request_from(
                 .context_view
                 .as_ref()
                 .map(|view| view.history.clone()),
+            recalled_memory: recalled_memory(&message.recalled_memory)?,
             project_context: message.project_context.map(|context| {
                 super::request::ProjectContextSnapshot {
                     id: context.id,
@@ -648,6 +689,7 @@ fn agent_floor(
     let cause = match floor.cause.as_str() {
         "human_message" => FloorCause::HumanMessage,
         "agent_mention" => FloorCause::AgentMention,
+        "heartbeat" => FloorCause::Heartbeat,
         _ => {
             return Err(AgentProtocolError::InvalidInput(
                 "the agent floor cause is unknown",
@@ -720,6 +762,47 @@ fn current_message_id(id: &str) -> Result<String, AgentProtocolError> {
     uuid::Uuid::try_parse(id)
         .map(|id| id.hyphenated().to_string())
         .map_err(|_| AgentProtocolError::InvalidInput("the agent current message id is not a uuid"))
+}
+
+/// The most entries Main recalls into one turn (`agentmemory.MaxRecallEntries`).
+#[allow(clippy::cast_possible_truncation)]
+const MAX_RECALLED_MEMORY: usize = super::agent_memory_tools::MAX_RECALL_ENTRIES as usize;
+/// The longest stored entry (`agentmemory.MaxContentBytes`).
+const MAX_RECALLED_MEMORY_BYTES: usize = super::agent_memory_tools::MAX_CONTENT_BYTES;
+
+/// #1826: the entries Main recalled into the instructions. Each id is a
+/// positive decimal number of at most 19 digits, named once; each content
+/// is at most one stored entry long.
+fn recalled_memory(
+    entries: &[crate::protocol::elitea::runtime::v1::RecalledMemoryEntryV1],
+) -> Result<Vec<super::request::RecalledMemoryEntry>, AgentProtocolError> {
+    let invalid =
+        || AgentProtocolError::InvalidInput("the agent recalled memory entries are invalid");
+    if entries.len() > MAX_RECALLED_MEMORY {
+        return Err(invalid());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    entries
+        .iter()
+        .map(|entry| {
+            let id = entry.entry_id.as_str();
+            let numeric = !id.is_empty()
+                && id.len() <= 19
+                && !id.starts_with('0')
+                && id.bytes().all(|byte| byte.is_ascii_digit());
+            if !numeric
+                || entry.content.is_empty()
+                || entry.content.len() > MAX_RECALLED_MEMORY_BYTES
+                || !seen.insert(id)
+            {
+                return Err(invalid());
+            }
+            Ok(super::request::RecalledMemoryEntry {
+                entry_id: id.to_owned(),
+                content: entry.content.clone(),
+            })
+        })
+        .collect()
 }
 
 /// ADR-0050 decision 9c: one reference per history entry, each a uuid, or

@@ -146,6 +146,9 @@ type CurrentRegenerateTurn struct {
 	// that answers it commit together or not at all. Zero for a retry, and the
 	// admission then touches no question text.
 	EditedQuestion CurrentRegenerationEdit
+	// ContextView is the view the regenerated run's input carries (issue
+	// 1669); the admission replaces the response's record with it.
+	ContextView *ContextViewRecord
 }
 
 func (turn CurrentRegenerateTurn) Validate() error {
@@ -177,6 +180,7 @@ func (turn *CurrentRegenerateTurn) Clone() *CurrentRegenerateTurn {
 		return nil
 	}
 	clone := *turn
+	clone.ContextView = turn.ContextView.Clone()
 	return &clone
 }
 
@@ -310,7 +314,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		// #870: memory recall is wired on turn START only — see
 		// continue.go's call site for why regeneration deliberately does not
 		// re-run it. "" preserves this call site's pre-#870 behavior.
-		input, err := currentApplicationInput(start, resolved, toolkitGuardrails, nil, "",
+		input, view, err := currentApplicationInputWithView(start, resolved, toolkitGuardrails, nil, "",
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same
@@ -324,6 +328,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		input.IsRegenerate = true
 		turn.ApplicationID = resolved.ApplicationID
 		turn.ApplicationVersionID = resolved.ApplicationVersionID
+		turn.ContextView = newContextViewRecord(target.TargetParticipantID, resolved.ParticipantContextHistory, view, input)
 		return input, turn, executiondomain.AgentApplicationCapability, nil
 	case CurrentRegenerationAdhoc:
 		start := CurrentAdhocStartRequest{
@@ -358,7 +363,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 			return nil, nil, "", err
 		}
 		start.QuestionID = request.RegenerationID
-		input, err := currentAdhocInput(start, resolved, frozen, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's regeneration call site
+		input, view, err := currentAdhocInputWithView(start, resolved, frozen, toolkitGuardrails, nil, "", // #870: see currentApplicationInput's regeneration call site
 			// #946: project context is NOT a per-turn recall like memories —
 			// it is standing project configuration, so a resumed or
 			// regenerated turn in the same project must carry the same
@@ -370,6 +375,7 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		input.ContextSettings = contextSettings
 		input.IsRegenerate = true
+		turn.ContextView = newContextViewRecord(target.TargetParticipantID, "", view, input)
 		return input, turn, executiondomain.AgentAdhocCapability, nil
 	default:
 		return nil, nil, "", errors.New("unsupported current regeneration kind")

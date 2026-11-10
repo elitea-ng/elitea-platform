@@ -514,7 +514,12 @@ crate-scoped subscriber whose `ELITEA_RUST_LOG` input is a single level, not an
 arbitrary dependency filter. Preparation/native-lifecycle, provider-neutral
 assembly, policy-wrapped tools and nested `AgentTool` calls have stable
 execution/generation/invocation/function-call correlation, phase, outcome and
-safe error-code fields plus span-close durations. Prompts, tool arguments,
+safe error-code fields. Since FU-299 stdout is a JSON-lines operator stream
+(one object per event, span fields flattened, `support_ref` = `execution_id`)
+and span-close durations (`time.busy`, `time.idle`) go to OpenTelemetry; for
+local performance evidence start the Worker with
+`ELITEA_RUST_SPAN_TIMING=stderr`, which writes the close lines to stderr
+(`src/diagnostics.rs` module docs). Prompts, tool arguments,
 results, URLs, credentials and provider bodies are excluded. ADK's own
 instrumentation remains useful below this boundary, but Elitea owns the span
 that correlates admission, authorization, ADK execution, durable output,

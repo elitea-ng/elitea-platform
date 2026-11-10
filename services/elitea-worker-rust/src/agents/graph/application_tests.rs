@@ -861,6 +861,7 @@ fn resume_payload(thread_id: &str, interrupt_id: &str) -> AgentExecutionPayload 
         tool_envelope: None,
         current_message_id: None,
         context_view_history: None,
+        recalled_memory: Vec::new(),
     }
 }
 

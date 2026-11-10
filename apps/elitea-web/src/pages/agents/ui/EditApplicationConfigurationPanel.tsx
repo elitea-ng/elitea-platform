@@ -12,7 +12,7 @@ import { useCallback } from 'react';
 import Box from '@mui/material/Box';
 
 import type { Tag } from '@/entities/tag';
-import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, CreateAgentForm } from '@/features/agents';
+import { AgentIconEditor, AgentTagEditor, ApplicationEditorNotes, ApplicationInformation, ApplicationMcpAccessToggle, contextBlockRefusal, CreateAgentForm } from '@/features/agents';
 import { AgentSkillsPanel } from '@/features/agent-skills';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
@@ -48,6 +48,8 @@ export interface EditApplicationConfigurationPanelProps {
    * business knowing the rule.
    */
   readonly instructionsAiEditSlot?: ReactNode | undefined;
+  /** The last save's failure; a refusal of `meta.context` shows on the Conversation history field. */
+  readonly saveError?: unknown;
 }
 
 /**
@@ -120,7 +122,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
-        showOutputContract
+        showOutputContract={{ contextHistory: contextBlockRefusal(props.saveError) }}
         /* #345 — the tag control. It reaches the wire through
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
            writes as association rows. */

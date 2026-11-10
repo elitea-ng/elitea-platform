@@ -11,7 +11,90 @@ fn identity(user: i64, deployment: &str) -> SessionIdentity {
         user_id: user,
         project_id: 1,
         conversation_uuid: "99999999-2222-4333-8444-555555555555".to_owned(),
+        reader: None,
     }
+}
+
+/// Each agent of a thread with several agents has a session of its own,
+/// never the thread's one session (ADR-0050 decision 7f).
+#[test]
+fn each_reader_of_a_thread_has_its_own_key() {
+    let thread = identity(1, "https://a.example");
+    let coder = SessionIdentity {
+        reader: Some(77),
+        ..thread.clone()
+    };
+    let reviewer = SessionIdentity {
+        reader: Some(78),
+        ..thread.clone()
+    };
+    assert_ne!(coder.key(), thread.key());
+    assert_ne!(coder.key(), reviewer.key());
+    assert_eq!(
+        coder.key(),
+        reader_session_key("https://a.example/", 1, &thread.conversation_uuid, 77)
+    );
+}
+
+/// `info` of a thread with several agents sums every agent's session: the
+/// thread's own key holds none (ADR-0050 decision 7f).
+#[tokio::test]
+async fn info_of_a_thread_with_several_agents_sums_each_agents_session() {
+    let (_dir, state) = open();
+    let sessions = state.store();
+    let service = state.sessions();
+    let thread = identity(1, "https://a.example");
+    assert!(
+        sessions
+            .info(
+                &thread.deployment,
+                thread.user_id,
+                &thread.conversation_uuid
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for (reader, execution) in [(77, "exec-coder"), (78, "exec-reviewer")] {
+        let me = SessionIdentity {
+            reader: Some(reader),
+            ..thread.clone()
+        };
+        let key = me.key();
+        sessions.open_session(&me, "fp").await.unwrap();
+        sessions
+            .seed(&key, Vec::new(), Some("0".into()), &[])
+            .await
+            .unwrap();
+        let scope = sessions.begin_turn(&key, execution).unwrap();
+        service
+            .append_event(&key, text_event(execution, "user", "user", "go"))
+            .await
+            .unwrap();
+        sessions
+            .finish_turn(
+                &key,
+                execution,
+                TurnOutcome::Committed {
+                    response_message_id: format!("r-{reader}"),
+                    cursor: Some("2".into()),
+                },
+            )
+            .await
+            .unwrap();
+        drop(scope);
+    }
+    let info = sessions
+        .info(
+            &thread.deployment,
+            thread.user_id,
+            &thread.conversation_uuid,
+        )
+        .await
+        .unwrap()
+        .expect("the agents' sessions");
+    assert_eq!((info.turns, info.seeded_from_server), (2, true));
+    assert!(info.bytes > 0);
 }
 
 fn text_event(invocation: &str, author: &str, role: &str, text: &str) -> Event {

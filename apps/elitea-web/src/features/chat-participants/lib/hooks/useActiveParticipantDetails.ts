@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ChatParticipantType } from '../../model/constants';
 
@@ -78,11 +78,19 @@ export function useActiveParticipantDetails(
 
   const [activeParticipantDetails, setActiveParticipantDetails] = useState<Record<string, unknown>>({});
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  // Only the latest request may write. The target can change while a read is
+  // in flight (a chat with nothing picked resolves to one agent, then to the
+  // agent its history last addressed once that loads), and a slower answer
+  // for the earlier target used to land last and stick: the attachments gate
+  // and the grantable tools then read the wrong agent's version.
+  const latestRequest = useRef(0);
 
   const fetchDetails = useCallback(
     async (options?: FetchOptions) => {
       if (!activeParticipant) return;
 
+      latestRequest.current += 1;
+      const request = latestRequest.current;
       setIsLoadingDetails(true);
       try {
         const entityName = activeParticipant.entity_name as ChatParticipantType;
@@ -101,12 +109,13 @@ export function useActiveParticipantDetails(
           entityProjectId,
         );
 
+        if (request !== latestRequest.current) return;
         setActiveParticipantDetails({
           ...details,
           version_details: versionDetails,
         });
       } finally {
-        setIsLoadingDetails(false);
+        if (request === latestRequest.current) setIsLoadingDetails(false);
       }
     },
     [activeParticipant, fetchOriginalDetails, fetchOriginalVersionDetails, projectId],

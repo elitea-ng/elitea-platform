@@ -1,0 +1,89 @@
+---
+title: "Proactive agents (heartbeat)"
+description: "How an agent wakes on a timer, decides to do nothing, send you a message or start a run, and the limits that keep it safe."
+---
+
+A proactive agent has a **heartbeat**. The platform wakes the agent on a timer. The agent reads its goals and what is new, and then decides one of three things:
+
+| Decision | What happens |
+| --- | --- |
+| `no_op` | Nothing. The platform writes one row in the heartbeat history. |
+| `notify` | The agent writes a message to you in its **home thread** and you get a notification. |
+| `act` | The agent starts a run. The run uses **your mandate**, waits for you at every approval and never gets a sensitive tool. |
+
+The heartbeat is for cloud agents only. The desktop app has no heartbeat in this release.
+
+## What the agent reads when it wakes
+
+At each wake a small, low-cost model reads a short digest and makes the decision. The digest holds:
+
+- the agent's **proactive goals** (`proactive_goals` in its [persona](/menus/agents#persona));
+- its latest [memory](/how-tos/agents-pipelines/agent-memory/) notes, and the facts you pinned (**schedule notes**);
+- the **new messages** since the last wake in the conversations the agent takes part in.
+
+The digest is data, never instructions. The platform keeps only the SHA-256 of each digest, not its text.
+
+## Turn the heartbeat on
+
+1. In the agent's version meta, add a `proactivity` block. An empty block uses the defaults:
+
+   ```json
+   {
+     "proactivity": {
+       "mode": "heartbeat",
+       "interval": "1h",
+       "jitter": 10,
+       "quiet_hours": "22:00-07:00 Europe/Berlin",
+       "watch": [{ "kind": "conversation" }, { "kind": "schedule_note" }],
+       "act_target": "home_thread",
+       "limits": { "wakes_per_day": 24, "acts_per_day": 4, "spend_per_day_usd": 2.0 }
+     }
+   }
+   ```
+
+2. **Publish** the agent. The heartbeat reads the block of the published release, never of a draft.
+3. Open the agent editor's **Heartbeat** tab and turn on **Heartbeat on**. You become the heartbeat's owner: the person the agent notifies and acts for.
+4. To let the agent start runs, paste the ID of a **delegated mandate of yours** for this agent and select **Save mandate**. Without a mandate the agent can send you messages, but each `act` becomes a message that tells you why it did not act.
+
+| Field | Values |
+| --- | --- |
+| `interval` | Whole minutes from `15m` to `24h`. Default `1h`. |
+| `jitter` | 0 to 50 percent of the interval. Default 10. Wakes of many agents do not all start at the same second. |
+| `quiet_hours` | `HH:MM-HH:MM Zone`. No wake starts in the window; the next wake is after it. |
+| `watch` | `conversation`, `schedule_note` and `toolkit_read`. In this release `toolkit_read` only names a read-only tool in the digest; the triage does not call it. |
+| `act_target` | `home_thread` (default) or `new_conversation`. `workspace_thread` is not available yet. |
+
+Save refuses a block that is not valid (`proactivity_invalid`).
+
+## Who can turn it on
+
+- The agent must be at least **medium** risk, with a **reviewed** release (a change request that another person approved).
+- In your **personal project** you can turn it on without a review, because nobody else is there to review. An administrator can turn this off with **Personal Projects Approve Their Own Agents**.
+
+The Heartbeat tab tells you when you cannot turn it on, and why.
+
+When the heartbeat is on, it belongs to its owner. Another member can turn it off, but can turn it on again as their own only if they are an owner of the agent in the registry (`proactivity_not_owner`).
+
+The triage reads the new messages of the agent's conversations that the owner can see: shared conversations and the owner's own. Another person's private chat with the agent is never in it.
+
+## Limits and switches
+
+Each agent has a daily envelope. A day starts at midnight in the zone of `quiet_hours` (UTC without it).
+
+- **Wakes per day** and **spend per day** (the triage and the runs it starts). When the agent reaches one, the heartbeat **pauses until the next day** and tells you once. A run that the agent starts may spend at most what is left of the day's spend.
+- **Runs per day.** Past it, an `act` becomes a message.
+- A personal project has a lower run limit, 2 a day by default.
+
+Administrators set the platform maximums under **Configuration › Proactive agents**. An agent's own limits can only be lower. Other switches:
+
+- **Allow Proactive Agents** (platform), and the project switch, stop every heartbeat at the next wake.
+- The **kill switch** (execution suspensions) stops a suspended agent's wakes, and an `act` that a suspension reached during the triage.
+- **Maintenance mode** stops every wake.
+- When a run that the agent started is still active, or waits for your approval, the next wake is skipped.
+- Every run of an `act`, its automatic continuations included, uses only the tools the agent may use unattended.
+
+## Heartbeat history
+
+The Heartbeat tab lists each wake with its outcome and reason. `act_degraded` is an `act` that became a message; its reason code says why (for example `mandate_required` or `act_limit`). A skipped wake (quiet hours, kill switch, an active run) writes no row; the tab shows the last skip reason.
+
+The history is in `elitea_runtime.agent_heartbeats`. The heartbeat's clock and its read cursor are in the project's `agent_heartbeat_settings` table, not in the agent's memory.

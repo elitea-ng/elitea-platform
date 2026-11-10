@@ -7,6 +7,7 @@ import { PROMPT_PAYLOAD_KEY } from '@/shared/lib/prompt-payload';
 import { contextResolver } from '@/shared/lib/string';
 
 import { useFieldFocus } from '../lib/useFieldFocus';
+import type { ContextBlock } from '../lib/contextBlock';
 import type { AgentDraftValues, AgentFieldChange, AgentVariable } from './types';
 
 /**
@@ -45,6 +46,9 @@ export interface CreateAgentFormState {
   readonly citations: unknown;
   /** Writes `meta.citations`; `null` clears it. */
   readonly onCitationsChange: (next: 'required' | null) => void;
+  /** ADR-0050 decision 9 — `meta.context` as stored, and its writer; `null` clears it. */
+  readonly contextHistory: unknown;
+  readonly onContextHistoryChange: (next: ContextBlock | null) => void;
   /** #307 — replaces the baseline's `setFieldValue('version_details.conversation_starters', ...)` inside `ConversationStarters.jsx` itself. */
   readonly onConversationStartersChange: (next: readonly string[]) => void;
 }
@@ -103,6 +107,10 @@ function storedOutputContract(values: AgentDraftValues): unknown {
 
 function storedCitations(values: AgentDraftValues): unknown {
   return values.version_details?.meta?.['citations'];
+}
+
+function storedContextHistory(values: AgentDraftValues): unknown {
+  return values.version_details?.meta?.['context'];
 }
 
 /**
@@ -215,6 +223,11 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     [onFieldChange],
   );
 
+  const onContextHistoryChange = useCallback(
+    (next: ContextBlock | null) => onFieldChange('version_details.meta.context', next),
+    [onFieldChange],
+  );
+
   const onConversationStartersChange = useCallback(
     (next: readonly string[]) => onFieldChange('version_details.conversation_starters', next),
     [onFieldChange],
@@ -241,6 +254,8 @@ export function useCreateAgentFormState(values: AgentDraftValues, onFieldChange:
     onOutputContractChange,
     citations: storedCitations(values),
     onCitationsChange,
+    contextHistory: storedContextHistory(values),
+    onContextHistoryChange,
     onConversationStartersChange,
   };
 }

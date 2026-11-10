@@ -1174,6 +1174,9 @@ impl Connection {
                 command: input.command,
                 images: input.images,
                 unattended: None,
+                addressed_to: Vec::new(),
+                floor_turn: None,
+                cloud: false,
             })
             .await;
         let started = match started {

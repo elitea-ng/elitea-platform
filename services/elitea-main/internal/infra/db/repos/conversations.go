@@ -3400,8 +3400,23 @@ func addConversationParticipant(ctx context.Context, transaction pgx.Tx, s strin
 	// generated name is different. On such a database the statement failed with
 	// SQLSTATE 42704 (undefined_object), so adding a participant answered 500.
 	// Column inference matches the unique key under either name.
-	mapping := fmt.Sprintf(`INSERT INTO %s.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
-		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC') ON CONFLICT (participant_id, conversation_id) DO NOTHING`, s)
+	//
+	// Re-adding a participant that is already in the conversation keeps its
+	// row and settings, except "share history from" (issue 1669): a re-add
+	// with context_history since_joined ("now") sets it and moves the join
+	// time to now, so the agent's next view starts here; full ("the start")
+	// clears the narrowing and keeps the join time. DO NOTHING here used to
+	// drop "now" without a word.
+	mapping := fmt.Sprintf(`INSERT INTO %[1]s.chat_participant_mapping AS mapping
+		(conversation_id, participant_id, entity_settings, created_at)
+		VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')
+		ON CONFLICT (participant_id, conversation_id) DO UPDATE SET
+			entity_settings = COALESCE(mapping.entity_settings, '{}'::jsonb)
+				|| jsonb_build_object('context_history', EXCLUDED.entity_settings->>'context_history'),
+			created_at = CASE WHEN EXCLUDED.entity_settings->>'context_history' = 'since_joined'
+				THEN EXCLUDED.created_at ELSE mapping.created_at END,
+			updated_at = now() AT TIME ZONE 'UTC'
+		WHERE EXCLUDED.entity_settings->>'context_history' IN ('since_joined', 'full')`, s)
 	if _, err := transaction.Exec(ctx, mapping, id, participantID, entitySettings); err != nil {
 		return 0, fmt.Errorf("conversations: add participant mapping: %w", err)
 	}

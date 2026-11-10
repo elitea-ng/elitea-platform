@@ -11,6 +11,55 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/contextview"
 )
 
+// Issue 1669: the view lists every projected entry, the dropped ones with
+// the rule that dropped them, and the record carries the input's window and
+// digest.
+func TestBuildReaderViewRecordsEveryEntryWithItsReason(t *testing.T) {
+	history := json.RawMessage(`[{"role":"user","content":"secret-body-1"},{"role":"user","content":"after"},{"role":"assistant","content":"side"}]`)
+	refs := []ChatHistoryRef{
+		{MessageID: "00000000-0000-4000-8000-000000000001"},
+		{MessageID: "00000000-0000-4000-8000-000000000002", AfterJoined: true},
+		{MessageID: "00000000-0000-4000-8000-000000000003", AfterJoined: true, Side: true},
+	}
+	settings := contextview.Settings{History: contextview.HistorySinceJoined, SideTalk: contextview.SideTalkParty}
+	view, err := BuildReaderView(settings, history, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ContextViewEntry{
+		{MessageID: refs[0].MessageID, Reason: contextview.ReasonBeforeJoined},
+		{MessageID: refs[1].MessageID},
+		{MessageID: refs[2].MessageID, Reason: contextview.ReasonSideTalkOfOthers},
+	}
+	if len(view.Entries) != len(want) || len(view.Refs) != 1 || view.Refs[0].MessageID != refs[1].MessageID {
+		t.Fatalf("view = %+v", view)
+	}
+	for i := range want {
+		if view.Entries[i] != want[i] {
+			t.Fatalf("entry %d = %+v, want %+v", i, view.Entries[i], want[i])
+		}
+	}
+	encoded, _ := json.Marshal(view.Entries)
+	if strings.Contains(string(encoded), "secret-body") || strings.Contains(string(encoded), "content") {
+		t.Fatalf("entries carry message text: %s", encoded)
+	}
+	input := &runtimev1.AgentExecutionInputV1{ContextView: &runtimev1.ContextViewV1{WindowTokens: 8192, Digest: "d"}}
+	record := newContextViewRecord(9, "since_joined", view, input)
+	if record == nil || record.ReaderParticipantID != 9 || record.WindowTokens != 8192 || record.Digest != "d" ||
+		record.ParticipantHistory != "since_joined" || len(record.Entries) != 3 {
+		t.Fatalf("record = %+v", record)
+	}
+	clone := record.Clone()
+	clone.Entries[0].MessageID = "changed"
+	if record.Entries[0].MessageID == "changed" {
+		t.Fatal("Clone shares entries")
+	}
+	if newContextViewRecord(9, "", view, &runtimev1.AgentExecutionInputV1{}) != nil ||
+		newContextViewRecord(0, "", view, input) != nil {
+		t.Fatal("a record without a view or a reader")
+	}
+}
+
 func TestDecodeChatHistoryRefsNamesEveryEntry(t *testing.T) {
 	history := json.RawMessage(`[{"role":"user"},{"role":"assistant"}]`)
 	refs, err := DecodeChatHistoryRefs(history, json.RawMessage(`[

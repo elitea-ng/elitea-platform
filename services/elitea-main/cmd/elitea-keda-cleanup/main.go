@@ -40,6 +40,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/elitea-ng/elitea-platform/libs/go/faults/logx"
 )
 
 const (
@@ -55,7 +57,9 @@ var resources = []string{"scaledobjects", "triggerauthentications"}
 var pollInterval = 2 * time.Second
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// The shared handler (FU-299): the same JSON lines and level as before,
+	// plus the cause chain, typed-fault fields and support_ref.
+	logger := slog.New(logx.Wrap(slog.NewJSONHandler(os.Stdout, nil), nil))
 	cfg, err := configFromEnv(os.LookupEnv)
 	if err != nil {
 		logger.Error("elitea-keda-cleanup: configuration", "error", err)

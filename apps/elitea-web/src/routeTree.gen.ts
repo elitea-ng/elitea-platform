@@ -46,6 +46,7 @@ import { Route as ShellPipelinesTabRouteImport } from './routes/_shell/pipelines
 import { Route as ShellPipelinesCreateRouteImport } from './routes/_shell/pipelines/create'
 import { Route as ShellSettingsIndexRouteImport } from './routes/_shell/settings/index'
 import { Route as ShellSettingsTabRouteImport } from './routes/_shell/settings/$tab'
+import { Route as ShellSettingsAgentWorkforceRouteImport } from './routes/_shell/settings/agent-workforce'
 import { Route as ShellSettingsAiPersonalityRouteImport } from './routes/_shell/settings/ai-personality'
 import { Route as ShellSettingsAnalyticsRouteImport } from './routes/_shell/settings/analytics'
 import { Route as ShellSettingsCreateConfigurationRouteImport } from './routes/_shell/settings/create-configuration'
@@ -286,6 +287,12 @@ const ShellSettingsTabRoute = ShellSettingsTabRouteImport.update({
   path: '/$tab',
   getParentRoute: () => ShellSettingsRouteRoute,
 } as any)
+const ShellSettingsAgentWorkforceRoute =
+  ShellSettingsAgentWorkforceRouteImport.update({
+    id: '/agent-workforce',
+    path: '/agent-workforce',
+    getParentRoute: () => ShellSettingsRouteRoute,
+  } as any)
 const ShellSettingsAiPersonalityRoute =
   ShellSettingsAiPersonalityRouteImport.update({
     id: '/ai-personality',
@@ -608,6 +615,7 @@ export interface FileRoutesByFullPath {
   '/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
   '/pipelines/create': typeof ShellPipelinesCreateRoute
   '/settings/$tab': typeof ShellSettingsTabRoute
+  '/settings/agent-workforce': typeof ShellSettingsAgentWorkforceRoute
   '/settings/ai-personality': typeof ShellSettingsAiPersonalityRoute
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
@@ -698,6 +706,7 @@ export interface FileRoutesByTo {
   '/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
   '/pipelines/create': typeof ShellPipelinesCreateRoute
   '/settings/$tab': typeof ShellSettingsTabRoute
+  '/settings/agent-workforce': typeof ShellSettingsAgentWorkforceRoute
   '/settings/ai-personality': typeof ShellSettingsAiPersonalityRoute
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
@@ -791,6 +800,7 @@ export interface FileRoutesById {
   '/_shell/pipelines/$tab': typeof ShellPipelinesTabRouteWithChildren
   '/_shell/pipelines/create': typeof ShellPipelinesCreateRoute
   '/_shell/settings/$tab': typeof ShellSettingsTabRoute
+  '/_shell/settings/agent-workforce': typeof ShellSettingsAgentWorkforceRoute
   '/_shell/settings/ai-personality': typeof ShellSettingsAiPersonalityRoute
   '/_shell/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/_shell/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
@@ -884,6 +894,7 @@ export interface FileRouteTypes {
     | '/pipelines/$tab'
     | '/pipelines/create'
     | '/settings/$tab'
+    | '/settings/agent-workforce'
     | '/settings/ai-personality'
     | '/settings/analytics'
     | '/settings/create-configuration'
@@ -974,6 +985,7 @@ export interface FileRouteTypes {
     | '/pipelines/$tab'
     | '/pipelines/create'
     | '/settings/$tab'
+    | '/settings/agent-workforce'
     | '/settings/ai-personality'
     | '/settings/analytics'
     | '/settings/create-configuration'
@@ -1066,6 +1078,7 @@ export interface FileRouteTypes {
     | '/_shell/pipelines/$tab'
     | '/_shell/pipelines/create'
     | '/_shell/settings/$tab'
+    | '/_shell/settings/agent-workforce'
     | '/_shell/settings/ai-personality'
     | '/_shell/settings/analytics'
     | '/_shell/settings/create-configuration'
@@ -1396,6 +1409,13 @@ declare module '@tanstack/react-router' {
       path: '/$tab'
       fullPath: '/settings/$tab'
       preLoaderRoute: typeof ShellSettingsTabRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
+    '/_shell/settings/agent-workforce': {
+      id: '/_shell/settings/agent-workforce'
+      path: '/agent-workforce'
+      fullPath: '/settings/agent-workforce'
+      preLoaderRoute: typeof ShellSettingsAgentWorkforceRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
     '/_shell/settings/ai-personality': {
@@ -1789,6 +1809,7 @@ const ShellSettingsCreateConfigurationRouteWithChildren =
 
 interface ShellSettingsRouteRouteChildren {
   ShellSettingsTabRoute: typeof ShellSettingsTabRoute
+  ShellSettingsAgentWorkforceRoute: typeof ShellSettingsAgentWorkforceRoute
   ShellSettingsAiPersonalityRoute: typeof ShellSettingsAiPersonalityRoute
   ShellSettingsAnalyticsRoute: typeof ShellSettingsAnalyticsRoute
   ShellSettingsCreateConfigurationRoute: typeof ShellSettingsCreateConfigurationRouteWithChildren
@@ -1815,6 +1836,7 @@ interface ShellSettingsRouteRouteChildren {
 
 const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsTabRoute: ShellSettingsTabRoute,
+  ShellSettingsAgentWorkforceRoute: ShellSettingsAgentWorkforceRoute,
   ShellSettingsAiPersonalityRoute: ShellSettingsAiPersonalityRoute,
   ShellSettingsAnalyticsRoute: ShellSettingsAnalyticsRoute,
   ShellSettingsCreateConfigurationRoute:

@@ -96,3 +96,27 @@ func TestGrantOfDeduplicatesBrowserSubmits(t *testing.T) {
 		t.Fatal("a grant that names browser hosts only continues")
 	}
 }
+
+// A heartbeat act's spend cap (ADR-0050 decision 2) lowers the chain's
+// spend limit to what is left of the day, never raises it, and a cap that
+// rounds to 0 leaves the limit as it is (0 would read as no limit).
+func TestResolveLimitsAppliesTheSpendCap(t *testing.T) {
+	settings := platformconfig.DefaultUnattendedSettings()
+	free, err := ResolveLimits(settings, ChainRequest{}, 2)
+	if err != nil || free.MaxSpendUSD <= 1 {
+		t.Fatalf("uncapped = %+v, %v", free, err)
+	}
+	spendCap := 0.75
+	limits, err := ResolveLimits(settings, ChainRequest{SpendCapUSD: &spendCap}, 2)
+	if err != nil || limits.MaxSpendUSD != 0.75 {
+		t.Fatalf("capped = %+v, %v", limits, err)
+	}
+	above := free.MaxSpendUSD * 10
+	if limits, _ := ResolveLimits(settings, ChainRequest{SpendCapUSD: &above}, 2); limits.MaxSpendUSD != free.MaxSpendUSD {
+		t.Fatalf("a cap above the limit raised it: %+v", limits)
+	}
+	tiny := 0.00001
+	if limits, _ := ResolveLimits(settings, ChainRequest{SpendCapUSD: &tiny}, 2); limits.MaxSpendUSD != free.MaxSpendUSD {
+		t.Fatalf("a cap that rounds to 0 lifted the limit: %+v", limits)
+	}
+}

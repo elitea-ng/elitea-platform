@@ -87,6 +87,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentrelease"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentworkforce"
 	executiondomain "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 )
@@ -515,11 +516,13 @@ func suspendedResult(toolName string, err error) (map[string]any, bool) {
 		return errorResult(fmt.Sprintf("'%s' was not run: the platform cannot confirm that execution is "+
 			"allowed right now (suspension_state_unavailable). Try again shortly; nothing was executed.", toolName)), true
 	}
-	if _, body, refused := agentrelease.HTTPRefusal(err); refused {
-		code, _ := body["code"].(string)
-		message, _ := body["message"].(string)
-		return errorResult(fmt.Sprintf("'%s' was not run: %s (%s). Nothing was executed.",
-			toolName, strings.TrimSuffix(message, "."), code)), true
+	for _, refusal := range []func(error) (int, map[string]any, bool){agentrelease.HTTPRefusal, agentworkforce.HTTPRefusal} {
+		if _, body, refused := refusal(err); refused {
+			code, _ := body["code"].(string)
+			message, _ := body["message"].(string)
+			return errorResult(fmt.Sprintf("'%s' was not run: %s (%s). Nothing was executed.",
+				toolName, strings.TrimSuffix(message, "."), code)), true
+		}
 	}
 	return nil, false
 }

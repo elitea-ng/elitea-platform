@@ -74,6 +74,8 @@ COPY libs/go/observability ./libs/go/observability
 COPY libs/go/egresslib ./libs/go/egresslib
 COPY libs/go/natsconn ./libs/go/natsconn
 COPY libs/go/routines ./libs/go/routines
+# The shared error registry and fault convention (FU-299).
+COPY libs/go/faults ./libs/go/faults
 COPY services/elitea-main/go.mod services/elitea-main/go.sum ./services/elitea-main/
 WORKDIR /src/services/elitea-main
 # A TRANSIENT proxy.golang.org failure must not fail the build.
