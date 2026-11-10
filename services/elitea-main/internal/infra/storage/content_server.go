@@ -122,11 +122,13 @@ type ContentServer struct {
 	runtimeAgentMemory  *RuntimeAgentMemoryService
 	runtimeHandFloor    *RuntimeHandFloorService
 	runtimeProposeAgent *RuntimeProposeAgentService
-	runtimeArtifacts    *RuntimeArtifactObjectService
-	sandboxBundles      *SandboxBundleContentService
-	compiledSnapshots   *CompiledSnapshotContentService
-	maxBytes            int64
-	requests            chan struct{}
+	// runtimeProposeDismissal serves propose_dismissal (#1616).
+	runtimeProposeDismissal *RuntimeProposeDismissalService
+	runtimeArtifacts        *RuntimeArtifactObjectService
+	sandboxBundles          *SandboxBundleContentService
+	compiledSnapshots       *CompiledSnapshotContentService
+	maxBytes                int64
+	requests                chan struct{}
 	// attachmentRequests is the attachment route's OWN pool. One attachment
 	// read can wait up to attachmentExtractionWait for an extraction, so in
 	// the shared pool a burst of first-time PDFs would answer 503 to every
@@ -370,6 +372,16 @@ func (s *ContentServer) WithRuntimeProposeAgent(propose *RuntimeProposeAgentServ
 		return nil
 	}
 	s.runtimeProposeAgent = propose
+	return s
+}
+
+// WithRuntimeProposeDismissal enables the propose_dismissal route (ADR-0050
+// decision 5j, #1616). Nil leaves it answering Unimplemented.
+func (s *ContentServer) WithRuntimeProposeDismissal(propose *RuntimeProposeDismissalService) *ContentServer {
+	if s == nil {
+		return nil
+	}
+	s.runtimeProposeDismissal = propose
 	return s
 }
 
@@ -864,6 +876,29 @@ func (s *ContentServer) ProposeAgent(ctx context.Context, request *runtimev1.Pro
 		return nil, err
 	}
 	return &runtimev1.ProposeAgentResponseV1{ResponseJson: encoded}, nil
+}
+
+// ProposeDismissal serves an HR agent's propose_dismissal call.
+func (s *ContentServer) ProposeDismissal(ctx context.Context, request *runtimev1.ProposeDismissalRequestV1) (*runtimev1.ProposeDismissalResponseV1, error) {
+	if s.runtimeProposeDismissal == nil {
+		return nil, contentStatus(codes.Unimplemented)
+	}
+	var document DismissalRequest
+	claim, release, err := s.claimedDocument(ctx, request.GetScope(), request.GetRequestJson(), &document,
+		maxRuntimeProposeDismissalRequestBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	value, err := s.runtimeProposeDismissal.Propose(ctx, claim, document)
+	if err != nil {
+		return nil, s.builderError(ctx, err, "propose dismissal unavailable")
+	}
+	encoded, err := runtimeResponse(value, maxRuntimeProposeDismissalResponseBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &runtimev1.ProposeDismissalResponseV1{ResponseJson: encoded}, nil
 }
 
 func (s *ContentServer) agentMemoryRequest(ctx context.Context, scope *runtimev1.RuntimeContentScopeV1, raw []byte, target any) (ContentClaim, func(), error) {

@@ -84,6 +84,12 @@ import type {
   AgentRegistryRecord,
   AgentRegistryUpdate,
   AgentSchemaResponse,
+  AgentWorkforceAgent,
+  AgentWorkforceDecisionBody,
+  AgentWorkforceImpact,
+  AgentWorkforceProposal,
+  AgentWorkforceRefusal,
+  AppealAgentWorkforceProposalBody,
   ApplicationCreateRequest,
   ApplicationCreatedResponse,
   ApplicationDetail,
@@ -107,10 +113,12 @@ import type {
   CapabilityUnavailableResponse,
   ClearAgentMemory200,
   ClientUpgradeRequiredResponse,
+  CommentAgentWorkforceProposalBody,
   ConversationRunList,
   CopyAgentMemory200,
   CopyAgentMemoryBody,
   CredentialReviewRefusal,
+  DecideAgentWorkforceAppealBody,
   DefaultIcon,
   DeleteApplicationVersionParams,
   DesktopOperationError,
@@ -155,6 +163,10 @@ import type {
   ListAgentHeartbeatsParams,
   ListAgentMemoryParams,
   ListAgentProposalsParams,
+  ListAgentScorecards200,
+  ListAgentScorecardsParams,
+  ListAgentWorkforceProposals200,
+  ListAgentWorkforceProposalsParams,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -199,6 +211,7 @@ import type {
   ProjectQuotaUpdate,
   ProjectStatistics,
   ProjectWithGroups,
+  ProposeAgentWorkforceStageBody,
   PublicApplicationDetail,
   PublicApplicationList,
   PublishBadRequestResponse,
@@ -8920,6 +8933,3543 @@ export function useMarkAgentProposalCreated<
     projectId,
     proposalId,
     markAgentProposalCreatedBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentWorkforceResponse200 = {
+  data: AgentWorkforceAgent;
+  status: 200;
+};
+
+export type getAgentWorkforceResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentWorkforceResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentWorkforceResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type getAgentWorkforceResponseSuccess = getAgentWorkforceResponse200 & {
+  headers: Headers;
+};
+export type getAgentWorkforceResponseError = (
+  | getAgentWorkforceResponse401
+  | getAgentWorkforceResponse403
+  | getAgentWorkforceResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentWorkforceResponse =
+  getAgentWorkforceResponseSuccess | getAgentWorkforceResponseError;
+
+export const getGetAgentWorkforceUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}`;
+};
+
+/**
+ * The agent's place on the dismissal ladder (ADR-0050 decision 5g): whether it is under review (watch), suspended, retired (and until when it can be reinstated) or deleted, its owners, legal hold, whether it is an HR agent, its latest daily scorecard, and whether the caller manages agents here or owns the agent. Requires `models.applications.applications.list`.
+ * @summary Read an agent's workforce state and latest scorecard
+ */
+export const getAgentWorkforce = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentWorkforceResponse> => {
+  return eliteaFetch<getAgentWorkforceResponse>(
+    getGetAgentWorkforceUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentWorkforceQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}`,
+  ] as const;
+};
+
+export const getGetAgentWorkforceQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforce>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentWorkforceQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentWorkforce>>
+  > = ({ signal }) =>
+    getAgentWorkforce(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentWorkforce>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentWorkforceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentWorkforce>>
+>;
+export type GetAgentWorkforceQueryError =
+  N401Response | N403Response | AgentWorkforceRefusal;
+
+export function useGetAgentWorkforce<
+  TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforce>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforce>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforce>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforce<
+  TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforce>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforce>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforce>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforce<
+  TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforce>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read an agent's workforce state and latest scorecard
+ */
+
+export function useGetAgentWorkforce<
+  TData = Awaited<ReturnType<typeof getAgentWorkforce>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforce>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentWorkforceQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentScorecardsResponse200 = {
+  data: ListAgentScorecards200;
+  status: 200;
+};
+
+export type listAgentScorecardsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAgentScorecardsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentScorecardsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentScorecardsResponseSuccess =
+  listAgentScorecardsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentScorecardsResponseError = (
+  | listAgentScorecardsResponse400
+  | listAgentScorecardsResponse401
+  | listAgentScorecardsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentScorecardsResponse =
+  listAgentScorecardsResponseSuccess | listAgentScorecardsResponseError;
+
+export const getListAgentScorecardsUrl = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/scorecards?${stringifiedParams}`
+    : `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/scorecards`;
+};
+
+/**
+ * The daily scorecards (ADR-0050 decision 5b), newest first: runs, failures, budget-cap stops, breaker trips, approval rejections, guardrail hits, spend against the project median, feedback, last use and certification. Kept 400 days. Requires `models.applications.applications.list`.
+ * @summary List an agent's daily scorecards
+ */
+export const listAgentScorecards = async (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentScorecardsResponse> => {
+  return eliteaFetch<listAgentScorecardsResponse>(
+    getListAgentScorecardsUrl(projectId, applicationId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentScorecardsQueryKey = (
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+) => {
+  return [
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/scorecards`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentScorecardsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentScorecards>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentScorecards>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentScorecardsQueryKey(projectId, applicationId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentScorecards>>
+  > = ({ signal }) =>
+    listAgentScorecards(projectId, applicationId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentScorecards>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentScorecardsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentScorecards>>
+>;
+export type ListAgentScorecardsQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListAgentScorecards<
+  TData = Awaited<ReturnType<typeof listAgentScorecards>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params: undefined | ListAgentScorecardsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentScorecards>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentScorecards>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentScorecards>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentScorecards<
+  TData = Awaited<ReturnType<typeof listAgentScorecards>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentScorecards>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentScorecards>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentScorecards>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentScorecards<
+  TData = Awaited<ReturnType<typeof listAgentScorecards>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentScorecards>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List an agent's daily scorecards
+ */
+
+export function useListAgentScorecards<
+  TData = Awaited<ReturnType<typeof listAgentScorecards>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  params?: ListAgentScorecardsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentScorecards>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentScorecardsQueryOptions(
+    projectId,
+    applicationId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentWorkforceImpactResponse200 = {
+  data: AgentWorkforceImpact;
+  status: 200;
+};
+
+export type getAgentWorkforceImpactResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentWorkforceImpactResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentWorkforceImpactResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type getAgentWorkforceImpactResponseSuccess =
+  getAgentWorkforceImpactResponse200 & {
+    headers: Headers;
+  };
+export type getAgentWorkforceImpactResponseError = (
+  | getAgentWorkforceImpactResponse401
+  | getAgentWorkforceImpactResponse403
+  | getAgentWorkforceImpactResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentWorkforceImpactResponse =
+  getAgentWorkforceImpactResponseSuccess | getAgentWorkforceImpactResponseError;
+
+export const getGetAgentWorkforceImpactUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/impact`;
+};
+
+/**
+ * The impact preview a decision shows first: conversations it is in and leads, saved teams, agents that nest it, schedules, triggers, published versions, an active suspension, legal hold and the current lifecycle state. Requires `models.applications.applications.list`.
+ * @summary Preview what suspending or retiring an agent would touch
+ */
+export const getAgentWorkforceImpact = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentWorkforceImpactResponse> => {
+  return eliteaFetch<getAgentWorkforceImpactResponse>(
+    getGetAgentWorkforceImpactUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentWorkforceImpactQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/impact`,
+  ] as const;
+};
+
+export const getGetAgentWorkforceImpactQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentWorkforceImpactQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentWorkforceImpact>>
+  > = ({ signal }) =>
+    getAgentWorkforceImpact(projectId, applicationId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentWorkforceImpactQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentWorkforceImpact>>
+>;
+export type GetAgentWorkforceImpactQueryError =
+  N401Response | N403Response | AgentWorkforceRefusal;
+
+export function useGetAgentWorkforceImpact<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforceImpact>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforceImpact<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforceImpact>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforceImpact<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Preview what suspending or retiring an agent would touch
+ */
+
+export function useGetAgentWorkforceImpact<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceImpact>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentWorkforceImpactQueryOptions(
+    projectId,
+    applicationId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type reinstateAgentResponse200 = {
+  data: AgentWorkforceAgent;
+  status: 200;
+};
+
+export type reinstateAgentResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type reinstateAgentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type reinstateAgentResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type reinstateAgentResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type reinstateAgentResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type reinstateAgentResponseSuccess = reinstateAgentResponse200 & {
+  headers: Headers;
+};
+export type reinstateAgentResponseError = (
+  | reinstateAgentResponse400
+  | reinstateAgentResponse401
+  | reinstateAgentResponse403
+  | reinstateAgentResponse404
+  | reinstateAgentResponse409
+) & {
+  headers: Headers;
+};
+
+export type reinstateAgentResponse =
+  reinstateAgentResponseSuccess | reinstateAgentResponseError;
+
+export const getReinstateAgentUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/reinstate`;
+};
+
+/**
+ * Within 30 days of retirement, restores the agent's published versions and release head, its conversation memberships, saved team seats, nesting and schedules, and lifts its dismissal suspension. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+ * @summary Reinstate a retired agent
+ */
+export const reinstateAgent = async (
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<reinstateAgentResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<reinstateAgentResponse>(
+    getReinstateAgentUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentWorkforceDecisionBody),
+    },
+  );
+};
+
+export const getReinstateAgentQueryKey = (
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/agents/${applicationId}/reinstate`,
+    agentWorkforceDecisionBody,
+  ] as const;
+};
+
+export const getReinstateAgentQueryOptions = <
+  TData = Awaited<ReturnType<typeof reinstateAgent>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof reinstateAgent>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getReinstateAgentQueryKey(
+      projectId,
+      applicationId,
+      agentWorkforceDecisionBody,
+    );
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof reinstateAgent>>> = ({
+    signal,
+  }) =>
+    reinstateAgent(projectId, applicationId, agentWorkforceDecisionBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof reinstateAgent>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReinstateAgentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof reinstateAgent>>
+>;
+export type ReinstateAgentQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useReinstateAgent<
+  TData = Awaited<ReturnType<typeof reinstateAgent>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody: undefined | AgentWorkforceDecisionBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof reinstateAgent>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reinstateAgent>>,
+          TError,
+          Awaited<ReturnType<typeof reinstateAgent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReinstateAgent<
+  TData = Awaited<ReturnType<typeof reinstateAgent>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof reinstateAgent>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reinstateAgent>>,
+          TError,
+          Awaited<ReturnType<typeof reinstateAgent>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReinstateAgent<
+  TData = Awaited<ReturnType<typeof reinstateAgent>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof reinstateAgent>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reinstate a retired agent
+ */
+
+export function useReinstateAgent<
+  TData = Awaited<ReturnType<typeof reinstateAgent>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  applicationId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof reinstateAgent>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReinstateAgentQueryOptions(
+    projectId,
+    applicationId,
+    agentWorkforceDecisionBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listAgentWorkforceProposalsResponse200 = {
+  data: ListAgentWorkforceProposals200;
+  status: 200;
+};
+
+export type listAgentWorkforceProposalsResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type listAgentWorkforceProposalsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listAgentWorkforceProposalsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listAgentWorkforceProposalsResponseSuccess =
+  listAgentWorkforceProposalsResponse200 & {
+    headers: Headers;
+  };
+export type listAgentWorkforceProposalsResponseError = (
+  | listAgentWorkforceProposalsResponse400
+  | listAgentWorkforceProposalsResponse401
+  | listAgentWorkforceProposalsResponse403
+) & {
+  headers: Headers;
+};
+
+export type listAgentWorkforceProposalsResponse =
+  | listAgentWorkforceProposalsResponseSuccess
+  | listAgentWorkforceProposalsResponseError;
+
+export const getListAgentWorkforceProposalsUrl = (
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals?${stringifiedParams}`
+    : `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals`;
+};
+
+/**
+ * The project's workforce proposals, newest first: open ones (proposed or asked_owner) unless status names proposed, asked_owner, approved, rejected or all. application_id narrows them to one agent. Requires `models.applications.applications.list`.
+ * @summary List dismissal and demotion proposals
+ */
+export const listAgentWorkforceProposals = async (
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listAgentWorkforceProposalsResponse> => {
+  return eliteaFetch<listAgentWorkforceProposalsResponse>(
+    getListAgentWorkforceProposalsUrl(projectId, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListAgentWorkforceProposalsQueryKey = (
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+) => {
+  return [
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getListAgentWorkforceProposalsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListAgentWorkforceProposalsQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listAgentWorkforceProposals>>
+  > = ({ signal }) =>
+    listAgentWorkforceProposals(projectId, params, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAgentWorkforceProposalsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listAgentWorkforceProposals>>
+>;
+export type ListAgentWorkforceProposalsQueryError =
+  N400Response | N401Response | N403Response;
+
+export function useListAgentWorkforceProposals<
+  TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params: undefined | ListAgentWorkforceProposalsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentWorkforceProposals>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentWorkforceProposals<
+  TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+          TError,
+          Awaited<ReturnType<typeof listAgentWorkforceProposals>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListAgentWorkforceProposals<
+  TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List dismissal and demotion proposals
+ */
+
+export function useListAgentWorkforceProposals<
+  TData = Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+  TError = N400Response | N401Response | N403Response,
+>(
+  projectId: string,
+  params?: ListAgentWorkforceProposalsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAgentWorkforceProposals>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListAgentWorkforceProposalsQueryOptions(
+    projectId,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type proposeAgentWorkforceStageResponse201 = {
+  data: AgentWorkforceProposal;
+  status: 201;
+};
+
+export type proposeAgentWorkforceStageResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type proposeAgentWorkforceStageResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type proposeAgentWorkforceStageResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type proposeAgentWorkforceStageResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type proposeAgentWorkforceStageResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type proposeAgentWorkforceStageResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type proposeAgentWorkforceStageResponseSuccess =
+  proposeAgentWorkforceStageResponse201 & {
+    headers: Headers;
+  };
+export type proposeAgentWorkforceStageResponseError = (
+  | proposeAgentWorkforceStageResponse400
+  | proposeAgentWorkforceStageResponse401
+  | proposeAgentWorkforceStageResponse403
+  | proposeAgentWorkforceStageResponse404
+  | proposeAgentWorkforceStageResponse409
+  | proposeAgentWorkforceStageResponse422
+) & {
+  headers: Headers;
+};
+
+export type proposeAgentWorkforceStageResponse =
+  | proposeAgentWorkforceStageResponseSuccess
+  | proposeAgentWorkforceStageResponseError;
+
+export const getProposeAgentWorkforceStageUrl = (projectId: string) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals`;
+};
+
+/**
+ * A person proposes watch, demote (with the exact narrowing), suspend, retire or delete for an agent, with a rationale; the latest scorecard is frozen as evidence. One open proposal per agent. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * @summary Propose a ladder stage for an agent
+ */
+export const proposeAgentWorkforceStage = async (
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<proposeAgentWorkforceStageResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<proposeAgentWorkforceStageResponse>(
+    getProposeAgentWorkforceStageUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(proposeAgentWorkforceStageBody),
+    },
+  );
+};
+
+export const getProposeAgentWorkforceStageQueryKey = (
+  projectId: string,
+  proposeAgentWorkforceStageBody?: ProposeAgentWorkforceStageBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals`,
+    proposeAgentWorkforceStageBody,
+  ] as const;
+};
+
+export const getProposeAgentWorkforceStageQueryOptions = <
+  TData = Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getProposeAgentWorkforceStageQueryKey(
+      projectId,
+      proposeAgentWorkforceStageBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof proposeAgentWorkforceStage>>
+  > = ({ signal }) =>
+    proposeAgentWorkforceStage(projectId, proposeAgentWorkforceStageBody, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ProposeAgentWorkforceStageQueryResult = NonNullable<
+  Awaited<ReturnType<typeof proposeAgentWorkforceStage>>
+>;
+export type ProposeAgentWorkforceStageQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useProposeAgentWorkforceStage<
+  TData = Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+          TError,
+          Awaited<ReturnType<typeof proposeAgentWorkforceStage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeAgentWorkforceStage<
+  TData = Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+          TError,
+          Awaited<ReturnType<typeof proposeAgentWorkforceStage>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useProposeAgentWorkforceStage<
+  TData = Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Propose a ladder stage for an agent
+ */
+
+export function useProposeAgentWorkforceStage<
+  TData = Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposeAgentWorkforceStageBody: ProposeAgentWorkforceStageBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof proposeAgentWorkforceStage>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getProposeAgentWorkforceStageQueryOptions(
+    projectId,
+    proposeAgentWorkforceStageBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type getAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentWorkforceProposalResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type getAgentWorkforceProposalResponseSuccess =
+  getAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type getAgentWorkforceProposalResponseError = (
+  | getAgentWorkforceProposalResponse401
+  | getAgentWorkforceProposalResponse403
+  | getAgentWorkforceProposalResponse404
+) & {
+  headers: Headers;
+};
+
+export type getAgentWorkforceProposalResponse =
+  | getAgentWorkforceProposalResponseSuccess
+  | getAgentWorkforceProposalResponseError;
+
+export const getGetAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}`;
+};
+
+/**
+ * The proposal, its evidence, what applying it changed, the owner's comment and the appeal. Requires `models.applications.applications.list`.
+ * @summary Read one workforce proposal
+ */
+export const getAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentWorkforceProposalResponse> => {
+  return eliteaFetch<getAgentWorkforceProposalResponse>(
+    getGetAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return [
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}`,
+  ] as const;
+};
+
+export const getGetAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentWorkforceProposalQueryKey(projectId, proposalId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    getAgentWorkforceProposal(projectId, proposalId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentWorkforceProposal>>
+>;
+export type GetAgentWorkforceProposalQueryError =
+  N401Response | N403Response | AgentWorkforceRefusal;
+
+export function useGetAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one workforce proposal
+ */
+
+export function useGetAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+  TError = N401Response | N403Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type approveAgentWorkforceProposalResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type approveAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveAgentWorkforceProposalResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type approveAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type approveAgentWorkforceProposalResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type approveAgentWorkforceProposalResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type approveAgentWorkforceProposalResponseSuccess =
+  approveAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type approveAgentWorkforceProposalResponseError = (
+  | approveAgentWorkforceProposalResponse400
+  | approveAgentWorkforceProposalResponse401
+  | approveAgentWorkforceProposalResponse403
+  | approveAgentWorkforceProposalResponse404
+  | approveAgentWorkforceProposalResponse409
+  | approveAgentWorkforceProposalResponse422
+) & {
+  headers: Headers;
+};
+
+export type approveAgentWorkforceProposalResponse =
+  | approveAgentWorkforceProposalResponseSuccess
+  | approveAgentWorkforceProposalResponseError;
+
+export const getApproveAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/approve`;
+};
+
+/**
+ * Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * @summary Approve a workforce proposal and apply its stage
+ */
+export const approveAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveAgentWorkforceProposalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<approveAgentWorkforceProposalResponse>(
+    getApproveAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentWorkforceDecisionBody),
+    },
+  );
+};
+
+export const getApproveAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/approve`,
+    agentWorkforceDecisionBody,
+  ] as const;
+};
+
+export const getApproveAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getApproveAgentWorkforceProposalQueryKey(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    approveAgentWorkforceProposal(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveAgentWorkforceProposal>>
+>;
+export type ApproveAgentWorkforceProposalQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useApproveAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody: undefined | AgentWorkforceDecisionBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof approveAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve a workforce proposal and apply its stage
+ */
+
+export function useApproveAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    agentWorkforceDecisionBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type rejectAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type rejectAgentWorkforceProposalResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type rejectAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type rejectAgentWorkforceProposalResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type rejectAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type rejectAgentWorkforceProposalResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type rejectAgentWorkforceProposalResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type rejectAgentWorkforceProposalResponseSuccess =
+  rejectAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type rejectAgentWorkforceProposalResponseError = (
+  | rejectAgentWorkforceProposalResponse400
+  | rejectAgentWorkforceProposalResponse401
+  | rejectAgentWorkforceProposalResponse403
+  | rejectAgentWorkforceProposalResponse404
+  | rejectAgentWorkforceProposalResponse409
+  | rejectAgentWorkforceProposalResponse422
+) & {
+  headers: Headers;
+};
+
+export type rejectAgentWorkforceProposalResponse =
+  | rejectAgentWorkforceProposalResponseSuccess
+  | rejectAgentWorkforceProposalResponseError;
+
+export const getRejectAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/reject`;
+};
+
+/**
+ * Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+ * @summary Reject a workforce proposal
+ */
+export const rejectAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<rejectAgentWorkforceProposalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<rejectAgentWorkforceProposalResponse>(
+    getRejectAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentWorkforceDecisionBody),
+    },
+  );
+};
+
+export const getRejectAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/reject`,
+    agentWorkforceDecisionBody,
+  ] as const;
+};
+
+export const getRejectAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getRejectAgentWorkforceProposalQueryKey(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    rejectAgentWorkforceProposal(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type RejectAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>
+>;
+export type RejectAgentWorkforceProposalQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useRejectAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody: undefined | AgentWorkforceDecisionBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRejectAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useRejectAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Reject a workforce proposal
+ */
+
+export function useRejectAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof rejectAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getRejectAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    agentWorkforceDecisionBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type askOwnerAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type askOwnerAgentWorkforceProposalResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type askOwnerAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type askOwnerAgentWorkforceProposalResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type askOwnerAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type askOwnerAgentWorkforceProposalResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type askOwnerAgentWorkforceProposalResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type askOwnerAgentWorkforceProposalResponseSuccess =
+  askOwnerAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type askOwnerAgentWorkforceProposalResponseError = (
+  | askOwnerAgentWorkforceProposalResponse400
+  | askOwnerAgentWorkforceProposalResponse401
+  | askOwnerAgentWorkforceProposalResponse403
+  | askOwnerAgentWorkforceProposalResponse404
+  | askOwnerAgentWorkforceProposalResponse409
+  | askOwnerAgentWorkforceProposalResponse422
+) & {
+  headers: Headers;
+};
+
+export type askOwnerAgentWorkforceProposalResponse =
+  | askOwnerAgentWorkforceProposalResponseSuccess
+  | askOwnerAgentWorkforceProposalResponseError;
+
+export const getAskOwnerAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/ask_owner`;
+};
+
+/**
+ * The owner is notified and may comment before a manager decides. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+ * @summary Route a workforce proposal to the agent's owner
+ */
+export const askOwnerAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<askOwnerAgentWorkforceProposalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<askOwnerAgentWorkforceProposalResponse>(
+    getAskOwnerAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(agentWorkforceDecisionBody),
+    },
+  );
+};
+
+export const getAskOwnerAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/ask_owner`,
+    agentWorkforceDecisionBody,
+  ] as const;
+};
+
+export const getAskOwnerAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAskOwnerAgentWorkforceProposalQueryKey(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    askOwnerAgentWorkforceProposal(
+      projectId,
+      proposalId,
+      agentWorkforceDecisionBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AskOwnerAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>
+>;
+export type AskOwnerAgentWorkforceProposalQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useAskOwnerAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody: undefined | AgentWorkforceDecisionBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAskOwnerAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAskOwnerAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Route a workforce proposal to the agent's owner
+ */
+
+export function useAskOwnerAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  agentWorkforceDecisionBody?: AgentWorkforceDecisionBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof askOwnerAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAskOwnerAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    agentWorkforceDecisionBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type commentAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type commentAgentWorkforceProposalResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type commentAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type commentAgentWorkforceProposalResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type commentAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type commentAgentWorkforceProposalResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type commentAgentWorkforceProposalResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type commentAgentWorkforceProposalResponseSuccess =
+  commentAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type commentAgentWorkforceProposalResponseError = (
+  | commentAgentWorkforceProposalResponse400
+  | commentAgentWorkforceProposalResponse401
+  | commentAgentWorkforceProposalResponse403
+  | commentAgentWorkforceProposalResponse404
+  | commentAgentWorkforceProposalResponse409
+  | commentAgentWorkforceProposalResponse422
+) & {
+  headers: Headers;
+};
+
+export type commentAgentWorkforceProposalResponse =
+  | commentAgentWorkforceProposalResponseSuccess
+  | commentAgentWorkforceProposalResponseError;
+
+export const getCommentAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/comment`;
+};
+
+/**
+ * Only the agent's business or technical owner, while the proposal is open. Requires `models.applications.applications.list`.
+ * @summary Record the owner's comment on a workforce proposal
+ */
+export const commentAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<commentAgentWorkforceProposalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<commentAgentWorkforceProposalResponse>(
+    getCommentAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(commentAgentWorkforceProposalBody),
+    },
+  );
+};
+
+export const getCommentAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody?: CommentAgentWorkforceProposalBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/comment`,
+    commentAgentWorkforceProposalBody,
+  ] as const;
+};
+
+export const getCommentAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCommentAgentWorkforceProposalQueryKey(
+      projectId,
+      proposalId,
+      commentAgentWorkforceProposalBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof commentAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    commentAgentWorkforceProposal(
+      projectId,
+      proposalId,
+      commentAgentWorkforceProposalBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CommentAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof commentAgentWorkforceProposal>>
+>;
+export type CommentAgentWorkforceProposalQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useCommentAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof commentAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCommentAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof commentAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCommentAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record the owner's comment on a workforce proposal
+ */
+
+export function useCommentAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  commentAgentWorkforceProposalBody: CommentAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commentAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCommentAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    commentAgentWorkforceProposalBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type appealAgentWorkforceProposalResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type appealAgentWorkforceProposalResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type appealAgentWorkforceProposalResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type appealAgentWorkforceProposalResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type appealAgentWorkforceProposalResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type appealAgentWorkforceProposalResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type appealAgentWorkforceProposalResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type appealAgentWorkforceProposalResponseSuccess =
+  appealAgentWorkforceProposalResponse200 & {
+    headers: Headers;
+  };
+export type appealAgentWorkforceProposalResponseError = (
+  | appealAgentWorkforceProposalResponse400
+  | appealAgentWorkforceProposalResponse401
+  | appealAgentWorkforceProposalResponse403
+  | appealAgentWorkforceProposalResponse404
+  | appealAgentWorkforceProposalResponse409
+  | appealAgentWorkforceProposalResponse422
+) & {
+  headers: Headers;
+};
+
+export type appealAgentWorkforceProposalResponse =
+  | appealAgentWorkforceProposalResponseSuccess
+  | appealAgentWorkforceProposalResponseError;
+
+export const getAppealAgentWorkforceProposalUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/appeal`;
+};
+
+/**
+ * The agent's owner may appeal an approved suspend, retire or demote once, within 30 days. Managers are notified. Requires `models.applications.applications.list`.
+ * @summary Appeal an approved workforce decision
+ */
+export const appealAgentWorkforceProposal = async (
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<appealAgentWorkforceProposalResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<appealAgentWorkforceProposalResponse>(
+    getAppealAgentWorkforceProposalUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(appealAgentWorkforceProposalBody),
+    },
+  );
+};
+
+export const getAppealAgentWorkforceProposalQueryKey = (
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody?: AppealAgentWorkforceProposalBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/appeal`,
+    appealAgentWorkforceProposalBody,
+  ] as const;
+};
+
+export const getAppealAgentWorkforceProposalQueryOptions = <
+  TData = Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAppealAgentWorkforceProposalQueryKey(
+      projectId,
+      proposalId,
+      appealAgentWorkforceProposalBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof appealAgentWorkforceProposal>>
+  > = ({ signal }) =>
+    appealAgentWorkforceProposal(
+      projectId,
+      proposalId,
+      appealAgentWorkforceProposalBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AppealAgentWorkforceProposalQueryResult = NonNullable<
+  Awaited<ReturnType<typeof appealAgentWorkforceProposal>>
+>;
+export type AppealAgentWorkforceProposalQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useAppealAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof appealAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAppealAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+          TError,
+          Awaited<ReturnType<typeof appealAgentWorkforceProposal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAppealAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Appeal an approved workforce decision
+ */
+
+export function useAppealAgentWorkforceProposal<
+  TData = Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  appealAgentWorkforceProposalBody: AppealAgentWorkforceProposalBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof appealAgentWorkforceProposal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAppealAgentWorkforceProposalQueryOptions(
+    projectId,
+    proposalId,
+    appealAgentWorkforceProposalBody,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type decideAgentWorkforceAppealResponse200 = {
+  data: AgentWorkforceProposal;
+  status: 200;
+};
+
+export type decideAgentWorkforceAppealResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type decideAgentWorkforceAppealResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type decideAgentWorkforceAppealResponse403 = {
+  data: AgentWorkforceRefusal;
+  status: 403;
+};
+
+export type decideAgentWorkforceAppealResponse404 = {
+  data: AgentWorkforceRefusal;
+  status: 404;
+};
+
+export type decideAgentWorkforceAppealResponse409 = {
+  data: AgentWorkforceRefusal;
+  status: 409;
+};
+
+export type decideAgentWorkforceAppealResponse422 = {
+  data: AgentWorkforceRefusal;
+  status: 422;
+};
+
+export type decideAgentWorkforceAppealResponseSuccess =
+  decideAgentWorkforceAppealResponse200 & {
+    headers: Headers;
+  };
+export type decideAgentWorkforceAppealResponseError = (
+  | decideAgentWorkforceAppealResponse400
+  | decideAgentWorkforceAppealResponse401
+  | decideAgentWorkforceAppealResponse403
+  | decideAgentWorkforceAppealResponse404
+  | decideAgentWorkforceAppealResponse409
+  | decideAgentWorkforceAppealResponse422
+) & {
+  headers: Headers;
+};
+
+export type decideAgentWorkforceAppealResponse =
+  | decideAgentWorkforceAppealResponseSuccess
+  | decideAgentWorkforceAppealResponseError;
+
+export const getDecideAgentWorkforceAppealUrl = (
+  projectId: string,
+  proposalId: number,
+) => {
+  return `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/appeal/decide`;
+};
+
+/**
+ * A manager other than the one who decided, and not the owner, grants (the stage is reversed) or upholds the appeal. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+ * @summary Grant or uphold an appeal
+ */
+export const decideAgentWorkforceAppeal = async (
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<decideAgentWorkforceAppealResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<decideAgentWorkforceAppealResponse>(
+    getDecideAgentWorkforceAppealUrl(projectId, proposalId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(decideAgentWorkforceAppealBody),
+    },
+  );
+};
+
+export const getDecideAgentWorkforceAppealQueryKey = (
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody?: DecideAgentWorkforceAppealBody,
+) => {
+  return [
+    "POST",
+    `/elitea_core/agent_workforce/prompt_lib/${projectId}/proposals/${proposalId}/appeal/decide`,
+    decideAgentWorkforceAppealBody,
+  ] as const;
+};
+
+export const getDecideAgentWorkforceAppealQueryOptions = <
+  TData = Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDecideAgentWorkforceAppealQueryKey(
+      projectId,
+      proposalId,
+      decideAgentWorkforceAppealBody,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>
+  > = ({ signal }) =>
+    decideAgentWorkforceAppeal(
+      projectId,
+      proposalId,
+      decideAgentWorkforceAppealBody,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      proposalId !== null &&
+      proposalId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DecideAgentWorkforceAppealQueryResult = NonNullable<
+  Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>
+>;
+export type DecideAgentWorkforceAppealQueryError =
+  N400Response | N401Response | AgentWorkforceRefusal;
+
+export function useDecideAgentWorkforceAppeal<
+  TData = Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+          TError,
+          Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideAgentWorkforceAppeal<
+  TData = Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+          TError,
+          Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideAgentWorkforceAppeal<
+  TData = Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Grant or uphold an appeal
+ */
+
+export function useDecideAgentWorkforceAppeal<
+  TData = Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+  TError = N400Response | N401Response | AgentWorkforceRefusal,
+>(
+  projectId: string,
+  proposalId: number,
+  decideAgentWorkforceAppealBody: DecideAgentWorkforceAppealBody,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideAgentWorkforceAppeal>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDecideAgentWorkforceAppealQueryOptions(
+    projectId,
+    proposalId,
+    decideAgentWorkforceAppealBody,
     options,
   );
 

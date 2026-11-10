@@ -9134,6 +9134,196 @@ components:
         code: { type: string, enum: [not_found, proposal_decided, proposal_decision_forbidden, copy_forbidden, not_your_new_agent] }
       description: >
         NOTE(W2): internal/api/v2/agentproposals/handler.go, writeError.
+    AgentWorkforceNarrowing:
+      type: object
+      additionalProperties: false
+      description: >
+        The exact narrowing of a demotion. Every field only takes away.
+      properties:
+        remove_toolkit_ids:
+          type: array
+          maxItems: 50
+          items: { type: integer, format: int64, minimum: 1 }
+        memory_review: { type: boolean, description: Set the memory write mode to review. }
+        proactivity_off: { type: boolean, description: Turn the heartbeat off. }
+        remove_capabilities:
+          type: array
+          maxItems: 2
+          items: { type: string }
+          description: can_propose_agents and/or can_review_agents.
+        remove_lead: { type: boolean, description: Drop the agent as the lead of every conversation it leads. }
+        toolkit_type_ceiling:
+          type: array
+          maxItems: 50
+          items: { type: string }
+          description: Keep only toolkits of these types (an allowlist; empty is no ceiling).
+    AgentWorkforceDecisionBody:
+      type: object
+      additionalProperties: false
+      properties:
+        note: { type: string, maxLength: 4000 }
+        confirm_nested:
+          type: boolean
+          description: Confirm retiring an agent that other agents nest (they then fail with nested_agent_retired).
+    AgentWorkforceProposal:
+      type: object
+      required: [id, project_id, application_id, application_name, kind, stage, source, proposed_by_user_id,
+        proposer_application_id, execution_id, rationale, narrowing, evidence, evidence_digest, status,
+        owner_comment, decided_by_user_id, decided_at, decision_note, applied, appeal_state, appeal_reason,
+        appealed_by_user_id, appealed_at, appeal_decided_by_user_id, appeal_decided_at, appeal_note, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        kind: { type: string, description: dismiss or demote. }
+        stage: { type: string, description: 'watch, demote, suspend, retire or delete.' }
+        source: { type: string, description: person or hr_agent. }
+        proposed_by_user_id: { type: integer, format: int64, nullable: true }
+        proposer_application_id: { type: integer, format: int64, nullable: true, description: The HR agent that proposed it. }
+        execution_id: { type: string, nullable: true }
+        rationale: { type: string }
+        narrowing: { $ref: '#/components/schemas/AgentWorkforceNarrowing' }
+        evidence:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: The latest scorecard when the proposal was made.
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.WorkforceProposal.Evidence
+            (internal/infra/db/repos/agent_workforce.go:104) is the frozen
+            agentworkforce.Scorecard stored as jsonb.
+        evidence_digest: { type: string }
+        status: { type: string, description: 'proposed, asked_owner, approved or rejected.' }
+        owner_comment: { type: string, nullable: true }
+        decided_by_user_id: { type: integer, format: int64, nullable: true }
+        decided_at: { type: string, format: date-time, nullable: true }
+        decision_note: { type: string, nullable: true }
+        applied:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: What applying the stage changed (the reinstate and appeal reversal read it).
+          x-elitea-passthrough: >-
+            NOTE(W2): repos.WorkforceProposal.Applied
+            (internal/infra/db/repos/agent_workforce.go:111), built per stage
+            in applyStage (internal/infra/db/repos/agent_workforce_ladder.go:93).
+        appeal_state: { type: string, nullable: true, description: 'open, granted or upheld.' }
+        appeal_reason: { type: string, nullable: true }
+        appealed_by_user_id: { type: integer, format: int64, nullable: true }
+        appealed_at: { type: string, format: date-time, nullable: true }
+        appeal_decided_by_user_id: { type: integer, format: int64, nullable: true }
+        appeal_decided_at: { type: string, format: date-time, nullable: true }
+        appeal_note: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    AgentScorecard:
+      type: object
+      required: [day, runs_30d, failed_30d, cap_reached_30d, failure_rate_30d, breaker_trips_7d,
+        approval_rejections_30d, guardrail_hits_30d, spend_30d_usd, project_median_spend_usd,
+        thumbs_up_30d, thumbs_down_30d, last_used_at, unused_days, certification_state, computed_at]
+      properties:
+        day: { type: string, format: date }
+        runs_30d: { type: integer }
+        failed_30d: { type: integer }
+        cap_reached_30d: { type: integer }
+        failure_rate_30d: { type: number }
+        breaker_trips_7d: { type: integer }
+        approval_rejections_30d: { type: integer }
+        guardrail_hits_30d: { type: integer }
+        spend_30d_usd: { type: number }
+        project_median_spend_usd: { type: number }
+        thumbs_up_30d: { type: integer }
+        thumbs_down_30d: { type: integer }
+        last_used_at: { type: string, format: date-time, nullable: true }
+        unused_days: { type: integer, nullable: true }
+        certification_state: { type: string }
+        computed_at: { type: string, format: date-time }
+    AgentWorkforceAgent:
+      type: object
+      required: [project_id, application_id, application_name, risk_tier, business_owner_id, technical_owner_id,
+        under_review, under_review_since, lifecycle_state, retired_at, retired_by, reinstate_until, purge_after,
+        suspension_id, suspension_source, legal_hold, is_hr_agent]
+      properties:
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        application_name: { type: string }
+        risk_tier: { type: string }
+        business_owner_id: { type: integer, format: int64 }
+        technical_owner_id: { type: integer, format: int64 }
+        under_review: { type: boolean, description: The watch flag. }
+        under_review_since: { type: string, format: date-time, nullable: true }
+        lifecycle_state: { type: string, description: 'active, retired or deleted.' }
+        retired_at: { type: string, format: date-time, nullable: true }
+        retired_by: { type: integer, format: int64, nullable: true }
+        reinstate_until: { type: string, format: date-time, nullable: true }
+        purge_after: { type: string, format: date-time, nullable: true }
+        suspension_id: { type: integer, format: int64, description: 'The active suspension, 0 for none.' }
+        suspension_source: { type: string }
+        legal_hold: { type: boolean }
+        is_hr_agent: { type: boolean }
+        scorecard:
+          allOf: [{ $ref: '#/components/schemas/AgentScorecard' }]
+          nullable: true
+          description: The latest scorecard (only on getAgentWorkforce).
+        can_manage: { type: boolean, description: The caller holds agents.workforce.manage here (only on getAgentWorkforce). }
+        is_owner: { type: boolean, description: The caller owns the agent (only on getAgentWorkforce). }
+    AgentWorkforceImpact:
+      type: object
+      required: [conversations, conversations_led, teams, nested_by, schedules, triggers, published_versions,
+        suspension, legal_hold, lifecycle_state]
+      properties:
+        conversations: { type: integer }
+        conversations_led: { type: integer }
+        teams:
+          type: array
+          items:
+            type: object
+            required: [id, name, lead]
+            properties:
+              id: { type: integer, format: int64 }
+              name: { type: string }
+              lead: { type: boolean }
+        nested_by:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceNesting' }
+        schedules: { type: integer }
+        triggers: { type: integer }
+        published_versions: { type: integer }
+        suspension:
+          type: object
+          nullable: true
+          required: [id, source]
+          properties:
+            id: { type: integer, format: int64 }
+            source: { type: string }
+        legal_hold: { type: boolean }
+        lifecycle_state: { type: string }
+    AgentWorkforceNesting:
+      type: object
+      required: [application_id, name]
+      properties:
+        application_id: { type: integer, format: int64 }
+        name: { type: string }
+    AgentWorkforceRefusal:
+      type: object
+      required: [error, code, message]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        message: { type: string }
+        nested_by:
+          type: array
+          items: { $ref: '#/components/schemas/AgentWorkforceNesting' }
+          description: With workforce_confirm_nested, the agents that nest it.
+        purge_after: { type: string, format: date-time, nullable: true, description: With workforce_retention_pending. }
+        workforce_proposal_id: { type: integer, format: int64 }
+      description: >
+        NOTE(W2): internal/api/v2/agentworkforce/handler.go, writeError.
+        code is one of not_found, workforce_invalid, workforce_forbidden,
+        workforce_guard_refused, workforce_proposal_open,
+        workforce_state_conflict, workforce_confirm_nested,
+        workforce_legal_hold, workforce_retention_pending,
+        workforce_reinstate_closed, workforce_appeal_closed.
     AgentRegistryRecord:
       type: object
       required: [project_id, application_id, application_name, business_owner_id, technical_owner_id,
@@ -9974,7 +10164,7 @@ components:
           description: The user who suspended. 0 is the system (the scheduled self-test or the circuit breaker).
         source:
           type: string
-          description: One of manual, breaker, certification, self_test.
+          description: One of manual, breaker, certification, self_test, dismissal.
         resume_requires:
           type: string
           description: One of any_admin, governance_role, two_person.
@@ -12082,6 +12272,15 @@ components:
                 temporary sub-agent it started become a saved agent
                 (ADR-0050 decision 5a). The person it works for must also
                 hold models.applications.applications.create.
+            can_review_agents:
+              type: boolean
+              description: >
+                The agent is an HR agent (ADR-0050 decision 5l): it may
+                propose, with the propose_dismissal tool, a ladder stage for
+                another agent of the project. It never decides; a person
+                holding agents.workforce.manage does. Guards refuse a
+                proposal against itself, its hirer, a higher tier, another
+                HR agent, a critical-tier agent or one under legal hold.
           additionalProperties: { type: boolean }
           description: >
             What the agent may do beyond its tools. Absent is none. A save
@@ -29320,6 +29519,560 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AgentProposalRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforce
+      summary: Read an agent's workforce state and latest scorecard
+      description: >
+        The agent's place on the dismissal ladder (ADR-0050 decision 5g):
+        whether it is under review (watch), suspended, retired (and until
+        when it can be reinstated) or deleted, its owners, legal hold, whether
+        it is an HR agent, its latest daily scorecard, and whether the caller
+        manages agents here or owns the agent. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The agent's workforce state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceAgent' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/scorecards:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: listAgentScorecards
+      summary: List an agent's daily scorecards
+      description: >
+        The daily scorecards (ADR-0050 decision 5b), newest first: runs,
+        failures, budget-cap stops, breaker trips, approval rejections,
+        guardrail hits, spend against the project median, feedback, last
+        use and certification. Kept 400 days. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 400 } }
+      responses:
+        '200':
+          description: The scorecards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentScorecard' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/impact:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforceImpact
+      summary: Preview what suspending or retiring an agent would touch
+      description: >
+        The impact preview a decision shows first: conversations it is in
+        and leads, saved teams, agents that nest it, schedules, triggers,
+        published versions, an active suspension, legal hold and the
+        current lifecycle state. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The impact
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceImpact' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/agents/{application_id}/reinstate:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: reinstateAgent
+      summary: Reinstate a retired agent
+      description: >
+        Within 30 days of retirement, restores the agent's published
+        versions and release head, its conversation memberships, saved team
+        seats, nesting and schedules, and lifts its dismissal suspension.
+        Requires `models.applications.applications.list` and
+        `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The reinstated agent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceAgent' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: listAgentWorkforceProposals
+      summary: List dismissal and demotion proposals
+      description: >
+        The project's workforce proposals, newest first: open ones (proposed
+        or asked_owner) unless status names proposed, asked_owner, approved,
+        rejected or all. application_id narrows them to one agent. Requires
+        `models.applications.applications.list`.
+      tags: [applications]
+      parameters:
+        - { name: status, in: query, required: false, description: 'proposed, asked_owner, approved, rejected or all', schema: { type: string } }
+        - { name: application_id, in: query, required: false, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 0, maximum: 100 } }
+        - { name: offset, in: query, required: false, schema: { type: integer, minimum: 0 } }
+      responses:
+        '200':
+          description: The proposals
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows, total]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+                  total: { type: integer }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+    post:
+      operationId: proposeAgentWorkforceStage
+      summary: Propose a ladder stage for an agent
+      description: >
+        A person proposes watch, demote (with the exact narrowing), suspend,
+        retire or delete for an agent, with a rationale; the latest
+        scorecard is frozen as evidence. One open proposal per agent.
+        Requires `models.applications.applications.list`, and
+        `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [application_id, stage, rationale]
+              properties:
+                application_id: { type: integer, format: int64, minimum: 1 }
+                stage: { type: string, description: 'watch, demote, suspend, retire or delete' }
+                rationale: { type: string, minLength: 1, maxLength: 4000 }
+                narrowing: { $ref: '#/components/schemas/AgentWorkforceNarrowing' }
+      responses:
+        '201':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    get:
+      operationId: getAgentWorkforceProposal
+      summary: Read one workforce proposal
+      description: The proposal, its evidence, what applying it changed, the owner's comment and the appeal. Requires `models.applications.applications.list`.
+      tags: [applications]
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: approveAgentWorkforceProposal
+      summary: Approve a workforce proposal and apply its stage
+      description: >
+        Applies the stage. Retiring an agent that other agents nest needs confirm_nested. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: rejectAgentWorkforceProposal
+      summary: Reject a workforce proposal
+      description: >
+        Keeps the agent; a watch flag the proposal raised is cleared. Requires `models.applications.applications.list`, and `agents.workforce.manage` or ownership of the agent.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/ask_owner:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: askOwnerAgentWorkforceProposal
+      summary: Route a workforce proposal to the agent's owner
+      description: >
+        The owner is notified and may comment before a manager decides. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentWorkforceDecisionBody' }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/comment:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: commentAgentWorkforceProposal
+      summary: Record the owner's comment on a workforce proposal
+      description: >
+        Only the agent's business or technical owner, while the proposal is open. Requires `models.applications.applications.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/appeal:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: appealAgentWorkforceProposal
+      summary: Appeal an approved workforce decision
+      description: >
+        The agent's owner may appeal an approved suspend, retire or demote once, within 30 days. Managers are notified. Requires `models.applications.applications.list`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+
+  /elitea_core/agent_workforce/prompt_lib/{project_id}/proposals/{proposal_id}/appeal/decide:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: proposal_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: decideAgentWorkforceAppeal
+      summary: Grant or uphold an appeal
+      description: >
+        A manager other than the one who decided, and not the owner, grants (the stage is reversed) or upholds the appeal. Requires `models.applications.applications.list` and `agents.workforce.manage`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [grant]
+              properties:
+                grant: { type: boolean }
+                note: { type: string, maxLength: 4000 }
+      responses:
+        '200':
+          description: The proposal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceProposal' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: (codes workforce_forbidden, workforce_guard_refused) The caller may not do this, or a guard refused it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '404':
+          description: (code not_found) No such agent or proposal in this project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '409':
+          description: (codes workforce_state_conflict, workforce_confirm_nested, workforce_legal_hold, workforce_retention_pending, workforce_reinstate_closed, workforce_appeal_closed, workforce_proposal_open) The agent or the proposal is not in a state that allows this
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
+        '422':
+          description: (code workforce_invalid) The stage, rationale or narrowing is not valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentWorkforceRefusal' }
 
   /elitea_core/agent_copy_memory/prompt_lib/{project_id}/{application_id}:
     parameters:

@@ -36,6 +36,7 @@ import (
 	v2agentproposals "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentproposals"
 	v2agentreleases "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentreleases"
 	v2agentteams "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentteams"
+	v2agentworkforce "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentworkforce"
 	v2analytics "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	v2apps "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applications"
 	v2applicationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
@@ -4806,6 +4807,36 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(readProposals).Post(v2agentproposals.DismissPath, proposals.Dismiss)
 					r.With(createAgents).Post(v2agentproposals.CreatedPath, proposals.MarkCreated)
 					r.With(createAgents).Post(v2agentproposals.CopyMemoryPath, proposals.CopyMemory)
+				}
+				// The agent workforce (ADR-0050 decisions 5b, 5g-5j, #1616).
+				// Every route takes applications.list; who may read the
+				// scorecards, the impact and the proposals, and who may
+				// propose, decide, reinstate, comment or appeal, is decided
+				// in the handler and the store (agents.workforce.manage, or
+				// the agent's owner). Anyone else reads the ladder state only.
+				{
+					var workforceStore *dbrepos.AgentWorkforce
+					if cfg.Pool != nil {
+						workforceStore, _ = dbrepos.ComposeAgentWorkforce(cfg.Pool, cfg.SuspensionChanged)
+					}
+					workforce := v2agentworkforce.NewHandler(workforceStore,
+						func(r *http.Request, projectID, permission string) (bool, error) {
+							return apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, permission)(r, projectID)
+						})
+					readWorkforce := projectPermission(v2agentworkforce.ListPermission)
+					r.With(readWorkforce).Get(v2agentworkforce.AgentPath, workforce.GetAgent)
+					r.With(readWorkforce).Get(v2agentworkforce.ScorecardsPath, workforce.ListScorecards)
+					r.With(readWorkforce).Get(v2agentworkforce.ImpactPath, workforce.GetImpact)
+					r.With(readWorkforce).Post(v2agentworkforce.ReinstatePath, workforce.Reinstate)
+					r.With(readWorkforce).Get(v2agentworkforce.ProposalsPath, workforce.List)
+					r.With(readWorkforce).Post(v2agentworkforce.ProposalsPath, workforce.Propose)
+					r.With(readWorkforce).Get(v2agentworkforce.ProposalPath, workforce.Get)
+					r.With(readWorkforce).Post(v2agentworkforce.ApprovePath, workforce.Approve)
+					r.With(readWorkforce).Post(v2agentworkforce.RejectPath, workforce.Reject)
+					r.With(readWorkforce).Post(v2agentworkforce.AskOwnerPath, workforce.AskOwner)
+					r.With(readWorkforce).Post(v2agentworkforce.CommentPath, workforce.Comment)
+					r.With(readWorkforce).Post(v2agentworkforce.AppealPath, workforce.Appeal)
+					r.With(readWorkforce).Post(v2agentworkforce.AppealDecidePath, workforce.DecideAppeal)
 				}
 				// Run step records (ADR-0042 decisions 1 and 2): every read,
 				// the content's included, takes runs.evidence.read; a content

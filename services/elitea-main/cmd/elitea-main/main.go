@@ -426,6 +426,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startAgentBreaker(ctx, pool, executionSuspensions, safetyMetrics, logger); err != nil {
 		return err
 	}
+	// The daily agent scorecard (ADR-0050 decision 5h, #1616): the
+	// main.agent_scorecard routine, paused in maintenance.
+	if err := startAgentScorecard(ctx, pool, executionSuspensions, logger); err != nil {
+		return err
+	}
 
 	// The run-safety Configuration sections (#1496, #1498): the
 	// administrator's session policy and the whole-run wall cap, one cache
