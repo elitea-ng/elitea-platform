@@ -14945,7 +14945,7 @@ export const getGetAgentMediaUrl = (projectId: string, file: string) => {
 };
 
 /**
- * Immutable for a year. A `Range` request answers 206, as a <video> element asks.
+ * Immutable for a year. A `Range` request answers 206, as a <video> element asks. Client contract 1.46: a native client downloads the pack media `persona.avatar_pack` names through this route. It is root-mounted with no credential, so the X-Client-Version gate never judges it (like getBrandingPackJSON) and it never answers 426.
  * @summary Download one avatar pack media file
  */
 export const getAgentMedia = async (

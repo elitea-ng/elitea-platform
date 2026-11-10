@@ -37,7 +37,45 @@ function ChoiceRow({ chosen, label, onClick }: { chosen: boolean; label: string;
   );
 }
 
-/** The agent menu's rows: the agents, then "Version ›", whose versions open beside it on hover. */
+/**
+ * "Add to thread ›" (ADR-0050 decision 7f): the project's other agents, each added to run on this computer or in the
+ * cloud; the ones added are checked, and clicking one again takes it out. A message names who it is for with "@Name".
+ */
+function companionRows(selection: AgentSelection, pick: (action: () => void) => () => void): React.JSX.Element[] {
+  const { addCompanion, removeCompanion } = selection;
+  if (addCompanion === undefined || removeCompanion === undefined) return [];
+  const others = selection.agents.filter((a) => a.id !== selection.agentId && selection.pipelineIds?.has(a.id) !== true);
+  if (others.length === 0) return [];
+  const added = selection.companions ?? [];
+  const submenu = (cloud: boolean): React.JSX.Element => (
+    <NativeSubmenu
+      key={cloud ? 'add-cloud' : 'add-local'}
+      testId={cloud ? 'agent-add-cloud' : 'agent-add-local'}
+      label={cloud ? t('workspace.floor.addCloud', 'Add a cloud agent') : t('workspace.floor.addLocal', 'Add an agent')}
+    >
+      {() =>
+        others.map((a) => {
+          const chosen = added.some((c) => c.agentId === a.id && c.cloud === cloud);
+          return (
+            <MenuRow key={a.id} selected={chosen} data-testid={`agent-add-${cloud ? 'cloud' : 'local'}-${a.id}`} onClick={pick(() => (chosen ? removeCompanion(a.id) : addCompanion(a.id, cloud)))}>
+              <MenuRowIcon>{chosen && <CheckOutlinedIcon />}</MenuRowIcon>
+              <MenuRowText>{a.name}</MenuRowText>
+            </MenuRow>
+          );
+        })
+      }
+    </NativeSubmenu>
+  );
+  return [
+    <MenuDivider key="floor-divider" />,
+    <MenuHeader key="floor-header">{t('workspace.floor.header', 'Also in this thread')}</MenuHeader>,
+    submenu(false),
+    submenu(true),
+    ...(added.length === 0 ? [] : [<MenuNote key="floor-note">{t('workspace.floor.note', 'Write @Name to address an agent; the cloud ones get the conversation text only.')}</MenuNote>]),
+  ];
+}
+
+/** The agent menu's rows: the agents, then "Version ›", whose versions open beside it on hover, then the thread's other agents. */
 function AgentMenu({ selection, close }: { selection: AgentSelection; close: () => void }): React.JSX.Element[] {
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
   const pick = (action: () => void) => (): void => {
@@ -51,6 +89,7 @@ function AgentMenu({ selection, close }: { selection: AgentSelection; close: () 
     <NativeSubmenu key="version" label={t('workspace.version', 'Version')} hint={version?.name ?? ''} disabled={selection.versions.length === 0}>
       {() => selection.versions.map((v) => <ChoiceRow key={v.id} chosen={String(v.id) === selection.versionId} label={v.name} onClick={pick(() => selection.selectVersion(String(v.id)))} />)}
     </NativeSubmenu>,
+    ...companionRows(selection, pick),
   ];
 }
 
@@ -59,7 +98,9 @@ export function AgentChip({ selection, agentRef, disabledHint }: { selection: Ag
   if (selection.empty) return null;
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
-  const label = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
+  const base = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
+  const others = selection.companions ?? [];
+  const label = others.length === 0 ? base : `${base} + ${others.map((c) => c.name).join(', ')}`;
   return (
     <Tooltip title={disabledHint ?? ''}>
       <Box ref={agentRef} sx={{ display: 'inline-flex', minWidth: 0 }}>

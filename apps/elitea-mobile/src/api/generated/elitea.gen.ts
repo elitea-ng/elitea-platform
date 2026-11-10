@@ -4,8 +4,8 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.45
- * operations sha256:  27f1115f052a1dce26cdb61fca19d2e7d60270ce0bc0d49003e54f0955abb678
+ * client contract:    1.47
+ * operations sha256:  90f7ce0d441261594219777baafedfb6c11c64e23476f55952ced30a49d7d69e
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -34,6 +34,31 @@ export interface paths {
          *     sign-in".
          */
         get: operations["getClientDiscovery"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent_media/{project_id}/{file}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm */
+                file: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download one avatar pack media file
+         * @description Immutable for a year. A `Range` request answers 206, as a <video> element asks. Client contract 1.46: a native client downloads the pack media `persona.avatar_pack` names through this route. It is root-mounted with no credential, so the X-Client-Version gate never judges it (like getBrandingPackJSON) and it never answers 426.
+         */
+        get: operations["getAgentMedia"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3475,7 +3500,7 @@ export interface components {
         };
         /** @description Client contract 1.38: the agent's persona in this conversation, from the soul of the version the conversation runs, refreshed on every turn. Absent when the agent has none. Show `display_name` instead of the agent's name when it is set. */
         ConversationParticipantPersona: {
-            /** @description Reserved for the avatar pack of a later release. */
+            /** @description Client contract 1.46 (ADR-0050 decision 6): on a read, the avatar pack of the version the agent participant runs, an AgentAvatarPackV1 OBJECT, read live from the version on every participants read; absent when the version has none (the client then shows `entity_settings.icon_meta`). It stays declared as a string, the "reserved" type contract 1.38 locked, because a type change is a breaking change within the major. A client reads the value as unknown JSON and validates it (`avatarPackOf` in `@elitea/client-core/conversation`); a value that is not a valid pack is ignored. A create request does not set it. */
             avatar_pack?: string;
             display_name?: string;
             pronouns?: string;
@@ -5076,6 +5101,47 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    getAgentMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description <sha256 hex>.<ext>, ext one of png, jpg, webp, svg, mp4, webm */
+                file: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/svg+xml": string;
+                    "image/webp": string;
+                    "video/mp4": string;
+                    "video/webm": string;
+                };
+            };
+            /** @description The requested byte range */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "video/mp4": string;
+                    "video/webm": string;
+                };
+            };
+            404: components["responses"]["404"];
         };
     };
     listNativeDevices: {

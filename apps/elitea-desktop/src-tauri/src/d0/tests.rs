@@ -387,6 +387,9 @@ fn request(workspace_id: &str) -> TurnRequest {
         command: None,
         images: Vec::new(),
         unattended: None,
+        addressed_to: Vec::new(),
+        floor_turn: None,
+        cloud: false,
     }
 }
 
@@ -11202,3 +11205,7 @@ async fn revoking_an_app_reaches_every_folder_and_reports_the_one_that_failed() 
         [("com.apple.notes".to_owned(), true, false)]
     );
 }
+
+/// Several agents in one thread (ADR-0050 decision 7f, #1806).
+#[path = "floor_tests.rs"]
+mod floor_tests;

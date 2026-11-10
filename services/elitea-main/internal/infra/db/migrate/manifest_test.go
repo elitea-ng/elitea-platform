@@ -1097,7 +1097,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agent_automatic_actions, the registry's probation and orphan columns,
 	// and source policy on agent_workforce_proposals (watch, suspend or
 	// retire only). No data, no permission.
-	require.EqualValues(t, 237, Head(shared))
+	//
+	// 238: shared/0238_local_turn_floor.sql, several agents in a desktop
+	// thread (ADR-0050 decision 7f, issue 1806): local_turn_executions
+	// floor_question_id, floor_position, floor_targets and executor. No
+	// backfill, no permission.
+	require.EqualValues(t, 238, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
