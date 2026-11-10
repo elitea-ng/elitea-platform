@@ -99,6 +99,9 @@ pub(crate) struct OrdinaryNoToolProfile {
     /// Only a root application agent has it. Main checks it again, with the
     /// person's create permission, on every call.
     can_propose_agents: bool,
+    /// The agent memory entries Main recalled into the instructions
+    /// (#1826). Only a root application agent with `meta.memory` has them.
+    recalled_memory: Vec<super::request::RecalledMemoryEntry>,
     /// The version's `meta.capabilities.can_review_agents` (ADR-0050
     /// decision 5l, #1616): an HR agent, bound `propose_dismissal`. Only a
     /// root application agent has it; Main checks it again on every call.
@@ -310,6 +313,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            recalled_memory: Vec::new(),
             can_review_agents: false,
         })
     }
@@ -369,6 +373,7 @@ impl OrdinaryNoToolProfile {
             floor: request.payload.floor.clone(),
             tool_envelope: request.payload.tool_envelope.clone(),
             can_propose_agents: application_can_propose_agents(request),
+            recalled_memory: application_recalled_memory(request),
             can_review_agents: application_capability(
                 request,
                 super::propose_dismissal_tool::CAPABILITY_KEY,
@@ -488,6 +493,7 @@ impl OrdinaryNoToolProfile {
             floor: None,
             tool_envelope: None,
             can_propose_agents: false,
+            recalled_memory: Vec::new(),
             can_review_agents: false,
         })
     }
@@ -550,6 +556,12 @@ impl OrdinaryNoToolProfile {
     #[must_use]
     pub(crate) const fn can_propose_agents(&self) -> bool {
         self.can_propose_agents
+    }
+
+    /// The agent memory entries Main recalled into this turn (#1826).
+    #[must_use]
+    pub(crate) fn recalled_memory(&self) -> &[super::request::RecalledMemoryEntry] {
+        &self.recalled_memory
     }
 
     /// Whether the version makes the agent an HR agent
@@ -1019,6 +1031,19 @@ fn application_agent_memory(
         _ => None,
     };
     super::agent_memory_tools::AgentMemoryBinding::from_meta(meta)
+}
+
+/// The entries Main recalled into a root application agent's instructions
+/// (#1826), kept only when the version binds agent memory: Main recalls
+/// none otherwise, so an input that still names some names nothing a brief
+/// may pass on.
+fn application_recalled_memory(
+    request: &AgentExecutionRequest,
+) -> Vec<super::request::RecalledMemoryEntry> {
+    if application_agent_memory(request).is_none() {
+        return Vec::new();
+    }
+    request.payload.recalled_memory.clone()
 }
 
 /// `meta.capabilities.can_propose_agents` of a root application agent:

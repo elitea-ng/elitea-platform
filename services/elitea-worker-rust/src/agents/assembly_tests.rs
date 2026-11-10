@@ -207,6 +207,7 @@ pub(crate) fn ordinary_request(kind: AgentExecutionKind) -> AgentExecutionReques
             floor: None,
             tool_envelope: None,
             current_message_id: None,
+            recalled_memory: Vec::new(),
         },
     }
 }
