@@ -3,7 +3,7 @@
 //! On macOS and Linux every item here IS the `rustix` or `std::os::unix`
 //! item (a re-export): the tools behave exactly as they did before Windows
 //! was ported. On Windows the same names are a safe shim over `std`
-//! ([`windows`]): no `unsafe` in this crate on either system.
+//! (`sys/windows.rs`): no `unsafe` in this crate on either system.
 //!
 //! What Windows gives and does not give, against the Unix behaviour:
 //!
