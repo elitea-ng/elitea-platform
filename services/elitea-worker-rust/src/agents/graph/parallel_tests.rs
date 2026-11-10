@@ -3185,15 +3185,51 @@ fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
         node: "gather".into(),
         message: "Node 'js_a' execution failed: Checkpoint error: checkpoint.invalid_scope: secret_marker detail".into(),
     };
+    // R7: an unregistered dotted prefix is dropped; only FU-299 registry
+    // codes are copied.
     assert_eq!(
         safe_graph_cause(&scoped),
+        ["graph.node_execution_failed", "node gather", "node js_a"]
+    );
+    let registered = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: pipeline.node_recovery.child_effect_unknown: secret_marker".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&registered),
+        [
+            "pipeline.node_recovery.child_effect_unknown",
+            "node gather",
+            "node js_a"
+        ]
+    );
+    let deadline = GraphError::NodeExecutionFailed {
+        node: "gather".into(),
+        message: "Node 'js_a' execution failed: pipeline.code.nested_slot: secret_marker".into(),
+    };
+    assert_eq!(
+        safe_graph_cause(&deadline),
         [
             "graph.node_execution_failed",
             "node gather",
             "node js_a",
-            "checkpoint.invalid_scope"
+            "pipeline.code.nested_slot"
         ]
     );
+    for host in [
+        "api.openai.com: connection refused",
+        "vault.internal.svc:8200 timed out",
+    ] {
+        let error = GraphError::NodeExecutionFailed {
+            node: "shout".into(),
+            message: host.into(),
+        };
+        assert_eq!(
+            safe_graph_cause(&error),
+            ["graph.node_execution_failed", "node shout"],
+            "{host}"
+        );
+    }
     let free = GraphError::NodeExecutionFailed {
         node: "shout".into(),
         message: "secret_marker: value.with.dots".into(),
@@ -3209,4 +3245,73 @@ fn a_child_failure_cause_keeps_codes_and_node_ids_only() {
         message: "Node 'n' execution failed: ".repeat(20),
     };
     assert!(safe_graph_cause(&deep).len() <= elitea_faults::MAX_CAUSES);
+}
+
+const HOST_CAUSE_CHILD_ENV: &str = "ELITEA_FANOUT_HOST_CAUSE_CHILD";
+
+/// R7 log capture: a child failure whose error text starts with host names
+/// writes its fault line without them.
+#[test]
+fn a_child_failure_line_never_logs_a_host_name() {
+    let output = elitea_faults::logtest::run_child(
+        "agents::graph::parallel_tests::host_cause_log_child",
+        HOST_CAUSE_CHILD_ENV,
+    );
+    for host in ["api.openai.com", "vault.internal.svc"] {
+        assert!(
+            !output.stdout.contains(host) && !output.stderr.contains(host),
+            "{host} reached the log: {}",
+            output.stdout
+        );
+    }
+    let code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED;
+    let lines: Vec<_> = output
+        .operator_lines()
+        .into_iter()
+        .filter(|line| line.get("code").is_some_and(|value| value == code.as_str()))
+        .collect();
+    assert_eq!(lines.len(), 2, "{}", output.stdout);
+    assert_eq!(
+        lines[0]["cause"],
+        json!(["graph.node_execution_failed", "node crunch"])
+    );
+    assert_eq!(
+        lines[1]["cause"],
+        json!(["graph.node_execution_failed", "node crunch", "node inner"])
+    );
+}
+
+#[test]
+fn host_cause_log_child() {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    if !elitea_faults::logtest::is_child(HOST_CAUSE_CHILD_ENV) {
+        return;
+    }
+    tracing_subscriber::registry()
+        .with(
+            crate::diagnostics::log_layer(Some("debug"), std::io::stdout).expect("operator stream"),
+        )
+        .init();
+    let failure = elitea_agent_runtime::graph::fanout::plan::ChildFailure::new(
+        "graph.node_execution_failed",
+        "The branch failed.",
+    );
+    for message in [
+        "api.openai.com: connection refused",
+        "Node 'inner' execution failed: vault.internal.svc:8200 timed out",
+    ] {
+        super::parallel::write_child_failure_line(
+            "execution-1",
+            "map_parts",
+            "0",
+            "m1:item-0",
+            &failure,
+            &GraphError::NodeExecutionFailed {
+                node: "crunch".into(),
+                message: message.into(),
+            },
+        );
+    }
+    elitea_faults::logtest::child_ran();
 }

@@ -637,20 +637,13 @@ impl AdkParallelBranchRuntime {
             .child_origin(activation)
             .map(|origin| origin.execution_id)
             .unwrap_or_default();
-        let cause =
-            serde_json::to_string(&safe_graph_cause(error)).unwrap_or_else(|_| String::from("[]"));
-        elitea_faults::fault!(
-            tracing::Level::WARN,
-            code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED,
-            event = "fanout_child_failed",
-            member_code = failure.code.as_str(),
-            member_sentence = failure.message_safe.as_str(),
-            cause = cause.as_str(),
-            execution_id = execution_id.as_str(),
-            support_ref = execution_id.as_str(),
-            node_id = activation.node_id.as_str(),
-            item = item,
-            item_ref = elitea_agent_runtime::graph::fanout::plan::support_ref_for(child_thread)
+        write_child_failure_line(
+            &execution_id,
+            &activation.node_id,
+            item,
+            child_thread,
+            failure,
+            error,
         );
     }
 
@@ -2742,11 +2735,36 @@ fn unwrap_node_failures(mut message: &str) -> &str {
     message
 }
 
+/// The one operator line of a failed fan-out child (B2, R7).
+pub(super) fn write_child_failure_line(
+    execution_id: &str,
+    node_id: &str,
+    item: &str,
+    child_thread: &str,
+    failure: &ChildFailure,
+    error: &GraphError,
+) {
+    let cause =
+        serde_json::to_string(&safe_graph_cause(error)).unwrap_or_else(|_| String::from("[]"));
+    elitea_faults::fault!(
+        tracing::Level::WARN,
+        code = elitea_faults::codes::GRAPH_FANOUT_CHILD_FAILED,
+        event = "fanout_child_failed",
+        member_code = failure.code.as_str(),
+        member_sentence = failure.message_safe.as_str(),
+        cause = cause.as_str(),
+        execution_id = execution_id,
+        support_ref = execution_id,
+        node_id = node_id,
+        item = item,
+        item_ref = elitea_agent_runtime::graph::fanout::plan::support_ref_for(child_thread)
+    );
+}
+
 /// A child failure's cause chain, safe by construction: the error's kind,
 /// each node id it passed through (pipeline identifiers, never values), and
-/// the innermost message only when it starts with a registered-shape dotted
-/// code (`checkpoint.invalid_scope`, `pipeline.code_failed`). Free text is
-/// never copied. Bounded like a FU-299 chain.
+/// the innermost message's leading code only when the FU-299 registry knows
+/// it. Free text is never copied. Bounded like a FU-299 chain.
 pub(super) fn safe_graph_cause(error: &GraphError) -> Vec<String> {
     let mut chain = vec![graph_error_code(error).to_owned()];
     let mut message = match error {
@@ -2789,21 +2807,12 @@ pub(super) fn safe_graph_cause(error: &GraphError) -> Vec<String> {
     chain
 }
 
-/// `a.b[.c]` made of `[a-z0-9_]` segments at the start of `message`, ended by
-/// `:` or the end of the text; anything else is not a code.
-fn leading_dotted_code(message: &str) -> Option<&str> {
+/// The FU-299 registered code at the start of `message`, ended by `:` or the
+/// end of the text (R7). A dotted prefix the registry does not know (a host
+/// name such as `api.openai.com:`, a path) is never copied.
+fn leading_dotted_code(message: &str) -> Option<&'static str> {
     let end = message.find(':').unwrap_or(message.len());
-    let candidate = &message[..end];
-    let segments = candidate.split('.').collect::<Vec<_>>();
-    (segments.len() >= 2
-        && candidate.len() <= 96
-        && segments.iter().all(|segment| {
-            !segment.is_empty()
-                && segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-        }))
-    .then_some(candidate)
+    elitea_faults::Code::lookup(&message[..end]).map(elitea_faults::Code::as_str)
 }
 
 fn valid_failure_code(code: &str) -> bool {
