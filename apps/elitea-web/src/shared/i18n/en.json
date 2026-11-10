@@ -4753,7 +4753,7 @@
   "pipelines.graphExtensions.statePreview": "Authored default: {{preview}}. Nested shape remains unknown.",
   "pipelines.graphExtensions.unknownShape": "Nested values can have unknown shapes. Declare the root type in State.",
   "pipelines.graphExtensions.worker": "Owned worker",
-  "pipelines.graphExtensions.workerHelp": "The worker must have no transition, parent route, or static pause. It can be a State Modifier, an LLM node, or a saved agent or pipeline.",
+  "pipelines.graphExtensions.workerHelp": "The worker must have no transition, parent route, or static pause. It can be a State Modifier, an LLM node, a Code node, or a saved agent or pipeline.",
   "pipelines.graphExtensions.workerOutput": "Worker output {{index}}",
   "pipelines.graphExtensions.workerTask": "Worker task value",
   "pipelines.graphExtensions.workerTaskChannel": "Worker task channel",

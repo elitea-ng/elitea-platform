@@ -47,6 +47,14 @@ describe('fan-out child families match the shared contract', () => {
     expect(parallelOwnedAgent(withLeftType('code'), 'extension', 0)?.type).toBe('code');
   });
 
+  it('names Code in the Map worker hint, as the Worker admits it (B4)', () => {
+    const catalogue = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../../shared/i18n/en.json'), 'utf8')) as Record<string, string>;
+    const source = readFileSync(resolve(import.meta.dirname, '../ui/settings/graph-extensions/MapSettings.tsx'), 'utf8');
+    const hint = catalogue['pipelines.graphExtensions.workerHelp'];
+    expect(hint).toContain('a Code node');
+    expect(source).toContain(hint);
+  });
+
   it('admits a Code node as a Map worker', () => {
     const worker: YamlPipelineNode = { id: 'worker', type: 'code', code: { type: 'fixed', value: 'print(1)' }, input: ['entity', 'item_index'], output: ['rendered'] };
     expect(graphMapIssues(mapWith(worker))).toEqual([]);

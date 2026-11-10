@@ -64,7 +64,7 @@ export function MapSettings({ node, disabled, change }: ExtensionSettingsProps):
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.mapDescription', 'Run the same owned worker once per frozen list item. Preserve input order and original item identity.')}</Typography>
     <ExtensionChoice label={t('pipelines.graphExtensions.worker', 'Owned worker')} value={worker} disabled={disabled}
       choices={['', ...workers.map((entry) => entry.id)]} change={(value) => change('worker', value)}
-      help={t('pipelines.graphExtensions.workerHelp', 'The worker must have no transition, parent route, or static pause. It can be a State Modifier, an LLM node, or a saved agent or pipeline.')} />
+      help={t('pipelines.graphExtensions.workerHelp', 'The worker must have no transition, parent route, or static pause. It can be a State Modifier, an LLM node, a Code node, or a saved agent or pipeline.')} />
     <StateChannelSelect label={t('pipelines.graphExtensions.source', 'Source state variable')} value={source} types={['list']}
       disabled={disabled} change={(value) => change('source', value)} />
     <ExtensionField label={t('pipelines.graphExtensions.itemChannel', 'Child item channel')} value={extensionText(node['item'])}
